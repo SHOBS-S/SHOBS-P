@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+selftest_log.txt
+*.log
+.shobs_p_settings.json
