@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.5"
+APP_VERSION = "2.2.6"
 APP_SHORT = "SHOBS-P"
 # Marker colours on the image, shared by the pick buttons so each button matches its marker.
 PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
@@ -1243,8 +1243,8 @@ class App(Tk):
     def lookup_planet(self):
         name = self.planet_name.get().strip()
         if not name:
-            messagebox.showinfo(APP_TITLE, "Type the planet's name first (for example TrES-3 b, Kepler-71 b, TOI-2046 b; "
-                                           "a KOI number is looked up under its Kepler name).")
+            messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example TrES-3 b, "
+                                           "KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
         self.planet_source.set(f"Looking up {name}…")
 
@@ -1254,10 +1254,15 @@ class App(Tk):
             except Exception as exc:
                 self.call_ui(self._planet_lookup_done, None, exc)
 
-        self._blink_worker = threading.Thread(target=work, daemon=True)
-        self._blink_worker.start()
+        self._lookup_worker = threading.Thread(target=work, daemon=True)
+        self._lookup_worker.start()
 
     def _planet_lookup_done(self, p, error):
+        if isinstance(error, tcore.PlanetChoice):
+            # 2.2.6: a star with several planets: ask which one, then look that one up.
+            self.planet_source.set(f"{error.system}: choose a planet.")
+            self._choose_planet(error.system, error.planets)
+            return
         if error is not None:
             self.planet_source.set("Lookup failed.")
             messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
@@ -1273,13 +1278,48 @@ class App(Tk):
             self.star_id.set(p["host"])
             filled.append("Star ID")
         mags = ", ".join(f"{b} {p[k]:.2f}" for b, k in (("V", "vmag"), ("TESS", "tmag")) if p.get(k))
+        # 2.2.6: say what the typed name resolved to, and the planet's other names.
+        typed = (p.get("typed") or "").strip()
+        aka = ""
+        if typed and typed.lower().replace(" ", "") != str(p["name"]).lower().replace(" ", ""):
+            aka = f" (you typed {typed})"
+        others = [a for a in (p.get("aliases") or []) if not a.startswith(("Gaia ", "WISE ", "2MASS "))][:4]
+        if others:
+            aka += "; also known as " + ", ".join(others)
         self.planet_source.set(
-            f"{p['name']} from {p.get('source', '')}" + (f" ({p['reference']})" if p.get("reference") else "")
+            f"{p['name']}{aka} from {p.get('source', '')}" + (f" ({p['reference']})" if p.get("reference") else "")
             + (f"; star {mags}" if mags else "") + (f"; filled {' and '.join(filled)}" if filled else "")
             + (". a/R* derived from the duration." if p.get("a_rs_derived") else "."))
         self.status.set(f"{p['name']}: P {p['period']:.6f} d.")
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
+
+    def _choose_planet(self, system: str, planets: list):
+        """2.2.6: one button per planet of a multi-planet system; the choice is looked up."""
+        win = Toplevel(self)
+        win.title(f"{APP_TITLE} — choose a planet")
+        win.transient(self)
+        frame = ttk.Frame(win, style="Card.TFrame", padding=14)
+        frame.pack(fill=BOTH, expand=True)
+        ttk.Label(frame, text=f"{system} has {len(planets)} known planets. Which one did you observe?",
+                  style="Card.TLabel").pack(anchor=W, pady=(0, 8))
+
+        def pick(name):
+            win.destroy()
+            self.planet_name.set(name)
+            self.lookup_planet()
+        def cancel():
+            win.destroy()
+            self.planet_source.set("Lookup cancelled.")
+        for name in planets:
+            ttk.Button(frame, text=name, command=lambda n=name: pick(n)).pack(fill=X, pady=2)
+        ttk.Button(frame, text="Cancel", command=cancel).pack(anchor=E, pady=(8, 0))
+        win.protocol("WM_DELETE_WINDOW", cancel)
+        win.after_idle(lambda: fit_to_content(win))
+        try:
+            win.grab_set()
+        except Exception:
+            pass
 
     def _planet_to_fields(self, p: dict):
         def put(var, value, fmt):
@@ -1514,8 +1554,9 @@ class App(Tk):
             extra = f"   VSX period {self.catalog_period:.6f} d"
             if found.get("var_type"):
                 extra += f" ({found['var_type']})"
+        note = f" ({found['note']})" if found.get("note") else ""
         self.status.set(
-            f"{found['name']} from {found.get('source', 'catalog')}: RA {found['ra_hours']:.5f} h, "
+            f"{found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
 

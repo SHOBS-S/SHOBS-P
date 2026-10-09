@@ -1,4 +1,4 @@
-"""SHOBS-P self-test (2.2.3; 2.2.5 checks added). Double-click "Run self-test.bat" in this folder.
+"""SHOBS-P self-test (2.2.3; 2.2.5 and 2.2.6 checks added). Double-click "Run self-test.bat" in this folder.
 
 Runs with your own Python (the one SHOBS-P uses), so it checks the real Astropy, photutils and Tkinter:
   1. the program files import, and the version;
@@ -140,6 +140,27 @@ def main() -> None:
         state = res["verdict"]["state"]
         key = next((k for k in expect if k in os.path.basename(path)), None)
         check(f"{os.path.basename(path)}: {state}", key is None or state == expect[key], f"expected {expect.get(key)}")
+
+    section("4b planet names (2.2.6; needs the internet)")
+    names = ("KOI-217 b", "Kepler-71 b", "KOI-217.01", "TrES-3b", "wasp 12 b")
+    got = {n: tc.nea_resolve(n) for n in names}
+    if all(v is None for v in got.values()):
+        out("  (NASA Exoplanet Archive not reachable: skipped)")
+    else:
+        same = {(got[n] or {}).get("resolved") for n in names[:3]}
+        check("KOI-217 b, Kepler-71 b and KOI-217.01 are one planet", len(same) == 1 and None not in same, str(same))
+        check("TrES-3b resolves", bool((got["TrES-3b"] or {}).get("resolved")), str((got["TrES-3b"] or {}).get("resolved")))
+        check("wasp 12 b resolves", bool((got["wasp 12 b"] or {}).get("resolved")), str((got["wasp 12 b"] or {}).get("resolved")))
+        try:
+            p = tc.lookup_planet("Kepler-71 b")
+            check("Kepler-71 b looks up (period 3.905 d)", abs(p["period"] - 3.905) < 0.01, f"{p['name']} P {p['period']:.5f}")
+        except Exception as exc:
+            check("Kepler-71 b looks up", False, str(exc).splitlines()[0])
+        try:
+            t = core.lookup_target("TrES-3 b")
+            check("Star ID 'TrES-3 b' finds the star", 17.8 < t["ra_hours"] < 17.9, t.get("note", t.get("source", "")))
+        except Exception as exc:
+            check("Star ID 'TrES-3 b' finds the star", False, str(exc).splitlines()[0])
 
     section("5  the window opens and closes")
     try:

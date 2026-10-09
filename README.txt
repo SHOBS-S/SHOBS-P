@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.5
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.6
 =====================================================
 
 Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
@@ -37,6 +37,15 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.6 (S = shared by every mode, M = one mode only)
+- M  Transits: the planet lookup finds a planet under any of its names. It first asks the NASA Exoplanet Archive's
+     own alias service which name the Archive uses now, so KOI-217 b, Kepler-71 b, KOI-217.01 and TOI-4426 b all
+     find the same planet, as do TrES-3b, "wasp 12 b", EPIC and TIC numbers. (2.2.5 turned KOI-217 b into
+     Kepler-71 b, a name the Archive's planet table no longer uses, and found nothing.) The Input page says what the
+     name resolved to and the planet's other names. A star with several planets (HD 219134) asks which one.
+- S  Star ID lookup: a planet name typed as the Star ID (TrES-3 b) now finds its star: SHOBS-P tries SIMBAD's
+     spelling (TrES-3b) and then the host star.
 
 New in 2.2.5 (S = shared by every mode, M = one mode only)
 - S  Up to 10 comparison stars. Pick "Comps (C1–C10)" on the Photometry page and click stars one after another:
@@ -469,6 +478,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.6  Planet lookup through the Exoplanet Archive's alias service (any name; KOI-217 b fixed); planet names as
+       Star ID.
 2.2.5  Up to 10 comps (ensemble reports); one file-name pattern with dates; automatic target lookup; aperture
        rings with a switch; Show catalog stars; Discovery candidate styles, Candidates only, Hide known; blink title.
 2.2.4  Site starts blank and is remembered in the settings file, not the program (ready to share publicly).

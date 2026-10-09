@@ -758,25 +758,92 @@ def _nea_query(adql: str) -> list[dict]:
     return list(csv.DictReader(io.StringIO(_http_get(url).decode("utf-8", "replace"))))
 
 
-def lookup_nea(name: str) -> dict:
-    """Planet parameters from the NASA Exoplanet Archive (Planetary Systems Composite table)."""
+class PlanetChoice(ValueError):
+    """2.2.6: a star name with several planets: the UI asks which one (planets holds their Archive names)."""
+
+    def __init__(self, system: str, planets: list):
+        self.system = system
+        self.planets = list(planets)
+        super().__init__(f"{system} has {len(self.planets)} planets ({', '.join(self.planets)}). Choose one.")
+
+
+def nea_resolve(name: str) -> dict | None:
+    """2.2.6: ask the NASA Exoplanet Archive's System Aliases service which name it uses now for a planet or star
+    typed under any of its names (KOI-217 b, Kepler-71 b, KOI-217.01, TOI-4426.01, TIC/EPIC/Gaia/2MASS numbers,
+    WASP-12b, "wasp 12 b"). Archive names change (Kepler-71 b is listed as KOI-217 b in 2026), so this replaces
+    guessing spellings. Returns {"resolved": name or None, "system": host, "planets": [names], "aliases": [names of
+    the resolved planet]}, or None when the service cannot be reached or does not know the name."""
+    import json
+    import urllib.parse
+
     clean = " ".join(name.strip().replace("'", "").split())
-    kepler = _kepler_name_for_koi(clean)
-    if kepler:
-        clean = kepler
-    variants = _name_variants(clean)
-    where = " or ".join(f"pl_name = '{v}'" for v in variants)
-    rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where {where}")
+    if not clean:
+        return None
+    url = ("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/Lookup/nph-aliaslookup.py?"
+           + urllib.parse.urlencode({"objname": clean}))
+    try:
+        data = json.loads(_http_get(url, timeout=30).decode("utf-8", "replace"))
+        return _parse_alias_reply(data)
+    except Exception:
+        return None   # unreachable, or a reply in an unexpected shape: fall back to the old name guesses
+
+
+def _parse_alias_reply(data) -> dict | None:
+    def obj(value):
+        return value if isinstance(value, dict) else {}
+    data = obj(data)
+    manifest = obj(data.get("manifest"))
+    if str(manifest.get("lookup_status", "")).upper() != "OK":
+        return None
+    planets_info = obj(obj(obj(obj(data.get("system")).get("objects")).get("planet_set")).get("planets"))
+    planets = sorted(k for k in planets_info if isinstance(k, str))
+    resolved = manifest.get("resolved_name") or None
+    matched_planet = resolved in planets_info
+    if not matched_planet:
+        # The name is the star (or the system): a planet only when there is exactly one.
+        resolved = planets[0] if len(planets) == 1 else None
+    aliases = []
+    if resolved:
+        raw = obj(obj(planets_info.get(resolved)).get("alias_set")).get("aliases")
+        aliases = [a for a in (raw if isinstance(raw, list) else []) if isinstance(a, str) and a != resolved]
+    return {"resolved": resolved, "system": manifest.get("system_name") or "", "planets": planets,
+            "aliases": aliases, "matched_planet": matched_planet}
+
+
+def lookup_nea(name: str) -> dict:
+    """Planet parameters from the NASA Exoplanet Archive (Planetary Systems Composite table). 2.2.6: the name is
+    first resolved with the Archive's alias service; the old spelling guesses are kept as the fallback."""
+    clean = " ".join(name.strip().replace("'", "").split())
+    rows = []
+    info = nea_resolve(clean)
+    import re
+    planet_like = bool(re.search(r"(\d\s?[b-i]|\.\d{1,2})$", clean, flags=re.IGNORECASE))
+    if info is not None and planet_like and not info["matched_planet"]:
+        # A planet-like name the service matched only to its star (a TOI candidate, say): don't hand back one of the
+        # star's confirmed planets in its place, and don't ask; let the spelling guesses and ExoFOP try it.
+        info = None
+    if info is not None and info["resolved"] is None and len(info["planets"]) > 1:
+        raise PlanetChoice(info["system"] or clean, info["planets"])
+    if info is not None and info["resolved"]:
+        rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where pl_name = '{info['resolved']}'")
+    kepler = None
     if not rows:
-        try:   # the same names in any capitalization
-            rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where "
-                              + " or ".join(f"lower(pl_name) = '{v.lower()}'" for v in variants))
-        except Exception:
-            rows = []
+        kepler = _kepler_name_for_koi(clean)
+        # Look for the name as typed AND its Kepler name: the Archive's name table maps KOI-217 b to Kepler-71 b,
+        # but its planet tables list that planet as KOI-217 b, so the Kepler name alone found nothing.
+        variants = list(dict.fromkeys(_name_variants(clean) + (_name_variants(kepler) if kepler else [])))
+        where = " or ".join(f"pl_name = '{v}'" for v in variants)
+        rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where {where}")
+        if not rows:
+            try:   # the same names in any capitalization
+                rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where "
+                                  + " or ".join(f"lower(pl_name) = '{v.lower()}'" for v in variants))
+            except Exception:
+                rows = []
     if not rows:
         raise ValueError(f"the NASA Exoplanet Archive has no planet called {name}"
-                         + (f" (looked for {kepler}, its Kepler name)" if kepler else "")
-                         + ". Try the published name (for example Kepler-71 b rather than a KOI number).")
+                         + (f" (also looked for {kepler}, its Kepler name)" if kepler else "")
+                         + ". Check the spelling, or type the planet's values by hand.")
     row = rows[0]
     pl_name = row.get("pl_name") or clean
     # Uncertainties: the composite table if it has them, else the default parameter set in the full table.
@@ -816,6 +883,8 @@ def lookup_nea(name: str) -> dict:
         "vmag": _f(row.get("sy_vmag")), "tmag": _f(row.get("sy_tmag")),
         "ra": _f(row.get("ra")), "dec": _f(row.get("dec")), "source": "NASA Exoplanet Archive",
         "reference": ("ephemeris: " + refs[0] if refs[0] else "") + eph_note,
+        # 2.2.6: what was typed, and the planet's other names, so the Input page can say what it resolved to.
+        "typed": clean, "aliases": list((info or {}).get("aliases") or []) if info and info.get("resolved") == pl_name else [],
     }
     return complete_planet(planet)
 
@@ -924,6 +993,8 @@ def lookup_planet(name: str) -> dict:
     errors = []
     try:
         return lookup_nea(name)
+    except PlanetChoice:
+        raise
     except Exception as exc:
         errors.append(f"NASA Exoplanet Archive: {exc}")
     if "TOI" in name.upper():

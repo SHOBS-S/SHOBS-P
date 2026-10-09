@@ -1070,6 +1070,19 @@ def reduce_frame(
     )
 
 
+def planet_name_fallbacks(name: str) -> list[str]:
+    """2.2.6: for a name that ends in a planet letter after a number ("TrES-3 b", "KOI-217b", "HD 219134 b"): the
+    no-space planet spelling SIMBAD uses, then the host star. Anything else: []."""
+    import re
+
+    clean = " ".join(name.strip().split())
+    m = re.match(r"^(.*\d)\s?([b-iB-I])$", clean)
+    if not m:
+        return []
+    host = m.group(1).strip()
+    return list(dict.fromkeys([host + m.group(2).lower(), host]))
+
+
 def lookup_target(name: str) -> dict:
     """SIMBAD first, so any designation works. VSX is the fallback, and also supplies a catalog period when it has one."""
     errors = []
@@ -1083,6 +1096,17 @@ def lookup_target(name: str) -> dict:
     except Exception as exc:
         errors.append(f"VSX: {exc}")
         vsx = None
+    if found is None and vsx is None:
+        # 2.2.6: a planet name in the Star ID box. SIMBAD writes planets without the space ("WASP-12b",
+        # "Kepler-71b") and does not know some spellings ("TrES-3 b"); try its spelling, then the host star.
+        for alt in planet_name_fallbacks(name):
+            try:
+                found = _lookup_simbad(alt)
+                found["name"] = alt
+                found["note"] = f"looked up as {alt}"
+                break
+            except Exception:
+                continue
     if found is None and vsx is None:
         raise ValueError(f"Could not find {name}.\n" + "\n".join(errors))
     if found is None:
