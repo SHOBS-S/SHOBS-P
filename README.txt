@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.6
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.7
 =====================================================
 
 Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
@@ -37,6 +37,34 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.7 (S = shared by every mode, M = one mode only)
+- S  Nights are named the way observers say them: "K2-113 b · night of 5–6 Oct 2026" in the Transit fit night box,
+     the Output per-night table (the JD moves to its own column), the night-by-night plots, Comp health and the
+     series messages. The date is your local evening (from the site longitude), so a night past midnight stays one
+     night. Series files still use the JD underneath, so older series open unchanged.
+- S  Flips the alignment cannot see: when the camera rotator leaves its angle during a flip and comes back to it
+     (ROTATOR 360 → 180 → 360), the images look unflipped, but the light path has changed. The frames after the
+     rotator's excursion now start the "after flip" segment (rejected frames' headers count too).
+- M  Transits: Save plot PNG on the Transit fit page: the plot as shown, with the planet, the data source, the
+     verdict, the results table and the notes above it. Works for fits of EXOTIC reports too.
+- M  Transits: opening an EXOTIC/AAVSO report clears the previous plot at once and fits the report by itself. A
+     banner says which report is being fitted, and that your own photometry is kept: choose its night, or Close
+     report, to go back. The Input page says so too, and is not changed by the report. A new photometry run or a
+     loaded series closes a report left open, so the page never fits the wrong data.
+- M  Transits: a report with no OBSDATE (EXOTIC 4.3.1) takes the date of its first point, in the header and the
+     file name.
+- M  Transits: looking up a planet whose star differs from the Star ID (a target left from another planet) replaces
+     the Star ID and RA/Dec and says so. Looking up a Star ID also finds its planets: one transiting planet fills
+     the Planet box; several open the chooser, transiting planets first and the others marked "does not transit".
+- M  Transits: when the depth is far from the published one and the night gives a reason (a jump at an in-transit
+     gap that fits nearly as well, or a one-sided baseline), the verdict reads "Timing usable; depth unreliable"
+     in amber, and saved reports carry the note. The depth note no longer blames a neighbor for a deeper dip.
+- M  Transits: ephemeris references with accented names read properly (Kabáth, not Kab&aacute;th).
+- M  Discovery: select rows in the field-scan table (several with Ctrl or Shift) and the button marks only those
+     on the image ("Mark 3 selected on image"); with none selected it marks all candidates.
+- M  Discovery: a new caution, "noise begins at flip (or after a gap): check", for a star that is quiet on one side
+     of a flip or gap and scattered on the other (it moves the candidate to the dim "check first" style).
 
 New in 2.2.6 (S = shared by every mode, M = one mode only)
 - M  Transits: the planet lookup finds a planet under any of its names. It first asks the NASA Exoplanet Archive's
@@ -478,6 +506,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.7  Night names; hidden-flip detection; Transit PNG; report handling (auto fit, banner, closes on new data);
+       Star ID finds planets; depth-unreliable verdict; Discovery mark selected and noise-at-flip caution.
 2.2.6  Planet lookup through the Exoplanet Archive's alias service (any name; KOI-217 b fixed); planet names as
        Star ID.
 2.2.5  Up to 10 comps (ensemble reports); one file-name pattern with dates; automatic target lookup; aperture

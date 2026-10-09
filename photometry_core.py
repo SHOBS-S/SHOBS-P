@@ -3239,6 +3239,11 @@ def scan_cautions(result: dict, i: int) -> list[str]:
         out.append("change begins at flip: check")
     elif kind == "gap":
         out.append("change begins after a gap: check")
+    noise = (result.get("noise_at_boundary") or {}).get(i)   # 2.2.7
+    if noise == "flip" and kind != "flip":
+        out.append("noise begins at flip: check")
+    elif noise == "gap" and kind != "gap":
+        out.append("noise begins after a gap: check")
     return out
 
 
@@ -3969,6 +3974,27 @@ def header_rotator(header: dict) -> float | None:
     return None
 
 
+def rotator_excursion_start(angles: list) -> int | None:
+    """2.2.7: index of the first frame after a rotator excursion, else None. angles: each light's rotator reading in
+    time order (rejected frames included, None when a header has none). A mount flip done with the camera turned
+    back to its first angle leaves the images unflipped (ROTATOR 360 → 180 during the flip → 360/0 again), so the
+    alignment sees no flip, but the light path through the telescope has changed: treat the frames after the
+    excursion as a new segment, as a flip."""
+    ref = next((a for a in angles if a is not None), None)
+    if ref is None:
+        return None
+    seen_excursion = False
+    for i, a in enumerate(angles):
+        if a is None:
+            continue
+        far = angle_difference(a, ref) > 90.0
+        if far:
+            seen_excursion = True
+        elif seen_excursion:
+            return i
+    return None
+
+
 def angle_difference(a: float, b: float) -> float:
     """Smallest difference between two angles in degrees (360 and 0 are the same)."""
     return abs((a - b + 180.0) % 360.0 - 180.0)
@@ -4298,6 +4324,32 @@ def scan_boundaries(seg, jd) -> list[tuple[int, str]]:
         elif jd[k] - jd[k - 1] > gap:
             out.append((k, "gap"))
     return out
+
+
+def noise_at_boundary(lc, boundaries: list[tuple[int, str]], ratio: float = 3.0, min_side: int = 6) -> str | None:
+    """2.2.7: does the light curve go from quiet to noisy (or the reverse) at a flip, rotator move or gap? Robust
+    scatter (of frame-to-frame differences, so a slow trend does not count) on each side of each boundary; returns
+    that boundary's kind when one side scatters at least `ratio` times the other. Catches a star that lands on a bad
+    spot after a flip, which a change-in-level test misses."""
+    lc = np.asarray(lc, dtype=float)
+    best = None
+    for k, kind in boundaries:
+        a, b = lc[:k], lc[k:]
+        a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+        if a.size < min_side or b.size < min_side:
+            continue
+        sa = 1.4826 * float(np.median(np.abs(np.diff(a) - np.median(np.diff(a))))) / math.sqrt(2)
+        sb = 1.4826 * float(np.median(np.abs(np.diff(b) - np.median(np.diff(b))))) / math.sqrt(2)
+        lo, hi = min(sa, sb), max(sa, sb)
+        if lo <= 0 and hi > 0:
+            r = float("inf")
+        elif lo <= 0:
+            continue
+        else:
+            r = hi / lo
+        if r >= ratio and (best is None or r > best[0]):
+            best = (r, kind)
+    return best[1] if best else None
 
 
 def change_at_boundary(lc, boundaries: list[tuple[int, str]], before: int = 2, ratio: float = 1.5) -> str | None:

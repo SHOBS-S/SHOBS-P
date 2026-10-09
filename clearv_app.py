@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.6"
+APP_VERSION = "2.2.7"
 APP_SHORT = "SHOBS-P"
 # Marker colours on the image, shared by the pick buttons so each button matches its marker.
 PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
@@ -1207,6 +1207,9 @@ class App(Tk):
             ttk.Entry(pg, textvariable=var2, width=16).grid(row=r, column=3, sticky="ew", pady=3)
         ttk.Label(pg, textvariable=self.planet_source, style="Hint.TLabel", wraplength=560, justify=LEFT).grid(
             row=5, column=0, columnspan=4, sticky=W, pady=(4, 0))
+        self.report_note = StringVar(value="")
+        ttk.Label(pg, textvariable=self.report_note, style="Warn.TLabel", wraplength=560, justify=LEFT).grid(
+            row=6, column=0, columnspan=4, sticky=W, pady=(2, 0))
         pg.columnconfigure(1, weight=1)
         pg.columnconfigure(3, weight=1)
         self.planet_group.pack(fill=X, pady=(10, 0))
@@ -1261,7 +1264,7 @@ class App(Tk):
         if isinstance(error, tcore.PlanetChoice):
             # 2.2.6: a star with several planets: ask which one, then look that one up.
             self.planet_source.set(f"{error.system}: choose a planet.")
-            self._choose_planet(error.system, error.planets)
+            self._choose_planet(error.system, error.planets, getattr(error, "transiting", set()))
             return
         if error is not None:
             self.planet_source.set("Lookup failed.")
@@ -1270,13 +1273,25 @@ class App(Tk):
         self.planet_info = dict(p)
         self._planet_to_fields(p)
         filled = []
-        if p.get("ra") is not None and not self.ra_hours.get().strip():
+        # 2.2.7: a planet whose host is a different star from the Star ID (a target left from an earlier planet)
+        # replaces the Star ID and RA/Dec, and says so; the same star is left as typed.
+        old_star = self.star_id.get().strip()
+        different = False
+        if p.get("ra") is not None and self.ra_hours.get().strip() and self.dec_deg.get().strip():
+            try:
+                sep = core.sky_separation_arcsec(float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()),
+                                                 p["ra"], p["dec"])
+                different = sep > 60.0
+            except (TypeError, ValueError):
+                different = True
+        if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
             self.dec_deg.set(f"{p['dec']:.5f}")
             filled.append("RA/Dec")
-        if p.get("host") and not self.star_id.get().strip():
+        if p.get("host") and (not old_star or different):
             self.star_id.set(p["host"])
-            filled.append("Star ID")
+            self._last_lookup_name = p["host"]
+            filled.append("Star ID" + (f" (was {old_star}, a different star)" if old_star and different else ""))
         mags = ", ".join(f"{b} {p[k]:.2f}" for b, k in (("V", "vmag"), ("TESS", "tmag")) if p.get(k))
         # 2.2.6: say what the typed name resolved to, and the planet's other names.
         typed = (p.get("typed") or "").strip()
@@ -1294,8 +1309,50 @@ class App(Tk):
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
 
-    def _choose_planet(self, system: str, planets: list):
-        """2.2.6: one button per planet of a multi-planet system; the choice is looked up."""
+    def _planets_for_star(self, star: str, found: dict):
+        """2.2.7 (Transits): a Star ID lookup also finds the star's planets: one transiting planet is looked up and
+        filled in; several open the chooser (transiting first). A planet already typed for this star is kept."""
+        star = (star or "").strip()
+        if not star:
+            return
+        current = self.planet_name.get().strip()
+        info = getattr(self, "planet_info", None) or {}
+        if current and info.get("host") and info.get("ra") is not None and found.get("ra_hours") is not None:
+            try:
+                if core.sky_separation_arcsec(info["ra"], info["dec"], found["ra_hours"] * 15.0,
+                                              found["dec_deg"]) < 60.0:
+                    return   # the planet box already holds a planet of this star
+            except (TypeError, ValueError, KeyError):
+                pass
+
+        def work():
+            try:
+                res = tcore.star_planets(star)
+            except Exception:
+                res = None
+            self.call_ui(self._planets_for_star_done, star, res)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _planets_for_star_done(self, star: str, res):
+        if star != self.star_id.get().strip():
+            return
+        if not res:
+            self.planet_source.set(f"No known planets for {star} in the NASA Exoplanet Archive (type the planet's name "
+                                   "if it has another).")
+            return
+        tr = [n for n in res["planets"] if n in res["transiting"]]
+        if len(tr) == 1 or (len(res["planets"]) == 1):
+            self.planet_name.set(tr[0] if tr else res["planets"][0])
+            self.lookup_planet()
+        else:
+            self.planet_source.set(f"{res['system']}: choose a planet.")
+            self._choose_planet(res["system"], res["planets"], res["transiting"])
+
+    def _choose_planet(self, system: str, planets: list, transiting=None):
+        """2.2.6: one button per planet of a multi-planet system; the choice is looked up. 2.2.7: planets that
+        transit first; the others are marked, since a transit fit needs a transiting planet."""
+        transiting = set(transiting or [])
         win = Toplevel(self)
         win.title(f"{APP_TITLE} — choose a planet")
         win.transient(self)
@@ -1312,7 +1369,8 @@ class App(Tk):
             win.destroy()
             self.planet_source.set("Lookup cancelled.")
         for name in planets:
-            ttk.Button(frame, text=name, command=lambda n=name: pick(n)).pack(fill=X, pady=2)
+            text = name if (not transiting or name in transiting) else f"{name}   (does not transit)"
+            ttk.Button(frame, text=text, command=lambda n=name: pick(n)).pack(fill=X, pady=2)
         ttk.Button(frame, text="Cancel", command=cancel).pack(anchor=E, pady=(8, 0))
         win.protocol("WM_DELETE_WINDOW", cancel)
         win.after_idle(lambda: fit_to_content(win))
@@ -1554,6 +1612,8 @@ class App(Tk):
             extra = f"   VSX period {self.catalog_period:.6f} d"
             if found.get("var_type"):
                 extra += f" ({found['var_type']})"
+        if self.mode_key == "transits":
+            self._planets_for_star(name or found.get("name", ""), found)
         note = f" ({found['note']})" if found.get("note") else ""
         self.status.set(
             f"{found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
@@ -4533,11 +4593,18 @@ class App(Tk):
                     if kind:
                         at_flip[i] = kind
                 result["at_boundary"] = at_flip
+                # 2.2.7: also quiet on one side of a flip or gap and noisy on the other.
+                noisy = {}
+                for i in set(cand) | set(result["near"]) | set(watched):
+                    kind = core.noise_at_boundary(result["light_curves"][:, i], result["boundaries"])
+                    if kind:
+                        noisy[i] = kind
+                result["noise_at_boundary"] = noisy
                 n_ns = len([i for i in cand if i in set(result["near_sat"])])
-                n_fb = len([i for i in cand if i in at_flip])
+                n_fb = len([i for i in cand if i in at_flip or i in noisy])
                 if n_ns or n_fb:
-                    self.call_ui(self.log, f"  Cautions on candidates: {n_ns} near saturation, {n_fb} with the biggest "
-                                           "change starting at a flip, rotator move or gap.")
+                    self.call_ui(self.log, f"  Cautions on candidates: {n_ns} near saturation, {n_fb} with a change or "
+                                           "a jump in noise starting at a flip, rotator move or gap.")
                 periods = {}
                 for i in list(cand[:40]) + [k for k in watched if k not in cand[:40]]:
                     good = np.isfinite(result["light_curves"][:, i])
@@ -4656,10 +4723,12 @@ class App(Tk):
             child.destroy()
         self.scan_view = ScanView(self.discovery_host, self, result)
 
-    def mark_scan_candidates(self, result):
+    def mark_scan_candidates(self, result, only=None):
         # 2.2.5: each mark carries its kind (possible new / known / check first / unchecked) and the reason.
+        # 2.2.7: only= a list of candidates to mark (the rows selected); their numbers stay as in the table.
+        keep = set(only) if only else None
         self.scan_marks = [(result["xy"][i][0], result["xy"][i][1], str(rank), *core.scan_candidate_kind(result, i))
-                           for rank, i in enumerate(result["candidates"], 1)]
+                           for rank, i in enumerate(result["candidates"], 1) if keep is None or i in keep]
         self.show_step(STEP_PHOTO)
         self.refresh_preview()
 
@@ -5101,6 +5170,39 @@ class App(Tk):
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
 
+    def _mark_rotator_excursion(self, night_points):
+        """2.2.7: a flip the alignment cannot see (the camera turned back to its first angle after the flip) still
+        splits the night: frames after a rotator excursion become the "flip" segment, so each star's light curve is
+        lined up across it like any flip. Rejected frames count, since the excursion is often only in them."""
+        if not night_points or any(o.segment == "flip" for o in night_points):
+            return
+        try:
+            paths, _skipped, _note = core.split_lights(core.list_fits(self.light_dir.get()))
+        except Exception:
+            return
+        used = {os.path.normcase(os.path.abspath(o.path)) for o in night_points}
+        if not paths or not used:
+            return
+        angles = []
+        for p in paths:
+            try:
+                angles.append(core.header_rotator(core.read_header(p)))
+            except Exception:
+                angles.append(None)
+        start = core.rotator_excursion_start(angles)
+        if start is None:
+            return
+        after = {os.path.normcase(os.path.abspath(p)) for p in paths[start:]}
+        before_used = any(os.path.normcase(os.path.abspath(p)) in used for p in paths[:start])
+        moved = [o for o in night_points if os.path.normcase(os.path.abspath(o.path)) in after]
+        if not before_used or not moved:
+            return
+        for o in moved:
+            o.segment = "flip"
+        self.log(f"Flip found from the rotator readings (it left its angle and came back, so the images look "
+                 f"unflipped): {len(moved)} frames from {os.path.basename(paths[start])} on are treated as after "
+                 "the flip.")
+
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False):
         self._end_job()
         if cancelled:
@@ -5112,10 +5214,15 @@ class App(Tk):
             messagebox.showerror(APP_TITLE, "No frames produced a magnitude. The Calibrate page log says why each frame was skipped.")
             return
         night = f"JD{math.floor(night_points[0].jd)}"
+        # 2.2.7: new photometry is what the Transit fit page should show: drop an EXOTIC report left loaded there.
+        if getattr(self, "transit_page", None) is not None and self.transit_page.report is not None:
+            self.transit_page.close_report(quiet=True)
+            self.log("Transit fit: the EXOTIC report that was loaded was closed; the page now uses this photometry.")
         filt = self._filter_code()
         for obs in night_points:
             obs.night = night
             obs.filt = filt
+        self._mark_rotator_excursion(night_points)
         if color_info:
             self._record_color_calibration(night, color_info)
         append = False
@@ -5141,17 +5248,18 @@ class App(Tk):
             diffs = core.night_setup_differences(mine, others)
             if diffs:
                 warning += ("\n\nCareful: this night was reduced differently from the series:\n  • "
-                            + "\n  • ".join(diffs) + "\nNights reduced differently can sit on different zero points "
+                            + "\n  • ".join(self.label_nights(d) for d in diffs) + "\nNights reduced differently can sit on different zero points "
                             "(a step between nights that is not the star).")
             already = any(o.night == night for o in self.observations)
             if already:
-                warning += (f"\n\n{night} is already in the series. Yes replaces that night's points with this run "
+                warning += (f"\n\nThe night of {self.night_label(night, short=True, jd=night_points[0].jd)} ({night}) is already in the series. Yes replaces that night's points with this run "
                             "(the other nights stay).")
             saved_note = (f"\n\nNo also leaves {os.path.basename(self.series_path)} on disk untouched; use Save series "
                           "to keep the new one under a new name.") if self.series_path else ""
             append = messagebox.askyesno(
                 APP_TITLE,
-                f"Add these {len(night_points)} points as {night} to the {len(self.observations)} points already in the series?\n\n"
+                f"Add these {len(night_points)} points as the night of "
+                f"{self.night_label(night, short=True, jd=night_points[0].jd)} ({night}) to the {len(self.observations)} points already in the series?\n\n"
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
             )
         replaced = False
@@ -5221,7 +5329,7 @@ class App(Tk):
             return
         for p in problems:
             self.log(f"⚠ {night}: {p}")
-        messagebox.showwarning(APP_TITLE, f"{night}: near the frame edge or a weak part of the flat:\n\n  • "
+        messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}: near the frame edge or a weak part of the flat:\n\n  • "
                                + "\n  • ".join(problems))
 
     def _night_setup(self) -> dict:
@@ -5475,6 +5583,8 @@ class App(Tk):
             self.log(f"Switched to {MODES[self.series_mode]['name']} mode to match {os.path.basename(path)}.")
         self._fill_base(observations, meta)
         self.observations = observations
+        if getattr(self, "transit_page", None) is not None and self.transit_page.report is not None:
+            self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
         self.legacy_mixed = self._legacy_nights(meta, observations)
         self.series_path = path
         self._refresh_period()
@@ -5796,7 +5906,7 @@ class App(Tk):
             ax.errorbar(
                 tx[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
                 color=colors[i % len(colors)], ecolor="#b0b0b0", lw=0.8,
-                label=(night or "night") + (" *" if self.night_notes.get(night) else ""),
+                label=(self.night_label(night, short=True) if night else "night") + (" *" if self.night_notes.get(night) else ""),
             )
             drop = mask & excluded
             if drop.any():
@@ -5988,7 +6098,7 @@ class App(Tk):
         self.out_canvas.draw_idle()
 
     # ---- Output summary (boxes + per-night table) ------------------------------------
-    SUMMARY_COLUMNS = (("night", "Night", 105), ("date", "Date (local)", 100), ("pts", "Pts", 60), ("used", "used", 60),
+    SUMMARY_COLUMNS = (("night_text", "Night", 120), ("night", "JD", 90), ("pts", "Pts", 60), ("used", "used", 60),
                        ("mean", "Mean mag ± err", 145), ("tsig", "Target σ", 85), ("csig", "Check σ", 85),
                        ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170), ("note", "Note", 260))
 
@@ -6055,7 +6165,8 @@ class App(Tk):
             flags = Counter(w for k in idx for w in obs_list[k].flag.split())
             note = self.night_notes.get(night, "")
             rows.append({
-                "night": night, "date": date, "pts": len(idx), "used": len(used), "mean": mean,
+                "night": night, "night_text": self.night_label(night, short=True), "date": date,
+                "pts": len(idx), "used": len(used), "mean": mean,
                 "value": bins[0]["value"] if bins else float("nan"), "err": bins[0]["err"] if bins else float("nan"),
                 "tsig": f"{tsig:.3f}" if math.isfinite(tsig) else "—",
                 "csig": f"{csig:.3f}" if math.isfinite(csig) else "—",
@@ -6294,7 +6405,7 @@ class App(Tk):
                         {n: v for n, v in self.night_bin.items() if n != their_night}):
                     if line not in seen:
                         seen.add(line)
-                        warn += f"\n  • {their_night}: {line}"
+                        warn += f"\n  • {self.label_nights(their_night)}: {self.label_nights(line)}"
             if seen:
                 warn = warn.replace("\n  • ", "\n\nReduced differently from the open series:\n  • ", 1)
         new_nights = sorted({o.night for o in obs})
@@ -6357,7 +6468,7 @@ class App(Tk):
         if not nights:
             messagebox.showinfo(APP_TITLE, "There is no series loaded.")
             return
-        listing = "\n".join(f"  {i + 1})  {n}" + (f"   note: {self.night_notes[n][:60]}" if self.night_notes.get(n) else "")
+        listing = "\n".join(f"  {i + 1})  {self.night_label(n, short=True)} ({n})" + (f"   note: {self.night_notes[n][:60]}" if self.night_notes.get(n) else "")
                              for i, n in enumerate(nights))
         answer = simpledialog.askstring(APP_TITLE, f"Which night is the note for?\n\n{listing}\n\nType its number:", parent=self)
         if not answer:
@@ -6369,7 +6480,7 @@ class App(Tk):
             return
         text = simpledialog.askstring(
             APP_TITLE,
-            f"Note for {night} (stays with the series and goes into the CSV and exports; leave empty to remove):",
+            f"Note for the night of {self.night_label(night, short=True)} (stays with the series and goes into the CSV and exports; leave empty to remove):",
             initialvalue=self.night_notes.get(night, ""), parent=self,
         )
         if text is None:
@@ -6587,7 +6698,7 @@ class App(Tk):
         except (ValueError, IndexError):
             messagebox.showerror(APP_TITLE, f"'{answer}' is not one of the numbers listed.")
             return
-        if not messagebox.askyesno(APP_TITLE, f"Remove {night} ({counts[night]} points) from the series? This cannot be undone."):
+        if not messagebox.askyesno(APP_TITLE, f"Remove the night of {self.night_label(night, short=True)} ({night}, {counts[night]} points) from the series? This cannot be undone."):
             return
         self.observations = [o for o in self.observations if o.night != night]
         self.legacy_mixed.discard(night)
@@ -6602,7 +6713,7 @@ class App(Tk):
                 saved = f" Saved to {os.path.basename(self.series_path)}."
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
-        self.status.set(f"Removed {night}. {len(self.observations)} points left.{saved}")
+        self.status.set(f"Removed the night of {self.night_label(night, short=True)}. {len(self.observations)} points left.{saved}")
 
     def refit_period(self):
         if not self.observations:
@@ -6699,14 +6810,56 @@ class App(Tk):
         return "night" if answer else "series"
 
     def _night_label(self, night: str) -> str:
-        pts = [o.jd for o in self.observations if o.night == night and math.isfinite(o.jd)]
-        if pts:
+        return self.night_label(night)
+
+    def night_label(self, night: str, short: bool = False, with_target: bool = True, jd: float | None = None) -> str:
+        """2.2.7: a night as an observer says it: "K2-113 b · night of 5–6 Oct 2026" (short: "5–6 Oct 2026"). The
+        evening date is local, from the site longitude (UTC when the site is blank), so a night that runs past
+        midnight is one night. The JD key ("JD2461319") stays the key everywhere else."""
+        if not night or not str(night).startswith("JD"):
+            return str(night or "")
+        if jd is None:
+            pts = [o.jd for o in self.observations if o.night == night and o.jd is not None and math.isfinite(o.jd)]
             try:
-                local = core.jd_to_datetime_utc(min(pts)).astimezone()
-                return f"{night} ({local:%b} {local.day})"
-            except Exception:
-                pass
-        return night
+                jd = min(pts) if pts else float(str(night)[2:]) + 0.5
+            except ValueError:
+                return str(night)
+        try:
+            lon = float(self.lon.get()) if self.lon.get().strip() else 0.0
+        except ValueError:
+            lon = 0.0
+        if not math.isfinite(lon) or abs(lon) > 360:
+            lon = 0.0
+        from datetime import timedelta
+        try:
+            local = core.jd_to_datetime_utc(jd) + timedelta(hours=lon / 15.0)
+        except (OverflowError, ValueError):
+            return str(night)
+        evening = local.date() if local.hour >= 12 else (local - timedelta(days=1)).date()
+        morning = evening + timedelta(days=1)
+        if evening.month == morning.month:
+            span = f"{evening.day}–{morning.day} {morning:%b} {morning.year}"
+        elif evening.year == morning.year:
+            span = f"{evening.day} {evening:%b}–{morning.day} {morning:%b} {morning.year}"
+        else:
+            span = f"{evening.day} {evening:%b} {evening.year}–{morning.day} {morning:%b} {morning.year}"
+        if short:
+            return span
+        target = ""
+        if with_target:
+            target = (self.planet_name.get().strip() if self.mode_key == "transits" else "") or self.star_id.get().strip()
+        return (f"{target} · " if target else "") + f"night of {span}"
+
+    def label_nights(self, text: str) -> str:
+        """2.2.7: replace the JD keys in a message with human night labels (the JD in brackets)."""
+        import re
+        return re.sub(r"\bJD\d{7}\b", lambda m: f"night of {self.night_label(m.group(0), short=True)} ({m.group(0)})",
+                      str(text))
+
+    def set_report_note(self, text: str):
+        """2.2.7: a line on the Input page when the Transit fit page shows an EXOTIC report, not this setup."""
+        if hasattr(self, "report_note"):
+            self.report_note.set(text)
 
     def _already_reported(self, points: list, scope: str) -> str:
         """A warning when nights in this report were already saved in an AAVSO report of the other scope
@@ -6978,7 +7131,8 @@ class CompHealthWindow:
                         ms=4 if spare else 6, alpha=0.7 if spare else 1.0, label=lab + (" (spare)" if spare else ""))
             ax.axhline(0, color="#888888", lw=0.8)
             ax.set_xticks(xs)
-            ax.set_xticklabels(nights, rotation=20, fontsize=8)
+            ax.set_xticklabels([app.night_label(n, short=True) if hasattr(app, "night_label") else n for n in nights],
+                               rotation=20, fontsize=8)
             ax.invert_yaxis()
             ax.set_ylabel("Night median minus its own median (mag)")
             ax.set_title("Night-to-night behaviour of each star (should be flat)")
@@ -7706,7 +7860,7 @@ class ScanView:
         body = ttk.Frame(top, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True)
         cols = ("rank", "star", "mag", "scatter", "excess", "period", "color", "caution", "vsx")
-        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=8)
+        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=8, selectmode="extended")
         for col, label, width in (
             ("rank", "#", 40), ("star", "Star / position", 210), ("mag", "Mag", 70), ("scatter", "Scatter", 80),
             ("excess", "× normal", 80), ("period", "Best period (d)", 110),
@@ -7720,6 +7874,7 @@ class ScanView:
         self.rows = {}
         self._fill_table()
         self.tree.bind("<<TreeviewSelect>>", self._on_row)
+        self.tree.bind("<<TreeviewSelect>>", self._update_mark_button, add="+")
 
         if Figure is None:
             return
@@ -7902,10 +8057,20 @@ class ScanView:
     def toggle_marks(self):
         if self.app.scan_marks:
             self.app.clear_scan_marks()
-            self.mark_button.configure(text="Mark candidates on image")
+            self._update_mark_button()
         else:
-            self.app.mark_scan_candidates(self.r)
+            # 2.2.7: rows selected in the table → only those candidates (numbers kept); none → all of them.
+            chosen = [self.rows[iid] for iid in self.tree.selection() if iid in self.rows]
+            chosen = [i for i in chosen if i in self.r["candidates"]]
+            self.app.mark_scan_candidates(self.r, only=chosen or None)
             self.mark_button.configure(text="Clear candidate marks")
+
+    def _update_mark_button(self, _event=None):
+        if self.app.scan_marks:
+            self.mark_button.configure(text="Clear candidate marks")
+            return
+        n = len([iid for iid in self.tree.selection() if iid in self.rows and self.rows[iid] in self.r["candidates"]])
+        self.mark_button.configure(text=(f"Mark {n} selected on image" if n else "Mark candidates on image"))
 
     def _on_row(self, _event):
         sel = self.tree.selection()

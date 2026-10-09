@@ -101,10 +101,14 @@ class TransitPage:
         row.pack(fill=X, pady=2)
         ttk.Label(row, text="Night", style="Card.TLabel").pack(side=LEFT)
         self.night = StringVar()
-        self.night_box = ttk.Combobox(row, textvariable=self.night, width=14, state="readonly")
+        # 2.2.7: the box shows "K2-113 b · night of 5–6 Oct 2026"; self.night keeps the JD key behind it.
+        self.night_label = StringVar()
+        self._night_keys = {}
+        self.night_box = ttk.Combobox(row, textvariable=self.night_label, width=36, state="readonly")
         self.night_box.pack(side=LEFT, padx=(4, 6))
-        self.night_box.bind("<<ComboboxSelected>>", lambda _e: self._use_night())
+        self.night_box.bind("<<ComboboxSelected>>", lambda _e: self._night_picked())
         ttk.Button(row, text="Open AAVSO exoplanet report (EXOTIC)…", command=self.open_report).pack(side=LEFT, padx=6)
+        self.close_report_button = ttk.Button(row, text="Close report", command=self.close_report)
         self.source_text = StringVar(value="")
         ttk.Label(row, textvariable=self.source_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
 
@@ -126,6 +130,8 @@ class TransitPage:
         ttk.Button(row3, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT)
         ttk.Button(row3, text="Save AAVSO exoplanet report…", command=self.save_aavso).pack(side=LEFT, padx=6)
         ttk.Button(row3, text="Save light-curve CSV…", command=app.save_csv).pack(side=LEFT)
+        # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
+        ttk.Button(row3, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
         row4 = ttk.Frame(card, style="Card.TFrame")
         row4.pack(fill=X, pady=(2, 2))
         ttk.Button(row4, text="Tonight's transits…", command=lambda: FinderWindow(app)).pack(side=LEFT)
@@ -142,6 +148,12 @@ class TransitPage:
         self.prog_text = StringVar(value="")
         ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
 
+        # 2.2.7: which data the page is fitting, in plain words (a loaded report, or a night of photometry).
+        self.banner = StringVar(value="")
+        self.banner_label = ttk.Label(card, textvariable=self.banner, style="Card.TLabel", wraplength=1100,
+                                      justify=LEFT, foreground="#8a4b00", font=("Segoe UI", 10, "bold"))
+        self.banner_label.pack(anchor=W, fill=X, pady=(4, 0))
+        card.bind("<Configure>", lambda e: self.banner_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         # Plot and results side by side; drag the divider to give the table more room.
         body = ttk.PanedWindow(card, orient="horizontal")
         body.pack(fill=BOTH, expand=True, pady=(6, 0))
@@ -198,15 +210,81 @@ class TransitPage:
         """List the nights and show the planet. shown=True when the page has just been opened: then a fit made
         from data that have since changed is cleared, and fresh data are fitted straight away (2.2)."""
         nights = sorted({o.night for o in self.app.observations if o.night})
-        self.night_box.configure(values=nights)
+        labels = [self.app.night_label(n) for n in nights]
+        self._night_keys = {(lab if labels.count(lab) == 1 else f"{lab} ({n})"): n for lab, n in zip(labels, nights)}
+        self._key_labels = {n: lab for lab, n in self._night_keys.items()}
+        self.night_box.configure(values=list(self._night_keys))
+        if self.night.get() in nights:
+            self.night_label.set(self._key_labels.get(self.night.get(), self.night.get()))
         if nights and (self.night.get() not in nights) and self.report is None:
             self.night.set(nights[-1])
+            self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
         self._check_stale(auto=shown)
 
+    def _night_picked(self):
+        key = self._night_keys.get(self.night_label.get())
+        if key:
+            self.night.set(key)
+        self._use_night()
+
+    def close_report(self, quiet: bool = False):
+        """2.2.7: back to the photometry (newest night), dropping a loaded EXOTIC report."""
+        if self.report is None:
+            return
+        self.report = None
+        self.night.set("")
+        self.result = None
+        self._fit_signature = None
+        self._show_source()
+        self._fill_table()
+        self.draw()
+        self.refresh(shown=not quiet)
+        if not self.app.observations:
+            self.source_text.set("")
+            self._notes_text([("info", "Report closed. Run photometry in Transits mode, or open another report.")])
+
+    def _show_source(self):
+        """2.2.7: say what the page is fitting, here and on the Input page."""
+        app = self.app
+        if self.report is not None:
+            r = self.report
+            name = (r.get("planet") or {}).get("name") or "the planet"
+            kept = ""
+            if app.observations:
+                target = app.planet_name.get().strip() or app.star_id.get().strip() or "your"
+                kept = (f" Your {target} photometry is kept; choose its night above (or Close report) to go back.")
+            self.banner.set(f"Fitting an EXOTIC report: {name}, {self._report_date()}, {len(r['t'])} points from "
+                            f"{os.path.basename(r.get('path', ''))}." + kept)
+            try:
+                self.close_report_button.pack(side=LEFT, padx=(0, 6), after=self.night_box)
+            except Exception:
+                pass
+            app.set_report_note(f"The Transit fit page is showing an EXOTIC report for {name}, not the photometry "
+                                "set up here.")
+        else:
+            self.banner.set("")
+            try:
+                self.close_report_button.pack_forget()
+            except Exception:
+                pass
+            app.set_report_note("")
+
+    def _report_date(self) -> str:
+        """The report's OBSDATE, or (2.2.7) the UTC date of its first point when the header has none."""
+        r = self.report or {}
+        date = str((r.get("header") or {}).get("OBSDATE", "")).strip()
+        if date:
+            return date
+        try:
+            return core.jd_to_datetime_utc(float(np.min(r["t"]))).strftime("%d-%b-%Y").upper()
+        except Exception:
+            return ""
+
     def _use_night(self, auto: bool = True):
         self.report = None
+        self._show_source()
         self.result = None
         self._fit_signature = None
         self._fill_table()
@@ -280,14 +358,24 @@ class TransitPage:
             return
         self.report = rep
         self.night.set("")
+        self.night_label.set("")
         h = rep["header"]
         self.source_text.set(f"{os.path.basename(path)}: {len(rep['t'])} points, {h.get('SOFTWARE', '')}, "
-                             f"{h.get('OBSDATE', '')}")
+                             f"{self._report_date()}")
         self.planet_text.set(planet_summary(self.current_planet()))
         self.result = None
+        self._fit_signature = None
+        self._show_source()
         self._fill_table()
-        self._notes_text([("info", "Report loaded. Fit transit refits its light curve with SHOBS-P and lists "
-                                   "EXOTIC's results beside SHOBS-P's.")])
+        # 2.2.7: the old plot goes at once, and the report is fitted straight away (as new photometry is).
+        name = (rep.get("planet") or {}).get("name") or "the planet"
+        what = "fitting…" if not self.app.busy else "press Fit transit when the current job ends"
+        self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from EXOTIC: {what}")
+        self._notes_text([("info", "Report loaded and being fitted. SHOBS-P refits its light curve and lists "
+                                   "EXOTIC's results beside SHOBS-P's. Cancel stops the fit; Fit transit runs it "
+                                   "again with other settings.")])
+        if not self.app.busy:
+            self.fit(auto=True)
 
     def _data(self):
         """(t BJD_TDB, flux, err, airmass, meta for files) from the chosen source."""
@@ -296,7 +384,7 @@ class TransitPage:
             r = self.report
             am = r["airmass"] if r["airmass"] is not None else np.full(len(r["t"]), np.nan)
             h = r["header"]
-            meta = {"obscode": h.get("OBSCODE", ""), "obsdate": h.get("OBSDATE", ""), "lat": h.get("OBSLAT", ""),
+            meta = {"obscode": h.get("OBSCODE", ""), "obsdate": self._report_date(), "lat": h.get("OBSLAT", ""),
                     "lon": h.get("OBSLON", ""), "elev": h.get("OBSELEV", ""), "exposure": h.get("EXPOSURE_TIME", ""),
                     "binning": h.get("BINNING", ""), "filter": h.get("FILTER", "CV"), "notes": h.get("NOTES", ""),
                     "source": os.path.basename(r.get("path", ""))}
@@ -351,7 +439,8 @@ class TransitPage:
         if auto:
             if self.app.busy:
                 return
-            self.app.log("Transit fit: starting by itself on the new photometry (Cancel stops it).")
+            self.app.log("Transit fit: starting by itself on the " + ("loaded report" if self.report is not None
+                                                                        else "new photometry") + " (Cancel stops it).")
         if not self.app._start_job("Fitting the transit…"):
             return
         self._pending_signature = self._signature()
@@ -384,9 +473,18 @@ class TransitPage:
         self.app._end_job()
         if error is not None:
             self.prog_text.set("Cancelled." if error[0] == "Cancelled" else "Fit failed.")
+            self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Cancelled" else "Fit failed.")
             if error[0] != "Cancelled":
                 self.app.log(error[1])
                 messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}")
+            return
+        if self._signature() != getattr(self, "_pending_signature", None):
+            # 2.2.7: the data changed while this fit ran (a report opened or closed, another night picked): the
+            # result belongs to other data, so it is not shown.
+            self.prog_text.set("Fit finished for data no longer shown; not used.")
+            self._notes_text([("info", "That fit was for data no longer on this page. Fit transit fits what is shown "
+                                       "now.")])
+            self.draw(placeholder="Not fitted yet: press Fit transit.")
             return
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
@@ -405,6 +503,7 @@ class TransitPage:
     def _set_columns(self):
         """The EXOTIC column only when a report is loaded."""
         cols = ["param", "shobs", "free", "pub"] + (["exotic"] if self.report is not None else [])
+        self._display_cols = cols
         self.table.configure(displaycolumns=cols)
 
     def _show_verdict(self):
@@ -413,7 +512,11 @@ class TransitPage:
             self.verdict.set("")
             return
         state = _state(v)
-        if state == "detected":
+        if state == "detected" and v.get("depth_unreliable"):
+            # 2.2.7: a real dip with good timing, but a depth the night cannot be trusted for.
+            self.verdict.set("✓ " + v["reason"] + " Timing usable; depth unreliable: " + v["depth_unreliable"] + ".")
+            self.verdict_label.configure(foreground="#c26a00")
+        elif state == "detected":
             self.verdict.set("✓ " + v["reason"])
             self.verdict_label.configure(foreground="#2e7d32")
         elif state == "inconclusive":
@@ -505,7 +608,7 @@ class TransitPage:
             self.notes.insert(END, ("⚠ " if level == "warn" else "• ") + text + "\n\n", level)
         self.notes.configure(state="disabled")
 
-    def draw(self):
+    def draw(self, placeholder: str = ""):
         if self.fig is None:
             return
         r = self.result
@@ -513,6 +616,13 @@ class TransitPage:
         ax.clear()
         axr.clear()
         if not r:
+            if placeholder:
+                ax.text(0.5, 0.5, placeholder, transform=ax.transAxes, ha="center", va="center", fontsize=12,
+                        color="#5d6d76", wrap=True)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                axr.set_xticks([])
+                axr.set_yticks([])
             self.canvas.draw_idle()
             return
         best = r["best"]
@@ -584,6 +694,10 @@ class TransitPage:
         meta["version"] = getattr(self.app, "app_version", "")
         v = (self.result or {}).get("verdict")
         state = _state(v) if v else "detected"
+        if state == "detected" and v and v.get("depth_unreliable"):
+            note = "SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"]
+            note = note.replace("Δ", "d").replace("±", "+/-").replace("σ", "sigma").replace("°", " deg").replace("−", "-")
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
         if state != "detected":
             label = "INCONCLUSIVE" if state == "inconclusive" else "NO TRANSIT MEASURED"
             note = f"SHOBS-P verdict {label}: " + v["reason"].replace("\n", " ")
@@ -591,6 +705,97 @@ class TransitPage:
             note = note.replace("Δ", "d").replace("±", "+/-").replace("σ", "sigma").replace("°", " deg").replace("−", "-")
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
         return meta
+
+    def save_png(self):
+        """2.2.7: the transit plot as shown, with the planet, source, verdict and results table above it. Works for a
+        fit of photometry or of an EXOTIC report."""
+        if not self.result or self.fig is None:
+            messagebox.showinfo("SHOBS-P", "Fit a transit first.")
+            return
+        meta = self.meta_for_files or {}
+        name = ((self.result.get("planet") or {}).get("name") or "planet").replace(" ", "")
+        filt = str(meta.get("filter") or "CV").strip() or "CV"
+        date = str(meta.get("obsdate") or "").strip()
+        fname = f"{name}_{filt}_{date}_SHOBS-P_transit.png" if date else f"{name}_{filt}_SHOBS-P_transit.png"
+        path = self.app.output_path(fname, title="Save transit plot PNG", defaultextension=".png",
+                                    filetypes=[("PNG", "*.png")], parent=self.app)
+        if not path:
+            return
+        try:
+            self._write_png(path)
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}")
+            return
+        self.app.status.set(f"Wrote {path}")
+        self.app.log(f"Transit plot PNG: {path}")
+
+    def _write_png(self, path: str):
+        import io
+
+        import matplotlib.image as mpimg
+        from matplotlib.figure import Figure as _Fig
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        buf = io.BytesIO()
+        self.fig.savefig(buf, format="png", dpi=130, facecolor="#ffffff")
+        buf.seek(0)
+        plot = mpimg.imread(buf)
+        ph, pw = plot.shape[:2]
+        lines = [(self.planet_text.get(), 9, "#33424d", "normal")]
+        if self.banner.get():
+            lines.append((self.banner.get(), 9, "#8a4b00", "bold"))
+        elif self.source_text.get():
+            lines.append((self.source_text.get(), 9, "#33424d", "normal"))
+        lines.append((self.verdict.get(), 11, {"detected": "#2e7d32", "inconclusive": "#c26a00",
+                                              "none": "#b00020"}.get(_state(self.result.get("verdict")), "black"),
+                      "bold"))
+        if (self.result.get("verdict") or {}).get("depth_unreliable"):
+            lines[-1] = (lines[-1][0], 11, "#c26a00", "bold")
+        all_cols = ["param", "shobs", "free", "pub", "exotic"]
+        cols = list(getattr(self, "_display_cols", None) or all_cols[:4])
+        labels = {"param": "Parameter", "shobs": "SHOBS-P (MCMC)", "free": "Free shape", "pub": "Published / prior",
+                  "exotic": "EXOTIC report"}
+        heads = [labels[c] for c in cols]
+        rows = [heads]
+        for iid in self.table.get_children():
+            try:
+                vals = list(self.table.item(iid).get("values") or [])
+            except Exception:
+                vals = []
+            by_col = dict(zip(all_cols, [str(v) for v in vals]))
+            rows.append([by_col.get(c, "") for c in cols])
+        notes = [ln.strip() for ln in self.notes.get("1.0", END).split("\n") if ln.strip()]
+        w_in = pw / 130.0
+        import textwrap
+        wrapped = [(part, size, colour, weight) for text, size, colour, weight in lines
+                   for part in (textwrap.wrap(text, width=int(w_in * 13)) or [""])]
+        header_h = 0.24 * len(wrapped) + 0.2 * len(rows) + 0.2 * min(len(notes), 8) + 0.5
+        fig = _Fig(figsize=(w_in, header_h + ph / 130.0), dpi=130, facecolor="#ffffff")
+        FigureCanvasAgg(fig)
+        total = header_h + ph / 130.0
+        y = 1.0 - 0.25 / total
+        for part, size, colour, weight in wrapped:
+            fig.text(0.02, y, part, fontsize=size, color=colour, fontweight=weight, va="top")
+            y -= 0.24 / total
+        y -= 0.06 / total
+        width = [max(len(r[k]) if k < len(r) else 0 for r in rows) for k in range(len(cols))]
+        xs, acc = [], 0.02
+        for k in range(len(cols)):
+            xs.append(acc)
+            acc += min(0.35, (width[k] + 2) / max(sum(width) + 2 * len(cols), 1) * 0.96)
+        for j, r in enumerate(rows):
+            for k, cell in enumerate(r):
+                fig.text(xs[k], y, cell, fontsize=8, va="top", family="monospace" if k else None,
+                         fontweight="bold" if j == 0 else "normal", color="#1a1a1a")
+            y -= 0.2 / total
+        for ln in notes[:8]:
+            fig.text(0.02, y, textwrap.shorten(ln, width=int(w_in * 16), placeholder=" …"), fontsize=8,
+                     color="#b35c00" if ln.startswith("⚠") else "#33424d", va="top")
+            y -= 0.2 / total
+        ax = fig.add_axes([0, 0, 1, (ph / 130.0) / total])
+        ax.imshow(plot)
+        ax.axis("off")
+        fig.savefig(path, dpi=130, facecolor="#ffffff")
 
     def save_aavso(self):
         if not self.result:

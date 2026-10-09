@@ -457,6 +457,7 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     result["verdict"] = transit_verdict(result, prob_s)
     result["flags"] = transit_flags(result)
     v = result["verdict"]
+    v["depth_unreliable"] = depth_unreliable(result) if v["state"] == "detected" else ""
     if v["state"] == "none":
         result["flags"].insert(0, ("warn", "NO TRANSIT MEASURED: " + v["reason"] + " The numbers are shown for "
                                            "reference only; do not report them."))
@@ -533,6 +534,38 @@ def transit_verdict(r: dict, prob) -> dict:
               "none": sentence(reasons) if reasons else ""}[state]
     return {"detected": state == "detected", "state": state, "dbic": dbic, "chi2_flat": chi2_flat,
             "chi2_transit": chi2_tr, "step": step, "reason": reason}
+
+
+def depth_unreliable(r: dict) -> str:
+    """2.2.7: for a detected transit, '' when the depth can be trusted, else why not: the depth is more than 3 sigma
+    from the published one AND the night gives a reason a systematic could have made the difference (a jump at a gap
+    inside the transit that fits nearly as well, ΔBIC under 10; or a one-sided baseline). Timing stays usable."""
+    pub = (r.get("planet") or {}).get("depth")
+    s = r.get("summary") or {}
+    if not pub or pub <= 0 or "depth" not in s:
+        return ""
+    depth, err = s["depth"]
+    if abs(depth - pub) <= 3 * max(err, 1e-6):
+        return ""
+    causes = []
+    step = (r.get("verdict") or {}).get("step")
+    half_t14_h = s["t14"][0] * 12.0 if "t14" in s else None
+    if (step and step.get("dbic") is not None and step["dbic"] > -10
+            and (half_t14_h is None or step.get("gap_at_h") is None or abs(step["gap_at_h"]) <= half_t14_h)):
+        causes.append(f"a {abs(step['step']) * 100:.1f}% jump at the {step['gap_min']:.0f}-minute gap fits nearly as "
+                      f"well (ΔBIC {-step['dbic']:.1f} for the transit)")
+    t = np.asarray(r.get("t"))
+    best = r.get("best") or {}
+    if t.size and "t14" in s and "tc" in best:
+        t1, t4 = best["tc"] - s["t14"][0] / 2, best["tc"] + s["t14"][0] / 2
+        pre_min = (t1 - t.min()) * 1440 if (t < t1).any() else 0.0
+        post_min = (t.max() - t4) * 1440 if (t > t4).any() else 0.0
+        if pre_min < 20 or post_min < 20:
+            causes.append(f"the baseline is one-sided ({pre_min:.0f} min before, {post_min:.0f} min after)")
+    if not causes:
+        return ""
+    return (f"depth {depth * 100:.2f}% vs published {pub * 100:.2f}% ({abs(depth - pub) / max(err, 1e-6):.0f}σ), and "
+            + "; ".join(causes))
 
 
 def depth_plausibility(r: dict) -> str:
@@ -684,9 +717,12 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     if pub and "depth" in s:
         dd = s["depth"][0] - pub
         if abs(dd) > 3 * max(s["depth"][1], 1e-5):
+            why = ("a neighbor's light in the aperture dilutes a transit (makes it shallower)" if dd < 0 else
+                   "a deeper dip than published usually comes from the light curve itself (a jump, a trend, a comp "
+                   "or calibration problem); a neighbor's light cannot make a transit deeper")
             flags.append(("info", f"Depth {s['depth'][0] * 100:.2f}% vs published {pub * 100:.2f}% "
                                   f"({dd * 100:+.2f}%). A clear-filter depth can differ a little from TESS's red "
-                                  "band; a large difference suggests a diluting or contaminating neighbor."))
+                                  f"band; a large difference: {why}."))
     return flags
 
 
@@ -746,7 +782,10 @@ def _name_variants(clean: str) -> list[str]:
 def _strip_tags(text: str) -> str:
     import re
 
-    return re.sub(r"<[^>]+>", "", text or "").replace("&amp;", "&").strip()
+    import html
+
+    # 2.2.7: the Archive sends names double-escaped ("Kab&amp;aacute;th"): unescape twice.
+    return html.unescape(html.unescape(re.sub(r"<[^>]+>", "", text or ""))).strip()
 
 
 def _nea_query(adql: str) -> list[dict]:
@@ -759,12 +798,36 @@ def _nea_query(adql: str) -> list[dict]:
 
 
 class PlanetChoice(ValueError):
-    """2.2.6: a star name with several planets: the UI asks which one (planets holds their Archive names)."""
+    """2.2.6: a star name with several planets: the UI asks which one (planets holds their Archive names).
+    2.2.7: transiting holds the names that transit (empty when unknown)."""
 
-    def __init__(self, system: str, planets: list):
+    def __init__(self, system: str, planets: list, transiting=None):
         self.system = system
         self.planets = list(planets)
+        self.transiting = set(transiting or [])
         super().__init__(f"{system} has {len(self.planets)} planets ({', '.join(self.planets)}). Choose one.")
+
+
+def transiting_planets(system: str) -> set | None:
+    """2.2.7: the names of a system's planets that transit (pscomppars tran_flag = 1), or None if unknown."""
+    if not system or "'" in system:
+        return None
+    try:
+        rows = _nea_query(f"select pl_name, tran_flag from pscomppars where hostname = '{system}'")
+    except Exception:
+        return None
+    return {r.get("pl_name") for r in rows if str(r.get("tran_flag", "")).strip() in ("1", "1.0")}
+
+
+def star_planets(star: str) -> dict | None:
+    """2.2.7: a star typed as the Star ID: its planets from the Archive, transiting ones first.
+    {"system": host, "planets": [names], "transiting": set} or None (unknown star, no planets, or offline)."""
+    info = nea_resolve(star)
+    if info is None or not info.get("planets"):
+        return None
+    tr = transiting_planets(info.get("system") or "") or set()
+    planets = sorted(info["planets"], key=lambda n: (n not in tr, n))
+    return {"system": info.get("system") or star, "planets": planets, "transiting": tr}
 
 
 def nea_resolve(name: str) -> dict | None:
@@ -823,7 +886,8 @@ def lookup_nea(name: str) -> dict:
         # star's confirmed planets in its place, and don't ask; let the spelling guesses and ExoFOP try it.
         info = None
     if info is not None and info["resolved"] is None and len(info["planets"]) > 1:
-        raise PlanetChoice(info["system"] or clean, info["planets"])
+        tr = transiting_planets(info["system"] or "") or set()
+        raise PlanetChoice(info["system"] or clean, sorted(info["planets"], key=lambda n: (n not in tr, n)), tr)
     if info is not None and info["resolved"]:
         rows = _nea_query(f"select {NEA_COLUMNS} from pscomppars where pl_name = '{info['resolved']}'")
     kepler = None
