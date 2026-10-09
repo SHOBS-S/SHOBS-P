@@ -1,20 +1,21 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.4
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.5
 =====================================================
 
 Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
 that finds stars that vary.
 
 Process flow
-1. Input: folders of bias, dark, flat, and light FITS, and an optional Output folder; the target (Lookup RA/Dec asks
-   SIMBAD, then VSX); AAVSO observer code and chart; site and optics. (Comparison and check stars are chosen on the
+1. Input: folders of bias, dark, flat, and light FITS, and an optional Output folder; the target (type the Star ID
+   and press Enter: SIMBAD, then VSX, fill RA/Dec); AAVSO observer code and chart; site and optics. (Comparison and check stars are chosen on the
    Photometry page.)
 2. Blink: step through raw lights (or flats) and reject trails, clouds, and bad guiding. Rejected frames stay on disk.
 3. Calibrate: master bias, exposure-scaled master dark, normalized master flat. Each light becomes
    (light - bias - dark) / flat. The first light is then debayered (superpixel; the channel is chosen on this page:
    green is the default, AAVSO TG with V comps; red is TR, blue is TB, luminance is CV; MONO for monochrome cameras)
    and the app goes straight to Photometry.
-4. Photometry: mark target, comparison, comp 2 (optional), and check. "Label chart" circles catalog stars with their
-   magnitudes; with Comparison or Check selected, clicking a circled star fills in its ID and magnitude.
+4. Photometry: mark the target, one to ten comparison stars (C1-C10), and the check star. "Label chart" circles
+   catalog stars with their magnitudes; with Comps or Check selected, clicking a circled star fills in its ID and
+   magnitude.
    Catalogs: AAVSO sequence (preferred for AAVSO reports; sets the chart ID), Gaia DR3 (almost every star; Johnson V,
    B, R), APASS DR9 (B and V, about V 10 to 17), Tycho-2 (bright stars). Comps from Gaia, APASS, or Tycho-2 set
    Chart ID to na. Every frame is aligned to the marked frame (shift, rotation, meridian flip).
@@ -36,6 +37,38 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.5 (S = shared by every mode, M = one mode only)
+- S  Up to 10 comparison stars. Pick "Comps (C1–C10)" on the Photometry page and click stars one after another:
+     each click adds the next comp (C1, C2 … C10), numbered on the image. Right-click a comp to remove it; the next
+     click fills the free number. Clear selected removes the last comp. The Stars panel lists every comp in use
+     with its catalog magnitude, color and variable check. The comps are averaged as an error-weighted ensemble
+     (as Use comps does); spares, Use comps and Comp health work as before. With two or more comps the AAVSO report
+     is an ensemble (CNAME ENSEMBLE, CMAG na), and AAVSO requires a check star then: SHOBS-P warns if there is none.
+     Series saved by 2.2.4 and earlier open with their comps as C1 and C2. The image legend shows one entry for
+     the comps (for example "Comps C1–C4").
+- S  One naming pattern for result files, modeled on the Transits report:
+       AAVSO_<star>_<filter>_<date>_SHOBS-P.txt
+       <star>_<filter>_<date>_SHOBS-P_lightcurve.csv   and   ..._lightcurve.png
+     for example AAVSO_HD_219134_TG_06-OCT-2026_SHOBS-P.txt. The date is the UTC date of the first point saved; a
+     save spanning several nights shows the first and last (16-SEP-2026_to_06-OCT-2026). The three files of one save
+     share one number when a second set is saved (_2). The ExoFOP package keeps its own name.
+- S  The target is looked up by itself: type the Star ID and press Enter (or click elsewhere), and RA, Dec and the
+     VSX period fill in. A failed lookup is a note in the status line, not a pop-up. Look up again forces a refresh.
+- S  The aperture and sky ring are drawn around the target, comps and check at the sizes in the boxes, and redraw
+     as you type new sizes. "Show apertures" turns them off. In the Suggest… window the button now reads "Use these
+     aperture sizes", and the window says the stars it lists were only measured for their size.
+- S  Overlay switches on the Photometry image: "Show catalog stars" hides the catalog circles and their labels
+     (the labeling stays, so magnitudes, comps and the variable check still work); "Show variables" now hides the
+     red circles of labeled variables as well as the red ×.
+- S  Blink: the "REJECTED" title above the image is no longer cut off (and is bold red).
+- M  Discovery: candidate marks on the image say which candidates matter. Bold magenta: possible new variable (not
+     in VSX/SIMBAD, nothing to check first). Dim: known variable, or a candidate with a "Check first" note. Light
+     grey: unchecked (no sky positions, so no catalog check). Hover over a mark for the reason.
+- M  Discovery: "Candidates only" next to Watch/Exclude hides everything but the scan candidates, watch stars and
+     excluded stars; turning it off brings back exactly what was shown before.
+- M  Discovery: "Hide known variables" on the field-scan results takes the candidates already in VSX/SIMBAD off the
+     plot and the table. The others keep their numbers, so #7 in the table is still mark 7 on the image.
 
 New in 2.2.4 (S = shared by every mode, M = one mode only)
 - S  Site latitude, longitude and elevation start blank for a new user (Input page, Site and optics) and are
@@ -436,6 +469,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.5  Up to 10 comps (ensemble reports); one file-name pattern with dates; automatic target lookup; aperture
+       rings with a switch; Show catalog stars; Discovery candidate styles, Candidates only, Hide known; blink title.
 2.2.4  Site starts blank and is remembered in the settings file, not the program (ready to share publicly).
 2.2.3  Aperture in mm; PNG with the summary header; fast blink with a speed control; series setting checks; markers
        rescale with binning and stay in sync with the Stars panel; plots fill on first show; zoom kept; Save series

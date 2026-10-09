@@ -1,4 +1,4 @@
-"""SHOBS-P self-test (2.2.3). Double-click "Run self-test.bat" in this folder.
+"""SHOBS-P self-test (2.2.3; 2.2.5 checks added). Double-click "Run self-test.bat" in this folder.
 
 Runs with your own Python (the one SHOBS-P uses), so it checks the real Astropy, photutils and Tkinter:
   1. the program files import, and the version;
@@ -99,6 +99,15 @@ def main() -> None:
     edges = core.edge_problems(pts, (1044, 1562), ["C1", "C2"], "K", 66)
     check("edge warning names the comp at the edge only", len(edges) == 1 and "C2" in edges[0])
 
+    section("2b 2.2.5 helpers")
+    check("ten comparison-star slots", len(ca.COMP_ROLES) == 10 and ca.role_label("comp10") == "Comp 10")
+    res = {"candidates": [0, 1, 2], "vsx": [{"name": "V1 Cas", "type": "EW", "source": "VSX"}, None, None],
+           "vsx_sources": ["VSX", "SIMBAD"], "near_sat": [2], "at_boundary": {}}
+    kinds = [core.scan_candidate_kind(res, i)[0] for i in range(3)]
+    check("candidate kinds: known / new / check first", kinds == ["known", "new", "caution"], str(kinds))
+    res["vsx"] = None
+    check("candidate with no sky positions is unchecked", core.scan_candidate_kind(res, 1)[0] == "unchecked")
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):
@@ -141,6 +150,12 @@ def main() -> None:
             app.update()
         app._fit_visible_canvases()
         check("main window built, every step shown", True)
+        app.show_step(1)
+        app._blink_layout()
+        check("blink keeps room for the title", app.blink_fig.subplotpars.top < 0.99)
+        app.star_id.set("HD 219134")
+        check("report name pattern", app._family_names()[0].startswith("AAVSO_HD_219134_")
+              and app._family_names()[0].endswith("_SHOBS-P.txt"), app._family_names()[0])
         app.destroy()
     except Exception:
         check("main window", False, traceback.format_exc(limit=3).strip().splitlines()[-1])

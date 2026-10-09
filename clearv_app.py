@@ -54,10 +54,51 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.4"
+APP_VERSION = "2.2.5"
 APP_SHORT = "SHOBS-P"
 # Marker colours on the image, shared by the pick buttons so each button matches its marker.
-PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#9467bd", "check": "#1f77b4", "watch": "#17becf"}
+PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
+# 2.2.5: up to ten comparison stars. "comp" is C1 and "comp2" C2 (the names older series files use); C3-C10 follow.
+MAX_COMPS = 10
+COMP_ROLES = ("comp",) + tuple(f"comp{i}" for i in range(2, MAX_COMPS + 1))
+for _role in COMP_ROLES:
+    PICK_COLORS[_role] = PICK_COLORS["comp"]
+
+
+# 2.2.5: Discovery candidate marks say which candidates matter. "new": not in VSX/SIMBAD and nothing to check first;
+# "known": already in VSX/SIMBAD; "caution": a "Check first" note (near saturation, starts at a flip or gap);
+# "unchecked": no sky positions, so the catalog check could not run.
+SCAN_MARK_STYLES = {
+    "new": {"color": "#ff2fd0", "ms": 15, "mew": 2.4, "alpha": 1.0, "fs": 10, "weight": "bold",
+            "legend": "Possible new variable"},
+    "known": {"color": "#c49ab8", "ms": 11, "mew": 0.9, "alpha": 0.75, "fs": 8, "weight": "normal",
+              "legend": "Known variable (VSX/SIMBAD)"},
+    "caution": {"color": "#d9a066", "ms": 11, "mew": 0.9, "alpha": 0.8, "fs": 8, "weight": "normal",
+                "legend": "Candidate to check first"},
+    "unchecked": {"color": "#e8e8e8", "ms": 12, "mew": 1.2, "alpha": 0.9, "fs": 9, "weight": "normal",
+                  "legend": "Unchecked (no sky positions)"},
+}
+
+
+def comp_number(role: str) -> int:
+    """1 for "comp", 2 for "comp2" ... 10 for "comp10"; 0 for anything else."""
+    if role == "comp":
+        return 1
+    if role.startswith("comp") and role[4:].isdigit():
+        return int(role[4:])
+    return 0
+
+
+def role_label(role: str) -> str:
+    """Human name of a marked-star role: Target, Comp 1 … Comp 10, Check."""
+    n = comp_number(role)
+    if n:
+        return f"Comp {n}"
+    return {"target": "Target", "check": "Check", "watch": "Watch"}.get(role, role.title())
+
+
+# Labels the field scan gives the marked stars (and the 2.2.4 and older names).
+MARKED_LABELS = ("Target", "Check", "Comp", "Comp 2") + tuple(f"Comp {i}" for i in range(1, MAX_COMPS + 1))
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".shobs_p_settings.json")
 LOG_FILE = os.path.join(os.path.expanduser("~"), ".shobs_p.log")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -264,6 +305,9 @@ class App(Tk):
         self.max_period = DoubleVar(value=20.0)
         self.comp2_name = StringVar()
         self.comp2_mag = StringVar()
+        for _role in COMP_ROLES[2:]:
+            setattr(self, f"{_role}_name", StringVar())
+            setattr(self, f"{_role}_mag", StringVar())
         self.ra_hours = StringVar()
         self.dec_deg = StringVar()
         self.focal_mm = DoubleVar(value=2900)
@@ -286,6 +330,9 @@ class App(Tk):
         self.mag_header = StringVar(value="V magnitude")
         self.show_variables = BooleanVar(value=True)
         self.show_labels = BooleanVar(value=True)
+        self.show_catalog = BooleanVar(value=True)      # 2.2.5: catalog circles (and their labels)
+        self.show_apertures = BooleanVar(value=True)    # 2.2.5: aperture and sky ring around the marked stars
+        self.candidates_only = BooleanVar(value=False)  # 2.2.5: Discovery: only scan candidates and watch stars
         self._own_setup = None                 # your site/optics/camera, set aside while using MicroObservatory frames
         self.scale_approx = False              # the plate scale is only approximate: widen Label chart's search
         self.app_version = APP_VERSION
@@ -323,6 +370,8 @@ class App(Tk):
         self.target_xy = None
         self.comp_xy = None
         self.comp2_xy = None
+        for _role in COMP_ROLES[2:]:
+            setattr(self, f"{_role}_xy", None)
         self.check_xy = None
         self.observations = []
         self.series_path = ""
@@ -462,8 +511,11 @@ class App(Tk):
 
     def _clear_marks(self):
         """New lights mean new star positions; drop the old markers."""
-        self.target_xy = self.comp_xy = self.comp2_xy = self.check_xy = None
+        self.target_xy = self.check_xy = None
+        for _role in COMP_ROLES:
+            setattr(self, f"{_role}_xy", None)
         self._marks_shape = None
+        self.scan_marks = []
         self.spare_marks = []
         self.scan_excluded = []
         self.suggested_comps = []
@@ -931,13 +983,32 @@ class App(Tk):
         return f"{root}_{k}{ext}"
 
     def _family_names(self) -> list[str]:
-        """2.2.3: the file names the three result saves would use now (report, CSV, PNG)."""
-        star = (self.star_id.get() or "").strip()
-        base_csv = (star or self.planet_name.get().strip() or "lightcurve").replace(" ", "_")
-        tag = f"_{self.highlight_night}" if self._save_one_night and self.highlight_night else ""
-        names = [f"{(star or 'variable').replace(' ', '_')}_{self._filter_code()}{tag}.txt",
-                 f"{base_csv}_lightcurve{tag}.csv", f"{(star or 'lightcurve').replace(' ', '_')}_lightcurve{tag}.png"]
+        """The file names the three result saves would use now (report, CSV, PNG). 2.2.5: one pattern, modeled on
+        the Transits report: AAVSO_<star>_<filter>_<date>_SHOBS-P.txt, and <star>_<filter>_<date>_SHOBS-P_lightcurve
+        .csv / .png, so the three files of one save sort together. The date is the UTC date of the first point saved;
+        several nights give the first and last (16-SEP-2026_to_06-OCT-2026)."""
+        star = (self.star_id.get() or "").strip() or self.planet_name.get().strip() or "target"
+        stem = f"{star.replace(' ', '_')}_{self._filter_code()}"
+        dates = self._save_dates()
+        if dates:
+            stem += f"_{dates}"
+        stem += "_SHOBS-P"
+        names = [f"AAVSO_{stem}.txt", f"{stem}_lightcurve.csv", f"{stem}_lightcurve.png"]
         return ["".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in n) for n in names]
+
+    def _save_dates(self) -> str:
+        """2.2.5: DD-MON-YYYY of the first point being saved, or first_to_last when they fall on different UTC dates."""
+        points = self._usable() if self.observations else []
+        if self._save_one_night and self.highlight_night:
+            points = [o for o in points if o.night == self.highlight_night]
+        jds = [o.jd for o in points if o.jd is not None and math.isfinite(o.jd)]
+        if not jds:
+            return ""
+
+        def day(jd):
+            return core.jd_to_datetime_utc(jd).strftime("%d-%b-%Y").upper()
+        first, last = day(min(jds)), day(max(jds))
+        return first if first == last else f"{first}_to_{last}"
 
     def _results_key(self):
         """2.2.3: identifies the results on screen; a new run, an added night or other comps make a new key."""
@@ -1075,8 +1146,12 @@ class App(Tk):
         ttk.Label(target, text="Star ID", style="Card.TLabel").grid(row=0, column=0, sticky=W, padx=(0, 10), pady=3)
         cell = ttk.Frame(target, style="Card.TFrame")
         cell.grid(row=0, column=1, columnspan=2, sticky="ew", pady=3)
-        ttk.Entry(cell, textvariable=self.star_id, width=24).pack(side=LEFT, fill=X, expand=True)
-        ttk.Button(cell, text="Lookup RA/Dec", command=self.lookup_star).pack(side=LEFT, padx=(6, 0))
+        star_entry = ttk.Entry(cell, textvariable=self.star_id, width=24)
+        star_entry.pack(side=LEFT, fill=X, expand=True)
+        # 2.2.5: the target is looked up by itself when you press Enter or leave the box with a new name.
+        star_entry.bind("<Return>", lambda _e: self._auto_lookup())
+        star_entry.bind("<FocusOut>", lambda _e: self._auto_lookup())
+        ttk.Button(cell, text="Look up again", command=self.lookup_star).pack(side=LEFT, padx=(6, 0))
         ttk.Button(cell, text="Clear target", command=self.clear_target).pack(side=LEFT, padx=(6, 0))
         # How AAVSO spells the name, when the typed one differs only in spacing or capitals (2.2).
         self.name_hint = StringVar(value="")
@@ -1266,7 +1341,7 @@ class App(Tk):
         p = planet or self.planet_info or {}
         if p.get("ra") is not None and p.get("dec") is not None:
             return float(p["ra"]), float(p["dec"])
-        raise ValueError("enter the target's RA and Dec on the Input page (Lookup RA/Dec)")
+        raise ValueError("enter the target's RA and Dec on the Input page (type the Star ID and press Enter)")
 
     def _layout_input_for_mode(self):
         if not hasattr(self, "planet_group"):
@@ -1307,6 +1382,7 @@ class App(Tk):
         if good:
             self.star_id.set(good)
             self.status.set(f"Star ID set to {good}.")
+            self._auto_lookup()
 
     def clear_target(self, quiet: bool = False):
         """Empty the target (Star ID, RA, Dec) and the marked stars and comp/check fields that belong to it."""
@@ -1314,8 +1390,8 @@ class App(Tk):
         self.ra_hours.set("")
         self.dec_deg.set("")
         self.target_xy = None
-        for role in ("comp", "comp2", "check"):
-            self.clear_mark(role)
+        for role in COMP_ROLES + ("check",):
+            self.clear_mark(role, redraw=False)
         self.star_bands = {}
         self.suggested_comps = []
         self.catalog_period = None
@@ -1325,7 +1401,7 @@ class App(Tk):
             self.update_star_panel()
         self.refresh_preview()
         if not quiet:
-            self.status.set("Target, comps, and check cleared. Type the new Star ID and press Lookup RA/Dec.")
+            self.status.set("Target, comps, and check cleared. Type the new Star ID and press Enter to look it up.")
 
     def _check_target_field(self, header: dict):
         """Lights pointing far from the Input page's target (a target left over from another star): offer to clear
@@ -1388,25 +1464,46 @@ class App(Tk):
             self.field_centre_needed = needed
             self._layout_input_for_mode()
 
-    def lookup_star(self):
+    def _auto_lookup(self):
+        """2.2.5: look the target up when its name has changed since the last lookup (not on every keystroke)."""
+        name = self.star_id.get().strip()
+        if not name or name == getattr(self, "_last_lookup_name", None):
+            return
+        self.lookup_star(quiet=True)
+
+    def lookup_star(self, quiet: bool = False):
         name = self.star_id.get().strip()
         if not name:
-            messagebox.showinfo(APP_TITLE, "Enter a Star ID or designation first.")
+            if not quiet:
+                messagebox.showinfo(APP_TITLE, "Enter a Star ID or designation first.")
             return
+        self._last_lookup_name = name
         self.status.set(f"Looking up {name} in SIMBAD and VSX…")
 
         def work():
             try:
                 found = core.lookup_target(name)
-                self.call_ui(self._lookup_done, found, None)
+                self.call_ui(self._lookup_done, found, None, name, quiet)
             except Exception as exc:
-                self.call_ui(self._lookup_done, None, exc)
+                self.call_ui(self._lookup_done, None, exc, name, quiet)
 
-        self._blink_worker = threading.Thread(target=work, daemon=True)
-        self._blink_worker.start()
+        # A separate thread from the blink and photometry workers, so a lookup never waits on them (2.2.5).
+        self._lookup_worker = threading.Thread(target=work, daemon=True)
+        self._lookup_worker.start()
 
-    def _lookup_done(self, found, error):
+    def _lookup_done(self, found, error, name: str = "", quiet: bool = False):
+        if name and name != self.star_id.get().strip():
+            # The name changed while this lookup ran (typed again, or "Use it" on the spelling hint): look up the
+            # name that is there now instead of reporting the old one.
+            self._auto_lookup()
+            return
         if error is not None:
+            if quiet:
+                # 2.2.5: an automatic lookup that fails says so quietly; RA/Dec can come from the plate solution.
+                self.status.set(f"Could not look up {name or 'the target'} ({error}). Type RA/Dec, or let the plate "
+                                "solution fill them, or press Look up again.")
+                self._last_lookup_name = None
+                return
             messagebox.showerror(APP_TITLE, str(error))
             return
         self.ra_hours.set(f"{found['ra_hours']:.6f}")
@@ -1565,6 +1662,8 @@ class App(Tk):
             self.blink_canvas = FigureCanvasTkAgg(self.blink_fig, master=host)
             self.blink_canvas.get_tk_widget().configure(width=400, height=300)
             self.blink_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+            # 2.2.5: keep the title band the same height in pixels when the window is resized.
+            self.blink_canvas.mpl_connect("resize_event", lambda _e: self._blink_layout())
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", before=host, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_INPUT)).pack(side=LEFT)
@@ -1783,12 +1882,27 @@ class App(Tk):
                                                       interpolation="nearest")
             self.blink_ax.set_xticks([])
             self.blink_ax.set_yticks([])
-            self.blink_fig.tight_layout()
         else:
             artist.set_data(pic)
+        # 2.2.5: a fixed band in pixels above the image for the title, worked out for the figure's size right now, so
+        # the title is never clipped (tight_layout ran only on the first frame, before the window had its real size).
+        self._blink_layout()
         self.blink_ax.set_title("REJECTED" if rejected else os.path.basename(path),
-                                color="#a32020" if rejected else "#1a1a1a")
+                                color="#c62828" if rejected else "#1a1a1a",
+                                fontweight="bold" if rejected else "normal", fontsize=13 if rejected else 10)
         self.blink_canvas.draw_idle()
+
+    def _blink_layout(self):
+        fig = getattr(self, "blink_fig", None)
+        if fig is None:
+            return
+        h = max(fig.get_figheight() * fig.dpi, 60.0)
+        w = max(fig.get_figwidth() * fig.dpi, 60.0)
+        pt = fig.dpi / 72.0          # pixels per point: follows Windows display scaling (125%, 150% …)
+        top = 1.0 - min(0.4, 26.0 * pt / h)
+        bottom = min(0.2, 4.0 * pt / h)
+        side = min(0.2, 4.0 * pt / w)
+        fig.subplots_adjust(left=side, right=1.0 - side, bottom=bottom, top=top)
 
     def _page_calibrate(self):
         page = ttk.Frame(self.pages)
@@ -2145,8 +2259,7 @@ class App(Tk):
         tools.pack(fill=X, pady=4)
         # Variables and Transits: pick the target, comps, and check star.
         self.pick_tools = ttk.Frame(tools, style="Card.TFrame")
-        for label, value in (("Target", "target"), ("Comparison", "comp"), ("Comp 2", "comp2"), ("Check", "check"),
-                             ("Watch", "watch")):
+        for label, value in (("Target", "target"), ("Comps (C1–C10)", "comp"), ("Check", "check"), ("Watch", "watch")):
             ttk.Radiobutton(self.pick_tools, text="●  " + label, value=value, variable=self.pick_mode,
                             style=f"Pick{value}.TRadiobutton").pack(side=LEFT, padx=6)
         ttk.Button(self.pick_tools, text="Clear selected", command=self.clear_selected_mark).pack(side=LEFT, padx=(2, 6))
@@ -2158,6 +2271,9 @@ class App(Tk):
         ttk.Radiobutton(self.disc_tools, text="✕  Exclude it", value="exclude", variable=self.pick_mode,
                         style="Pickcheck.TRadiobutton").pack(side=LEFT, padx=6)
         ttk.Label(self.disc_tools, text="(right-click a marker to undo)", style="Hint.TLabel").pack(side=LEFT, padx=6)
+        # 2.2.5: one switch to see only the scan candidates and watch stars (the other switches are kept as they are).
+        ttk.Checkbutton(self.disc_tools, text="Candidates only", variable=self.candidates_only,
+                        command=self.refresh_preview).pack(side=LEFT, padx=(14, 6))
         self.run_button = ttk.Button(tools, text="Run photometry", style="Accent.TButton", command=self.run_photometry)
         self.scan_button = ttk.Button(tools, text="Scan field", style="Accent.TButton", command=self.scan_field)
         self.run_button.pack(side=RIGHT)
@@ -2180,11 +2296,20 @@ class App(Tk):
             options, text="Also measure R and B (color index; slower)", variable=self.measure_color,
         ).pack(side=LEFT, padx=14)
         ttk.Checkbutton(
-            options, text="Show variables (red ×)", variable=self.show_variables, command=self.refresh_preview,
+            options, text="Show variables (red ○ ×)", variable=self.show_variables, command=self.refresh_preview,
         ).pack(side=LEFT, padx=(0, 14))
         ttk.Button(options, text="Fit view", command=self.reset_photo_view).pack(side=RIGHT)
         ttk.Checkbutton(options, text="Show labels", variable=self.show_labels, command=self.refresh_preview).pack(
             side=RIGHT, padx=(0, 10))
+        # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
+        for _var in (self.radius, self.sky_in, self.sky_out):
+            _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
+        # 2.2.5: overlay switches.
+        ttk.Checkbutton(options, text="Show catalog stars", variable=self.show_catalog,
+                        command=self.refresh_preview).pack(side=RIGHT, padx=(0, 10))
+        ttk.Checkbutton(options, text="Show apertures", variable=self.show_apertures,
+                        command=self.refresh_preview).pack(side=RIGHT, padx=(0, 10))
+
         self.pick_label = StringVar(value="No stars marked.")
         self.pick_label_widget = ttk.Label(card, textvariable=self.pick_label, style="Hint.TLabel")
         self.pick_label_widget.pack(anchor=W)
@@ -2423,7 +2548,8 @@ class App(Tk):
         switching telescopes, for example to MicroObservatory frames with your own aperture still set."""
         if self.preview is None or not self.preview_is_debayered:
             return True
-        sizes = [self._fwhm_at(self.preview, xy)[0] for xy in (self.target_xy, self.comp_xy) if xy is not None]
+        first_comp = next((getattr(self, f"{r}_xy") for r in self._comp_roles_marked()), None)
+        sizes = [self._fwhm_at(self.preview, xy)[0] for xy in (self.target_xy, first_comp) if xy is not None]
         sizes = [f for f in sizes if math.isfinite(f) and 0.8 < f < 40]
         if not sizes:
             return True
@@ -2447,8 +2573,7 @@ class App(Tk):
         return True
 
     def _marked_stars(self):
-        return [(role, xy) for role, xy in (("Target", self.target_xy), ("Comp", self.comp_xy),
-                                            ("Comp 2", self.comp2_xy), ("Check", self.check_xy)) if xy is not None]
+        return [(role_label(role), xy) for role, xy in self._marked_roles()]
 
     def _fwhm_at(self, img, xy):
         try:
@@ -2513,13 +2638,17 @@ class App(Tk):
         if not lights or self.masters is None:
             messagebox.showinfo(APP_TITLE, "Calibrate first; the test measures real frames.", parent=window.win)
             return
-        if self.comp_xy is None:
-            messagebox.showinfo(APP_TITLE, "Mark at least the comparison star; the test compares stars against it.",
+        # 2.2.5: the test uses the first two marked comps, whichever numbers they have.
+        marked_comps = [getattr(self, f"{r}_xy") for r in self._comp_roles_marked()]
+        test_c1 = marked_comps[0] if marked_comps else None
+        test_c2 = marked_comps[1] if len(marked_comps) > 1 else None
+        if test_c1 is None:
+            messagebox.showinfo(APP_TITLE, "Mark at least one comparison star; the test compares stars against it.",
                                 parent=window.win)
             return
         if self.check_xy is not None:
             ref_label = "check star"
-        elif self.comp2_xy is not None:
+        elif test_c2 is not None:
             ref_label = "comp 2"
         else:
             ref_label = "target (it may truly vary)"
@@ -2532,7 +2661,7 @@ class App(Tk):
         sky_out = float(math.ceil(math.sqrt(sky_in ** 2 + 4.0 * rmax ** 2)))
         n = min(frames, len(lights))
         picks = [lights[int(round(k))] for k in np.linspace(0, len(lights) - 1, n)]
-        pts = [self.target_xy or self.comp_xy, self.comp_xy, self.comp2_xy, self.check_xy]
+        pts = [self.target_xy or test_c1, test_c1, test_c2, self.check_xy]
         xy = np.array([p if p is not None else (np.nan, np.nan) for p in pts], dtype=float)
         binning = max(int(self.binning.get()), 1)
         masters, pattern, mode = self.masters, self.pattern.get(), self.debayer_mode.get()
@@ -2663,10 +2792,12 @@ class App(Tk):
             lo, hi = 0, 1
         self.photo_ax.imshow(img, cmap="gray", origin="upper", vmin=lo, vmax=hi, interpolation="nearest")
         self._mark(self.target_xy, PICK_COLORS["target"], "T")
-        self._mark(self.comp_xy, PICK_COLORS["comp"], "C")
-        self._mark(self.comp2_xy, PICK_COLORS["comp2"], "C2")
+        for role in COMP_ROLES:
+            self._mark(getattr(self, f"{role}_xy"), PICK_COLORS[role], f"C{comp_number(role)}")
         self._mark(self.check_xy, PICK_COLORS["check"], "K")
         for x, y, star in self.chart_placed:
+            if not self._overlay("variables" if star.get("variable") else "catalog"):
+                continue
             if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
                 colour = "#ff5252" if star.get("variable") else "#ffd24a"
                 self.photo_ax.plot(x, y, marker="o", mfc="none", mec=colour, ms=9, lw=1.0 if star.get("variable") else 0.8)
@@ -2678,16 +2809,22 @@ class App(Tk):
         for name, (x, y) in self.watch_xy.items():
             self.photo_ax.plot(x, y, marker="D", mfc="none", mec=PICK_COLORS["watch"], ms=13, mew=1.4)
             self.photo_ax.text(x + 9, y + 9, "W", color=PICK_COLORS["watch"], fontsize=9, fontweight="bold")
-        for x, y, label in self.scan_marks:
-            self.photo_ax.plot(x, y, marker="s", mfc="none", mec="#ff4fd8", ms=12, lw=1.0)
-            self.photo_ax.text(x + 6, y + 6, label, color="#ff4fd8", fontsize=8, fontweight="bold")
-        for x, y, name in self.spare_marks:
-            self.photo_ax.plot(x, y, marker="D", mfc="none", mec="#7fd6ff", ms=7, lw=0.8)
+        for mark in self.scan_marks:
+            x, y, label = mark[:3]
+            style = SCAN_MARK_STYLES.get(self._scan_kind(mark), SCAN_MARK_STYLES["new"])
+            self.photo_ax.plot(x, y, marker="s", mfc="none", mec=style["color"], ms=style["ms"], mew=style["mew"],
+                               alpha=style["alpha"], ls="none")
+            self.photo_ax.text(x + 7, y + 7, label, color=style["color"], fontsize=style["fs"],
+                               fontweight=style["weight"], alpha=style["alpha"])
+        if self._overlay("spares"):
+            for x, y, name in self.spare_marks:
+                self.photo_ax.plot(x, y, marker="D", mfc="none", mec="#7fd6ff", ms=7, lw=0.8)
         for x, y in self.scan_excluded:
             self.photo_ax.plot(x, y, marker="x", color="#ff9800", ms=12, mew=2.0)
-        if self.mode_key != "discovery":
+        if self.mode_key != "discovery" and self._overlay("suggested"):
+            taken = {tuple(getattr(self, f"{r}_xy")) for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None}
             for name, _dm, x, y in self.suggested_comps:
-                if (x, y) != tuple(self.comp_xy or ()) and (x, y) != tuple(self.comp2_xy or ()):
+                if (x, y) not in taken:
                     self.photo_ax.plot(x, y, marker="o", mfc="none", mec="#2ca02c", ms=16, mew=1.2, ls="none",
                                        alpha=0.9)
         self._photo_hover_sets = self._photo_hover_data(img.shape)
@@ -2716,23 +2853,35 @@ class App(Tk):
         for child in row.winfo_children():
             child.destroy()
         items = []
-        for role, label in (("target", "Target"), ("comp", "Comp"), ("comp2", "Comp 2"), ("check", "Check")):
-            if getattr(self, f"{role}_xy") is not None:
-                items.append(("⊕", label, PICK_COLORS[role]))
-        if self.suggested_comps and self.mode_key != "discovery":
+        if self.target_xy is not None:
+            items.append(("⊕", "Target", PICK_COLORS["target"]))
+        comps = self._comp_roles_marked()
+        if comps:
+            nums = [comp_number(r) for r in comps]
+            label = "Comp C1" if nums == [1] else (f"Comps C{nums[0]}–C{nums[-1]}" if nums == list(range(nums[0], nums[-1] + 1))
+                                                   else "Comps " + ", ".join(f"C{n}" for n in nums))
+            items.append(("⊕", label, PICK_COLORS["comp"]))
+        if self.check_xy is not None:
+            items.append(("⊕", "Check", PICK_COLORS["check"]))
+        if (self.target_xy is not None or comps or self.check_xy is not None) and self.show_apertures.get():
+            items.append(("◎", "Aperture and sky ring", "#7a7a7a"))
+        if self.suggested_comps and self.mode_key != "discovery" and self._overlay("suggested"):
             items.append(("◯", "Suggested comp", "#2ca02c"))
-        if self.spare_marks:
+        if self.spare_marks and self._overlay("spares"):
             items.append(("◇", "Spare comp", "#4fb3e0"))
         if self.watch_xy:
             items.append(("◇ W", "Watch", PICK_COLORS["watch"]))
-        if any(not st.get("variable") for _x, _y, st in self.chart_placed):
+        if self._overlay("catalog") and any(not st.get("variable") for _x, _y, st in self.chart_placed):
             items.append(("○", "Catalog star" + ("" if self.show_labels.get() else " (labels hidden)"), "#e0b000"))
-        if any(st.get("variable") for _x, _y, st in self.chart_placed):
+        if self._overlay("variables") and any(st.get("variable") for _x, _y, st in self.chart_placed):
             items.append(("○", "Known variable", "#d32f2f"))
         if self._loose_variable_marks():
             items.append(("×", "Variable, not labeled", "#d32f2f"))
-        if self.scan_marks:
-            items.append(("□", "Scan candidate", "#e040c0"))
+        kinds = {self._scan_kind(m) for m in self.scan_marks}
+        for kind in ("new", "known", "caution", "unchecked"):
+            if kind in kinds:
+                st = SCAN_MARK_STYLES[kind]
+                items.append(("□", st["legend"], st["color"]))
         if self.scan_excluded:
             items.append(("×", "Excluded from the scan", "#ff9800"))
         for symbol, text, colour in items:
@@ -2818,10 +2967,11 @@ class App(Tk):
         h, w = shape
         sets = []
         marked = []
-        for role, xy, name_var, mag_var in (("Target", self.target_xy, self.star_id, None),
-                                            ("Comparison", self.comp_xy, self.comp_name, self.comp_mag),
-                                            ("Comp 2", self.comp2_xy, self.comp2_name, self.comp2_mag),
-                                            ("Check", self.check_xy, self.check_name, self.check_mag)):
+        rows = ([("Target", self.target_xy, self.star_id, None)]
+                + [(role_label(r), getattr(self, f"{r}_xy"), getattr(self, f"{r}_name"), getattr(self, f"{r}_mag"))
+                   for r in COMP_ROLES]
+                + [("Check", self.check_xy, self.check_name, self.check_mag)])
+        for role, xy, name_var, mag_var in rows:
             if xy is None:
                 continue
             text = f"{role}: {name_var.get().strip() or '(no name)'}"
@@ -2845,12 +2995,13 @@ class App(Tk):
         if loose:
             sets.append((self.photo_ax, np.array([m[0] for m in loose]), np.array([m[1] for m in loose]),
                          [self._variable_hover(v) for _x, _y, v in loose], 0.5))
-        if self.spare_marks:
+        if self.spare_marks and self._overlay("spares"):
             sets.append((self.photo_ax, np.array([m[0] for m in self.spare_marks]),
                          np.array([m[1] for m in self.spare_marks]),
                          [f"Spare comp: {name}\n{self._star_text(self.spare_catalog.get(name, {}))}"
                           f"\npixel ({x:.1f}, {y:.1f})" for x, y, name in self.spare_marks], 1.0))
-        stars = [(x, y, st) for x, y, st in self.chart_placed if 0 <= x < w and 0 <= y < h]
+        stars = [(x, y, st) for x, y, st in self.chart_placed if 0 <= x < w and 0 <= y < h
+                 and self._overlay("variables" if st.get("variable") else "catalog")]
         if stars:
             sets.append((self.photo_ax, np.array([s_[0] for s_ in stars]), np.array([s_[1] for s_ in stars]),
                          [f"{st.get('auid') or st.get('label') or 'catalog star'}\n"
@@ -2860,8 +3011,46 @@ class App(Tk):
         if self.scan_marks:
             sets.append((self.photo_ax, np.array([m[0] for m in self.scan_marks]),
                          np.array([m[1] for m in self.scan_marks]),
-                         [f"Scan candidate #{lab}\npixel ({x:.1f}, {y:.1f})" for x, y, lab in self.scan_marks], 0.0))
+                         [f"Scan candidate #{m[2]} — {SCAN_MARK_STYLES[self._scan_kind(m)]['legend'].lower()}"
+                          + (f"\n{m[4]}" if len(m) > 4 and m[4] else "")
+                          + f"\npixel ({m[0]:.1f}, {m[1]:.1f})" for m in self.scan_marks], 0.0))
         return sets
+
+    def _aperture_sizes_changed(self):
+        job = getattr(self, "_aperture_redraw_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._aperture_redraw_job = self.after(400, self._aperture_redraw)
+
+    def _aperture_redraw(self):
+        self._aperture_redraw_job = None
+        if self.preview is None or not self.show_apertures.get() or not self._marked_roles():
+            return
+        try:
+            if not (0 < float(self.radius.get()) and float(self.sky_in.get()) < float(self.sky_out.get())):
+                return
+        except Exception:
+            return   # half-typed number: wait for the next keystroke
+        self.refresh_preview()
+
+    def _overlay(self, kind: str) -> bool:
+        """2.2.5: whether a kind of mark is drawn on the Photometry image. "Candidates only" (Discovery) hides
+        everything but scan candidates, watch stars and excluded stars, without changing the other switches, so
+        turning it off brings back exactly what was shown before."""
+        if self.mode_key == "discovery" and self.candidates_only.get():
+            return False
+        if kind == "catalog":
+            return bool(self.show_catalog.get())
+        if kind == "variables":
+            return bool(self.show_variables.get())
+        return True
+
+    @staticmethod
+    def _scan_kind(mark) -> str:
+        return mark[3] if len(mark) > 3 and mark[3] in SCAN_MARK_STYLES else "new"
 
     @staticmethod
     def _variable_hover(v: dict) -> str:
@@ -2884,7 +3073,7 @@ class App(Tk):
     def _loose_variable_marks(self) -> list:
         """Variables to draw as a red ×: not on a labeled star (those already get a red circle), and only
         when Show variables is on."""
-        if not self.show_variables.get():
+        if not self._overlay("variables"):
             return []
         circled = {id(v) for _x, _y, st in self.chart_placed for v in st.get("variable") or []}
         return [(x, y, v) for x, y, v in self.variable_marks if id(v) not in circled]
@@ -2907,42 +3096,83 @@ class App(Tk):
             parts.append(f"(B-V {mags['B'] - mags['V']:.2f})")
         return "  ".join(parts) or "no magnitudes"
 
-    def clear_mark(self, role: str):
-        """Remove a marked star and empty its fields on the Input page (and its stored catalog colors)."""
+    def clear_mark(self, role: str, redraw: bool = True):
+        """Remove a marked star and empty its fields (and its stored catalog colors). redraw=False when clearing
+        several in a row; the caller redraws once (2.2.5: a full-frame redraw per role was slow)."""
         if role == "target":
             self.target_xy = None
-        elif role == "comp":
-            self.comp_xy = None
-            self.comp_name.set("")
-            self.comp_mag.set("")
-        elif role == "comp2":
-            self.comp2_xy = None
-            self.comp2_name.set("")
-            self.comp2_mag.set("")
-        elif role == "check":
-            self.check_xy = None
-            self.check_name.set("")
-            self.check_mag.set("")
+        elif role in COMP_ROLES or role == "check":
+            setattr(self, f"{role}_xy", None)
+            getattr(self, f"{role}_name").set("")
+            getattr(self, f"{role}_mag").set("")
         self.star_bands.pop(role, None)
+        if not redraw:
+            return
         self._update_pick_label()
         self.refresh_preview()
-        names = {"target": "Target", "comp": "Comparison", "comp2": "Comp 2", "check": "Check"}
-        self.status.set(f"{names.get(role, role)} cleared" + ("" if role == "target" else " (and its Input page fields)") + ".")
+        self.update_star_panel()
+        self.status.set(f"{role_label(role)} cleared" + ("" if role == "target" else " (and its fields)") + ".")
 
     def clear_selected_mark(self):
-        self.clear_mark(self.pick_mode.get())
+        mode = self.pick_mode.get()
+        if mode == "comp":
+            # 2.2.5: the Comps button adds comps one after another; Clear selected removes the last one marked.
+            used = self._comp_roles_used()
+            if used:
+                self.clear_mark(used[-1])
+            return
+        self.clear_mark(mode)
+
+    # ---- comparison stars C1-C10 (2.2.5) -------------------------------------------------
+    def _comp_roles_used(self) -> list:
+        """Comp roles with a marker or a name, in order (C1, C2, ...)."""
+        return [r for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None or getattr(self, f"{r}_name").get().strip()]
+
+    def _comp_roles_marked(self) -> list:
+        return [r for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
+
+    def _next_comp_role(self, xy=None):
+        """The comp slot a Comps click fills, or None when all ten are marked. A loaded series (or new lights) leaves
+        comp names with no marker: clicking the star with that name puts it back in its own slot (C1 stays C1); any
+        other star goes to the first slot with neither marker nor name, then to the first slot without a marker."""
+        if xy is not None:
+            star = self._chart_star_at(xy)
+            name = str((star or {}).get("auid") or (star or {}).get("label") or "").strip()
+            if name:
+                for r in COMP_ROLES:
+                    if getattr(self, f"{r}_xy") is None and getattr(self, f"{r}_name").get().strip() == name:
+                        return r
+        for r in COMP_ROLES:
+            if getattr(self, f"{r}_xy") is None and not getattr(self, f"{r}_name").get().strip():
+                return r
+        for r in COMP_ROLES:
+            if getattr(self, f"{r}_xy") is None:
+                return r
+        return None
+
+    def _marked_roles(self) -> list:
+        """(role, xy) for the target, every marked comp, and the check star."""
+        out = [("target", self.target_xy)] + [(r, getattr(self, f"{r}_xy")) for r in COMP_ROLES] + [("check", self.check_xy)]
+        return [(r, xy) for r, xy in out if xy is not None]
 
     def _mark(self, xy, color, tag):
         if not xy:
             return
         from matplotlib.patches import Circle
         x, y = xy
-        r = self.radius.get()
-        self.photo_ax.add_patch(Circle((x, y), r, fill=False, color=color, lw=1.2))
-        self.photo_ax.add_patch(Circle((x, y), self.sky_in.get(), fill=False, color=color, lw=0.7, ls="--"))
-        self.photo_ax.add_patch(Circle((x, y), self.sky_out.get(), fill=False, color=color, lw=0.7, ls=":"))
+        try:
+            r, s_in, s_out = float(self.radius.get()), float(self.sky_in.get()), float(self.sky_out.get())
+        except Exception:
+            r, s_in, s_out = 8.0, 0.0, 0.0
+        if self.show_apertures.get():
+            # 2.2.5: the aperture (solid) and the sky ring (dashed inner, dotted outer) at the sizes in the boxes now.
+            self.photo_ax.add_patch(Circle((x, y), r, fill=False, color=color, lw=1.2))
+            if 0 < s_in < s_out:
+                self.photo_ax.add_patch(Circle((x, y), s_in, fill=False, color=color, lw=0.7, ls="--"))
+                self.photo_ax.add_patch(Circle((x, y), s_out, fill=False, color=color, lw=0.7, ls=":"))
         self.photo_ax.plot(x, y, marker="+", color=color, ms=10)
-        self.photo_ax.text(x + r + 2, y, tag, color=color, fontsize=9)
+        self.photo_ax.text(x + (s_out if self.show_apertures.get() and s_out > r else r) * 0.72 + 3, y - 3, tag,
+                           color=color, fontsize=9, fontweight="bold")
 
     def _rescale_marks(self, old_shape, new_shape):
         """2.2.3: the image changed size (binning changed): move every marker to the same star on the new image,
@@ -2958,7 +3188,7 @@ class App(Tk):
         def move(xy):
             return None if xy is None else ((xy[0] + 0.5) * sx - 0.5, (xy[1] + 0.5) * sy - 0.5)
         moved = 0
-        for role in ("target", "comp", "comp2", "check"):
+        for role in ("target",) + COMP_ROLES + ("check",):
             xy = getattr(self, f"{role}_xy")
             if xy is not None:
                 setattr(self, f"{role}_xy", move(xy))
@@ -2979,8 +3209,7 @@ class App(Tk):
         if getattr(event, "button", 1) == 3:
             # Right-click: clear the nearest marked star.
             best = None
-            marks = [("target", self.target_xy), ("comp", self.comp_xy), ("comp2", self.comp2_xy),
-                     ("check", self.check_xy)] + [("watch:" + name, xy) for name, xy in self.watch_xy.items()] \
+            marks = self._marked_roles() + [("watch:" + name, xy) for name, xy in self.watch_xy.items()] \
                 + [(f"exclude:{k}", xy) for k, xy in enumerate(self.scan_excluded)]
             for role, xy in marks:
                 if xy is None:
@@ -3003,7 +3232,7 @@ class App(Tk):
                 else:
                     self.clear_mark(best[1])
             else:
-                self.status.set("Right-click on a marked star (T, C, C2, K, W) to clear it.")
+                self.status.set("Right-click on a marked star (T, C1…C10, K, W) to clear it.")
             return
         if not self.preview_is_debayered:
             messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image.")
@@ -3029,12 +3258,23 @@ class App(Tk):
             return
         if self.mode_key == "discovery":
             return
+        if mode == "comp" or comp_number(mode):
+            # 2.2.5: each click with Comps adds the next comparison star (C1, C2 ... C10). Clicking a star that is
+            # already a comp does nothing new.
+            for r in COMP_ROLES:
+                old = getattr(self, f"{r}_xy")
+                if old is not None and math.hypot(old[0] - xy[0], old[1] - xy[1]) < 2.0:
+                    self.status.set(f"That star is already {role_label(r)}.")
+                    return
+            mode = self._next_comp_role(xy)
+            if mode is None:
+                messagebox.showinfo(APP_TITLE, f"All {MAX_COMPS} comparison stars are marked. Right-click one to "
+                                               "remove it first.")
+                return
         if mode == "target":
             self.target_xy = xy
-        elif mode == "comp":
-            self.comp_xy = xy
-        elif mode == "comp2":
-            self.comp2_xy = xy
+        elif comp_number(mode):
+            setattr(self, f"{mode}_xy", xy)
         else:
             self.check_xy = xy
         filled = self._fill_from_chart(mode, xy)
@@ -3043,7 +3283,7 @@ class App(Tk):
         self.update_star_panel()
         if filled:
             self.status.set(filled)
-        if mode in ("comp", "comp2", "check"):
+        if comp_number(mode) or mode == "check":
             self._vet_choice(mode, xy)
 
     def _chart_star_at(self, xy, reach: float = 8.0):
@@ -3068,12 +3308,12 @@ class App(Tk):
         hits = (star or {}).get("variable") or self._variables_at(xy)
         if not hits:
             return
-        names = {"comp": "comparison star", "comp2": "comp 2", "check": "check star"}
+        what = "check star" if role == "check" else f"comparison star ({role_label(role)})"
         label = (star or {}).get("auid") or (star or {}).get("label") or "This star"
         if not messagebox.askyesno(
             APP_TITLE,
             f"{label} is a known or suspected variable:\n  {core.variable_text({'variable': hits})}\n\n"
-            f"A variable {names[role]} shifts every measurement it touches. Use it anyway?",
+            f"A variable {what} shifts every measurement it touches. Use it anyway?",
         ):
             self.clear_mark(role)
 
@@ -3085,26 +3325,39 @@ class App(Tk):
         ttk.Label(stars, textvariable=self.mag_header, style="Hint.TLabel").grid(row=0, column=2, sticky=W, padx=(6, 0))
         self.star_status = {}
         self.star_status_labels = {}
-        rows = (("target", "Target", self.star_id, None), ("comp", "Comparison", self.comp_name, self.comp_mag),
-                ("comp2", "Comp 2", self.comp2_name, self.comp2_mag), ("check", "Check", self.check_name, self.check_mag))
+        self.star_row_widgets = {}
+        # 2.2.5: Comp 1 … Comp 10. Comp 1 always shows; the others appear as they are marked.
+        rows = ([("target", "Target", self.star_id, None)]
+                + [(r, role_label(r), getattr(self, f"{r}_name"), getattr(self, f"{r}_mag")) for r in COMP_ROLES]
+                + [("check", "Check", self.check_name, self.check_mag)])
         for i, (role, label, name_var, mag_var) in enumerate(rows):
             r = 1 + 2 * i
-            ttk.Label(stars, text="● " + label, style=f"Pick{role}.TLabel").grid(row=r, column=0, sticky=W, padx=(0, 6))
-            ttk.Entry(stars, textvariable=name_var, width=30).grid(row=r, column=1, sticky="ew", pady=(4, 0))
+            widgets = []
+            w = ttk.Label(stars, text="● " + label, style=f"Pick{'comp' if comp_number(role) else role}.TLabel")
+            w.grid(row=r, column=0, sticky=W, padx=(0, 6))
+            widgets.append(w)
+            w = ttk.Entry(stars, textvariable=name_var, width=30)
+            w.grid(row=r, column=1, sticky="ew", pady=(4, 0))
+            widgets.append(w)
             if mag_var is not None:
-                ttk.Entry(stars, textvariable=mag_var, width=8).grid(row=r, column=2, sticky=W, padx=(6, 0), pady=(4, 0))
-            ttk.Button(stars, text="✕", width=3, command=lambda k=role: self.clear_mark(k)).grid(
-                row=r, column=3, sticky=W, padx=(4, 0), pady=(4, 0))
+                w = ttk.Entry(stars, textvariable=mag_var, width=8)
+                w.grid(row=r, column=2, sticky=W, padx=(6, 0), pady=(4, 0))
+                widgets.append(w)
+            w = ttk.Button(stars, text="✕", width=3, command=lambda k=role: self.clear_mark(k))
+            w.grid(row=r, column=3, sticky=W, padx=(4, 0), pady=(4, 0))
+            widgets.append(w)
             var = StringVar(value="")
             lab = ttk.Label(stars, textvariable=var, style="Hint.TLabel", wraplength=480, justify=LEFT)
             lab.grid(row=r + 1, column=0, columnspan=4, sticky=W, padx=(14, 0))
+            widgets.append(lab)
             self.star_status[role] = var
             self.star_status_labels[role] = lab
+            self.star_row_widgets[role] = widgets
             name_var.trace_add("write", lambda *_: self.update_star_panel())
         stars.columnconfigure(1, weight=1)
         self.field_check_text = StringVar(value="Variable-star check: Label chart to check the field against VSX and SIMBAD.")
         ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=480, justify=LEFT).grid(
-            row=9, column=0, columnspan=4, sticky=W, pady=(8, 0))
+            row=1 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
 
         watch = self._group(panel, "Watch stars")
         watch.pack(fill=BOTH, expand=True, pady=(10, 0))
@@ -3125,8 +3378,21 @@ class App(Tk):
         if not hasattr(self, "star_status"):
             return
         checked = bool(self.field_check_sources)
-        for role, name_var, xy in (("target", self.star_id, self.target_xy), ("comp", self.comp_name, self.comp_xy),
-                                   ("comp2", self.comp2_name, self.comp2_xy), ("check", self.check_name, self.check_xy)):
+        # 2.2.5: show Comp 2 … Comp 10 only when they are in use.
+        used = set(self._comp_roles_used())
+        for role in COMP_ROLES[1:]:
+            for w in self.star_row_widgets.get(role, []):
+                try:
+                    if role in used:
+                        w.grid()
+                    else:
+                        w.grid_remove()
+                except Exception:
+                    pass
+        roles = ([("target", self.star_id, self.target_xy)]
+                 + [(r, getattr(self, f"{r}_name"), getattr(self, f"{r}_xy")) for r in COMP_ROLES]
+                 + [("check", self.check_name, self.check_xy)])
+        for role, name_var, xy in roles:
             name = name_var.get().strip()
             var, lab = self.star_status[role], self.star_status_labels[role]
             if not name and xy is None:
@@ -3384,9 +3650,10 @@ class App(Tk):
         self._refresh_watch_box()
 
     def _update_pick_label(self):
+        comps = self._comp_roles_marked()
+        comp_text = ("Comps " + ", ".join(f"C{comp_number(r)}" for r in comps)) if comps else "Comps —"
         self.pick_label.set(
-            f"Target {self._fmt(self.target_xy)}    Comp {self._fmt(self.comp_xy)}    "
-            f"Comp 2 {self._fmt(self.comp2_xy)}    Check {self._fmt(self.check_xy)}"
+            f"Target {self._fmt(self.target_xy)}    {comp_text}    Check {self._fmt(self.check_xy)}"
             + (f"    Watch {len(self.watch_xy)} of {len(self.watch_list)} on this frame" if self.watch_list else "")
         )
 
@@ -3408,17 +3675,13 @@ class App(Tk):
         mag = f"{star['mag']:.3f}"
         # AAVSO comps carry the chart ID; comps from other catalogs are reported with CHART=na.
         self.chart.set(star.get("chartid") or "na")
-        target = {
-            "comp": (self.comp_name, self.comp_mag),
-            "comp2": (self.comp2_name, self.comp2_mag),
-            "check": (self.check_name, self.check_mag),
-        }[mode]
+        target = (getattr(self, f"{mode}_name"), getattr(self, f"{mode}_mag"))
         target[0].set(name)
         target[1].set(mag)
         self.star_bands[mode] = {"name": name, "mags": dict(star.get("mags") or {})}
         if star.get("ra") is not None and star.get("dec") is not None:
             self.comp_coords[name] = (float(star["ra"]), float(star["dec"]))
-        return f"{mode}: {star.get('catalog', 'AAVSO')}  {name}  {star.get('band', 'V')} = {mag}"
+        return f"{role_label(mode)}: {star.get('catalog', 'AAVSO')}  {name}  {star.get('band', 'V')} = {mag}"
 
     def _bands_for(self, role: str, name: str) -> dict:
         """Catalog magnitudes in every band for a comp, if it was picked from a chart."""
@@ -3790,8 +4053,8 @@ class App(Tk):
         """After Label chart: a comp, comp 2, or check star marked before the chart (so its ID and magnitude are still
         empty) takes them from the labeled star under it. Names already there are left alone (2.2.1)."""
         filled = []
-        for role, xy, name_var in (("comp", self.comp_xy, self.comp_name), ("comp2", self.comp2_xy, self.comp2_name),
-                                   ("check", self.check_xy, self.check_name)):
+        for role, xy, name_var in ([(r, getattr(self, f"{r}_xy"), getattr(self, f"{r}_name")) for r in COMP_ROLES]
+                                   + [("check", self.check_xy, self.check_name)]):
             if xy is None or name_var.get().strip():
                 continue
             if self._chart_star_at(xy) is None:
@@ -3886,7 +4149,7 @@ class App(Tk):
     def _comp_brightness_note(self, role: str, xy):
         """How a comp compares with the target in brightness and color (2.2: brightness; 2.2.1: color, and no
         warning when nothing better exists in the field)."""
-        if role not in ("comp", "comp2") or xy is None or self.target_xy is None:
+        if not comp_number(role) or xy is None or self.target_xy is None:
             return ""
         t, c = self._inst_at(self.target_xy), self._inst_at(xy)
         if not (math.isfinite(t) and math.isfinite(c)):
@@ -4008,8 +4271,7 @@ class App(Tk):
                     keep.append((x, y))
             found = keep
         labels, xy = [], []
-        marks = [] if discovery else [("Target", self.target_xy), ("Comp", self.comp_xy), ("Comp 2", self.comp2_xy),
-                                      ("Check", self.check_xy)]
+        marks = [] if discovery else [(role_label(r), xy) for r, xy in self._marked_roles()]
         for label, pos in marks:
             if pos is not None:
                 labels.append(label)
@@ -4175,8 +4437,9 @@ class App(Tk):
                 stats = core.field_variability(inst)
                 offset = 0.0
                 zp = None
-                if "Comp" in labels and comp_mag is not None and math.isfinite(stats["median"][labels.index("Comp")]):
-                    offset = comp_mag - stats["median"][labels.index("Comp")]
+                c1 = role_label("comp")
+                if c1 in labels and comp_mag is not None and math.isfinite(stats["median"][labels.index(c1)]):
+                    offset = comp_mag - stats["median"][labels.index(c1)]
                 else:
                     use = np.asarray(stats["usable"], dtype=bool).copy()
                     for k in saturated:
@@ -4251,7 +4514,7 @@ class App(Tk):
                     # Leave clouded frames (field zero point more than ~20% faint) out of the color fit.
                     zp = np.asarray(stats["zero_point"], dtype=float)
                     frame_ok = (zp - np.median(zp)) < 0.24
-                    ci = labels.index("Comp") if "Comp" in labels else None
+                    ci = labels.index(role_label("comp")) if role_label("comp") in labels else None
                     comp_cat = {"bv": (comp_bands["B"] - comp_bands["V"]) if "B" in comp_bands and "V" in comp_bands else None,
                                 "vr": (comp_bands["V"] - comp_bands["R"]) if "V" in comp_bands and "R" in comp_bands else None}
                     for key, _b1, _b2, c1, c2 in core.COLOR_INDICES:
@@ -4353,7 +4616,9 @@ class App(Tk):
         self.scan_view = ScanView(self.discovery_host, self, result)
 
     def mark_scan_candidates(self, result):
-        self.scan_marks = [(result["xy"][i][0], result["xy"][i][1], str(rank)) for rank, i in enumerate(result["candidates"], 1)]
+        # 2.2.5: each mark carries its kind (possible new / known / check first / unchecked) and the reason.
+        self.scan_marks = [(result["xy"][i][0], result["xy"][i][1], str(rank), *core.scan_candidate_kind(result, i))
+                           for rank, i in enumerate(result["candidates"], 1)]
         self.show_step(STEP_PHOTO)
         self.refresh_preview()
 
@@ -4368,8 +4633,9 @@ class App(Tk):
         if self.preview is None:
             return True
         h, w = self.preview.shape[:2]
-        names = {"target": ("Target", self.star_id), "comp": ("Comparison", self.comp_name),
-                 "comp2": ("Comp 2", self.comp2_name), "check": ("Check", self.check_name)}
+        names = {"target": ("Target", self.star_id)}
+        names.update({r: (role_label(r), getattr(self, f"{r}_name")) for r in COMP_ROLES})
+        names["check"] = ("Check", self.check_name)
         try:
             radius = float(self.radius.get())
         except Exception:
@@ -4388,7 +4654,7 @@ class App(Tk):
                                                       "Measure blank sky there anyway?"):
                     return False
         ghosts = [(role, label, var.get().strip()) for role, (label, var) in names.items()
-                  if role in ("comp2", "check") and var.get().strip() and getattr(self, f"{role}_xy") is None]
+                  if role != "target" and var.get().strip() and getattr(self, f"{role}_xy") is None]
         if ghosts:
             listing = "\n".join(f"  • {label}: {name}" for _r, label, name in ghosts)
             answer = messagebox.askyesnocancel(
@@ -4400,7 +4666,10 @@ class App(Tk):
                 return False
             if answer:
                 for role, _label, _name in ghosts:
-                    self.clear_mark(role)
+                    self.clear_mark(role, redraw=False)
+                self._update_pick_label()
+                self.refresh_preview()
+                self.update_star_panel()
         return True
 
     def run_photometry(self):
@@ -4422,11 +4691,19 @@ class App(Tk):
                     f"Binning is {binning} but the masters were built at {self.masters_binning}. Rebuild the masters or set it back."
                 )
             target = self._star(self.star_id.get() or "target", self.target_xy, "", False)
-            if not self.comp_mag.get().strip():
-                raise ValueError("First comparison star needs a magnitude")
-            comps = [self._star(self.comp_name.get() or "comp", self.comp_xy, self.comp_mag.get(), True)]
-            if self.comp2_xy is not None and self.comp2_mag.get().strip():
-                comps.append(self._star(self.comp2_name.get() or "comp2", self.comp2_xy, self.comp2_mag.get(), True))
+            # 2.2.5: every marked comparison star, C1 … C10, in order. Each needs a catalog magnitude.
+            comp_roles = self._comp_roles_marked()
+            if not comp_roles:
+                raise ValueError("Mark at least one comparison star (Comps, then click the star)")
+            missing = [role_label(r) for r in comp_roles if not getattr(self, f"{r}_mag").get().strip()]
+            if missing:
+                raise ValueError(f"{', '.join(missing)} need{'s' if len(missing) == 1 else ''} a catalog magnitude "
+                                 "(click it on a Label chart circle, or type it)")
+            comps = [self._star(getattr(self, f"{r}_name").get().strip() or f"comp{comp_number(r)}",
+                                getattr(self, f"{r}_xy"), getattr(self, f"{r}_mag").get(), True) for r in comp_roles]
+            dupes = {c.name for c in comps if [d.name for d in comps].count(c.name) > 1}
+            if dupes:
+                raise ValueError(f"Two comps have the same name ({', '.join(sorted(dupes))}). Give each its own name.")
             check = None
             if self.check_xy is not None:
                 check = self._star(self.check_name.get() or "check", self.check_xy, self.check_mag.get(), False)
@@ -4438,7 +4715,7 @@ class App(Tk):
             for star in comps + ([check] if check is not None else []):
                 if math.hypot(star.x - target.x, star.y - target.y) < radius:
                     raise ValueError(f"{star.name} is marked on top of the target. Select it and click a different star.")
-            marked = [("Comparison", comps[0])] + ([("Comp 2", comps[1])] if len(comps) > 1 else []) + ([("Check", check)] if check is not None else [])
+            marked = [(role_label(r), c) for r, c in zip(comp_roles, comps)] + ([("Check", check)] if check is not None else [])
             for i in range(len(marked)):
                 for j in range(i + 1, len(marked)):
                     (la, a), (lb, b) = marked[i], marked[j]
@@ -4459,7 +4736,8 @@ class App(Tk):
             messagebox.showerror(APP_TITLE, str(exc))
             return
         if len(comps) > 1 and check is None:
-            if not messagebox.askyesno(APP_TITLE, "AAVSO asks for a check star with an ensemble. Continue without one?"):
+            if not messagebox.askyesno(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
+                                                  "requires a check star for ensemble reports. Continue without one?"):
                 return
 
         mode = self.debayer_mode.get()
@@ -4467,7 +4745,7 @@ class App(Tk):
         masters = self.masters
         precalibrated = self.precalibrated
         measure_color = bool(self.measure_color.get())
-        comp_bands = [self._bands_for(role, star.name) for role, star in zip(("comp", "comp2"), comps)]
+        comp_bands = [self._bands_for(role, star.name) for role, star in zip(comp_roles, comps)]
         cat_bv = core.ensemble_color(comp_bands, "B", "V")
         cat_vr = core.ensemble_color(comp_bands, "V", "R")
         cloud_fraction = self._cloud_fraction()
@@ -4513,7 +4791,7 @@ class App(Tk):
         spares = []
         if self.chart_placed:
             comp_mags = [c.catalog_mag for c in comps]
-            avoid = [self.target_xy, self.comp_xy, self.comp2_xy, self.check_xy] + list(self.watch_xy.values())
+            avoid = [xy for _r, xy in self._marked_roles()] + list(self.watch_xy.values())
             taken = {c.name for c in comps} | ({check.name} if check is not None else set())
             # The suggested comps (near the target in brightness and color) first, so Use comps can switch to them
             # later without reducing again (2.2.1).
@@ -4981,7 +5259,7 @@ class App(Tk):
         "observer", "star_id", "chart", "comp_name", "comp_mag", "check_name", "check_mag",
         "comp2_name", "comp2_mag", "ra_hours", "dec_deg", "notes", "lat", "lon", "pattern", "debayer_mode", "catalog",
         "time_axis", "bin_choice", "mark_periods",
-    )
+    ) + tuple(f"{r}_{k}" for r in COMP_ROLES[2:] for k in ("name", "mag"))   # 2.2.5: comps 3-10
     _META_NUMBERS = ("min_period", "max_period", "radius", "sky_in", "sky_out", "focal_mm", "pixel_um", "sat_limit", "cloud_limit")
 
     def _meta(self) -> dict:
@@ -5034,6 +5312,15 @@ class App(Tk):
         for key in self._META_STRINGS:
             if meta.get(key) not in (None, ""):
                 getattr(self, key).set(meta[key])
+        # 2.2.5: a series' target already has its RA/Dec; don't look it up again when the Star ID box loses focus.
+        if meta.get("star_id") and meta.get("ra_hours"):
+            self._last_lookup_name = str(meta["star_id"]).strip()
+        # 2.2.5: the series says which comps 3-10 it uses; slots it does not name are emptied (a 2.2.4 or older
+        # series has at most two comps).
+        for r in COMP_ROLES[2:]:
+            if meta.get(f"{r}_name") in (None, "") and getattr(self, f"{r}_xy") is None:
+                getattr(self, f"{r}_name").set("")
+                getattr(self, f"{r}_mag").set("")
         for key in self._META_NUMBERS:
             if meta.get(key) not in (None, ""):
                 try:
@@ -5066,7 +5353,7 @@ class App(Tk):
         self.night_bin = dict(meta.get("night_binning") or {})
         # 2.2.3: these belong to the series being loaded; never carry another series' over.
         self.reports_saved = {}
-        current = {v.get().strip() for v in (self.comp_name, self.comp2_name, self.check_name)}
+        current = {getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES} | {self.check_name.get().strip()}
         self.comp_coords = {k: v for k, v in self.comp_coords.items() if k in current}   # tonight's picks stay
         if isinstance(meta.get("comp_coords"), dict):
             for k, v in meta["comp_coords"].items():
@@ -6062,8 +6349,8 @@ class App(Tk):
     def _comp_catalog(self) -> dict:
         """Catalog magnitude of every comp and spare comp the series knows about."""
         cat = dict(self.comp_catalog_mags)
-        for name, mag_text in ((self.comp_name.get().strip(), self.comp_mag.get()),
-                               (self.comp2_name.get().strip(), self.comp2_mag.get())):
+        for name, mag_text in [(getattr(self, f"{r}_name").get().strip(), getattr(self, f"{r}_mag").get())
+                               for r in COMP_ROLES]:
             if name and name in self.comps_used and name not in cat:
                 try:
                     cat[name] = float(mag_text)
@@ -6078,7 +6365,7 @@ class App(Tk):
         """Give points from series saved before 1.8 the base values "Use comps..." needs."""
         names = list(meta.get("comps_used") or [])
         cat = dict(meta.get("comp_catalog_mags") or {})
-        for name_key, mag_key in (("comp_name", "comp_mag"), ("comp2_name", "comp2_mag")):
+        for name_key, mag_key in [(f"{r}_name", f"{r}_mag") for r in COMP_ROLES]:
             name = str(meta.get(name_key) or "").strip()
             if name and name in names and name not in cat:
                 try:
@@ -6322,6 +6609,9 @@ class App(Tk):
                 self.star_id.set(good)
         if len({o.filt for o in self._usable()}) > 1:
             problems.append("the series mixes filters")
+        # 2.2.5: two or more comps make an ensemble report, which AAVSO accepts only with a check star.
+        if len(self.active_comps or self.comps_used or []) > 1 and not any(o.kmag is not None for o in self._usable()):
+            problems.append("ensemble report (more than one comp) without a check star; AAVSO requires one")
         if problems:
             if not messagebox.askyesno(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
                 return
@@ -6521,8 +6811,9 @@ class App(Tk):
         self.comp_mag.set("11.50")
         self.check_name.set("DEMO CHECK")
         self.check_mag.set("12.20")
-        self.comp2_name.set("")
-        self.comp2_mag.set("")
+        for r in COMP_ROLES[1:]:
+            getattr(self, f"{r}_name").set("")
+            getattr(self, f"{r}_mag").set("")
         self.chart.set("DEMO")
         self.observer.set("TST")
         self.ra_hours.set("0.75")
@@ -6537,7 +6828,8 @@ class App(Tk):
         self.scan_folders()
         self.target_xy = demo["target_xy"]
         self.comp_xy = demo["comp_xy"]
-        self.comp2_xy = None
+        for r in COMP_ROLES[1:]:
+            setattr(self, f"{r}_xy", None)
         self.check_xy = demo["check_xy"]
         self.radius.set(4)
         self.sky_in.set(7)
@@ -6824,6 +7116,8 @@ class SuggestWindow:
         measured = ", ".join(f"{role} {f:.1f}" for role, f, _p in sizes)
         ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px   ({measured})", style="Card.TLabel").pack(
             anchor=W, pady=(6, 0))
+        ttk.Label(top, text="These stars were only measured for their size; this window sets the aperture and sky ring, "
+                            "not which stars are used.", style="Hint.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = {prop['sky_in']:g}    "
                              f"sky out = {prop['sky_out']:g} px (sky ring with 4× the aperture's area)"),
                   style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor=W, pady=(6, 0))
@@ -6837,7 +7131,7 @@ class SuggestWindow:
         ttk.Label(top, textvariable=self.result_text, style="Box.TLabel", justify=LEFT).pack(anchor=W, pady=(10, 0))
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(10, 0))
-        ttk.Button(nav, text="Use these", style="Accent.TButton", command=self.use).pack(side=LEFT)
+        ttk.Button(nav, text="Use these aperture sizes", style="Accent.TButton", command=self.use).pack(side=LEFT)
         ttk.Button(nav, text="Test 4 apertures on 30 frames", command=lambda: app.test_apertures(fwhm, self, 30)).pack(
             side=LEFT, padx=8)
         ttk.Button(nav, text="60 frames (slower, surer)", command=lambda: app.test_apertures(fwhm, self, 60)).pack(
@@ -6888,7 +7182,7 @@ class SuggestWindow:
                          "much fainter than the check star, that can be the better choice; if it truly varies, its "
                          "scatter includes the variation.")
         self.prop = {"radius": pick, "sky_in": sky_in, "sky_out": sky_out}
-        lines.append(f"Use these now sets r = {pick:g}, sky {sky_in:g}–{sky_out:g}.")
+        lines.append(f"Use these aperture sizes now sets r = {pick:g}, sky {sky_in:g}–{sky_out:g}.")
         self.result_text.set("\n".join(lines))
 
 
@@ -7355,6 +7649,16 @@ class ScanView:
         ttk.Button(nav, text="Export all light curves CSV…", command=self.export_curves).pack(side=LEFT)
         ttk.Button(nav, text="Watch selected star", command=self.watch_selected).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
+        # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
+        # they still match the marks on the image).
+        self.hide_known = BooleanVar(value=False)
+        self.n_known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
+        hide_box = ttk.Checkbutton(nav, text="Hide known variables", variable=self.hide_known, command=self._hide_changed)
+        hide_box.pack(side=LEFT, padx=(12, 0))
+        if result.get("vsx") is None:
+            hide_box.state(["disabled"])
+        self.hidden_text = StringVar(value="")
+        ttk.Label(nav, textvariable=self.hidden_text, style="Hint.TLabel").pack(side=LEFT, padx=6)
         if on_close is not None:
             ttk.Button(nav, text="Close", command=on_close).pack(side=RIGHT)
 
@@ -7373,7 +7677,43 @@ class ScanView:
             self.tree.column(col, width=cw, minwidth=cw, anchor=W, stretch=(col == "vsx"))
         self.tree.pack(fill=X, side="bottom", pady=(6, 0))
         self.rows = {}
-        listed = list(enumerate(result["candidates"], 1))
+        self._fill_table()
+        self.tree.bind("<<TreeviewSelect>>", self._on_row)
+
+        if Figure is None:
+            return
+        self.fig = Figure(figsize=(11, 5.5), dpi=100, facecolor="#ffffff")
+        self.ax_s = self.fig.add_subplot(1, 2, 1)
+        self.ax_lc = self.fig.add_subplot(2, 2, 2)
+        self.ax_ls = self.fig.add_subplot(2, 2, 4)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=body)
+        self.canvas.get_tk_widget().configure(width=400, height=300)
+        self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+        self.canvas.mpl_connect("button_press_event", self._on_click)
+        self.draw()
+
+    def _is_known(self, i) -> bool:
+        return bool(self.r.get("vsx") and self.r["vsx"][i])
+
+    def _hide_changed(self):
+        n = self.n_known if self.hide_known.get() else 0
+        self.hidden_text.set(f"{n} known variable(s) hidden" if n else "")
+        if self.hide_known.get() and self._is_known(self.selected):
+            rest = [i for i in self.r["candidates"] if not self._is_known(i)]
+            if rest:
+                self.selected = rest[0]
+        self._fill_table()
+        if getattr(self, "fig", None) is not None:
+            self.draw()
+
+    def _fill_table(self):
+        result = self.r
+        method = (result.get("color_method") or {}).get("bv", "")
+        for item in list(self.tree.get_children()):
+            self.tree.delete(item)
+        self.rows = {}
+        hide = bool(getattr(self, "hide_known", None) and self.hide_known.get())
+        listed = [(rank, i) for rank, i in enumerate(result["candidates"], 1) if not (hide and self._is_known(i))]
         if not result["candidates"]:
             # Nothing reached the candidate level: show the closest misses, marked as such (2.2.1).
             listed += [(f"~{k}", i) for k, i in enumerate(result.get("near") or [], 1)]
@@ -7402,19 +7742,6 @@ class ScanView:
                 f"{bv:.2f}" if math.isfinite(bv) else "", "; ".join(self.cautions(i)), vsx_text,
             ))
             self.rows[item] = i
-        self.tree.bind("<<TreeviewSelect>>", self._on_row)
-
-        if Figure is None:
-            return
-        self.fig = Figure(figsize=(11, 5.5), dpi=100, facecolor="#ffffff")
-        self.ax_s = self.fig.add_subplot(1, 2, 1)
-        self.ax_lc = self.fig.add_subplot(2, 2, 2)
-        self.ax_ls = self.fig.add_subplot(2, 2, 4)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=body)
-        self.canvas.get_tk_widget().configure(width=400, height=300)
-        self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
-        self.canvas.mpl_connect("button_press_event", self._on_click)
-        self.draw()
 
     def cautions(self, i) -> list[str]:
         """2.2.2: reasons to doubt a candidate before celebrating."""
@@ -7435,16 +7762,19 @@ class ScanView:
         order = np.argsort(mag[ok])
         ax.plot(mag[ok][order], exp[ok][order], "-", color="#0067c0", lw=1, label="typical scatter")
         cand = r["candidates"]
+        hide = bool(getattr(self, "hide_known", None) and self.hide_known.get())
         if cand:
-            known = [i for i in cand if r.get("vsx") and r["vsx"][i]]
-            new = [i for i in cand if i not in known]
+            known = [] if hide else [i for i in cand if r.get("vsx") and r["vsx"][i]]
+            new = [i for i in cand if not self._is_known(i)]
             if new:
                 ax.plot(mag[new], sc[new], "o", mfc="none", mec="#d62828", ms=10, mew=1.4, label="candidate")
             if known:
                 ax.plot(mag[known], sc[known], "s", mfc="none", mec="#f08c00", ms=10, mew=1.4, label="known in VSX")
             for rank, i in enumerate(cand, 1):
+                if hide and self._is_known(i):
+                    continue
                 ax.annotate(str(rank), (mag[i], sc[i]), textcoords="offset points", xytext=(6, 4), fontsize=8, color="#d62828")
-        for name in ("Target", "Comp", "Comp 2", "Check"):
+        for name in MARKED_LABELS:
             if name in r["labels"]:
                 i = r["labels"].index(name)
                 if ok[i]:
@@ -7549,7 +7879,7 @@ class ScanView:
         if not (0 <= i < len(r["labels"])):
             return
         label = r["labels"][i]
-        if label in ("Target", "Comp", "Comp 2", "Check"):
+        if label in MARKED_LABELS:
             self.app.status.set(f"{label} is already measured every run.")
             return
         xy = r["xy"][i]

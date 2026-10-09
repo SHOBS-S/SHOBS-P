@@ -3218,6 +3218,24 @@ def scan_cautions(result: dict, i: int) -> list[str]:
     return out
 
 
+def scan_candidate_kind(result: dict, i: int) -> tuple[str, str]:
+    """2.2.5: what a field-scan candidate is worth, and why: ("new", ""), ("known", "KNOWN (VSX): name type"),
+    ("caution", "near saturation: check linearity"), or ("unchecked", "no sky positions: …"). A known star with a
+    caution counts as known. The reason is shown when hovering over the mark."""
+    vsx = result.get("vsx")
+    hit = vsx[i] if vsx is not None and i < len(vsx) else None
+    if hit:
+        text = f"KNOWN ({hit.get('source', 'VSX')}): {hit.get('name', '')} {hit.get('type', '')}".strip()
+        return "known", text
+    cautions = scan_cautions(result, i)
+    if cautions:
+        return "caution", "Check first: " + "; ".join(cautions)
+    if vsx is None:
+        return "unchecked", "no sky positions, so not checked against VSX/SIMBAD (solve the field first)"
+    sources = " or ".join(result.get("vsx_sources") or ["VSX"])
+    return "new", f"not in {sources}"
+
+
 def write_scan_candidates(path: str, result: dict) -> None:
     """One row per star that stands out, ready to start a VSX new-variable submission."""
     with AsciiWriter(path) as fh:
