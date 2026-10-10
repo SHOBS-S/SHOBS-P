@@ -88,7 +88,7 @@ class TransitPage:
         self.frame = ttk.Frame(parent)
         card = ttk.Frame(self.frame, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Transit fit", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Output – Transit fit", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.planet_text = StringVar(value=planet_summary(None))
         planet_label = ttk.Label(card, textvariable=self.planet_text, style="Hint.TLabel", wraplength=700, justify=LEFT)
         planet_label.pack(anchor=W, fill=X, pady=(2, 6))
@@ -125,13 +125,6 @@ class TransitPage:
         ttk.Button(row2, text="Fit transit", style="Accent.TButton", command=self.fit).pack(side=LEFT, padx=10)
         ttk.Button(row2, text="Cancel", command=app.cancel_job).pack(side=LEFT)
 
-        row3 = ttk.Frame(card, style="Card.TFrame")
-        row3.pack(fill=X, pady=(4, 2))
-        ttk.Button(row3, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT)
-        ttk.Button(row3, text="Save AAVSO exoplanet report…", command=self.save_aavso).pack(side=LEFT, padx=6)
-        ttk.Button(row3, text="Save light-curve CSV…", command=app.save_csv).pack(side=LEFT)
-        # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
-        ttk.Button(row3, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
         row4 = ttk.Frame(card, style="Card.TFrame")
         row4.pack(fill=X, pady=(2, 2))
         ttk.Button(row4, text="Tonight's transits…", command=lambda: FinderWindow(app)).pack(side=LEFT)
@@ -139,9 +132,19 @@ class TransitPage:
         ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT, padx=6)
 
         prog = ttk.Frame(card, style="Card.TFrame")
-        prog.pack(fill=X, side="bottom", pady=(6, 0))
+        prog.pack(fill=X, side="bottom", pady=(4, 0))
+        # 2.2.9: the save buttons sit below the plot in a "Results" row, as on the Variables Output page (John).
+        results = ttk.Frame(card, style="Card.TFrame")
+        results.pack(fill=X, side="bottom", pady=(6, 0))
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
+        ttk.Button(results, text="Save AAVSO exoplanet report…", style="Accent.TButton",
+                   command=self.save_aavso).pack(side=LEFT)
+        ttk.Button(results, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT, padx=6)
+        ttk.Button(results, text="Save light-curve CSV…", command=app.save_csv).pack(side=LEFT)
+        # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
+        ttk.Button(results, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
-        ttk.Button(prog, text="Variable View  ▶", style="Accent.TButton", command=app.show_variables_view).pack(
+        ttk.Button(results, text="Variable View  ▶", style="Accent.TButton", command=app.show_variables_view).pack(
             side=RIGHT)
         self.bar = ttk.Progressbar(prog, length=320, mode="determinate", maximum=1)
         self.bar.pack(side=LEFT)
@@ -440,6 +443,25 @@ class TransitPage:
             else:
                 messagebox.showerror("SHOBS-P", str(exc))
             return
+        # 2.2.9: no predicted transit during these data -> say so instead of fitting (Tessa's 10-minute run was
+        # fitted 27 h from any transit). "Fit anyway" stays possible.
+        tf = np.asarray(t, dtype=float)
+        tf = tf[np.isfinite(tf)]
+        chk = tc.transit_window_check(float(tf.min()), float(tf.max()), planet) if tf.size else None
+        if chk is not None and not chk["overlap"]:
+            when = (f"{abs(chk['hours']):.1f} h {'after' if chk['hours'] > 0 else 'before'} the "
+                    f"{'last' if chk['hours'] > 0 else 'first'} point (Tc {chk['tc']:.4f} BJD_TDB)")
+            text = (f"No transit of {planet.get('name') or 'this planet'} is predicted during these data. "
+                    f"The nearest predicted transit is {when}. A transit fit cannot measure anything here; if this "
+                    "was a variability run, use Variables mode.")
+            if auto:
+                self.result = None
+                self.draw(placeholder="No transit predicted during these data.")
+                self._notes_text([("warn", text), ("info", "Fit transit fits it anyway.")])
+                self.app.log("Transit fit: " + text)
+                return
+            if not messagebox.askyesno("SHOBS-P", text + "\n\nFit anyway?"):
+                return
         if auto:
             if self.app.busy:
                 return
@@ -691,6 +713,14 @@ class TransitPage:
         axr.set_ylabel("Resid. %")
         axr.set_xlabel("Hours from fitted mid-transit")
         axr.grid(alpha=0.3)
+        # 2.2.9: the x range is the data plus the fitted transit, never stretched to a predicted Tc far away.
+        xd_lo, xd_hi = float(np.nanmin(x)), float(np.nanmax(x))
+        if t14 / 2 >= xd_lo and -t14 / 2 <= xd_hi:
+            x_lo, x_hi = min(xd_lo, -t14 / 2) - 0.25, max(xd_hi, t14 / 2) + 0.25
+        else:
+            # "Fit anyway" pulled to a Tc away from the data: show the data, not the empty hours between.
+            x_lo, x_hi = xd_lo - 0.25, xd_hi + 0.25
+        ax.set_xlim(x_lo, x_hi)
         for label in ax.get_xticklabels():
             label.set_visible(False)
         self.fig.subplots_adjust(left=0.09, right=0.98, top=0.93, bottom=0.1)

@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.8
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.9
 =====================================================
 
 Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
@@ -37,6 +37,37 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.9 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
+- S  Input page: "Site and optics" is split in two. Site holds latitude, longitude and elevation; Optics holds
+     aperture, focal length, pixel size and binning, with the scintillation checkbox and the aperture hint.
+- S  Scan files fills Site and Optics from the FITS header (FOCALLEN, XPIXSZ, APTDIA or FOCRATIO, and the site
+     keywords including OBSGEO-B/L/H). Empty boxes are filled quietly; when the header disagrees with what you typed
+     (more than 0.01 deg, 30 m or 2%) it asks once, and a declined value is not asked again. Binning is never taken
+     from XBINNING; a binned XPIXSZ is divided by XBINNING for the Pixel size box. With your Site boxes still empty
+     it asks whether the header's site is yours before saving it.
+- S  Frames from another observer (site more than 50 km from yours): SHOBS-P asks, then borrows their site and
+     optics for the run and says so in the log. Your own values are kept and come back with your next folder of
+     your own frames. A borrowed aperture is never saved as yours.
+- S  Unistellar eVscope frames are recognized: 450 mm focal length, 2.9 um pixels and 114 mm aperture fill what
+     their headers lack. When a frame shows too few stars to label (very short exposures), Label chart stacks up to
+     30 frames first; when it still fails it says why (too few stars; the scale comes from the Optics box).
+- S  Noise note after photometry: when scintillation is more than twice the photon noise, the log says so, gives
+     both numbers and how much longer the exposures could be before the target reaches 75% of saturation.
+- S  Adding a night warns separately when it comes from other equipment (telescope / camera), another observer
+     (the header's OBSERVER), or used another telescope's site and optics.
+     Such nights are best kept as their own series.
+- S  Photometry page: a "View" box on the right, under the Catalog row, holds Show variables, Show apertures,
+     Show catalog stars, Show labels, Candidates only (Discovery only) and Fit view.
+- S  Switching mode keeps you on the page you were on.
+- S  Output page titles: "Output – Variability", "Output – Transit fit", "Output – Field scan".
+- T  When no transit is predicted during the data, Run photometry warns before starting, and the Transit fit page
+     says how far away the nearest predicted transit is instead of fitting. A manual fit asks "Fit anyway?". The
+     plot axis never stretches beyond the data and the transit window.
+- T  The save buttons moved into a "Results" row below the plot.
+- D  The Output page shows an empty Field scan frame before a scan, and a "Results" row with Save plot PNG, Save
+     CSV (every star: position, magnitude, scatter, candidate flags), Export candidates CSV and Export all light
+     curves CSV.
 
 New in 2.2.8 (S = shared by every mode, M = one mode only)
 - S  Calibration masters are saved and reused. Each master SHOBS-P builds is written into the folder its raw frames
@@ -551,6 +582,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.9  Site and Optics boxes; site and optics from the FITS header (and borrowed for another observer's
+       frames, then restored); Unistellar headers and stacked solve; scintillation note; equipment/observer
+       warning; View box; mode switch keeps the page; no-predicted-transit check; Results rows; Field scan saves.
 2.2.8  Calibration masters saved beside their frames and reused; star size from bright isolated stars;
        nearest-star centring; same star under two catalog names when adding a night and in comp health; plain
        'No significant period'; report note follows the camera; MicroObservatory elevation; scrolling star panel;

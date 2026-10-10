@@ -301,12 +301,71 @@ def header_site(header: dict):
                 except (ValueError, IndexError):
                     continue
         return None
-    lat = num("SITELAT", "LAT-OBS", "OBSLAT", "LATITUDE")
-    lon = num("SITELONG", "LONG-OBS", "OBSLON", "LONGITUD", "LONGITUDE")
-    elev = num("SITEELEV", "ALT-OBS", "OBSELEV", "ELEVATIO")
+    lat = num("SITELAT", "LAT-OBS", "OBSLAT", "LATITUDE", "OBSGEO-B")
+    lon = num("SITELONG", "LONG-OBS", "OBSLON", "LONGITUD", "LONGITUDE", "OBSGEO-L")
+    elev = num("SITEELEV", "ALT-OBS", "OBSELEV", "ELEVATIO", "OBSGEO-H")
+    if elev is None and is_unistellar(header):
+        elev = num("ALTITUDE")   # Unistellar: "altitude in meters of observing site" (elsewhere often pointing altitude)
     if lat is None or lon is None:
         return None
     return lat, lon, elev
+
+
+def is_unistellar(header: dict) -> bool:
+    text = " ".join(str(header.get(k, "")) for k in ("ORIGIN", "TELESCOP"))
+    return "UNISTELLAR" in text.upper() or "EVSCOPE" in text.upper().replace(" ", "")
+
+
+def header_optics(header: dict) -> dict:
+    """2.2.9: optics the FITS header gives: {"focal_mm", "pixel_um", "aperture_mm"} (only the ones found) and
+    {"source": {name: keyword}}. Unistellar eVscopes (114 mm, 450 mm, 2.9 µm IMX347) fill what their headers lack."""
+    out: dict = {"source": {}}
+
+    def num(*keys):
+        for key in keys:
+            try:
+                v = float(header.get(key))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v) and v > 0:
+                return v, key
+        return None, None
+
+    focal, k = num("FOCALLEN", "FOCAL", "TELFOCAL")
+    if focal:
+        out["focal_mm"], out["source"]["focal_mm"] = focal, k
+    pix, k = num("XPIXSZ", "PIXSIZE1", "PIXSIZE")
+    if pix:
+        # XPIXSZ is written after camera binning (MaxIm, N.I.N.A., ASIAIR); the Pixel size box is the unbinned pixel.
+        try:
+            cam_bin = int(float(header.get("XBINNING") or 1))
+        except (TypeError, ValueError):
+            cam_bin = 1
+        if cam_bin > 1:
+            pix /= cam_bin
+            k = f"{k} / XBINNING {cam_bin}"
+        out["pixel_um"], out["source"]["pixel_um"] = pix, k
+    ap, k = num("APTDIA", "APERTURE", "TELAPER")
+    if ap:
+        if ap < 3:      # some programs write the aperture in metres
+            ap *= 1000.0
+        out["aperture_mm"], out["source"]["aperture_mm"] = ap, k
+    else:
+        fr, k2 = num("FOCRATIO", "FRATIO")
+        if focal and fr:
+            out["aperture_mm"], out["source"]["aperture_mm"] = focal / fr, "FOCALLEN/FOCRATIO"
+    if is_unistellar(header):
+        for key, value in (("focal_mm", 450.0), ("pixel_um", 2.9), ("aperture_mm", 114.0)):
+            if key not in out:
+                out[key], out["source"][key] = value, "Unistellar eVscope"
+    return out
+
+
+def site_distance_km(a: tuple, b: tuple) -> float:
+    """Great-circle distance between two (lat, lon) in km."""
+    la1, lo1, la2, lo2 = (math.radians(float(v)) for v in (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(h)))
 
 
 def header_plate_scale(header: dict):
@@ -1897,6 +1956,32 @@ def detect_sources(img: np.ndarray, max_sources: int = 80, nsigma: float = 5.0, 
             if len(picked) >= max_sources:
                 break
     return picked
+
+
+def quick_stack(frames: list) -> np.ndarray | None:
+    """2.2.9: mean of a few calibrated, debayered frames, each shifted (whole pixels) so its brightest star lands on
+    the first frame's. Very short exposures (Unistellar 0.04 s) show ~10 stars per frame, too few to match a catalog;
+    30 stacked frames show several times more. Field rotation over a few minutes is ignored."""
+    from scipy import ndimage
+
+    ref = None
+    acc = None
+    n = 0
+    for img in frames:
+        if img is None:
+            continue
+        data = np.nan_to_num(np.asarray(img, dtype=np.float32), nan=float(np.nanmedian(img)))
+        sm = ndimage.uniform_filter(data, size=3)
+        y, x = np.unravel_index(int(np.argmax(sm)), sm.shape)
+        if ref is None:
+            ref = (x, y)
+            acc = data.astype(np.float64)
+        else:
+            if data.shape != acc.shape:
+                continue
+            acc += np.roll(np.roll(data, ref[1] - y, axis=0), ref[0] - x, axis=1)
+        n += 1
+    return (acc / n).astype(np.float32) if n else None
 
 
 def match_chart(
@@ -3866,6 +3951,34 @@ def write_scan_candidates(path: str, result: dict) -> None:
             ]) + "\n")
 
 
+def write_scan_stars(path: str, result: dict) -> None:
+    """2.2.9: every measured star of a field scan (what the scatter plot shows): position, magnitude, scatter, how
+    much more it scatters than stars of its brightness, candidate kind, and any VSX/SIMBAD match."""
+    cand_rank = {i: k for k, i in enumerate(result["candidates"], 1)}
+    sat = set(result.get("saturated") or [])
+
+    def num(v, fmt="{:.4f}"):
+        return "" if v is None or not (isinstance(v, (int, float)) and math.isfinite(v)) else fmt.format(v)
+
+    with AsciiWriter(path) as fh:
+        fh.write("label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,candidate_rank,candidate_kind,"
+                 "saturated,usable,best_period_days,vsx_name,vsx_type,n_points,caution\n")
+        for i, label in enumerate(result["labels"]):
+            ra, dec = result["radec"][i] if result.get("radec") else (float("nan"), float("nan"))
+            vsx = result["vsx"][i] if result.get("vsx") else None
+            per = (result.get("periods") or {}).get(i, {})
+            kind = scan_candidate_kind(result, i)[0] if i in cand_rank else ""
+            fh.write(",".join([
+                str(label).replace(",", " "), f"{result['xy'][i][0]:.1f}", f"{result['xy'][i][1]:.1f}",
+                num(ra, "{:.6f}"), num(dec, "{:.6f}"), format_radec(ra, dec) if math.isfinite(ra) else "",
+                num(result["mag"][i], "{:.3f}"), num(result["scatter"][i]), num(result["expected"][i]),
+                num(result["excess"][i], "{:.2f}"), str(cand_rank.get(i, "")), kind,
+                "yes" if i in sat else "", "yes" if result["usable"][i] else "no", num(per.get("period")),
+                (vsx or {}).get("name", "").replace(",", " "), (vsx or {}).get("type", "").replace(",", " "),
+                str(int(result["n_good"][i])), "; ".join(scan_cautions(result, i)).replace(",", ";"),
+            ]) + "\n")
+
+
 def write_scan_lightcurves(path: str, result: dict) -> None:
     """Every star's zero-pointed light curve, long format (one row per star per frame)."""
     corrected = result["light_curves"]
@@ -4677,7 +4790,8 @@ def night_setup_differences(new: dict, others: dict) -> list[str]:
         return vals
 
     for key, label in (("binning", "binning"), ("radius", "aperture radius"), ("sky_in", "inner sky radius"),
-                       ("sky_out", "outer sky radius"), ("comps", "comparison star(s)"), ("check", "check star")):
+                       ("sky_out", "outer sky radius"), ("comps", "comparison star(s)"), ("check", "check star"),
+                       ("instrument", "telescope / camera"), ("observer", "observer")):
         mine = new.get(key)
         if mine in (None, "", []):
             continue

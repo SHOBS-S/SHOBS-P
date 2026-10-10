@@ -163,6 +163,48 @@ def main() -> None:
     check("a click stays on the clicked star beside a brighter one", abs(info["x"] - 50.3) < 0.6 and abs(info["y"] - 50.2) < 0.6,
           f"({info['x']:.1f}, {info['y']:.1f})")
 
+    section("2d 2.2.9: header optics, short-exposure stack, transit window")
+    try:
+        from astropy.io import fits as _fits
+        hu = _fits.Header()
+        hu["TELESCOP"] = "eVscope v2.0"
+        hu["ORIGIN"] = "Unistellar"
+        hu["OBSGEO-B"] = 33.38
+        hu["OBSGEO-L"] = -111.96
+        hu["OBSGEO-H"] = 339.0
+        opt = core.header_optics(hu)
+        check("Unistellar header recognized", core.is_unistellar(hu))
+        check("Unistellar optics 450 mm / 2.9 um / 114 mm",
+              opt.get("focal_mm") == 450 and abs(float(opt.get("pixel_um", 0)) - 2.9) < 1e-6
+              and float(opt.get("aperture_mm", 0)) == 114, str({k: v for k, v in opt.items() if k != "source"}))
+        site = core.header_site(hu)
+        check("site from OBSGEO keywords", site is not None and abs(site[0] - 33.38) < 1e-6, str(site))
+        hz = _fits.Header()
+        hz["FOCALLEN"] = 2563.0
+        hz["XPIXSZ"] = 3.76
+        hz["FOCRATIO"] = 7.2
+        oz = core.header_optics(hz)
+        check("focal, pixel and aperture from FOCALLEN/XPIXSZ/FOCRATIO",
+              oz.get("focal_mm") == 2563 and abs(float(oz.get("aperture_mm", 0)) - 356) < 1, str(oz.get("aperture_mm")))
+    except Exception as exc:
+        check("header optics", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    yy4, xx4 = np.mgrid[0:150, 0:200]
+    pts4 = [(rng.uniform(10, 190), rng.uniform(10, 140), 10 ** rng.uniform(1.3, 2.6)) for _ in range(40)]
+    shots = []
+    for k in range(20):
+        img = rng.normal(0, 40, (150, 200))
+        for (sx, sy, a) in pts4 + [(100, 75, 3000)]:
+            img += a * np.exp(-((xx4 - sx - k % 4) ** 2 + (yy4 - sy) ** 2) / (2 * 1.2 ** 2))
+        shots.append(img.astype(np.float32))
+    n1 = len(core.detect_sources(shots[0]))
+    n20 = len(core.detect_sources(core.quick_stack(shots)))
+    check("a stack of short frames shows more stars than one", n20 > n1, f"{n1} -> {n20}")
+    pl = {"period": 3.092926, "t0": 2461323.81372, "t14": 0.95 / 24}
+    w1 = tc.transit_window_check(2461322.6925, 2461322.6994, pl)
+    check("no transit predicted during a 10-minute run (HD 219134 b, 9 Oct)", w1 is not None and not w1["overlap"],
+          f"{w1['hours']:.1f} h away" if w1 else "None")
+    check("no ephemeris gives no window check", tc.transit_window_check(1, 2, {"period": 3}) is None)
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):

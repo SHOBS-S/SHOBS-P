@@ -355,6 +355,37 @@ def prepare_priors(planet: dict, a_start: float | None = None) -> dict:
     return priors
 
 
+def transit_window_check(t_min: float, t_max: float, planet: dict) -> dict | None:
+    """2.2.9: does a predicted transit (± T14/2 and 3x the ephemeris uncertainty) overlap the data's time span?
+    Returns {"overlap": bool, "tc": nearest predicted mid-transit, "hours": hours from the data to it (negative =
+    before the data), "epoch": n}, or None when the planet has no usable ephemeris."""
+    try:
+        period = float(planet["period"])
+        t0 = float(planet["t0"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(period) and period > 0 and math.isfinite(t0)):
+        return None
+    if not (math.isfinite(t_min) and math.isfinite(t_max)):
+        return None
+    t14 = float(planet.get("t14") or 0.1)
+    mid = 0.5 * (t_min + t_max)
+    best = None
+    for n in (math.floor((mid - t0) / period), math.ceil((mid - t0) / period)):
+        tc = t0 + n * period
+        unc = math.hypot(float(planet.get("t0_err") or 0.0), abs(n) * float(planet.get("period_err") or 0.0))
+        half = t14 / 2 + 3 * unc
+        overlap = (tc + half) >= t_min and (tc - half) <= t_max
+        dist = 0.0 if overlap else min(abs(tc - half - t_max), abs(tc + half - t_min))
+        cand = {"overlap": overlap, "tc": tc, "epoch": n,
+                "hours": 0.0 if overlap else ((tc - t_max) * 24 if tc > t_max else (tc - t_min) * 24), "_d": dist}
+        if best is None or (cand["overlap"] and not best["overlap"]) or (cand["overlap"] == best["overlap"]
+                                                                          and cand["_d"] < best["_d"]):
+            best = cand
+    best.pop("_d", None)
+    return best
+
+
 def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False,
                 mcmc_steps: int = 3000, progress=None, cancel=None, log=None) -> dict:
     """The full SHOBS-P transit fit.

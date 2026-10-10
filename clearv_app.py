@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.8"
+APP_VERSION = "2.2.9"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -763,6 +763,14 @@ class App(Tk):
         # small in the top-left corner until something else redrew it, e.g. the mouse wheel).
         self.after_idle(self._fit_visible_canvases)
         self.after(250, self._fit_visible_canvases)
+        if index == STEP_PHOTO and self.mode_key == "discovery" and self.preview is not None and self.preview_is_debayered:
+            # Discovery: the field is solved when its Photometry page is first shown for this frame (2.2.9).
+            if self.chart_placed:
+                if getattr(self, "_summary_due", False):   # after a mode switch only, not on every visit
+                    self._summary_due = False
+                    self._field_summary()
+            elif getattr(self, "_auto_solved_for", None) is not self.preview:
+                self.after(150, self._auto_solve)
         for i, btn in enumerate(self.step_buttons):
             btn.state(["!disabled"])
             btn.configure(text=("●  " if i == index else "    ") + f"{i + 1}   {STEPS[i]}")
@@ -812,17 +820,12 @@ class App(Tk):
             btn.configure(text=("▶  " if key == mode else "     ") + MODES[key]["name"])
         self._layout_photo_for_mode()
         self._layout_input_for_mode()
-        # Land on the Photometry page: always for Discovery (its work starts there), and for the other modes when a
-        # frame is already loaded. Otherwise stay put (redrawing Output, whose layout follows the mode).
-        if not initial and (mode == "discovery" or self.preview is not None):
-            self.show_step(STEP_PHOTO)
-            if mode == "discovery" and self.preview is not None and self.preview_is_debayered:
-                if self.chart_placed:
-                    self._field_summary()
-                else:
-                    self.after(150, self._auto_solve)
-        elif getattr(self, "current_step", 0) == STEP_OUTPUT:
-            self.show_step(STEP_OUTPUT)
+        # 2.2.9: stay on the step you were on (John): the page is redrawn for the new mode. A page the new mode does
+        # not have (the Transit fit page) is its Output step. Discovery's field solve runs when its Photometry page
+        # is on screen (see show_step).
+        if not initial:
+            self._summary_due = mode == "discovery"
+            self.show_step(getattr(self, "current_step", 0))
         self.settings["mode"] = mode
         self._save_settings()
         if not initial:
@@ -956,8 +959,10 @@ class App(Tk):
 
     def _remember_scint(self):
         """2.2.2: the aperture and the scintillation switch are remembered between sessions."""
-        self.settings["aperture_mm"] = self.aperture_mm.get().strip()
-        self.settings.pop("aperture_cm", None)
+        # 2.2.9: a borrowed aperture (another telescope's frames) is not the user's own: not remembered.
+        if getattr(self, "_own_setup", None) is None:
+            self.settings["aperture_mm"] = self.aperture_mm.get().strip()
+            self.settings.pop("aperture_cm", None)
         self.settings["use_scint"] = bool(self.use_scint.get())
         self.aperture_hint.set(core.aperture_mm_hint(self.aperture_mm.get()))
         self._save_settings()
@@ -1271,24 +1276,28 @@ class App(Tk):
         self._field(report, 1, "Chart ID", self.chart, width=14, hint="na for non-AAVSO comps")
         report.columnconfigure(1, weight=1)
 
-        # Site and optics
-        site = self._group(right, "Site and optics")
+        # 2.2.9: Site and Optics are two boxes.
+        site = self._group(right, "Site")
         site.pack(fill=X, pady=(10, 0))
         self._field(site, 0, "Latitude (°, north +)", self.lat, width=12)
         self._field(site, 1, "Longitude (°, east +)", self.lon, width=12, hint="west is negative")
-        ttk.Label(site, text="Binning", style="Card.TLabel").grid(row=2, column=0, sticky=W, padx=(0, 10), pady=3)
-        ttk.Combobox(site, textvariable=self.binning, values=(1, 2, 4), width=6, state="readonly").grid(row=2, column=1, sticky=W, pady=3)
-        ttk.Label(site, text="same-color pixels only; colors stay separate", style="Hint.TLabel").grid(
-            row=2, column=2, sticky=W, padx=(8, 0))
-        self._field(site, 3, "Focal length (mm)", self.focal_mm, width=12)
-        self._field(site, 4, "Pixel size (µm)", self.pixel_um, width=12)
-        self._field(site, 5, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation")
-        self._field(site, 6, "Telescope aperture (mm)", self.aperture_mm, width=12, hint="for the scintillation error")
-        ttk.Label(site, textvariable=self.aperture_hint, style="Hint.TLabel", foreground="#a32020").grid(
-            row=8, column=0, columnspan=3, sticky=W)
-        ttk.Checkbutton(site, text="Include scintillation (atmospheric twinkling) in the error bars",
-                        variable=self.use_scint).grid(row=7, column=0, columnspan=3, sticky=W, pady=(2, 3))
+        self._field(site, 2, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation")
         site.columnconfigure(1, weight=1)
+        optics = self._group(right, "Optics")
+        optics.pack(fill=X, pady=(10, 0))
+        self._field(optics, 0, "Telescope aperture (mm)", self.aperture_mm, width=12, hint="for the scintillation error")
+        self._field(optics, 1, "Focal length (mm)", self.focal_mm, width=12)
+        self._field(optics, 2, "Pixel size (µm)", self.pixel_um, width=12)
+        ttk.Label(optics, text="Binning", style="Card.TLabel").grid(row=3, column=0, sticky=W, padx=(0, 10), pady=3)
+        ttk.Combobox(optics, textvariable=self.binning, values=(1, 2, 4), width=6, state="readonly").grid(
+            row=3, column=1, sticky=W, pady=3)
+        ttk.Label(optics, text="same-color pixels only; colors stay separate", style="Hint.TLabel").grid(
+            row=3, column=2, sticky=W, padx=(8, 0))
+        ttk.Checkbutton(optics, text="Include scintillation (atmospheric twinkling) in the error bars",
+                        variable=self.use_scint).grid(row=4, column=0, columnspan=3, sticky=W, pady=(2, 3))
+        ttk.Label(optics, textvariable=self.aperture_hint, style="Hint.TLabel", foreground="#a32020").grid(
+            row=5, column=0, columnspan=3, sticky=W)
+        optics.columnconfigure(1, weight=1)
         return page
 
     # ---- planet (Transits) ---------------------------------------------------------------
@@ -1692,7 +1701,7 @@ class App(Tk):
                 self._read_mono_filter(header)
                 self._check_target_field(header)
                 if not core.is_microobservatory(lights[0], header):
-                    self._restore_own_setup()
+                    self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
                 pat = core.header_bayer(header)
                 if pat:
                     self.pattern.set(pat)
@@ -1760,9 +1769,7 @@ class App(Tk):
             return
         if self._own_setup is None:
             # Taken only when the borrowed setup is accepted (2.2.4), so answering No never freezes the saved site.
-            self._own_setup = {name: getattr(self, name).get() for name in
-                               ("lat", "lon", "elevation", "focal_mm", "pixel_um", "pattern", "debayer_mode",
-                                "sat_limit", "binning")}
+            self._own_setup = self._setup_snapshot()
         self.pattern.set(core.MONO)
         self.debayer_mode.set("luminance")
         self.sat_limit.set(4000)
@@ -1775,10 +1782,137 @@ class App(Tk):
             self.elevation.set(f"{elev:.0f}")
         self.focal_mm.set(focal)
         self.pixel_um.set(round(pixel, 2))
+        self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
         self.log(f"MicroObservatory setup: site {lat:.4f}, {lon:.4f} ({where}); optics {focal:.0f} mm, {pixel:.2f} µm "
                  f"({'from the header scale' if scale else 'approximate'}); monochrome, CV, saturation 4000 ADU. "
                  "Your own setup comes back when you scan your own lights.")
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
+
+    _SETUP_NAMES = ("lat", "lon", "elevation", "focal_mm", "pixel_um", "aperture_mm", "pattern", "debayer_mode",
+                    "sat_limit", "binning")
+
+    def _setup_value(self, name: str):
+        """A Site/Optics/camera box's value; "" when a number box is empty (real Tk raises TclError on .get())."""
+        try:
+            return getattr(self, name).get()
+        except Exception:
+            return ""
+
+    def _setup_snapshot(self) -> dict:
+        return {n: self._setup_value(n) for n in self._SETUP_NAMES}
+
+    def _header_setup(self, header: dict):
+        """2.2.9 (John): Scan files fills the Site and Optics boxes from the lights' FITS header.
+        - Frames from a site far (> 50 km) from yours (another observer, a remote telescope): offer to use that site
+          and those optics for these frames; your own come back when you scan your own lights (as for MicroObservatory).
+        - Your own frames: empty boxes are filled silently; values that differ are listed in one question.
+        Binning is never taken from the header (XBINNING is the camera's; SHOBS-P's Binning is its own)."""
+        site = core.header_site(header)
+        opt = core.header_optics(header)
+        own = self._own_setup
+        ref = own if own is not None else self._setup_snapshot()
+
+        def fnum(v):
+            try:
+                f = float(v)
+                return f if math.isfinite(f) else None
+            except (TypeError, ValueError):
+                return None
+
+        ref_lat, ref_lon = fnum(ref.get("lat")), fnum(ref.get("lon"))
+        cam = " / ".join(str(header.get(k) or "").strip() for k in ("TELESCOP", "INSTRUME") if header.get(k))
+        if (site and own is not None and fnum(self.lat.get()) == round(site[0], 4)
+                and fnum(self.lon.get()) == round(site[1], 4)):
+            return   # these frames' setup is already in use
+        far = asked = False
+        if site and ref_lat is not None and ref_lon is not None:
+            dist = core.site_distance_km((ref_lat, ref_lon), site[:2])
+            far = dist > 50
+            where = f"{dist:.0f} km from your site"
+        elif site:
+            # No site of your own yet: never save a header's site as yours without asking (it may be a friend's).
+            where = "and your Site boxes are empty"
+            far = not messagebox.askyesno(
+                APP_TITLE,
+                f"These lights were taken at latitude {site[0]:.3f}, longitude {site[1]:.3f}"
+                + (f" ({cam})" if cam else "") + ".\n\nIs that your own site? Yes saves it as yours; No uses it "
+                "for these frames only.")
+            asked = True
+        if far:
+            if not asked and not messagebox.askyesno(
+                    APP_TITLE,
+                    f"These lights were taken at latitude {site[0]:.3f}, longitude {site[1]:.3f}"
+                    + (f" ({cam})" if cam else "") + f", {where}.\n\n"
+                    "Use the site and optics in these frames for them? Your own site, optics and camera "
+                    "settings are kept and come back when you scan a folder of your own lights."):
+                self._restore_own_setup()   # not a previous telescope's setup either
+                self.log("Lights from another site: your own site and optics kept (answered No). Check the "
+                         "Site and Optics boxes before photometry; the airmass and BJD times use them.")
+                return
+            if self._own_setup is None:
+                self._own_setup = self._setup_snapshot()
+            else:
+                # Start from your own setup, not the previous telescope's (MicroObservatory's MONO and 4000 ADU,
+                # or another eVscope's optics), keeping it set aside.
+                for name, value in self._own_setup.items():
+                    try:
+                        getattr(self, name).set(value)
+                    except Exception:
+                        pass
+                self.scale_approx = False
+            self.lat.set(f"{site[0]:.4f}")
+            self.lon.set(f"{site[1]:.4f}")
+            # Never leave your own elevation with another site's coordinates (2.2.8 MicroObservatory lesson).
+            self.elevation.set(f"{site[2]:.0f}" if site[2] is not None else "")
+            for key in ("focal_mm", "pixel_um", "aperture_mm"):
+                if key in opt:
+                    getattr(self, key).set(round(opt[key], 2) if key != "aperture_mm" else f"{opt[key]:.0f}")
+            got = ", ".join(f"{k.split('_')[0]} from {v}" for k, v in opt["source"].items())
+            self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
+                     + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
+                     + (f"; {got}" if got else "") + ". Your own setup comes back when you scan your own lights.")
+            self.status.set("Lights from another site: their site and optics are in use.")
+            return
+        # Your own frames (or no site in the header): any borrowed setup goes back first.
+        self._restore_own_setup()
+        wanted = []
+        if site:
+            wanted += [("lat", "Latitude", round(site[0], 4), "header site", 0.01),
+                       ("lon", "Longitude", round(site[1], 4), "header site", 0.01)]
+            if site[2] is not None:
+                wanted.append(("elevation", "Elevation (m)", round(site[2]), "header site", 30.0))
+        for key, label in (("aperture_mm", "Telescope aperture (mm)"), ("focal_mm", "Focal length (mm)"),
+                           ("pixel_um", "Pixel size (µm)")):
+            if key in opt:
+                v = opt[key]
+                wanted.append((key, label, round(v, 2) if key == "pixel_um" else round(v), opt["source"][key],
+                               0.02 * v))
+        filled, differ = [], []
+        for key, label, value, src, tol in wanted:
+            cur = fnum(self._setup_value(key))
+            if cur is None or (key in ("focal_mm", "pixel_um") and cur <= 0):
+                getattr(self, key).set(value if key not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
+                filled.append(f"{label} {value:g} ({src})")
+            elif abs(cur - value) > tol:
+                differ.append((key, label, cur, value, src))
+        if filled:
+            self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
+        if not differ:
+            return
+        key = ";".join(f"{k}={v:g}" for k, _l, _c, v, _s in differ)
+        declined = self.settings.get("header_declined") or []
+        if key in declined:
+            return
+        lines = "\n".join(f"  {label}: yours {cur:g}, header {value:g} ({src})" for _k, label, cur, value, src in differ)
+        if messagebox.askyesno(APP_TITLE, "The lights' FITS header differs from the Site and Optics boxes:\n" + lines
+                               + "\n\nUse the header values? (No keeps yours and will not ask again for these values.)"):
+            for k, _label, _cur, value, _src in differ:
+                getattr(self, k).set(value if k not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
+            self.log("Site/Optics updated from the lights' FITS header: "
+                     + "; ".join(f"{label} {value:g}" for _k, label, _c, value, _s in differ) + ".")
+        else:
+            self.settings["header_declined"] = (declined + [key])[-20:]
+            self._save_settings()
 
     def _restore_own_setup(self):
         """Back from someone else's frames (MicroObservatory) to your own site, optics, and camera settings."""
@@ -1791,7 +1925,7 @@ class App(Tk):
                 pass
         self._own_setup = None
         self.scale_approx = False
-        self.log("Your own site, optics, and camera settings are back (they were set aside for MicroObservatory frames).")
+        self.log("Your own site, optics, and camera settings are back (they were set aside for another telescope's frames).")
 
     def _page_blink(self):
         page = ttk.Frame(self.pages)
@@ -2442,10 +2576,9 @@ class App(Tk):
                               + ("" if self.pattern.get() == core.MONO else " (superpixel)"))
         self.log(f"Preview debayered: {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
         self.refresh_preview()
-        self.show_step(STEP_PHOTO)
+        self.show_step(STEP_PHOTO)   # in Discovery this starts the field solve (2.2.9: show_step)
         if self.mode_key == "discovery":
             self.status.set("Calibrated and debayered. Solving the field…")
-            self.after(150, self._auto_solve)
         else:
             self.status.set("Calibrated and debayered. Click the target, then Label chart and pick the comparison stars.")
 
@@ -2475,9 +2608,6 @@ class App(Tk):
         ttk.Radiobutton(self.disc_tools, text="✕  Exclude it", value="exclude", variable=self.pick_mode,
                         style="Pickcheck.TRadiobutton").pack(side=LEFT, padx=6)
         ttk.Label(self.disc_tools, text="(right-click a marker to undo)", style="Hint.TLabel").pack(side=LEFT, padx=6)
-        # 2.2.5: one switch to see only the scan candidates and watch stars (the other switches are kept as they are).
-        ttk.Checkbutton(self.disc_tools, text="Candidates only", variable=self.candidates_only,
-                        command=self.refresh_preview).pack(side=LEFT, padx=(14, 6))
         self.run_button = ttk.Button(tools, text="Run photometry", style="Accent.TButton", command=self.run_photometry)
         self.scan_button = ttk.Button(tools, text="Scan field", style="Accent.TButton", command=self.scan_field)
         self.run_button.pack(side=RIGHT)
@@ -2499,20 +2629,26 @@ class App(Tk):
         ttk.Checkbutton(
             options, text="Also measure R and B (color index; slower)", variable=self.measure_color,
         ).pack(side=LEFT, padx=14)
-        ttk.Checkbutton(
-            options, text="Show variables (red ○ ×)", variable=self.show_variables, command=self.refresh_preview,
-        ).pack(side=LEFT, padx=(0, 14))
-        ttk.Button(options, text="Fit view", command=self.reset_photo_view).pack(side=RIGHT)
-        ttk.Checkbutton(options, text="Show labels", variable=self.show_labels, command=self.refresh_preview).pack(
-            side=RIGHT, padx=(0, 10))
+        # 2.2.9: everything that changes what the image shows sits in one "View" box on the right, under the
+        # Catalog / Label chart row (John); the row on the left keeps the measurement settings.
+        view = ttk.LabelFrame(options, text="View", style="Group.TLabelframe", padding=(8, 2, 8, 4))
+        view.pack(side=RIGHT, padx=(10, 0))
+        ttk.Checkbutton(view, text="Show variables (red ○ ×)", variable=self.show_variables,
+                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
+        ttk.Checkbutton(view, text="Show apertures", variable=self.show_apertures,
+                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
+        ttk.Checkbutton(view, text="Show catalog stars", variable=self.show_catalog,
+                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
+        ttk.Checkbutton(view, text="Show labels", variable=self.show_labels, command=self.refresh_preview).pack(
+            side=LEFT, padx=(0, 10))
+        # 2.2.5: Discovery's switch to see only the scan candidates and watch stars (shown in Discovery only).
+        self.candidates_only_box = ttk.Checkbutton(view, text="Candidates only", variable=self.candidates_only,
+                                                   command=self.refresh_preview)
+        self.view_fit_button = ttk.Button(view, text="Fit view", command=self.reset_photo_view)
+        self.view_fit_button.pack(side=LEFT)
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
             _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
-        # 2.2.5: overlay switches.
-        ttk.Checkbutton(options, text="Show catalog stars", variable=self.show_catalog,
-                        command=self.refresh_preview).pack(side=RIGHT, padx=(0, 10))
-        ttk.Checkbutton(options, text="Show apertures", variable=self.show_apertures,
-                        command=self.refresh_preview).pack(side=RIGHT, padx=(0, 10))
 
         self.pick_label = StringVar(value="No stars marked.")
         self.pick_label_widget = ttk.Label(card, textvariable=self.pick_label, style="Hint.TLabel")
@@ -2594,7 +2730,9 @@ class App(Tk):
         self.pick_label_widget.pack_forget()
         if mode != "discovery":
             self.pick_label_widget.pack(anchor=W, before=self.photo_body)
+        self.candidates_only_box.pack_forget()
         if mode == "discovery":
+            self.candidates_only_box.pack(side=LEFT, padx=(0, 10), before=self.view_fit_button)
             self.disc_tools.pack(side=LEFT)
             self.disc_panel.pack(fill=BOTH, expand=True)
             self.scan_button.pack(side=RIGHT, before=self.label_button)
@@ -2753,10 +2891,79 @@ class App(Tk):
     def _auto_solve(self):
         """Discovery: solve the field as soon as the frame is calibrated (2.2)."""
         if self.mode_key != "discovery" or self.busy or self.preview is None or not self.preview_is_debayered:
+            return   # not marked as solved: the next visit to the Photometry page tries again
+        if getattr(self, "_auto_solved_for", None) is self.preview:
             return
+        self._auto_solved_for = self.preview
         self.label_aavso(auto=True)
 
     # ---- aperture suggestion ------------------------------------------------------------
+    def _noise_note(self, night_points):
+        """2.2.9: say when scintillation, not photon noise, sets the error bars, and how much exposure headroom the
+        brightest marked star leaves (Tessa's 0.04 s frames: photon 0.05 mag, scintillation 0.17, peak at 19%)."""
+        scint = self._scint_setup()
+        pts = [o for o in night_points if not o.flag]
+        if not pts or scint is None:
+            return
+        phot = [o.merr for o in pts if math.isfinite(o.merr)]
+        sc = [core.scint_mag(o, scint) for o in pts]
+        sc = [v for v in sc if math.isfinite(v)]
+        if not phot or not sc:
+            return
+        p_med, s_med = float(np.median(phot)), float(np.median(sc))
+        if s_med <= 2.0 * p_med:
+            return
+        peaks = [o.raw_peak for o in pts if math.isfinite(o.raw_peak)]
+        head = ""
+        if peaks and not getattr(self, "precalibrated", False):
+            full = self._num(self.sat_limit, 65535.0) or 65535.0   # the raw saturation level set on the page
+            frac = float(np.percentile(peaks, 95)) / full
+            if 0 < frac < 0.75:
+                head = (f" The target's peak reaches {frac:.0%} of the raw saturation level, so exposures about "
+                        f"{max(1.0, 0.75 / frac):.1f}x longer still stay under 75% in focus; defocusing allows more.")
+        exps = [o.exptime for o in pts if o.exptime]
+        exp_txt = f" ({np.median(exps):g} s exposures)" if exps else ""
+        self.log(f"Noise: scintillation sets the error bars{exp_txt}: about {s_med:.3f} mag per point from the "
+                 f"atmosphere against {p_med:.3f} mag photon noise. Longer exposures (defocused if needed) or binning "
+                 "points reduce it; scintillation falls as the square root of the exposure time." + head)
+
+    def _lights_instrument(self) -> str:
+        """'<TELESCOP> / <INSTRUME>' from the first light's header ('' when the header names neither)."""
+        try:
+            lights = self._lights()
+            h = core.read_header(lights[0]) if lights else {}
+        except Exception:
+            return ""
+        parts = [str(h.get(k) or "").strip() for k in ("TELESCOP", "INSTRUME")]
+        return " / ".join(p for p in parts if p)
+
+    def _transit_in_lights(self, lights) -> bool:
+        """2.2.9: in Transits mode, before photometry: is a transit of the planet predicted during these lights? If
+        not, it may be a variability run started in the wrong mode (Tessa's HD 219134 frames, 10 Oct)."""
+        if self.mode_key != "transits" or not lights:
+            return True
+        page = getattr(self, "transit_page", None)
+        planet = page.current_planet() if page is not None else None
+        if not planet:
+            return True
+        try:
+            j0 = core.mid_jd(core.read_header(lights[0]))
+            j1 = core.mid_jd(core.read_header(lights[-1]))
+        except Exception:
+            return True
+        if j0 is None or j1 is None or not (math.isfinite(j0) and math.isfinite(j1)):
+            return True
+        # JD to BJD differs by up to about 8 minutes: pad the span by 15 minutes so the check never cuts too close.
+        chk = tcore.transit_window_check(min(j0, j1) - 0.0105, max(j0, j1) + 0.0105, planet)
+        if chk is None or chk["overlap"]:
+            return True
+        side = "after" if chk["hours"] > 0 else "before"
+        return messagebox.askyesno(
+            APP_TITLE,
+            f"No transit of {planet.get('name') or 'the planet'} is predicted during these lights: the nearest is "
+            f"{abs(chk['hours']):.1f} h {side} them.\n\nIf this is a variability run, switch to Variables mode "
+            "first (the series and reports are kept per mode).\n\nRun photometry in Transits mode anyway?")
+
     def _aperture_sane(self) -> bool:
         """Before a run: is the aperture far larger (or smaller) than the stars on this frame? Typical after
         switching telescopes, for example to MicroObservatory frames with your own aperture still set."""
@@ -4088,6 +4295,13 @@ class App(Tk):
         fov = 2.0 * reach_px * scale / 60.0 * (1.15 if field_solve else 1.05) + (6.0 if field_solve else 0.0)
         band = self._band()
         sources = core.detect_sources(self.preview)
+        # 2.2.9: very short exposures (Tessa's 0.04 s eVscope frames) show too few stars to match; the work below
+        # then solves on a quick stack of the first frames instead.
+        stack_paths = []
+        if len(sources) < 20 and wcs is None:
+            stack_paths = [p for p in self._lights()[:30]]
+        stack_setup = (self.masters, self.pattern.get(), self.debayer_mode.get(), max(int(self.binning.get() or 1), 1))
+        preview_ref, preview_path = self.preview, self.preview_path
         target_xy = self.target_xy if not field_solve else (tx, ty)
         self._chart_diag = {"scale": scale, "camera_bin": camera_bin, "sources": len(sources), "target": target_xy,
                             "auto": auto, "ref": (ra_hours * 15.0, dec)}
@@ -4099,6 +4313,27 @@ class App(Tk):
 
         def work():
             try:
+                if len(stack_paths) >= 5 and stack_setup[0] is not None:
+                    self.call_ui(self.status.set, f"Only {len(sources)} stars on this frame: stacking "
+                                                  f"{len(stack_paths)} frames to find more…")
+                    masters_, pattern_, mode_, bin_ = stack_setup
+                    frames = [preview_ref]   # the reference, so star positions stay on the preview's pixels
+                    for path in stack_paths:
+                        if path == preview_path:
+                            continue
+                        try:
+                            raw, header = core.read_fits(path)
+                            frames.append(core.debayer(core.calibrate_frame(core.bin_image(raw, bin_), header,
+                                                                            masters_), pattern_, mode_))
+                        except Exception:
+                            continue
+                    stacked = core.quick_stack(frames)
+                    if stacked is not None and stacked.shape == self.preview.shape:
+                        more = core.detect_sources(stacked)
+                        if len(more) > len(sources):
+                            self._chart_diag["stacked"] = (len(frames), len(sources), len(more))
+                            sources[:] = more
+                            self._chart_diag["sources"] = len(more)
                 stars, chart_id = core.fetch_comparison_stars(catalog, cone[0], cone[1], fov, band)
                 if not stars:
                     raise ValueError(f"{catalog} returned no stars for this field.")
@@ -4204,10 +4439,19 @@ class App(Tk):
             tx, ty = diag.get("target") or (float("nan"), float("nan"))
             hint = ""
             self.status.set(f"{catalog}: no lock ({hits} of {n} matched).")
+            # 2.2.9: say why, in plain words.
+            why = []
+            n_src = diag.get("sources", 0)
+            if n_src < 15:
+                why.append(f"Only {n_src} stars were found on this frame"
+                           + (f" (even after stacking {diag['stacked'][0]} frames)" if diag.get("stacked") else "")
+                           + ": too few to match a catalog. Very short exposures or a small telescope do this; mark "
+                             "the stars by hand and type their names and magnitudes.")
+            why.append(f"The plate scale used is {diag.get('scale', 0):.3f}\"/px, from the focal length and pixel size in "
+                       "the Optics box: for another telescope's frames, enter its values.")
             if auto:
-                self.log(f"Solve field: {catalog} did not lock onto this frame ({hits} of {n} stars matched). Check the "
-                         "focal length, pixel size, and binning on the Input page, or try another catalog, then Solve "
-                         "field.")
+                self.log(f"Solve field: {catalog} did not lock onto this frame ({hits} of {n} stars matched). "
+                         + " ".join(why) + " Check binning too, or try another catalog, then Solve field.")
                 self._field_summary()
                 return
             if catalog == "AAVSO sequence" and n < 6:
@@ -4219,10 +4463,14 @@ class App(Tk):
                 f"Plate scale used: {diag.get('scale', 0):.3f}\"/px (camera bin {diag.get('camera_bin', 1)}, "
                 f"app bin {self.binning.get()}, "
                 + ("monochrome)" if self.pattern.get() == core.MONO else "superpixel x2)") + "\n\n"
+                + "\n\n".join(why) + "\n\n"
                 "Check that the Target marker is on your star, then RA/Dec, focal length, pixel size, and binning.\n"
                 "You can always type the comp and check magnitudes in by hand." + hint,
             )
             return
+        if diag.get("stacked"):
+            k, before, after = diag["stacked"]
+            self.log(f"Label chart: only {before} stars on one frame, so {k} frames were stacked first ({after} stars).")
         if diag.get("from_header"):
             self.log(f"Label chart: placed with the plate solution in the FITS header ({solved['hits']} of "
                      f"{solved.get('match_count', n)} bright catalog stars on detected stars).")
@@ -4907,16 +5155,53 @@ class App(Tk):
         card.pack(fill=BOTH, expand=True)
         self.discovery_host = ttk.Frame(card, style="Card.TFrame")
         self.discovery_host.pack(fill=BOTH, expand=True)
-        self.discovery_empty = ttk.Label(
-            self.discovery_host,
-            text="No field scan yet.\n\nCalibrate: the field is solved straight away (every star gets a position, a catalog "
-                 "magnitude, and a VSX/SIMBAD check). Then press Scan field on the Photometry page. The results appear here.",
-            style="Hint.TLabel", justify=LEFT, font=("Segoe UI", 11))
-        self.discovery_empty.pack(anchor=W, padx=16, pady=16)
+        self._discovery_placeholder()
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(4, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT, padx=8, pady=4)
         return page
+
+    def _discovery_placeholder(self):
+        """2.2.9: before a scan the Field scan page shows its empty plot frame and table, as Variables and Transits
+        show theirs (John)."""
+        for child in self.discovery_host.winfo_children():
+            child.destroy()
+        top = ttk.Frame(self.discovery_host, style="Card.TFrame", padding=10)
+        top.pack(fill=BOTH, expand=True)
+        ttk.Label(top, text="Output – Field scan", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        self.discovery_empty = ttk.Label(
+            top, text="No field scan yet: Scan field on the Photometry page. (Calibrate first; the field is solved "
+                      "straight away, so every star gets a position, a catalog magnitude and a VSX/SIMBAD check.)",
+            style="Hint.TLabel", justify=LEFT, wraplength=1300)
+        self.discovery_empty.pack(anchor=W, pady=(2, 6))
+        body = ttk.Frame(top, style="Card.TFrame")
+        body.pack(fill=BOTH, expand=True)
+        tree = ttk.Treeview(body, columns=("rank", "star", "mag", "scatter", "excess", "period", "color", "caution",
+                                           "vsx"), show="headings", height=8)
+        for col, label in (("rank", "#"), ("star", "Star / position"), ("mag", "Mag"), ("scatter", "Scatter"),
+                           ("excess", "× normal"), ("period", "Best period (d)"), ("color", "B−V"),
+                           ("caution", "Check first"), ("vsx", "VSX")):
+            tree.heading(col, text=label)
+        tree.pack(fill=X, side="bottom", pady=(6, 0))
+        if Figure is None:
+            return
+        fig = Figure(figsize=(11, 5.5), dpi=100, facecolor="#ffffff")
+        ax_s = fig.add_subplot(1, 2, 1)
+        ax_lc = fig.add_subplot(2, 2, 2)
+        ax_ls = fig.add_subplot(2, 2, 4)
+        ax_s.set_xlabel("Magnitude")
+        ax_s.set_ylabel("Scatter (mag, robust)")
+        ax_s.set_title("Scatter vs brightness")
+        ax_lc.set_title("Selected star")
+        ax_ls.set_xlabel("Period (d)")
+        for ax in (ax_s, ax_lc, ax_ls):
+            ax.grid(True, alpha=0.3)
+        ax_s.text(0.5, 0.5, "No field scan yet", transform=ax_s.transAxes, ha="center", va="center", color="#7a8a94")
+        fig.tight_layout()
+        canvas = FigureCanvasTkAgg(fig, master=body)
+        canvas.get_tk_widget().configure(width=400, height=300)
+        canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+        canvas.draw_idle()
 
     def _show_scan_on_output(self, result):
         for child in self.discovery_host.winfo_children():
@@ -4993,6 +5278,8 @@ class App(Tk):
         if not self._aperture_sane():
             return
         if not self._markers_in_order():
+            return
+        if not self._transit_in_lights(lights):
             return
         try:
             binning = max(int(self.binning.get()), 1)
@@ -5455,7 +5742,22 @@ class App(Tk):
             mine = dict(self._night_setup(), comps=cmp_comps, check=cmp_check or "")
             if "different stars than the series" in warning:
                 mine = {k: v for k, v in mine.items() if k not in ("comps", "check")}   # already said above
-            diffs = core.night_setup_differences(mine, others)
+            other_kit = [d for d in core.night_setup_differences(
+                {k: mine.get(k) for k in ("instrument", "observer")}, others)]
+            diffs = core.night_setup_differences({k: v for k, v in mine.items() if k not in ("instrument", "observer")},
+                                                 others)
+            if others and bool(mine.get("borrowed")) != any(isinstance(i, dict) and i.get("borrowed")
+                                                            for i in others.values()):
+                other_kit.append("site and optics: " + ("another telescope's (from its frames) on this night, your "
+                                                        "own on the series' nights" if mine.get("borrowed") else
+                                                        "your own on this night, another telescope's on the "
+                                                        "series' nights"))
+            if other_kit:
+                # 2.2.9: Tessa's eVscope night sat 0.33 mag from John's: untransformed instruments do not mix.
+                warning += ("\n\nCareful: this night comes from other equipment or another observer:\n  • "
+                            + "\n  • ".join(self.label_nights(d) for d in other_kit)
+                            + "\nUntransformed nights from different instruments sit on their own zero points (tenths "
+                              "of a magnitude). A separate series is usually better: answer No.")
             if diffs:
                 warning += ("\n\nCareful: this night was reduced differently from the series:\n  • "
                             + "\n  • ".join(self.label_nights(d) for d in diffs) + "\nNights reduced differently can sit on different zero points "
@@ -5510,6 +5812,7 @@ class App(Tk):
         flagged = sum(1 for obs in night_points if obs.flag)
         clouds = sum(1 for obs in night_points if "cloud" in obs.flag.split())
         self.log(f"Photometry done: {len(night_points)} points, {flagged} flagged ({clouds} cloud).")
+        self._noise_note(night_points)
         self._warn_edges(night, night_points)
         self.draw_output()
         self.show_step(STEP_OUTPUT)
@@ -5555,6 +5858,20 @@ class App(Tk):
         out = {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
                "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
                "comps": list(self.comps_used), "check": self.check_used or ""}
+        # 2.2.9: which telescope/camera and observer took the night, so nights from other equipment are recognized.
+        inst = self._lights_instrument()
+        if inst:
+            out["instrument"] = inst
+        # The header's OBSERVER names who took the frames; the Input page box names who reduces them.
+        try:
+            lights = self._lights()
+            who = str(core.read_header(lights[0]).get("OBSERVER") or "").strip() if lights else ""
+        except Exception:
+            who = ""
+        if who or self.observer.get().strip():
+            out["observer"] = who or self.observer.get().strip()
+        if getattr(self, "_own_setup", None) is not None:
+            out["borrowed"] = True   # this night used another telescope's site and optics
         used = getattr(self.masters, "used", None) if self.masters is not None else None
         if used:
             out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
@@ -5821,7 +6138,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Output", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Output – Variability", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self._build_summary(card)
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill=X)
@@ -8140,7 +8457,9 @@ class ScanView:
             cal = "calibrated to the comp star"
         else:
             cal = "instrumental (solve the field first to put them on a catalog scale)"
-        ttk.Label(top, text="Field scan", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        # 2.2.9: on the Output page the title names the step ("Output – Field scan"); the pop-up keeps "Field scan".
+        ttk.Label(top, text="Field scan" if on_close is not None else "Output – Field scan",
+                  font=("Segoe UI", 16 if on_close is None else 15, "bold"), style="Card.TLabel").pack(anchor=W)
         method = (result.get("color_method") or {}).get("bv", "")
         fit = (result.get("color_fits") or {}).get("bv")
         color_note = {
@@ -8168,13 +8487,19 @@ class ScanView:
                  + color_note,
             style="Hint.TLabel", wraplength=1300, justify=LEFT,
         ).pack(anchor=W, pady=(2, 6))
+        # 2.2.9: a "Results" save row at the bottom, as on the Variables Output page; the actions sit above it.
+        results = ttk.Frame(top, style="Card.TFrame")
+        results.pack(fill=X, side="bottom", pady=(4, 0))
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
+        ttk.Button(results, text="Save plot PNG…", style="Accent.TButton", command=self.save_png).pack(side=LEFT)
+        ttk.Button(results, text="Save CSV…", command=self.save_csv).pack(side=LEFT, padx=6)
+        ttk.Button(results, text="Export candidates CSV…", command=self.export_candidates).pack(side=LEFT)
+        ttk.Button(results, text="Export all light curves CSV…", command=self.export_curves).pack(side=LEFT, padx=6)
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         self.mark_button = ttk.Button(nav, text="Clear candidate marks" if app.scan_marks else "Mark candidates on image",
                                       command=self.toggle_marks)
         self.mark_button.pack(side=LEFT)
-        ttk.Button(nav, text="Export candidates CSV…", command=self.export_candidates).pack(side=LEFT, padx=6)
-        ttk.Button(nav, text="Export all light curves CSV…", command=self.export_curves).pack(side=LEFT)
         ttk.Button(nav, text="Watch selected star", command=self.watch_selected).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
         # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
@@ -8428,6 +8753,58 @@ class ScanView:
             for w in self.app.watch_list:
                 if w["name"] == name:
                     w.setdefault("variable", f"{vsx.get('source', 'VSX')}: {vsx['name']} {vsx['type']}")
+
+    def _scan_stem(self) -> str:
+        """<field>_<filter>_<date>_SHOBS-P_scan, the 2.2.5 file-name pattern (2.2.9)."""
+        app = self.app
+        field = (app.star_id.get() or "").strip() or "field"
+        jds = self._scan_jds()
+        date = ""
+        if jds:
+            a, b = (core.jd_to_datetime_utc(min(jds)).strftime("%d-%b-%Y").upper(),
+                    core.jd_to_datetime_utc(max(jds)).strftime("%d-%b-%Y").upper())
+            date = "_" + (a if a == b else f"{a}_to_{b}")
+        stem = f"{field.replace(' ', '_')}_{app._filter_code()}{date}_SHOBS-P_scan"
+        return "".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in stem)
+
+    def _scan_jds(self) -> list:
+        jd = self.r.get("jd")   # a numpy array: never test it with "or"
+        if jd is None:
+            return []
+        return [float(j) for j in np.ravel(np.asarray(jd, dtype=float)) if math.isfinite(float(j))]
+
+    def _summary_line(self) -> str:
+        r = self.r
+        zp = r.get("zp")
+        jds = self._scan_jds()
+        night = self.app.night_label(f"JD{math.floor(min(jds))}", jd=min(jds)) if jds else ""
+        return (f"{night}   {len(r['labels'])} stars measured, {r['frames']} frames, {len(r['candidates'])} candidate(s)"
+                + (f"   zero point from {zp['n']} {r.get('zp_catalog', 'catalog')} stars ± {zp['err']:.3f}" if zp else "")
+                + f"   SHOBS-P {APP_VERSION}")
+
+    def save_png(self):
+        """2.2.9: the scan plots as shown, with a one-line summary above them."""
+        if getattr(self, "fig", None) is None:
+            return
+        path = self.app.output_path(self._scan_stem() + ".png", title="Save plot PNG", defaultextension=".png",
+                                    filetypes=[("PNG", "*.png")], parent=self.win)
+        if not path:
+            return
+        title = self.fig.suptitle(self._summary_line(), fontsize=9, x=0.01, ha="left")
+        try:
+            self.fig.savefig(path, dpi=150, facecolor="#ffffff", bbox_inches="tight")
+        finally:
+            title.remove()
+            self.canvas.draw_idle()
+        self.app.status.set(f"Wrote {path}")
+
+    def save_csv(self):
+        """2.2.9: what the plot shows, one row per measured star."""
+        path = self.app.output_path(self._scan_stem() + ".csv", title="Save CSV", defaultextension=".csv",
+                                    filetypes=[("CSV", "*.csv")], parent=self.win)
+        if path:
+            core.write_scan_stars(path, self.r)
+            self.app.status.set(f"Wrote {path}")
 
     def export_candidates(self):
         path = self.app.output_path("field_scan_candidates.csv", title="Save CSV", defaultextension=".csv",
