@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.7
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.8
 =====================================================
 
 Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
@@ -37,6 +37,51 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.8 (S = shared by every mode, M = one mode only)
+- S  Calibration masters are saved and reused. Each master SHOBS-P builds is written into the folder its raw frames
+     came from (SHOBS-P_master_flat_bin2.fits, SHOBS-P_master_dark_bin2_0.75s.fits, SHOBS-P_master_bias_bin2.fits)
+     and stays there. The next run on the same folder uses it instead of stacking again, as long as the raw frames
+     (names, sizes, times, count), the binning and the bias/dark it was built with are unchanged; otherwise it is
+     rebuilt and replaced. "Rebuild masters" on the Calibrate page forces a fresh stack. Masters are never stacked
+     as frames, and a read-only folder only means the master is not saved. Bias/Dark/Flat also take one master file
+     ("Master file…"), but only masters SHOBS-P built (their scaling and normalization are known); PixInsight and
+     other masters are refused with a plain message. Before use a master is checked against the lights (size and
+     binning must match; Bayer pattern, gain, offset, temperature, flat rotator angle and flat age are cautions),
+     the log says which masters were used ("using saved master flat from 1–2 Oct (51 frames)"), and the night's
+     setup record in the series keeps it.
+- S  Star size (FWHM) is measured on bright, unsaturated, isolated stars with a Gaussian fit, not on the marked
+     stars in a fixed 12 px circle. Faint or crowded stars had measured 3x too big (MicroObservatory CoRoT-1:
+     10.5 px for 2-3 px stars), so Suggest... proposed apertures that swallowed neighbors. The aperture check before
+     photometry and the aperture test's seeing column use the same measurement; a faint target gets a note
+     suggesting 1.2-1.5 x FWHM.
+- S  Clicking a star centres the marker on the star nearest the click, not on whatever is brightest nearby: a
+     brighter neighbor a few pixels away no longer pulls the marker (and the aperture) onto itself. With no star at
+     the click the marker stays where you clicked and the status line says so. Every frame of the photometry run
+     centres the same way.
+- S  The Suggest apertures window grows to show the test results when they arrive (it scrolls if the screen is
+     too small).
+- S  The Photometry page's right-hand panel (Stars and Watch stars) scrolls when it does not fit, for example with
+     ten comps; the mouse wheel scrolls it while the pointer is over it, and the image keeps its wheel zoom. The
+     comps' status lines are kept in full.
+- S  A comp clicked before Label chart now fills C1 (the first slot without a marker), even when C1 still holds a
+     name from another night; Label chart then corrects a leftover name that belongs to a different star
+     ("Comp 1 name updated from ... to ..."). A single comp other than C1 is labeled "Comp C2" in the legend.
+- S  Adding a night: a comp or check labeled from another catalog (Gaia DR3 tonight, TYC in the series) is
+     recognized as the same star by sky position (3"). It takes the series' name and catalog magnitude, the night
+     is re-derived with that magnitude (Gaia's V and Tycho's V differ), and the log says so. Only stars that really
+     differ are warned about. Comp health counts a star under both of its names as one star, every night.
+- S  Period result: when nothing is significant (false-alarm probability above 1%, or one night carries it) the
+     Output page, the saved PNG and the summary say so first: "No significant period: the star looks constant at
+     this precision (scatter ... per point, ... night to night)", and the fold is titled "Best peak (not
+     significant)".
+- S  AAVSO reports: the default note follows the camera ("Monochrome camera; not transformed" for MONO, "OSC
+     reduced; not transformed" for color); a note you typed is kept. MicroObservatory frames give latitude and
+     longitude but no elevation: the telescope's (Mt. Hopkins, about 2340 m) is used, never your own.
+- S  Suggested comps for a faint target are about 1 mag brighter (0.3 fainter to 2 brighter), not equally faint:
+     a comp as faint as the target adds as much noise as the target.
+- M  Transits: the fit notes say when the comparison stars, not the target, set the noise (the target is much
+     steadier against the check star than against the comps), and suggest brighter comps.
 
 New in 2.2.7 (S = shared by every mode, M = one mode only)
 - S  Nights are named the way observers say them: "K2-113 b · night of 5–6 Oct 2026" in the Transit fit night box,
@@ -506,6 +551,10 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.8  Calibration masters saved beside their frames and reused; star size from bright isolated stars;
+       nearest-star centring; same star under two catalog names when adding a night and in comp health; plain
+       'No significant period'; report note follows the camera; MicroObservatory elevation; scrolling star panel;
+       comp-noise warning (Transits).
 2.2.7  Night names; hidden-flip detection; Transit PNG; report handling (auto fit, banner, closes on new data);
        Star ID finds planets; depth-unreliable verdict; Discovery mark selected and noise-at-flip caution.
 2.2.6  Planet lookup through the Exoplanet Archive's alias service (any name; KOI-217 b fixed); planet names as

@@ -418,6 +418,10 @@ class TransitPage:
                 "aperture": f"r {app.radius.get():g} px, sky {app.sky_in.get():g}-{app.sky_out.get():g} px",
                 "comps": ", ".join(app.active_comps or app.comps_used), "source": f"night {night}",
                 "scint": app._scint_note() if hasattr(app, "_scint_note") else ""}
+        try:
+            meta["comp_noise"] = core.comp_noise_warning(obs)  # 2.2.8
+        except Exception:
+            meta["comp_noise"] = None
         return t, flux, err, am, meta
 
     # ---- fit -------------------------------------------------------------------------------
@@ -486,6 +490,10 @@ class TransitPage:
                                        "now.")])
             self.draw(placeholder="Not fitted yet: press Fit transit.")
             return
+        if meta.get("comp_noise"):
+            flags = result.setdefault("flags", [])
+            flags.insert(1 if flags else 0, ("warn", meta["comp_noise"]))   # after the verdict line
+            self.app.log("Comps: " + meta["comp_noise"])
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
         self.meta_for_files = meta

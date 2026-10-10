@@ -425,6 +425,8 @@ class Masters:
     flat: np.ndarray | None = None
     dark_exptime: float = 1.0
     notes: list[str] = field(default_factory=list)
+    used: dict = field(default_factory=dict)      # 2.2.8: where each master came from (for the log and the night)
+    headers: dict = field(default_factory=dict)   # 2.2.8: each master's header, for the checks against the lights
 
 
 def build_masters(
@@ -476,6 +478,359 @@ def build_masters(
 
         masters.flat = normalize_flat(median_stack(flat_paths, binning, log, prep_flat))
         masters.notes.append(f"flat n={len(flat_paths)}" + (" (already calibrated)" if flats_calibrated else ""))
+    return masters
+
+
+# ---- 2.2.8: SHOBS-P's own calibration masters, saved beside their raw frames and reused ---------------------
+
+MASTER_PREFIX = "SHOBS-P_master_"
+MASTER_KINDS = ("bias", "dark", "flat")
+
+
+def master_file_name(kind: str, binning: int, exptime: float | None = None) -> str:
+    """SHOBS-P_master_flat_bin2.fits, SHOBS-P_master_dark_bin2_0.75s.fits, SHOBS-P_master_bias_bin2.fits."""
+    if kind == "dark":
+        return f"{MASTER_PREFIX}dark_bin{int(binning)}_{float(exptime or 0):g}s.fits"
+    return f"{MASTER_PREFIX}{kind}_bin{int(binning)}.fits"
+
+
+def is_shobsp_master_name(path: str) -> bool:
+    return os.path.basename(path).lower().startswith(MASTER_PREFIX.lower())
+
+
+def calibration_source(path: str) -> tuple[list[str], str | None]:
+    """A Bias/Dark/Flat entry is a folder of raw frames (SHOBS-P masters in it are never stacked as frames) or one
+    master file picked directly. Returns (raw frames, master file or None)."""
+    p = (path or "").strip()
+    if not p:
+        return [], None
+    if os.path.isfile(p):
+        return [], p
+    return [f for f in list_fits(p) if not is_shobsp_master_name(f)], None
+
+
+def frames_fingerprint(paths: list[str]) -> str:
+    """Names, sizes, modification times and count of the raw frames: a saved master is reused only while this is
+    unchanged."""
+    import hashlib
+
+    h = hashlib.sha1()
+    rows = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            rows.append(f"{os.path.basename(path)}|{st.st_size}|{int(st.st_mtime)}")
+        except OSError:
+            rows.append(f"{os.path.basename(path)}|?|?")
+    rows.sort()
+    h.update(f"{len(rows)}\n".encode())
+    for row in rows:
+        h.update(row.encode("utf-8", "replace") + b"\n")
+    return h.hexdigest()[:20]
+
+
+_COPY_KEYS = ("GAIN", "OFFSET", "EGAIN", "CCD-TEMP", "SET-TEMP", "BAYERPAT", "INSTRUME", "XPIXSZ", "YPIXSZ")
+
+
+def _master_cards(kind: str, binning: int, paths: list[str], headers: list[dict], version: str, extra: dict) -> dict:
+    first = headers[0] if headers else {}
+    cards = {"SHOBSP": (str(version), "built by SHOBS-P (Shiloh Hill Observatory - Photometry)"),
+             "MASTTYPE": (kind.upper(), "SHOBS-P master type"),
+             "IMAGETYP": (f"Master {kind.title()}", ""),
+             "SHBIN": (int(binning), "binning applied when stacking"),
+             "NFRAMES": (len(paths), "raw frames median-combined"),
+             "FPRINT": (frames_fingerprint(paths), "fingerprint of the raw frames (names, sizes, times)"),
+             "SRCDIR": (os.path.basename(os.path.dirname(paths[0]))[:60] if paths else "", "folder of the raw frames")}
+    dates = sorted(str(h.get("DATE-OBS")) for h in headers if h.get("DATE-OBS"))
+    if dates:
+        cards["DATE-BEG"] = (dates[0][:30], "first raw frame")
+        cards["DATE-END"] = (dates[-1][:30], "last raw frame")
+    for key in _COPY_KEYS:
+        if first.get(key) not in (None, ""):
+            cards[key] = (first[key], "")
+    rot = header_rotator(first) if first else None
+    if kind == "flat" and rot is not None:
+        cards["ROTATOR"] = (float(rot), "camera angle of the flats")
+    for key, value in extra.items():
+        cards[key] = value
+    return cards
+
+
+def write_master(path: str, data: np.ndarray, cards: dict) -> None:
+    """Write a master as 32-bit float FITS with its SHOBS-P stamp."""
+    if fits is None:
+        raise RuntimeError("astropy is required to save masters")
+    hdr = fits.Header()
+    for key, value in cards.items():
+        val, comment = value if isinstance(value, tuple) else (value, "")
+        if isinstance(val, str):
+            val = ascii_safe(val)[:68]
+        try:
+            hdr[key] = (val, ascii_safe(str(comment))[:46])
+        except Exception:
+            continue
+    tmp = path + ".part"
+    try:
+        fits.PrimaryHDU(np.asarray(data, dtype=np.float32), header=hdr).writeto(tmp, overwrite=True)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def master_stamp(header: dict) -> str | None:
+    """The master type (BIAS, DARK, FLAT) when the file carries SHOBS-P's stamp, else None."""
+    if not header or not str(header.get("SHOBSP") or "").strip():
+        return None
+    kind = str(header.get("MASTTYPE") or "").strip().upper()
+    return kind if kind in ("BIAS", "DARK", "FLAT") else None
+
+
+def check_master_file(path: str, kind: str) -> str:
+    """'' when path is a SHOBS-P master of this kind; otherwise a plain reason it cannot be used."""
+    try:
+        header = read_header(path)
+    except Exception as exc:
+        return f"{os.path.basename(path)} cannot be read ({exc})."
+    stamp = master_stamp(header)
+    if stamp is None:
+        return (f"{os.path.basename(path)} is not a master SHOBS-P built. Masters from PixInsight or other software "
+                "are not used, because how they were scaled and normalized is not known. Choose the folder of raw "
+                f"{kind} frames instead (SHOBS-P builds its master there and reuses it).")
+    if stamp != kind.upper():
+        return f"{os.path.basename(path)} is a master {stamp.lower()}, not a master {kind}."
+    return ""
+
+
+def find_saved_master(paths: list[str], kind: str, binning: int, depends: dict, exptime: float | None = None):
+    """The saved SHOBS-P master for these raw frames, when it exists and still matches: same frames (fingerprint
+    and count), same binning, and built from the same bias/dark it depends on. Returns (path, header) or
+    (None, reason)."""
+    if not paths:
+        return None, "no frames"
+    path = os.path.join(os.path.dirname(paths[0]), master_file_name(kind, binning, exptime))
+    if not os.path.isfile(path):
+        return None, "none saved yet"
+    try:
+        header = read_header(path)
+    except Exception as exc:
+        return None, f"saved master unreadable ({exc})"
+    if master_stamp(header) != kind.upper():
+        return None, "saved file is not a SHOBS-P master"
+    try:
+        if int(header.get("SHBIN", -1)) != int(binning):
+            return None, "built with another binning"
+        if int(header.get("NFRAMES", -1)) != len(paths):
+            return None, "the number of raw frames changed"
+    except (TypeError, ValueError):
+        return None, "stamp incomplete"
+    if str(header.get("FPRINT", "")) != frames_fingerprint(paths):
+        return None, "the raw frames changed"
+    for key, value in depends.items():
+        if str(header.get(key, "")) != str(value):
+            return None, f"built with a different {key[:-2].lower() or key} set"
+    return path, header
+
+
+def master_mismatches(master_header: dict, kind: str, light_header: dict, light_shape: tuple, master_shape: tuple,
+                      binning: int) -> tuple[list[str], list[str]]:
+    """(errors that make the master unusable, warnings) comparing a master with the lights."""
+    errors, warns = [], []
+    if tuple(master_shape) != tuple(light_shape):
+        errors.append(f"master {kind} is {master_shape[1]}x{master_shape[0]} px but the binned lights are "
+                      f"{light_shape[1]}x{light_shape[0]} px")
+    try:
+        mb = int(master_header.get("SHBIN", binning))
+        if mb != int(binning):
+            errors.append(f"master {kind} was built at binning {mb}, the lights use binning {binning}")
+    except (TypeError, ValueError):
+        pass
+    mp, lp = header_bayer(master_header), header_bayer(light_header)
+    if mp and lp and mp != lp:
+        warns.append(f"master {kind} Bayer pattern {mp}, lights {lp}")
+    for key, label, tol in (("GAIN", "gain", 0.5), ("OFFSET", "offset", 0.5), ("CCD-TEMP", "sensor temperature", 3.0)):
+        try:
+            a, b = float(master_header.get(key)), float(light_header.get(key))
+        except (TypeError, ValueError):
+            continue
+        if abs(a - b) > tol:
+            warns.append(f"master {kind} {label} {a:g}, lights {b:g}")
+    if kind == "flat":
+        fr, lr = master_header.get("ROTATOR"), header_rotator(light_header)
+        try:
+            if fr is not None and lr is not None and rotator_difference(float(fr), float(lr)) > 2.0:
+                warns.append(f"master flat taken at rotator {float(fr):g}°, lights at {float(lr):g}°")
+        except (TypeError, ValueError):
+            pass
+        d0 = str(master_header.get("DATE-END") or master_header.get("DATE-BEG") or "")[:10]
+        dl = str(light_header.get("DATE-OBS") or "")[:10]
+        try:
+            gap = abs((datetime.fromisoformat(dl) - datetime.fromisoformat(d0)).days)
+            if gap > 30:
+                warns.append(f"master flat is from {d0}, {gap} days before or after the lights (dust moves)")
+        except ValueError:
+            pass
+    return errors, warns
+
+
+def master_summary(header: dict) -> str:
+    """'from 1–2 Oct (51 frames)' for the log."""
+    d0, d1 = str(header.get("DATE-BEG") or "")[:10], str(header.get("DATE-END") or "")[:10]
+    n = header.get("NFRAMES")
+    when = ""
+    try:
+        a, b = datetime.fromisoformat(d0), datetime.fromisoformat(d1)
+        when = (f"{a.day}–{b.day} {b.strftime('%b')}" if (a.year, a.month) == (b.year, b.month) and a.day != b.day
+                else a.strftime("%d %b").lstrip("0") if a.date() == b.date()
+                else f"{a.strftime('%d %b').lstrip('0')}–{b.strftime('%d %b').lstrip('0')}")
+    except ValueError:
+        pass
+    parts = [f"from {when}" if when else "", f"({n} frames)" if n else ""]
+    return " ".join(p for p in parts if p)
+
+
+def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: list[str], binning: int = 1,
+                    log=None, flats_calibrated: bool = False, files: dict | None = None, save: bool = True,
+                    rebuild: bool = False, version: str = "") -> Masters:
+    """2.2.8: build_masters, but each master is saved into the folder its raw frames came from and reused on later
+    runs while the raw frames, binning, and the bias/dark it was built with are unchanged. files: {"bias": path,
+    "dark": path, "flat": path} for SHOBS-P masters picked directly. Masters.used describes each master's source;
+    Masters.headers keeps each master's header for the checks against the lights."""
+    log = log or (lambda *_: None)
+    files = files or {}
+    masters = Masters()
+    masters.used = {}
+    masters.headers = {}
+
+    def load(kind, path, header, how):
+        data, _h = read_fits(path)
+        masters.headers[kind] = header
+        summary = master_summary(header)
+        masters.used[kind] = f"{how} SHOBS-P master {kind}" + (f" {summary}" if summary else "")
+        log(f"Using {how} master {kind} {summary}".rstrip() + f": {os.path.basename(path)}")
+        return np.asarray(data, dtype=np.float32)
+
+    def save_it(kind, data, paths, headers, extra, exptime=None):
+        if not save or not paths:
+            return
+        folder = os.path.dirname(paths[0])
+        path = os.path.join(folder, master_file_name(kind, binning, exptime))
+        try:
+            write_master(path, data, _master_cards(kind, binning, paths, headers, version, extra))
+            masters.headers[kind] = read_header(path)
+            log(f"Saved master {kind} in the {kind} folder: {os.path.basename(path)} (reused next time while these "
+                "frames are unchanged)")
+        except Exception as exc:
+            log(f"Could not save the master {kind} in {folder} ({exc}); continuing without saving it.")
+
+    def stack(paths, prep=None):
+        headers = []
+
+        def wrapped(data, header):
+            headers.append(header)
+            return prep(data, header) if prep is not None else data
+        return median_stack(paths, binning, log, wrapped), headers
+
+    # Bias
+    bias_fp = "none"
+    if files.get("bias"):
+        h = read_header(files["bias"])
+        masters.bias = load("bias", files["bias"], h, "chosen")
+        bias_fp = str(h.get("FPRINT", "file"))
+        masters.notes.append("bias: chosen master")
+    elif bias_paths:
+        bias_fp = frames_fingerprint(bias_paths)
+        found, hdr = (None, "rebuild asked") if rebuild else find_saved_master(bias_paths, "bias", binning, {})
+        if found:
+            masters.bias = load("bias", found, hdr, "saved")
+        else:
+            log(f"Median-combining {len(bias_paths)} bias frames")
+            masters.bias, hs = stack(bias_paths)
+            masters.used["bias"] = f"bias built from {len(bias_paths)} frames"
+            save_it("bias", masters.bias, bias_paths, hs, {})
+        masters.notes.append(f"bias n={len(bias_paths)} " + ("saved master" if found else "batched median"))
+
+    # Dark
+    dark_fp = "none"
+
+    def prep_dark(data, header):
+        ccd = _ccd(data, header_exptime(header))
+        if masters.bias is not None:
+            ccd = subtract_bias(ccd, _ccd(masters.bias))
+        return np.asarray(ccd.data, dtype=np.float32)
+
+    if files.get("dark"):
+        h = read_header(files["dark"])
+        masters.dark = load("dark", files["dark"], h, "chosen")
+        masters.dark_exptime = header_exptime(h)
+        dark_fp = str(h.get("FPRINT", "file"))
+        bias_out = str(h.get("BIASSUB", "")).upper() in ("T", "TRUE", "1")
+        if masters.bias is None and bias_out:
+            log("  Note: this master dark had the bias taken out, and no bias is given now: the pedestal stays in the "
+                "lights (the sky ring still removes it in photometry).")
+        elif masters.bias is not None and not bias_out:
+            # The lights and flats lose the bias first; a dark that still holds it would take the pedestal off twice.
+            if masters.bias.shape == masters.dark.shape:
+                masters.dark = (masters.dark - masters.bias).astype(np.float32)
+                log("  This master dark still held the bias; the bias given now was taken out of it, so the pedestal "
+                    "is removed once.")
+            else:
+                raise ValueError("The chosen master dark still holds the bias, and the bias given is another size; "
+                                 "clear one of them.")
+        masters.notes.append(f"dark: chosen master exp={masters.dark_exptime:.3g}s")
+    elif dark_paths:
+        exps = [header_exptime(read_header(path)) for path in dark_paths]
+        exptime = float(np.median(exps)) if exps else 1.0
+        dark_fp = frames_fingerprint(dark_paths)
+        deps = {"BIASFP": bias_fp}
+        found, hdr = (None, "rebuild asked") if rebuild else find_saved_master(dark_paths, "dark", binning, deps, exptime)
+        if found:
+            masters.dark = load("dark", found, hdr, "saved")
+        else:
+            log(f"Median-combining {len(dark_paths)} dark frames")
+            masters.dark, hs = stack(dark_paths, prep_dark)
+            masters.used["dark"] = f"dark built from {len(dark_paths)} frames"
+            save_it("dark", masters.dark, dark_paths, hs,
+                    {"EXPTIME": (exptime, "dark exposure, s"), "BIASSUB": (masters.bias is not None, "bias removed"),
+                     "BIASFP": (bias_fp, "bias set used")}, exptime)
+        masters.dark_exptime = exptime
+        masters.notes.append(f"dark n={len(dark_paths)} exp={masters.dark_exptime:.3g}s" + (" saved master" if found else ""))
+
+    # Flat
+    def prep_flat(data, header):
+        if flats_calibrated:
+            return np.asarray(data, dtype=np.float32)
+        ccd = _ccd(data, header_exptime(header))
+        if masters.bias is not None:
+            ccd = subtract_bias(ccd, _ccd(masters.bias))
+        if masters.dark is not None and masters.dark_exptime > 0:
+            ccd = subtract_dark(ccd, _ccd(masters.dark, masters.dark_exptime),
+                                data_exposure=header_exptime(header) * u.s,
+                                dark_exposure=masters.dark_exptime * u.s, scale=True)
+        return np.asarray(ccd.data, dtype=np.float32)
+
+    if files.get("flat"):
+        h = read_header(files["flat"])
+        masters.flat = load("flat", files["flat"], h, "chosen")
+        masters.notes.append("flat: chosen master")
+    elif flat_paths:
+        deps = {"BIASFP": bias_fp, "DARKFP": dark_fp, "FLATCAL": bool(flats_calibrated)}
+        found, hdr = (None, "rebuild asked") if rebuild else find_saved_master(flat_paths, "flat", binning, deps)
+        if found:
+            masters.flat = load("flat", found, hdr, "saved")
+        else:
+            log(f"Median-combining {len(flat_paths)} flat frames")
+            raw, hs = stack(flat_paths, prep_flat)
+            masters.flat = normalize_flat(raw)
+            masters.used["flat"] = f"flat built from {len(flat_paths)} frames"
+            save_it("flat", masters.flat, flat_paths, hs,
+                    {"NORMFLAT": (True, "normalized to 1 at the median"), "BIASFP": (bias_fp, "bias set used"),
+                     "DARKFP": (dark_fp, "dark set used"), "FLATCAL": (bool(flats_calibrated), "flats were pre-calibrated")})
+        masters.notes.append(f"flat n={len(flat_paths)}" + (" (already calibrated)" if flats_calibrated else "")
+                             + (" saved master" if found else ""))
     return masters
 
 
@@ -691,26 +1046,238 @@ class Obs:
     pos: dict = field(default_factory=dict)
 
 
-def recenter(img: np.ndarray, x: float, y: float, radius: float) -> tuple[float, float, float]:
-    """photutils center-of-mass centroid inside 1.5 apertures."""
-    search = max(radius * 1.5, radius + 2)
-    crop, cx, cy = _crop(img, x, y, int(math.ceil(search)) + 2)
-    yy, xx = np.mgrid[0 : crop.shape[0], 0 : crop.shape[1]]
-    rr = np.hypot(xx - cx, yy - cy)
-    sky = np.median(crop[rr <= search]) if np.any(rr <= search) else 0
-    work = np.clip(crop - sky, 0, None)
-    work[rr > search] = 0
+def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
+    """2.2.8: centre on the star nearest (x, y), not on whatever is brightest nearby.
+
+    1. Look for significant peaks (3x3-smoothed, above sky + 4 sigma of the smoothed noise) within a search radius
+       (max(3, 1.2 x aperture radius), or 2.5 x FWHM when the FWHM is known).
+    2. Take the peak NEAREST the start point, so a brighter neighbour a few pixels away cannot capture it
+       (CoRoT-1, 10 Oct 2026: a star 2.5x brighter 5.8 px away pulled the old centre-of-mass 3.5 px off the target).
+    3. Centre of mass of the sky-subtracted light inside about one FWHM of that peak, iterated three times.
+    With no significant peak (a faint star lost in the noise), the start point is kept and found = False.
+    Returns {"x", "y", "shift", "found"}."""
+    from scipy import ndimage
+
+    if fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
+        search = max(3.0, 2.5 * float(fwhm))
+        window = max(1.5, float(fwhm))
+    else:
+        search = max(3.0, 1.2 * float(radius))
+        window = min(max(1.5, 0.45 * float(radius)), 5.0)
+    half = int(math.ceil(search + window)) + 3
+    crop, cx, cy = _crop(img, x, y, half)
+    keep = {"x": float(x), "y": float(y), "shift": 0.0, "found": False}
+    if crop.size < 9:
+        return keep
+    data = np.array(crop, dtype=float, copy=True)
+    finite = np.isfinite(data)
+    if finite.sum() < 9:
+        return keep
+    sky = float(np.median(data[finite]))
+    noise = 1.4826 * float(np.median(np.abs(data[finite] - sky)))
+    if not math.isfinite(noise) or noise <= 0:
+        noise = float(np.std(data[finite])) or 1.0
+    data[~finite] = sky
+    x_off = x - round(x)
+    y_off = y - round(y)
+    sx, sy = cx + x_off, cy + y_off  # start point in crop coordinates
+    smooth = ndimage.uniform_filter(data, size=3)
+    peaks = (smooth == ndimage.maximum_filter(smooth, size=3)) & (smooth > sky + 4.0 * noise / 3.0)
+    yy, xx = np.mgrid[0 : data.shape[0], 0 : data.shape[1]]
+    all_py, all_px = np.nonzero(peaks)
+    peaks &= np.hypot(xx - sx, yy - sy) <= search
+    py, px = np.nonzero(peaks)
+    if px.size == 0:
+        return keep
+    k = int(np.argmin(np.hypot(px - sx, py - sy)))
+    ux, uy = float(px[k]), float(py[k])
+    work = np.clip(data - sky, 0, None)
+    peak_x, peak_y = ux, uy
+    # Size the window to the star itself: its half-maximum region (wide for a bright or saturated, flat-topped star),
+    # but keep it well short of the next star.
+    top = None
+    area = 1
+    lab, own = None, 0
     try:
-        x_local, y_local = centroid_com(work)
+        py0, px0 = int(peak_y), int(peak_x)
+        level = 0.5 * float(smooth[py0, px0] - sky)
+        lab, _n = ndimage.label(smooth - sky > level)
+        own = int(lab[py0, px0])
+        area = int(np.count_nonzero(lab == own)) if own else 0
+        window = max(window, 1.5 * math.sqrt(area / math.pi))
+        # A flat (saturated) top is one star with many equal "peaks": move to the middle of that top. Only the
+        # top's own connected patch counts, so a brighter neighbour whose half-maximum region touches this star's
+        # is never taken for part of it (review, 2.2.8).
+        raw_peak = float(data[py0, px0])
+        tol = 1e-6 * max(1.0, abs(raw_peak))
+        # Pixels EQUAL to the peak (a clipped, saturated top), not merely as bright: a brighter neighbour's core is
+        # brighter than this star's peak and must not join it.
+        tl, _m = ndimage.label(np.abs(data - raw_peak) <= tol)
+        if tl[py0, px0]:
+            top = tl == tl[py0, px0]
+            if np.count_nonzero(top) > 1:
+                peak_x, peak_y = float(xx[top].mean()), float(yy[top].mean())
+                ux, uy = peak_x, peak_y
     except Exception:
-        return float(x), float(y), 0.0
-    if not np.isfinite(x_local) or not np.isfinite(y_local):
-        return float(x), float(y), 0.0
-    y1 = max(0, int(round(y)) - int(math.ceil(search)) - 2)
-    x1 = max(0, int(round(x)) - int(math.ceil(search)) - 2)
-    x_new = x1 + float(x_local)
-    y_new = y1 + float(y_local)
-    return x_new, y_new, float(math.hypot(x_new - x, y_new - y))
+        top = None
+    # A star blended into a brighter neighbour's wing (closer than about 1.5 FWHM) has no peak of its own, so the
+    # nearest peak can be the neighbour. When the click holds clearly more light than that peak's own profile
+    # would put there, the click is on another star: keep it rather than jump to the neighbour.
+    try:
+        d_click = math.hypot(peak_x - sx, peak_y - sy)
+        if d_click > 1.5:
+            p_val = float(smooth[int(round(peak_y)), int(round(peak_x))] - sky)
+            r_half = math.sqrt(max(area, 1) / math.pi)
+            sig = math.sqrt((r_half / 1.1774) ** 2 + 0.67)
+            expect = p_val * math.exp(-d_click ** 2 / (2.0 * sig * sig))
+            here = float(smooth[int(round(sy)), int(round(sx))] - sky)
+            if here > 3.0 * expect + 8.0 * noise / 3.0 and here < 0.5 * p_val:
+                return {"x": float(x), "y": float(y), "shift": 0.0, "found": True, "blended": True}
+    except Exception:
+        pass
+    # Other stars: peaks outside this star's half-maximum region, and much brighter peaks inside it (a neighbour
+    # whose light reaches this star). Peaks of about the same height inside the region belong to this star (the
+    # ring of a defocused "donut", noise on a broad top).
+    p_here = float(smooth[int(round(peak_y)), int(round(peak_x))])
+    other_pts = []
+    for ox, oy in zip(all_px, all_py):
+        if (top is not None and top[oy, ox]) or math.hypot(ox - peak_x, oy - peak_y) <= 1.5:
+            continue
+        same_region = lab is not None and own and lab[oy, ox] == own
+        if same_region and float(smooth[oy, ox]) - sky <= 1.5 * (p_here - sky):
+            # Same star only when the light stays high all the way between the two peaks (a donut's ring does);
+            # two stars have a dip between them (review, 2.2.8).
+            lower = min(p_here, float(smooth[oy, ox])) - sky
+            try:
+                ridge, _r = ndimage.label(smooth - sky >= 0.8 * lower)
+                if ridge[int(round(peak_y)), int(round(peak_x))] and \
+                        ridge[oy, ox] == ridge[int(round(peak_y)), int(round(peak_x))]:
+                    continue
+            except Exception:
+                continue
+        other_pts.append((float(ox), float(oy)))
+    others = [math.hypot(ox - peak_x, oy - peak_y) for ox, oy in other_pts]
+    # Pixels nearer another star's peak than this one's never count for this star's centre.
+    mine = np.ones(data.shape, dtype=bool)
+    for ox, oy in other_pts:
+        mine &= np.hypot(xx - peak_x, yy - peak_y) <= np.hypot(xx - ox, yy - oy)
+    others = [d for d in others if d > 1.5]
+    if others:
+        window = max(1.5, min(window, 0.75 * min(others)))
+    for _ in range(6):
+        m = (np.hypot(xx - ux, yy - uy) <= window) & mine
+        wsum = float(work[m].sum())
+        if wsum <= 0:
+            break
+        nx = float((work[m] * xx[m]).sum() / wsum)
+        ny = float((work[m] * yy[m]).sum() / wsum)
+        if not (math.isfinite(nx) and math.isfinite(ny)):
+            break
+        done = math.hypot(nx - ux, ny - uy) < 0.01
+        ux, uy = nx, ny
+        if done:
+            break
+    # A centre that wandered far from its own peak was pulled by a neighbour's wings: use the peak's 3x3 centroid.
+    if others and min(others) < 2.0 * window and math.hypot(ux - peak_x, uy - peak_y) > max(1.0, 0.5 * window):
+        m = (np.abs(xx - peak_x) <= 1) & (np.abs(yy - peak_y) <= 1)
+        wsum = float(work[m].sum())
+        if wsum > 0:
+            ux = float((work[m] * xx[m]).sum() / wsum)
+            uy = float((work[m] * yy[m]).sum() / wsum)
+        else:
+            ux, uy = peak_x, peak_y
+    x_new = float(x) + (ux - sx)
+    y_new = float(y) + (uy - sy)
+    return {"x": x_new, "y": y_new, "shift": float(math.hypot(x_new - x, y_new - y)), "found": True}
+
+
+def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> tuple[float, float, float]:
+    """Centre on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found."""
+    r = recenter_info(img, x, y, radius, fwhm)
+    return r["x"], r["y"], r["shift"]
+
+
+def star_fwhm(img: np.ndarray, x: float, y: float) -> dict:
+    """2.2.8: FWHM of one star from a circular 2-D Gaussian fit (amplitude, centre, sigma, sky) to a box that grows
+    with the star. Replaces moments in a fixed 12 px radius, which on a faint or crowded star measured the noise and
+    the neighbours (CoRoT-1 MicroObservatory frames: real stars 2.7-3.3 px, old method 10.5 px).
+    Returns {"fwhm", "peak", "snr", "ok"}."""
+    from scipy.optimize import least_squares
+
+    out = {"fwhm": float("nan"), "peak": float("nan"), "snr": float("nan"), "ok": False}
+    half = 6
+    guess = None
+    for _attempt in range(3):
+        crop, cx, cy = _crop(img, x, y, half)
+        if crop.shape[0] < 5 or crop.shape[1] < 5:
+            return out
+        data = np.array(crop, dtype=float)
+        finite = np.isfinite(data)
+        if finite.sum() < 20:
+            return out
+        yy, xx = np.mgrid[0 : data.shape[0], 0 : data.shape[1]]
+        edge = np.hypot(xx - cx, yy - cy) >= half - 1.5
+        sky0 = float(np.median(data[finite & edge])) if np.any(finite & edge) else float(np.median(data[finite]))
+        amp0 = float(np.nanmax(data)) - sky0
+        if not math.isfinite(amp0) or amp0 <= 0:
+            return out
+        s0 = guess if guess else 1.5
+        p0 = [amp0, float(cx), float(cy), s0, sky0]
+
+        def resid(p):
+            a, x0, y0, sg, b = p
+            model = a * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2.0 * sg * sg)) + b
+            return (model - data)[finite]
+
+        try:
+            fit = least_squares(resid, p0, bounds=([0, cx - 3, cy - 3, 0.3, -np.inf], [np.inf, cx + 3, cy + 3, half, np.inf]))
+        except Exception:
+            return out
+        a, _x0, _y0, sg, b = fit.x
+        fwhm = 2.3548 * float(sg)
+        res = resid(fit.x)
+        noise = 1.4826 * float(np.median(np.abs(res - np.median(res)))) or 1.0
+        out = {"fwhm": fwhm, "peak": float(a + b), "snr": float(a / noise), "ok": bool(fit.success and a > 0)}
+        if fwhm * 1.5 <= half or half >= 20:
+            break
+        guess = float(sg)
+        half = min(20, int(math.ceil(fwhm * 1.6)) + 2)
+    return out
+
+
+def field_fwhm(img: np.ndarray, n: int = 12, sat_level: float | None = None) -> dict:
+    """2.2.8: the frame's seeing, measured on bright, unsaturated, isolated stars (median of up to n Gaussian fits).
+    Returns {"fwhm", "n", "values"}; fwhm is NaN when no suitable star is found."""
+    data = np.asarray(img, dtype=float)
+    stars = detect_sources(data, max_sources=80, nsigma=8.0, min_sep=4.0)
+    if not stars:
+        return {"fwhm": float("nan"), "n": 0, "values": []}
+    finite = data[np.isfinite(data)]
+    top = float(np.max(finite)) if finite.size else float("nan")
+    limit = sat_level if (sat_level is not None and math.isfinite(sat_level) and sat_level > 0) else 0.9 * top
+    pts = np.array(stars, dtype=float)
+    values = []
+    for i, (sx, sy) in enumerate(stars):
+        if len(values) >= n:
+            break
+        d = np.hypot(pts[:, 0] - sx, pts[:, 1] - sy)
+        d[i] = np.inf
+        if d.size and float(np.min(d)) < 10.0:
+            continue  # a neighbour close enough to disturb the fit
+        h, w = data.shape
+        if not (12 <= sx < w - 12 and 12 <= sy < h - 12):
+            continue
+        r = star_fwhm(data, sx, sy)
+        if not r["ok"] or not math.isfinite(r["fwhm"]) or not (0.8 < r["fwhm"] < 30):
+            continue
+        if math.isfinite(limit) and r["peak"] >= 0.85 * limit:
+            continue  # saturated or nearly: a flat top fits too wide
+        if r["snr"] < 15:
+            continue
+        values.append(r["fwhm"])
+    if not values:
+        return {"fwhm": float("nan"), "n": 0, "values": []}
+    return {"fwhm": float(np.median(values)), "n": len(values), "values": values}
 
 
 def shape_metrics(img: np.ndarray, x: float, y: float, radius: float, sky: float) -> tuple[float, float, float]:
@@ -954,6 +1521,7 @@ def reduce_frame(
     ra_hours: float | None = None,
     dec_deg: float | None = None,
     sat_limit: float = 60000,
+    aligned: bool = True,
 ) -> Obs:
     """One calibrated, debayered frame -> one differential magnitude.
 
@@ -970,7 +1538,10 @@ def reduce_frame(
 
     tx, ty, shift = recenter(img, target.x, target.y, radius)
     drifted = shift > radius
-    use_x, use_y = (target.x, target.y) if drifted else (tx, ty)
+    # 2.2.8: frames are aligned to well under a pixel, so a big jump means the centring found another star: measure
+    # at the aligned position instead.
+    jump_limit = max(3.0, 0.5 * radius) if aligned else float("inf")   # unaligned frames follow drift by centring
+    use_x, use_y = (target.x, target.y) if shift > jump_limit else (tx, ty)
     var = measure_aperture(img, use_x, use_y, radius, sky_inner, sky_outer)
     fwhm, elong, peak = shape_metrics(img, use_x, use_y, radius, var["sky"])
 
@@ -980,7 +1551,9 @@ def reduce_frame(
     comp_mag_var = []
     comp_peak = float("-inf")
     for comp in comps:
-        cx, cy, _ = recenter(img, comp.x, comp.y, radius)
+        cx, cy, c_shift = recenter(img, comp.x, comp.y, radius)
+        if c_shift > jump_limit:
+            cx, cy = comp.x, comp.y
         comp_pos.append([round(float(cx), 2), round(float(cy), 2)])
         measured = measure_aperture(img, cx, cy, radius, sky_inner, sky_outer)
         if measured["flux"] <= 0:
@@ -999,7 +1572,9 @@ def reduce_frame(
     chk = None
     k_pos = None
     if check is not None:
-        kx, ky, _ = recenter(img, check.x, check.y, radius)
+        kx, ky, k_shift = recenter(img, check.x, check.y, radius)
+        if k_shift > jump_limit:
+            kx, ky = check.x, check.y
         chk = measure_aperture(img, kx, ky, radius, sky_inner, sky_outer)
         k_pos = [round(float(kx), 2), round(float(ky), 2)]
 
@@ -3553,7 +4128,7 @@ def convert_times(jd_utc: np.ndarray, system: str, ra_deg: float | None, dec_deg
 # ---- Comparison ensemble health -------------------------------------------------------
 
 def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
-                spare_names: list[str] | None = None) -> dict | None:
+                spare_names: list[str] | None = None, aliases: dict | None = None) -> dict | None:
     """Measure each comp, spare comp, and the check star against the others, frame by frame.
 
     For every star, its instrumental magnitude minus the mean of the other stars in the same
@@ -3563,6 +4138,21 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     few nights cannot shift the others.
     """
     spare_names = list(spare_names or [])
+    aliases = aliases or {}
+    # 2.2.8: one star labeled from two catalogs (TYC on some nights, APASS or Gaia on others) is one row, measured
+    # every night under whichever name it had (Use comps already counted it so; health saw "one night").
+    taken: set = set()
+    kept_spares = []
+    for n in names:
+        taken.add(n)
+        taken.update(aliases.get(n, ()))
+    for n in spare_names:
+        if n in taken:
+            continue
+        kept_spares.append(n)
+        taken.add(n)
+        taken.update(aliases.get(n, ()))
+    spare_names = kept_spares
     labels, kinds = [], []
     for n in names:
         labels.append(n)
@@ -3578,7 +4168,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     for o in observations:
         if not o.comp_insts:
             continue
-        row = [star_inst(o, n, names) for n in names] + [star_inst(o, n, names) for n in spare_names]
+        row = [star_inst(o, n, names, aliases) for n in names] + [star_inst(o, n, names, aliases) for n in spare_names]
         if has_check:
             row.append(float(o.kmag) if o.kmag is not None and math.isfinite(o.kmag) else float("nan"))
         rows.append(row)
@@ -4249,17 +4839,21 @@ def catalog_zero_point(inst_mag: np.ndarray, catalog_mag: np.ndarray, use: np.nd
 
 
 def suggest_comps_near(target_inst: float, candidates: list, max_dmag: float = 1.0, count: int = 4,
-                       target_bv: float | None = None, max_dbv: float = 0.6) -> list[tuple[str, float]]:
+                       target_bv: float | None = None, max_dbv: float = 0.6, aim: float = 0.0,
+                       window: tuple[float, float] | None = None) -> list[tuple[str, float]]:
     """Comparison candidates near the target in brightness and, when catalog colors are known, in color.
     candidates: (name, instrumental mag, x, y[, B-V]) measured on the same image as target_inst. Ranked by
-    |delta mag| + |delta B-V| (a star without a color counts 0.25 for it). Returns [(name, comp - target mag)]."""
+    |delta mag - aim| + |delta B-V| (a star without a color counts 0.25 for it). Returns [(name, comp - target mag)].
+    2.2.8: aim and window (comp - target, mag) let a faint target get brighter comps (aim -1, window -2..+0.3):
+    a comp as faint as a faint target adds as much noise as the target itself (CoRoT-1 MicroObservatory run)."""
     if target_inst is None or not math.isfinite(target_inst):
         return []
+    lo, hi = window if window is not None else (-max_dmag, max_dmag)
     rows = []
     for cand in candidates:
         name, m = cand[0], cand[1]
         bv = cand[4] if len(cand) > 4 else None
-        if m is None or not math.isfinite(m) or abs(m - target_inst) > max_dmag:
+        if m is None or not math.isfinite(m) or not (lo <= m - target_inst <= hi):
             continue
         if target_bv is not None and bv is not None:
             dbv = abs(bv - target_bv)
@@ -4267,9 +4861,40 @@ def suggest_comps_near(target_inst: float, candidates: list, max_dmag: float = 1
                 continue
         else:
             dbv = 0.25
-        rows.append((abs(m - target_inst) + dbv, name, m - target_inst))
+        rows.append((abs(m - target_inst - aim) + dbv, name, m - target_inst))
     rows.sort()
     return [(name, dm) for _a, name, dm in rows[:count]]
+
+
+def comp_noise_warning(obs: list) -> str | None:
+    """2.2.8: say so when the comparison stars, not the target, set the noise. Point-to-point scatter of
+    target - comps, target - check and check - comps (instrumental). If the target is much steadier against the check
+    than against the comps, and the check is as noisy as the target against the comps, the comps are the noise source
+    (CoRoT-1 MicroObservatory run: 6.4% against a faint comp, 1.8% against the check)."""
+    rows = [(o.target_inst if math.isfinite(getattr(o, "target_inst", float("nan"))) else o.mag + 0.0, o.cmag, o.kmag)
+            for o in obs if o.kmag is not None and math.isfinite(o.kmag) and math.isfinite(o.cmag)]
+    if len(rows) < 15:
+        return None
+    t = np.array([r[0] for r in rows], dtype=float)
+    c = np.array([r[1] for r in rows], dtype=float)
+    k = np.array([r[2] for r in rows], dtype=float)
+    if not np.all(np.isfinite(t)):
+        return None
+
+    def ptp(a):
+        d = np.diff(a)
+        d = d[np.isfinite(d)]
+        return float(1.4826 * np.median(np.abs(d - np.median(d))) / math.sqrt(2)) if d.size >= 10 else float("nan")
+
+    s_tc, s_tk, s_kc = ptp(t - c), ptp(t - k), ptp(k - c)
+    if not all(math.isfinite(v) for v in (s_tc, s_tk, s_kc)) or s_tc <= 0:
+        return None
+    if s_tk < 0.6 * s_tc and s_kc > 0.6 * s_tc:
+        pct = lambda m: 100 * (10 ** (0.4 * m) - 1)
+        return (f"The comparison stars set most of the noise: the target scatters {pct(s_tc):.1f}% per point against "
+                f"the comps but {pct(s_tk):.1f}% against the check star (and the check {pct(s_kc):.1f}% against the "
+                "comps). Pick brighter, steadier comps (the check star can be one), then run photometry again.")
+    return None
 
 
 def align_segments(inst: np.ndarray, seg: np.ndarray, min_frames: int = 5) -> np.ndarray:

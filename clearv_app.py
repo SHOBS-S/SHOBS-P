@@ -54,7 +54,9 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.7"
+APP_VERSION = "2.2.8"
+OSC_NOTE = "OSC reduced; not transformed"
+MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
 # Marker colours on the image, shared by the pick buttons so each button matches its marker.
 PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
@@ -179,6 +181,24 @@ def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
         h = min(max(int(win.winfo_reqheight()), min_h), int(0.9 * sh))
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 3)}")
         win.minsize(min(w, 420), min(h, 280))
+    except Exception:
+        pass
+
+
+def grow_to_content(win) -> None:
+    """2.2.8: after a pop-up's contents grow (results arriving later), make the window big enough for them again,
+    never smaller than it is now and never more than 90% of the screen; keep it on screen."""
+    try:
+        win.update_idletasks()
+        sw, sh = int(win.winfo_screenwidth()), int(win.winfo_screenheight())
+        cur_w, cur_h = int(win.winfo_width()), int(win.winfo_height())
+        w = min(max(int(win.winfo_reqwidth()), cur_w), int(0.9 * sw))
+        h = min(max(int(win.winfo_reqheight()), cur_h), int(0.9 * sh))
+        if w <= cur_w and h <= cur_h:
+            return
+        x = min(max(0, int(win.winfo_x())), max(0, sw - w))
+        y = min(max(0, int(win.winfo_y())), max(0, sh - h - 40))
+        win.geometry(f"{w}x{h}+{x}+{y}")
     except Exception:
         pass
 
@@ -313,7 +333,10 @@ class App(Tk):
         self.focal_mm = DoubleVar(value=2900)
         self.pixel_um = DoubleVar(value=3.76)
         self.blink_source = StringVar(value="lights")
-        self.notes = StringVar(value="OSC reduced; not transformed")
+        self.notes = StringVar(value=OSC_NOTE)
+        # 2.2.8: the default report note follows the camera (a mono camera is not "OSC reduced"); a note the user
+        # typed is left alone.
+        self.pattern.trace_add("write", lambda *_a: self._sync_camera_note())
         self.sat_limit = DoubleVar(value=60000)
         self.cloud_limit = DoubleVar(value=20.0)
         self.use_check_zp = BooleanVar(value=True)
@@ -870,9 +893,13 @@ class App(Tk):
         ttk.Label(row, text=label, width=12, style="Card.TLabel").pack(side=LEFT, padx=(0, 6))
         ttk.Entry(row, textvariable=variable).pack(side=LEFT, fill=X, expand=True)
         ttk.Button(row, text="Browse", command=lambda: self._browse(variable, key)).pack(side=LEFT, padx=(6, 0))
+        if key in ("Bias", "Dark", "Flat"):
+            # 2.2.8: a calibration entry can also be one SHOBS-P master file.
+            ttk.Button(row, text="Master file…", command=lambda: self._browse_master(variable, key)).pack(
+                side=LEFT, padx=(4, 0))
         ttk.Button(row, text="✕", width=3, command=lambda: self._clear_folder(variable, key)).pack(side=LEFT, padx=(4, 0))
         count = StringVar(value="" if key == "Output" else "0 files")
-        ttk.Label(row, textvariable=count, width=10, style="Card.TLabel").pack(side=LEFT, padx=(8, 0))
+        ttk.Label(row, textvariable=count, width=16, style="Card.TLabel").pack(side=LEFT, padx=(8, 0))
         self._counts[key] = count
 
     def _browse(self, variable, key):
@@ -883,9 +910,31 @@ class App(Tk):
         if key == "Output":
             self._output_changed()
             return
-        n = len(core.list_fits(path))
-        self._counts[key].set(f"{n} files")
-        self.status.set(f"{key}: {n} FITS files")
+        self._counts[key].set(self._count_text(key, path))
+        self.status.set(f"{key}: {self._counts[key].get()}")
+
+    def _count_text(self, key, path) -> str:
+        """'51 files', '51 files + master', or 'master file' (2.2.8: saved masters are not counted as frames)."""
+        if key in ("Bias", "Dark", "Flat"):
+            frames, master = core.calibration_source(path)
+            if master:
+                return "master file"
+            saved = any(core.is_shobsp_master_name(f) for f in core.list_fits(path))
+            return f"{len(frames)} files" + (" + master" if saved else "")
+        return f"{len(core.list_fits(path))} files"
+
+    def _browse_master(self, variable, key):
+        path = filedialog.askopenfilename(title=f"Select a SHOBS-P master {key.lower()}",
+                                          filetypes=[("FITS", "*.fits *.fit *.fts"), ("All files", "*.*")])
+        if not path:
+            return
+        problem = core.check_master_file(path, key.lower())
+        if problem:
+            messagebox.showerror(APP_TITLE, problem)
+            return
+        variable.set(path)
+        self._counts[key].set("master file")
+        self.status.set(f"{key}: SHOBS-P master {os.path.basename(path)}")
 
     def _clear_folder(self, variable, key):
         variable.set("")
@@ -1627,9 +1676,9 @@ class App(Tk):
             ("Flat", self.flat_dir),
             ("Lights", self.light_dir),
         ):
-            n = len(core.list_fits(var.get()))
-            other = core.unreadable_files(var.get())
-            self._counts[key].set(f"{n} files" + (f" ({len(other)} unreadable)" if other else ""))
+            n = len(core.calibration_source(var.get())[0]) if key != "Lights" else len(core.list_fits(var.get()))
+            other = core.unreadable_files(var.get()) if not os.path.isfile(var.get().strip()) else []
+            self._counts[key].set(self._count_text(key, var.get()) + (f" ({len(other)} unreadable)" if other else ""))
             if other and not n:
                 self.log(f"The {key} folder holds {len(other)} file(s) SHOBS-P cannot read (for example "
                          f"{other[0]}). It reads FITS and XISF: save or export them in one of those.")
@@ -1665,6 +1714,15 @@ class App(Tk):
         if mono and self.debayer_mode.get() != "luminance":
             self.debayer_mode.set("luminance")
 
+    def _sync_camera_note(self):
+        try:
+            note = self.notes.get().strip()
+            want = MONO_NOTE if self.pattern.get() == core.MONO else OSC_NOTE
+            if note in (OSC_NOTE, MONO_NOTE, "") and note != want:
+                self.notes.set(want)
+        except Exception:
+            pass
+
     def _setup_microobservatory(self, header: dict, n_lights: int):
         """MicroObservatory frames: monochrome, 12-bit, taken in Arizona with a 560 mm telescope. Offer the
         telescope's camera, site, and optics; your own come back when you scan your own lights."""
@@ -1674,6 +1732,11 @@ class App(Tk):
             site = (site[0], -site[1], site[2])
         lat, lon, elev = site if site else (31.68, -110.88, 2340.0)
         where = "from the FITS header" if site else "approximately, Whipple Observatory on Mt. Hopkins, Arizona"
+        if site and not elev:
+            # 2.2.8: MicroObservatory headers give latitude and longitude but no elevation. Never leave the user's own
+            # elevation in place with Arizona's coordinates (CoRoT-1 run: 280 m reported for Mt. Hopkins).
+            elev = 2340.0
+            where += "; elevation approximate (Mt. Hopkins ridge)"
         scale = core.header_plate_scale(header)
         focal = 560.0
         # 6.8 µm pixels binned 2x2 at 560 mm: about 5"/px, and a 650 x 500 frame covers about 56' x 42'.
@@ -1791,7 +1854,7 @@ class App(Tk):
         if folder != self._blink_loaded_from:
             self.blink_index = 0
         self._blink_loaded_from = folder
-        self.blink_paths = core.list_fits(folder)
+        self.blink_paths = [f for f in core.list_fits(folder) if not core.is_shobsp_master_name(f)]  # 2.2.8
         if self.blink_source.get() == "lights":
             self.blink_paths = core.split_lights(self.blink_paths)[0]
         self.blink_index = min(self.blink_index, max(0, len(self.blink_paths) - 1))
@@ -2042,6 +2105,10 @@ class App(Tk):
         ttk.Button(cal_row, text="Build masters and calibrate", style="Accent.TButton",
                    command=self.run_calibration).pack(side=LEFT)
         ttk.Button(cal_row, text="Cancel", command=self.cancel_job).pack(side=LEFT, padx=8)
+        # 2.2.8: masters are saved beside their raw frames and reused; this forces a fresh stack.
+        self.rebuild_masters = BooleanVar(value=False)
+        ttk.Checkbutton(cal_row, text="Rebuild masters (ignore saved ones)", variable=self.rebuild_masters).pack(
+            side=LEFT, padx=(4, 8))
         self.debayer_info = StringVar(value="No preview yet.")
         ttk.Label(cal_row, textvariable=self.debayer_info, style="Hint.TLabel").pack(side=LEFT, padx=(12, 0))
         self.log_box = Text(card, height=18, wrap="word", font=("Consolas", 10), bg="#1e1e1e", fg="#dcdcdc",
@@ -2157,13 +2224,22 @@ class App(Tk):
         return "; ".join(flips), "; ".join(moves)
 
     def run_calibration(self):
-        bias = core.list_fits(self.bias_dir.get())
-        dark = core.list_fits(self.dark_dir.get())
-        flat = [path for path in core.list_fits(self.flat_dir.get()) if path not in self.rejected]
+        # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
+        bias, bias_file = core.calibration_source(self.bias_dir.get())
+        dark, dark_file = core.calibration_source(self.dark_dir.get())
+        flat, flat_file = core.calibration_source(self.flat_dir.get())
+        flat = [path for path in flat if path not in self.rejected]
+        files = {"bias": bias_file, "dark": dark_file, "flat": flat_file}
+        for kind, path in files.items():
+            if path:
+                problem = core.check_master_file(path, kind)
+                if problem:
+                    messagebox.showerror(APP_TITLE, problem)
+                    return
         lights = self._lights(log_skips=True)
         unreadable = []
-        for key, var, found in (("Bias", self.bias_dir, bias), ("Dark", self.dark_dir, dark),
-                                ("Flat", self.flat_dir, flat), ("Lights", self.light_dir, lights)):
+        for key, var, found in (("Bias", self.bias_dir, bias or bias_file), ("Dark", self.dark_dir, dark or dark_file),
+                                ("Flat", self.flat_dir, flat or flat_file), ("Lights", self.light_dir, lights)):
             other = core.unreadable_files(var.get()) if var.get().strip() and not found else []
             if other:
                 unreadable.append(f"{key}: {len(other)} file(s) such as {other[0]}")
@@ -2205,7 +2281,7 @@ class App(Tk):
         self.precalibrated = bool(signs)
         if signs:
             reasons = "\n  • ".join(signs)
-            if bias or dark or flat:
+            if bias or dark or flat or any(files.values()):
                 skip = messagebox.askyesno(
                     APP_TITLE,
                     "These lights look already calibrated:\n  • " + reasons + "\n\n"
@@ -2216,25 +2292,34 @@ class App(Tk):
                 )
                 if skip:
                     bias, dark, flat = [], [], []
+                    files = {"bias": None, "dark": None, "flat": None}
                 else:
                     self.precalibrated = False
         if not self.precalibrated:
-            checked = self._calibration_checks(bias, dark, flat, lights)
+            # The checks read headers: a chosen master file stands in for its frames (it carries their keywords).
+            checked = self._calibration_checks(bias or ([bias_file] if files["bias"] else []),
+                                               dark or ([dark_file] if files["dark"] else []),
+                                               flat or ([flat_file] if files["flat"] else []), lights)
             if checked is None:
                 return
-            dark = checked
+            if not checked and (dark or files["dark"]):
+                dark, files["dark"] = [], None   # darks left out (exposure far from the lights')
+            elif dark:
+                dark = checked
         if not self._start_job("Building calibration masters…"):
             return
         if self.precalibrated:
             self.log("Lights are pre-calibrated: no bias, dark, or flat applied; saturation judged from flat-topped "
                      "star cores, not the raw level. ("
                      + "; ".join(signs) + ")")
-        missing = [name for name, paths in (("bias", bias), ("dark", dark), ("flat", flat)) if not paths]
+        missing = [name for name, paths in (("bias", bias), ("dark", dark), ("flat", flat))
+                   if not paths and not files.get(name)]
         if missing:
             self.log("Note: no " + ", ".join(missing) + " frames. That step is skipped.")
         self.log("Building calibration masters. The window stays live; this can take several minutes for 100 full frames.")
 
         cancel = self._cancel
+        rebuild = bool(self.rebuild_masters.get())
 
         def progress_log(text):
             if cancel.is_set():
@@ -2243,10 +2328,26 @@ class App(Tk):
 
         def work():
             try:
-                masters = core.build_masters(bias, dark, flat, binning, progress_log, flats_calibrated=flats_calibrated)
+                masters = core.prepare_masters(bias, dark, flat, binning, progress_log, flats_calibrated=flats_calibrated,
+                                               files=files, save=True, rebuild=rebuild, version=APP_VERSION)
                 path = lights[0]
                 data, header = core.read_fits(path)
                 data = core.bin_image(data, binning)
+                # 2.2.8: a saved or chosen master must match the lights before it is used.
+                problems, cautions = [], []
+                for kind in ("bias", "dark", "flat"):
+                    arr = getattr(masters, kind)
+                    if arr is None:
+                        continue
+                    errs, warns = core.master_mismatches(masters.headers.get(kind) or {}, kind, header, data.shape,
+                                                         arr.shape, binning)
+                    problems += errs
+                    cautions += warns
+                if problems:
+                    raise ValueError("The masters do not fit these lights: " + "; ".join(problems)
+                                     + ". Pick the matching frames, or tick Rebuild masters.")
+                for text in cautions:
+                    self.call_ui(self.log, "Caution: " + text + ".")
                 calibrated = core.calibrate_frame(data, header, masters)
                 flips, moves = self._rotator_survey(lights) if len(lights) > 1 else ("", "")
                 if flips:
@@ -2279,6 +2380,7 @@ class App(Tk):
         self.masters_binning = binning
         self.calibrated = calibrated
         self.preview = calibrated
+        self._seeing_cache = None   # 2.2.8
         self.preview_header = header
         self.preview_path = path
         self.preview_is_debayered = False
@@ -2324,6 +2426,7 @@ class App(Tk):
         # calibrated mosaic here).
         old_shape = getattr(self, "_marks_shape", None)
         self.preview = mono
+        self._seeing_cache = None   # 2.2.8
         self.preview_is_debayered = True
         if old_shape is not None and tuple(old_shape[:2]) != tuple(mono.shape[:2]):
             self._rescale_marks(old_shape, mono.shape)
@@ -2421,9 +2524,15 @@ class App(Tk):
         panel = ttk.Frame(body, style="Card.TFrame", width=520)
         panel.pack(side=RIGHT, fill=Y, padx=(8, 0))
         panel.pack_propagate(False)
-        self.star_panel = ttk.Frame(panel, style="Card.TFrame")
+        # 2.2.8: with up to 10 comps the Stars and Watch boxes no longer fit; the whole right-hand panel scrolls
+        # (scroll bar only when needed; the mouse wheel scrolls it while the pointer is over it, so the image keeps
+        # its own wheel zoom). Each comp's full status lines are kept, never shortened.
+        self.panel_scroll = ScrollBody(panel)
+        self.panel_scroll.pack(fill=BOTH, expand=True)
+        holder = self.panel_scroll.inner
+        self.star_panel = ttk.Frame(holder, style="Card.TFrame")
         self._build_star_panel(self.star_panel)
-        self.disc_panel = ttk.Frame(panel, style="Card.TFrame")
+        self.disc_panel = ttk.Frame(holder, style="Card.TFrame")
         self._build_discovery_panel(self.disc_panel)
         self.star_panel.pack(fill=BOTH, expand=True)
         plot_host = ttk.Frame(body, style="Card.TFrame")
@@ -2478,6 +2587,10 @@ class App(Tk):
         self.disc_tools.pack_forget()
         self.star_panel.pack_forget()
         self.disc_panel.pack_forget()
+        try:
+            self.panel_scroll.canvas.yview_moveto(0.0)
+        except Exception:
+            pass
         self.pick_label_widget.pack_forget()
         if mode != "discovery":
             self.pick_label_widget.pack(anchor=W, before=self.photo_body)
@@ -2511,7 +2624,7 @@ class App(Tk):
                 self.pick_mode.set("target")
             self.photo_title.set("Photometry")
             self.photo_hint.set(
-                "Click the image to mark the target, comparison, comp 2, and check star; Watch adds a star to follow. "
+                "Click the image to mark the target, comps (C1–C10), and check star; Watch adds a star to follow. "
                 "After Label chart, clicking a circled star fills in its ID and magnitude, shown in the panel at right "
                 "with its catalog color and a variable-star check. Right-click a marker to clear it.")
 
@@ -2520,7 +2633,7 @@ class App(Tk):
         field = self._group(panel, "Field")
         field.pack(fill=X)
         self.disc_field_text = StringVar(value="Not solved yet. Calibrate, and the field is solved straight away.")
-        ttk.Label(field, textvariable=self.disc_field_text, style="Card.TLabel", wraplength=480, justify=LEFT).pack(
+        ttk.Label(field, textvariable=self.disc_field_text, style="Card.TLabel", wraplength=460, justify=LEFT).pack(
             anchor=W)
         settings = self._group(panel, "Scan settings")
         settings.pack(fill=X, pady=(10, 0))
@@ -2650,11 +2763,13 @@ class App(Tk):
         if self.preview is None or not self.preview_is_debayered:
             return True
         first_comp = next((getattr(self, f"{r}_xy") for r in self._comp_roles_marked()), None)
-        sizes = [self._fwhm_at(self.preview, xy)[0] for xy in (self.target_xy, first_comp) if xy is not None]
-        sizes = [f for f in sizes if math.isfinite(f) and 0.8 < f < 40]
-        if not sizes:
-            return True
-        fwhm = float(np.median(sizes))
+        fwhm = self._seeing()  # 2.2.8: field seeing, not the (possibly faint) marked stars
+        if not math.isfinite(fwhm):
+            sizes = [self._fwhm_at(self.preview, xy)[0] for xy in (self.target_xy, first_comp) if xy is not None]
+            sizes = [f for f in sizes if math.isfinite(f) and 0.8 < f < 40]
+            if not sizes:
+                return True
+            fwhm = float(np.median(sizes))
         try:
             r = float(self.radius.get())
         except (TypeError, ValueError):
@@ -2677,34 +2792,67 @@ class App(Tk):
         return [(role_label(role), xy) for role, xy in self._marked_roles()]
 
     def _fwhm_at(self, img, xy):
+        """2.2.8: one star's FWHM from a Gaussian fit in a box sized to the star (core.star_fwhm)."""
         try:
-            m = core.measure_aperture(img, xy[0], xy[1], 12.0, 16.0, 24.0)
-            fwhm, _e, peak = core.shape_metrics(img, xy[0], xy[1], 12.0, m["sky"])
-            return fwhm, peak
+            r = core.star_fwhm(img, xy[0], xy[1])
+            return (r["fwhm"] if r["ok"] else float("nan")), r["peak"]
         except Exception:
             return float("nan"), float("nan")
+
+    def _star_snr(self, img, xy):
+        try:
+            return float(core.star_fwhm(img, xy[0], xy[1])["snr"])
+        except Exception:
+            return float("nan")
+
+    def _seeing(self, img=None):
+        """2.2.8: the preview's seeing (FWHM, px), measured on bright, unsaturated, isolated stars; cached per image."""
+        img = self.preview if img is None else img
+        if img is None:
+            return float("nan")
+        key = (id(img), getattr(img, "shape", None))
+        cache = getattr(self, "_seeing_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        try:
+            value = float(core.field_fwhm(img)["fwhm"])
+        except Exception:
+            value = float("nan")
+        self._seeing_cache = (key, value)
+        return value
 
     def suggest_apertures(self):
         if self.preview is None or not self.preview_is_debayered:
             messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page); star sizes are measured on the calibrated, debayered image.")
             return
         img = self.preview
-        stars = self._marked_stars()
-        if not stars:
-            found = core.detect_sources(img, max_sources=12)
-            stars = [(f"star {k + 1}", xy) for k, xy in enumerate(found[:8])]
+        # 2.2.8: the seeing comes from bright, unsaturated, isolated field stars. Faint or crowded marked stars gave
+        # sizes 3x too big (CoRoT-1: 10.5 px for 2-3 px stars) and so apertures that swallowed neighbours.
+        field = core.field_fwhm(img)
         sizes = []
-        for role, xy in stars:
-            fwhm, peak = self._fwhm_at(img, xy)
-            if math.isfinite(fwhm) and 0.8 < fwhm < 40:
-                sizes.append((role, fwhm, peak))
-        if not sizes:
+        for role, xy in self._marked_stars():
+            fwhm_i, peak = self._fwhm_at(img, xy)
+            if math.isfinite(fwhm_i) and 0.8 < fwhm_i < 40:
+                sizes.append((role, fwhm_i, peak))
+        if math.isfinite(field["fwhm"]):
+            fwhm = float(field["fwhm"])
+            basis = f"median of {field['n']} bright, unsaturated, isolated stars"
+        elif sizes:
+            fwhm = float(np.median([f for _r, f, _p in sizes]))
+            basis = "from the marked stars (no bright isolated star to measure)"
+        else:
             messagebox.showinfo(APP_TITLE, "Could not measure star sizes on this frame. Mark the target and comps first.")
             return
-        fwhm = float(np.median([f for _r, f, _p in sizes]))
+        self._seeing_cache = ((id(img), getattr(img, "shape", None)), fwhm)
         prop = core.suggest_apertures(fwhm)
         notes = self._neighbor_notes(img, prop)
-        SuggestWindow(self, fwhm, sizes, prop, notes)
+        if self.target_xy is not None:
+            snr = self._star_snr(img, self.target_xy)
+            if math.isfinite(snr) and snr < 30:
+                lo, hi = max(2.0, round(1.2 * fwhm, 1)), max(2.0, round(1.5 * fwhm, 1))
+                notes.insert(0, f"The target is faint (peak about {snr:.0f} × the noise). Faint stars usually do best "
+                                f"with 1.2–1.5 × FWHM (r = {lo:g}–{hi:g} px); the test below will tell.")
+        SuggestWindow(self, fwhm, sizes, prop, notes, basis)
 
     def _neighbor_notes(self, img, prop):
         """Stars that fall inside a marked star's aperture or sky ring with the proposed sizes."""
@@ -2796,7 +2944,10 @@ class App(Tk):
                         good = np.isfinite(xy[:, 0])
                         pos = np.full_like(xy, np.nan)
                         pos[good] = core.move_points(xy[good], reg, data.shape)
-                        f, _p = self._fwhm_at(data, tuple(pos[1]))
+                        # 2.2.8: seeing from bright isolated stars, on a 600 px box around the target (fast on big frames)
+                        cx_, cy_ = (pos[0] if np.isfinite(pos[0, 0]) else pos[1])
+                        y0_, x0_ = max(0, int(cy_) - 300), max(0, int(cx_) - 300)
+                        f = core.field_fwhm(data[y0_:y0_ + 600, x0_:x0_ + 600], n=6)["fwhm"]
                         if math.isfinite(f):
                             seeing.append(f)
                         exp = core.header_exptime(header)
@@ -2959,7 +3110,7 @@ class App(Tk):
         comps = self._comp_roles_marked()
         if comps:
             nums = [comp_number(r) for r in comps]
-            label = "Comp C1" if nums == [1] else (f"Comps C{nums[0]}–C{nums[-1]}" if nums == list(range(nums[0], nums[-1] + 1))
+            label = f"Comp C{nums[0]}" if len(nums) == 1 else (f"Comps C{nums[0]}–C{nums[-1]}" if nums == list(range(nums[0], nums[-1] + 1))
                                                    else "Comps " + ", ".join(f"C{n}" for n in nums))
             items.append(("⊕", label, PICK_COLORS["comp"]))
         if self.check_xy is not None:
@@ -3236,6 +3387,14 @@ class App(Tk):
         """The comp slot a Comps click fills, or None when all ten are marked. A loaded series (or new lights) leaves
         comp names with no marker: clicking the star with that name puts it back in its own slot (C1 stays C1); any
         other star goes to the first slot with neither marker nor name, then to the first slot without a marker."""
+        if not self.chart_placed:
+            # 2.2.8: before Label chart a click cannot be matched to a saved name, so it takes the first slot without
+            # a marker (C1 first), keeping that slot's leftover name until Label chart checks it. Skipping a slot
+            # that still held last night's name left a ghost C1 and put the real comp in C2 (John, 9 Oct).
+            for r in COMP_ROLES:
+                if getattr(self, f"{r}_xy") is None:
+                    return r
+            return None
         if xy is not None:
             star = self._chart_star_at(xy)
             name = str((star or {}).get("auid") or (star or {}).get("label") or "").strip()
@@ -3339,9 +3498,17 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image.")
             return
         xy = (float(event.xdata), float(event.ydata))
+        snap_note = ""
         try:
             radius = float(self.radius.get())
-            xy = core.recenter(self.preview, xy[0], xy[1], radius)[:2]
+            # 2.2.8: snap to the star nearest the click (not the brightest one nearby), sized by the seeing.
+            seeing = self._seeing()
+            info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None)
+            xy = (info["x"], info["y"])
+            if not info["found"]:
+                snap_note = " No star found right at the click; the marker is where you clicked."
+            elif info["shift"] >= 1.0:
+                snap_note = f" Centred on the star ({info['shift']:.1f} px from the click)."
         except Exception:
             pass
         mode = self.pick_mode.get()
@@ -3383,7 +3550,9 @@ class App(Tk):
         self.refresh_preview()
         self.update_star_panel()
         if filled:
-            self.status.set(filled)
+            self.status.set(filled + snap_note)
+        elif snap_note:
+            self.status.set(snap_note.strip())
         if comp_number(mode) or mode == "check":
             self._vet_choice(mode, xy)
 
@@ -3448,7 +3617,7 @@ class App(Tk):
             w.grid(row=r, column=3, sticky=W, padx=(4, 0), pady=(4, 0))
             widgets.append(w)
             var = StringVar(value="")
-            lab = ttk.Label(stars, textvariable=var, style="Hint.TLabel", wraplength=480, justify=LEFT)
+            lab = ttk.Label(stars, textvariable=var, style="Hint.TLabel", wraplength=450, justify=LEFT)
             lab.grid(row=r + 1, column=0, columnspan=4, sticky=W, padx=(14, 0))
             widgets.append(lab)
             self.star_status[role] = var
@@ -3457,7 +3626,7 @@ class App(Tk):
             name_var.trace_add("write", lambda *_: self.update_star_panel())
         stars.columnconfigure(1, weight=1)
         self.field_check_text = StringVar(value="Variable-star check: Label chart to check the field against VSX and SIMBAD.")
-        ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=480, justify=LEFT).grid(
+        ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=460, justify=LEFT).grid(
             row=1 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
 
         watch = self._group(panel, "Watch stars")
@@ -3465,7 +3634,7 @@ class App(Tk):
         ttk.Label(watch, text="Pick Watch and click a star, or Add a star… by name or RA/Dec. Watch stars are measured "
                               "every run, found again after Label chart on later nights, and have their own light "
                               "curves (Output page).",
-                  style="Hint.TLabel", wraplength=480, justify=LEFT).pack(anchor=W)
+                  style="Hint.TLabel", wraplength=460, justify=LEFT).pack(anchor=W)
         self.watch_box = Listbox(watch, height=6, font=("Segoe UI", 9), activestyle="none", exportselection=False)
         self.watch_box.pack(fill=BOTH, expand=True, pady=(4, 4))
         row = ttk.Frame(watch, style="Card.TFrame")
@@ -4152,13 +4321,35 @@ class App(Tk):
 
     def _fill_marked_from_chart(self):
         """After Label chart: a comp, comp 2, or check star marked before the chart (so its ID and magnitude are still
-        empty) takes them from the labeled star under it. Names already there are left alone (2.2.1)."""
+        empty) takes them from the labeled star under it. Names already there are left alone (2.2.1), except a
+        catalog name from another night that belongs to a different star (2.2.8)."""
         filled = []
         for role, xy, name_var in ([(r, getattr(self, f"{r}_xy"), getattr(self, f"{r}_name")) for r in COMP_ROLES]
                                    + [("check", self.check_xy, self.check_name)]):
-            if xy is None or name_var.get().strip():
+            if xy is None:
                 continue
-            if self._chart_star_at(xy) is None:
+            star = self._chart_star_at(xy)
+            if star is None:
+                continue
+            old = name_var.get().strip()
+            if old:
+                # 2.2.8: a catalog name left over from another night that belongs to a different star is corrected.
+                # Left alone: names typed by hand (no sky position known for them), the same star under another
+                # catalog's name (within 3"), and any case where the labeled star is not right under the marker.
+                new = str(star.get("auid") or star.get("label") or "").strip()
+                if not new or new == old:
+                    continue
+                rd = self.comp_coords.get(old)
+                if rd is None or star.get("ra") is None or star.get("dec") is None:
+                    continue
+                if core.same_star_aliases({old: rd, new: (float(star["ra"]), float(star["dec"]))}):
+                    continue
+                seeing = self._seeing()
+                if self._chart_star_at(xy, reach=max(2.0, seeing if math.isfinite(seeing) else 2.0)) is not star:
+                    continue
+                text = self._fill_from_chart(role, xy)
+                if text and "=" in text:
+                    self.log(f"{role_label(role)} name updated from {old} to {new}: the marked star is {new}.")
                 continue
             text = self._fill_from_chart(role, xy)
             if text and "=" in text:
@@ -4232,11 +4423,20 @@ class App(Tk):
         t_bv = core.catalog_bv(target_star) if target_star else None
         self._target_bv = t_bv
         self._closest_dm = min((abs(c[1] - t_inst) for c in cands), default=None)
-        picks = core.suggest_comps_near(t_inst, cands, max_dmag=1.0, count=4, target_bv=t_bv)
+        # 2.2.8: a faint target (near the noise floor) gets comps 0.5-2 mag brighter, not equally faint ones.
+        t_snr = self._star_snr(self.preview, self.target_xy)
+        faint = math.isfinite(t_snr) and t_snr < 30
+        if faint:
+            picks = core.suggest_comps_near(t_inst, cands, count=4, target_bv=t_bv, aim=-1.0, window=(-2.0, -0.5))
+            if not picks:
+                picks = core.suggest_comps_near(t_inst, cands, count=4, target_bv=t_bv, aim=-1.0, window=(-2.0, 0.3))
+        else:
+            picks = core.suggest_comps_near(t_inst, cands, max_dmag=1.0, count=4, target_bv=t_bv)
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
         if self.suggested_comps:
-            self.log("Suggested comps (near the target in brightness" + (f" and color, target B−V {t_bv:.2f}"
-                                                                         if t_bv is not None else "")
+            self.log(("Suggested comps (the target is faint, so 0.5–2 mag brighter than it"
+                      if faint else "Suggested comps (near the target in brightness")
+                     + (f" and near its color, target B−V {t_bv:.2f}" if t_bv is not None else "")
                      + "; green rings): "
                      + ", ".join(f"{name} ({dm:+.1f} mag)" for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best.")
@@ -5051,7 +5251,7 @@ class App(Tk):
                     f_check = core.move_star(check, reg, data.shape) if check is not None else None
                     obs = core.reduce_frame(
                         data, header, f_target, f_comps, f_check, radius, sky_in, sky_out,
-                        lat, lon, ra_hours, dec_deg, float("inf"),
+                        lat, lon, ra_hours, dec_deg, float("inf"), aligned=reg is not None,
                     )
                     # Saturation is judged on the raw frame, where binning cannot hide a clipped core.
                     total_bin = binning * (1 if pattern == core.MONO else 2)
@@ -5226,6 +5426,7 @@ class App(Tk):
         if color_info:
             self._record_color_calibration(night, color_info)
         append = False
+        plan = None
         same_mode = not self.series_mode or self.series_mode == self.mode_key
         if self.observations and same_mode:
             filters = {obs.filt for obs in self.observations}
@@ -5233,16 +5434,25 @@ class App(Tk):
             if filters != {filt}:
                 warning = f"\n\nCareful: the series is {', '.join(sorted(filters))} and this night is {filt}."
             prev_comps, prev_check = getattr(self, "_prev_stars", ([], ""))
-            if prev_comps and (prev_comps != self.comps_used or prev_check != self.check_used):
+            # 2.2.8: the same star under another catalog's name (Gaia DR3 tonight, TYC in the series) is the same
+            # star. It is compared as the series' star; its name and magnitude change only if the night is added.
+            plan = self._same_star_plan(prev_comps, prev_check)
+            cmp_comps = plan["comps"] if plan else list(self.comps_used)
+            cmp_check = plan["check"] if plan else self.check_used
+            if prev_comps and (prev_comps != cmp_comps or prev_check != cmp_check):
                 warning += (
                     "\n\nCareful: this night used different stars than the series.\n"
                     f"  Series: comps {', '.join(prev_comps)}; check {prev_check or 'none'}\n"
-                    f"  This night: comps {', '.join(self.comps_used)}; check {self.check_used or 'none'}\n"
+                    f"  This night: comps {', '.join(cmp_comps)}; check {cmp_check or 'none'}\n"
                     "Different comps put each night on its own zero point."
                 )
+            if plan:
+                warning += ("\n\nSame stars under other catalog names: "
+                            + "; ".join(f"{a} is {b}" for a, b in plan["renamed"].items())
+                            + ". Yes uses the series' names and catalog magnitudes for this night.")
             # 2.2.3: compare this night's reduction settings with every other night's in the series.
             others = {n: info for n, info in self.night_bin.items() if n != night}
-            mine = self._night_setup()
+            mine = dict(self._night_setup(), comps=cmp_comps, check=cmp_check or "")
             if "different stars than the series" in warning:
                 mine = {k: v for k, v in mine.items() if k not in ("comps", "check")}   # already said above
             diffs = core.night_setup_differences(mine, others)
@@ -5263,6 +5473,8 @@ class App(Tk):
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
             )
         replaced = False
+        if append and plan:
+            self._apply_same_star_plan(plan, night_points)
         if append:
             if any(o.night == night for o in self.observations):
                 self.observations = [o for o in self.observations if o.night != night]
@@ -5292,6 +5504,7 @@ class App(Tk):
                 self.log(f"Could not apply the chosen comps to {night}: {exc}")
         self.legacy_mixed.discard(night)
         self.series_mode = self.mode_key
+        self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self.night_bin[night] = self._night_setup()
         self._refresh_period()
         flagged = sum(1 for obs in night_points if obs.flag)
@@ -5339,9 +5552,13 @@ class App(Tk):
                 return float(var.get())
             except Exception:
                 return None
-        return {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
-                "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
-                "comps": list(self.comps_used), "check": self.check_used or ""}
+        out = {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
+               "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
+               "comps": list(self.comps_used), "check": self.check_used or ""}
+        used = getattr(self.masters, "used", None) if self.masters is not None else None
+        if used:
+            out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
+        return out
 
     def _usable(self) -> list:
         """Observations that go into the period search and the AAVSO report."""
@@ -5486,6 +5703,7 @@ class App(Tk):
         if "use_check_zp" in meta:
             self.use_check_zp.set(bool(meta["use_check_zp"]))
         self.check_used = meta.get("check_used") or ""
+        self._series_check = (self.check_used, str(meta.get("check_mag") or ""))   # 2.2.8
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         if isinstance(meta.get("watch_list"), list):
@@ -5972,13 +6190,37 @@ class App(Tk):
             ax.set_xlim(0, 2)
             ax.set_xlabel("Phase")
             ax.set_ylabel("Zero-pointed mag")
-            ax.set_title(f"Folded  P = {p:.5f} d")
-            ax.grid(True, alpha=0.3)
             alias = 1.0 / abs(1.0 / p - 1.0) if p > 0 and abs(1.0 / p - 1.0) > 1e-6 else float("nan")
             fap = self.period.get("fap", float("nan"))
             baseline = self.period.get("baseline_days", float("nan"))
-            period_lines = [
-                f"Best    {p:.5f} d ({p * 24:.2f} h)" + ("   (one short night: not reliable)" if too_short else ""),
+            # 2.2.8: say plainly when no period is significant (FAP above 1%, or one night carries it), so a best
+            # peak is never read as the star's period (HD 219134: 'periods' from night offsets and day aliases).
+            carried_now = self.period.get("carried_by") or []
+            significant = math.isfinite(fap) and fap <= 0.01 and not carried_now and not too_short
+            ax.set_title(f"Folded  P = {p:.5f} d" if significant else f"Best peak (not significant)  P = {p:.5f} d")
+            ax.grid(True, alpha=0.3)
+            period_lines = []
+            if not significant:
+                if too_short:
+                    period_lines.append("No reliable period yet: one short night covers under two cycles of the "
+                                        "best peak. Add nights.")
+                elif carried_now and not (math.isfinite(fap) and fap > 0.01):
+                    period_lines.append(f"No reliable period: the peak depends on {', '.join(carried_now)} alone "
+                                        "(often an offset between nights, not the star).")
+                else:
+                    in_night = [float(np.std(corrected[np.array([o.night == n for o in usable])]))
+                                for n in nights if sum(o.night == n for o in usable) >= 3]
+                    night_meds = [float(np.median(corrected[np.array([o.night == n for o in usable])]))
+                                  for n in nights if sum(o.night == n for o in usable) >= 3]
+                    per_point = f"scatter {np.median(in_night):.3f} mag per point" if in_night else ""
+                    n2n = f"{np.std(night_meds):.3f} mag night to night" if len(night_meds) > 1 else ""
+                    detail = ", ".join(x for x in (per_point, n2n) if x)
+                    period_lines.append("No significant period: the star looks constant at this precision"
+                                        + (f" ({detail})." if detail else "."))
+            period_lines += [
+                ("Best    " if significant else "Peak    ")
+                + f"{p:.5f} d ({p * 24:.2f} h)" + ("" if significant else "   (not significant)")
+                + ("   (one short night: not reliable)" if too_short else ""),
                 f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else ""),
                 f"Basis   {getattr(self, '_period_note', '') or 'every point'}",
                 f"Alias   {alias:.5f} d (one-day)",
@@ -5987,8 +6229,9 @@ class App(Tk):
             ]
             if self.catalog_period:
                 period_lines.append(f"VSX     {self.catalog_period:.5f} d")
+            head = 0 if significant else 1
             if self.period.get("alias_text"):
-                period_lines[0] += "   ⚠ near a day alias"
+                period_lines[head] += "   ⚠ near a day alias"
                 cautions.append(self.period["alias_text"])
             carried = self.period.get("carried_by") or []
             if carried:
@@ -5997,7 +6240,7 @@ class App(Tk):
                                 "(often an offset between nights, not the star). Check that night before trusting it.")
             edge_text = core.period_edge_text(self.period)
             if edge_text:
-                period_lines[0] += "   ⚠ at the edge"
+                period_lines[head] += "   ⚠ at the edge"
                 cautions.append(edge_text)
             if math.isfinite(baseline) and p > baseline / 1.5:
                 cautions.append(f"The data span only {baseline:.2f} d, under 1.5 cycles of the best period; it is not "
@@ -6498,6 +6741,74 @@ class App(Tk):
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Note for {night} " + ("saved." if text else "removed."))
 
+    def _same_star_plan(self, prev_comps, prev_check):
+        """2.2.8: tonight's comps and check matched to the series' stars by sky position (3", as same_star_aliases).
+        Returns {"comps", "check", "renamed": {tonight's name: series name}} or None when nothing matches. A comp is
+        matched only when the series knows its catalog magnitude. Without sky positions names are compared as
+        before."""
+        if not prev_comps and not prev_check:
+            return None
+        aliases = self._star_aliases()
+        catalog = self._comp_catalog()
+        renamed = {}
+        new_comps = list(self.comps_used)
+        for i, name in enumerate(new_comps):
+            if name in prev_comps:
+                continue
+            match = next((p for p in prev_comps if p in aliases.get(name, ()) and p not in new_comps
+                          and catalog.get(p) is not None), None)
+            if match:
+                new_comps[i] = match
+                renamed[name] = match
+        new_check = self.check_used
+        if prev_check and new_check and new_check != prev_check and prev_check in aliases.get(new_check, ()):
+            renamed[new_check] = prev_check
+            new_check = prev_check
+        if not renamed:
+            return None
+        return {"comps": new_comps, "check": new_check, "renamed": renamed}
+
+    def _apply_same_star_plan(self, plan, night_points):
+        """Give tonight's stars the series' names and catalog magnitudes, and re-derive the night with them (Gaia's
+        synthetic V and Tycho's V differ by tenths, which would shift this night's zero point)."""
+        catalog = self._comp_catalog()
+        aliases = self._star_aliases()
+        series_check = getattr(self, "_series_check", ("", ""))
+        for old, new in plan["renamed"].items():
+            for r in COMP_ROLES:
+                if getattr(self, f"{r}_name").get().strip() == old:
+                    getattr(self, f"{r}_name").set(new)
+                    if catalog.get(new) is not None:
+                        getattr(self, f"{r}_mag").set(f"{catalog[new]:.3f}")
+            if self.check_name.get().strip() == old:
+                self.check_name.set(new)
+                if series_check[0] == new and str(series_check[1]).strip():
+                    self.check_mag.set(str(series_check[1]).strip())
+            for _role, entry in list(self.star_bands.items()):
+                if isinstance(entry, dict) and entry.get("name") == old:
+                    entry["name"] = new
+            if old in self.comp_coords and new not in self.comp_coords:
+                self.comp_coords[new] = self.comp_coords[old]
+        comps_changed = plan["comps"] != self.comps_used
+        self.comps_used = list(plan["comps"])
+        self.check_used = plan["check"]
+        if comps_changed:
+            try:
+                core.recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
+            except ValueError as exc:
+                self.log(f"Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
+        for old, new in plan["renamed"].items():
+            mag = catalog.get(new)
+            self.log(f"{old} is {new} (same star, within 3\"): series name"
+                     + (f" and V {mag:.3f}" if mag is not None and new in self.comps_used else "") + " used.")
+
+    def _adopt_series_names(self, night_points, prev_comps, prev_check):
+        """Plan and apply at once (kept for callers and tests)."""
+        plan = self._same_star_plan(prev_comps, prev_check)
+        if plan:
+            self._apply_same_star_plan(plan, night_points)
+        return plan
+
     def _comp_catalog(self) -> dict:
         """Catalog magnitude of every comp and spare comp the series knows about."""
         cat = dict(self.comp_catalog_mags)
@@ -6627,8 +6938,9 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "There is no series loaded.")
             return
         names = list(self.comps_used) or ["comp"]
+        aliases = self._star_aliases()
         result = core.comp_health([o for o in self.observations if not (set(o.flag.split()) - {"nocomp"})]
-                                  or self.observations, names, self.check_used, self._spares_in_series())
+                                  or self.observations, names, self.check_used, self._spares_in_series(), aliases)
         if result is None:
             messagebox.showinfo(
                 APP_TITLE,
@@ -6646,6 +6958,7 @@ class App(Tk):
         """Median pixel position of each star in the health check, and its median distance from the target
         (the distance does not change with framing, rotation, or the meridian flip)."""
         names = list(self.comps_used)
+        aliases = self._star_aliases()  # 2.2.8: a star's position under its other catalog name counts too
         out = {}
         for lab, kind in zip(result["labels"], result.get("kinds") or []):
             xs, ys, ds = [], [], []
@@ -6657,7 +6970,10 @@ class App(Tk):
                     comps = pos.get("c") or []
                     p = comps[k] if k < len(comps) else None
                 elif kind == "spare":
-                    p = (pos.get("s") or {}).get(lab)
+                    spares = pos.get("s") or {}
+                    p = spares.get(lab)
+                    if p is None:
+                        p = next((spares[a] for a in aliases.get(lab, ()) if a in spares), None)
                 elif kind == "check":
                     p = pos.get("k")
                 t = pos.get("t")
@@ -7297,7 +7613,7 @@ class UseCompsWindow:
 class SuggestWindow:
     """Aperture and sky ring sizes from the measured star size, with an optional test on real frames."""
 
-    def __init__(self, app, fwhm, sizes, prop, notes):
+    def __init__(self, app, fwhm, sizes, prop, notes, basis=""):
         self.app = app
         self.fwhm = fwhm
         self.prop = dict(prop)
@@ -7305,14 +7621,23 @@ class SuggestWindow:
         self.win = win
         win.title(f"{APP_TITLE} — suggest apertures")
         win.after_idle(lambda: fit_to_content(win))
-        top = ttk.Frame(win, style="Card.TFrame", padding=12)
+        # 2.2.8: buttons first (bottom), contents in a scrolling body so the test table that arrives later fits.
+        nav = ttk.Frame(win, style="Card.TFrame", padding=(12, 6, 12, 12))
+        nav.pack(fill=X, side="bottom")
+        self.body = ScrollBody(win, horizontal=True)
+        self.body.pack(fill=BOTH, expand=True)
+        top = ttk.Frame(self.body.inner, style="Card.TFrame", padding=12)
         top.pack(fill=BOTH, expand=True)
         ttk.Label(top, text="Suggested apertures", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
         measured = ", ".join(f"{role} {f:.1f}" for role, f, _p in sizes)
-        ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px   ({measured})", style="Card.TLabel").pack(
-            anchor=W, pady=(6, 0))
-        ttk.Label(top, text="These stars were only measured for their size; this window sets the aperture and sky ring, "
-                            "not which stars are used.", style="Hint.TLabel").pack(anchor=W)
+        ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px" + (f"   ({basis})" if basis else ""),
+                  style="Card.TLabel").pack(anchor=W, pady=(6, 0))
+        if measured:
+            ttk.Label(top, text=f"Marked stars, for comparison: {measured} px. Faint or crowded stars measure noisier; "
+                                "the aperture follows the field's seeing.", style="Hint.TLabel", wraplength=780,
+                      justify=LEFT).pack(anchor=W)
+        ttk.Label(top, text="This window sets the aperture and sky ring, not which stars are used.",
+                  style="Hint.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = {prop['sky_in']:g}    "
                              f"sky out = {prop['sky_out']:g} px (sky ring with 4× the aperture's area)"),
                   style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor=W, pady=(6, 0))
@@ -7324,8 +7649,7 @@ class SuggestWindow:
                       wraplength=780, justify=LEFT).pack(anchor=W, pady=(4, 0))
         self.result_text = StringVar(value="")
         ttk.Label(top, textvariable=self.result_text, style="Box.TLabel", justify=LEFT).pack(anchor=W, pady=(10, 0))
-        nav = ttk.Frame(top, style="Card.TFrame")
-        nav.pack(fill=X, side="bottom", pady=(10, 0))
+        self.body.fit()
         ttk.Button(nav, text="Use these aperture sizes", style="Accent.TButton", command=self.use).pack(side=LEFT)
         ttk.Button(nav, text="Test 4 apertures on 30 frames", command=lambda: app.test_apertures(fwhm, self, 30)).pack(
             side=LEFT, padx=8)
@@ -7379,6 +7703,15 @@ class SuggestWindow:
         self.prop = {"radius": pick, "sky_in": sky_in, "sky_out": sky_out}
         lines.append(f"Use these aperture sizes now sets r = {pick:g}, sky {sky_in:g}–{sky_out:g}.")
         self.result_text.set("\n".join(lines))
+        self._refit()
+
+    def _refit(self):
+        # 2.2.8: the results table arrives after the window opened; grow the window to show it (John, CoRoT-1 run).
+        try:
+            self.body.fit()
+            grow_to_content(self.win)
+        except Exception:
+            pass
 
 
 class WatchWindow:

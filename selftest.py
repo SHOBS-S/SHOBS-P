@@ -14,6 +14,7 @@ Downloads folder (SHOBS-P_selftest_log.txt).
 from __future__ import annotations
 
 import glob
+import shutil
 import io
 import math
 import os
@@ -107,6 +108,60 @@ def main() -> None:
     check("candidate kinds: known / new / check first", kinds == ["known", "new", "caution"], str(kinds))
     res["vsx"] = None
     check("candidate with no sky positions is unchecked", core.scan_candidate_kind(res, 1)[0] == "unchecked")
+
+    section("2c 2.2.8: masters saved and reused (real Astropy FITS), star size, centring")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="shobsp_selftest_")
+    try:
+        from astropy.io import fits as _fits
+        folders = {}
+        for kind, level, exp in (("bias", 300.0, 0.0), ("dark", 330.0, 30.0), ("flat", 20000.0, 2.0)):
+            d = os.path.join(tmp, kind)
+            os.makedirs(d)
+            folders[kind] = d
+            for i in range(4):
+                h = _fits.Header()
+                h["EXPTIME"] = exp
+                h["GAIN"] = 100
+                h["DATE-OBS"] = "2026-10-0%dT03:00:00" % (1 + i // 2)
+                h["ROTATOR"] = 30.0
+                _fits.PrimaryHDU((level + rng.normal(0, 3, (32, 48))).astype(np.uint16), header=h).writeto(
+                    os.path.join(d, f"{kind}_{i}.fits"))
+        frames = {k: core.calibration_source(v)[0] for k, v in folders.items()}
+        logs = []
+        m1 = core.prepare_masters(frames["bias"], frames["dark"], frames["flat"], 1, logs.append, version=ca.APP_VERSION)
+        saved = sorted(f for v in folders.values() for f in os.listdir(v) if f.startswith(core.MASTER_PREFIX))
+        check("three masters written beside their frames", len(saved) == 3, ", ".join(saved))
+        frames = {k: core.calibration_source(v)[0] for k, v in folders.items()}
+        check("saved masters are not counted as frames", all(len(v) == 4 for v in frames.values()))
+        logs.clear()
+        m2 = core.prepare_masters(frames["bias"], frames["dark"], frames["flat"], 1, logs.append, version=ca.APP_VERSION)
+        check("second run reuses all three", sum("Using saved master" in t for t in logs) == 3, " | ".join(logs[:3]))
+        check("reused flat equals the built one", bool(np.allclose(m1.flat, m2.flat, equal_nan=True)))
+        mf = os.path.join(folders["flat"], core.master_file_name("flat", 1))
+        h = core.read_header(mf)
+        check("master stamp readable", core.master_stamp(h) == "FLAT" and int(h.get("NFRAMES")) == 4, str(h.get("SHOBSP")))
+        check("a master picked directly is accepted", core.check_master_file(mf, "flat") == "")
+        alien = os.path.join(tmp, "other_master_flat.fits")
+        _fits.PrimaryHDU(np.ones((32, 48), np.float32)).writeto(alien)
+        check("another program's master is refused", core.check_master_file(alien, "flat") != "")
+    except Exception as exc:
+        check("masters saved and reused", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    yy2, xx2 = np.mgrid[0:200, 0:200]
+    field = rng.normal(100, 5, (200, 200))
+    for (sx, sy, a) in ((40, 40, 5000), (150, 60, 3000), (60, 150, 4000), (140, 150, 6000), (100, 100, 2500)):
+        field += a * np.exp(-((xx2 - sx) ** 2 + (yy2 - sy) ** 2) / (2 * (3.0 / 2.3548) ** 2))
+    fw = core.field_fwhm(field)["fwhm"]
+    check("seeing measured on bright isolated stars (3.0 px)", abs(fw - 3.0) < 0.3, f"{fw:.2f}")
+    pair = rng.normal(100, 5, (100, 100))
+    yy3, xx3 = np.mgrid[0:100, 0:100]
+    pair += 300 * np.exp(-((xx3 - 50.3) ** 2 + (yy3 - 50.2) ** 2) / (2 * 0.95 ** 2))
+    pair += 900 * np.exp(-((xx3 - 46.0) ** 2 + (yy3 - 54.5) ** 2) / (2 * 0.95 ** 2))
+    info = core.recenter_info(pair, 50.0, 49.0, 8)
+    check("a click stays on the clicked star beside a brighter one", abs(info["x"] - 50.3) < 0.6 and abs(info["y"] - 50.2) < 0.6,
+          f"({info['x']:.1f}, {info['y']:.1f})")
 
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
