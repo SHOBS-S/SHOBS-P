@@ -42,8 +42,8 @@ baseline, explains the dip just as well. You also get the O − C timing against
 a cross-check, and a nearby-eclipsing-binary check. You can open an **EXOTIC report** to see both fits side by
 side. Results go out as an **AAVSO exoplanet report** and an **ExoFOP package**.
 
-**Discovery mode** is designed so you can take a series of images, with calibration frames, of any random spot in
-the sky. SHOBS-P works out where the frames point, from the plate solution in the FITS header or by matching the
+**Discovery mode** is designed so you can take a series of images, with calibration frames, of any patch of sky you
+choose, no target star needed. SHOBS-P works out where the frames point, from the plate solution in the FITS header or by matching the
 star pattern. It checks that spot for known variables using VSX and SIMBAD, and marks them.
 
 When you run a **field scan**, SHOBS-P performs photometry on every star in the field. Before scoring, it lines up
