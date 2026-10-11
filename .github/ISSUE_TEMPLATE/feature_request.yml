@@ -1,0 +1,23 @@
+name: Idea or request
+description: Something SHOBS-P could do, or do better.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which part?
+      options: [Variables, Transits, Discovery, All modes, Not sure]
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like it to do?
+      description: What you are trying to get done, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup (optional)
+      description: Camera, filters, telescope, and the kind of targets you observe, if it matters for the idea.

@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in SHOBS-P did not work, gave a wrong number, or crashed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The more of this you fill in, the faster it can be fixed.
+  - type: input
+    id: version
+    attributes:
+      label: SHOBS-P version
+      description: Shown at the bottom of the sidebar (for example 2.2.11).
+    validations:
+      required: true
+  - type: input
+    id: camera
+    attributes:
+      label: Camera and telescope
+      description: For example "ZWO ASI2600MC (colour) on a 14-inch RC", or "ASI1600MM (mono) with a V filter".
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: [Variables, Transits, Discovery, Not sure]
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: Step
+      options: [Input, Blink, Calibrate, Photometry, Output, Tonight's transits / planner, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: The steps you took, and what you saw. Error messages copied as text are a big help.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Screenshot and logs
+      description: |
+        Drag files here. Most useful: a screenshot, selftest_log.txt (from "Run self-test.bat" in the program folder),
+        and .shobs_p.log from your user folder (C:\Users\<you>). One FITS header (as text) helps with camera or
+        calibration problems.
+  - type: input
+    id: system
+    attributes:
+      label: Windows and Python versions
+      description: For example "Windows 11, Python 3.13". The first lines of selftest_log.txt list them.

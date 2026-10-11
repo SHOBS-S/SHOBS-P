@@ -1,8 +1,19 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.9
-=====================================================
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.11
+======================================================
 
-Windows desktop app for color-camera (OSC) photometry: variable-star light curves, AAVSO reports, and a field scan
-that finds stars that vary.
+Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
+reports, exoplanet transit fits and AAVSO exoplanet reports, and a field scan that finds stars that vary.
+
+Quick start
+1. Install Python 3.11 or newer from python.org ("Add python.exe to PATH" ticked). Double-click "Create shortcuts.bat"
+   in this folder, then "Run self-test.bat" (it should end with RESULT: ALL PASSED).
+2. Try it first: on the Input page press "Try it with sample data…" and pick an empty folder; every box is filled and
+   the stars are marked. Then Blink, Calibrate, Photometry, Output.
+3. Your own frames: Input (folders, Scan folders, site and optics once, the target's name then Enter), Blink (reject bad
+   frames), Calibrate (camera pattern or MONO; Build masters and calibrate), Photometry (Label chart, click the
+   target, comps and check star, Run photometry), Output (light curve and AAVSO report; transit fit; or field scan).
+4. Problems and ideas: GitHub Issues (github.com/SHOBS-S/SHOBS-P/issues). Attach selftest_log.txt and .shobs_p.log
+   (in your user folder) and a screenshot.
 
 Process flow
 1. Input: folders of bias, dark, flat, and light FITS, and an optional Output folder; the target (type the Star ID

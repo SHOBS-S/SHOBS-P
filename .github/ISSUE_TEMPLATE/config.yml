@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: User guide (README.txt)
+    url: https://github.com/SHOBS-S/SHOBS-P/blob/main/README.txt
+    about: Every page and button is described here.
