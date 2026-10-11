@@ -24,9 +24,12 @@ include scintillation (Osborn et al. 2015).
 - Python 3.11 or newer from [python.org](https://www.python.org/downloads/) (check "Add python.exe to PATH")
 - Packages (installed automatically): numpy, scipy, matplotlib, astropy, photutils, ccdproc
 
-<!-- Screenshots: add docs/transit_fit.png, docs/light_curve.png, docs/field_scan.png and uncomment.
-![Transit fit](docs/transit_fit.png)
--->
+![SHOBS-P transit fit of TrES-3 b](docs/transit_fit.png)
+
+*TrES-3 b, 4 Sep 2026: SHOBS-P refitting an EXOTIC report. The SHOBS-P fit (green) stays close to the published
+transit shape (blue dotted); the report's own fit (red dashed) runs about twice as deep.*
+
+<!-- More screenshots to come: docs/light_curve.png (Variables), docs/field_scan.png (Discovery). -->
 
 ## Install
 
