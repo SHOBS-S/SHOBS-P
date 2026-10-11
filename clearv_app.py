@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.9"
+APP_VERSION = "2.2.10"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -696,7 +696,9 @@ class App(Tk):
         self.credits_page.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         status = ttk.Frame(self, style="Side.TFrame")
-        status.pack(fill=X, side="bottom")
+        # 2.2.10 (John): packed ahead of the main area, so a window shorter than the pages ask for squeezes the
+        # pages, not the status bar (its credits line was cut in half at the bottom edge).
+        status.pack(fill=X, side="bottom", before=outer)
         self.status = StringVar(value="Choose the calibration and light folders to begin.")
         ttk.Label(status, textvariable=self.status, style="Status.TLabel").pack(anchor=W, padx=12, pady=(4, 0))
         ttk.Label(

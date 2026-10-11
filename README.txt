@@ -38,6 +38,14 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.2.10 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
+- T  Transit fit page: the plot is the page. It fills the width and height, with margins just big enough for its
+     labels. The verdict sits above the plot; the parameter table and the notes run in a strip under it (as on
+     the Field scan page). The table's columns are as wide as their contents, with no sideways scroll bar.
+- T  The progress bar shows only while a fit runs; its message stays until you pick another night or report.
+- T  Saved plot PNGs and the ExoFOP plot keep their usual 8 x 5.4 in shape, whatever the plot's size on screen.
+- S  The status bar keeps its room when the window is short (its second line was cut off at the bottom edge).
+
 New in 2.2.9 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
 - S  Input page: "Site and optics" is split in two. Site holds latitude, longitude and elevation; Optics holds
      aperture, focal length, pixel size and binning, with the scintillation checkbox and the aperture hint.
@@ -583,6 +591,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.10 Transit fit page: plot first, table and notes in a strip under it; progress bar only while
+       fitting; status bar no longer cut off.
 2.2.9  Site and Optics boxes; site and optics from the FITS header (and borrowed for another observer's
        frames, then restored); Unistellar headers and stacked solve; scintillation note; equipment/observer
        warning; View box; mode switch keeps the page; no-predicted-transit check; Results rows; Field scan saves.

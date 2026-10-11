@@ -133,9 +133,11 @@ class TransitPage:
 
         prog = ttk.Frame(card, style="Card.TFrame")
         prog.pack(fill=X, side="bottom", pady=(4, 0))
+        self.prog_row = prog
         # 2.2.9: the save buttons sit below the plot in a "Results" row, as on the Variables Output page (John).
         results = ttk.Frame(card, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(6, 0))
+        self.results_row = results
         ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(results, text="Save AAVSO exoplanet report…", style="Accent.TButton",
                    command=self.save_aavso).pack(side=LEFT)
@@ -149,7 +151,10 @@ class TransitPage:
         self.bar = ttk.Progressbar(prog, length=320, mode="determinate", maximum=1)
         self.bar.pack(side=LEFT)
         self.prog_text = StringVar(value="")
-        ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        self.prog_label = ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel")
+        self.prog_label.pack(side=LEFT, padx=8)
+        self._fitting = False
+        self._show_progress()
 
         # 2.2.7: which data the page is fitting, in plain words (a loaded report, or a night of photometry).
         self.banner = StringVar(value="")
@@ -157,52 +162,62 @@ class TransitPage:
                                       justify=LEFT, foreground="#8a4b00", font=("Segoe UI", 10, "bold"))
         self.banner_label.pack(anchor=W, fill=X, pady=(4, 0))
         card.bind("<Configure>", lambda e: self.banner_label.configure(wraplength=max(e.width - 40, 300)), add="+")
-        # Plot and results side by side; drag the divider to give the table more room.
-        body = ttk.PanedWindow(card, orient="horizontal")
-        body.pack(fill=BOTH, expand=True, pady=(6, 0))
-        plot = ttk.Frame(body, style="Card.TFrame")
-        side = ttk.Frame(body, style="Card.TFrame")
-        body.add(plot, weight=3)
-        body.add(side, weight=2)
+        # 2.2.10 (John): the plot is the page. The verdict sits above it, full width; the parameter table and the
+        # notes run in a strip under it (as on the Field scan page), instead of a right-hand pane.
         self.verdict = StringVar(value="")
-        self.verdict_label = ttk.Label(side, textvariable=self.verdict, style="Card.TLabel", wraplength=300,
+        self.verdict_label = ttk.Label(card, textvariable=self.verdict, style="Card.TLabel", wraplength=1100,
                                        justify=LEFT, font=("Segoe UI", 11, "bold"))
-        self.verdict_label.pack(anchor=W, fill=X, pady=(0, 6))
-        side.bind("<Configure>", lambda e: self.verdict_label.configure(wraplength=max(e.width - 20, 200)))
-        tablebox = ttk.Frame(side, style="Card.TFrame")
-        tablebox.pack(fill=X)
+        self.verdict_label.pack(anchor=W, fill=X, pady=(4, 0))
+        card.bind("<Configure>", lambda e: self.verdict_label.configure(wraplength=max(e.width - 40, 300)), add="+")
+        body = ttk.Frame(card, style="Card.TFrame")
+        body.pack(fill=BOTH, expand=True, pady=(4, 0))
+        strip = ttk.Frame(body, style="Card.TFrame")
+        strip.pack(fill=X, side="bottom", pady=(6, 0))
+        tablebox = ttk.Frame(strip, style="Card.TFrame")
+        tablebox.pack(side=LEFT, fill=Y)
         cols = ("param", "shobs", "free", "pub", "exotic")
-        self.table = ttk.Treeview(tablebox, columns=cols, show="headings", height=15)
+        # Eight rows show at once (the scroll bar reaches the rest), so the strip leaves the height to the plot.
+        self.table = ttk.Treeview(tablebox, columns=cols, show="headings", height=8)
         for col, label, width in (("param", "Parameter", 150), ("shobs", "SHOBS-P (MCMC)", 170),
                                   ("free", "Free shape", 90), ("pub", "Published / prior", 130),
                                   ("exotic", "EXOTIC report", 150)):
-            _col(self.table, col, label, width, stretch=(col == "param"))
-            # Columns may shrink (the scroll bar reaches the rest), so the table never forces the page wider
-            # than the screen.
-            self.table.column(col, minwidth=40)
+            _col(self.table, col, label, width, stretch=False)
         self.table.tag_configure("warn", foreground="#b35c00")
         self.table.tag_configure("grey", foreground="#9aa7b0")
         self.table.tag_configure("greywarn", foreground="#d9b38c")
-        xscroll = ttk.Scrollbar(tablebox, orient="horizontal", command=self.table.xview)
-        self.table.configure(xscrollcommand=xscroll.set)
-        self.table.pack(fill=X)
-        xscroll.pack(fill=X)
+        yscroll = ttk.Scrollbar(tablebox, orient="vertical", command=self.table.yview)
+        # A sideways scroll bar only when the window is too narrow for the columns.
+        self.table_xscroll = ttk.Scrollbar(tablebox, orient="horizontal", command=self.table.xview)
+        self.table.configure(yscrollcommand=yscroll.set, xscrollcommand=self._table_xview)
+        self.table.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        self.table_xscroll.grid(row=1, column=0, sticky="ew")
+        self.table_xscroll.grid_remove()
+        tablebox.rowconfigure(0, weight=1)
+        tablebox.columnconfigure(0, weight=1)
         self._set_columns()
-        self.notes = Text(side, height=12, wrap="word", font=("Segoe UI", 9), relief="flat", bg="#ffffff")
+        self.notes = Text(strip, height=8, width=30, wrap="word", font=("Segoe UI", 9), relief="flat", bg="#ffffff")
+        # On a short window the table gives up rows (down to 3) before the plot gives up height.
+        body.bind("<Configure>", self._fit_strip, add="+")
         self.notes.tag_configure("warn", foreground="#b35c00")
         self.notes.tag_configure("info", foreground="#33424d")
-        self.notes.pack(fill=BOTH, expand=True, pady=(6, 0))
+        self.notes.pack(side=LEFT, fill=BOTH, expand=True, padx=(10, 0))
         self.fig = None
         if Figure is not None:
             self.fig = Figure(figsize=(8, 5.4), dpi=100, facecolor="#ffffff")
             gs = self.fig.add_gridspec(2, 1, height_ratios=(3, 1), hspace=0.06)
             self.ax = self.fig.add_subplot(gs[0])
             self.ax_r = self.fig.add_subplot(gs[1], sharex=self.ax)
-            self.canvas = FigureCanvasTkAgg(self.fig, master=plot)
-            # Ask for a small size and let the pane stretch it: the figure's own 8-inch width (more on a scaled
+            self.canvas = FigureCanvasTkAgg(self.fig, master=body)
+            # Ask for a small size and let the page stretch it: the figure's own 8-inch width (more on a scaled
             # display) pushed the page past the screen edge (2.2).
             self.canvas.get_tk_widget().configure(width=420, height=320)
             self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+            # 2.2.10: margins in points, so a big plot does not float in wide fractional margins.
+            try:
+                self.canvas.mpl_connect("resize_event", lambda _e: self._set_margins())
+            except Exception:
+                pass
             self.draw(placeholder="No transit fit yet: pick a night or open an exoplanet report, then Fit transit.")
         self._notes_text([("info", "Pick a night of a Transits series (or open an AAVSO exoplanet report from "
                                    "EXOTIC), then Fit transit. The fit always runs an MCMC, with the published "
@@ -237,6 +252,7 @@ class TransitPage:
         """2.2.7: back to the photometry (newest night), dropping a loaded EXOTIC report."""
         if self.report is None:
             return
+        self._clear_progress()
         self.report = None
         self.night.set("")
         self.result = None
@@ -287,6 +303,7 @@ class TransitPage:
             return ""
 
     def _use_night(self, auto: bool = True):
+        self._clear_progress()
         self.report = None
         self._show_source()
         self.result = None
@@ -324,6 +341,7 @@ class TransitPage:
             self._fill_table()
             self.draw()
             self.prog_text.set("")
+            self._show_progress()
             self._notes_text([("warn", "The photometry, the comps, or the planet changed since the last fit, so that "
                                        "fit was cleared. Fit transit to fit the data as they are now.")])
         if not auto or self.result is not None or sig is None or sig == self._auto_tried or self.app.busy:
@@ -360,6 +378,7 @@ class TransitPage:
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not read {os.path.basename(path)}:\n{exc}")
             return
+        self._clear_progress()
         self.report = rep
         self.night.set("")
         self.night_label.set("")
@@ -476,6 +495,8 @@ class TransitPage:
         cancel = self.app._cancel
         self.bar.configure(value=0, maximum=1)
         self.prog_text.set("Least-squares fit…")
+        self._fitting = True
+        self._show_progress()
         app = self.app
 
         def progress(done, total):
@@ -496,10 +517,39 @@ class TransitPage:
         self.bar.configure(maximum=total, value=done)
         self.prog_text.set(f"MCMC step {done} of {total}")
 
+    def _clear_progress(self):
+        """A new source: the last fit's message no longer applies (unless a fit is still running)."""
+        if not self._fitting:
+            self.prog_text.set("")
+            self._show_progress()
+
+    def _show_progress(self):
+        """2.2.10 (John): the bar only while a fit runs; the row only while it has something to say."""
+        try:
+            self.bar.pack_forget()
+            self.prog_label.pack_forget()
+            if self._fitting:
+                self.bar.pack(side=LEFT)
+            if self._fitting or self.prog_text.get():
+                self.prog_label.pack(side=LEFT, padx=8)
+                self.prog_row.pack(fill=X, side="bottom", pady=(4, 0), before=self.results_row)
+            else:
+                self.prog_row.pack_forget()
+        except Exception:
+            pass
+
     def _fit_done(self, result, meta, error):
+        self._fitting = False
         self.app._end_job()
+        try:
+            self._finish_fit(result, meta, error)
+        finally:
+            self._show_progress()
+
+    def _finish_fit(self, result, meta, error):
         if error is not None:
             self.prog_text.set("Cancelled." if error[0] == "Cancelled" else "Fit failed.")
+            self._show_progress()     # before any dialog, so the bar is not left showing behind it
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Cancelled" else "Fit failed.")
             if error[0] != "Cancelled":
                 self.app.log(error[1])
@@ -536,6 +586,105 @@ class TransitPage:
         cols = ["param", "shobs", "free", "pub"] + (["exotic"] if self.report is not None else [])
         self._display_cols = cols
         self.table.configure(displaycolumns=cols)
+
+    def _table_xview(self, first, last):
+        try:
+            self.table_xscroll.set(first, last)
+            if float(first) > 0.0 or float(last) < 1.0:
+                self.table_xscroll.grid()
+            else:
+                self.table_xscroll.grid_remove()
+        except Exception:
+            pass
+
+    def _fit_strip(self, event):
+        """Rows in the table: 8, fewer (down to 3) when the page is short, so the plot keeps at least ~300 px."""
+        try:
+            try:
+                rowh = int(ttk.Style(self.table).lookup("Treeview", "rowheight") or 28)
+            except Exception:
+                rowh = 28
+            scale = max(float(self.table.tk.call("tk", "scaling")) / 1.3333, 1.0)
+            rowh = max(rowh, int(20 * scale))
+            room = event.height - 300 * scale
+            try:
+                if self.table_xscroll.winfo_ismapped():
+                    room -= int(self.table_xscroll.winfo_reqheight())
+            except Exception:
+                pass
+            rows = max(3, min(8, int(room // rowh) - 1))
+            if int(self.table.cget("height") or 0) != rows:
+                self.table.configure(height=rows)
+        except Exception:
+            pass
+
+    def _fit_columns(self, rows=None):
+        """2.2.10: each column as wide as its heading or its widest value, no more, so no column hogs the strip
+        and no horizontal scroll bar is needed."""
+        labels = {"param": "Parameter", "shobs": "SHOBS-P (MCMC)", "free": "Free shape", "pub": "Published / prior",
+                  "exotic": "EXOTIC report"}
+        try:
+            from tkinter import font as tkfont
+            head = tkfont.Font(self.table, font=("Segoe UI", 10, "bold"))
+            # The font the rows are drawn in (the app styles Treeview as Segoe UI 10).
+            body = None
+            try:
+                spec = ttk.Style(self.table).lookup("Treeview", "font")
+                if isinstance(spec, (str, tuple)) and spec:
+                    body = tkfont.Font(self.table, font=spec)
+            except Exception:
+                body = None
+            if body is None:
+                try:
+                    body = tkfont.nametofont("TkDefaultFont")
+                except Exception:
+                    body = tkfont.Font(self.table, font=("Segoe UI", 10))
+            all_cols = ["param", "shobs", "free", "pub", "exotic"]
+            if rows is None:
+                rows = []
+                for iid in self.table.get_children():
+                    try:
+                        rows.append([str(v) for v in (self.table.item(iid).get("values") or [])])
+                    except Exception:
+                        pass
+            rows = [[str(v) for v in row] for row in rows]
+            for k, col in enumerate(all_cols):
+                widest = head.measure(labels[col]) + 24
+                for row in rows:
+                    if k < len(row):
+                        widest = max(widest, body.measure(row[k]) + 24)
+                self.table.column(col, width=int(widest), minwidth=int(widest), stretch=False)
+        except Exception:
+            pass
+
+    def _save_fig(self, target, **kw):
+        """2.2.10: save the plot at a fixed 8 × 5.4 in, whatever its size on screen (the full-width plot would make
+        a thin strip of a PNG), then put the screen size back."""
+        old = self.fig.get_size_inches().copy()
+        try:
+            self.fig.set_size_inches(8, 5.4, forward=False)
+            self._set_margins()
+            self.fig.savefig(target, **kw)
+        finally:
+            self.fig.set_size_inches(old, forward=False)
+            self._set_margins()
+            try:
+                self.canvas.draw_idle()
+            except Exception:
+                pass
+
+    def _set_margins(self):
+        """Plot margins in points (labels, ticks, title), whatever the size of the plot."""
+        if self.fig is None:
+            return
+        try:
+            w, h = self.fig.get_size_inches() * 72.0
+            if w < 100 or h < 100:
+                return
+            self.fig.subplots_adjust(left=min(64 / w, 0.3), right=1 - min(10 / w, 0.1),
+                                     top=1 - min(24 / h, 0.2), bottom=min(38 / h, 0.3))
+        except Exception:
+            pass
 
     def _show_verdict(self):
         v = (self.result or {}).get("verdict")
@@ -631,6 +780,7 @@ class TransitPage:
             else:
                 tags = ("warn",) if row[0] in warn_names else ()
             self.table.insert("", END, values=row, tags=tags)
+        self._fit_columns(rows)
 
     def _notes_text(self, flags):
         self.notes.configure(state="normal")
@@ -657,6 +807,7 @@ class TransitPage:
                 a_.grid(False)
             ax.text(0.5, 0.5, placeholder or "No transit fit yet", transform=ax.transAxes, ha="center", va="center",
                     fontsize=12, color="#5d6d76", wrap=True)
+            self._set_margins()
             self.canvas.draw_idle()
             return
         best = r["best"]
@@ -727,7 +878,7 @@ class TransitPage:
         ax.set_xlim(x_lo, x_hi)
         for label in ax.get_xticklabels():
             label.set_visible(False)
-        self.fig.subplots_adjust(left=0.09, right=0.98, top=0.93, bottom=0.1)
+        self._set_margins()
         self.canvas.draw_idle()
 
     # ---- files -----------------------------------------------------------------------------
@@ -779,7 +930,7 @@ class TransitPage:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
 
         buf = io.BytesIO()
-        self.fig.savefig(buf, format="png", dpi=130, facecolor="#ffffff")
+        self._save_fig(buf, format="png", dpi=130, facecolor="#ffffff")
         buf.seek(0)
         plot = mpimg.imread(buf)
         ph, pw = plot.shape[:2]
@@ -905,7 +1056,7 @@ class TransitPage:
         files.append(rep)
         if self.fig is not None:
             png = os.path.join(out, f"{base}_plot.png")
-            self.fig.savefig(png, dpi=150)
+            self._save_fig(png, dpi=150)
             files.append(png)
         zpath = out + ".zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
