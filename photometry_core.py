@@ -118,6 +118,8 @@ def read_xisf(path: str, header_only: bool = False):
         channels = geometry[2] if len(geometry) > 2 else 1
         header.setdefault("NAXIS1", width)
         header.setdefault("NAXIS2", height)
+        if channels > 1:
+            header.setdefault("NAXIS3", channels)   # 2.2.11: a colour image (only its first channel is returned)
         fmt0 = image.get("sampleFormat") or "UInt16"
         header.setdefault("BITPIX", -32 if fmt0.startswith("Float") else 8 * np.dtype(_XISF_TYPES.get(fmt0, np.uint16)).itemsize)
         if header_only:
@@ -964,6 +966,80 @@ _FILTER_NAMES = {
     "none": ("CV", "V"), "c": ("CV", "V"), "open": ("CV", "V"), "empty": ("CV", "V"),
 }
 # I, U, and Sloan filters are not mapped: the comp catalogs here carry only B, V, and R magnitudes.
+
+# 2.2.11: the filters a monochrome camera can be set to by hand (Calibrate page) when the header does not say:
+# label -> (AAVSO filter code, comp band). Only bands the comp catalogs carry (B, V, R).
+MONO_FILTER_CHOICES = {
+    "V (Johnson V)": ("V", "V"),
+    "B (Johnson B)": ("B", "B"),
+    "R (Cousins R)": ("R", "R"),
+    "Clear / L (CV)": ("CV", "V"),
+    "Green imaging (TG)": ("TG", "V"),
+    "Red imaging (TR)": ("TR", "R"),
+    "Blue imaging (TB)": ("TB", "B"),
+}
+
+
+def header_filter_value(header: dict) -> str:
+    """The raw FILTER / FILTNAME / FILTER1 / FILT value of a frame, or '' when it has none."""
+    for key in ("FILTER", "FILTNAME", "FILTER1", "FILT"):
+        value = (header or {}).get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def mono_filter_label(found) -> str:
+    """The Filter-box label for a (code, band) pair, or ''."""
+    for label, pair in MONO_FILTER_CHOICES.items():
+        if found and tuple(found) == pair:
+            return label
+    return ""
+
+
+def cfa_contrast(img: np.ndarray):
+    """2.2.11: how different the four 2x2 sub-planes of a raw frame are, from the central half of the frame:
+    (max/min - 1 of the four plane medians, mean level). A colour (Bayer) sensor's flat has red, green and blue
+    pixels at clearly different levels (often 20-60%); a monochrome sensor's planes agree to well under 1%."""
+    a = np.asarray(img)
+    if a.ndim != 2 or min(a.shape) < 16:
+        return None, None
+    h, w = a.shape
+    y0, x0 = (h // 4) // 2 * 2, (w // 4) // 2 * 2
+    c = a[y0:y0 + (h // 2) // 2 * 2, x0:x0 + (w // 2) // 2 * 2].astype(np.float64)   # crop first: frames are big
+    meds = [float(np.nanmedian(c[i::2, j::2])) for i in (0, 1) for j in (0, 1)]
+    lo, hi = min(meds), max(meds)
+    if not np.isfinite(lo) or lo <= 0:
+        return None, None
+    return hi / lo - 1.0, float(np.mean(meds))
+
+
+def detect_sensor_from_flat(path: str):
+    """'mono', 'cfa', or None (cannot tell) from one raw flat frame, with the contrast found. A flat bright enough
+    (mean > 1000 ADU) with planes within 1% is monochrome; planes 4% or more apart are a colour mask. A colour image
+    (three channels, already debayered) or a calibrated/normalised frame cannot be judged and gives None."""
+    try:
+        data, header = read_fits(path)
+    except Exception:
+        return None, None
+    header = header or {}
+    if header_bayer(header):
+        return "cfa", None
+    try:
+        if int(header.get("NAXIS", 2)) >= 3 and int(header.get("NAXIS3", 1)) > 1:
+            return None, None
+    except (TypeError, ValueError):
+        pass
+    if data is None or np.asarray(data).ndim != 2:
+        return None, None
+    contrast, level = cfa_contrast(data)
+    if contrast is None or level is None or level < 1000:
+        return None, contrast
+    if contrast < 0.01:
+        return "mono", contrast
+    if contrast >= 0.04:
+        return "cfa", contrast
+    return None, contrast
 
 
 def filter_from_header(header: dict):

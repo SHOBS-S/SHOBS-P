@@ -158,23 +158,32 @@ class TransitPage:
 
         # 2.2.7: which data the page is fitting, in plain words (a loaded report, or a night of photometry).
         self.banner = StringVar(value="")
-        self.banner_label = ttk.Label(card, textvariable=self.banner, style="Card.TLabel", wraplength=1100,
+        # 2.2.11: the banner and the verdict sit in one frame and take room only when they say something (an empty
+        # label still kept a line each above the plot).
+        self.heads = ttk.Frame(card, style="Card.TFrame")
+        self.heads.pack(fill=X)
+        self.banner_label = ttk.Label(self.heads, textvariable=self.banner, style="Card.TLabel", wraplength=1100,
                                       justify=LEFT, foreground="#8a4b00", font=("Segoe UI", 10, "bold"))
-        self.banner_label.pack(anchor=W, fill=X, pady=(4, 0))
         card.bind("<Configure>", lambda e: self.banner_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         # 2.2.10 (John): the plot is the page. The verdict sits above it, full width; the parameter table and the
         # notes run in a strip under it (as on the Field scan page), instead of a right-hand pane.
         self.verdict = StringVar(value="")
-        self.verdict_label = ttk.Label(card, textvariable=self.verdict, style="Card.TLabel", wraplength=1100,
+        self.verdict_label = ttk.Label(self.heads, textvariable=self.verdict, style="Card.TLabel", wraplength=1100,
                                        justify=LEFT, font=("Segoe UI", 11, "bold"))
-        self.verdict_label.pack(anchor=W, fill=X, pady=(4, 0))
+        for var in (self.banner, self.verdict):
+            var.trace_add("write", lambda *_a: self._show_heads())
+        self._show_heads()
         card.bind("<Configure>", lambda e: self.verdict_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         body = ttk.Frame(card, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True, pady=(4, 0))
+        self.body = body
         strip = ttk.Frame(body, style="Card.TFrame")
         strip.pack(fill=X, side="bottom", pady=(6, 0))
+        self.strip = strip
+        # 2.2.11 (John): the table fills the strip; cautions, when there are any, take a third on the right.
         tablebox = ttk.Frame(strip, style="Card.TFrame")
-        tablebox.pack(side=LEFT, fill=Y)
+        tablebox.grid(row=0, column=0, sticky="nsew")
+        strip.rowconfigure(0, weight=1)
         cols = ("param", "shobs", "free", "pub", "exotic")
         # Eight rows show at once (the scroll bar reaches the rest), so the strip leaves the height to the plot.
         self.table = ttk.Treeview(tablebox, columns=cols, show="headings", height=8)
@@ -196,12 +205,13 @@ class TransitPage:
         tablebox.rowconfigure(0, weight=1)
         tablebox.columnconfigure(0, weight=1)
         self._set_columns()
-        self.notes = Text(strip, height=8, width=30, wrap="word", font=("Segoe UI", 9), relief="flat", bg="#ffffff")
+        self.notes = Text(strip, height=8, width=20, wrap="word", font=("Segoe UI", 9), relief="flat", bg="#ffffff")
         # On a short window the table gives up rows (down to 3) before the plot gives up height.
         body.bind("<Configure>", self._fit_strip, add="+")
         self.notes.tag_configure("warn", foreground="#b35c00")
         self.notes.tag_configure("info", foreground="#33424d")
-        self.notes.pack(side=LEFT, fill=BOTH, expand=True, padx=(10, 0))
+        self.notes.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        self._notes_shown = True
         self.fig = None
         if Figure is not None:
             self.fig = Figure(figsize=(8, 5.4), dpi=100, facecolor="#ffffff")
@@ -219,10 +229,8 @@ class TransitPage:
             except Exception:
                 pass
             self.draw(placeholder="No transit fit yet: pick a night or open an exoplanet report, then Fit transit.")
-        self._notes_text([("info", "Pick a night of a Transits series (or open an AAVSO exoplanet report from "
-                                   "EXOTIC), then Fit transit. The fit always runs an MCMC, with the published "
-                                   "a/R* and impact parameter as priors, airmass detrending, and error bars "
-                                   "scaled for red noise.")])
+        # 2.2.11: no hint here (the plot's placeholder says what to do); the notes column shows only real notes.
+        self._notes_text([])
 
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
@@ -474,13 +482,22 @@ class TransitPage:
             text = (f"No transit of {planet.get('name') or 'this planet'} is predicted during these data. "
                     f"The nearest predicted transit is {when}. A transit fit cannot measure anything here; if this "
                     "was a variability run, use Variables mode.")
+            arrow = (f"Nearest predicted transit: {abs(chk['hours']):.1f} h after the last point →"
+                     if chk["hours"] > 0 else
+                     f"← Nearest predicted transit: {abs(chk['hours']):.1f} h before the first point")
+            preview = (t, flux, arrow)
             if auto:
                 self.result = None
-                self.draw(placeholder="No transit predicted during these data.")
+                self._fill_table()
+                self.draw(preview=preview)
                 self._notes_text([("warn", text), ("info", "Fit transit fits it anyway.")])
                 self.app.log("Transit fit: " + text)
                 return
             if not messagebox.askyesno("SHOBS-P", text + "\n\nFit anyway?"):
+                self.result = None
+                self._fill_table()
+                self.draw(preview=preview)
+                self._notes_text([("warn", text)])
                 return
         if auto:
             if self.app.busy:
@@ -577,7 +594,7 @@ class TransitPage:
                      f"{s['k'][1]:.4f}, depth {s['depth'][0] * 100:.2f}%, b {s['b'][0]:.2f}, beta {result['beta']:.2f}")
         self.app.status.set("Transit fit done.")
         self._fill_table()
-        self._notes_text(result["flags"] or [("info", "No cautions.")])
+        self._notes_text(result["flags"] or [])
         self.draw()
 
     # ---- display ---------------------------------------------------------------------------
@@ -615,6 +632,7 @@ class TransitPage:
             rows = max(3, min(8, int(room // rowh) - 1))
             if int(self.table.cget("height") or 0) != rows:
                 self.table.configure(height=rows)
+                self.notes.configure(height=rows)   # 2.2.11: the notes ask no more height than the table
         except Exception:
             pass
 
@@ -653,7 +671,8 @@ class TransitPage:
                 for row in rows:
                     if k < len(row):
                         widest = max(widest, body.measure(row[k]) + 24)
-                self.table.column(col, width=int(widest), minwidth=int(widest), stretch=False)
+                # 2.2.11: content width is the minimum; the columns share any spare width of the strip.
+                self.table.column(col, width=int(widest), minwidth=int(widest), stretch=True)
         except Exception:
             pass
 
@@ -681,10 +700,54 @@ class TransitPage:
             w, h = self.fig.get_size_inches() * 72.0
             if w < 100 or h < 100:
                 return
-            self.fig.subplots_adjust(left=min(64 / w, 0.3), right=1 - min(10 / w, 0.1),
-                                     top=1 - min(24 / h, 0.2), bottom=min(38 / h, 0.3))
+            # 2.2.11: room for a title only when the plot has one.
+            top = 24 if getattr(self, "_has_title", False) else 8
+            left, right = min(64 / w, 0.3), 1 - min(10 / w, 0.1)
+            bottom = min(38 / h, 0.3)
+            self.fig.subplots_adjust(left=left, right=right, top=1 - min(top / h, 0.2), bottom=bottom)
+            if getattr(self, "_single_panel", False):
+                # The light curve alone (no residuals): the flux panel takes the whole plot.
+                self.ax.set_position([left, bottom, right - left, (1 - min(top / h, 0.2)) - bottom])
         except Exception:
             pass
+
+    def _draw_preview(self, t, flux, note):
+        """2.2.11 (John): no transit predicted during these data, so nothing is fitted; show the night's light curve
+        (relative flux against hours from the first point) and where the nearest transit is."""
+        ax, axr = self.ax, self.ax_r
+        t = np.asarray(t, dtype=float)
+        f = np.asarray(flux, dtype=float)
+        ok = np.isfinite(t) & np.isfinite(f)
+        t, f = t[ok], f[ok]
+        self._single_panel = True
+        axr.set_visible(False)
+        ax.tick_params(axis="x", labelbottom=True)
+        med = float(np.nanmedian(f)) if t.size else float("nan")
+        if t.size and np.isfinite(med) and med != 0:
+            f = f / med
+            x = (t - t.min()) * 24
+            ax.plot(x, f, ".", color="#9aa7b0", ms=4, label="each frame")
+            cadence = float(np.median(np.diff(np.sort(t)))) * 24 if t.size > 1 else 0.0
+            bins = _bin(x, f, max(10.0 / 60, 3 * cadence))
+            if bins:
+                ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k",
+                            ms=4, capsize=2, label="10-minute bins")
+            lo, hi = np.percentile(f, 1), np.percentile(f, 99)
+            pad = max((hi - lo) * 0.15, 0.002)
+            ax.set_ylim(lo - pad, hi + pad)
+            ax.legend(fontsize=8, loc="lower left", frameon=False)
+            try:
+                start = tc.jd_to_local(float(t.min())).strftime("%H:%M")
+                ax.set_xlabel(f"Hours from the first point ({start} local)")
+            except Exception:
+                ax.set_xlabel("Hours from the first point")
+        else:
+            ax.set_xlabel("Hours from the first point")
+        ax.set_ylabel("Relative flux")
+        ax.grid(alpha=0.3)
+        ax.text(0.99, 0.97, note, transform=ax.transAxes, ha="right", va="top", fontsize=10, color="#b35c00")
+        self._set_margins()
+        self.canvas.draw_idle()
 
     def _show_verdict(self):
         v = (self.result or {}).get("verdict")
@@ -788,14 +851,57 @@ class TransitPage:
         for level, text in flags:
             self.notes.insert(END, ("⚠ " if level == "warn" else "• ") + text + "\n\n", level)
         self.notes.configure(state="disabled")
+        self._show_notes(bool(flags))
 
-    def draw(self, placeholder: str = ""):
+    def _show_notes(self, show: bool):
+        """2.2.11: with notes, table two thirds and notes one third; without, the table takes the whole strip."""
+        try:
+            if show:
+                self.notes.grid()
+                self.strip.columnconfigure(0, weight=2, uniform="strip")
+                self.strip.columnconfigure(1, weight=1, uniform="strip")
+            else:
+                self.notes.grid_remove()
+                self.strip.columnconfigure(0, weight=1, uniform="")
+                self.strip.columnconfigure(1, weight=0, uniform="")
+            self._notes_shown = show
+        except Exception:
+            pass
+
+    def _show_heads(self):
+        """The banner and the verdict take a line only when they say something."""
+        try:
+            self.banner_label.pack_forget()
+            self.verdict_label.pack_forget()
+            if not (self.banner.get() or self.verdict.get()):
+                # An emptied frame keeps its old height in Tk, so the frame itself goes too.
+                self.heads.pack_forget()
+                return
+            if getattr(self, "body", None) is not None:
+                self.heads.pack(fill=X, before=self.body)
+            if self.banner.get():
+                self.banner_label.pack(anchor=W, fill=X, pady=(4, 0))
+            if self.verdict.get():
+                self.verdict_label.pack(anchor=W, fill=X, pady=(4, 0))
+        except Exception:
+            pass
+
+    def draw(self, placeholder: str = "", preview=None):
+        """The fit; or, with no fit, a labelled empty frame with the placeholder; or (2.2.11) preview=(t, flux,
+        note): the night's light curve alone, when no transit is predicted during it."""
         if self.fig is None:
             return
         r = self.result
         ax, axr = self.ax, self.ax_r
         ax.clear()
         axr.clear()
+        self._has_title = bool(r)
+        self._single_panel = False
+        axr.set_visible(True)
+        ax.tick_params(axis="x", labelbottom=False)
+        if not r and preview is not None:
+            self._draw_preview(*preview)
+            return
         if not r:
             # 2.2.9 (John): an empty frame labelled like the fitted plot, no overlapping default ticks.
             ax.set_ylabel("Relative flux")
@@ -1076,6 +1182,31 @@ def _state(verdict) -> str:
 
 def _norm(name) -> str:
     return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+def parse_clock(text):
+    """2.2.11 (John): a clock time typed as 23:00, 2300, 23.00, 23h00, 23 or 130 (01:30) -> (hours, minutes), or
+    (None, None) for an empty box. Anything else raises ValueError with a plain message."""
+    raw = (text or "").strip()
+    if not raw:
+        return None, None
+    t = raw.lower().replace("h", ":").replace(".", ":").replace(" ", "")
+    if ":" in t:
+        hh, _, mm = t.partition(":")
+        if not hh.isdigit() or (mm and (not mm.isdigit() or len(mm) != 2)):
+            raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+        h, m = int(hh), int(mm or 0)
+    elif t.isdigit() and len(t) <= 2:
+        h, m = int(t), 0
+    elif t.isdigit() and len(t) in (3, 4):
+        h, m = int(t[:-2]), int(t[-2:])
+    else:
+        raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+    if h == 24 and m == 0:
+        h = 0
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+    return h, m
 
 
 def _bin(x, y, width):
@@ -1379,7 +1510,7 @@ class FinderWindow:
         ttk.Label(top, text=(f"Site {self.lat:.4f}, {self.lon:.4f}. Every known transiting planet (NASA Exoplanet "
                              "Archive) whose whole transit, plus the baseline on both sides, is in the dark with the "
                              "star above the altitude limit. Times are local. 'After' and 'End by' limit the window "
-                             "(for example, after 23:00 to finish another target first). Double-click a row to use "
+                             "(for example, after 2300 or 23:00 to finish another target first). Double-click a row to use "
                              "that planet."),
                   style="Hint.TLabel", wraplength=1450, justify=LEFT).pack(anchor=W, pady=(2, 6))
         row = ttk.Frame(top, style="Card.TFrame")
@@ -1439,11 +1570,9 @@ class FinderWindow:
     def _clock_jd(self, text, night):
         """'23:30' on this night (hours before noon belong to the next morning) -> JD UTC, or None."""
         import datetime as _dt
-        text = (text or "").strip()
-        if not text:
+        h, m = parse_clock(text)
+        if h is None:
             return None
-        hh, _, mm = text.replace(".", ":").partition(":")
-        h, m = int(hh), int(mm or 0)
         day = night + _dt.timedelta(days=1) if h < 12 else night
         local = _dt.datetime.combine(day, _dt.time(h % 24, m)).astimezone()
         return local.timestamp() / 86400.0 + 2440587.5

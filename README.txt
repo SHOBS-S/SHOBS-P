@@ -38,6 +38,24 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.2.11 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
+- S  Monochrome cameras: when the lights carry no Bayer keyword, SHOBS-P looks at a raw flat. With no colour mask
+     (its 2x2 pixel planes agree to within 1%) it sets the Bayer pattern to MONO and says so in the log; a pattern
+     you picked by hand is kept. A colour mask while MONO is set gives a caution.
+- S  On MONO the Calibrate page's Channel box becomes a Filter box: V, B, R, Clear (CV) and the imaging filters
+     (TG, TR, TB). It fills from the FITS FILTER keyword, or set it by hand when the header has none; the AAVSO
+     filter code and the comps' band follow it. (I and Sloan filters are not offered: the comp catalogs carry only
+     B, V and R.) 'Apply channel to the preview' is hidden on MONO.
+- S  Blink: 0.25 s/frame added.
+- S  Input page: 'Write demo FITS set' is now 'Try it with sample data…'.
+- T  Transit fit page: the parameter table fills the strip under the plot; notes and cautions, when there are
+     any, take a third on the right. The old hint sentence is gone (the plot says what to do). The empty space
+     above the plot is gone: the banner and verdict take a line only when they say something, and the plot keeps
+     room for a title only when it has one.
+- T  No transit predicted during the data: the page shows the night's light curve (relative flux against hours
+     from the first point) with an arrow note to the nearest predicted transit, instead of an empty frame.
+- T  Tonight's transits: After and End by take 2300 or 23:00 (also 23.00, 23, 130 for 01:30).
+
 New in 2.2.10 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
 - T  Transit fit page: the plot is the page. It fills the width and height, with margins just big enough for its
      labels. The verdict sits above the plot; the parameter table and the notes run in a strip under it (as on
@@ -582,7 +600,7 @@ Remove night... (Output page) drops one night so you can redo it. Line up segmen
 meridian-flip offsets for transit-style work.
 
 Demo
-"Write demo FITS set" (Input page) builds a small synthetic night with a 0.12 d variable and fills in every field.
+"Try it with sample data…" (Input page) builds a small synthetic night with a 0.12 d variable and fills in every field.
 Calibrate, apply the debayer, then Run photometry.
 
 Notes
@@ -591,6 +609,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.11 Mono cameras found from the flat, Filter box on MONO; 0.25 s blink; sample-data button; Transit fit
+       table fills the strip, no empty band, light curve when no transit is predicted; HHMM times.
 2.2.10 Transit fit page: plot first, table and notes in a strip under it; progress bar only while
        fitting; status bar no longer cut off.
 2.2.9  Site and Optics boxes; site and optics from the FITS header (and borrowed for another observer's

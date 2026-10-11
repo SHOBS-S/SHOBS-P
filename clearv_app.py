@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.10"
+APP_VERSION = "2.2.11"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -119,7 +119,7 @@ MODES = {
 PERIOD_BIN_CHOICES = ("Every point", "5 min bins", "10 min bins", "30 min bins")
 BIN_CHOICES = ("None", "Night", "60 min", "30 min", "15 min", "10 min")
 STEPS = ("Input", "Blink", "Calibrate", "Photometry", "Output")
-BLINK_SPEEDS = ("0.5 s/frame", "1 s/frame", "2 s/frame")  # 2.2.3
+BLINK_SPEEDS = ("0.25 s/frame", "0.5 s/frame", "1 s/frame", "2 s/frame")  # 2.2.3; 0.25 in 2.2.11 (John)
 # Page indices (2.2: the Debayer step is gone; the first frame is debayered as soon as it is calibrated).
 STEP_INPUT, STEP_BLINK, STEP_CAL, STEP_PHOTO, STEP_OUTPUT = range(5)
 
@@ -460,6 +460,14 @@ class App(Tk):
         self._fit_after_photometry = False
         self._inst_cache = None
         self.mono_filter = None            # (AAVSO code, band) from a monochrome camera's FITS FILTER
+        # 2.2.11: a monochrome camera's filter set by hand (Calibrate page Filter box), used when the header has none.
+        self.mono_filter_choice = StringVar(value=self.settings.get("mono_filter_choice", "") or "")
+        self._mono_filter_manual = bool(self.mono_filter_choice.get() in core.MONO_FILTER_CHOICES)
+        if self._mono_filter_manual:
+            self.mono_filter = core.MONO_FILTER_CHOICES[self.mono_filter_choice.get()]
+        self._mono_filter_source = "hand" if self._mono_filter_manual else None   # header / hand / unknown / mobs
+        self._pattern_user_set = False     # the Bayer pattern was picked by hand (cleared when the folders change)
+        self._debayer_before_mono = None   # the colour channel to go back to when leaving MONO
         self._catalog_before_discovery = None
         self._closest_dm = None
         self._target_bv = None
@@ -468,6 +476,7 @@ class App(Tk):
         self._build()
         self.debayer_mode.trace_add("write", lambda *_: self._update_filter_hint())
         self.pattern.trace_add("write", lambda *_: self._pattern_changed())
+        self._pattern_changed()
         for var in (self.bias_dir, self.dark_dir, self.flat_dir, self.light_dir):
             var.trace_add("write", lambda *_: self._folders_changed())
         self.light_dir.trace_add("write", lambda *_: self._clear_marks())
@@ -515,6 +524,7 @@ class App(Tk):
     def _folders_changed(self):
         """A new folder means the old masters and preview no longer apply."""
         self.precalibrated = False
+        self._pattern_user_set = False    # 2.2.11: a new camera may come with new folders
         self.variable_marks = []
         self.field_variables = []
         self.field_check_sources = []
@@ -564,20 +574,59 @@ class App(Tk):
         return {"red": "R", "blue": "B"}.get(self.debayer_mode.get(), "V")
 
     def _read_mono_filter(self, header: dict):
-        """A monochrome camera's filter from the light's header (2.2.1)."""
-        found = core.filter_from_header(header or {})
+        """A monochrome camera's filter from the light's header (2.2.1). 2.2.11: a known FILTER value wins; with no
+        FILTER keyword the filter set by hand (Calibrate page) is used; an unknown value (I, Ha, Sloan…) is never
+        replaced by the hand-set one: it is reported as clear, with a caution."""
+        header = header or {}
+        raw = core.header_filter_value(header)
+        found = core.filter_from_header(header)
+        hand = self._mono_filter_hand()
+        if found is not None:
+            source = "header"
+            if hasattr(self, "mono_filter_choice"):
+                self.mono_filter_choice.set(core.mono_filter_label(found) or self.mono_filter_choice.get())
+        elif getattr(self, "_mono_filter_source", None) == "mobs" and self._own_setup is not None:
+            # MicroObservatory frames with no FILTER stay clear, never the hand-set filter of your own camera.
+            found, source = ("CV", "V"), "mobs"
+        elif raw:
+            source = "unknown"
+            if hasattr(self, "mono_filter_choice"):
+                self.mono_filter_choice.set("Clear / L (CV)")
+            if self.pattern.get() == core.MONO and raw != getattr(self, "_unknown_filter_logged", None):
+                self._unknown_filter_logged = raw
+                self.log(f"Caution: the FITS FILTER is '{raw}', which SHOBS-P cannot calibrate (the comp catalogs carry "
+                         "B, V and R only). These frames are reported as clear (CV) with V comps.")
+        elif hand is not None:
+            found, source = hand, "hand"
+            self.mono_filter_choice.set(self.settings.get("mono_filter_choice", ""))
+        else:
+            source = None
+        self._mono_filter_source = source
         if found != self.mono_filter:
             self.mono_filter = found
-            if found and self.pattern.get() == core.MONO:
-                self.log(f"Filter from the FITS header: {header.get('FILTER', header.get('FILTNAME', ''))} → AAVSO "
-                         f"filter {found[0]}, comps in {found[1]}.")
+            if found and source == "header" and self.pattern.get() == core.MONO:
+                self.log(f"Filter from the FITS header: {raw} → AAVSO filter {found[0]}, comps in {found[1]}.")
         self._update_filter_hint()
+
+    def _mono_filter_hand(self):
+        """The filter set by hand (saved in the settings), as (code, band), or None. The Filter box may be showing a
+        header's filter, so the saved choice is read, not the box."""
+        if not getattr(self, "_mono_filter_manual", False):
+            return None
+        return core.MONO_FILTER_CHOICES.get(self.settings.get("mono_filter_choice", ""))
 
     def _update_filter_hint(self):
         mode = self.debayer_mode.get()
         code, band = self._filter_code(), self._band()
         if self.pattern.get() == core.MONO and self.mono_filter:
-            self.filter_hint.set(f"AAVSO filter code {code}\nfilter wheel (FITS FILTER), {band} comps")
+            where = {"hand": "filter set here", "header": "filter wheel (FITS FILTER)",
+                     "mobs": "MicroObservatory, clear"}.get(getattr(self, "_mono_filter_source", None),
+                                                           "filter wheel (FITS FILTER)")
+            self.filter_hint.set(f"AAVSO filter code {code}\n{where}, {band} comps")
+        elif self.pattern.get() == core.MONO:
+            what = ("filter in the header not supported" if getattr(self, "_mono_filter_source", None) == "unknown"
+                    else "no filter in the header")
+            self.filter_hint.set(f"AAVSO filter code {code}\n{what}: clear, {band} comps")
         else:
             self.filter_hint.set(f"AAVSO filter code {code}\n{mode.capitalize()} channel, {band} comps")
         self.mag_header.set(f"{band} magnitude")
@@ -1170,7 +1219,7 @@ class App(Tk):
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(12, 0))
         ttk.Button(nav, text="Scan folders", command=self.scan_folders).pack(side=LEFT)
-        ttk.Button(nav, text="Write demo FITS set", command=self.write_demo).pack(side=LEFT, padx=8)
+        ttk.Button(nav, text="Try it with sample data…", command=self.write_demo).pack(side=LEFT, padx=8)
         ttk.Button(nav, text="Load series", command=self.load_series).pack(side=LEFT, padx=8)
         ttk.Button(nav, text="Next: Blink", command=lambda: self.show_step(STEP_BLINK)).pack(side=RIGHT)
 
@@ -1705,6 +1754,11 @@ class App(Tk):
                 if not core.is_microobservatory(lights[0], header):
                     self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
                 pat = core.header_bayer(header)
+                if not pat and not core.is_microobservatory(lights[0], header):
+                    was_mono = self.pattern.get() == core.MONO
+                    self._detect_sensor()        # 2.2.11: mono or colour from a raw flat
+                    if not was_mono and self.pattern.get() == core.MONO:
+                        self._read_mono_filter(header)   # now that it is MONO, read the filter again
                 if pat:
                     self.pattern.set(pat)
                     self.status.set(f"{len(lights)} lights. Bayer pattern from header: {pat}")
@@ -1720,10 +1774,87 @@ class App(Tk):
     def _pattern_changed(self):
         mono = self.pattern.get() == core.MONO
         core.set_mono(mono)
+        if mono and self.debayer_mode.get() != "luminance":
+            self._debayer_before_mono = self.debayer_mode.get()
+            self.debayer_mode.set("luminance")
+        elif not mono and getattr(self, "_debayer_before_mono", None):
+            # 2.2.11: back to a colour pattern: the channel chosen before MONO (green, usually) comes back.
+            self.debayer_mode.set(self._debayer_before_mono)
+            self._debayer_before_mono = None
+        self._show_channel_or_filter(mono)
         if hasattr(self, "filter_hint"):
             self._update_filter_hint()
-        if mono and self.debayer_mode.get() != "luminance":
-            self.debayer_mode.set("luminance")
+
+    def _show_channel_or_filter(self, mono: bool):
+        """2.2.11: on MONO the Channel box and 'Apply channel' give way to a Filter box."""
+        if not hasattr(self, "channel_box"):
+            return
+        try:
+            self.channel_box.pack_forget()
+            self.filter_box.pack_forget()
+            self.apply_button.pack_forget()
+            if mono:
+                self.channel_label.configure(text="Filter")
+                if not self.mono_filter_choice.get():
+                    self.mono_filter_choice.set(core.mono_filter_label(self.mono_filter) or "Clear / L (CV)")
+                self.filter_box.pack(side=LEFT, padx=8, before=self.filter_hint_label)
+            else:
+                self.channel_label.configure(text="Channel")
+                self.channel_box.pack(side=LEFT, padx=8, before=self.filter_hint_label)
+                self.apply_button.pack(side=LEFT, padx=8, before=self.filter_hint_label)
+        except Exception:
+            pass
+
+    def _mono_filter_picked(self):
+        """A monochrome camera's filter chosen by hand: used for the report code and the comps' band."""
+        label = self.mono_filter_choice.get()
+        pair = core.MONO_FILTER_CHOICES.get(label)
+        if not pair:
+            return
+        self.mono_filter = pair
+        self._mono_filter_manual = True
+        self._mono_filter_source = "hand"
+        self.settings["mono_filter_choice"] = label
+        self._save_settings()
+        self.log(f"Filter set by hand: {label} → AAVSO filter {pair[0]}, comps in {pair[1]}.")
+        self._update_filter_hint()
+
+    def _detect_sensor(self):
+        """2.2.11: no Bayer keyword in the lights: look at the raw flats (up to five, flats before flat-darks). No
+        colour mask -> MONO (unless the pattern was picked by hand); a colour mask while MONO is set -> a caution."""
+        try:
+            frames, _master = core.calibration_source(self.flat_dir.get())
+            if not frames:
+                return
+            frames = sorted(frames, key=lambda f: ("dark" in os.path.basename(f).lower(), f))[:5]
+            kind = contrast = None
+            for path in frames:
+                kind, contrast = core.detect_sensor_from_flat(path)
+                if kind is not None:
+                    break
+            binned = ""
+            try:
+                hdr = core.read_header(frames[0])
+                if int((hdr or {}).get("XBINNING", 1) or 1) > 1:
+                    binned = " (binned in the camera: a colour sensor binned 2x2 also looks like this)"
+            except Exception:
+                pass
+            if kind == "mono" and self.pattern.get() != core.MONO:
+                if self._pattern_user_set:
+                    self.log(f"The flat shows no colour mask (its 2x2 pixel planes agree to {contrast * 100:.1f}%), so "
+                             f"the camera looks monochrome{binned}, but the Bayer pattern was set by hand; left as it is.")
+                    return
+                self.pattern.set(core.MONO)
+                self.log(f"No Bayer pattern in the headers and the flat shows no colour mask (its 2x2 pixel planes agree "
+                         f"to {contrast * 100:.1f}%){binned}: monochrome, Bayer pattern set to MONO. Pick the camera's "
+                         "pattern on the Calibrate page if this is a colour camera.")
+                self.status.set("Monochrome camera found (no colour mask in the flat): Bayer pattern MONO.")
+            elif kind == "cfa" and self.pattern.get() == core.MONO:
+                what = f" (its 2x2 pixel planes differ by {contrast * 100:.0f}%)" if contrast else ""
+                self.log(f"Caution: the flat shows a colour mask{what}, but the Bayer pattern is MONO. For a colour "
+                         "camera, pick its pattern (often RGGB) on the Calibrate page.")
+        except Exception as exc:
+            self.log(f"Could not check the flat for a colour mask ({exc}).")
 
     def _sync_camera_note(self):
         try:
@@ -1774,6 +1905,12 @@ class App(Tk):
             self._own_setup = self._setup_snapshot()
         self.pattern.set(core.MONO)
         self.debayer_mode.set("luminance")
+        if self._mono_filter_source != "header":
+            # 2.2.11: MicroObservatory frames are clear unless their header says otherwise; a filter set by hand for
+            # your own camera is not used for them (it comes back with your own setup).
+            self.mono_filter = ("CV", "V")
+            self._mono_filter_source = "mobs"
+            self._update_filter_hint()
         self.sat_limit.set(4000)
         if int(self.binning.get() or 1) > 1:
             self.binning.set(1)
@@ -1927,6 +2064,13 @@ class App(Tk):
                 pass
         self._own_setup = None
         self.scale_approx = False
+        if getattr(self, "_mono_filter_source", None) == "mobs":
+            hand = self._mono_filter_hand()
+            self.mono_filter = hand
+            self._mono_filter_source = "hand" if hand else None
+            if hand:
+                self.mono_filter_choice.set(self.settings.get("mono_filter_choice", ""))
+            self._update_filter_hint()
         self.log("Your own site, optics, and camera settings are back (they were set aside for another telescope's frames).")
 
     def _page_blink(self):
@@ -1948,7 +2092,7 @@ class App(Tk):
         ttk.Button(tools, text="Blink", command=self.toggle_blink).pack(side=LEFT, padx=6)
         ttk.Button(tools, text="Stop", command=self.stop_blink).pack(side=LEFT)
         ttk.Label(tools, text="Speed", style="Card.TLabel").pack(side=LEFT, padx=(10, 2))
-        ttk.Combobox(tools, textvariable=self.blink_speed, values=BLINK_SPEEDS, width=9, state="readonly").pack(side=LEFT)
+        ttk.Combobox(tools, textvariable=self.blink_speed, values=BLINK_SPEEDS, width=12, state="readonly").pack(side=LEFT)
         ttk.Button(tools, text="Reject / restore", command=self.toggle_reject).pack(side=LEFT, padx=6)
         self.blink_label = StringVar(value="No lights loaded.")
         ttk.Label(card, textvariable=self.blink_label, style="Hint.TLabel").pack(anchor=W)
@@ -2222,18 +2366,29 @@ class App(Tk):
         row = ttk.Frame(cam, style="Card.TFrame")
         row.pack(fill=X)
         ttk.Label(row, text="Bayer pattern", style="Card.TLabel").pack(side=LEFT)
-        ttk.Combobox(row, textvariable=self.pattern, values=("RGGB", "BGGR", "GRBG", "GBRG", "MONO"), width=10,
-                     state="readonly").pack(side=LEFT, padx=8)
-        ttk.Label(row, text="Channel", style="Card.TLabel").pack(side=LEFT, padx=(12, 0))
-        ttk.Combobox(row, textvariable=self.debayer_mode, values=("green", "red", "blue", "luminance"), width=12,
-                     state="readonly").pack(side=LEFT, padx=8)
-        ttk.Button(row, text="Apply channel to the preview", command=self.apply_debayer).pack(side=LEFT, padx=8)
-        ttk.Label(row, textvariable=self.filter_hint, style="Hint.TLabel", justify=LEFT).pack(side=LEFT, padx=(12, 0))
+        pattern_box = ttk.Combobox(row, textvariable=self.pattern, values=("RGGB", "BGGR", "GRBG", "GBRG", "MONO"),
+                                   width=10, state="readonly")
+        pattern_box.pack(side=LEFT, padx=8)
+        pattern_box.bind("<<ComboboxSelected>>", lambda _e: setattr(self, "_pattern_user_set", True))
+        # 2.2.11: Channel for a colour camera; on MONO the same place holds Filter (there is nothing to debayer).
+        self.channel_label = ttk.Label(row, text="Channel", style="Card.TLabel")
+        self.channel_label.pack(side=LEFT, padx=(12, 0))
+        self.channel_box = ttk.Combobox(row, textvariable=self.debayer_mode, values=("green", "red", "blue", "luminance"),
+                                        width=12, state="readonly")
+        self.channel_box.pack(side=LEFT, padx=8)
+        self.filter_box = ttk.Combobox(row, textvariable=self.mono_filter_choice, values=list(core.MONO_FILTER_CHOICES),
+                                       width=18, state="readonly")
+        self.filter_box.bind("<<ComboboxSelected>>", lambda _e: self._mono_filter_picked())
+        self.apply_button = ttk.Button(row, text="Apply channel to the preview", command=self.apply_debayer)
+        self.apply_button.pack(side=LEFT, padx=8)
+        self.filter_hint_label = ttk.Label(row, textvariable=self.filter_hint, style="Hint.TLabel", justify=LEFT)
+        self.filter_hint_label.pack(side=LEFT, padx=(12, 0))
         ttk.Label(
             cam,
             text="Green is the normal choice (AAVSO TG, V comps). Red (TR, R comps) suits a red dwarf; blue is TB; luminance "
-                 "is clear, reported as CV. MONO is for monochrome cameras (MicroObservatory and others): no debayer. The "
-                 "pattern is read from the FITS header when the camera writes it.",
+                 "is clear, reported as CV. MONO is for monochrome cameras (MicroObservatory and others): no debayer, and "
+                 "Channel becomes Filter (from the FITS FILTER keyword, or set it here). The pattern is read from the "
+                 "FITS header when the camera writes it; without one, a raw flat with no colour mask sets MONO.",
             style="Hint.TLabel", wraplength=1100, justify=LEFT,
         ).pack(anchor=W, pady=(6, 0))
         cal_row = ttk.Frame(card, style="Card.TFrame")
