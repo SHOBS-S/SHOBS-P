@@ -14,6 +14,47 @@ one window.
 
 All three share the same steps: **Input → Blink → Calibrate → Photometry → Output**.
 
+## What each mode does
+
+**Variables mode** is for following a known variable star, one night or many. You type the star's name and
+SHOBS-P looks up its position in SIMBAD and VSX, along with its catalogued period if it has one. After calibration,
+**Label chart** circles the catalog stars in the field with their magnitudes, from the AAVSO comparison sequence,
+Gaia DR3, APASS or Tycho-2. The best comparison stars, close to the target in brightness and colour, are ringed in
+green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
+frames up across meridian flips, and flags saturated frames, cloud and drift.
+
+The result is a **light curve with honest error bars**: they include atmospheric scintillation as well as photon
+noise, so they match the real scatter. A **period search** (Lomb-Scargle) reports how significant its best period
+is, warns about one-day aliases, and checks that no single night is driving the answer. Nights build up into a
+**series**, with a comparison-star health check along the way. When you're happy, it writes an **AAVSO Extended
+report** ready to submit.
+
+**Transits mode** is for catching an exoplanet crossing its star. Type the planet's name, in any of its catalogue
+spellings (KOI, Kepler, TOI, TIC…), or just the host star. SHOBS-P pulls its period, timing, depth and shape from
+the NASA Exoplanet Archive, choosing the most precise published ephemeris. **Tonight's transits** lists every
+transit visible from your site tonight, complete with its baseline before and after, and SHOBS-P warns you if your
+frames don't actually cover a predicted transit.
+
+After photometry, the **transit fit** detrends for airmass and runs an MCMC fit, guided by the planet's published
+shape. It scales the error bars for red (correlated) noise and gives a plain verdict: **detected, inconclusive, or
+no transit**. It doesn't just accept any dip: it tests whether a simple jump at a gap in the data, or a one-sided
+baseline, explains the dip just as well. You also get the O − C timing against the ephemeris, a free-shape fit as
+a cross-check, and a nearby-eclipsing-binary check. You can open an **EXOTIC report** to see both fits side by
+side. Results go out as an **AAVSO exoplanet report** and an **ExoFOP package**.
+
+**Discovery mode** is designed so you can take a series of images, with calibration frames, of any random spot in
+the sky. SHOBS-P works out where the frames point, from the plate solution in the FITS header or by matching the
+star pattern. It checks that spot for known variables using VSX and SIMBAD, and marks them.
+
+When you run a **field scan**, SHOBS-P performs photometry on every star in the field. Before scoring, it lines up
+each star's light curve across meridian flips and rotator moves, so a flip can't masquerade as a variable star. It
+then compares each star's scatter with that of other stars of the same brightness. Stars that vary at least **3
+times more than normal** for their brightness (the level is adjustable) are flagged as candidates, and each is
+labelled new, known, or "check first" (for example, near a bright star or at the edge of the frame).
+
+Interesting stars can be put on a **watch list**. Every later night you add to that field's series measures the
+watched stars automatically, building up their light curves over time.
+
 Highlights: bias/dark/flat calibration with superpixel debayering, frame alignment through meridian flips,
 comparison-star ensembles, catalog comps from the AAVSO sequence, Gaia DR3, APASS and Tycho-2, and error bars that
 include scintillation (Osborn et al. 2015).
