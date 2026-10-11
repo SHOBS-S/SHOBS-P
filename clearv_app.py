@@ -2660,6 +2660,7 @@ class App(Tk):
         panel = ttk.Frame(body, style="Card.TFrame", width=520)
         panel.pack(side=RIGHT, fill=Y, padx=(8, 0))
         panel.pack_propagate(False)
+        self.photo_panel = panel   # 2.2.9: its width follows its contents (see _fit_photo_panel)
         # 2.2.8: with up to 10 comps the Stars and Watch boxes no longer fit; the whole right-hand panel scrolls
         # (scroll bar only when needed; the mouse wheel scrolls it while the pointer is over it, so the image keeps
         # its own wheel zoom). Each comp's full status lines are kept, never shortened.
@@ -2671,6 +2672,7 @@ class App(Tk):
         self.disc_panel = ttk.Frame(holder, style="Card.TFrame")
         self._build_discovery_panel(self.disc_panel)
         self.star_panel.pack(fill=BOTH, expand=True)
+        self.after_idle(self._fit_photo_panel)
         plot_host = ttk.Frame(body, style="Card.TFrame")
         plot_host.pack(side=LEFT, fill=BOTH, expand=True)
         if Figure is None:
@@ -2712,6 +2714,23 @@ class App(Tk):
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
         return page
 
+    def _fit_photo_panel(self):
+        """2.2.9 (John): the right-hand panel was a fixed 520 px, which does not grow with Windows display scaling, so
+        at 150-200% its magnitude boxes were cut off. Size it to what the Stars / Discovery panel asks for, plus the
+        scroll bar."""
+        panel = getattr(self, "photo_panel", None)
+        if panel is None:
+            return
+        try:
+            inner = self.panel_scroll.inner
+            inner.update_idletasks()
+            need = int(inner.winfo_reqwidth()) + int(self.panel_scroll.vbar.winfo_reqwidth()) + 6
+            if need > 40 and abs(need - int(panel.cget("width"))) > 2:
+                # Never more than 40% of the screen, so the image keeps most of the page.
+                panel.configure(width=max(min(need, int(self.winfo_screenwidth() * 0.4)), 300))
+        except Exception:
+            pass
+
     def _layout_photo_for_mode(self):
         """The Photometry page follows the mode: Discovery has no target, comps, or check star (2.2)."""
         if not hasattr(self, "run_button"):
@@ -2727,6 +2746,7 @@ class App(Tk):
             self.panel_scroll.canvas.yview_moveto(0.0)
         except Exception:
             pass
+        self.after_idle(self._fit_photo_panel)   # Stars and Discovery panels differ in width
         self.pick_label_widget.pack_forget()
         if mode != "discovery":
             self.pick_label_widget.pack(anchor=W, before=self.photo_body)

@@ -203,6 +203,7 @@ class TransitPage:
             # display) pushed the page past the screen edge (2.2).
             self.canvas.get_tk_widget().configure(width=420, height=320)
             self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+            self.draw(placeholder="No transit fit yet: pick a night or open an exoplanet report, then Fit transit.")
         self._notes_text([("info", "Pick a night of a Transits series (or open an AAVSO exoplanet report from "
                                    "EXOTIC), then Fit transit. The fit always runs an MCMC, with the published "
                                    "a/R* and impact parameter as priors, airmass detrending, and error bars "
@@ -646,13 +647,16 @@ class TransitPage:
         ax.clear()
         axr.clear()
         if not r:
-            if placeholder:
-                ax.text(0.5, 0.5, placeholder, transform=ax.transAxes, ha="center", va="center", fontsize=12,
-                        color="#5d6d76", wrap=True)
-                ax.set_xticks([])
-                ax.set_yticks([])
-                axr.set_xticks([])
-                axr.set_yticks([])
+            # 2.2.9 (John): an empty frame labelled like the fitted plot, no overlapping default ticks.
+            ax.set_ylabel("Relative flux")
+            axr.set_ylabel("Resid. %")
+            axr.set_xlabel("Hours from fitted mid-transit")
+            for a_ in (ax, axr):
+                a_.set_xticks([])
+                a_.set_yticks([])
+                a_.grid(False)
+            ax.text(0.5, 0.5, placeholder or "No transit fit yet", transform=ax.transAxes, ha="center", va="center",
+                    fontsize=12, color="#5d6d76", wrap=True)
             self.canvas.draw_idle()
             return
         best = r["best"]
