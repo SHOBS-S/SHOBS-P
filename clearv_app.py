@@ -5174,6 +5174,19 @@ class App(Tk):
                       "straight away, so every star gets a position, a catalog magnitude and a VSX/SIMBAD check.)",
             style="Hint.TLabel", justify=LEFT, wraplength=1300)
         self.discovery_empty.pack(anchor=W, pady=(2, 6))
+        # The same Results row as after a scan (John, 10 Oct). As on the Variables and Transit fit pages the buttons
+        # stay active and say what to do first.
+        results = ttk.Frame(top, style="Card.TFrame")
+        results.pack(fill=X, side="bottom", pady=(4, 0))
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
+
+        def need_scan():
+            messagebox.showinfo(APP_TITLE, "Scan the field first (Scan field on the Photometry page).")
+        for i, label in enumerate(("Save plot PNG…", "Save CSV…", "Export candidates CSV…",
+                                   "Export all light curves CSV…")):
+            ttk.Button(results, text=label, style="Accent.TButton" if i == 0 else "TButton",
+                       command=need_scan).pack(side=LEFT, padx=6 if i % 2 else 0)
+        ttk.Button(results, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT)
         body = ttk.Frame(top, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True)
         tree = ttk.Treeview(body, columns=("rank", "star", "mag", "scatter", "excess", "period", "color", "caution",
@@ -8495,6 +8508,8 @@ class ScanView:
         ttk.Button(results, text="Save CSV…", command=self.save_csv).pack(side=LEFT, padx=6)
         ttk.Button(results, text="Export candidates CSV…", command=self.export_candidates).pack(side=LEFT)
         ttk.Button(results, text="Export all light curves CSV…", command=self.export_curves).pack(side=LEFT, padx=6)
+        if on_close is None:   # on the Output page: Back to Photometry, as on the Variables Output page
+            ttk.Button(results, text="Back", command=lambda: app.show_step(STEP_PHOTO)).pack(side=RIGHT)
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         self.mark_button = ttk.Button(nav, text="Clear candidate marks" if app.scan_marks else "Mark candidates on image",

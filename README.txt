@@ -65,7 +65,8 @@ New in 2.2.9 (S = shared by every mode, M = one mode only, T = Transits, D = Dis
      says how far away the nearest predicted transit is instead of fitting. A manual fit asks "Fit anyway?". The
      plot axis never stretches beyond the data and the transit window.
 - T  The save buttons moved into a "Results" row below the plot.
-- D  The Output page shows an empty Field scan frame before a scan, and a "Results" row with Save plot PNG, Save
+- D  The Output page shows an empty Field scan frame before a scan (its Results row already there, as on the
+     other modes' Output pages), and a "Results" row with Save plot PNG, Save
      CSV (every star: position, magnitude, scatter, candidate flags), Export candidates CSV and Export all light
      curves CSV.
 
