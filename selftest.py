@@ -205,6 +205,27 @@ def main() -> None:
           f"{w1['hours']:.1f} h away" if w1 else "None")
     check("no ephemeris gives no window check", tc.transit_window_check(1, 2, {"period": 3}) is None)
 
+    section("2e 2.2.12: detection test (real photutils), DTG, scatter curve, Mac helpers")
+    try:
+        rng5 = np.random.default_rng(12)
+        img5 = rng5.normal(1000, 20, (120, 160))
+        yy5, xx5 = np.mgrid[0:120, 0:160]
+        img5 += 20000 * np.exp(-((xx5 - 40) ** 2 + (yy5 - 60) ** 2) / (2 * 2.0 ** 2))
+        flux5, sky5, noise5 = core.measure_many(img5, np.array([[40.0, 60.0], [120.0, 60.0]]), 6, 10, 16, noise=True)
+        mags5 = core.detected_mags(flux5, 10.0, noise5)
+        check("sky noise measured by photutils", bool(np.all(np.isfinite(noise5)) and np.all(noise5 > 0)), str(noise5))
+        check("star detected, empty sky left out", bool(np.isfinite(mags5[0]) and np.isnan(mags5[1])), str(mags5))
+    except Exception as exc:
+        check("detection test", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    import re as _re
+    check("DTG stamp like 121153Z OCT 26", _re.fullmatch(r"\d{6}Z [A-Z]{3} \d{2}", core.dtg()) is not None, core.dtg())
+    m5 = np.concatenate([np.linspace(8.7, 10.5, 12), np.linspace(11, 16, 150)])
+    s5 = 0.004 + 0.002 * 10 ** (0.4 * (m5 - 13)).clip(0)
+    e5 = core.typical_scatter(m5, s5, np.ones(m5.size, bool))
+    check("bright stars on the typical-scatter curve", bool(np.all(np.abs(s5[:12] / e5[:12] - 1) < 0.35)))
+    check("font names set for this computer", bool(core.UI_FONT and core.MONO_FONT), f"{core.UI_FONT} / {core.MONO_FONT}")
+    check("wheel: any scroll moves at least one step", core.wheel_units(3) != 0 and core.wheel_units(-120) == 1)
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):

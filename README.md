@@ -107,7 +107,7 @@ Every page and button is described in **[README.txt](README.txt)** (also in the 
 
 ## Known limitations
 
-- **Windows only** (10 or 11). It is plain Python and may run elsewhere, but only Windows is tested.
+- **Made for Windows** (10 or 11). It is plain Python and also runs on a Mac (python.org Python, which includes Tk; start it with `python clearv_app.py`); the Mac is lightly tested so far.
 - **Colour (OSC) cameras are the most tested.** Monochrome cameras are supported (V, B, R, clear and LRGB imaging
   filters); that path is newer, so reports from mono users are especially welcome.
 - **I and Sloan filters are not supported yet**: the comparison-star catalogs used carry B, V and R only.

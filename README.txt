@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.11
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.12
 ======================================================
 
 Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -48,6 +48,36 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.12 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  Files carry the time they were made as a military Date Time Group in Zulu (e.g. 121153Z OCT 26): on plot
+     PNGs, as a '# Created' first line in CSV files, in the transit fit text of the ExoFOP package, and as a '#'
+     comment line in AAVSO Extended and exoplanet reports (AAVSO's format allows comment lines; they are kept in
+     the archive and ignored on upload). Tools reading the CSVs should skip lines that start with '#'.
+- S  Mac: the side panels scroll with a trackpad (small wheel steps were rounded to nothing), and the fonts fall
+     back to Helvetica Neue and Menlo, so the Series and Period boxes still line up. Linux wheels scroll too.
+- V D Periodograms grey out periods longer than about half the data span, labelled 'longer than the data can
+     test'. The search still runs there (a series of several nights can test them).
+- D  Typical-scatter curve: a running median over stars within half a magnitude, leaving out stars that already
+     stand well above it, so the bright end follows the bright stars (they no longer sit under the curve, which
+     hid bright variables). No line is drawn across magnitude ranges with no stars.
+- D  Faint end: frames where a star is not detected (net flux under 3x the sky noise) are left out of its light
+     curve and scatter, so non-detections no longer read as drops to 18-20 mag. With Faintest magnitude blank, the
+     scan stops where the field's typical scatter reaches 0.25 mag (shown as a dashed line and in the log).
+- D  Field scan table: columns sized to what they hold (Star / position no longer cuts Gaia IDs; VSX no longer
+     takes half the width).
+- T  The verdict shows once, above the plot; its copy is gone from the notes on the right and from the notes in
+     the saved PNG.
+- T  MCMC progress names the phase: 'MCMC burn-in 600 of 1,000', then 'MCMC step 1,200 of 3,000' (the second count
+     now matches the MCMC menu).
+- T  Saved transit PNG: long verdicts wrap to the page (measured, not estimated), and notes are printed in full.
+- T  An EXOTIC report without an ephemeris: SHOBS-P looks the ephemeris up (NASA Exoplanet Archive, most precise
+     one), or reads EXOTIC's inits file beside the report, before fitting (the fit waits for it). The
+     lowest point is only the fit's starting guess and is never shown as a published time. The O − C line says
+     where the ephemeris came from, is shown even when the ephemeris has no stated uncertainty (with a caution),
+     and flags an ephemeris whose uncertainty swamps the fit's.
+- T  Variable View with only an EXOTIC report loaded: 'Variable View not available from an EXOTIC report.' (it shows
+     SHOBS-P's own photometry; the report has only its final light curve).
 
 New in 2.2.11 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
 - S  Monochrome cameras: when the lights carry no Bayer keyword, SHOBS-P looks at a raw flat. With no colour mask
@@ -620,6 +650,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.12 DTG stamp on files; Mac trackpad and fonts; periodogram shading; Discovery scatter curve, faint end and
+       table columns; verdict once; MCMC phases; PNG wrap; ephemeris for EXOTIC reports; report-only Variable View.
 2.2.11 Mono cameras found from the flat, Filter box on MONO; 0.25 s blink; sample-data button; Transit fit
        table fills the strip, no empty band, light curve when no transit is predicted; HHMM times.
 2.2.10 Transit fit page: plot first, table and notes in a strip under it; progress bar only while

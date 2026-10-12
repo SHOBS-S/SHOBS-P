@@ -54,7 +54,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.11"
+APP_VERSION = "2.2.12"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -128,11 +128,49 @@ def col_width(widget, label: str, width: int) -> int:
     """A table column wide enough for its heading (bold) and scaled with the screen's DPI setting."""
     try:
         from tkinter import font as tkfont
-        heading = tkfont.Font(widget, font=("Segoe UI", 10, "bold"))
+        heading = tkfont.Font(widget, font=(core.UI_FONT, 10, "bold"))
         scale = max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
         return int(max(width * scale, heading.measure(label) + 30))
     except Exception:
         return width
+
+
+def fit_tree_columns(tree, headings: dict, cap: int = 480) -> None:
+    """2.2.12: size each table column to its heading or its widest value, measured in the fonts the table is
+    drawn in (bold heading, Treeview body font), scaled for the screen. A column never goes over `cap` points
+    (scaled), so one long VSX name cannot take half the table. The widths are minimums; spare room is shared."""
+    try:
+        from tkinter import font as tkfont
+        head = tkfont.Font(tree, font=(core.UI_FONT, 10, "bold"))
+        body = None
+        try:
+            spec = ttk.Style(tree).lookup("Treeview", "font")
+            if isinstance(spec, (str, tuple)) and spec:
+                body = tkfont.Font(tree, font=spec)
+        except Exception:
+            body = None
+        if body is None:
+            body = tkfont.Font(tree, font=(core.UI_FONT, 10))
+        try:
+            scale = max(float(tree.tk.call("tk", "scaling")) / 1.3333, 1.0)
+        except Exception:
+            scale = 1.0
+        cols = list(tree["columns"])
+        rows = []
+        for iid in tree.get_children():
+            try:
+                rows.append([str(v) for v in (tree.item(iid).get("values") or [])])
+            except Exception:
+                pass
+        for k, col in enumerate(cols):
+            widest = head.measure(headings.get(col, "")) + 24
+            for row in rows:
+                if k < len(row):
+                    widest = max(widest, body.measure(row[k]) + 24)
+            width = int(min(widest, cap * scale))
+            tree.column(col, width=width, minwidth=min(width, int(60 * scale)), stretch=True)
+    except Exception:
+        pass
 
 
 def fit_figure_to_widget(fig, canvas) -> bool:
@@ -210,6 +248,12 @@ class ScrollBody:
     def __init__(self, parent, horizontal: bool = False, bg: str = "#ffffff"):
         self.outer = ttk.Frame(parent, style="Card.TFrame")
         self.canvas = Canvas(self.outer, highlightthickness=0, borderwidth=0, background=bg)
+        if sys.platform == "darwin":
+            # 2.2.12: a trackpad sends many small wheel events; one unit each is a tenth of the view without this.
+            try:
+                self.canvas.configure(yscrollincrement=16)
+            except Exception:
+                pass
         self.vbar = ttk.Scrollbar(self.outer, orient=VERTICAL, command=self.canvas.yview)
         self.hbar = ttk.Scrollbar(self.outer, orient="horizontal", command=self.canvas.xview) if horizontal else None
         self.inner = ttk.Frame(self.canvas, style="Card.TFrame")
@@ -220,8 +264,15 @@ class ScrollBody:
         self.inner.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._stretch)
         self.canvas.pack(side=LEFT, fill=BOTH, expand=True)
-        self.outer.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._wheel))
+        self.outer.bind("<Enter>", self._enter)
         self.outer.bind("<Leave>", self._leave)
+
+    def _enter(self, _event=None):
+        self.canvas.bind_all("<MouseWheel>", self._wheel)
+        if sys.platform.startswith("linux"):
+            # 2.2.12: X11 sends the wheel as buttons 4 and 5.
+            self.canvas.bind_all("<Button-4>", lambda e: self._wheel(e, units=-1))
+            self.canvas.bind_all("<Button-5>", lambda e: self._wheel(e, units=1))
 
     def _leave(self, event):
         # Moving onto a child widget is not leaving the body.
@@ -229,6 +280,9 @@ class ScrollBody:
             return
         try:
             self.canvas.unbind_all("<MouseWheel>")
+            if sys.platform.startswith("linux"):
+                self.canvas.unbind_all("<Button-4>")
+                self.canvas.unbind_all("<Button-5>")
         except Exception:
             pass
 
@@ -251,11 +305,13 @@ class ScrollBody:
         except Exception:
             pass
 
-    def _wheel(self, event):
+    def _wheel(self, event, units=None):
         try:
             if str(event.widget.winfo_class()) in ("TCombobox", "Text", "Listbox", "Treeview"):
                 return
-            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+            n = units if units is not None else core.wheel_units(getattr(event, "delta", 0))
+            if n:
+                self.canvas.yview_scroll(n, "units")
         except Exception:
             pass
 
@@ -269,6 +325,25 @@ class ScrollBody:
 
     def pack(self, **kw):
         self.outer.pack(**kw)
+
+
+def shade_long_periods(ax, span_days: float, periods) -> bool:
+    """2.2.12: grey out the periods longer than about half the data span on a periodogram (log period axis), labelled
+    "longer than the data can test". The search still runs there (a multi-night series can test them). Returns True
+    when something was shaded."""
+    try:
+        p = np.asarray(periods, dtype=float)
+        p = p[np.isfinite(p) & (p > 0)]
+        half = float(span_days) / 2.0
+        if not p.size or not (half > 0) or p.max() <= half:
+            return False
+        lo, hi = max(half, float(p.min())), float(p.max())
+        ax.axvspan(lo, hi, color="#9aa7b0", alpha=0.18, lw=0, zorder=0)
+        ax.text(math.sqrt(lo * hi), 0.97, "longer than the data\ncan test", transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=7, color="#5d6d76")
+        return True
+    except Exception:
+        return False
 
 
 def enable_windows_dpi():
@@ -637,7 +712,7 @@ class App(Tk):
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure(".", font=("Segoe UI", 10), background="#e7eef2")
+        style.configure(".", font=(core.UI_FONT, 10), background="#e7eef2")
         style.configure("TFrame", background="#e7eef2")
         style.configure("Card.TFrame", background="#ffffff")
         style.configure("TLabel", background="#e7eef2", foreground="#1c2b33")
@@ -652,27 +727,27 @@ class App(Tk):
         style.map("Accent.TButton", background=[("active", "#a86622")], foreground=[("active", "#ffffff")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
-        style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=("Segoe UI", 10, "bold"))
+        style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
         style.configure("TNotebook.Tab", padding=(12, 6))
         style.configure("Status.TLabel", background="#10283b", foreground="#d5e0e6")
         style.configure("TEntry", fieldbackground="#ffffff")
         # Tall enough rows that text is never clipped on high-DPI Windows displays.
-        style.configure("Treeview", rowheight=28, font=("Segoe UI", 10))
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"), padding=(4, 6))
+        style.configure("Treeview", rowheight=28, font=(core.UI_FONT, 10))
+        style.configure("Treeview.Heading", font=(core.UI_FONT, 10, "bold"), padding=(4, 6))
         for key, colour in PICK_COLORS.items():
             style.configure(f"Pick{key}.TRadiobutton", background="#ffffff", foreground=colour,
-                            font=("Segoe UI", 10, "bold"))
+                            font=(core.UI_FONT, 10, "bold"))
             style.map(f"Pick{key}.TRadiobutton", background=[("active", "#f2f5f7")], foreground=[("active", colour)])
-            style.configure(f"Pick{key}.TLabel", background="#ffffff", foreground=colour, font=("Segoe UI", 10, "bold"))
+            style.configure(f"Pick{key}.TLabel", background="#ffffff", foreground=colour, font=(core.UI_FONT, 10, "bold"))
         style.configure("TCombobox", fieldbackground="#ffffff")
         for key, m in MODES.items():
             style.configure(f"Mode{key}.TButton", anchor=W, padding=(12, 7), background=m["step"], foreground="#ffffff",
-                            bordercolor=m["active"], font=("Segoe UI", 10, "bold"))
+                            bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
             style.map(f"Mode{key}.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
-        style.configure("Box.TLabel", background="#ffffff", foreground="#1c2b33", font=("Consolas", 9))
+        style.configure("Box.TLabel", background="#ffffff", foreground="#1c2b33", font=(core.MONO_FONT, 9))
         self._apply_theme(getattr(self, "mode_key", "variables"))
 
     def _apply_theme(self, mode: str):
@@ -686,8 +761,8 @@ class App(Tk):
         style.map("Step.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
         style.configure("Status.TLabel", background=m["status"], foreground="#d5e0e6")
         style.configure("Banner.TFrame", background=m["step"])
-        style.configure("Banner.TLabel", background=m["step"], foreground="#ffffff", font=("Segoe UI", 11, "bold"))
-        style.configure("Group.TLabelframe.Label", background="#ffffff", foreground=m["side"], font=("Segoe UI", 10, "bold"))
+        style.configure("Banner.TLabel", background=m["step"], foreground="#ffffff", font=(core.UI_FONT, 11, "bold"))
+        style.configure("Group.TLabelframe.Label", background="#ffffff", foreground=m["side"], font=(core.UI_FONT, 10, "bold"))
 
     def _build(self):
         outer = ttk.Frame(self)
@@ -696,18 +771,18 @@ class App(Tk):
         self.side = ttk.Frame(outer, style="Side.TFrame", width=230)
         self.side.pack(side=LEFT, fill=Y)
         self.side.pack_propagate(False)
-        ttk.Label(self.side, text="Shiloh Hill\nObservatory\nPhotometry\n(SHOBS-P)", font=("Segoe UI", 13, "bold"), style="Side.TLabel", justify=LEFT).pack(
+        ttk.Label(self.side, text="Shiloh Hill\nObservatory\nPhotometry\n(SHOBS-P)", font=(core.UI_FONT, 13, "bold"), style="Side.TLabel", justify=LEFT).pack(
             anchor=W, padx=16, pady=(18, 4)
         )
         self.subtitle = StringVar(value=MODES[self.mode_key]["subtitle"])
         ttk.Label(self.side, textvariable=self.subtitle, style="SideHint.TLabel").pack(anchor=W, padx=16, pady=(0, 10))
-        ttk.Label(self.side, text="MODE", style="SideHint.TLabel", font=("Segoe UI", 8, "bold")).pack(anchor=W, padx=16)
+        ttk.Label(self.side, text="MODE", style="SideHint.TLabel", font=(core.UI_FONT, 8, "bold")).pack(anchor=W, padx=16)
         self.mode_buttons = {}
         for key, m in MODES.items():
             btn = ttk.Button(self.side, text=m["name"], style=f"Mode{key}.TButton", command=lambda k=key: self.set_mode(k))
             btn.pack(fill=X, padx=10, pady=1)
             self.mode_buttons[key] = btn
-        ttk.Label(self.side, text="STEPS", style="SideHint.TLabel", font=("Segoe UI", 8, "bold")).pack(
+        ttk.Label(self.side, text="STEPS", style="SideHint.TLabel", font=(core.UI_FONT, 8, "bold")).pack(
             anchor=W, padx=16, pady=(12, 0))
         self.step_buttons = []
         for i, name in enumerate(STEPS):
@@ -763,7 +838,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Credits and sources", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Credits and sources", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             card,
             text="Every library, catalog, service, and published method this app uses. Quoted sentences are the "
@@ -774,7 +849,7 @@ class App(Tk):
         nav.pack(fill=X, side="bottom", pady=(8, 0))
         ttk.Button(nav, text="Save credits as text…", command=self.save_credits).pack(side=LEFT)
         ttk.Button(nav, text="Back", command=lambda: self.show_step(self._before_credits)).pack(side=RIGHT)
-        box = Text(card, wrap="word", font=("Segoe UI", 10), bg="#ffffff", fg="#1c2b33", relief="flat", padx=8, pady=8)
+        box = Text(card, wrap="word", font=(core.UI_FONT, 10), bg="#ffffff", fg="#1c2b33", relief="flat", padx=8, pady=8)
         box.pack(fill=BOTH, expand=True, before=nav)
         box.insert(END, core.credits_text())
         box.configure(state="disabled")
@@ -1208,7 +1283,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Input", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Input", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             card,
             text="Frames, target, site, and where the report goes. Comparison, check, and watch stars are picked on "
@@ -2077,7 +2152,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Blink", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Blink", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             card,
             text="Raw lights, before calibration. Reject trails, clouds, and bad guiding. Rejected frames are left on disk and skipped by photometry.",
@@ -2352,7 +2427,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Calibrate", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Calibrate", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             card,
             text="Master bias, bias-subtracted master dark scaled by exposure, normalized master flat. Each light is then "
@@ -2402,7 +2477,7 @@ class App(Tk):
             side=LEFT, padx=(4, 8))
         self.debayer_info = StringVar(value="No preview yet.")
         ttk.Label(cal_row, textvariable=self.debayer_info, style="Hint.TLabel").pack(side=LEFT, padx=(12, 0))
-        self.log_box = Text(card, height=18, wrap="word", font=("Consolas", 10), bg="#1e1e1e", fg="#dcdcdc",
+        self.log_box = Text(card, height=18, wrap="word", font=(core.MONO_FONT, 10), bg="#1e1e1e", fg="#dcdcdc",
                             insertbackground="#dcdcdc")
         self.log_box.pack(fill=BOTH, expand=True, pady=(10, 0))
         nav = ttk.Frame(card, style="Card.TFrame")
@@ -2744,7 +2819,7 @@ class App(Tk):
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         self.photo_title = StringVar(value="Photometry")
-        ttk.Label(card, textvariable=self.photo_title, font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, textvariable=self.photo_title, font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.photo_hint = StringVar()
         hint = ttk.Label(card, textvariable=self.photo_hint, style="Hint.TLabel", wraplength=900, justify=LEFT)
         hint.pack(anchor=W, fill=X, pady=(2, 6))
@@ -2856,7 +2931,7 @@ class App(Tk):
         ttk.Button(nav, text="Next: Output", command=lambda: self.show_step(STEP_OUTPUT)).pack(side=RIGHT)
         # Live log (the same messages as the Calibrate page log) and a progress bar with an ETA.
         self.photo_logf = ttk.Frame(card, style="Card.TFrame")
-        self.photo_log = Text(self.photo_logf, height=7, wrap="none", font=("Consolas", 9), bg="#1e1e1e", fg="#dcdcdc",
+        self.photo_log = Text(self.photo_logf, height=7, wrap="none", font=(core.MONO_FONT, 9), bg="#1e1e1e", fg="#dcdcdc",
                               insertbackground="#dcdcdc")
         self.photo_log.pack(fill=X)
         self.photo_logf.pack(fill=X, side="bottom", before=body, pady=(4, 0))
@@ -2969,7 +3044,7 @@ class App(Tk):
             row=5, column=0, columnspan=3, sticky=W, pady=(4, 0))
         picks = self._group(panel, "Watched and excluded stars")
         picks.pack(fill=BOTH, expand=True, pady=(10, 0))
-        self.disc_box = Listbox(picks, height=7, font=("Segoe UI", 9), activestyle="none", exportselection=False)
+        self.disc_box = Listbox(picks, height=7, font=(core.UI_FONT, 9), activestyle="none", exportselection=False)
         self.disc_box.pack(fill=BOTH, expand=True, pady=(0, 4))
         row = ttk.Frame(picks, style="Card.TFrame")
         row.pack(fill=X)
@@ -3522,7 +3597,7 @@ class App(Tk):
             items.append(("×", "Excluded from the scan", "#ff9800"))
         for symbol, text, colour in items:
             ttk.Label(row, text=f"{symbol} {text}", style="Card.TLabel", foreground=colour,
-                      font=("Segoe UI", 9, "bold")).pack(side=LEFT, padx=(0, 12))
+                      font=(core.UI_FONT, 9, "bold")).pack(side=LEFT, padx=(0, 12))
         ttk.Label(row, text="wheel: zoom · drag: pan · right-click a marker: clear", style="Hint.TLabel").pack(
             side=RIGHT)
 
@@ -4019,7 +4094,7 @@ class App(Tk):
                               "every run, found again after Label chart on later nights, and have their own light "
                               "curves (Output page).",
                   style="Hint.TLabel", wraplength=460, justify=LEFT).pack(anchor=W)
-        self.watch_box = Listbox(watch, height=6, font=("Segoe UI", 9), activestyle="none", exportselection=False)
+        self.watch_box = Listbox(watch, height=6, font=(core.UI_FONT, 9), activestyle="none", exportselection=False)
         self.watch_box.pack(fill=BOTH, expand=True, pady=(4, 4))
         row = ttk.Frame(watch, style="Card.TFrame")
         row.pack(fill=X)
@@ -5117,9 +5192,13 @@ class App(Tk):
                         last["sources"], last["reg"] = src, reg
                         pos = core.move_points(xy0, reg, img.shape)
                         exp = core.header_exptime(header)
-                        flux, _ = core.measure_many(img, pos, radius, sky_in, sky_out)
-                        with np.errstate(divide="ignore", invalid="ignore"):
-                            row = np.where(flux > 0, -2.5 * np.log10(flux / exp), np.nan)
+                        try:
+                            flux, _, noise = core.measure_many(img, pos, radius, sky_in, sky_out, noise=True)
+                        except TypeError:
+                            flux, _ = core.measure_many(img, pos, radius, sky_in, sky_out)
+                            noise = None
+                        # 2.2.12: a frame where the star is not detected is left out of its curve and scatter.
+                        row = core.detected_mags(flux, exp, noise)
                         peak_row = core.peak_values(img, pos, radius)
                         frame_jd = core.mid_jd(header)
                         side = (bool(reg.get("flipped")), core.header_rotator(header))
@@ -5160,7 +5239,7 @@ class App(Tk):
                     inst = core.align_segments(inst, seg, min_frames=5)
                     self.call_ui(self.log, f"  {n_segments - 1} meridian flip(s) or rotator move(s): each star's light "
                                            "curve lined up across them before measuring its scatter.")
-                stats = core.field_variability(inst)
+                stats = core.field_variability(inst, exclude=sorted(saturated))
                 offset = 0.0
                 zp = None
                 c1 = role_label("comp")
@@ -5185,9 +5264,23 @@ class App(Tk):
                     "watched": watched, "names": cat_name,
                 }
                 too_faint = set()
-                if mag_limit is not None and offset != 0.0:
+                limit = mag_limit
+                if limit is None:
+                    # 2.2.12: no faintest magnitude typed: stop where the field's typical scatter reaches 0.25 mag.
+                    auto = core.faint_limit(result["mag"], result["expected"], 0.25)
+                    result["auto_mag_limit"] = auto
+                    if auto is not None:
+                        limit = auto
+                        self.call_ui(self.log, f"  Faintest magnitude {auto:.1f}"
+                                               + ("" if offset != 0.0 else " (instrumental)")
+                                               + ": the field's typical scatter reaches 0.25 mag there."
+                                               + (" Type a faintest magnitude to choose another." if offset != 0.0
+                                                  else " (A typed faintest magnitude needs a catalog zero point: "
+                                                       "run Label chart first.)"))
+                if limit is not None and (offset != 0.0 or mag_limit is None):
                     too_faint = {i for i in range(len(labels)) if math.isfinite(result["mag"][i])
-                                 and result["mag"][i] > mag_limit}
+                                 and result["mag"][i] > limit}
+                result["too_faint"] = sorted(too_faint)
                 cand = [i for i in range(len(labels))
                         if stats["usable"][i] and math.isfinite(stats["excess"][i]) and stats["excess"][i] >= excess_limit
                         and stats["scatter"][i] >= 0.005 and i not in saturated and i not in too_faint]
@@ -5345,7 +5438,7 @@ class App(Tk):
             child.destroy()
         top = ttk.Frame(self.discovery_host, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Output – Field scan", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Output – Field scan", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.discovery_empty = ttk.Label(
             top, text="No field scan yet: Scan field on the Photometry page. (Calibrate first; the field is solved "
                       "straight away, so every star gets a position, a catalog magnitude and a VSX/SIMBAD check.)",
@@ -6328,7 +6421,7 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Output – Variability", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Output – Variability", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self._build_summary(card)
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill=X)
@@ -6591,6 +6684,22 @@ class App(Tk):
         self._hover_annots = {}
         self._hover_key = None
         if not self.observations:
+            tp = getattr(self, "transit_page", None)
+            if self.mode_key == "transits" and tp is not None and getattr(tp, "report", None) is not None:
+                # 2.2.12 (John's wording): a report alone has no SHOBS-P photometry to show here.
+                self._fill_summary(["Variable View not available from an EXOTIC report."], ["—"], ["—"], [], [])
+                for ax in (self.out_ax1, self.out_ax2, self.out_ax3, self.out_ax4):
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    ax.grid(False)
+                self.out_ax1.text(0.5, 0.56, "Variable View not available from an EXOTIC report.",
+                                  transform=self.out_ax1.transAxes, ha="center", va="center", fontsize=12,
+                                  color="#33424d", fontweight="bold")
+                self.out_ax1.text(0.5, 0.40, "It shows SHOBS-P's own photometry; the report has only its final "
+                                             "light curve.", transform=self.out_ax1.transAxes, ha="center",
+                                  va="center", fontsize=10, color="#5d6d76", wrap=True)
+                self.out_canvas.draw_idle()
+                return
             self._fill_summary(["No series yet: run photometry", "or Load series."], ["—"], ["—"], [], [])
             self.out_canvas.draw_idle()
             return
@@ -6818,6 +6927,7 @@ class App(Tk):
         if self.period:
             period_axis = 1.0 / self.period["freqs"]
             ax.plot(period_axis, self.period["power_spectrum"], color="#c0c6cc" if too_short else "#0067c0", lw=0.8)
+            shade_long_periods(ax, span_used, period_axis)
             if too_short:
                 ax.text(0.5, 0.5, "Periods longer than half the night\ncannot be told apart yet",
                         transform=ax.transAxes, ha="center", va="center", fontsize=9, color="#5d6d76",
@@ -7755,12 +7865,17 @@ class App(Tk):
         from matplotlib.backends.backend_agg import FigureCanvasAgg
 
         snap = getattr(self, "_summary_snapshot", None)
+        stamp = f"Created {core.dtg()} · {APP_TITLE} {APP_VERSION}"
         buf = io.BytesIO()
-        self.out_fig.savefig(buf, dpi=140, format="png")
         if not snap:
-            with open(path, "wb") as fh:
-                fh.write(buf.getvalue())
+            mark = self.out_fig.text(0.99, 0.005, stamp, fontsize=7, color="#7a8a94", ha="right", va="bottom")
+            try:
+                self.out_fig.savefig(path, dpi=140, format="png")
+            finally:
+                mark.remove()
+                self.out_canvas.draw_idle()
             return
+        self.out_fig.savefig(buf, dpi=140, format="png")
         buf.seek(0)
         import matplotlib.image as mpimg
         plot = mpimg.imread(buf)
@@ -7779,7 +7894,7 @@ class App(Tk):
         fig = Figure(figsize=(width_in, ph / dpi + head_in), dpi=dpi, facecolor="white")
         FigureCanvasAgg(fig)
         total = ph / dpi + head_in
-        title = f"{self.star_id.get().strip() or 'Target'}   {APP_TITLE} {APP_VERSION}"
+        title = f"{self.star_id.get().strip() or 'Target'}   {APP_TITLE} {APP_VERSION}   Created {core.dtg()}"
         fig.text(0.01, 1 - 0.25 / total, title, fontsize=11, weight="bold", va="top")
         top = 1 - 0.5 / total
         x = 0.01
@@ -7880,7 +7995,7 @@ class CompHealthWindow:
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
         ttk.Button(nav, text="Watch selected spare", command=self.watch_selected).pack(side=LEFT)
-        ttk.Label(top, text="Comparison star health", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Comparison star health", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             top,
             text="Each star is measured against the average of the others in the same frame, so clouds and airmass "
@@ -8045,7 +8160,7 @@ class UseCompsWindow:
         body = ScrollBody(top, horizontal=True)
         body.pack(fill=BOTH, expand=True)
         inner = body.inner
-        ttk.Label(inner, text="Comparison stars in use", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(inner, text="Comparison stars in use", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             inner,
             text="Tick the stars to average as the comparison. Every point is re-derived from the measurements already "
@@ -8063,7 +8178,7 @@ class UseCompsWindow:
         grid.pack(fill=X)
         for c, head in enumerate(("Use", "Star", "Role", "Catalog mag", "Nights measured", "Night offset",
                                   "Scatter in night", "Comp health")):
-            ttk.Label(grid, text=head, style="Card.TLabel", font=("Segoe UI", 10, "bold")).grid(
+            ttk.Label(grid, text=head, style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).grid(
                 row=0, column=c, sticky=W, padx=6, pady=(0, 4))
         self.vars = {}
         aliases = app._star_aliases()
@@ -8135,7 +8250,7 @@ class SuggestWindow:
         self.body.pack(fill=BOTH, expand=True)
         top = ttk.Frame(self.body.inner, style="Card.TFrame", padding=12)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Suggested apertures", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Suggested apertures", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         measured = ", ".join(f"{role} {f:.1f}" for role, f, _p in sizes)
         ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px" + (f"   ({basis})" if basis else ""),
                   style="Card.TLabel").pack(anchor=W, pady=(6, 0))
@@ -8147,7 +8262,7 @@ class SuggestWindow:
                   style="Hint.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = {prop['sky_in']:g}    "
                              f"sky out = {prop['sky_out']:g} px (sky ring with 4× the aperture's area)"),
-                  style="Card.TLabel", font=("Segoe UI", 11, "bold")).pack(anchor=W, pady=(6, 0))
+                  style="Card.TLabel", font=(core.UI_FONT, 11, "bold")).pack(anchor=W, pady=(6, 0))
         ttk.Label(top, text="Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The seeing changes during "
                             "the night, so the test below measures real frames and lets the check star decide.",
                   style="Hint.TLabel", wraplength=780, justify=LEFT).pack(anchor=W, pady=(4, 0))
@@ -8232,7 +8347,7 @@ class WatchWindow:
         win.after_idle(lambda: fit_to_content(win))
         top = ttk.Frame(win, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Watch stars", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Watch stars", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text="Each watch star is measured against the comparison stars in use, frame by frame. Cloud, drift, "
                             "and frames without the star are left out. Magnitudes are untransformed, like the target's.",
                   style="Hint.TLabel", wraplength=1250, justify=LEFT).pack(anchor=W, pady=(2, 6))
@@ -8325,6 +8440,7 @@ class WatchWindow:
         rows = 0
         with core.AsciiWriter(path) as fh:
             fh.write(f"# {APP_TITLE} {APP_VERSION}: watch stars, measured against the comps in use; untransformed\n")
+            fh.write(core.created_line() + "\n")
             fh.write("star,jd,mag,night,file\n")
             for w in self.app.watch_list:
                 obs, mags = self.app.watch_series(w["name"])
@@ -8379,7 +8495,7 @@ class ExportWindow:
         body = ScrollBody(outer)
         body.pack(fill=BOTH, expand=True)
         top = body.inner
-        ttk.Label(top, text="Export", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Export", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             top,
             text="Values follow the Output page: flagged points left out if that box is ticked, check-star "
@@ -8531,7 +8647,7 @@ class KnownVariablesWindow:
         win.after_idle(lambda: fit_to_content(win))
         top = ttk.Frame(win, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Known variables in the field", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Known variables in the field", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         known = r.get("known")
         if known is None:
             why = ("VSX and SIMBAD could not be reached during the scan. Scan again when online."
@@ -8649,7 +8765,7 @@ class ScanView:
             cal = "instrumental (solve the field first to put them on a catalog scale)"
         # 2.2.9: on the Output page the title names the step ("Output – Field scan"); the pop-up keeps "Field scan".
         ttk.Label(top, text="Field scan" if on_close is not None else "Output – Field scan",
-                  font=("Segoe UI", 16 if on_close is None else 15, "bold"), style="Card.TLabel").pack(anchor=W)
+                  font=(core.UI_FONT, 16 if on_close is None else 15, "bold"), style="Card.TLabel").pack(anchor=W)
         method = (result.get("color_method") or {}).get("bv", "")
         fit = (result.get("color_fits") or {}).get("bv")
         color_note = {
@@ -8711,6 +8827,7 @@ class ScanView:
         body.pack(fill=BOTH, expand=True)
         cols = ("rank", "star", "mag", "scatter", "excess", "period", "color", "caution", "vsx")
         self.tree = ttk.Treeview(body, columns=cols, show="headings", height=8, selectmode="extended")
+        self._scan_heads = {}
         for col, label, width in (
             ("rank", "#", 40), ("star", "Star / position", 210), ("mag", "Mag", 70), ("scatter", "Scatter", 80),
             ("excess", "× normal", 80), ("period", "Best period (d)", 110),
@@ -8718,6 +8835,7 @@ class ScanView:
             ("vsx", "VSX", 260),
         ):
             self.tree.heading(col, text=label)
+            self._scan_heads[col] = label
             cw = col_width(self.tree, label, width)
             self.tree.column(col, width=cw, minwidth=cw, anchor=W, stretch=(col == "vsx"))
         self.tree.pack(fill=X, side="bottom", pady=(6, 0))
@@ -8788,6 +8906,8 @@ class ScanView:
                 f"{bv:.2f}" if math.isfinite(bv) else "", "; ".join(self.cautions(i)), vsx_text,
             ))
             self.rows[item] = i
+        # 2.2.12 (John): columns sized to what they hold, like the Transit fit table.
+        fit_tree_columns(self.tree, getattr(self, "_scan_heads", {}))
 
     def cautions(self, i) -> list[str]:
         """2.2.2: reasons to doubt a candidate before celebrating."""
@@ -8805,8 +8925,11 @@ class ScanView:
         ax.plot(mag[ok & ~sat], sc[ok & ~sat], ".", color="#9aa7b0", ms=5, label="stars")
         if (ok & sat).any():
             ax.plot(mag[ok & sat], sc[ok & sat], "x", color="#5d6d76", ms=7, mew=1.4, label="saturated (never candidates)")
-        order = np.argsort(mag[ok])
-        ax.plot(mag[ok][order], exp[ok][order], "-", color="#0067c0", lw=1, label="typical scatter")
+        # 2.2.12: no line across magnitude ranges with no stars.
+        for k_seg, (sm, se) in enumerate(core.scatter_curve_segments(mag[ok], exp[ok])):
+            ax.plot(sm, se, "-", color="#0067c0", lw=1, label="typical scatter" if k_seg == 0 else None)
+        if r.get("auto_mag_limit") is not None:
+            ax.axvline(r["auto_mag_limit"], color="#9aa7b0", lw=0.8, ls="--", label="faintest (scatter 0.25 mag)")
         cand = r["candidates"]
         hide = bool(getattr(self, "hide_known", None) and self.hide_known.get())
         if cand:
@@ -8879,6 +9002,8 @@ class ScanView:
         if per:
             ls = per["ls"]
             ax.plot(1.0 / ls["freqs"], ls["power_spectrum"], color="#0067c0", lw=0.8)
+            jd_ok = np.asarray(r["jd"], dtype=float)[good]
+            shade_long_periods(ax, float(np.ptp(jd_ok)) if jd_ok.size else 0.0, 1.0 / np.asarray(ls["freqs"]))
             ax.axvline(per["period"], color="#d62828", lw=0.8)
             ax.set_xscale("log")
             edge = ls.get("edge")
@@ -8982,7 +9107,7 @@ class ScanView:
                                     filetypes=[("PNG", "*.png")], parent=self.win)
         if not path:
             return
-        title = self.fig.suptitle(self._summary_line(), fontsize=9, x=0.01, ha="left")
+        title = self.fig.suptitle(self._summary_line() + f"   Created {core.dtg()}", fontsize=9, x=0.01, ha="left")
         try:
             self.fig.savefig(path, dpi=150, facecolor="#ffffff", bbox_inches="tight")
         finally:

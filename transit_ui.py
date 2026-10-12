@@ -44,7 +44,7 @@ def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
 def col_width(widget, label: str, width: int) -> int:
     try:
         from tkinter import font as tkfont
-        heading = tkfont.Font(widget, font=("Segoe UI", 10, "bold"))
+        heading = tkfont.Font(widget, font=(core.UI_FONT, 10, "bold"))
         scale = max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
         return int(max(width * scale, heading.measure(label) + 30))
     except Exception:
@@ -88,7 +88,7 @@ class TransitPage:
         self.frame = ttk.Frame(parent)
         card = ttk.Frame(self.frame, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Output – Transit fit", font=("Segoe UI", 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(card, text="Output – Transit fit", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.planet_text = StringVar(value=planet_summary(None))
         planet_label = ttk.Label(card, textvariable=self.planet_text, style="Hint.TLabel", wraplength=700, justify=LEFT)
         planet_label.pack(anchor=W, fill=X, pady=(2, 6))
@@ -163,13 +163,13 @@ class TransitPage:
         self.heads = ttk.Frame(card, style="Card.TFrame")
         self.heads.pack(fill=X)
         self.banner_label = ttk.Label(self.heads, textvariable=self.banner, style="Card.TLabel", wraplength=1100,
-                                      justify=LEFT, foreground="#8a4b00", font=("Segoe UI", 10, "bold"))
+                                      justify=LEFT, foreground="#8a4b00", font=(core.UI_FONT, 10, "bold"))
         card.bind("<Configure>", lambda e: self.banner_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         # 2.2.10 (John): the plot is the page. The verdict sits above it, full width; the parameter table and the
         # notes run in a strip under it (as on the Field scan page), instead of a right-hand pane.
         self.verdict = StringVar(value="")
         self.verdict_label = ttk.Label(self.heads, textvariable=self.verdict, style="Card.TLabel", wraplength=1100,
-                                       justify=LEFT, font=("Segoe UI", 11, "bold"))
+                                       justify=LEFT, font=(core.UI_FONT, 11, "bold"))
         for var in (self.banner, self.verdict):
             var.trace_add("write", lambda *_a: self._show_heads())
         self._show_heads()
@@ -205,7 +205,7 @@ class TransitPage:
         tablebox.rowconfigure(0, weight=1)
         tablebox.columnconfigure(0, weight=1)
         self._set_columns()
-        self.notes = Text(strip, height=8, width=20, wrap="word", font=("Segoe UI", 9), relief="flat", bg="#ffffff")
+        self.notes = Text(strip, height=8, width=20, wrap="word", font=(core.UI_FONT, 9), relief="flat", bg="#ffffff")
         # On a short window the table gives up rows (down to 3) before the plot gives up height.
         body.bind("<Configure>", self._fit_strip, add="+")
         self.notes.tag_configure("warn", foreground="#b35c00")
@@ -400,13 +400,68 @@ class TransitPage:
         self._fill_table()
         # 2.2.7: the old plot goes at once, and the report is fitted straight away (as new photometry is).
         name = (rep.get("planet") or {}).get("name") or "the planet"
-        what = "fitting…" if not self.app.busy else "press Fit transit when the current job ends"
+        # 2.2.12: a report without an ephemeris (no QC-XC line) gets one from the NASA Exoplanet Archive, else from
+        # EXOTIC's inits file beside the report, before the fit; never from the lowest point.
+        need_eph = not (rep.get("planet") or {}).get("t0") and self.current_planet() is rep.get("planet")
+        what = ("looking up the ephemeris…" if need_eph else
+                "fitting…" if not self.app.busy else "press Fit transit when the current job ends")
         self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from EXOTIC: {what}")
         self._notes_text([("info", "Report loaded and being fitted. SHOBS-P refits its light curve and lists "
                                    "EXOTIC's results beside SHOBS-P's. Cancel stops the fit; Fit transit runs it "
                                    "again with other settings.")])
-        if not self.app.busy:
+        if need_eph:
+            self._eph_pending = rep
+            self._find_ephemeris(rep)
+        elif not self.app.busy:
             self.fit(auto=True)
+
+    def _find_ephemeris(self, rep):
+        """2.2.12: NASA Exoplanet Archive (most precise ephemeris) first, then an EXOTIC inits file beside the
+        report. Runs in the background; the fit starts when it is done (if the report is still the one shown)."""
+        planet = rep["planet"]
+        app = self.app
+
+        def work():
+            found, why = None, ""
+            try:
+                got = tc.lookup_planet(planet.get("name") or planet.get("host") or "")
+                if got.get("t0") and got.get("period"):
+                    found = {k: got.get(k) for k in ("t0", "t0_err", "period", "period_err")}
+                    found["eph_source"] = tc.ephemeris_source(got)
+            except Exception as exc:
+                why = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            if found is None:
+                try:
+                    found = tc.ephemeris_from_inits(os.path.dirname(rep.get("path", "")), planet.get("name", ""),
+                                                    planet.get("host", ""))
+                except Exception:
+                    found = None
+            app.call_ui(self._ephemeris_found, rep, found, why)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ephemeris_found(self, rep, found, why):
+        if getattr(self, "_eph_pending", None) is rep:
+            self._eph_pending = None
+        if self.report is not rep:
+            return
+        planet = rep["planet"]
+        if found:
+            # The period too: the ephemeris's t0 and period belong together.
+            planet.update({k: v for k, v in found.items() if v is not None})
+            planet.setdefault("eph_source", found.get("eph_source", ""))
+            self.app.log(f"Transit fit: the report has no ephemeris; using {found.get('eph_source')}.")
+        else:
+            self.app.log("Transit fit: the report has no ephemeris and none was found"
+                         + (f" ({why})" if why else "") + "; no O − C will be given.")
+        self.planet_text.set(planet_summary(self.current_planet()))
+        self._fill_table()
+        if not self.app.busy:
+            name = planet.get("name") or "the planet"
+            self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from EXOTIC: fitting…")
+            self.fit(auto=True)
+        else:
+            self.draw(placeholder="Press Fit transit when the current job ends.")
 
     def _data(self):
         """(t BJD_TDB, flux, err, airmass, meta for files) from the chosen source."""
@@ -457,6 +512,12 @@ class TransitPage:
 
     # ---- fit -------------------------------------------------------------------------------
     def fit(self, auto: bool = False):
+        # 2.2.12: a report's ephemeris is still being looked up: the fit starts by itself when it is in.
+        if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
+            if not auto:
+                messagebox.showinfo("SHOBS-P", "Still looking up this planet's ephemeris; the fit starts by itself "
+                                               "as soon as it is in.")
+            return
         planet = self.current_planet()
         if not planet:
             if not auto:
@@ -516,8 +577,8 @@ class TransitPage:
         self._show_progress()
         app = self.app
 
-        def progress(done, total):
-            app.call_ui(self._progress, done, total)
+        def progress(phase, done, total):
+            app.call_ui(self._progress, phase, done, total)
 
         def work():
             try:
@@ -530,9 +591,11 @@ class TransitPage:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _progress(self, done, total):
+    def _progress(self, phase, done, total):
+        """2.2.12: the burn-in and the steps are counted separately ("MCMC burn-in 600 of 1,000", then
+        "MCMC step 1,200 of 3,000"), so the second count matches the MCMC menu."""
         self.bar.configure(maximum=total, value=done)
-        self.prog_text.set(f"MCMC step {done} of {total}")
+        self.prog_text.set(f"MCMC {'burn-in' if phase == 'burn-in' else 'step'} {done:,} of {total:,}")
 
     def _clear_progress(self):
         """A new source: the last fit's message no longer applies (unless a fit is still running)."""
@@ -594,7 +657,7 @@ class TransitPage:
                      f"{s['k'][1]:.4f}, depth {s['depth'][0] * 100:.2f}%, b {s['b'][0]:.2f}, beta {result['beta']:.2f}")
         self.app.status.set("Transit fit done.")
         self._fill_table()
-        self._notes_text(result["flags"] or [])
+        self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
         self.draw()
 
     # ---- display ---------------------------------------------------------------------------
@@ -643,7 +706,7 @@ class TransitPage:
                   "exotic": "EXOTIC report"}
         try:
             from tkinter import font as tkfont
-            head = tkfont.Font(self.table, font=("Segoe UI", 10, "bold"))
+            head = tkfont.Font(self.table, font=(core.UI_FONT, 10, "bold"))
             # The font the rows are drawn in (the app styles Treeview as Segoe UI 10).
             body = None
             try:
@@ -656,7 +719,7 @@ class TransitPage:
                 try:
                     body = tkfont.nametofont("TkDefaultFont")
                 except Exception:
-                    body = tkfont.Font(self.table, font=("Segoe UI", 10))
+                    body = tkfont.Font(self.table, font=(core.UI_FONT, 10))
             all_cols = ["param", "shobs", "free", "pub", "exotic"]
             if rows is None:
                 rows = []
@@ -676,15 +739,23 @@ class TransitPage:
         except Exception:
             pass
 
-    def _save_fig(self, target, **kw):
+    def _save_fig(self, target, stamp: bool = False, **kw):
         """2.2.10: save the plot at a fixed 8 × 5.4 in, whatever its size on screen (the full-width plot would make
         a thin strip of a PNG), then put the screen size back."""
         old = self.fig.get_size_inches().copy()
+        mark = None
         try:
             self.fig.set_size_inches(8, 5.4, forward=False)
             self._set_margins()
+            if stamp:
+                # 2.2.12: the ExoFOP package's plot carries its DTG too.
+                mark = self.fig.text(0.99, 0.005, f"Created {core.dtg()} · SHOBS-P "
+                                                  f"{getattr(self.app, 'app_version', '')}", fontsize=6,
+                                     color="#7a8a94", ha="right", va="bottom")
             self.fig.savefig(target, **kw)
         finally:
+            if mark is not None:
+                mark.remove()
             self.fig.set_size_inches(old, forward=False)
             self._set_margins()
             try:
@@ -823,7 +894,8 @@ class TransitPage:
             ("Airmass slope", val("c_am", "{:.4f}"), "", "", ""),
         ]
         if r:
-            oc = (r["best"]["tc"] - r["tc_pred"]) * 1440 if r.get("tc_pred_err") is not None else None
+            oc = ((r["best"]["tc"] - r["tc_pred"]) * 1440
+                  if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None else None)
             sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if oc is not None else None
             rows.insert(1, ("O − C (min)", f"{oc:+.2f} ± {sig:.2f}" if oc is not None else "", "", "0", ""))
             rows += [("rms per point (%)", f"{r['rms'] * 100:.3f}", "", "", ""),
@@ -946,7 +1018,7 @@ class TransitPage:
                                  ex["Rp/R*"][0], u1, u2)
             ax.plot((tt - best["tc"]) * 24, exm, "--", color=PINK, lw=1.3,
                     label=f"EXOTIC: Rp/R* {ex['Rp/R*'][0]:.3f}, b {b_ex:.2f}")
-        if r.get("tc_pred_err") is not None:
+        if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
             xp = (r["tc_pred"] - best["tc"]) * 24
             ax.axvline(xp, color="#888", ls="--", lw=0.8)
             ax.axvspan(xp - r["tc_pred_err"] * 24, xp + r["tc_pred_err"] * 24, color="#888", alpha=0.15)
@@ -1065,10 +1137,16 @@ class TransitPage:
             rows.append([by_col.get(c, "") for c in cols])
         notes = [ln.strip() for ln in self.notes.get("1.0", END).split("\n") if ln.strip()]
         w_in = pw / 130.0
-        import textwrap
+        # 2.2.12: lines are wrapped by their measured width at their own size and weight (the old estimate of
+        # 13 characters an inch ran long bold verdicts off the edge), and notes are wrapped in full, not cut.
+        avail = (w_in - 0.4) * 130.0
         wrapped = [(part, size, colour, weight) for text, size, colour, weight in lines
-                   for part in (textwrap.wrap(text, width=int(w_in * 13)) or [""])]
-        header_h = 0.24 * len(wrapped) + 0.2 * len(rows) + 0.2 * min(len(notes), 8) + 0.5
+                   for part in (wrap_to_width(text, avail, size, weight, 130) or [""])]
+        note_lines = []
+        for ln in notes:
+            colour = "#b35c00" if ln.startswith("⚠") else "#33424d"
+            note_lines += [(part, colour) for part in wrap_to_width(ln, avail, 8, "normal", 130)]
+        header_h = 0.24 * len(wrapped) + 0.2 * len(rows) + 0.17 * len(note_lines) + 0.5
         fig = _Fig(figsize=(w_in, header_h + ph / 130.0), dpi=130, facecolor="#ffffff")
         FigureCanvasAgg(fig)
         total = header_h + ph / 130.0
@@ -1087,13 +1165,14 @@ class TransitPage:
                 fig.text(xs[k], y, cell, fontsize=8, va="top", family="monospace" if k else None,
                          fontweight="bold" if j == 0 else "normal", color="#1a1a1a")
             y -= 0.2 / total
-        for ln in notes[:8]:
-            fig.text(0.02, y, textwrap.shorten(ln, width=int(w_in * 16), placeholder=" …"), fontsize=8,
-                     color="#b35c00" if ln.startswith("⚠") else "#33424d", va="top")
-            y -= 0.2 / total
+        for part, colour in note_lines:
+            fig.text(0.02, y, part, fontsize=8, color=colour, va="top")
+            y -= 0.17 / total
         ax = fig.add_axes([0, 0, 1, (ph / 130.0) / total])
         ax.imshow(plot)
         ax.axis("off")
+        fig.text(0.98, 1.0 - 0.08 / total, f"Created {core.dtg()} · SHOBS-P {getattr(self.app, 'app_version', '')}",
+                 fontsize=7, color="#7a8a94", ha="right", va="top")
         fig.savefig(path, dpi=130, facecolor="#ffffff")
 
     def save_aavso(self):
@@ -1139,6 +1218,7 @@ class TransitPage:
         lc = os.path.join(out, f"{base}_lightcurve.csv")
         with open(lc, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
+            w.writerow([core.created_line()])
             w.writerow(["BJD_TDB", "rel_flux", "rel_flux_err", "airmass", "detrended_flux", "model", "residual"])
             for row in zip(r["t"], r["flux"], r["err_scaled"], r["airmass"], r["detrended"], r["model"], r["residuals"]):
                 w.writerow([f"{row[0]:.7f}"] + [f"{v:.6f}" if math.isfinite(v) else "" for v in row[1:]])
@@ -1162,7 +1242,7 @@ class TransitPage:
         files.append(rep)
         if self.fig is not None:
             png = os.path.join(out, f"{base}_plot.png")
-            self._save_fig(png, dpi=150)
+            self._save_fig(png, stamp=True, dpi=150)
             files.append(png)
         zpath = out + ".zip"
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
@@ -1171,6 +1251,33 @@ class TransitPage:
         self.app.log(f"ExoFOP package: {out} (and {os.path.basename(zpath)})")
         self.app.saved_notice(out, f"Package folder and {os.path.basename(zpath)}: light curve (CSV), fit and ExoFOP "
                                    "notes (text), plot, and an AAVSO exoplanet report.")
+
+
+def wrap_to_width(text: str, width_px: float, size: float, weight: str = "normal", dpi: float = 130) -> list:
+    """2.2.12: greedy word wrap by the rendered width (matplotlib's Agg text metrics) at this font size and
+    weight. A single word wider than the line is left whole on its own line."""
+    from matplotlib.backends.backend_agg import RendererAgg
+    from matplotlib.font_manager import FontProperties
+
+    words = str(text or "").split()
+    if not words:
+        return []
+    renderer = RendererAgg(10, 10, dpi)
+    prop = FontProperties(size=size, weight=weight)
+
+    def width(t):
+        return renderer.get_text_width_height_descent(t, prop, ismath=False)[0]
+
+    out, line = [], words[0]
+    for w in words[1:]:
+        trial = line + " " + w
+        if width(trial) <= width_px:
+            line = trial
+        else:
+            out.append(line)
+            line = w
+    out.append(line)
+    return out
 
 
 def _state(verdict) -> str:
@@ -1249,7 +1356,7 @@ class PlannerWindow:
         win.after_idle(lambda: fit_to_content(win))
         top = ttk.Frame(win, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text=f"Transit planner: {planet.get('name', '')}", font=("Segoe UI", 15, "bold"),
+        ttk.Label(top, text=f"Transit planner: {planet.get('name', '')}", font=(core.UI_FONT, 15, "bold"),
                   style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Site {self.lat:.3f}, {self.lon:.3f}. Times are local (this computer's time zone). "
                              "'full' = transit plus the baseline on both sides above the altitude limit in a dark sky; "
@@ -1318,6 +1425,7 @@ class PlannerWindow:
             return
         with open(path, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
+            w.writerow([core.created_line()])
             w.writerow(["epoch", "ingress_local", "mid_local", "egress_local", "tc_bjd_tdb", "alt_in", "alt_mid",
                         "alt_out", "sun_alt_mid", "moon_illum", "moon_sep_deg", "sigma_min", "coverage"])
             for e in self.events:
@@ -1356,7 +1464,7 @@ class NebWindow:
         win.after_idle(lambda: fit_to_content(win))
         top = ttk.Frame(win, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Nearby eclipsing binary (NEB) check", font=("Segoe UI", 15, "bold"),
+        ttk.Label(top, text="Nearby eclipsing binary (NEB) check", font=(core.UI_FONT, 15, "bold"),
                   style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text=(
             f"TESS pixels are 21″ wide, so a faint eclipsing binary near the target can fake a transit. For each labeled "
@@ -1506,7 +1614,7 @@ class FinderWindow:
         win.after_idle(lambda: fit_to_content(win))
         top = ttk.Frame(win, style="Card.TFrame", padding=10)
         top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Tonight's transits", font=("Segoe UI", 15, "bold"), style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Tonight's transits", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Site {self.lat:.4f}, {self.lon:.4f}. Every known transiting planet (NASA Exoplanet "
                              "Archive) whose whole transit, plus the baseline on both sides, is in the dark with the "
                              "star above the altitude limit. Times are local. 'After' and 'End by' limit the window "
@@ -1682,6 +1790,7 @@ class FinderWindow:
         fmt = lambda jd: tc.jd_to_local(jd).strftime("%Y-%m-%d %H:%M")
         with open(path, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
+            w.writerow([core.created_line()])
             w.writerow(["planet", "V", "depth_pct", "T14_h", "start_local", "ingress_local", "mid_local", "egress_local",
                         "end_local", "alt_min", "alt_max", "moon_illum", "moon_sep_deg", "meridian_flip"])
             for e in self.events:

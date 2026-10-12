@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -308,8 +310,12 @@ def run_mcmc(problem: TransitProblem, x0, n_walkers: int = 0, n_burn: int = 1000
                         accepted += 1
         if step >= n_burn:
             chain[step - n_burn] = pos
-        if progress is not None and (step % 25 == 0 or step == total - 1):
-            progress(step + 1, total)
+        if progress is not None and (step % 25 == 0 or step in (n_burn - 1, total - 1)):
+            # 2.2.12: the two phases are counted separately (burn-in, then the steps the menu chose).
+            if step < n_burn:
+                progress("burn-in", step + 1, n_burn)
+            else:
+                progress("step", step + 1 - n_burn, n_steps)
     flat = chain.reshape(-1, ndim)
     return {"flat": flat, "acceptance": accepted / float(n_steps * n_walkers), "walkers": n_walkers,
             "steps": n_steps, "burn": n_burn}
@@ -419,14 +425,20 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     u1g, u2g = limb_darkening_guess(planet.get("teff"))
     q1, q2 = u_to_kipping(u1g, u2g)
     # Predicted mid-transit nearest the data.
+    # 2.2.12: without an ephemeris the start guess (the lowest point) is only a start; it is never reported as a
+    # published or predicted time, and no O − C is computed.
     tc0 = planet.get("t0")
+    eph_err_known = False
     if tc0:
         n = round((np.mean(t_abs) - tc0) / period)
         tc_pred = tc0 + n * period
+        eph_err_known = planet.get("t0_err") is not None
         tc_pred_err = math.hypot(planet.get("t0_err") or 0.0, abs(n) * (planet.get("period_err") or 0.0))
+        tc_start = tc_pred
     else:
-        n, tc_pred, tc_pred_err = None, float(t_abs[np.argmin(flux)]), None
-    tc_rel = tc_pred - t_ref
+        n, tc_pred, tc_pred_err = None, None, None
+        tc_start = float(t_abs[np.argmin(flux)])
+    tc_rel = tc_start - t_ref
     k0 = planet.get("k") or (math.sqrt(planet["depth"]) if planet.get("depth") else 0.1)
     k0 = min(max(k0, 0.01), 0.5)
     b0 = planet.get("b") if planet.get("b") is not None else 0.3
@@ -481,6 +493,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         "free_params": list(prob_s.free), "priors": priors, "ld_prior": ld, "rchi2": rchi, "beta": beta,
         "error_scale": scale, "rms": float(np.std(resid)), "cadence_days": cadence, "chain": chain,
         "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "epoch": n, "period": period, "planet": dict(planet),
+        "eph_err_known": eph_err_known, "eph_source": ephemeris_source(planet) if tc0 else "",
+        "tc_start": tc_start,
         "free_fit": free_fit, "n_points": len(t), "flux_median": float(med),
         "detrend": [name for name, on in (("airmass", detrend_airmass and prob_s.has_airmass),
                                           ("time", detrend_time)) if on],
@@ -489,14 +503,82 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     result["flags"] = transit_flags(result)
     v = result["verdict"]
     v["depth_unreliable"] = depth_unreliable(result) if v["state"] == "detected" else ""
+    note = ""
     if v["state"] == "none":
-        result["flags"].insert(0, ("warn", "NO TRANSIT MEASURED: " + v["reason"] + " The numbers are shown for "
-                                           "reference only; do not report them."))
+        note = ("NO TRANSIT MEASURED: " + v["reason"] + " The numbers are shown for reference only; do not report "
+                "them.")
     elif v["state"] == "inconclusive":
-        result["flags"].insert(0, ("warn", "INCONCLUSIVE. " + v["reason"].replace("Inconclusive. ", "", 1)
-                                   + " Tc may still be useful; the depth is not. A report from this fit carries the "
-                                   "verdict in its notes."))
+        note = ("INCONCLUSIVE. " + v["reason"].replace("Inconclusive. ", "", 1) + " Tc may still be useful; the "
+                "depth is not. A report from this fit carries the verdict in its notes.")
+    if note:
+        # Kept in the flags for the text summary and reports. 2.2.12: the Transit fit page shows the verdict above
+        # the plot and leaves this copy out of its notes (verdict["note"] marks it).
+        result["flags"].insert(0, ("warn", note))
+    v["note"] = note
     return result
+
+
+def cautions(flags, verdict: dict | None) -> list:
+    """2.2.12: the flags without the verdict's own copy (the page shows the verdict above the plot)."""
+    note = (verdict or {}).get("note")
+    return [f for f in (flags or []) if not (note and f[1] == note)]
+
+
+def ephemeris_source(planet: dict) -> str:
+    """2.2.12: where the planet's t0 and period came from, for the O − C line."""
+    src = planet.get("eph_source")
+    if src:
+        return src
+    ref = (planet.get("reference") or "").strip()
+    if ref.lower().startswith("ephemeris:"):
+        ref = ref.split(":", 1)[1].strip()
+    ref = ref.lstrip("; ").strip()
+    base = planet.get("source") or "the planet's published values"
+    return base + (f" ({ref})" if ref else "")
+
+
+def _norm_planet(name) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+
+
+def _inits_matches(pp: dict, planet_name: str, host: str) -> bool:
+    """The inits file is for this planet: the same planet name (EXOTIC sometimes doubles the letter, 'TOI-2046b b'),
+    or, when the report names no planet, the same host. Never a prefix match (WASP-1 b is not WASP-12 b)."""
+    rp, rh = _norm_planet(planet_name), _norm_planet(host)
+    ip, ih = _norm_planet(pp.get("Planet Name")), _norm_planet(pp.get("Host Star Name"))
+    names = {ip}
+    if len(ip) > 2 and ip[-1].isalpha() and ip[-1] == ip[-2]:
+        names.add(ip[:-1])
+    if rp:
+        return rp in names or (bool(ih) and rp == ih and (not rh or rh == ih))
+    return bool(rh) and rh == ih
+
+
+def ephemeris_from_inits(folder: str, planet_name: str = "", host: str = "") -> dict | None:
+    """2.2.12: the ephemeris EXOTIC used, from an inits*.json in the report's folder. EXOTIC's "Published
+    Mid-Transit Time (BJD-UTC)" is the NASA Exoplanet Archive's pl_tranmid, which is BJD_TDB (EXOTIC compares it
+    with its BJD_TDB fit as is), so it is used unchanged. The newest file for this planet; None when there is none."""
+    import glob
+    found = []
+    for path in glob.glob(os.path.join(folder or ".", "inits*.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                pp = json.load(fh).get("planetary_parameters") or {}
+        except Exception:
+            continue
+        if not _inits_matches(pp, planet_name, host):
+            continue
+        period = _f(pp.get("Orbital Period (days)"))
+        t0 = _f(pp.get("Published Mid-Transit Time (BJD-UTC)"))
+        if not period or not t0 or t0 < 2.4e6:
+            continue
+        found.append((os.path.getmtime(path), path, period, t0, pp))
+    if not found:
+        return None
+    _m, path, period, t0, pp = max(found, key=lambda f: f[0])
+    return {"period": period, "period_err": _f(pp.get("Orbital Period Uncertainty")),
+            "t0": t0, "t0_err": _f(pp.get("Mid-Transit Time Uncertainty")),
+            "eph_source": f"EXOTIC's inits file {os.path.basename(path)}"}
 
 
 def transit_verdict(r: dict, prob) -> dict:
@@ -736,11 +818,24 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                               f"χ² {r['rchi2']:.2f}). The photometry's noise estimate is too pessimistic, which usually "
                               "points at calibration: darks scaled far from their exposure, a mismatched bias, or a "
                               "noisy flat. The fit keeps the larger error bars, so its uncertainties are on the safe side."))
-    if r.get("tc_pred_err") is not None:
+    if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
         oc = (best["tc"] - r["tc_pred"]) * 1440
         sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if "tc" in s else float("nan")
         level = "warn" if (math.isfinite(sig) and sig > 0 and abs(oc) > 3 * sig) else "info"
-        flags.append((level, f"O − C {oc:+.1f} ± {sig:.1f} min against the published ephemeris (epoch {r['epoch']})."))
+        src = r.get("eph_source") or "the published ephemeris"
+        flags.append((level, f"O − C {oc:+.1f} ± {sig:.1f} min (epoch {r['epoch']}); ephemeris from {src}."))
+        # 2.2.12: say when the ephemeris itself is the weak part.
+        eph_min = r["tc_pred_err"] * 1440
+        fit_min = (s["tc"][1] * 1440) if "tc" in s else float("nan")
+        if r.get("eph_err_known") is False:
+            flags.append(("warn", "The ephemeris's mid-transit time has no stated uncertainty, so the ± above "
+                                  "leaves it out; treat the O − C with care."))
+        elif eph_min > 10.0 and (not math.isfinite(fit_min) or eph_min > 2.0 * fit_min):
+            flags.append(("warn", f"The predicted mid-transit is uncertain by ±{eph_min:.0f} min (ephemeris "
+                                  f"propagated to epoch {r['epoch']}), so this O − C mostly tests the ephemeris."))
+    elif r.get("tc_pred") is None:
+        flags.append(("info", "No ephemeris (mid-transit time) was available: Tc was started at the lowest "
+                              "point and no O − C is given."))
     if r["beta"] > 1.5:
         flags.append(("info", f"Red noise: beta {r['beta']:.2f}. Correlated noise (seeing, airmass, guiding) is "
                               "included in the uncertainties."))
@@ -1351,6 +1446,8 @@ def planet_from_report(rep: dict) -> dict:
                 qc = json.loads(h[key])
                 planet["t0"] = _f(qc.get("expected_tmid"))
                 planet["t0_err"] = _f(qc.get("expected_tmid_unc"))
+                if planet["t0"]:
+                    planet["eph_source"] = "the report's QC-XC line (EXOTIC's predicted mid-transit)"
             except Exception:
                 pass
     return complete_planet(planet)
@@ -1387,6 +1484,7 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
         "#DETREND_PARAMETERS=" + (", ".join(d.upper() for d in result["detrend"]) or "NONE"),
         "#MEASUREMENT_TYPE=Rnflux", f"#FILTER={meta.get('filter', 'CV')}",
         "#PRIORS=" + ",".join(priors), "#RESULTS=" + ",".join(results),
+        _created(),
         "#DATE,DIFF,ERR,DETREND_1",
     ]
     for t, f, e, a in zip(result["t"], result["flux"], result["err_scaled"], result["airmass"]):
@@ -1394,11 +1492,21 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _dtg() -> str:
+    import photometry_core as core
+    return core.dtg()
+
+
+def _created() -> str:
+    import photometry_core as core
+    return core.created_line()
+
+
 def fit_text(result: dict, meta: dict) -> str:
     """Plain-text summary of a transit fit (ExoFOP package, and a copy for the observer's records)."""
     s, pl = result["summary"], result["planet"]
     ch = result["chain"]
-    lines = [f"SHOBS-P {meta.get('version', '')} transit fit", "",
+    lines = [f"SHOBS-P {meta.get('version', '')} transit fit", f"Created        {_dtg()}", "",
              f"Planet         {pl.get('name', '')}   host {pl.get('host', '')}",
              f"Observer       {meta.get('obscode', '')}   site {meta.get('lat', '')}, {meta.get('lon', '')}",
              f"Night          {meta.get('obsdate', '')}   {result['n_points']} points, cadence "
@@ -1406,8 +1514,11 @@ def fit_text(result: dict, meta: dict) -> str:
              f"Equipment      {meta.get('notes', '')}",
              f"Photometry     aperture {meta.get('aperture', '')}; comps {meta.get('comps', '')}"
              + (f"; {meta['scint']}" if meta.get("scint") else ""),
-             f"Ephemeris      P {result['period']:.8f} d, published values from {pl.get('source', '')} "
-             f"{pl.get('reference', '')}".rstrip(), "",
+             f"Ephemeris      P {result['period']:.8f} d, "
+             + (f"from {result['eph_source']}" if result.get("eph_source") else
+                "none available (no O − C)" if result.get("tc_pred") is None else
+                f"published values from {pl.get('source', '')} {pl.get('reference', '')}".rstrip()),
+             f"Shape priors   from {pl.get('source', '')}", "",
              "Fitted values (MCMC median and 68% interval):"]
     for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t"):
         if name in s:
@@ -1416,7 +1527,7 @@ def fit_text(result: dict, meta: dict) -> str:
             v, e = s[name]
             fmt = "{:.6f}" if name == "tc" else "{:.5f}"
             lines.append(f"  {label:<16}{fmt.format(v)} ± {fmt.format(e)}")
-    if result.get("tc_pred_err") is not None:
+    if result.get("tc_pred") is not None and result.get("tc_pred_err") is not None:
         oc = (result["best"]["tc"] - result["tc_pred"]) * 1440
         lines.append(f"  O − C           {oc:+.2f} min (epoch {result['epoch']}, predicted {result['tc_pred']:.6f} "
                      f"± {result['tc_pred_err'] * 1440:.2f} min)")

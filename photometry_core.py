@@ -6,6 +6,44 @@ import json
 import re as _re
 import math
 import os
+import sys
+
+# 2.2.12: UI fonts per platform. Segoe UI and Consolas exist only on Windows; elsewhere Tk falls back to its
+# default (proportional) font, which breaks the lined-up Series and Period boxes. Menlo ships with every Mac.
+if sys.platform == "win32":
+    UI_FONT, MONO_FONT = "Segoe UI", "Consolas"
+elif sys.platform == "darwin":
+    UI_FONT, MONO_FONT = "Helvetica Neue", "Menlo"
+else:
+    UI_FONT, MONO_FONT = "DejaVu Sans", "DejaVu Sans Mono"
+
+
+def dtg(when=None) -> str:
+    """2.2.12 (John): a military Date Time Group, Zulu, for when a file was made: "121153Z OCT 26"."""
+    from datetime import datetime, timezone
+    now = when or datetime.now(timezone.utc)
+    return now.strftime("%d%H%MZ ") + now.strftime("%b %y").upper()
+
+
+def created_line() -> str:
+    """The comment line that stamps a written file (CSV, AAVSO reports)."""
+    return f"# Created {dtg()} by SHOBS-P"
+
+
+def wheel_units(delta) -> int:
+    """2.2.12: scroll units for a <MouseWheel> delta. Windows sends multiples of 120; a Mac trackpad sends small
+    deltas (1-10), which int(-delta / 120) turned into 0, so nothing scrolled. Any non-zero delta moves at least
+    one unit; on macOS only its sign counts."""
+    try:
+        delta = float(delta)
+    except (TypeError, ValueError):
+        return 0
+    if not delta:
+        return 0
+    if sys.platform == "darwin":
+        return -1 if delta > 0 else 1
+    n = int(-delta / 120)
+    return n if n else (-1 if delta > 0 else 1)
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from glob import glob
@@ -3139,6 +3177,7 @@ def aavso_report(
         "#DELIM=,",
         "#DATE=JD",
         "#OBSTYPE=CCD",
+        created_line(),
         "#NAME,DATE,MAG,MERR,FILT,TRANS,MTYPE,CNAME,CMAG,KNAME,KMAG,AMASS,GROUP,CHART,NOTES",
     ]
     chart_field = _field(chart, 20)
@@ -3209,6 +3248,7 @@ def segment_words(observations: list[Obs]) -> list[str]:
 def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = None, scint: dict | None = None) -> None:
     corrected = apply_night_zero_point(observations) if observations else []
     with AsciiWriter(path) as fh:
+        fh.write(created_line() + "\n")
         fh.write(
             "jd,mag,merr,filter,zero_pointed_mag,comp_inst_mag,check_inst_mag,check_reduced_mag,"
             "airmass,exptime,fwhm_px,peak,raw_peak,sky,flag,night,segment,segment_normalized_mag,"
@@ -3545,16 +3585,35 @@ def ensemble_color(comps_cat: list[dict], first: str, second: str) -> float | No
 
 # ---- Field scan (discovery mode) -----------------------------------------------------
 
-def measure_many(img: np.ndarray, xy: np.ndarray, radius: float, sky_inner: float, sky_outer: float) -> tuple[np.ndarray, np.ndarray]:
-    """Aperture photometry of many stars at once (photutils). Returns (net flux, sky median)."""
+def measure_many(img: np.ndarray, xy: np.ndarray, radius: float, sky_inner: float, sky_outer: float,
+                 noise: bool = False):
+    """Aperture photometry of many stars at once (photutils). Returns (net flux, sky median); with noise=True
+    (2.2.12) also the sky noise inside the aperture (sky standard deviation × sqrt(aperture area)), for a
+    detection test."""
     xy = np.asarray(xy, dtype=float)
     bad = ~np.isfinite(img)
     mask = bad if bad.any() else None
     apertures = CircularAperture(xy, r=radius)
     annuli = CircularAnnulus(xy, r_in=sky_inner, r_out=sky_outer)
-    sky = np.atleast_1d(np.asarray(ApertureStats(img, annuli, mask=mask, sigma_clip=SigmaClip(sigma=3.0, maxiters=10)).median, dtype=float))
+    stats = ApertureStats(img, annuli, mask=mask, sigma_clip=SigmaClip(sigma=3.0, maxiters=10))
+    sky = np.atleast_1d(np.asarray(stats.median, dtype=float))
     sums = np.asarray(aperture_photometry(img, apertures, mask=mask)["aperture_sum"], dtype=float)
-    return sums - sky * math.pi * radius ** 2, sky
+    net = sums - sky * math.pi * radius ** 2
+    if noise:
+        sd = np.atleast_1d(np.asarray(stats.std, dtype=float))
+        return net, sky, sd * math.sqrt(math.pi * radius ** 2)
+    return net, sky
+
+
+def detected_mags(flux, exptime: float, sky_noise=None, min_snr: float = 3.0) -> np.ndarray:
+    """2.2.12: instrumental magnitudes, NaN where the star is not detected in this frame (net flux below min_snr ×
+    the sky noise in the aperture). A non-detection measured as a magnitude read as a drop to 18-20 mag (S126)."""
+    flux = np.asarray(flux, dtype=float)
+    floor = 0.0
+    if sky_noise is not None:
+        floor = np.where(np.isfinite(sky_noise), min_snr * np.asarray(sky_noise, dtype=float), 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where((flux > 0) & (flux > floor), -2.5 * np.log10(flux / exptime), np.nan)
 
 
 def move_points(xy: np.ndarray, reg: dict | None, shape: tuple[int, int]) -> np.ndarray:
@@ -3626,7 +3685,7 @@ def parse_coordinates(text: str):
     return ra, dec
 
 
-def field_variability(inst: np.ndarray, min_fraction: float = 0.7) -> dict:
+def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None) -> dict:
     """Variability statistics for every star in a field.
 
     inst: frames x stars instrumental magnitudes (NaN where unmeasured).
@@ -3649,15 +3708,7 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7) -> dict:
     med = np.nanmedian(corrected, axis=0)
     mad = np.nanmedian(np.abs(corrected - med[None, :]), axis=0)
     scatter = 1.4826 * mad
-    # Expected scatter: running median over neighbours in brightness.
-    expected = np.full(n_stars, np.nan)
-    idx = np.where(usable & np.isfinite(scatter))[0]
-    if idx.size:
-        srt = idx[np.argsort(med[idx])]
-        k = max(5, srt.size // 8)
-        for pos, star in enumerate(srt):
-            lo, hi = max(0, pos - k), min(srt.size, pos + k + 1)
-            expected[star] = np.median(scatter[srt[lo:hi]])
+    expected = typical_scatter(med, scatter, usable, exclude=exclude)
     excess = scatter / expected
     return {
         "corrected": corrected,
@@ -3669,6 +3720,82 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7) -> dict:
         "n_good": good_count,
         "zero_point": zp,
     }
+
+
+def typical_scatter(mag, scatter, usable, half_width: float = 0.5, n_min: int = 5, clip: float = 2.5,
+                    exclude=None):
+    """2.2.12: the scatter a star of each brightness normally shows. A running median over the stars within
+    ±half_width mag (at least n_min, at most an eighth of the field, nearest in magnitude first), so the bright end
+    follows the bright stars instead of borrowing the fainter, noisier ones (on the HD 219134 field every star of
+    8.7-10.5 mag sat below the old rank-window curve). Stars more than clip × the first curve (variables,
+    artifacts) are left out of the second, final pass. exclude: stars (indices) evaluated but never used to build
+    the curve (saturated stars)."""
+    mag = np.asarray(mag, dtype=float)
+    scatter = np.asarray(scatter, dtype=float)
+    out = np.full(mag.size, np.nan)
+    idx = np.where(np.asarray(usable, dtype=bool) & np.isfinite(scatter) & (scatter > 0) & np.isfinite(mag))[0]
+    if not idx.size:
+        return out
+    if exclude is not None and len(exclude):
+        pool0 = np.setdiff1d(idx, np.asarray(list(exclude), dtype=int))
+        if pool0.size < n_min:
+            pool0 = idx
+    else:
+        pool0 = idx
+    k_max = max(n_min, pool0.size // 8)
+
+    def curve(pool):
+        res = np.full(mag.size, np.nan)
+        pm = mag[pool]
+        for s in idx:
+            d = np.abs(pm - mag[s])
+            take = min(max(int((d <= half_width).sum()), n_min), k_max, pool.size)
+            nearest = np.argpartition(d, take - 1)[:take] if take < pool.size else np.arange(pool.size)
+            res[s] = np.median(scatter[pool[nearest]])
+        return res
+
+    first = curve(pool0)
+    keep = pool0[scatter[pool0] <= clip * first[pool0]]
+    return curve(keep if keep.size >= n_min else pool0)
+
+
+def scatter_curve_segments(mag, expected, max_gap: float = 0.75):
+    """2.2.12: the typical-scatter curve as (mag, expected) segments, broken where no stars are for more than
+    max_gap mag, so no line is drawn across an empty magnitude range (HD 219134 at 5.5 mag drew a flat line to
+    8.7)."""
+    mag = np.asarray(mag, dtype=float)
+    expected = np.asarray(expected, dtype=float)
+    ok = np.isfinite(mag) & np.isfinite(expected)
+    m, e = mag[ok], expected[ok]
+    order = np.argsort(m)
+    m, e = m[order], e[order]
+    if not m.size:
+        return []
+    cuts = np.where(np.diff(m) > max_gap)[0] + 1
+    return [(a, b) for a, b in zip(np.split(m, cuts), np.split(e, cuts))]
+
+
+def faint_limit(mag, expected, level: float = 0.25):
+    """2.2.12: the default faintest magnitude: where the field's typical scatter reaches `level` mag for good
+    (stars past it are too noisy to call variable). Found from the faint end, so a noisy group of bright stars can
+    never set it. None when the faint end stays under the level, or no part of the field is under it."""
+    mag = np.asarray(mag, dtype=float)
+    expected = np.asarray(expected, dtype=float)
+    ok = np.isfinite(mag) & np.isfinite(expected)
+    if ok.sum() < 5:
+        return None
+    m, e = mag[ok], expected[ok]
+    order = np.argsort(m)
+    m, e = m[order], e[order]
+    below = np.where(e < level)[0]
+    if not below.size:
+        return None
+    k = int(below[-1])                 # the faintest star still under the level
+    if k == m.size - 1:
+        return None
+    # Straight-line crossing between it and the next, fainter star (at or above the level).
+    m0, m1, e0, e1 = m[k], m[k + 1], e[k], e[k + 1]
+    return float(m0 + (level - e0) * (m1 - m0) / (e1 - e0)) if e1 > e0 else float(m1)
 
 
 def fetch_vsx_cone(ra_deg: float, dec_deg: float, radius_deg: float) -> list[dict]:
@@ -4004,6 +4131,7 @@ def scan_candidate_kind(result: dict, i: int) -> tuple[str, str]:
 def write_scan_candidates(path: str, result: dict) -> None:
     """One row per star that stands out, ready to start a VSX new-variable submission."""
     with AsciiWriter(path) as fh:
+        fh.write(created_line() + "\n")
         fh.write("rank,label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,best_period_days,"
                  "period_power,b_minus_v,v_minus_r,color_method,vsx_name,vsx_type,vsx_period,n_points,caution\n")
         for rank, i in enumerate(result["candidates"], 1):
@@ -4037,6 +4165,7 @@ def write_scan_stars(path: str, result: dict) -> None:
         return "" if v is None or not (isinstance(v, (int, float)) and math.isfinite(v)) else fmt.format(v)
 
     with AsciiWriter(path) as fh:
+        fh.write(created_line() + "\n")
         fh.write("label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,candidate_rank,candidate_kind,"
                  "saturated,usable,best_period_days,vsx_name,vsx_type,n_points,caution\n")
         for i, label in enumerate(result["labels"]):
@@ -4059,6 +4188,7 @@ def write_scan_lightcurves(path: str, result: dict) -> None:
     """Every star's zero-pointed light curve, long format (one row per star per frame)."""
     corrected = result["light_curves"]
     with AsciiWriter(path) as fh:
+        fh.write(created_line() + "\n")
         fh.write("label,jd,mag\n")
         for i, label in enumerate(result["labels"]):
             for j, jd in enumerate(result["jd"]):
@@ -4488,6 +4618,7 @@ def write_export(path: str, observations: list[Obs], values: list[float], setup:
     ref = float(np.median(finite)) if finite.size else 0.0
     lines = [
         f"# {meta.get('software', 'Shiloh Hill Observatory - Photometry (SHOBS-P)')}",
+        created_line(),
         f"# target: {meta.get('target', '')}   filter: {meta.get('filter', '')}   observer: {meta.get('observer', '')}",
         f"# comparison stars: {meta.get('comps', '')}   check: {meta.get('check', '')}",
         f"# time: {setup.get('time')} (mid-exposure)   values: "
