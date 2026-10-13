@@ -130,8 +130,9 @@ def main() -> None:
         frames = {k: core.calibration_source(v)[0] for k, v in folders.items()}
         logs = []
         m1 = core.prepare_masters(frames["bias"], frames["dark"], frames["flat"], 1, logs.append, version=ca.APP_VERSION)
-        saved = sorted(f for v in folders.values() for f in os.listdir(v) if f.startswith(core.MASTER_PREFIX))
-        check("three masters written beside their frames", len(saved) == 3, ", ".join(saved))
+        sub = [os.path.join(v, core.MASTER_DIR) for v in folders.values()]
+        saved = sorted(f for d in sub if os.path.isdir(d) for f in os.listdir(d) if f.startswith(core.MASTER_PREFIX))
+        check("three masters written in the 'SHOBS-P masters' subfolders (2.2.13)", len(saved) == 3, ", ".join(saved))
         frames = {k: core.calibration_source(v)[0] for k, v in folders.items()}
         check("saved masters are not counted as frames", all(len(v) == 4 for v in frames.values()))
         logs.clear()
