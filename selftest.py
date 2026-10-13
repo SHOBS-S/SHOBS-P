@@ -138,7 +138,7 @@ def main() -> None:
         m2 = core.prepare_masters(frames["bias"], frames["dark"], frames["flat"], 1, logs.append, version=ca.APP_VERSION)
         check("second run reuses all three", sum("Using saved master" in t for t in logs) == 3, " | ".join(logs[:3]))
         check("reused flat equals the built one", bool(np.allclose(m1.flat, m2.flat, equal_nan=True)))
-        mf = os.path.join(folders["flat"], core.master_file_name("flat", 1))
+        mf = os.path.join(folders["flat"], core.MASTER_DIR, core.master_file_name("flat", 1))
         h = core.read_header(mf)
         check("master stamp readable", core.master_stamp(h) == "FLAT" and int(h.get("NFRAMES")) == 4, str(h.get("SHOBSP")))
         check("a master picked directly is accepted", core.check_master_file(mf, "flat") == "")
@@ -225,6 +225,37 @@ def main() -> None:
     check("bright stars on the typical-scatter curve", bool(np.all(np.abs(s5[:12] / e5[:12] - 1) < 0.35)))
     check("font names set for this computer", bool(core.UI_FONT and core.MONO_FONT), f"{core.UI_FONT} / {core.MONO_FONT}")
     check("wheel: any scroll moves at least one step", core.wheel_units(3) != 0 and core.wheel_units(-120) == 1)
+
+    section("2f 2.2.13: catalog merge, proper-motion epoch (real Astropy Time), constrained plots")
+    try:
+        ep = core.header_epoch_year({"DATE-OBS": "2026-10-13T03:00:00"})
+        check("epoch from DATE-OBS", ep is not None and abs(ep - 2026.78) < 0.01, str(ep))
+        core.PM_EPOCH_YEAR = 2026.8
+        pm6 = (2074.5, 294.8)
+        now6 = (348.34919, 57.17055)
+        yrs = 26.8
+        j2000 = (now6[0] - pm6[0] * yrs / 3.6e6 / np.cos(np.radians(now6[1])), now6[1] - pm6[1] * yrs / 3.6e6)
+        merged6 = core.merge_catalogs({
+            "Gaia DR3": [{"auid": "Gaia DR3 1", "ra": now6[0], "dec": now6[1], "mags": {"V": 5.57}, "bright": 5.2,
+                          "pm": pm6}],
+            "AAVSO sequence": [{"auid": "000-BBC-222", "label": "56", "ra": j2000[0], "dec": j2000[1],
+                                "mags": {"V": 5.57}, "chartid": "X1"}]}, "V")
+        check("high proper-motion star: J2000 sequence position matched to Gaia's star now",
+              len(merged6) == 1 and merged6[0]["seq"] is not None, str(len(merged6)))
+    except Exception as exc:
+        check("catalog merge", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    finally:
+        core.PM_EPOCH_YEAR = None
+    try:
+        from matplotlib.figure import Figure as _Fig
+        try:
+            fig6 = _Fig(figsize=(6, 3), layout="constrained")
+        except TypeError:
+            fig6 = _Fig(figsize=(6, 3), constrained_layout=True)
+        check("constrained-layout figures available (Comp health margins)",
+              fig6.get_layout_engine() is not None if hasattr(fig6, "get_layout_engine") else True)
+    except Exception as exc:
+        check("constrained-layout figure", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []

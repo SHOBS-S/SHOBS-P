@@ -105,20 +105,46 @@ def limb_darkening_guess(teff: float | None) -> tuple[float, float]:
 
 # ---- Parameters and priors ----------------------------------------------------------------------
 
-PARAMS = ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t")
+PARAMS = ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "step")
 PARAM_LABELS = {"tc": "Mid-transit Tc (BJD_TDB)", "k": "Rp/R*", "a_rs": "a/R*", "b": "Impact parameter b",
                 "q1": "q1 (limb darkening)", "q2": "q2 (limb darkening)", "c0": "Baseline",
-                "c_am": "Airmass slope", "c_t": "Time slope (per day)"}
+                "c_am": "Airmass slope", "c_t": "Time slope (per day)", "step": "Flip step"}
+
+# ---- 2.2.13: a meridian flip inside the data -----------------------------------------------------
+# After a flip every star sits on another part of the sensor and the flat, so the target/comp ratio can jump by a
+# few percent. The fit then gets ONE extra free parameter: a multiplicative baseline step that starts at the flip.
+# The flip time comes from the data (the frames' flip segment, or for a report the flip SHOBS-P wrote into it, or
+# the largest gap when the user says the report has a flip); it is never fitted. The step is fitted jointly with Tc,
+# Rp/R* and the rest, in the least squares and in the MCMC, so its uncertainty is part of the depth's.
+# (AstroImageJ instead removes a fixed meridian-flip offset from the baseline before the transit fit, Collins et al.
+# 2017; TRAPPIST normalizes each side of the flip separately. Fitting the step together with the transit lets the
+# MCMC show how much the depth and the step trade off.)
+# 2.2.13: OFF until the validation passes in full (see flipval2213.py and the release notes): the step model is
+# validated on synthetic nights and on KOI-217 b, but a TrES-3 b night with a 55-minute cut at the bottom (only 16 min
+# of baseline after the cut) did not reproduce the untouched Tc (3.8 sigma). fit_transit(flip_step=True) still runs
+# it for tests.
+FLIP_STEP_ENABLED = False
+FLIP_MIN_OOT_MIN = 30.0       # out-of-transit baseline needed on EACH side of the flip to trust the depth (minutes)
+FLIP_MIN_OOT_FRAMES = 15      # ... and at least this many out-of-transit frames on each side
+FLIP_CORR_WARN = 0.9          # |corr(step, depth)| above this: the night cannot separate the two
+FLIP_GAP_MIN_MIN = 20.0       # a report's largest gap counts as the flip only if at least this long (and 5 cadences)
+FLAGGED_ERR_FACTOR = 2.0      # 2.2.13: flagged (cloud) frames put back into a refit have their error bars doubled
+# When one side of the flip has no out-of-transit baseline of its own: "inconclusive" (timing not trusted either) or
+# "depth" (the original plan: timing usable, depth unreliable). Validation (flipval2213.py) found the timing biased
+# too in that case: with the flip gap over ingress and no baseline after the flip, 2 of 6 detected synthetic nights
+# had Tc off by more than 2 sigma, and a real TrES-3 b night cut that way moved Tc by 3.8 sigma.
+FLIP_NO_BASELINE_VERDICT = "inconclusive"
 
 
 class TransitProblem:
     """Data, fixed values, and priors for one transit light curve.
 
-    Model: flux = transit(t) * (c0 + c_am * (airmass - mean) + c_t * (t - t_mid)).
+    Model: flux = transit(t) * (c0 + c_am * (airmass - mean) + c_t * (t - t_mid)) * (1 + step * [t >= t_flip]).
+    The step term exists only when after (points after a meridian flip) is given with points on both sides.
     priors: {name: (mean, sigma)} Gaussian priors. Bounds keep everything physical."""
 
     def __init__(self, t, flux, err, airmass, period, priors: dict, free: tuple, start: dict,
-                 detrend_airmass=True, detrend_time=False, ld_prior=None):
+                 detrend_airmass=True, detrend_time=False, ld_prior=None, t_flip=None):
         self.t = np.asarray(t, dtype=float)
         self.flux = np.asarray(flux, dtype=float)
         self.err = np.asarray(err, dtype=float)
@@ -136,9 +162,18 @@ class TransitProblem:
             names = [p for p in names if p != "c_am"]
         if not detrend_time:
             names = [p for p in names if p != "c_t"]
+        # 2.2.13: the flip step, only with points on both sides of the flip.
+        self.t_flip = None
+        if t_flip is not None and (self.t < t_flip).any() and (self.t >= t_flip).any():
+            self.t_flip = float(t_flip)
+        self.after = (self.t >= self.t_flip).astype(float) if self.t_flip is not None else None
+        if self.t_flip is None:
+            names = [p for p in names if p != "step"]
         self.free = names
         self.fixed = {p: float(start.get(p, 0.0)) for p in PARAMS}
         self.fixed.setdefault("c0", 1.0)
+        if self.t_flip is None:
+            self.fixed["step"] = 0.0
 
     def full(self, x) -> dict:
         p = dict(self.fixed)
@@ -154,12 +189,19 @@ class TransitProblem:
         return occultation(z, p["k"], u1, u2) * self.baseline(p, t, am)
 
     def baseline(self, p: dict, t=None, am=None) -> np.ndarray:
+        own = t is None
         t = self.t if t is None else np.asarray(t, dtype=float)
         am = self.am if am is None else am
-        return p["c0"] + p["c_am"] * am + p["c_t"] * (t - self.t_mid)
+        base = p["c0"] + p["c_am"] * am + p["c_t"] * (t - self.t_mid)
+        if self.t_flip is not None:
+            after = self.after if own else (t >= self.t_flip).astype(float)
+            base = base * (1.0 + p.get("step", 0.0) * after)
+        return base
 
     def in_bounds(self, p: dict) -> bool:
         if not (0.005 < p["k"] < 0.6 and 1.2 < p["a_rs"] < 200 and 0.0 <= p["b"] < 1.0 + p["k"]):
+            return False
+        if abs(p.get("step", 0.0)) >= 0.5:
             return False
         if not (0.0 < p["q1"] < 1.0 and 0.0 < p["q2"] < 1.0):
             return False
@@ -203,14 +245,14 @@ class TransitProblem:
 
     def scales(self) -> np.ndarray:
         s = {"tc": 1e-3, "k": 0.01, "a_rs": 0.3, "b": 0.03, "q1": 0.05, "q2": 0.05, "c0": 1e-3, "c_am": 1e-3,
-             "c_t": 1e-3}
+             "c_t": 1e-3, "step": 1e-3}
         return np.array([s[p] for p in self.free])
 
     def bounds(self):
         lo = {"tc": self.t.min() - 0.2, "k": 0.006, "a_rs": 1.3, "b": 0.0, "q1": 1e-4, "q2": 1e-4, "c0": 0.5,
-              "c_am": -1.0, "c_t": -1.0}
+              "c_am": -1.0, "c_t": -1.0, "step": -0.49}
         hi = {"tc": self.t.max() + 0.2, "k": 0.59, "a_rs": 199.0, "b": 1.5, "q1": 0.9999, "q2": 0.9999, "c0": 1.5,
-              "c_am": 1.0, "c_t": 1.0}
+              "c_am": 1.0, "c_t": 1.0, "step": 0.49}
         return [lo[p] for p in self.free], [hi[p] for p in self.free]
 
 
@@ -242,9 +284,23 @@ def best_fit(problem: TransitProblem, starts: list[dict] | None = None):
             best = sol
     if best is None:
         raise ValueError("the least-squares fit did not converge")
+    problem.last_jac = best.jac     # 2.2.13: for least-squares uncertainties (lsq_errors)
     p = problem.full(best.x)
     r = (problem.flux - problem.model(p)) / problem.err
     return best.x, float(np.dot(r, r))
+
+
+def lsq_errors(problem: TransitProblem) -> np.ndarray:
+    """2.2.13: 1-sigma errors of the free parameters from the last best_fit's Jacobian (Gaussian approximation;
+    the priors are part of the residuals, so they are included). NaN where the matrix cannot be inverted."""
+    jac = getattr(problem, "last_jac", None)
+    if jac is None:
+        return np.full(len(problem.free), np.nan)
+    try:
+        cov = np.linalg.pinv(np.asarray(jac).T @ np.asarray(jac))
+        return np.sqrt(np.clip(np.diag(cov), 0, None))
+    except Exception:
+        return np.full(len(problem.free), np.nan)
 
 
 def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = 30.0) -> float:
@@ -392,28 +448,28 @@ def transit_window_check(t_min: float, t_max: float, planet: dict) -> dict | Non
     return best
 
 
-def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False,
-                mcmc_steps: int = 3000, progress=None, cancel=None, log=None) -> dict:
-    """The full SHOBS-P transit fit.
-
-    1. Least squares with the published shape as Gaussian priors (a/R*, b) and broad limb-darkening priors.
-    2. Errors rescaled so the reduced chi-square is 1, then multiplied by the red-noise beta.
-    3. MCMC (always) with the rescaled errors, for the reported values and uncertainties.
-    4. A second, free fit (no priors on a/R* and b) as a check of the shape.
-    """
-    say = log or (lambda _m: None)
+def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_flip=None, flip_step=None,
+               flagged_mask=None) -> dict:
+    """2.2.13: the data, start values, priors and flip time shared by fit_transit and lsq_fit."""
     t = np.asarray(t, dtype=float)
     flux = np.asarray(flux, dtype=float)
     err = np.asarray(err, dtype=float)
     am = np.asarray(airmass, dtype=float) if airmass is not None else np.full_like(t, np.nan)
+    aflip = np.asarray(after_flip, dtype=bool) if after_flip is not None else np.zeros(t.shape, dtype=bool)
+    fmask = np.asarray(flagged_mask, dtype=bool) if flagged_mask is not None else np.zeros(t.shape, dtype=bool)
     good = np.isfinite(t) & np.isfinite(flux) & np.isfinite(err) & (err > 0)
     if detrend_airmass and np.isfinite(am).any():
         good &= np.isfinite(am)
-    t, flux, err, am = t[good], flux[good], err[good], am[good]
+    t, flux, err, am, aflip, fmask = t[good], flux[good], err[good], am[good], aflip[good], fmask[good]
     order = np.argsort(t)
-    t, flux, err, am = t[order], flux[order], err[order], am[order]
+    t, flux, err, am, aflip, fmask = t[order], flux[order], err[order], am[order], aflip[order], fmask[order]
     if len(t) < 20:
         raise ValueError(f"only {len(t)} usable points; a transit fit needs at least 20")
+    # 2.2.13: flagged frames put back by the user count with doubled error bars (FLAGGED_ERR_FACTOR): they are
+    # measured, but through cloud, so they should not weigh like the clear frames. The usual rescaling to reduced
+    # chi-square 1 and the red-noise beta then apply to all points on top of this.
+    if fmask.any():
+        err = err * np.where(fmask, FLAGGED_ERR_FACTOR, 1.0)
     period = float(planet["period"])
     # Fit in days from a nearby reference time: an absolute BJD (2.46e6) makes the optimizer's finite-difference
     # steps and stopping test far too coarse for Tc.
@@ -445,16 +501,154 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     b0 = min(max(b0, 0.0), 1.0 + k0 - 0.01)
     a0 = planet.get("a_rs") or _a_rs_from_duration(period, planet.get("t14"), k0, min(b0, 0.9))
     a0 = max(a0, b0 + 0.5, 1.5)
-    start = {"tc": tc_rel, "k": k0, "a_rs": a0, "b": b0, "q1": q1, "q2": q2, "c0": 1.0, "c_am": 0.0, "c_t": 0.0}
-    priors = prepare_priors(planet, a0)
-    free = ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t")
-    ld = (u1g, u2g, 0.1)
+    start = {"tc": tc_rel, "k": k0, "a_rs": a0, "b": b0, "q1": q1, "q2": q2, "c0": 1.0, "c_am": 0.0, "c_t": 0.0,
+             "step": 0.0}
     cadence = float(np.median(np.diff(t))) if len(t) > 1 else 1e-3
     dur = total_duration(period, a0, min(b0, 0.99), k0)
     starts = [{"tc": tc_rel + d} for d in (-0.25 * dur, 0.25 * dur)] + [{"k": k0 * 1.2}, {"k": k0 * 0.8}]
+    # 2.2.13: the flip time, from the data: halfway between the last frame before the flip and the first after it.
+    use_step = FLIP_STEP_ENABLED if flip_step is None else bool(flip_step)
+    t_flip = flip_gap = None
+    if use_step and aflip.any() and (~aflip).any():
+        first_after = float(t[aflip].min())
+        before = t[t < first_after]
+        if before.size:
+            t_flip = 0.5 * (float(before.max()) + first_after)
+            flip_gap = (first_after - float(before.max())) * 1440
+            starts += [{"step": 0.02}, {"step": -0.02}]
+    return {"t": t, "t_abs": t_abs, "t_ref": t_ref, "flux": flux, "err": err, "am": am, "flagged": fmask,
+            "med": float(med), "period": period, "priors": prepare_priors(planet, a0), "start": start,
+            "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "step"), "ld": (u1g, u2g, 0.1),
+            "cadence": cadence, "starts": starts, "t_flip": t_flip, "flip_gap_min": flip_gap, "n": n,
+            "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "tc_start": tc_start, "eph_err_known": eph_err_known,
+            "has_eph": bool(tc0)}
 
-    prob = TransitProblem(t, flux, err, am, period, priors, free, start, detrend_airmass, detrend_time, ld)
+
+def flip_sides(t, t_flip: float, tc: float, t14: float, cadence: float, tc_pred: float | None = None) -> dict:
+    """2.2.13: out-of-transit baseline on each side of the flip, relative to the fitted first and fourth contacts:
+    {"before": (minutes, frames), "after": (minutes, frames)}. Minutes are frames × the median cadence, so a gap
+    in the data is not counted as baseline. With a predicted mid-transit (tc_pred), a frame counts only when it is
+    outside the predicted transit too: a fit pulled off by the step cannot make its own baseline (validation found
+    nights where a wrong Tc turned in-transit frames into "baseline")."""
+    t = np.asarray(t, dtype=float)
+    oot = (t < tc - t14 / 2) | (t > tc + t14 / 2)
+    if tc_pred is not None and math.isfinite(tc_pred):
+        oot &= (t < tc_pred - t14 / 2) | (t > tc_pred + t14 / 2)
+    out = {}
+    for side, mask in (("before", t < t_flip), ("after", t >= t_flip)):
+        n = int((oot & mask).sum())
+        out[side] = (n * cadence * 1440.0, n)
+    return out
+
+
+def _frames(n: int) -> str:
+    return f"{n} frame" + ("" if n == 1 else "s")
+
+
+def _flip_info(prob_s, flat, summary, best_rel: dict, chi2_s: float, setup: dict, scale: float, source: str) -> dict:
+    """2.2.13: what the night says about the flip step: its value and error (MCMC), its correlation with the depth
+    (MCMC chain), the same fit without the step (least squares) for comparison, the baseline on each side, and
+    whether the depth can be trusted."""
+    i_s, i_k = prob_s.free.index("step"), prob_s.free.index("k")
+    corr = float("nan")
+    if flat.shape[0] > 10 and np.std(flat[:, i_s]) > 0 and np.std(flat[:, i_k]) > 0:
+        corr = float(np.corrcoef(flat[:, i_k] ** 2, flat[:, i_s])[0, 1])
+    # The same model without the step, on the same (rescaled) errors.
+    nostep = None
+    try:
+        prob_ns = TransitProblem(setup["t"], setup["flux"], prob_s.err, setup["am"], setup["period"], setup["priors"],
+                                 tuple(prob_s.free), dict(best_rel, step=0.0), "c_am" in prob_s.free,
+                                 "c_t" in prob_s.free, setup["ld"])
+        x_ns, chi2_ns = best_fit(prob_ns, [s for s in setup["starts"] if "step" not in s])
+        e_ns = lsq_errors(prob_ns)
+        p_ns = prob_ns.full(x_ns)
+        ek = float(e_ns[prob_ns.free.index("k")])
+        n = len(setup["t"])
+        nostep = {"depth": p_ns["k"] ** 2, "depth_err": 2 * p_ns["k"] * ek, "tc": p_ns["tc"] + setup["t_ref"],
+                  "chi2": chi2_ns,
+                  # > 0: the data prefer the step (BIC: the step costs one parameter).
+                  "dbic": (chi2_ns + len(prob_ns.free) * math.log(n)) - (chi2_s + len(prob_s.free) * math.log(n))}
+    except Exception:
+        nostep = None
+    t14 = summary["t14"][0]
+    pred = (setup["tc_pred"] - setup["t_ref"]) if setup.get("tc_pred") is not None else None
+    sides = flip_sides(setup["t"], prob_s.t_flip, best_rel["tc"], t14, setup["cadence"], pred)
+    short = [s for s in ("before", "after") if sides[s][0] < FLIP_MIN_OOT_MIN or sides[s][1] < FLIP_MIN_OOT_FRAMES]
+    baseline_ok = not short
+    reason = ""
+    if not baseline_ok:
+        which = "either side" if len(short) == 2 else ("before the flip" if short[0] == "before" else "after the flip")
+        reason = (f"the meridian flip leaves no out-of-transit baseline of its own {which} "
+                  f"({sides['before'][0]:.0f} min, {_frames(sides['before'][1])} before the flip; "
+                  f"{sides['after'][0]:.0f} min, {_frames(sides['after'][1])} after; each side needs at least "
+                  f"{FLIP_MIN_OOT_MIN:.0f} min and {FLIP_MIN_OOT_FRAMES} frames to tell the flip step from the depth)")
+    elif math.isfinite(corr) and abs(corr) > FLIP_CORR_WARN:
+        reason = (f"the step at the meridian flip and the depth trade off (correlation {corr:+.2f}); depth not "
+                  "measurable from this night")
+    return {"t_flip": prob_s.t_flip + setup["t_ref"], "gap_min": setup.get("flip_gap_min"), "source": source,
+            "step": summary["step"], "corr": corr, "nostep": nostep, "sides": sides, "baseline_ok": baseline_ok,
+            "depth_ok": baseline_ok and not (math.isfinite(corr) and abs(corr) > FLIP_CORR_WARN), "reason": reason,
+            "error_scale": scale}
+
+
+def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False, after_flip=None,
+            flip_step=None) -> dict:
+    """2.2.13: the fit_transit model by least squares only (no MCMC), with Jacobian errors after the same error
+    rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step."""
+    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step)
+    t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
+    prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
+                          detrend_time, S["ld"], S["t_flip"])
+    x, chi2 = best_fit(prob, S["starts"])
+    rchi = chi2 / max(len(t) - len(prob.free), 1)
+    beta = red_noise_beta(t, flux - prob.model(prob.full(x)), S["cadence"])
+    scale = math.sqrt(max(rchi, 1.0)) * beta
+    prob_s = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], prob.full(x),
+                            detrend_airmass, detrend_time, S["ld"], S["t_flip"])
+    x_s, chi2_s = best_fit(prob_s)
+    e = lsq_errors(prob_s)
+    p = prob_s.full(x_s)
+    out = {"p": dict(p, tc=p["tc"] + S["t_ref"]), "err": dict(zip(prob_s.free, map(float, e))), "chi2": chi2_s,
+           "error_scale": scale, "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
+           is not None else None, "cadence": S["cadence"], "t": S["t_abs"]}
+    out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
+    out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
+    if prob_s.t_flip is not None:
+        pred = (S["tc_pred"] - S["t_ref"]) if S.get("tc_pred") is not None else None
+        sides = flip_sides(t, prob_s.t_flip, p["tc"], out["t14"], S["cadence"], pred)
+        out["sides"] = sides
+        out["baseline_ok"] = all(sides[s][0] >= FLIP_MIN_OOT_MIN and sides[s][1] >= FLIP_MIN_OOT_FRAMES
+                                 for s in sides)
+    return out
+
+
+def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False,
+                mcmc_steps: int = 3000, progress=None, cancel=None, log=None, after_flip=None, flip_source: str = "",
+                flip_step=None, flagged_mask=None, flagged_label: str = "flagged", excluded=None) -> dict:
+    """The full SHOBS-P transit fit.
+
+    1. Least squares with the published shape as Gaussian priors (a/R*, b) and broad limb-darkening priors.
+    2. Errors rescaled so the reduced chi-square is 1, then multiplied by the red-noise beta.
+    3. MCMC (always) with the rescaled errors, for the reported values and uncertainties.
+    4. A second, free fit (no priors on a/R* and b) as a check of the shape.
+
+    2.2.13: after_flip (one flag per point, True after a meridian flip) adds the flip step to the baseline, fitted
+    jointly (see FLIP_STEP_ENABLED; flip_step=True/False overrides it). flagged_mask marks flagged frames the user put
+    back in (their error bars are doubled and the result says so). excluded = {"t": BJD_TDB, "jd": JD UTC, "label":
+    "cloud"} lists flagged frames left out, so the cautions can say when they emptied a baseline.
+    """
+    say = log or (lambda _m: None)
+    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
+    t, t_abs, t_ref, flux, err, am = S["t"], S["t_abs"], S["t_ref"], S["flux"], S["err"], S["am"]
+    period, priors, free, ld, cadence, starts = S["period"], S["priors"], S["free"], S["ld"], S["cadence"], S["starts"]
+    t_flip = S["t_flip"]
+
+    prob = TransitProblem(t, flux, err, am, period, priors, free, S["start"], detrend_airmass, detrend_time, ld,
+                          t_flip)
     say("Transit fit: least squares with the published shape as priors…")
+    if prob.t_flip is not None:
+        say(f"  meridian flip at BJD_TDB {t_flip + t_ref:.5f} ({flip_source or 'from the data'}): a baseline step "
+            "there is fitted together with the transit")
     x, chi2 = best_fit(prob, starts)
     dof = max(len(t) - len(prob.free), 1)
     rchi = chi2 / dof
@@ -463,8 +657,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     scale = math.sqrt(max(rchi, 1.0)) * beta
     say(f"  reduced chi-square {rchi:.2f}; red-noise beta {beta:.2f}; error bars x{scale:.2f} for the MCMC")
     prob_s = TransitProblem(t, flux, err * scale, am, period, priors, free, prob.full(x), detrend_airmass,
-                            detrend_time, ld)
-    x_s, _ = best_fit(prob_s)
+                            detrend_time, ld, t_flip)
+    x_s, chi2_s = best_fit(prob_s)
     n_burn = max(500, mcmc_steps // 3)
     say(f"  MCMC: {max(2 * len(prob_s.free) + 2, 20)} walkers, {n_burn} burn-in + {mcmc_steps} steps…")
     chain = run_mcmc(prob_s, x_s, n_walkers=20, n_burn=n_burn, n_steps=mcmc_steps, progress=progress, cancel=cancel)
@@ -473,7 +667,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     # Free shape check (no priors on a/R* and b), least squares only.
     free_fit = None
     try:
-        prob_f = TransitProblem(t, flux, err * scale, am, period, {}, free, best, detrend_airmass, detrend_time, ld)
+        prob_f = TransitProblem(t, flux, err * scale, am, period, {}, free, best, detrend_airmass, detrend_time, ld,
+                                t_flip)
         xf, chi2f = best_fit(prob_f, [{"b": 0.1}, {"b": 0.5}, {"b": 0.8}, {"b": 0.95, "k": best["k"] * 1.3},
                                       {"b": min(1.0 + best["k"] * 1.5, 1.4), "k": best["k"] * 2.0}])
         pf = prob_f.full(xf)
@@ -482,31 +677,62 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
                     "t14": total_duration(period, pf["a_rs"], min(pf["b"], pf["a_rs"] * 0.999), pf["k"])}
     except Exception as exc:
         say(f"  free-shape check skipped: {exc}")
+    flip = None
+    if prob_s.t_flip is not None:
+        flip = _flip_info(prob_s, chain["flat"], summary, best, chi2_s, S, scale, flip_source)
+        say(f"  flip step {flip['step'][0] * 100:+.2f} ± {flip['step'][1] * 100:.2f}%, step–depth correlation "
+            f"{flip['corr']:+.2f}" + (f"; without the step the depth would be {flip['nostep']['depth'] * 100:.2f}%"
+                                      if flip.get("nostep") else ""))
     model = prob_s.model(best)
     base = prob_s.baseline(best)
     resid = flux - model
     best["tc"] += t_ref
     summary["tc"] = (summary["tc"][0] + t_ref, summary["tc"][1])
+    fmask = S["flagged"]
     result = {
         "t": t_abs, "t_ref": t_ref, "flux": flux, "err": err, "err_scaled": err * scale, "airmass": am, "model": model,
         "baseline": base, "detrended": flux / base, "residuals": resid, "best": best, "summary": summary,
         "free_params": list(prob_s.free), "priors": priors, "ld_prior": ld, "rchi2": rchi, "beta": beta,
         "error_scale": scale, "rms": float(np.std(resid)), "cadence_days": cadence, "chain": chain,
-        "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "epoch": n, "period": period, "planet": dict(planet),
-        "eph_err_known": eph_err_known, "eph_source": ephemeris_source(planet) if tc0 else "",
-        "tc_start": tc_start,
-        "free_fit": free_fit, "n_points": len(t), "flux_median": float(med),
+        "tc_pred": S["tc_pred"], "tc_pred_err": S["tc_pred_err"], "epoch": S["n"], "period": period,
+        "planet": dict(planet), "eph_err_known": S["eph_err_known"],
+        "eph_source": ephemeris_source(planet) if S["has_eph"] else "",
+        "tc_start": S["tc_start"],
+        "free_fit": free_fit, "n_points": len(t), "flux_median": S["med"],
         "detrend": [name for name, on in (("airmass", detrend_airmass and prob_s.has_airmass),
                                           ("time", detrend_time)) if on],
+        # 2.2.13
+        "flip": flip, "flagged": fmask,
+        "with_flagged": ({"n": int(fmask.sum()), "label": flagged_label, "factor": FLAGGED_ERR_FACTOR}
+                         if fmask.any() else None),
+        "excluded": excluded if excluded and len(np.atleast_1d(excluded.get("t", []))) else None,
     }
     result["verdict"] = transit_verdict(result, prob_s)
     result["flags"] = transit_flags(result)
     v = result["verdict"]
     v["depth_unreliable"] = depth_unreliable(result) if v["state"] == "detected" else ""
+    if (flip and not flip["baseline_ok"] and v["state"] == "detected"
+            and FLIP_NO_BASELINE_VERDICT == "inconclusive"):
+        # 2.2.13: no baseline of its own on one side of the flip: the step trades off against the timing as well as
+        # the depth, so the dip is reported, not measured.
+        v.update(state="inconclusive", detected=False, depth_unreliable="", flip_inconclusive=True,
+                 reason=(f"Inconclusive. The dip beats a flat line with the flip step (ΔBIC {v['dbic']:.0f}), but "
+                         + flip["reason"] + "; without that baseline the step trades off against the timing as well "
+                         "as the depth."))
+    elif flip and not flip["depth_ok"] and v["state"] == "detected":
+        # 2.2.13: the flip step and the depth cannot be told apart on this night: timing usable, depth not.
+        v["depth_unreliable"] = flip["reason"] + ("; and " + v["depth_unreliable"] if v["depth_unreliable"] else "")
+    if result["with_flagged"]:
+        wf = result["with_flagged"]
+        v["includes_flagged"] = (f"Includes {wf['n']} {wf['label']}-flagged frame{'s' if wf['n'] != 1 else ''} "
+                                 f"(error bars ×{wf['factor']:g}).")
     note = ""
     if v["state"] == "none":
         note = ("NO TRANSIT MEASURED: " + v["reason"] + " The numbers are shown for reference only; do not report "
                 "them.")
+    elif v["state"] == "inconclusive" and v.get("flip_inconclusive"):
+        note = ("INCONCLUSIVE. " + v["reason"].replace("Inconclusive. ", "", 1) + " Neither Tc nor the depth is "
+                "measured. A report from this fit carries the verdict in its notes.")
     elif v["state"] == "inconclusive":
         note = ("INCONCLUSIVE. " + v["reason"].replace("Inconclusive. ", "", 1) + " Tc may still be useful; the "
                 "depth is not. A report from this fit carries the verdict in its notes.")
@@ -590,12 +816,17 @@ def transit_verdict(r: dict, prob) -> dict:
 
     t, flux, err = prob.t, prob.flux, prob.err
     am = prob.am
-    names = [p for p in ("c0", "c_am", "c_t") if p in prob.free]
+    # 2.2.13: with a meridian flip in the model the flat line gets the same step, so a plain jump at the flip is
+    # never taken for a transit.
+    names = [p for p in ("c0", "c_am", "c_t", "step") if p in prob.free]
     t_mid = prob.t_mid
+    after = prob.after if prob.after is not None else 0.0
 
     def flat(x):
         p = dict(zip(names, x))
         base = p.get("c0", 1.0) + p.get("c_am", 0.0) * am + p.get("c_t", 0.0) * (t - t_mid)
+        if "step" in p:
+            base = base * (1.0 + p["step"] * after)
         return (flux - base) / err
 
     sol = least_squares(flat, [r["best"].get(n, 0.0) if n != "c0" else 1.0 for n in names])
@@ -609,17 +840,23 @@ def transit_verdict(r: dict, prob) -> dict:
     t14 = r["summary"].get("t14", (r["planet"].get("t14") or 0.1, 0))[0]
     reasons = []
     if dbic < 10:
-        reasons.append(f"a flat line fits about as well as a transit (ΔBIC {dbic:.1f}; a detection needs 10 or more)")
+        reasons.append(f"{'a flat line with a step at the meridian flip' if 'step' in names else 'a flat line'} fits "
+                       f"about as well as a transit (ΔBIC {dbic:.1f}; a detection needs 10 or more)")
     if tc_err > 0.25 * t14:
         reasons.append(f"Tc is not pinned down (± {tc_err * 24:.1f} h for a {t14 * 24:.1f}-hour transit)")
-    # 2.2: is the dip believable? (1) Its depth against the published one.
-    plaus = depth_plausibility(r)
+    # 2.2: is the dip believable? (1) Its depth against the published one. 2.2.13: not when a meridian flip makes the
+    # depth unmeasurable (the step and the depth trade off); the depth is then reported as unreliable instead.
+    flip = r.get("flip")
+    plaus = depth_plausibility(r) if not (flip and not flip.get("depth_ok", True)) else ""
     if plaus:
         reasons.append(plaus)
     # (2) A plain jump in the light curve at a gap (a mount problem, a rotator move, a re-centring) imitates a
     # transit. If a baseline with a step after the gap fits as well as the transit, the dip is not measured.
-    step = step_at_gap(t, flux, err, am, t_mid, names, r["best"], chi2_tr, extra,
-                       tc_rel=r["best"]["tc"] - r.get("t_ref", 0.0))
+    # 2.2.13: with the flip step in the model, the flat line above already carries that step, so this is skipped.
+    step = None
+    if "step" not in prob.free:
+        step = step_at_gap(t, flux, err, am, t_mid, names, r["best"], chi2_tr, extra,
+                           tc_rel=r["best"]["tc"] - r.get("t_ref", 0.0))
     step_reason = ""
     if step and step["explains"]:
         step_reason = (f"a plain {abs(step['step']) * 100:.1f}% jump after the {step['gap_min']:.0f}-minute gap at "
@@ -641,7 +878,8 @@ def transit_verdict(r: dict, prob) -> dict:
         text = "; ".join(parts)
         return text[:1].upper() + text[1:] + "."
 
-    reason = {"detected": f"Transit detected: ΔBIC {dbic:.0f} against a flat line, Tc ± {tc_err * 1440:.1f} min.",
+    flat_name = "a flat line with the flip step" if "step" in names else "a flat line"
+    reason = {"detected": f"Transit detected: ΔBIC {dbic:.0f} against {flat_name}, Tc ± {tc_err * 1440:.1f} min.",
               "inconclusive": f"Inconclusive. The dip beats a flat line (ΔBIC {dbic:.0f}), but "
                               + "; ".join(reasons) + ".",
               "none": sentence(reasons) if reasons else ""}[state]
@@ -649,11 +887,37 @@ def transit_verdict(r: dict, prob) -> dict:
             "chi2_transit": chi2_tr, "step": step, "reason": reason}
 
 
+def published_depth(planet: dict | None) -> tuple:
+    """2.2.13: the depth a fit is compared with, and its label: (Rp/R*)² whenever Rp/R* is known, else the listed
+    depth. The fit's "Depth" is its (Rp/R*)², so this compares like with like. A catalog's listed depth (the NASA
+    Exoplanet Archive's pl_trandep) is a different quantity, or from another paper: the limb-darkened dip at
+    mid-transit is deeper than (Rp/R*)² (by 10–30% in a green band), and some listed depths come from other analyses
+    (HAT-P-23 b: listed 1.05%, while its Rp/R* 0.1169 gives 1.37%). complete_planet already sets planet["depth"] to
+    (Rp/R*)² when both are known; this also covers dicts made before 2.2.13."""
+    p = planet or {}
+    k = p.get("k")
+    if isinstance(k, (int, float)) and math.isfinite(k) and k > 0:
+        return k * k, "(Rp/R*)²"
+    d = p.get("depth")
+    return (d if isinstance(d, (int, float)) and math.isfinite(d) and d > 0 else None), "depth"
+
+
+def ld_center_depth(planet: dict | None) -> float | None:
+    """2.2.13: the limb-darkened dip at mid-transit for the published shape (what the dotted published-shape curve
+    on the plot reaches), for the notes only; comparisons use (Rp/R*)²."""
+    p = planet or {}
+    if not p.get("k"):
+        return None
+    u1, u2 = limb_darkening_guess(p.get("teff"))
+    b = p.get("b") if p.get("b") is not None else 0.0
+    return float(1.0 - occultation(np.array([min(b, 1.0 + p["k"] - 1e-6)]), p["k"], u1, u2)[0])
+
+
 def depth_unreliable(r: dict) -> str:
     """2.2.7: for a detected transit, '' when the depth can be trusted, else why not: the depth is more than 3 sigma
     from the published one AND the night gives a reason a systematic could have made the difference (a jump at a gap
     inside the transit that fits nearly as well, ΔBIC under 10; or a one-sided baseline). Timing stays usable."""
-    pub = (r.get("planet") or {}).get("depth")
+    pub, pub_label = published_depth(r.get("planet"))
     s = r.get("summary") or {}
     if not pub or pub <= 0 or "depth" not in s:
         return ""
@@ -677,14 +941,14 @@ def depth_unreliable(r: dict) -> str:
             causes.append(f"the baseline is one-sided ({pre_min:.0f} min before, {post_min:.0f} min after)")
     if not causes:
         return ""
-    return (f"depth {depth * 100:.2f}% vs published {pub * 100:.2f}% ({abs(depth - pub) / max(err, 1e-6):.0f}σ), and "
-            + "; ".join(causes))
+    return (f"depth {depth * 100:.2f}% vs published {pub_label} {pub * 100:.2f}% "
+            f"({abs(depth - pub) / max(err, 1e-6):.0f}σ), and " + "; ".join(causes))
 
 
 def depth_plausibility(r: dict) -> str:
     """'' when the fitted depth is believable against the published depth, else the reason it is not: more than
     3x deeper (or shallower) than published AND more than 3 sigma away."""
-    pub = (r.get("planet") or {}).get("depth")
+    pub, pub_label = published_depth(r.get("planet"))
     s = r.get("summary") or {}
     if not pub or pub <= 0 or "depth" not in s:
         return ""
@@ -694,7 +958,8 @@ def depth_plausibility(r: dict) -> str:
     ratio = depth / pub
     sigma = abs(depth - pub) / max(err, 1e-6)
     if (ratio > 3.0 or ratio < 1.0 / 3.0) and sigma > 3.0:
-        return (f"the depth, {depth * 100:.2f}%, is {ratio:.1f}x the published {pub * 100:.2f}% ({sigma:.0f}σ away); a "
+        return (f"the depth, {depth * 100:.2f}%, is {ratio:.1f}x the published {pub_label} {pub * 100:.2f}% "
+                f"({sigma:.0f}σ away); a "
                 "real transit of this planet cannot be that " + ("deep" if ratio > 1 else "shallow") + ", so something "
                 "in the light curve (a jump, a trend, a bad comp, calibration) made it")
     return ""
@@ -783,8 +1048,11 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         side = "before ingress" if pre_min < 20 else "after egress"
         if pre_min < 20 and post_min < 20:
             side = "before ingress or after egress"
-        flags.append(("warn", f"Little or no baseline {side} ({pre_min:.0f} min before, {post_min:.0f} min after). "
-                              "A one-sided baseline lets a trend imitate depth or shift Tc."))
+        # 2.2.13: say when flagged frames (cloud) left out of the fit are what emptied that side.
+        why = excluded_baseline_text(r.get("excluded"), t1, t4, pre_min < 20, post_min < 20, pre_min, post_min)
+        flags.append(("warn", (why + " " if why else "") +
+                      f"Little or no baseline {side} ({pre_min:.0f} min before, {post_min:.0f} min after). "
+                      "A one-sided baseline lets a trend imitate depth or shift Tc."))
     ts = np.sort(t)
     inside = ts[(ts >= t1) & (ts <= t4)]
     if inside.size >= 2:
@@ -839,17 +1107,89 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     if r["beta"] > 1.5:
         flags.append(("info", f"Red noise: beta {r['beta']:.2f}. Correlated noise (seeing, airmass, guiding) is "
                               "included in the uncertainties."))
-    pub = r["planet"].get("depth")
-    if pub and "depth" in s:
+    pub, pub_label = published_depth(r["planet"])
+    if r["planet"].get("depth_note"):
+        flags.append(("info", r["planet"]["depth_note"]))
+    flip = r.get("flip")
+    if pub and "depth" in s and not (flip and not flip.get("depth_ok", True)):
         dd = s["depth"][0] - pub
         if abs(dd) > 3 * max(s["depth"][1], 1e-5):
             why = ("a neighbor's light in the aperture dilutes a transit (makes it shallower)" if dd < 0 else
                    "a deeper dip than published usually comes from the light curve itself (a jump, a trend, a comp "
                    "or calibration problem); a neighbor's light cannot make a transit deeper")
-            flags.append(("info", f"Depth {s['depth'][0] * 100:.2f}% vs published {pub * 100:.2f}% "
-                                  f"({dd * 100:+.2f}%). A clear-filter depth can differ a little from TESS's red "
-                                  f"band; a large difference: {why}."))
+            ldc = ld_center_depth(r["planet"]) if pub_label != "depth" else None
+            ld_text = (f" (the fit's depth is its (Rp/R*)², compared with the published one; the limb-darkened dip "
+                       f"at mid-transit is deeper, about {ldc * 100:.2f}% for the published shape)" if ldc else "")
+            flags.append(("info", f"Depth {s['depth'][0] * 100:.2f}% vs published {pub_label} {pub * 100:.2f}% "
+                                  f"({dd * 100:+.2f}%){ld_text}. A clear-filter depth can differ a little from "
+                                  f"TESS's red band; a large difference: {why}."))
+    # 2.2.13: the meridian flip step, and flagged frames put back in.
+    if flip:
+        rel_h = (flip["t_flip"] - best["tc"]) * 24
+        st, se = flip["step"]
+        ns = flip.get("nostep")
+        text = (f"Meridian flip at BJD_TDB {flip['t_flip']:.5f} ({rel_h:+.2f} h from mid-transit; "
+                f"{flip.get('source') or 'from the data'}): a baseline step there was fitted together with the "
+                f"transit: step {st * 100:+.2f} ± {se * 100:.2f}%.")
+        if ns:
+            text += (f" Without the step the depth would be {ns['depth'] * 100:.2f} ± {ns['depth_err'] * 100:.2f}% "
+                     f"(least squares); ΔBIC {ns['dbic']:+.0f} "
+                     + ("in favour of the step." if ns["dbic"] >= 0 else "against the step."))
+        flags.append(("info", text))
+        c = flip.get("corr")
+        if c is not None and math.isfinite(c):
+            if abs(c) > FLIP_CORR_WARN:
+                flags.append(("warn", f"Step–depth correlation {c:+.2f} (MCMC): the step and the depth trade off; "
+                                      "depth not measurable from this night."))
+            else:
+                flags.append(("info", f"Step–depth correlation {c:+.2f} (MCMC); its uncertainty is part of the depth's."))
+        if not flip.get("baseline_ok", True):
+            sd = flip["sides"]
+            flags.append(("warn", f"Out-of-transit baseline on each side of the flip: {sd['before'][0]:.0f} min "
+                                  f"({_frames(sd['before'][1])}) before, {sd['after'][0]:.0f} min "
+                                  f"({_frames(sd['after'][1])}) after. Each side needs at least {FLIP_MIN_OOT_MIN:.0f} min and "
+                                  f"{FLIP_MIN_OOT_FRAMES} frames to tell the step from the depth, so "
+                                  + ("neither the depth nor the timing is trusted (the step trades off against both)."
+                                     if FLIP_NO_BASELINE_VERDICT == "inconclusive" else
+                                     "the depth is not trusted; the timing is.")))
+    wf = r.get("with_flagged")
+    if wf:
+        flags.append(("warn", f"This fit includes {wf['n']} frame{'s' if wf['n'] != 1 else ''} flagged {wf['label']}, "
+                              f"with their error bars ×{wf['factor']:g}. Compare it with the fit without them (Fit "
+                              "transit) before reporting it."))
     return flags
+
+
+def excluded_baseline_text(excluded, t1, t4, pre_short, post_short, pre_min, post_min) -> str:
+    """2.2.13: when a side's baseline is short and flagged frames left out of the fit lie there, say so:
+    'No usable baseline after egress: the 31 frames there (00:44–01:20) were flagged cloud.' Times are local
+    (from the frames' JD UTC); minutes from the fitted contact when no JD is given."""
+    if not excluded:
+        return ""
+    t = np.atleast_1d(np.asarray(excluded.get("t", []), dtype=float))
+    jd = excluded.get("jd")
+    jd = np.atleast_1d(np.asarray(jd, dtype=float)) if jd is not None else None
+    label = excluded.get("label") or "flagged"
+    parts = []
+    for short, name, mask, have in ((pre_short, "before ingress", t < t1, pre_min),
+                                    (post_short, "after egress", t > t4, post_min)):
+        if not short or not mask.any():
+            continue
+        n = int(mask.sum())
+        try:
+            if jd is not None and len(jd) == len(t):
+                span = (f"{jd_to_local(float(jd[mask].min())).strftime('%H:%M')}–"
+                        f"{jd_to_local(float(jd[mask].max())).strftime('%H:%M')}")
+            else:
+                ref = t1 if name == "before ingress" else t4
+                span = (f"{(t[mask].min() - ref) * 1440:+.0f} to {(t[mask].max() - ref) * 1440:+.0f} min from "
+                        + ("ingress" if name == "before ingress" else "egress"))
+        except Exception:
+            span = ""
+        head = "No usable baseline" if have <= 0 else f"Only {have:.0f} min of usable baseline"
+        parts.append(f"{head} {name}: the {n} frame{'s' if n != 1 else ''} there" + (f" ({span})" if span else "")
+                     + f" {'were' if n != 1 else 'was'} flagged {label}.")
+    return " ".join(parts)
 
 
 # ---- Lookups (NASA Exoplanet Archive, ExoFOP) ----------------------------------------------------
@@ -1201,8 +1541,19 @@ def complete_planet(p: dict) -> dict:
         raise ValueError("the catalog entry has no period")
     if p.get("k") is None and p.get("depth"):
         p["k"] = math.sqrt(p["depth"])
-    if p.get("depth") is None and p.get("k"):
-        p["depth"] = p["k"] ** 2
+    if p.get("k"):
+        # 2.2.13: the reference depth is (Rp/R*)² whenever Rp/R* is known (see published_depth). A listed depth that
+        # disagrees by more than 20% is kept as depth_listed, with a note for the fit's cautions.
+        k2 = p["k"] ** 2
+        listed = p.get("depth")
+        if listed and abs(listed / k2 - 1.0) > 0.20 and not p.get("depth_note"):
+            src = str(p.get("source") or "")
+            who = ("The depth typed on the Input page" if p.get("depth_typed")
+                   else "The Archive's listed depth" if "Archive" in src else "The listed depth")
+            p["depth_listed"] = listed
+            p["depth_note"] = (f"{who}, {listed * 100:.2f}%, disagrees with its Rp/R* ({p['k']:.4f} → "
+                               f"{k2 * 100:.2f}%); SHOBS-P compares with (Rp/R*)².")
+        p["depth"] = k2
     if p.get("b") is None and p.get("inc") is not None and p.get("a_rs"):
         p["b"] = p["a_rs"] * math.cos(math.radians(p["inc"]))
     if p.get("a_rs") is None and p.get("t14"):
@@ -1520,10 +1871,11 @@ def fit_text(result: dict, meta: dict) -> str:
                 f"published values from {pl.get('source', '')} {pl.get('reference', '')}".rstrip()),
              f"Shape priors   from {pl.get('source', '')}", "",
              "Fitted values (MCMC median and 68% interval):"]
-    for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t"):
+    for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t", "step"):
         if name in s:
             label = {"tc": "Tc (BJD_TDB)", "k": "Rp/R*", "depth": "Depth", "a_rs": "a/R*", "b": "b", "inc": "inc (deg)",
-                     "t14": "T14 (days)", "u1": "u1", "u2": "u2", "c_am": "airmass slope", "c_t": "time slope"}[name]
+                     "t14": "T14 (days)", "u1": "u1", "u2": "u2", "c_am": "airmass slope", "c_t": "time slope",
+                     "step": "flip step"}[name]
             v, e = s[name]
             fmt = "{:.6f}" if name == "tc" else "{:.5f}"
             lines.append(f"  {label:<16}{fmt.format(v)} ± {fmt.format(e)}")
@@ -1541,9 +1893,78 @@ def fit_text(result: dict, meta: dict) -> str:
     ff = result.get("free_fit")
     if ff:
         lines.append(f"Free-shape check Rp/R* {ff['p']['k']:.4f}, a/R* {ff['p']['a_rs']:.2f}, b {ff['p']['b']:.3f}")
+    lines += [f"Meridian flip    {ln}" if i == 0 else f"                 {ln}" for i, ln in enumerate(flip_lines(result))]
+    wf = result.get("with_flagged")
+    if wf:
+        lines.append(f"Flagged frames   INCLUDED: {wf['n']} frames flagged {wf['label']}, error bars x{wf['factor']:g}")
+    v = result.get("verdict") or {}
+    if v.get("depth_unreliable"):
+        lines.append("Verdict          timing usable, depth unreliable: " + v["depth_unreliable"])
     if result["flags"]:
         lines += ["", "Notes"] + [("  ! " if lvl == "warn" else "  - ") + text for lvl, text in result["flags"]]
     return "\n".join(lines) + "\n"
+
+
+def flip_lines(result: dict) -> list:
+    """2.2.13: the flip step in plain lines (fit text, ExoFOP notes): [] without a flip."""
+    flip = (result or {}).get("flip")
+    if not flip:
+        return []
+    st, se = flip["step"]
+    out = [f"at BJD_TDB {flip['t_flip']:.5f} ({flip.get('source') or 'from the data'}); baseline step fitted jointly "
+           f"with the transit: {st * 100:+.2f} +/- {se * 100:.2f}%"]
+    c = flip.get("corr")
+    if c is not None and math.isfinite(c):
+        out.append(f"step-depth correlation {c:+.2f} (MCMC)"
+                   + ("; the step and the depth trade off; depth not measurable from this night"
+                      if abs(c) > FLIP_CORR_WARN else ""))
+    ns = flip.get("nostep")
+    if ns:
+        out.append(f"without the step: depth {ns['depth'] * 100:.2f} +/- {ns['depth_err'] * 100:.2f}% (least squares), "
+                   f"dBIC {ns['dbic']:+.0f} " + ("in favour of the step" if ns["dbic"] >= 0 else "against the step"))
+    sd = flip.get("sides") or {}
+    if sd:
+        out.append(f"out-of-transit baseline {sd['before'][0]:.0f} min ({_frames(sd['before'][1])}) before the flip, "
+                   f"{sd['after'][0]:.0f} min ({_frames(sd['after'][1])}) after"
+                   + ("" if flip.get("baseline_ok") else f" (each side needs {FLIP_MIN_OOT_MIN:.0f} min and "
+                                                         f"{FLIP_MIN_OOT_FRAMES} frames)"))
+    return out
+
+
+def flip_report_note(result: dict) -> str:
+    """2.2.13: one ASCII line for an AAVSO report's NOTES. It names the flip time in a fixed form ("meridian flip at
+    BJD_TDB 2461326.63467") that report_flip_time() reads back, so a report SHOBS-P wrote can be refitted with
+    the step."""
+    flip = (result or {}).get("flip")
+    if not flip:
+        return ""
+    st, se = flip["step"]
+    text = f"SHOBS-P: meridian flip at BJD_TDB {flip['t_flip']:.5f}; baseline step {st * 100:+.2f}+/-{se * 100:.2f}%"
+    if flip.get("corr") is not None and math.isfinite(flip["corr"]):
+        text += f", step-depth corr {flip['corr']:+.2f}"
+    if flip.get("nostep"):
+        text += f", depth without step {flip['nostep']['depth'] * 100:.2f}+/-{flip['nostep']['depth_err'] * 100:.2f}%"
+    return text
+
+
+def report_flip_time(header: dict) -> float | None:
+    """2.2.13: the meridian flip time SHOBS-P wrote into a report's NOTES, or None."""
+    m = re.search(r"meridian flip at BJD_TDB\s+(\d{7}\.\d+)", str((header or {}).get("NOTES", "")))
+    return float(m.group(1)) if m else None
+
+
+def flip_from_gap(t, min_gap_min: float = FLIP_GAP_MIN_MIN) -> float | None:
+    """2.2.13: for a report the user says has a meridian flip (no flip segment in the data): the middle of the
+    largest gap, if it is at least min_gap_min minutes and 5 cadences long; else None. Never used on its own:
+    a gap can be clouds or a re-centring, so only the user's say-so makes it a flip."""
+    t = np.sort(np.asarray(t, dtype=float)[np.isfinite(np.asarray(t, dtype=float))])
+    if t.size < 12:
+        return None
+    dt = np.diff(t)
+    k = int(np.argmax(dt))
+    if dt[k] * 1440 < max(min_gap_min, 5 * float(np.median(dt)) * 1440):
+        return None
+    return float(t[k] + dt[k] / 2)
 
 
 # ---- Tonight's transits (finder) ----------------------------------------------------------------------
@@ -1590,8 +2011,8 @@ def load_transit_catalog(refresh: bool = False, max_age_days: float = 7.0) -> tu
              "depth": (_f(row.get("pl_trandep")) or 0) / 100.0 or None, "k": _f(row.get("pl_ratror")),
              "ra": _f(row.get("ra")), "dec": _f(row.get("dec")), "vmag": _f(row.get("sy_vmag")),
              "tmag": _f(row.get("sy_tmag"))}
-        if p["depth"] is None and p["k"]:
-            p["depth"] = p["k"] ** 2
+        if p["k"]:
+            p["depth"] = p["k"] ** 2      # 2.2.13: (Rp/R*)², as everywhere else (see published_depth)
         if p["period"] and p["t0"] and p["ra"] is not None and p["dec"] is not None:
             planets.append(p)
     return planets, note

@@ -18,9 +18,7 @@ All three share the same steps: **Input → Blink → Calibrate → Photometry �
 
 **Variables mode** is for following a known variable star, one night or many. You type the star's name and
 SHOBS-P looks up its position in SIMBAD and VSX, along with its catalogued period if it has one. After calibration,
-**Label chart** circles the catalog stars in the field with their magnitudes, from the AAVSO comparison sequence,
-Gaia DR3, APASS or Tycho-2. The best comparison stars, close to the target in brightness and colour, are ringed in
-green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
+the image **solves itself**, and every catalog (the AAVSO comparison sequence, Gaia DR3, APASS and Tycho-2) is merged into one star list: click any star and its name and magnitude fill in. The best comparison stars, AAVSO sequence stars first, close to the target in brightness and colour, are ringed in green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
 frames up across meridian flips, and flags saturated frames, cloud and drift.
 
 The result is a **light curve with honest error bars**: they include atmospheric scintillation as well as photon
@@ -98,8 +96,8 @@ Then go through the steps on the left: **Blink → Calibrate → Photometry → 
 2. **Blink:** step through the lights and reject anything with trails, clouds or bad guiding.
 3. **Calibrate:** check the camera (Bayer pattern for a colour camera, MONO for a monochrome one; SHOBS-P reads it
    from the headers or the flats when it can) and press **Build masters and calibrate**.
-4. **Photometry:** press **Label chart** to circle catalog stars with their magnitudes, click the target, pick one
-   or more comparison stars (green rings are good choices) and a check star, then **Run photometry**.
+4. **Photometry:** the image solves itself; click the target, pick one
+   or more comparison stars (green rings are good choices; you can also type a name) and a check star, then **Run photometry**.
 5. **Output:** the light curve, period search and AAVSO report (Variables); the MCMC transit fit and AAVSO
    exoplanet report (Transits); or the list of stars that vary (Discovery).
 

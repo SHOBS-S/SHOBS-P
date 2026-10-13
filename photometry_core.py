@@ -583,6 +583,10 @@ def build_masters(
 # ---- 2.2.8: SHOBS-P's own calibration masters, saved beside their raw frames and reused ---------------------
 
 MASTER_PREFIX = "SHOBS-P_master_"
+# 2.2.13 (John): masters live in a subfolder of the calibration folder, not beside the raw frames. Other programs
+# that take "every FITS in the folder" (TransitLab debayered SHOBS-P_master_bias_bin2.fits with the raw bias frames
+# on 13 Oct, and EXOTIC crashed on the half-size master) then never see them.
+MASTER_DIR = "SHOBS-P masters"
 MASTER_KINDS = ("bias", "dark", "flat")
 
 
@@ -591,6 +595,11 @@ def master_file_name(kind: str, binning: int, exptime: float | None = None) -> s
     if kind == "dark":
         return f"{MASTER_PREFIX}dark_bin{int(binning)}_{float(exptime or 0):g}s.fits"
     return f"{MASTER_PREFIX}{kind}_bin{int(binning)}.fits"
+
+
+def master_path(paths: list[str], kind: str, binning: int, exptime: float | None = None) -> str:
+    """Where the master for these raw frames is saved: <their folder>/SHOBS-P masters/<master_file_name>."""
+    return os.path.join(os.path.dirname(paths[0]), MASTER_DIR, master_file_name(kind, binning, exptime))
 
 
 def is_shobsp_master_name(path: str) -> bool:
@@ -710,9 +719,23 @@ def find_saved_master(paths: list[str], kind: str, binning: int, depends: dict, 
     (None, reason)."""
     if not paths:
         return None, "no frames"
-    path = os.path.join(os.path.dirname(paths[0]), master_file_name(kind, binning, exptime))
+    path = master_path(paths, kind, binning, exptime)
     if not os.path.isfile(path):
-        return None, "none saved yet"
+        # 2.2.13: a master saved the old way (beside the frames, 2.2.8-2.2.12) is still found, and moved into the
+        # subfolder on this first reuse; when the folder is read-only it is used where it is.
+        old = os.path.join(os.path.dirname(paths[0]), master_file_name(kind, binning, exptime))
+        if not os.path.isfile(old):
+            return None, "none saved yet"
+        path = old
+        try:
+            header = read_header(old)
+            if master_stamp(header) == kind.upper():
+                new = master_path(paths, kind, binning, exptime)
+                os.makedirs(os.path.dirname(new), exist_ok=True)
+                os.replace(old, new)
+                path = new
+        except Exception:
+            path = old
     try:
         header = read_header(path)
     except Exception as exc:
@@ -815,13 +838,14 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     def save_it(kind, data, paths, headers, extra, exptime=None):
         if not save or not paths:
             return
-        folder = os.path.dirname(paths[0])
-        path = os.path.join(folder, master_file_name(kind, binning, exptime))
+        path = master_path(paths, kind, binning, exptime)
+        folder = os.path.dirname(path)
         try:
+            os.makedirs(folder, exist_ok=True)
             write_master(path, data, _master_cards(kind, binning, paths, headers, version, extra))
             masters.headers[kind] = read_header(path)
-            log(f"Saved master {kind} in the {kind} folder: {os.path.basename(path)} (reused next time while these "
-                "frames are unchanged)")
+            log(f"Saved master {kind} in the {kind} folder's '{MASTER_DIR}' subfolder: {os.path.basename(path)} "
+                "(reused next time while these frames are unchanged)")
         except Exception as exc:
             log(f"Could not save the master {kind} in {folder} ({exc}); continuing without saving it.")
 
@@ -1929,9 +1953,29 @@ def _lookup_vsx(name: str) -> dict:
     }
 
 
+# 2.2.13: the epoch catalog positions are moved to (decimal year). None = now; the app sets it from the lights'
+# DATE-OBS before solving, so old data (WASP-12 b 2015) get the stars where they were that night.
+PM_EPOCH_YEAR = None
+
+
+def header_epoch_year(header: dict):
+    """Decimal year of a frame's DATE-OBS (None when missing or unreadable)."""
+    text = str((header or {}).get("DATE-OBS") or "").strip()
+    if not text:
+        return None
+    try:
+        return float(Time(text.replace(" ", "T")[:23], format="isot", scale="utc").decimalyear)
+    except Exception:
+        return None
+
+
+def pm_epoch() -> float:
+    return float(PM_EPOCH_YEAR) if PM_EPOCH_YEAR else Time.now().decimalyear
+
+
 def _apply_pm(ra_deg: float, dec_deg: float, pm_ra_cosdec: float, pm_dec: float) -> tuple[float, float]:
     """Move J2000 coordinates to now. Proper motions in mas/yr, RA component already times cos(dec)."""
-    years = Time.now().decimalyear - 2000.0
+    years = pm_epoch() - 2000.0
     ra_deg += pm_ra_cosdec * years / (3_600_000.0 * max(math.cos(math.radians(dec_deg)), 0.01))
     dec_deg += pm_dec * years / 3_600_000.0
     return ra_deg % 360.0, dec_deg
@@ -2188,7 +2232,7 @@ def _pm_to_now(ra_deg: float, dec_deg: float, pm_ra, pm_dec, epoch: float) -> tu
         return ra_deg, dec_deg
     if not (math.isfinite(pm_ra) and math.isfinite(pm_dec)):
         return ra_deg, dec_deg
-    years = Time.now().decimalyear - epoch
+    years = pm_epoch() - epoch
     ra_deg += pm_ra * years / (3_600_000.0 * max(math.cos(math.radians(dec_deg)), 0.01))
     dec_deg += pm_dec * years / 3_600_000.0
     return ra_deg % 360.0, dec_deg
@@ -2290,7 +2334,7 @@ def fetch_tycho2(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
         name = f"TYC {row.get('TYC1', '')}-{row.get('TYC2', '')}-{row.get('TYC3', '')}"
         stars.append({"auid": name, "label": f"{mag:.1f}" if mag is not None else "", "ra": ra, "dec": dec,
                       "mag": mag, "mags": mags, "band": band, "catalog": "Tycho-2", "bright": vt,
-                      "service": "VizieR I/259"})
+                      "service": "VizieR I/259", "pm": (_num(row.get("pmRA")), _num(row.get("pmDE")))})
     return stars
 
 
@@ -2340,9 +2384,10 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
     )
     query = urllib.parse.urlencode({"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": adql})
     try:
-        text = _http_get("https://gea.esac.esa.int/tap-server/tap/sync?" + query, timeout=180).decode("utf-8", errors="replace")
+        text = _http_get("https://gea.esac.esa.int/tap-server/tap/sync?" + query, timeout=25).decode("utf-8", errors="replace")
     except Exception as exc:
-        # ESA archive slow or down: same stars from the VizieR copy of Gaia DR3.
+        # ESA archive slow or down (25 s, 2.2.13: so the fallback still fits in the solve's 45 s): same stars from
+        # the VizieR copy of Gaia DR3.
         try:
             return fetch_gaia_dr3_vizier(ra_deg, dec_deg, radius_deg, band, glimit)
         except Exception as exc2:
@@ -2361,7 +2406,7 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
         mag = _num(row.get(column))
         stars.append({"auid": f"Gaia DR3 {row.get('source_id', '')}", "label": f"{mag:.1f}" if mag is not None else "",
                       "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": "ESA Gaia archive"})
+                      "service": "ESA Gaia archive", "pm": (_num(row.get("pmra")), _num(row.get("pmdec")))})
     if not stars and "error" in text.lower():
         raise ValueError("Gaia archive: " + text.strip()[:300])
     return stars
@@ -2392,7 +2437,8 @@ def fetch_gaia_dr3_vizier(ra_deg: float, dec_deg: float, radius_deg: float, band
         stars.append({"auid": f"Gaia DR3 {row.get('Source', '')}", "label": f"{mag:.1f}" if mag is not None else "",
                       "ra": ra, "dec": dec, "mag": mag, "mags": ({"V": v_from_g} if c is not None and -0.5 < c < 5.0 else {}),
                       "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": "VizieR I/355 (ESA archive unavailable; V from G only)"})
+                      "service": "VizieR I/355 (ESA archive unavailable; V from G only)",
+                      "pm": (_num(row.get("pmRA")), _num(row.get("pmDE")))})
     return stars
 
 
@@ -2413,6 +2459,241 @@ def fetch_comparison_stars(catalog: str, ra_hours: float, dec_deg: float, fov_ar
         star["bright"] = star["mag"]
         star["service"] = "AAVSO VSP"
     return stars, str(payload.get("chartid") or "")
+
+
+# ---- 2.2.13: one star list from every catalog ---------------------------------------------------------------
+# Which catalog a star's name and magnitudes come from, best first (John, 13 Oct). Names: Tycho, then APASS, then
+# Gaia, so the names already in John's series stay the same; an AAVSO sequence star keeps its AUID and chart label
+# alongside. Magnitudes: the AAVSO sequence (vetted, what AAVSO reports expect), then APASS (Johnson B, V), then
+# Gaia's Johnson-Kron-Cousins synthetic photometry, then Tycho converted to Johnson.
+NAME_ORDER = ("Tycho-2", "APASS DR9", "Gaia DR3", "AAVSO sequence")
+MAG_ORDER = ("AAVSO sequence", "APASS DR9", "Gaia DR3", "Tycho-2")
+MERGE_ARCSEC = 3.0
+
+
+def _pm_back(star: dict, to_year: float, now_year: float | None = None):
+    """A PM-corrected (now-epoch) catalog position moved back to another epoch, or None without a proper motion."""
+    pm = star.get("pm") or (None, None)
+    try:
+        pmra, pmde = float(pm[0]), float(pm[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (math.isfinite(pmra) and math.isfinite(pmde)):
+        return None
+    if now_year is None:
+        return None
+    years = to_year - now_year
+    dec = star["dec"] + pmde * years / 3_600_000.0
+    ra = star["ra"] + pmra * years / (3_600_000.0 * max(math.cos(math.radians(star["dec"])), 0.01))
+    return ra % 360.0, dec
+
+
+def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_ARCSEC) -> list[dict]:
+    """One entry per star from several catalogs' star lists ({catalog: [star, …]}), matched by sky position.
+
+    Gaia (complete, with proper motions) is the backbone; Tycho is already moved to the epoch; AAVSO and APASS
+    positions are J2000-ish without proper motion, so they are matched against each star's position now AND at
+    J2000 (HD 219134 has moved ~55" since 2000). A match also needs the V magnitudes to agree within 1 mag when both
+    are known, so a faint Gaia neighbour never takes a bright star's name. Each entry keeps the keys the rest of
+    SHOBS-P reads (auid, label, ra, dec, mag, mags, band, catalog, bright, service) plus: sources {catalog: that
+    catalog's own entry}, aka (every other name), seq (AAVSO sequence label, AUID, chart) and mag_source per band."""
+    band = _band_for(band)
+    merged: list[dict] = []
+    order = [c for c in ("Gaia DR3", "Tycho-2", "APASS DR9", "AAVSO sequence") if c in by_catalog]
+    order += [c for c in by_catalog if c not in order]
+    cells: dict = {}
+    cell = 10.0 / 3600.0
+    every = [st for c in order for st in (by_catalog.get(c) or []) if st.get("ra") is not None and st.get("dec") is not None]
+    if not every:
+        return []
+    # The search grid uses ONE reference RA and cos(Dec) for the whole field (review 2.2.13: a per-star cos(Dec)
+    # at RA ~350 deg moved a star a cell or two for a few arcsec of Dec, so true pairs were never compared), with RA
+    # unwrapped around the field centre (fields across 0h). The match itself uses the exact separation.
+    ra0 = float(every[0]["ra"])
+    dec0 = float(np.median([float(st["dec"]) for st in every]))
+    cos0 = max(math.cos(math.radians(dec0)), 0.05)
+    try:
+        epoch_now = pm_epoch() if any(st.get("pm") for st in every) else None
+    except Exception:
+        epoch_now = None
+
+    def key(ra, dec):
+        dra = ((ra - ra0 + 180.0) % 360.0) - 180.0
+        return (int(math.floor(dec / cell)), int(math.floor(dra * cos0 / cell)))
+
+    def add_to_grid(entry, ra, dec):
+        cells.setdefault(key(ra, dec), []).append(entry)
+
+    def nearby(ra, dec):
+        ky, kx = key(ra, dec)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                yield from cells.get((ky + dy, kx + dx), [])
+
+    for cat in order:
+        j2000 = cat in ("AAVSO sequence", "APASS DR9")
+        taken = set()
+        for st in by_catalog.get(cat) or []:
+            if st.get("ra") is None or st.get("dec") is None:
+                continue
+            st = dict(st)
+            st["catalog"] = cat
+            v_new = (st.get("mags") or {}).get("V")
+            best = None
+            for entry in nearby(st["ra"], st["dec"]):
+                if cat in entry["sources"] or id(entry) in taken:
+                    continue
+                d = sky_separation_arcsec(st["ra"], st["dec"], entry["ra"], entry["dec"])
+                if j2000 and entry.get("_pos2000"):
+                    d = min(d, sky_separation_arcsec(st["ra"], st["dec"], *entry["_pos2000"]))
+                if d > tol_arcsec:
+                    continue
+                v_old = (entry.get("mags") or {}).get("V")
+                if v_new is not None and v_old is not None and abs(v_new - v_old) > 1.0:
+                    continue
+                if best is None or d < best[0]:
+                    best = (d, entry)
+            if best is None:
+                entry = {"ra": st["ra"], "dec": st["dec"], "sources": {}, "bright": st.get("bright"), "mags": {}}
+                p2000 = _pm_back(st, 2000.0, epoch_now)
+                if p2000:
+                    entry["_pos2000"] = p2000
+                    entry["pm"] = st.get("pm")
+                merged.append(entry)
+                add_to_grid(entry, st["ra"], st["dec"])
+                if p2000:
+                    add_to_grid(entry, *p2000)
+            else:
+                entry = best[1]
+            taken.add(id(entry))
+            entry["sources"][cat] = st
+            if not entry.get("mags", {}).get("V") and v_new is not None:
+                entry.setdefault("mags", {})["V"] = v_new   # for the magnitude test of later catalogs
+    out = []
+    for entry in merged:
+        src = entry["sources"]
+        names = [str(src[c].get("auid") or "") for c in NAME_ORDER if c in src and src[c].get("auid")]
+        mags, mag_src = {}, {}
+        for b in ("V", "B", "R", "I"):
+            for c in MAG_ORDER:
+                m = (src.get(c, {}).get("mags") or {}).get(b)
+                if m is not None and math.isfinite(float(m)):
+                    mags[b], mag_src[b] = float(m), c
+                    break
+        seq = None
+        if "AAVSO sequence" in src:
+            a = src["AAVSO sequence"]
+            seq = {"label": str(a.get("label") or ""), "auid": str(a.get("auid") or ""),
+                   "chartid": str(a.get("chartid") or "")}
+        bright = next((src[c].get("bright") for c in ("Gaia DR3", "Tycho-2", "APASS DR9", "AAVSO sequence")
+                       if c in src and src[c].get("bright") is not None), None)
+        mag = mags.get(band)
+        catalog = mag_src.get(band) or next(iter(src))
+        star = {"auid": names[0] if names else "", "aka": names[1:], "ra": entry["ra"], "dec": entry["dec"],
+                "mag": mag, "mags": mags, "mag_source": mag_src, "band": band, "catalog": catalog,
+                "bright": bright, "service": str(src[catalog].get("service") or catalog),
+                "sources": src, "seq": seq,
+                "label": (seq["label"] if seq and seq["label"] else (f"{mag:.1f}" if mag is not None else ""))}
+        if entry.get("pm"):
+            star["pm"] = entry["pm"]
+        out.append(star)
+    return out
+
+
+def star_names(star: dict) -> list[str]:
+    """Every name a (merged) catalog star answers to: its ID, other catalogs' IDs, the AAVSO AUID and label."""
+    names = [str(star.get("auid") or "")] + [str(n) for n in star.get("aka") or []]
+    seq = star.get("seq") or {}
+    names += [seq.get("auid", ""), seq.get("label", "")]
+    if not seq:
+        names.append(str(star.get("label") or ""))
+    return [n for n in names if n]
+
+
+CATALOG_TIMEOUT_S = 45.0   # 2.2.13: a catalog slower than this is left out of this solve (Solve again retries)
+
+
+def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, band: str = "V",
+                         catalogs=None, timeout: float = CATALOG_TIMEOUT_S, cancel=None) -> tuple[dict, dict]:
+    """2.2.13: every catalog for one field, asked at the same time. Returns ({catalog: stars}, {catalog: error
+    text}); a catalog that fails, or has not answered within `timeout` seconds, costs only its own stars. Daemon
+    threads, so a slow server never holds the solve (or closing the program) hostage; `cancel` (an Event) stops
+    the wait."""
+    import threading
+    import time as _time
+
+    catalogs = list(catalogs or CATALOGS)
+    results: dict = {}
+
+    def one(cat):
+        try:
+            stars, chart_id = fetch_comparison_stars(cat, ra_hours, dec_deg, fov_arcmin, band)
+            for st in stars:
+                st["catalog"] = cat
+                if cat == "AAVSO sequence":
+                    st["chartid"] = chart_id
+            results[cat] = ("ok", stars)
+        except Exception as exc:
+            results[cat] = ("error", str(exc).splitlines()[0][:200] if str(exc) else exc.__class__.__name__)
+
+    threads = [threading.Thread(target=one, args=(c,), daemon=True) for c in catalogs]
+    for t in threads:
+        t.start()
+    deadline = _time.monotonic() + timeout
+    for t in threads:
+        while t.is_alive() and _time.monotonic() < deadline and not (cancel is not None and cancel.is_set()):
+            t.join(0.2)
+    found, errors = {}, {}
+    for cat in catalogs:
+        state = results.get(cat)
+        if state is None:
+            errors[cat] = "cancelled" if cancel is not None and cancel.is_set() else f"no answer within {timeout:.0f} s"
+        elif state[0] == "ok":
+            found[cat] = state[1]
+        else:
+            errors[cat] = state[1]
+    return found, errors
+
+
+def frame_pointing(header: dict):
+    """2.2.13: where one frame points: the centre of its plate solution, else its RA/Dec keywords, else None."""
+    wcs = header_wcs(header or {})
+    if wcs is not None:
+        try:
+            return tuple(float(v) for v in wcs_center(wcs, (int(header.get("NAXIS2")), int(header.get("NAXIS1")))))
+        except (TypeError, ValueError):
+            pass
+    return header_pointing(header or {})
+
+
+def pointing_groups(pointings: list, gap_deg: float = 1.0) -> list[list[int]]:
+    """Frames grouped by where they point: indices whose pointings lie within gap_deg of a group's first frame
+    (frames with no pointing are left out). Largest group first."""
+    groups: list[tuple[tuple[float, float], list[int]]] = []
+    for i, p in enumerate(pointings):
+        if p is None:
+            continue
+        for centre, members in groups:
+            if sky_separation_arcsec(p[0], p[1], centre[0], centre[1]) / 3600.0 <= gap_deg:
+                members.append(i)
+                break
+        else:
+            groups.append(((float(p[0]), float(p[1])), [i]))
+    return [m for _c, m in sorted(groups, key=lambda g: -len(g[1]))]
+
+
+GENERIC_OBJECTS = ("", "fov", "light", "object", "target", "unknown", "none", "test", "flat", "dark", "bias")
+
+
+def same_object_name(a: str, b: str) -> bool:
+    """2.2.13: two spellings of one object name ('HAT-P-23 b', 'HAT-P-23b', 'hatp23'; 'HD219134' and 'HD 219134');
+    a planet's name and its star's count as the same field. Real aliases (HIP vs HD) need a lookup."""
+    import re
+
+    def norm(t):
+        t = re.sub(r"[\s_\-.]+", "", str(t or "").lower())
+        return re.sub(r"(?<=\d)[b-h]$", "", t)
+    return bool(norm(a)) and norm(a) == norm(b)
 
 
 def header_pointing(header: dict):

@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.12
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.13
 ======================================================
 
 Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -10,8 +10,8 @@ Quick start
 2. Try it first: on the Input page press "Try it with sample data…" and pick an empty folder; every box is filled and
    the stars are marked. Then Blink, Calibrate, Photometry, Output.
 3. Your own frames: Input (folders, Scan folders, site and optics once, the target's name then Enter), Blink (reject bad
-   frames), Calibrate (camera pattern or MONO; Build masters and calibrate), Photometry (Label chart, click the
-   target, comps and check star, Run photometry), Output (light curve and AAVSO report; transit fit; or field scan).
+   frames), Calibrate (camera pattern or MONO; Build masters and calibrate), Photometry (the image solves itself;
+   click the target, comps and check star, Run photometry), Output (light curve and AAVSO report; transit fit; or field scan).
 4. Problems and ideas: GitHub Issues (github.com/SHOBS-S/SHOBS-P/issues). Attach selftest_log.txt and .shobs_p.log
    (in your user folder) and a screenshot.
 
@@ -24,12 +24,17 @@ Process flow
    (light - bias - dark) / flat. The first light is then debayered (superpixel; the channel is chosen on this page:
    green is the default, AAVSO TG with V comps; red is TR, blue is TB, luminance is CV; MONO for monochrome cameras)
    and the app goes straight to Photometry.
-4. Photometry: mark the target, one to ten comparison stars (C1-C10), and the check star. "Label chart" circles
-   catalog stars with their magnitudes; with Comps or Check selected, clicking a circled star fills in its ID and
-   magnitude.
-   Catalogs: AAVSO sequence (preferred for AAVSO reports; sets the chart ID), Gaia DR3 (almost every star; Johnson V,
-   B, R), APASS DR9 (B and V, about V 10 to 17), Tycho-2 (bright stars). Comps from Gaia, APASS, or Tycho-2 set
-   Chart ID to na. Every frame is aligned to the marked frame (shift, rotation, meridian flip).
+4. Photometry: mark the target, one to ten comparison stars (C1-C10), and the check star. The image is solved on
+   its own when the page opens (from the plate solution in the FITS header, or against the catalogs), and every
+   catalog is asked at once: the AAVSO sequence, Gaia DR3, APASS DR9 and Tycho-2, merged into one list (one entry
+   per star, high proper-motion stars moved to the night's date). With Comps or Check selected, clicking any star
+   fills in its ID and magnitude, whichever circles are shown. Names: Tycho, then APASS, then Gaia (the other names
+   are kept, and typing any of them finds the star). Magnitudes: the AAVSO sequence first, then APASS, Gaia, Tycho;
+   the panel says where each came from. AAVSO sequence stars are always circled in cyan with their chart label
+   (91 = V 9.1) and are suggested first; a sequence comp puts the AAVSO chart ID in the Chart box (otherwise na).
+   The Circles box only chooses which catalog's circles are drawn. Type a name or RA/Dec in an empty comp or check
+   slot and press Enter to put the marker on that star. Solve again retries (for example after a catalog did not
+   answer). Every frame is aligned to the marked frame (shift, rotation, meridian flip).
 5. Output: light curve, folded curve, check-star plot, Lomb-Scargle periodogram; AAVSO Extended report, CSV, PNG.
 
 Run on Windows 11
@@ -48,6 +53,47 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.13 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  One star list from every catalog. The image solves itself when the Photometry page opens (header plate solution
+     or a catalog solve), and the AAVSO sequence, Gaia DR3, APASS DR9 and Tycho-2 are fetched together and merged:
+     click any star and its ID and magnitude fill in, whichever catalog's circles are shown. The Catalog box is now
+     'Circles' (display only); 'Label chart' / 'Solve field' is 'Solve again'. Proper motions are applied to the
+     night's date, so high proper-motion stars (HD 219134, about 55" from its J2000 place) match. A catalog that does
+     not answer within 45 s costs only its own stars, and the log says so. Fields with no AAVSO sequence show APASS
+     (or Gaia) circles when the Circles box says AAVSO sequence.
+- S  AAVSO sequence stars are always circled (cyan, with the chart label), suggested first as comps, and set the
+     Chart box to the chart ID when one is used as a comp or check (a chart ID typed by hand is kept). In AAVSO
+     reports a sequence comp or check is named by its AUID (the series and the panel keep the catalog name). A note
+     in the log, once, when other comps are used while sequence stars are on the frame.
+- S  Type a name (any catalog's, a variable's, or a SIMBAD name) or RA/Dec in an empty comp or check slot and press
+     Enter: the marker goes on that star, or the status bar says it is off the frame. One empty comp slot is always shown
+     after the last one. Typing in a slot that already has a marker only changes its name.
+- S  Watch stars: a star typed by RA/Dec takes its catalog name, and a star already watched (by position or by any of
+     its catalog names) is not added twice.
+- S  Binning changed after Calibrate: said at once ('run Calibrate again'); the solve keeps using the image's own
+     binning. Loading a series reduced at another binning asks before switching.
+- S  Lights scanned: a folder pointing at two places (e.g. two targets saved under one plan name) is described, and
+     SHOBS-P offers to use only the frames near the target (the others are set aside as rejected; Blink brings them
+     back). A FITS OBJECT naming another object than the target gives a warning, unless it is another spelling or
+     (looked up) another name of the same star; when the frames do point at the target it is only a log note.
+- S  Masters are saved in a 'SHOBS-P masters' subfolder of the calibration folder, so other programs that take every
+     FITS file in the folder never pick them up. Masters saved beside the frames by 2.2.8-2.2.12 are still found and
+     moved into the subfolder the first time they are reused.
+- S  Photometry image: a new image (calibration, binning, channel) always opens showing the whole frame; star labels
+     stay inside the image; small N and E arrows in the least crowded corner (from the solution; 'orientation unknown
+     until the image is solved' before that), shown with Show labels.
+- V  Comp health window: click a table row to highlight that star's curve (thicker, others faded, bold in the legend);
+     axis labels and dates are no longer cut off at any window size; the legend sits in a column right of the plot;
+     table columns fit their contents, with a horizontal scroll bar only when they do not fit.
+- T  The published depth the fit is compared with is (Rp/R*)^2 from the same Archive entry; when the Archive's listed
+     depth disagrees with it a note says so (HAT-P-23 b: listed 1.05%, (Rp/R*)^2 1.37%). The table, plot and verdict
+     use the same value.
+- T  When the cloud flag removes all the baseline before ingress or after egress, the caution says so (how many frames,
+     when), and 'Refit with flagged frames (errors x2)' fits again with them, clearly labelled as including them.
+- T  Meridian flip in the transit: a fit with a step at the flip, fitted together with the transit, is built and
+     validated but switched off in this version (more test nights first). When it is switched on, a flip with no
+     out-of-transit baseline on one side gives 'Inconclusive' (the timing is not trusted either).
 
 New in 2.2.12 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Files carry the time they were made as a military Date Time Group in Zulu (e.g. 121153Z OCT 26): on plot
@@ -484,7 +530,7 @@ New in 2.0.1
 - Watch stars: "Add a star…" takes a name (V1441 Cas, NSV 14464, TYC 4006-946-1, a labeled Gaia ID) or RA Dec
   (23 13 48.1 +57 07 34, or degrees). It looks on the labeled chart, then in the field's known variables, then asks
   SIMBAD and VSX. A star clicked with Watch that is not a catalog star now keeps its sky position, so it is found
-  again on later nights after Label chart.
+  again on later nights after the image is solved.
 - Aperture test: each scatter has a ± (bootstrap), and a "lowest" column says how often that aperture stays lowest
   when the frames are resampled. Only 80% or more counts as a clear winner; otherwise it says "no clear winner" and
   keeps the suggested 1.8 × FWHM. The target's scatter has its own ± and lowest column. "60 frames (slower, surer)"
@@ -504,12 +550,12 @@ New in 2.0
 - The three modes above, with mode-colored frames and a banner on every page.
 - Comparison and check stars moved to the Photometry page, in a panel beside the image: ID, magnitude, catalog
   B-V (✓), a warning for very red stars (B-V > 1.5), and a variable-star check. Clear a star with its ✕.
-- Variable-star check: Label chart also asks AAVSO VSX and SIMBAD (one query per field) for known and suspected
+- Variable-star check: the solve also asks AAVSO VSX and SIMBAD (one query per field) for known and suspected
   variables. They are marked with a red × on the image, labeled stars on them get red circles, and hovering says
   what they are (for example "SIMBAD LP? long-period variable candidate"). Clicking one as a comp or check asks
   first. Flagged stars are never picked as spare comps or used in the color fit.
 - Watch stars: pick Watch and click a star to follow it. It is measured every frame, found again on later nights after
-  Label chart, and has its own light curve (Watch light curves…, also on the Photometry page). Spares in Comp health
+  the solve, and has its own light curve (Watch light curves…, also on the Photometry page). Spares in Comp health
   and stars in a field scan can be watched with one button; a watched spare's earlier measurements count at once.
 - Suggest… (next to the aperture sizes): measures the star size (FWHM) and proposes r = 1.8 × FWHM, a sky ring from
   the larger of r + 3 and 3.2 × FWHM, with four times the aperture's area. It warns about neighbors in or near the
@@ -547,7 +593,7 @@ New in 1.8
 - Color calibration: the fit weights each field star by its measured noise, leaves out stars noisier than 0.08 mag,
   uses only frames that pass QC (sat, drift, cloud), and is marked NOT USED when the weighted scatter exceeds 0.15 mag.
   The field scan uses the same fit and leaves clouded frames out. The summary lists B-V per night.
-- Label chart logs which service answered (e.g. "VizieR I/355 (ESA archive unavailable; V from G only)") and how many
+- The solve logs how many stars each catalog gave (and any catalog that did not answer) and how many
   labeled stars have B, V, and R. If "Also measure R and B" is ticked but B-V cannot be calibrated, the app says so
   before the run starts.
 - Cancel buttons for calibration, photometry, and the field scan. A cancelled run adds nothing.
@@ -621,7 +667,7 @@ New in 1.5
 - Field scan (opt-in, "Scan field for variables" on the Photometry page). Measures every star in the frame on every
   frame, with the same calibration, alignment, and aperture, and plots scatter against brightness. Constant stars
   form a band; a star that scatters at least 3 times more than stars of its brightness is listed as a candidate,
-  with its light curve and periodogram. After Label chart, each star gets RA/Dec and is checked against VSX:
+  with its light curve and periodogram. Once the image is solved, each star gets RA/Dec and is checked against VSX:
   "KNOWN" or "not in VSX - possible new variable". Export the candidate list (ready to start a VSX submission) or
   every star's light curve. A candidate is a lead, not a discovery: confirm it on another night, and rule out a
   blend with a nearby star or a bad pixel. Stars closer together than about two aperture radii are measured as one.
@@ -650,6 +696,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.13 One star list from every catalog, auto-solve, typed stars, AAVSO sequence first; target check on
+       scanned lights; masters subfolder; compass and fit view; Comp health window; transit depth reference and
+       cloud-flagged baseline.
 2.2.12 DTG stamp on files; Mac trackpad and fonts; periodogram shading; Discovery scatter curve, faint end and
        table columns; verdict once; MCMC phases; PNG wrap; ephemeris for EXOTIC reports; report-only Variable View.
 2.2.11 Mono cameras found from the flat, Filter box on MONO; 0.25 s blink; sample-data button; Transit fit

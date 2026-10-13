@@ -63,8 +63,9 @@ def planet_summary(p: dict | None) -> str:
     parts = [p.get("name") or "planet", f"P {p['period']:.6f} d"]
     if p.get("t14"):
         parts.append(f"T14 {p['t14'] * 24:.2f} h")
-    if p.get("depth"):
-        parts.append(f"depth {p['depth'] * 100:.2f}%")
+    depth, _label = tc.published_depth(p)     # 2.2.13: (Rp/R*)² when Rp/R* is known
+    if depth:
+        parts.append(f"depth {depth * 100:.2f}%")
     if p.get("k"):
         parts.append(f"Rp/R* {p['k']:.4f}")
     if p.get("a_rs"):
@@ -124,6 +125,15 @@ class TransitPage:
         ttk.Combobox(row2, textvariable=self.mcmc, values=list(MCMC_CHOICES), width=22, state="readonly").pack(side=LEFT)
         ttk.Button(row2, text="Fit transit", style="Accent.TButton", command=self.fit).pack(side=LEFT, padx=10)
         ttk.Button(row2, text="Cancel", command=app.cancel_job).pack(side=LEFT)
+        # 2.2.13: put the night's cloud-flagged frames back (error bars doubled); shown only when there are some.
+        self.refit_flagged_button = ttk.Button(row2, text=f"Refit with flagged frames (errors ×"
+                                                          f"{tc.FLAGGED_ERR_FACTOR:g})",
+                                               command=lambda: self.fit(with_flagged=True))
+        # 2.2.13: a report carries no flip segment: the user can say its largest gap is the meridian flip.
+        self.flip_at_gap = BooleanVar(value=False)
+        self.flip_at_gap_check = ttk.Checkbutton(row2, text="meridian flip at the largest gap",
+                                                 variable=self.flip_at_gap)
+        self._data_extra = {}
 
         row4 = ttk.Frame(card, style="Card.TFrame")
         row4.pack(fill=X, pady=(2, 2))
@@ -289,6 +299,7 @@ class TransitPage:
                 self.close_report_button.pack(side=LEFT, padx=(0, 6), after=self.night_box)
             except Exception:
                 pass
+            self._show_flip_check(True)
             app.set_report_note(f"The Transit fit page is showing an EXOTIC report for {name}, not the photometry "
                                 "set up here.")
         else:
@@ -297,7 +308,31 @@ class TransitPage:
                 self.close_report_button.pack_forget()
             except Exception:
                 pass
+            self._show_flip_check(False)
             app.set_report_note("")
+
+    def _show_flip_check(self, report_loaded: bool):
+        """2.2.13: the "meridian flip at the largest gap" box, only for a loaded report (photometry has its flip
+        segment) and only while the flip step is enabled."""
+        try:
+            if report_loaded and tc.FLIP_STEP_ENABLED:
+                self.flip_at_gap_check.pack(side=LEFT, padx=(12, 0))
+            else:
+                self.flip_at_gap.set(False)
+                self.flip_at_gap_check.pack_forget()
+        except Exception:
+            pass
+
+    def _show_refit_flagged(self):
+        """2.2.13: the refit button only when the night has flagged frames the fit left out (never for a report)."""
+        try:
+            fl = (self._data_extra or {}).get("flagged") if self.report is None else None
+            if fl is not None and len(fl["t"]) and self.result is not None:
+                self.refit_flagged_button.pack(side=LEFT, padx=(6, 0))
+            else:
+                self.refit_flagged_button.pack_forget()
+        except Exception:
+            pass
 
     def _report_date(self) -> str:
         """The report's OBSDATE, or (2.2.7) the UTC date of its first point when the header has none."""
@@ -371,6 +406,13 @@ class TransitPage:
             rp = self.report.get("planet")
             if not p or not p.get("period") or _norm(p.get("name")) != _norm(rp.get("name")):
                 return rp
+        if p and p.get("period") and not p.get("depth_note"):
+            # 2.2.13: the lookup's note on a listed depth that disagrees with Rp/R* (the Input page keeps only k² as
+            # the depth), while the page still shows that planet's Rp/R*.
+            info = getattr(self.app, "planet_info", None) or {}
+            if (info.get("depth_note") and _norm(info.get("name")) == _norm(p.get("name")) and p.get("k")
+                    and info.get("k") and abs(info["k"] - p["k"]) <= 1e-4 * max(info["k"], 1e-3)):
+                p["depth_note"] = info["depth_note"]
         return p if p and p.get("period") else None
 
     def open_report(self):
@@ -474,7 +516,18 @@ class TransitPage:
                     "lon": h.get("OBSLON", ""), "elev": h.get("OBSELEV", ""), "exposure": h.get("EXPOSURE_TIME", ""),
                     "binning": h.get("BINNING", ""), "filter": h.get("FILTER", "CV"), "notes": h.get("NOTES", ""),
                     "source": os.path.basename(r.get("path", ""))}
-            return np.asarray(r["t"]), np.asarray(r["flux"]), np.asarray(r["err"]), am, meta
+            t = np.asarray(r["t"])
+            # 2.2.13: a report has no flip segment. Use the flip SHOBS-P wrote into its NOTES, else, when the user ticks
+            # "meridian flip at the largest gap", the middle of the largest gap (never guessed on its own).
+            self._data_extra = {"after_flip": None, "flip_source": "", "flagged": None}
+            t_flip = tc.report_flip_time(h)
+            source = "from the report's notes"
+            if t_flip is None and self.flip_at_gap.get():
+                t_flip = tc.flip_from_gap(t)
+                source = "the report's largest gap, marked as the flip by the user"
+            if t_flip is not None:
+                self._data_extra.update(after_flip=t >= t_flip, flip_source=source)
+            return t, np.asarray(r["flux"]), np.asarray(r["err"]), am, meta
         night = self.night.get()
         obs = [o for o in app._usable() if o.night == night]
         if len(obs) < 20:
@@ -508,10 +561,30 @@ class TransitPage:
             meta["comp_noise"] = core.comp_noise_warning(obs)  # 2.2.8
         except Exception:
             meta["comp_noise"] = None
+        # 2.2.13: the flip segment (frames after a meridian flip or rotator move, as on the Variables side), and the
+        # night's cloud-flagged frames that the fit leaves out: the cautions say when they emptied a baseline, and
+        # "Refit with flagged frames" can put them back. Only cloud: saturated, drifted or comp-less frames are not
+        # measurements to put back. Nothing here needs the images, a plate solution or header pointing.
+        after = np.array([o.segment == "flip" for o in obs], dtype=bool)
+        extra = {"after_flip": after if (after.any() and (~after).any()) else None,
+                 "flip_source": "the frames' flip segment", "flagged": None}
+        used = {id(o) for o in obs}
+        clouded = [o for o in app.observations if o.night == night and id(o) not in used and math.isfinite(o.mag)
+                   and o.flag and set(o.flag.split()) <= {"cloud"}]
+        if clouded:
+            cjd = np.array([o.jd for o in clouded])
+            cmag = np.array([o.mag for o in clouded])
+            cflux = 10 ** (-0.4 * (cmag - ref))          # the same reference as the clear frames
+            cerr = np.abs(cflux * np.array([core.point_err(o, scint) for o in clouded]) * 0.4 * math.log(10))
+            cam = np.array([o.airmass if o.airmass is not None else np.nan for o in clouded], dtype=float)
+            extra["flagged"] = {"t": core.convert_times(cjd, "BJD_TDB", ra, dec, lat, lon), "jd": cjd, "flux": cflux,
+                                "err": cerr, "airmass": cam, "after_flip": np.array([o.segment == "flip" for o in clouded],
+                                                                                    dtype=bool), "label": "cloud"}
+        self._data_extra = extra
         return t, flux, err, am, meta
 
     # ---- fit -------------------------------------------------------------------------------
-    def fit(self, auto: bool = False):
+    def fit(self, auto: bool = False, with_flagged: bool = False):
         # 2.2.12: a report's ephemeris is still being looked up: the fit starts by itself when it is in.
         if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
             if not auto:
@@ -525,6 +598,7 @@ class TransitPage:
                                                "an exoplanet report.")
             return
         try:
+            self._data_extra = {}
             t, flux, err, am, meta = self._data()
         except Exception as exc:
             if auto:
@@ -570,6 +644,28 @@ class TransitPage:
         self._pending_signature = self._signature()
         steps = MCMC_CHOICES.get(self.mcmc.get(), 3000)
         da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+        # 2.2.13: the flip segment, and the flagged frames (left out and listed, or put back with doubled errors).
+        extra = dict(self._data_extra or {})
+        after = extra.get("after_flip")
+        fl = extra.get("flagged")
+        flagged_mask, excluded, label = None, None, "flagged"
+        if fl is not None and len(fl["t"]):
+            label = fl.get("label") or "flagged"
+            if with_flagged:
+                n0 = len(t)
+                t = np.concatenate([np.asarray(t, dtype=float), fl["t"]])
+                flux = np.concatenate([np.asarray(flux, dtype=float), fl["flux"]])
+                err = np.concatenate([np.asarray(err, dtype=float), fl["err"]])
+                am = np.concatenate([np.asarray(am, dtype=float), fl["airmass"]])
+                if after is not None or fl["after_flip"].any():
+                    base_after = after if after is not None else np.zeros(n0, dtype=bool)
+                    after = np.concatenate([base_after, fl["after_flip"]])
+                flagged_mask = np.r_[np.zeros(n0, dtype=bool), np.ones(len(fl["t"]), dtype=bool)]
+            else:
+                excluded = {"t": fl["t"], "jd": fl["jd"], "label": label}
+        if after is not None and not (np.any(after) and not np.all(after)):
+            after = None
+        flip_source = extra.get("flip_source", "")
         cancel = self.app._cancel
         self.bar.configure(value=0, maximum=1)
         self.prog_text.set("Least-squares fit…")
@@ -584,7 +680,9 @@ class TransitPage:
             try:
                 result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
                                         mcmc_steps=steps, progress=progress, cancel=cancel,
-                                        log=lambda m: app.call_ui(app.log, m))
+                                        log=lambda m: app.call_ui(app.log, m), after_flip=after,
+                                        flip_source=flip_source, flagged_mask=flagged_mask, flagged_label=label,
+                                        excluded=excluded)
                 app.call_ui(self._fit_done, result, meta, None)
             except Exception as exc:
                 app.call_ui(self._fit_done, None, meta, (str(exc), traceback.format_exc()))
@@ -659,6 +757,7 @@ class TransitPage:
         self._fill_table()
         self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
         self.draw()
+        self._show_refit_flagged()
 
     # ---- display ---------------------------------------------------------------------------
     def _set_columns(self):
@@ -826,18 +925,23 @@ class TransitPage:
             self.verdict.set("")
             return
         state = _state(v)
+        # 2.2.13: a fit with flagged frames put back says so first.
+        pre = ("[" + v["includes_flagged"] + "] ") if v.get("includes_flagged") else ""
         if state == "detected" and v.get("depth_unreliable"):
             # 2.2.7: a real dip with good timing, but a depth the night cannot be trusted for.
-            self.verdict.set("✓ " + v["reason"] + " Timing usable; depth unreliable: " + v["depth_unreliable"] + ".")
+            self.verdict.set("✓ " + pre + v["reason"] + " Timing usable; depth unreliable: " + v["depth_unreliable"] + ".")
             self.verdict_label.configure(foreground="#c26a00")
         elif state == "detected":
-            self.verdict.set("✓ " + v["reason"])
+            self.verdict.set("✓ " + pre + v["reason"])
             self.verdict_label.configure(foreground="#2e7d32")
         elif state == "inconclusive":
-            self.verdict.set("⚠ " + v["reason"] + " Tc may be usable; the depth is not.")
+            tail = (" Neither Tc nor the depth is measured." if v.get("flip_inconclusive") else
+                    " Tc may be usable; the depth is not.")
+            self.verdict.set("⚠ " + pre + v["reason"] + tail)
             self.verdict_label.configure(foreground="#c26a00")
         else:
-            self.verdict.set("✗ No transit measured. " + v["reason"] + " The numbers below are for reference only.")
+            self.verdict.set("✗ " + pre + "No transit measured. " + v["reason"] + " The numbers below are for reference "
+                             "only.")
             self.verdict_label.configure(foreground="#b00020")
 
     def _confirm_export(self) -> bool:
@@ -848,9 +952,11 @@ class TransitPage:
                 "SHOBS-P", "This fit did not measure a transit:\n\n" + v["reason"] + "\n\nA report from it would "
                 "carry numbers that mean nothing. Save it anyway (for your records, not for submission)?")
         if state == "inconclusive":
+            caveat = ("Neither Tc nor the depth is measured (the flip step trades off against both)."
+                      if v.get("flip_inconclusive") else "Tc may be worth reporting with that caveat; the depth is not.")
             return messagebox.askyesno(
                 "SHOBS-P", "This fit is inconclusive:\n\n" + v["reason"] + "\n\nThe report will say so in its notes. "
-                "Tc may be worth reporting with that caveat; the depth is not. Save it?")
+                + caveat + " Save it?")
         return True
 
     def _fill_table(self):
@@ -881,8 +987,9 @@ class TransitPage:
             ("Tc (BJD_TDB)", val("tc", "{:.5f}"), num(ff.get("tc"), "{:.5f}"),
              num((r or {}).get("tc_pred"), "{:.5f}"), exo("Tc", "{:.5f}")),
             ("Rp/R*", val("k", "{:.4f}"), num(ff.get("k"), "{:.4f}"), num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
+            # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
             ("Depth (%)", val("depth", "{:.2f}", 100), num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
-             num(p.get("depth"), "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
+             num(tc.published_depth(p)[0], "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
             ("a/R*", val("a_rs", "{:.2f}"), num(ff.get("a_rs"), "{:.2f}"), num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
             ("Impact parameter b", val("b", "{:.3f}"), num(ff.get("b"), "{:.3f}"), num(p.get("b"), "{:.3f}"),
              exo("Impact Parameter (b)", "{:.3f}")),
@@ -898,11 +1005,24 @@ class TransitPage:
                   if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None else None)
             sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if oc is not None else None
             rows.insert(1, ("O − C (min)", f"{oc:+.2f} ± {sig:.2f}" if oc is not None else "", "", "0", ""))
+            flip = r.get("flip")
+            if flip:
+                # 2.2.13: the flip step, the depth without it, and how much the two trade off.
+                ns = flip.get("nostep") or {}
+                c = flip.get("corr")
+                step_txt = (f"{s['step'][0] * 100:+.2f} ± {s['step'][1] * 100:.2f}" if "step" in s else "")
+                rows += [("Flip step (%)", step_txt, num(ff.get("step"), "{:+.2f}", 100), "", ""),
+                         ("Depth without step (%)", (f"{ns['depth'] * 100:.2f} ± {ns['depth_err'] * 100:.2f} (LSQ)"
+                                                     if ns else ""), "", "", ""),
+                         ("Step–depth correlation", f"{c:+.2f}" if c is not None and math.isfinite(c) else "", "", "",
+                          "")]
             rows += [("rms per point (%)", f"{r['rms'] * 100:.3f}", "", "", ""),
                      ("Red-noise beta", f"{r['beta']:.2f}", "", "", ""),
                      ("Reduced χ² (raw errors)", f"{r['rchi2']:.2f}", "", "", ""),
                      ("Points", str(r["n_points"]), "", "", str(len(self.report["t"])) if self.report else "")]
         warn_names = set()
+        if r and r.get("flip") and not r["flip"].get("depth_ok", True):
+            warn_names.update({"Depth (%)", "Rp/R*", "Flip step (%)", "Step–depth correlation"})
         for _lvl, text in (r or {}).get("flags", []):
             for key, label in (("a/R* =", "a/R*"), ("b =", "Impact parameter b"), ("Grazing", "Rp/R*"),
                                ("shape left free", "Rp/R*")):
@@ -916,6 +1036,7 @@ class TransitPage:
                 tags = ("warn",) if row[0] in warn_names else ()
             self.table.insert("", END, values=row, tags=tags)
         self._fit_columns(rows)
+        self._show_refit_flagged()
 
     def _notes_text(self, flags):
         self.notes.configure(state="normal")
@@ -992,7 +1113,15 @@ class TransitPage:
         t = r["t"]
         x = (t - best["tc"]) * 24
         y = r["detrended"]
-        ax.plot(x, y, ".", color="#9aa7b0", ms=4, label="each frame, detrended")
+        fmask = np.asarray(r.get("flagged")) if r.get("flagged") is not None else np.zeros(len(t), dtype=bool)
+        if fmask.shape != x.shape:
+            fmask = np.zeros(len(t), dtype=bool)
+        ax.plot(x[~fmask], y[~fmask], ".", color="#9aa7b0", ms=4, label="each frame, detrended")
+        if fmask.any():
+            # 2.2.13: flagged frames put back in the fit, drawn apart.
+            wf = r.get("with_flagged") or {}
+            ax.plot(x[fmask], y[fmask], "o", ms=4, mfc="none", mec="#d08a2e", mew=0.8,
+                    label=f"flagged {wf.get('label', '')} (errors ×{wf.get('factor', 2):g})".replace("  ", " "))
         bins = _bin(x, y, max(10.0 / 60, 3 * r["cadence_days"] * 24))
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
@@ -1025,6 +1154,14 @@ class TransitPage:
         t14 = s["t14"][0] * 24
         for edge in (-t14 / 2, t14 / 2):
             ax.axvline(edge, color=GREEN, lw=0.6, alpha=0.6)
+        flip = r.get("flip")
+        if flip:
+            # 2.2.13: where the flip step starts (the detrended points have it divided out).
+            xf = (flip["t_flip"] - best["tc"]) * 24
+            for a_ in (ax, axr):
+                a_.axvline(xf, color="#7b1fa2", ls="-.", lw=1.0)
+            ax.text(xf, 0.99, f" flip: step {flip['step'][0] * 100:+.1f} ± {flip['step'][1] * 100:.1f}%",
+                    transform=ax.get_xaxis_transform(), ha="left", va="top", fontsize=8, color="#7b1fa2")
         ax.set_ylabel("Relative flux")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8, loc="lower left", frameon=False)
@@ -1033,6 +1170,8 @@ class TransitPage:
         title = {"detected": f"{name}   Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f} BJD_TDB",
                  "inconclusive": f"{name}   INCONCLUSIVE   Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}",
                  "none": f"{name}   NO TRANSIT MEASURED (model shown for reference)"}[state]
+        if r.get("with_flagged"):
+            title += f"   incl. {r['with_flagged']['n']} flagged"
         ax.set_title(title + f"   ({self.meta_for_files.get('source', '')})", fontsize=10,
                      color={"detected": "black", "inconclusive": "#c26a00", "none": "#b00020"}[state])
         lo = min(np.percentile(y, 1), model.min()) - 0.004
@@ -1065,15 +1204,26 @@ class TransitPage:
         meta["version"] = getattr(self.app, "app_version", "")
         v = (self.result or {}).get("verdict")
         state = _state(v) if v else "detected"
+
+        def ascii_(text):
+            return (text.replace("Δ", "d").replace("±", "+/-").replace("σ", "sigma").replace("°", " deg")
+                    .replace("−", "-").replace("×", "x").replace("²", "^2").replace("–", "-").replace("→", "->"))
+        # 2.2.13: flagged frames put back, and the flip step (its time in a form a later fit can read back).
+        wf = (self.result or {}).get("with_flagged")
+        if wf:
+            note = (f"SHOBS-P: fit INCLUDES {wf['n']} frames flagged {wf['label']} (error bars x{wf['factor']:g})")
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
+        fnote = tc.flip_report_note(self.result or {})
+        if fnote:
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
         if state == "detected" and v and v.get("depth_unreliable"):
-            note = "SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"]
-            note = note.replace("Δ", "d").replace("±", "+/-").replace("σ", "sigma").replace("°", " deg").replace("−", "-")
+            note = ascii_("SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"])
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
         if state != "detected":
             label = "INCONCLUSIVE" if state == "inconclusive" else "NO TRANSIT MEASURED"
             note = f"SHOBS-P verdict {label}: " + v["reason"].replace("\n", " ")
             # AAVSO report headers are plain text: keep them ASCII.
-            note = note.replace("Δ", "d").replace("±", "+/-").replace("σ", "sigma").replace("°", " deg").replace("−", "-")
+            note = ascii_(note)
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
         return meta
 
@@ -1442,7 +1592,7 @@ class NebWindow:
         self.app = app
         self.page = page
         planet = page.current_planet() or {}
-        depth = planet.get("depth") or (page.result["summary"]["depth"][0] if page.result else None)
+        depth = tc.published_depth(planet)[0] or (page.result["summary"]["depth"][0] if page.result else None)
         if not depth:
             messagebox.showinfo("SHOBS-P", "The NEB check needs the transit depth: enter the planet on the Input page "
                                            "(Lookup), or fit the transit first.")
@@ -1453,7 +1603,7 @@ class NebWindow:
             messagebox.showinfo("SHOBS-P", f"The NEB check needs the target's RA/Dec: {exc}")
             return
         if not app.chart_placed:
-            messagebox.showinfo("SHOBS-P", "Label chart first (Gaia DR3 gives the most neighbors). The check lists the "
+            messagebox.showinfo("SHOBS-P", "Solve the image first (Photometry page). The check lists the "
                                            "labeled stars near the target.")
             return
         self.depth = depth
