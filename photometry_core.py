@@ -4354,19 +4354,27 @@ def light_loss_episodes(night_obs: list[Obs], limit: float = 0.20, min_frames: i
         if len(g) < min_frames:
             kind = "cloud"
             reasons.append(f"brief ({len(g)} frame{'s' if len(g) != 1 else ''})")
-        # 1. Smooth: the shared loss follows a slow curve (running median over 7 frames) without jumps.
-        c = common[sel]
-        c = c[np.isfinite(c)]
-        if c.size >= 7:
+        # 1. Smooth: the shared loss follows a slow curve (running median over 7 frames) without jumps. Three clear
+        # frames on each side are included, so a cloud that arrives (or leaves) in one frame counts as a jump even
+        # when its depth is steady inside the stretch. Checked on the stars' shared loss and on the comp light rate
+        # that set the flag (the lead's merge review: a steady-depth stretch was judged only from its inside).
+        ext = np.zeros(n, dtype=bool)
+        ext[max(0, g[0] - 3):min(n, g[-1] + 4)] = True
+        for series, noise in ((common, noise_common), (rate_loss, diff_noise(rate_loss, clear))):
+            c = series[ext]
+            c = c[np.isfinite(c)]
+            if c.size < 7:
+                continue
             pad = np.pad(c, 3, mode="edge")
             run = np.array([np.median(pad[k:k + 7]) for k in range(c.size)])
             rough = _robust_std(c - run)
             jump = float(np.max(np.abs(np.diff(c))))
-            base = noise_common if math.isfinite(noise_common) else 0.01
+            base = noise if math.isfinite(noise) else 0.01
             if rough > max(0.02, 3.0 * base * grow) or jump > max(0.15, 8.0 * base * grow):
                 kind = "cloud"
                 reasons.append(f"the loss changes fast ({rough:.3f} mag frame-to-frame scatter, jumps up to "
                                f"{jump:.2f} mag)")
+                break
         # 2. Even: every star loses the same amount (needs two or more stars).
         if n_stars >= 2:
             offsets = []
@@ -4481,7 +4489,8 @@ def apply_cloud_edge_flags(observations: list[Obs]) -> int:
         by_night.setdefault(obs.night, []).append(obs)
     for night_obs in by_night.values():
         pts = sorted(night_obs, key=lambda o: o.jd)
-        cloud_idx = [k for k, o in enumerate(pts) if "cloud" in o.flag.split()]
+        # A left-out transmission-loss ("haze") stretch counts like cloud here (merge of items 10 and 18).
+        cloud_idx = [k for k, o in enumerate(pts) if {"cloud", HAZE_FLAG} & set(o.flag.split())]
         if not cloud_idx or len(pts) < 10:
             continue
         jd = np.array([o.jd for o in pts])
