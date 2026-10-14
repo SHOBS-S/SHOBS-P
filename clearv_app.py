@@ -1497,6 +1497,7 @@ class App(Tk):
         cell = ttk.Frame(pg, style="Card.TFrame")
         cell.grid(row=0, column=1, columnspan=3, sticky="ew", pady=3)
         planet_entry = ttk.Entry(cell, textvariable=self.planet_name, width=24)
+        self._planet_entry = planet_entry
         planet_entry.pack(side=LEFT, fill=X, expand=True)
         # 2.2.14 (item 2): like the Star ID, the planet is looked up by itself on Enter or on leaving the box when
         # the name changed since the last lookup; the button repeats the lookup.
@@ -1564,6 +1565,13 @@ class App(Tk):
             return
         self.lookup_planet(quiet=True)
 
+    def _planet_box_has_focus(self) -> bool:
+        try:
+            entry = getattr(self, "_planet_entry", None)
+            return entry is not None and self.focus_get() is entry
+        except Exception:
+            return False
+
     def lookup_planet(self, quiet: bool = False):
         name = self.planet_name.get().strip()
         if not name:
@@ -1585,8 +1593,10 @@ class App(Tk):
 
     def _planet_lookup_done(self, p, error, name: str = "", quiet: bool = False):
         if name and name != self.planet_name.get().strip():
-            # 2.2.14 (item 2): the name changed while this lookup ran: look up the one that is there now instead.
-            self._auto_planet_lookup()
+            # 2.2.14 (item 2): the name changed while this lookup ran: look up the one that is there now instead, but
+            # not a half-typed name while the box still has the focus (review): Enter or leaving the box does that.
+            if not self._planet_box_has_focus():
+                self._auto_planet_lookup()
             return
         if isinstance(error, tcore.PlanetChoice):
             # 2.2.6: a star with several planets: ask which one, then look that one up.
@@ -3569,14 +3579,21 @@ class App(Tk):
     def _target_variable_reasons(self) -> list:
         """2.2.14 (item 19): why the target looks like a variability target: a known variable (VSX lookup, or a
         variable at the Target marker after Solve) or an open Variables series. Empty when nothing says so."""
+        import re
+
+        def planet_host(var_type) -> bool:
+            # 2.2.14 (item 19, review): VSX lists transiting-planet hosts as type EP (TrES-3, WASP-12, HD 189733) with
+            # the planet's orbital period: that is not a reason to call the run a variability run.
+            return re.split(r"[^A-Za-z]", str(var_type or "").strip().upper())[0] == "EP"
         why = []
-        if self.target_var_type or self.catalog_period:
+        if (self.target_var_type or self.catalog_period) and not planet_host(self.target_var_type):
             why.append(f"{self.star_id.get().strip() or 'the target'} is a known variable"
                        + (f" ({self.target_var_type})" if self.target_var_type else "")
                        + (f", period {self.catalog_period:.5f} d" if self.catalog_period else ""))
         elif self.target_xy is not None:
             star = self._chart_star_at(self.target_xy) if self.chart_placed else None
             hits = (star or {}).get("variable") or self._variables_at(self.target_xy)
+            hits = [v for v in hits or [] if not planet_host((v or {}).get("type") if isinstance(v, dict) else "")]
             if hits:
                 why.append(f"the target is listed as a variable ({core.variable_text({'variable': hits})})")
         if self.observations and self.series_mode == "variables" and not self.series_mode_unknown:
@@ -3610,10 +3627,12 @@ class App(Tk):
         variable or with a Variables series open: offer Variables mode. Variables mode on the host of the planet in
         the Planet box during one of its predicted transits: offer Transits mode. Needs only the lights' times and
         the Input page (no plate solution, no header pointing; a solve adds the variable-at-the-marker check)."""
+        self._series_mode_answered = False   # 2.2.14 (item 19, review): set when this guard already asked about it
         if self.mode_key == "transits" and lights:
             page = getattr(self, "transit_page", None)
             planet = page.current_planet() if page is not None else None
             why = self._target_variable_reasons()
+            series_open = self.observations and self.series_mode == "variables" and not self.series_mode_unknown
             span = self._lights_span(lights)
             if why and (planet is None or span is not None):
                 chk = None
@@ -3628,13 +3647,17 @@ class App(Tk):
                                 "them)")
                     answer = messagebox.askyesnocancel(
                         APP_TITLE, f"{what}, and {' and '.join(why)}.\n\nRun in Variables mode instead?\n\n"
-                                   "Yes: switch to Variables mode and run there.\nNo: run in Transits mode anyway.\n"
-                                   "Cancel: don't run.")
+                                   "Yes: switch to Variables mode and run there.\nNo: run in Transits mode anyway"
+                                   + (" (the night starts a new series; the Variables series is not changed)"
+                                      if series_open else "") + ".\nCancel: don't run.")
                     if answer is None:
                         return False
                     if answer:
                         return self._rerun_in_mode("variables")
-                    self.log(f"Run in Transits mode as chosen ({what.lower()}; {'; '.join(why)}).")
+                    # The open-series question would ask the same again: this No answers it (a new series).
+                    self._series_mode_answered = bool(series_open)
+                    self.log(f"Run in Transits mode as chosen ({what.lower()}; {'; '.join(why)})"
+                             + ("; the night starts a new series." if series_open else "."))
                     return True
             return self._transit_in_lights(lights)
         if self.mode_key == "variables" and lights:
@@ -4630,11 +4653,12 @@ class App(Tk):
         if getattr(self, f"{role}_mag").get().strip():
             return ""
         star = self._chart_star_at(getattr(self, f"{role}_xy"))
+        band = (star or {}).get("band") or self._band()   # 2.2.14 (review): B or R with a mono filter, not always V
         if star is not None and star.get("mag") is None:
             name = star.get("auid") or star.get("label") or "this star"
-            return (f"{name} has no {star.get('band', 'V')} in {star.get('catalog', 'the catalogs')}; type its V or "
+            return (f"{name} has no {band} in {star.get('catalog', 'the catalogs')}; type its {band} or "
                     "pick another star")
-        return "not in the downloaded catalogs; type its V or pick another star"
+        return f"not in the downloaded catalogs; type its {band} or pick another star"
 
     def _slot_lookup(self, role: str):
         """2.2.13 (John): a name or RA/Dec typed into a comp or check slot + Enter puts the marker on that star: the
@@ -4752,20 +4776,39 @@ class App(Tk):
         """The labeled star answering to this name in any catalog (2.2.13: Tycho, APASS, Gaia, AAVSO AUID or label)."""
         if not name:
             return None
-        key = " ".join(name.lower().split())
-        for _x, _y, star in self.chart_placed:
-            if any(" ".join(n.lower().split()) == key for n in core.star_names(star)):
-                return star
+        exact, by_key, by_core = self._chart_name_lookup()
+        star = exact.get(" ".join(name.lower().split()))
+        if star is not None:
+            return star
         # 2.2.14 (item 14): tolerant of spacing ("TYC4006-1310-1") and of a catalog prefix typed or left out
         # ("J231144.7+570632" for "APASS J231144.7+570632"); only a single match counts.
-        for keyfn in (name_key, name_core):
+        for keyfn, table in ((name_key, by_key), (name_core, by_core)):
             want = keyfn(name)
             if len(want) < 4:
                 continue
-            hits = [star for _x, _y, star in self.chart_placed if any(keyfn(n) == want for n in core.star_names(star))]
-            if len({id(s) for s in hits}) == 1:
+            hits = table.get(want) or []
+            if len(hits) == 1:
                 return hits[0]
         return None
+
+    def _chart_name_lookup(self):
+        """2.2.14 (item 14, review): the labeled stars' names, indexed once per set of labeled stars (exact,
+        spacing-free, prefix-free), so a name that is not there costs a dict lookup, not three passes over thousands of
+        catalog stars on every panel refresh. Rebuilt when chart_placed is replaced or changes length."""
+        sig = (id(self.chart_placed), len(self.chart_placed))
+        cache = getattr(self, "_chart_names_cache", None)
+        if cache is not None and cache[0] == sig:
+            return cache[1]
+        exact, by_key, by_core = {}, {}, {}
+        for _x, _y, star in self.chart_placed:
+            for n in core.star_names(star):
+                exact.setdefault(" ".join(n.lower().split()), star)
+                for keyfn, table in ((name_key, by_key), (name_core, by_core)):
+                    hits = table.setdefault(keyfn(n), [])
+                    if not any(h is star for h in hits):
+                        hits.append(star)
+        self._chart_names_cache = (sig, (exact, by_key, by_core))
+        return exact, by_key, by_core
 
     def _chart_xy_of(self, star):
         for x, y, st in self.chart_placed:
@@ -6644,10 +6687,11 @@ class App(Tk):
             missing = [role_label(r) for r in comp_roles if not getattr(self, f"{r}_mag").get().strip()]
             if missing and self.chart_placed:
                 # 2.2.14 (item 4): the image is solved already, so "click it once solved" was wrong: say why.
-                raise ValueError(f"{', '.join(missing)} {'has' if len(missing) == 1 else 'have'} no catalog V: "
+                band = self._band()   # 2.2.14 (review): the band the comps are taken in (B/R with a mono filter)
+                raise ValueError(f"{', '.join(missing)} {'has' if len(missing) == 1 else 'have'} no catalog {band}: "
                                  f"{'that star is' if len(missing) == 1 else 'those stars are'} not in the downloaded "
-                                 "catalogs (or the catalog has no V for it). Type its V in the box next to the name, "
-                                 "or pick another star")
+                                 f"catalogs (or the catalog has no {band} for it). Type its {band} in the box next to "
+                                 "the name, or pick another star")
             if missing:
                 raise ValueError(f"{', '.join(missing)} need{'s' if len(missing) == 1 else ''} a catalog magnitude "
                                  "(click it once the image is solved, or type it)")
@@ -6836,7 +6880,7 @@ class App(Tk):
         # 2.2.14 (item 19): the mode check when a night would go into the open series. The series file records its
         # mode; a series from before that has none, and is not checked.
         if self.observations and self.series_mode and self.series_mode != self.mode_key \
-                and not self.series_mode_unknown:
+                and not self.series_mode_unknown and not getattr(self, "_series_mode_answered", False):
             name = os.path.basename(self.series_path) if self.series_path else "The open series"
             answer = messagebox.askyesnocancel(
                 APP_TITLE, f"{name} is a {MODES[self.series_mode]['name']} series and this is "
@@ -6850,6 +6894,7 @@ class App(Tk):
             if answer:
                 self._rerun_in_mode(self.series_mode)
                 return
+        self._series_mode_answered = False
         if not self._start_job(f"Photometry on {len(lights)} lights…"):
             return
         if watch:
