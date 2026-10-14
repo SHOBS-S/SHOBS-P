@@ -77,6 +77,22 @@ def planet_summary(p: dict | None) -> str:
     return "   ".join(parts)
 
 
+
+def quality_text(r) -> str:
+    """2.2.14 (GitHub #5): "Fit rms 0.48% per point · 0.21% per 10-min bin · 68 points · β 1.12 · χ²ν 1.05"."""
+    if not r or r.get("rms") is None:
+        return ""
+    parts = [f"Fit rms {r['rms'] * 100:.3f}% per point"]
+    if r.get("rms_bin10") is not None:
+        parts.append(f"{r['rms_bin10'] * 100:.3f}% per 10-min bin")
+    if r.get("n_points") is not None:
+        parts.append(f"{r['n_points']} points")
+    if r.get("beta") is not None:
+        parts.append(f"red-noise β {r['beta']:.2f}")
+    if r.get("rchi2") is not None:
+        parts.append(f"χ²ν {r['rchi2']:.2f} (raw errors)")
+    return " · ".join(parts)
+
 class TransitPage:
     """Output page in Transits mode."""
 
@@ -180,7 +196,12 @@ class TransitPage:
         self.verdict = StringVar(value="")
         self.verdict_label = ttk.Label(self.heads, textvariable=self.verdict, style="Card.TLabel", wraplength=1100,
                                        justify=LEFT, font=(core.UI_FONT, 11, "bold"))
-        for var in (self.banner, self.verdict):
+        # 2.2.14 (GitHub #5): the fit's noise in one line under the verdict (it was only at the bottom of the table).
+        self.quality = StringVar(value="")
+        self.quality_label = ttk.Label(self.heads, textvariable=self.quality, style="Card.TLabel", justify=LEFT,
+                                       wraplength=1100, foreground="#33424d", font=(core.UI_FONT, 10))
+        card.bind("<Configure>", lambda e: self.quality_label.configure(wraplength=max(e.width - 40, 300)), add="+")
+        for var in (self.banner, self.verdict, self.quality):
             var.trace_add("write", lambda *_a: self._show_heads())
         self._show_heads()
         card.bind("<Configure>", lambda e: self.verdict_label.configure(wraplength=max(e.width - 40, 300)), add="+")
@@ -259,6 +280,7 @@ class TransitPage:
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
         self._check_stale(auto=shown)
+        self._count_text()
 
     def _night_picked(self):
         key = self._night_keys.get(self.night_label.get())
@@ -354,11 +376,27 @@ class TransitPage:
         self._fill_table()
         self.draw()
         self.source_night = self.night.get()
-        n = sum(1 for o in self.app._usable() if o.night == self.source_night)
-        self.source_text.set(f"{n} usable points on {self.source_night}")
+        self._count_text()
         self.planet_text.set(planet_summary(self.current_planet()))
         if auto:
             self._check_stale(auto=True)
+
+    def _count_text(self):
+        """2.2.14 (GitHub #7): the night's usable points counted now (the label was counted once, when the night first
+        appeared, sometimes while photometry was still running), plus the points the shown fit used."""
+        if self.report is not None:
+            return
+        night = self.night.get()
+        if not night:
+            self.source_text.set("")
+            return
+        n = sum(1 for o in self.app._usable() if o.night == night)
+        text = f"{n} usable points on {night}"
+        r = self.result
+        if r and r.get("n_points") is not None:
+            m = int(r["n_points"])
+            text += f"; {m} in this fit" + (f" ({m - n} flagged put back)" if m > n else "")
+        self.source_text.set(text)
 
     def _signature(self):
         """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet."""
@@ -755,6 +793,7 @@ class TransitPage:
                      f"{s['k'][1]:.4f}, depth {s['depth'][0] * 100:.2f}%, b {s['b'][0]:.2f}, beta {result['beta']:.2f}")
         self.app.status.set("Transit fit done.")
         self._fill_table()
+        self._count_text()
         self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
         self.draw()
         self._show_refit_flagged()
@@ -921,6 +960,7 @@ class TransitPage:
 
     def _show_verdict(self):
         v = (self.result or {}).get("verdict")
+        self.quality.set(quality_text(self.result) if v else "")
         if not v:
             self.verdict.set("")
             return
@@ -1017,6 +1057,7 @@ class TransitPage:
                          ("Step–depth correlation", f"{c:+.2f}" if c is not None and math.isfinite(c) else "", "", "",
                           "")]
             rows += [("rms per point (%)", f"{r['rms'] * 100:.3f}", "", "", ""),
+                     ("rms per 10-min bin (%)", num(r.get("rms_bin10"), "{:.3f}", 100), "", "", ""),
                      ("Red-noise beta", f"{r['beta']:.2f}", "", "", ""),
                      ("Reduced χ² (raw errors)", f"{r['rchi2']:.2f}", "", "", ""),
                      ("Points", str(r["n_points"]), "", "", str(len(self.report["t"])) if self.report else "")]
@@ -1037,6 +1078,7 @@ class TransitPage:
             self.table.insert("", END, values=row, tags=tags)
         self._fit_columns(rows)
         self._show_refit_flagged()
+        self._count_text()   # 2.2.14 (GitHub #7): the label follows every change of the shown fit
 
     def _notes_text(self, flags):
         self.notes.configure(state="normal")
@@ -1066,7 +1108,8 @@ class TransitPage:
         try:
             self.banner_label.pack_forget()
             self.verdict_label.pack_forget()
-            if not (self.banner.get() or self.verdict.get()):
+            self.quality_label.pack_forget()
+            if not (self.banner.get() or self.verdict.get() or self.quality.get()):
                 # An emptied frame keeps its old height in Tk, so the frame itself goes too.
                 self.heads.pack_forget()
                 return
@@ -1076,6 +1119,8 @@ class TransitPage:
                 self.banner_label.pack(anchor=W, fill=X, pady=(4, 0))
             if self.verdict.get():
                 self.verdict_label.pack(anchor=W, fill=X, pady=(4, 0))
+            if self.quality.get():
+                self.quality_label.pack(anchor=W, fill=X, pady=(2, 0))
         except Exception:
             pass
 
@@ -1272,6 +1317,8 @@ class TransitPage:
                       "bold"))
         if (self.result.get("verdict") or {}).get("depth_unreliable"):
             lines[-1] = (lines[-1][0], 11, "#c26a00", "bold")
+        if self.quality.get():
+            lines.append((self.quality.get(), 9, "#33424d", "normal"))   # 2.2.14 (GitHub #5)
         all_cols = ["param", "shobs", "free", "pub", "exotic"]
         cols = list(getattr(self, "_display_cols", None) or all_cols[:4])
         labels = {"param": "Parameter", "shobs": "SHOBS-P (MCMC)", "free": "Free shape", "pub": "Published / prior",

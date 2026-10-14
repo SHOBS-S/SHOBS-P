@@ -303,6 +303,23 @@ def lsq_errors(problem: TransitProblem) -> np.ndarray:
         return np.full(len(problem.free), np.nan)
 
 
+def binned_rms(t, resid, minutes: float = 10.0, min_bins: int = 3):
+    """2.2.14 (GitHub #5): rms of the residuals averaged in fixed time bins (as AstroImageJ's "RMS 10-min bins").
+    Bins start at the first point; a bin counts with at least 2 points. None when fewer than min_bins bins (or when the
+    cadence is longer than the bin, so binning would not average anything)."""
+    t = np.asarray(t, dtype=float)
+    r = np.asarray(resid, dtype=float)
+    ok = np.isfinite(t) & np.isfinite(r)
+    t, r = t[ok], r[ok]
+    if t.size < 2 * min_bins:
+        return None
+    idx = np.floor((t - t.min()) * 1440.0 / minutes).astype(int)
+    means = [float(np.mean(r[idx == k])) for k in np.unique(idx) if np.count_nonzero(idx == k) >= 2]
+    if len(means) < min_bins:
+        return None
+    return float(np.std(means, ddof=1))   # ddof=1: few bins on a short run would read ~15% low
+
+
 def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = 30.0) -> float:
     """Time-averaging beta (Pont et al. 2006; Winn et al. 2008): how much faster than white noise the
     residuals average down. 1 means white; 2 means binned errors are twice what white noise predicts."""
@@ -694,6 +711,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         "baseline": base, "detrended": flux / base, "residuals": resid, "best": best, "summary": summary,
         "free_params": list(prob_s.free), "priors": priors, "ld_prior": ld, "rchi2": rchi, "beta": beta,
         "error_scale": scale, "rms": float(np.std(resid)), "cadence_days": cadence, "chain": chain,
+        # 2.2.14 (GitHub #5): rms of 10-minute bins, as AstroImageJ shows it.
+        "rms_bin10": binned_rms(t_abs, resid, 10.0),
         "tc_pred": S["tc_pred"], "tc_pred_err": S["tc_pred_err"], "epoch": S["n"], "period": period,
         "planet": dict(planet), "eph_err_known": S["eph_err_known"],
         "eph_source": ephemeris_source(planet) if S["has_eph"] else "",
@@ -1885,7 +1904,9 @@ def fit_text(result: dict, meta: dict) -> str:
                      f"± {result['tc_pred_err'] * 1440:.2f} min)")
     lines += ["", "Priors           " + ", ".join(f"{k} {m:.4g} ± {sd:.2g}" for k, (m, sd) in result["priors"].items())
               + f"; limb darkening u1 {result['ld_prior'][0]:.2f}, u2 {result['ld_prior'][1]:.2f} ± {result['ld_prior'][2]:.2f}",
-              f"Noise            rms {result['rms'] * 100:.3f}% per point, reduced chi-square {result['rchi2']:.2f}, "
+              f"Noise            rms {result['rms'] * 100:.3f}% per point"
+              + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
+              + f", reduced chi-square {result['rchi2']:.2f}, "
               f"red-noise beta {result['beta']:.2f}, error bars x{result['error_scale']:.2f}",
               "Detrending       " + (", ".join(result["detrend"]) or "none"),
               f"MCMC             {ch['walkers']} walkers, {ch['burn']} burn-in + {ch['steps']} steps, "

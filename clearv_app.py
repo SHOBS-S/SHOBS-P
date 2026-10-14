@@ -6174,7 +6174,11 @@ class App(Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
-        if len(comps) > 1 and check is None:
+        # 2.2.14 (GitHub #4): a check star is not usual in transit work, so Transits mode does not ask; the AAVSO
+        # ensemble rule is about variable-star reports.
+        if len(comps) > 1 and check is None and self.mode_key == "transits":
+            self.log("No check star marked: fine for a transit fit (a check star only shows whether trends are shared).")
+        elif len(comps) > 1 and check is None:
             if not messagebox.askyesno(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
                                                   "requires a check star for ensemble reports. Continue without one?"):
                 return
