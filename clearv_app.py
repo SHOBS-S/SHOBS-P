@@ -7318,7 +7318,7 @@ class App(Tk):
                  + (f", {edges} at a cloud edge" if edges else "")
                  + (f", {hazy} {core.HAZE_LABEL}" if hazy else "") + ").")
         if edges:
-            self.log("  'cloudedge': a point within two frames of a cloud-flagged run and far off the night's level "
+            self.log("  'cloudedge': a point within two frames of a cloud or haze run and far off the night's level "
                      "(over 5× the night's scatter, at least 0.05 mag); left out like the cloud frames.")
         if hazy:
             self._offer_keep_transmission(night)
@@ -8193,12 +8193,16 @@ class App(Tk):
         if not held or self.out_canvas is None:
             return
         ax, name, key, lines = held
-        self._title_with_key(ax, name, key)
-        if self._lc_title[3] != lines:
+        # 2.2.14 review: the layout moves the axes, so wrap, lay out, and measure once more (at most two passes).
+        for _pass in range(2):
+            self._title_with_key(ax, name, key)
+            if self._lc_title[3] == lines and _pass:
+                break
+            lines = self._lc_title[3]
             try:
                 self.out_fig.tight_layout()
             except Exception:
-                pass
+                break
 
     def _jd_offset(self) -> int:
         """2.2.14 (item 9): the whole JD subtracted on a JD time axis (the series' first day), 0 without points."""
@@ -8331,7 +8335,8 @@ class App(Tk):
                 if fm.any():
                     ax.plot(tx[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
         # 2.2.14 (item 16): a symbol key in the title, only for the symbols drawn (8 nights overflowed a legend).
-        key = (["× flagged, left out"] if excluded.any() else []) + (["○ after flip"] if flip_mask.any() else [])
+        # 2.2.14 review: only drawn × count (a NaN point is left out but not plotted).
+        key = (["× flagged, left out"] if (excluded & np.isfinite(mag)).any() else []) + (["○ after flip"] if flip_mask.any() else [])
         ax.grid(True, alpha=0.3)
         bin_text = ""
         if interval is not False:
@@ -8602,6 +8607,11 @@ class App(Tk):
         Returns (array, "reduced" | "instrumental")."""
         reduced = np.array([o.check_std if o.check_std is not None else np.nan for o in obs_list], dtype=float)
         if np.isfinite(reduced).any():
+            # 2.2.14 review: a mixed series (the check had no catalog magnitude on some nights): those points get
+            # the same reduction, comps' catalog mean + check − comps, so every night sits on one scale.
+            for k, o in enumerate(obs_list):
+                if not math.isfinite(reduced[k]) and math.isfinite(o.comp_cat):
+                    reduced[k] = o.comp_cat + core.check_instrumental(o)
             return reduced, "reduced"
         return np.array([core.check_instrumental(o) for o in obs_list], dtype=float), "instrumental"
 
@@ -8689,6 +8699,8 @@ class App(Tk):
             # 2.2.14 (item 18): transmission loss in words, and how many such points were kept.
             if core.HAZE_FLAG in flags:
                 flags[core.HAZE_LABEL] = flags.pop(core.HAZE_FLAG)
+            if "cloudedge" in flags:   # 2.2.14 (item 10): in words too
+                flags[core.CLOUD_EDGE_LABEL] = flags.pop("cloudedge")
             kept_haze = self._transmission_summary(night)[0] \
                 if (self.night_bin.get(night) or {}).get("keep_transmission") else 0
             if kept_haze:
@@ -9876,15 +9888,24 @@ class App(Tk):
         # 2.2.14 (item 9): the three boxes side by side at their own widths (a 9 pt monospace character is about
         # 0.075 in); the picture widens when they need more room than the plots, instead of overlapping.
         box_w = [max(len(t) for t in (snap[k] or ["—"])) * 0.075 + 0.5 for k in ("series", "period", "color")]
-        width_in = max(pw / dpi, 0.1 + sum(box_w))
         mono = {"family": "monospace", "size": 9}
         box_lines = max(len(snap["series"]), len(snap["period"]), len(snap["color"]) or 1)
         rows = snap["rows"]
         cols = [(c, label) for c, label, _w in self.SUMMARY_COLUMNS if c != "note" or any(r.get("note") for r in rows)]
+        # 2.2.14 review: the night table counts too (its right-hand columns were clipped), up to 16 in for long notes.
+        table_in = min(16.0, (sum(self._col_chars(c, rows, label) + 2 for c, label in cols)) * 0.075 + 0.2)
+        width_in = max(pw / dpi, 0.1 + sum(box_w), table_in)
         line_in = 0.17
         box_h = (box_lines + 1.6) * line_in
         table_h = (len(rows) + 1.5) * line_in
-        extra = (1 if snap.get("cautions") else 0) * line_in * 1.5 + 0.55
+        # 2.2.14 review: the cautions wrapped to the picture's width (one long line was clipped at the right).
+        caution_lines = []
+        if snap.get("cautions"):
+            from transit_ui import wrap_to_width
+            for c in snap["cautions"]:
+                caution_lines += wrap_to_width("! " + c, 0.97 * width_in * dpi, 8, dpi=dpi)
+            caution_lines = caution_lines[:14]
+        extra = (len(caution_lines) * 0.8 + 0.7 if caution_lines else 0) * line_in + 0.55
         head_in = box_h + table_h + extra
         fig = Figure(figsize=(width_in, ph / dpi + head_in), dpi=dpi, facecolor="white")
         FigureCanvasAgg(fig)
@@ -9907,9 +9928,9 @@ class App(Tk):
         y -= table_h / total
         if self.spread_text.get():
             fig.text(0.01, y + 0.25 * line_in / total, self.spread_text.get().split("     Click")[0], va="top", fontsize=8.5)
-        if snap.get("cautions"):
-            fig.text(0.01, y - line_in / total, "   ".join("! " + c for c in snap["cautions"])[:400], va="top",
-                     fontsize=8, color="#a32020")
+        if caution_lines:
+            fig.text(0.01, y - line_in / total, "\n".join(caution_lines), va="top", fontsize=8, color="#a32020",
+                     linespacing=1.15)
         ax = fig.add_axes([0, 0, (pw / dpi) / width_in, (ph / dpi) / total])
         ax.imshow(plot)
         ax.axis("off")

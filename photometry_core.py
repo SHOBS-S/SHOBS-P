@@ -3396,9 +3396,9 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
 
     Faint comps can carry a colour term, a non-linearity or a sky-subtraction bias that bright comps do not, and
     in an ensemble that shifts the whole night (13 Oct, HD 219134: 6 comps incl. 11-13 mag stars gave 5.383, the
-    8.7 mag comp alone 5.501). The reference set is the comps (the chosen ones and the run's own) within `near`
-    mag of the target's median; when none is that close (a bright target), those within `near` mag of the comp
-    nearest the target in brightness. Frame by frame the target is reduced against both sets (only frames without
+    8.7 mag comp alone 5.501). The reference set is the chosen comps within `near` mag of the target's median;
+    when no comp is that close (a bright target), within `near` mag of the comp nearest the target in brightness.
+    Comps of the run that are not in use count only when no chosen comp is at that level. Frame by frame the target is reduced against both sets (only frames without
     flags, with every star measured), and the night's median difference is the shift.
 
     Returns None when there is nothing to compare (fewer than two chosen comps with catalog magnitudes, or the
@@ -3420,10 +3420,16 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
     if not clean:
         return None
     target = float(np.median([o.mag for o in clean]))
-    ref = [n for n in pool if abs(cat(n) - target) <= near]
+    # The brightness level to compare at: the target's, or (a bright target) the nearest comp's.
+    if any(abs(cat(n) - target) <= near for n in pool):
+        anchor = target
+    else:
+        anchor = cat(min(pool, key=lambda n: abs(cat(n) - target)))
+    # 2.2.14 review: comps left out on purpose (Use comps…) are not the reference while a chosen comp is at that
+    # level; they come back (named "not in use") only when none of the chosen comps is.
+    ref = [n for n in sel if abs(cat(n) - anchor) <= near]
     if not ref:
-        closest = min(pool, key=lambda n: abs(cat(n) - target))
-        ref = [n for n in pool if abs(cat(n) - cat(closest)) <= near]
+        ref = [n for n in pool if abs(cat(n) - anchor) <= near]
     if not ref or set(ref) == set(sel):
         return None
     sel_cat = float(np.mean([cat(n) for n in sel]))
@@ -3451,7 +3457,7 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
             out["warn"].append(night)
     if not out["nights"]:
         return None
-    ref_text = ", ".join(f"{n} (V {cat(n):.2f})" for n in ref)
+    ref_text = ", ".join(f"{n} (V {cat(n):.2f}{'' if n in sel else ', not in use'})" for n in ref)
     for night in sorted(out["warn"]):
         r = out["nights"][night]
         out["text"].append(
@@ -4475,19 +4481,21 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
     return flagged
 
 
+CLOUD_EDGE_LABEL = "cloud edge"   # 2.2.14 (item 10): the 'cloudedge' flag in words (night table)
 CLOUD_EDGE_FRAMES = 2       # 2.2.14 (item 10): how far (in frames) from a cloud-flagged frame a point can be flagged
 CLOUD_EDGE_SIGMA = 5.0      # ... and how far off the local level it must be (robust sigmas of the night)
 CLOUD_EDGE_MIN_MAG = 0.05   # ... but never less than this (a quiet night's 5 sigma can be a few millimag)
 
 
 def apply_cloud_edge_flags(observations: list[Obs]) -> int:
-    """2.2.14 (item 10): flag 'cloudedge' on outlying points at the edge of a cloud-flagged run.
+    """2.2.14 (item 10): flag 'cloudedge' on outlying points at the edge of a cloud or haze run.
 
     Frames just before or after a cloud run often lose less light than the cloud limit (so they pass the cloud
     flag), but the cloud edge crosses the target and the comps at different moments and the point lands far off
     (13 Oct: two points at 5.75 / 6.0 on a 5.5 star next to a cloud run). The rule is kept narrow so good data stay:
-    1. only points within CLOUD_EDGE_FRAMES frames of a 'cloud' frame (in time order, and not separated from it by
-       a gap of more than three typical frame spacings) can be flagged; nothing else on the night is looked at;
+    1. only points within CLOUD_EDGE_FRAMES frames of a 'cloud' (or left-out haze) frame (in time order, and not
+       separated from it by a gap of more than three typical frame spacings) can be flagged; nothing else on the
+       night is looked at;
     2. only if the point sits more than max(CLOUD_EDGE_SIGMA x the night's robust scatter, CLOUD_EDGE_MIN_MAG,
        3 x its own error) from the median of the 10 nearest clean points (no flags, not next to cloud);
     3. points that already carry another flag keep it and are not double-flagged.
