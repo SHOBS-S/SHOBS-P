@@ -99,6 +99,62 @@ def role_label(role: str) -> str:
     return {"target": "Target", "check": "Check", "watch": "Watch"}.get(role, role.title())
 
 
+def series_prev_path(path: str) -> str:
+    """2.2.14 (item 17): where Save series keeps the version before: X.cvseries -> X_prev.cvseries. '' for a file
+    that is itself a _prev copy (saving onto it keeps no copy of the copy)."""
+    stem, ext = os.path.splitext(path)
+    if stem.lower().endswith("_prev"):
+        return ""
+    return f"{stem}_prev{ext or '.cvseries'}"
+
+
+def placeholder_star_name(name) -> bool:
+    """2.2.14 (item 7): a name SHOBS-P gives a star that never got a real one ("check", "comp2", "watch 3 (…)")."""
+    import re
+    n = " ".join(str(name or "").lower().split())
+    if n in ("", "check", "check star", "comp", "comp star", "comparison", "target", "star", "na", "k", "kname"):
+        return True
+    return bool(re.fullmatch(r"(comp|check)\s*\d{0,2}", n) or re.fullmatch(r"watch \d+ \(.*\)", n))
+
+
+# 2.2.14 (item 14): catalog prefixes a typed name may carry or leave out ("APASS J2311…" = "J2311…").
+_NAME_PREFIXES = ("gaiadr3", "gaiadr2", "gaia", "dr3", "apass", "tycho-2", "tycho2", "tycho", "tyc", "2mass", "ucac4",
+                  "auid")
+
+
+def name_key(text) -> str:
+    """2.2.14 (item 14): a star name for matching: case, spaces and underscores ignored ("TYC4006-1310-1")."""
+    return "".join(str(text or "").lower().replace("_", " ").split())
+
+
+def name_core(text) -> str:
+    """name_key without a leading catalog prefix ("apassj231144.7+570632" -> "j231144.7+570632")."""
+    key = name_key(text)
+    for p in _NAME_PREFIXES:
+        if key.startswith(p) and len(key) > len(p) + 2:
+            return key[len(p):].lstrip(":-")
+    return key
+
+
+def designation_coords(text):
+    """2.2.14 (item 14): RA/Dec (degrees) from a J-designation such as "APASS J231144.7+570632" or "2MASS
+    J23114470+5706321"; None when the name carries no coordinates. Accurate to about a second of arc."""
+    import re
+    m = re.search(r"J(\d{2})(\d{2})(\d{2}\.?\d*)([+-])(\d{2})(\d{2})(\d{2}\.?\d*)(?![\d.])", str(text or ""))
+    if not m:
+        return None
+    h, mi, s, sign, d, dm, ds = m.groups()
+
+    def secs(t):   # "44.7", or 2MASS's "4470" (= 44.70)
+        t = t.replace(".", "")
+        return float(t[:2] + "." + t[2:]) if len(t) > 2 else float(t)
+    ra = 15.0 * (int(h) + int(mi) / 60.0 + secs(s) / 3600.0)
+    dec = (int(d) + int(dm) / 60.0 + secs(ds) / 3600.0) * (-1.0 if sign == "-" else 1.0)
+    if not (0.0 <= ra < 360.0 and -90.0 <= dec <= 90.0):
+        return None
+    return ra, dec
+
+
 # Labels the field scan gives the marked stars (and the 2.2.4 and older names).
 MARKED_LABELS = ("Target", "Check", "Comp", "Comp 2") + tuple(f"Comp {i}" for i in range(1, MAX_COMPS + 1))
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".shobs_p_settings.json")
@@ -241,6 +297,17 @@ def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
         pass
 
 
+def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
+    """2.2.14 (item 12): a wrap width in screen pixels for about `chars` characters of the UI font, so it scales with
+    the display (a fixed 780 px is a narrow column on a high-DPI screen); at most 60% of the screen."""
+    try:
+        from tkinter import font as tkfont
+        px = int(tkfont.Font(root=widget, family=core.UI_FONT, size=size).measure("n" * chars))
+        return max(320, min(px, int(0.6 * int(widget.winfo_screenwidth()))))
+    except Exception:
+        return 780
+
+
 def grow_to_content(win) -> None:
     """2.2.8: after a pop-up's contents grow (results arriving later), make the window big enough for them again,
     never smaller than it is now and never more than 90% of the screen; keep it on screen."""
@@ -315,8 +382,19 @@ class ScrollBody:
             bar.pack(before=self.canvas, **pack)
         bar.set(first, last)
 
+    def follow_width(self, labels, pad: int = 40):
+        """2.2.14 (item 12): wrapped text follows the window's width (wraplength = the body's width less `pad`), so
+        a wider window shows longer lines and a narrower one wraps instead of clipping."""
+        self._followers = list(labels)
+        self._follow_pad = int(pad)
+
     def _stretch(self, event):
         # Let the contents fill the width when there is room; keep their own width when there is not.
+        for lab in getattr(self, "_followers", ()):   # 2.2.14 (item 12)
+            try:
+                lab.configure(wraplength=max(240, int(event.width) - self._follow_pad))
+            except Exception:
+                pass
         try:
             need = int(self.inner.winfo_reqwidth())
             self.canvas.itemconfigure(self._item, width=max(int(event.width), need))
@@ -473,8 +551,9 @@ class App(Tk):
         self.pl_b = StringVar()
         self.pl_teff = StringVar()
         self.planet_info = {}          # the last lookup (errors, source, magnitudes) for the values above
-        self.planet_source = StringVar(value="Type the planet's name and press Lookup (NASA Exoplanet Archive; "
+        self.planet_source = StringVar(value="Type the planet's name and press Enter (NASA Exoplanet Archive; "
                                              "TOIs also from ExoFOP), or type the values.")
+        self._last_planet_lookup = None   # 2.2.14 (item 2): the planet name last looked up (auto lookup on Enter)
 
         self.masters = None
         self.calibrated = None
@@ -510,6 +589,11 @@ class App(Tk):
         self.chart_placed = []
         self.comps_used = []
         self.check_used = ""
+        self.report_names = {}        # 2.2.14 (item 7): placeholder name ("check") -> the name typed for reports
+        self._slot_notes = {}         # 2.2.14 (item 14): role -> (typed name, outcome) shown on the slot's hint line
+        self._prev_kept = set()       # 2.2.14 (item 17): series files whose _prev copy was made this session
+        self.series_mode_unknown = False   # 2.2.14 (item 19): the loaded series file does not say its mode (old)
+        self.target_var_type = ""     # 2.2.14 (item 19): VSX type of the looked-up target ("" = none known)
         self.star_bands = {}
         self.seq_auids = {}           # 2.2.13: catalog name -> AAVSO AUID for sequence comps (reports)
         self.color_cal = {}
@@ -654,6 +738,7 @@ class App(Tk):
         self.pick_mode.set("watch" if self.mode_key == "discovery" else "target")
         if hasattr(self, "pick_label"):
             self._update_pick_label()
+        self._refresh_watch_box()   # 2.2.14 (item 15): the box said "on this frame" for the old frame's positions
 
     def _filter_code(self) -> str:
         """AAVSO filter code for reports: the filter wheel's (FITS FILTER) on a monochrome camera, else the OSC
@@ -1394,8 +1479,13 @@ class App(Tk):
         ttk.Label(pg, text="Planet", style="Card.TLabel").grid(row=0, column=0, sticky=W, padx=(0, 10), pady=3)
         cell = ttk.Frame(pg, style="Card.TFrame")
         cell.grid(row=0, column=1, columnspan=3, sticky="ew", pady=3)
-        ttk.Entry(cell, textvariable=self.planet_name, width=24).pack(side=LEFT, fill=X, expand=True)
-        ttk.Button(cell, text="Lookup", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
+        planet_entry = ttk.Entry(cell, textvariable=self.planet_name, width=24)
+        planet_entry.pack(side=LEFT, fill=X, expand=True)
+        # 2.2.14 (item 2): like the Star ID, the planet is looked up by itself on Enter or on leaving the box when
+        # the name changed since the last lookup; the button repeats the lookup.
+        for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
+            planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
+        ttk.Button(cell, text="Look up again", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
         ttk.Button(cell, text="Tonight's transits…", command=self._open_finder).pack(side=LEFT, padx=(6, 0))
         for i, (label, var, hint, label2, var2, hint2) in enumerate((
                 ("Period (d)", self.pl_period, "", "T0 (BJD_TDB)", self.pl_t0, ""),
@@ -1449,35 +1539,56 @@ class App(Tk):
         return page
 
     # ---- planet (Transits) ---------------------------------------------------------------
-    def lookup_planet(self):
+    def _auto_planet_lookup(self):
+        """2.2.14 (item 2): look the planet up when its name changed since the last lookup (not on every keystroke).
+        Names set by the planet chooser or Tonight's transits were looked up already, so they count as done."""
+        name = self.planet_name.get().strip()
+        if not name or name == getattr(self, "_last_planet_lookup", None):
+            return
+        self.lookup_planet(quiet=True)
+
+    def lookup_planet(self, quiet: bool = False):
         name = self.planet_name.get().strip()
         if not name:
-            messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example TrES-3 b, "
-                                           "KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
+            if not quiet:
+                messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example "
+                                               "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
+        self._last_planet_lookup = name   # 2.2.14 (item 2)
         self.planet_source.set(f"Looking up {name}…")
 
         def work():
             try:
-                self.call_ui(self._planet_lookup_done, tcore.lookup_planet(name), None)
+                self.call_ui(self._planet_lookup_done, tcore.lookup_planet(name), None, name, quiet)
             except Exception as exc:
-                self.call_ui(self._planet_lookup_done, None, exc)
+                self.call_ui(self._planet_lookup_done, None, exc, name, quiet)
 
         self._lookup_worker = threading.Thread(target=work, daemon=True)
         self._lookup_worker.start()
 
-    def _planet_lookup_done(self, p, error):
+    def _planet_lookup_done(self, p, error, name: str = "", quiet: bool = False):
+        if name and name != self.planet_name.get().strip():
+            # 2.2.14 (item 2): the name changed while this lookup ran: look up the one that is there now instead.
+            self._auto_planet_lookup()
+            return
         if isinstance(error, tcore.PlanetChoice):
             # 2.2.6: a star with several planets: ask which one, then look that one up.
             self.planet_source.set(f"{error.system}: choose a planet.")
             self._choose_planet(error.system, error.planets, getattr(error, "transiting", set()))
             return
         if error is not None:
+            if quiet:
+                # 2.2.14 (item 2): an automatic lookup fails quietly, on the line under the box (no error box). The
+                # name still counts as looked up, so leaving the box again does not ask again; Look up again does.
+                self.planet_source.set(f"Could not look up {name or 'the planet'} ({error}). Check the spelling and "
+                                       "press Look up again, or type the values.")
+                return
             self.planet_source.set("Lookup failed.")
             messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
             return
         self.planet_info = dict(p)
         self._planet_to_fields(p)
+        self._last_planet_lookup = self.planet_name.get().strip()   # 2.2.14 (item 2): the resolved name counts too
         filled = []
         # 2.2.7: a planet whose host is a different star from the Star ID (a target left from an earlier planet)
         # replaces the Star ID and RA/Dec, and says so; the same star is left as typed.
@@ -1702,6 +1813,7 @@ class App(Tk):
         self.star_bands = {}
         self.suggested_comps = []
         self.catalog_period = None
+        self.target_var_type = ""   # 2.2.14 (item 19)
         self.chart.set("")
         if hasattr(self, "pick_label"):
             self._update_pick_label()
@@ -1957,6 +2069,7 @@ class App(Tk):
         self.ra_hours.set(f"{found['ra_hours']:.6f}")
         self.dec_deg.set(f"{found['dec_deg']:.5f}")
         self.catalog_period = found.get("period_days")
+        self.target_var_type = str(found.get("var_type") or "")   # 2.2.14 (item 19)
         extra = ""
         if self.catalog_period:
             extra = f"   VSX period {self.catalog_period:.6f} d"
@@ -3421,6 +3534,117 @@ class App(Tk):
             f"{abs(chk['hours']):.1f} h {side} them.\n\nIf this is a variability run, switch to Variables mode "
             "first (the series and reports are kept per mode).\n\nRun photometry in Transits mode anyway?")
 
+    def _lights_span(self, lights):
+        """(first, last) mid-exposure JD of the lights, or None when the headers have no usable time."""
+        try:
+            j0 = core.mid_jd(core.read_header(lights[0]))
+            j1 = core.mid_jd(core.read_header(lights[-1]))
+        except Exception:
+            return None
+        if j0 is None or j1 is None or not (math.isfinite(j0) and math.isfinite(j1)):
+            return None
+        return min(j0, j1), max(j0, j1)
+
+    def _target_variable_reasons(self) -> list:
+        """2.2.14 (item 19): why the target looks like a variability target: a known variable (VSX lookup, or a
+        variable at the Target marker after Solve) or an open Variables series. Empty when nothing says so."""
+        why = []
+        if self.target_var_type or self.catalog_period:
+            why.append(f"{self.star_id.get().strip() or 'the target'} is a known variable"
+                       + (f" ({self.target_var_type})" if self.target_var_type else "")
+                       + (f", period {self.catalog_period:.5f} d" if self.catalog_period else ""))
+        elif self.target_xy is not None:
+            star = self._chart_star_at(self.target_xy) if self.chart_placed else None
+            hits = (star or {}).get("variable") or self._variables_at(self.target_xy)
+            if hits:
+                why.append(f"the target is listed as a variable ({core.variable_text({'variable': hits})})")
+        if self.observations and self.series_mode == "variables" and not self.series_mode_unknown:
+            why.append(f"a Variables series is open ({os.path.basename(self.series_path) or 'not saved yet'})")
+        return why
+
+    def _planet_is_target(self, planet: dict) -> bool:
+        """2.2.14 (item 19): the planet in the Planet box orbits the Input page's target (by position, else by name)."""
+        try:
+            if planet.get("ra") is not None and self.ra_hours.get().strip() and self.dec_deg.get().strip():
+                return core.sky_separation_arcsec(float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()),
+                                                  float(planet["ra"]), float(planet["dec"])) < 60.0
+        except (TypeError, ValueError, KeyError):
+            pass
+        host = name_key(planet.get("host") or "")
+        return bool(host) and host == name_key(self.star_id.get())
+
+    def _rerun_in_mode(self, mode: str) -> bool:
+        """2.2.14 (item 19): switch mode and start Run photometry again there (every check runs again in that mode).
+        Returns False, so the run asked for in the old mode stops."""
+        self.set_mode(mode)
+        if self.mode_key != mode:
+            return False
+        self.log(f"Switched to {MODES[mode]['name']} mode for this run.")
+        self.after(150, self.run_photometry)
+        return False
+
+    def _mode_guard(self, lights) -> bool:
+        """2.2.14 (item 19): before photometry, catch a run started in the wrong mode (14 Oct: HD 219134 run in
+        Transits mode by accident). Transits mode with no planet, or no transit predicted in the lights, on a known
+        variable or with a Variables series open: offer Variables mode. Variables mode on the host of the planet in
+        the Planet box during one of its predicted transits: offer Transits mode. Needs only the lights' times and
+        the Input page (no plate solution, no header pointing; a solve adds the variable-at-the-marker check)."""
+        if self.mode_key == "transits" and lights:
+            page = getattr(self, "transit_page", None)
+            planet = page.current_planet() if page is not None else None
+            why = self._target_variable_reasons()
+            span = self._lights_span(lights)
+            if why and (planet is None or span is not None):
+                chk = None
+                if planet is not None:
+                    chk = tcore.transit_window_check(span[0] - 0.0105, span[1] + 0.0105, planet)
+                if planet is None or (chk is not None and not chk["overlap"]):
+                    if planet is None:
+                        what = "No planet is entered on the Input page"
+                    else:
+                        what = (f"No transit of {planet.get('name') or 'the planet'} is predicted during these lights "
+                                f"(the nearest is {abs(chk['hours']):.1f} h {'after' if chk['hours'] > 0 else 'before'} "
+                                "them)")
+                    answer = messagebox.askyesnocancel(
+                        APP_TITLE, f"{what}, and {' and '.join(why)}.\n\nRun in Variables mode instead?\n\n"
+                                   "Yes: switch to Variables mode and run there.\nNo: run in Transits mode anyway.\n"
+                                   "Cancel: don't run.")
+                    if answer is None:
+                        return False
+                    if answer:
+                        return self._rerun_in_mode("variables")
+                    self.log(f"Run in Transits mode as chosen ({what.lower()}; {'; '.join(why)}).")
+                    return True
+            return self._transit_in_lights(lights)
+        if self.mode_key == "variables" and lights:
+            if self.observations and self.series_mode == "variables":
+                return True   # a Variables campaign on a planet host (HD 219134) is not asked every night
+            planet = self.planet_from_fields()
+            if not planet or not self._planet_is_target(planet):
+                return True
+            span = self._lights_span(lights)
+            if span is None:
+                return True
+            chk = tcore.transit_window_check(span[0] - 0.0105, span[1] + 0.0105, planet)
+            if chk is None or not chk["overlap"]:
+                return True
+            try:
+                when = f" (mid-transit about {tcore.jd_to_local(chk['tc']).strftime('%H:%M')} local)"
+            except Exception:
+                when = ""
+            name = planet.get("name") or "the planet"
+            answer = messagebox.askyesnocancel(
+                APP_TITLE, f"{self.star_id.get().strip() or 'The target'} hosts {name}, and a transit of {name} is "
+                           f"predicted during these lights{when}.\n\nRun in Transits mode instead?\n\n"
+                           "Yes: switch to Transits mode and run there.\nNo: run in Variables mode anyway.\n"
+                           "Cancel: don't run.")
+            if answer is None:
+                return False
+            if answer:
+                return self._rerun_in_mode("transits")
+            self.log(f"Run in Variables mode as chosen, during a predicted transit of {name}.")
+        return True
+
     def _aperture_sane(self) -> bool:
         """Before a run: is the aperture far larger (or smaller) than the stars on this frame? Typical after
         switching telescopes, for example to MicroObservatory frames with your own aperture still set."""
@@ -4343,8 +4567,27 @@ class App(Tk):
             self.status.set(filled + snap_note)
         elif snap_note:
             self.status.set(snap_note.strip())
+        no_v = self._no_catalog_v_note(mode) if comp_number(mode) else ""
+        if no_v:
+            # 2.2.14 (item 4): say it when the comp is marked, not only when Run photometry refuses.
+            self.status.set(f"{role_label(mode)}: {no_v}")
+            self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
             self._vet_choice(mode, xy)
+
+    def _no_catalog_v_note(self, role: str) -> str:
+        """2.2.14 (item 4): why a marked comp has no catalog V on a solved image ('' when it has one, or when the image
+        is not solved yet: then the magnitude fills in at Solve). Without a solve a typed V works as before."""
+        if not comp_number(role) or getattr(self, f"{role}_xy") is None or not self.chart_placed:
+            return ""
+        if getattr(self, f"{role}_mag").get().strip():
+            return ""
+        star = self._chart_star_at(getattr(self, f"{role}_xy"))
+        if star is not None and star.get("mag") is None:
+            name = star.get("auid") or star.get("label") or "this star"
+            return (f"{name} has no {star.get('band', 'V')} in {star.get('catalog', 'the catalogs')}; type its V or "
+                    "pick another star")
+        return "not in the downloaded catalogs; type its V or pick another star"
 
     def _slot_lookup(self, role: str):
         """2.2.13 (John): a name or RA/Dec typed into a comp or check slot + Enter puts the marker on that star: the
@@ -4352,10 +4595,15 @@ class App(Tk):
         already has a marker is only relabelled (typing changes the name; nothing moves)."""
         name_var = getattr(self, f"{role}_name")
         text = name_var.get().strip()
-        if not text or getattr(self, f"{role}_xy") is not None or self.mode_key == "discovery":
+        if not text or self.mode_key == "discovery":
+            return
+        if getattr(self, f"{role}_xy") is not None:
+            # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
+            self._slot_say(role, f"{role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
+                                 "then Enter places the name).")
             return
         if self.preview is None or not self.preview_is_debayered:
-            self.status.set("Calibrate first, so the star can be found on the image.")
+            self._slot_say(role, f"Calibrate first, so {text} can be found on the image.", bad=True)
             return
         star = self._chart_star_named(text)
         if star is not None and self._chart_xy_of(star) is not None:
@@ -4365,49 +4613,73 @@ class App(Tk):
         if coords is not None:
             self._place_slot_sky(role, text, coords[0], coords[1])
             return
-        if not self.chart_solution:
-            self._slot_not_solved(text)
+        # 2.2.14 (item 14): the merged catalogs' positions before SIMBAD, which does not know "APASS J…" names: a
+        # J-designation carries its own coordinates.
+        coords = designation_coords(text)
+        if coords is not None and self.chart_solution:
+            self._place_slot_sky(role, text, coords[0], coords[1], reach=WATCH_SAME_ARCSEC)
             return
-        self.status.set(f"Looking up {text} in SIMBAD and VSX…")
+        if not self.chart_solution:
+            self._slot_not_solved(text, role)
+            return
+        self._slot_say(role, f"Looking up {text} in SIMBAD and VSX…")
 
         def work():
             try:
                 found = core.lookup_target(text)
                 self.call_ui(self._place_slot_sky, role, text, found["ra_hours"] * 15.0, found["dec_deg"])
             except Exception as exc:
-                self.call_ui(self.status.set, f"Could not find {text} ({exc}). Click the star on the image instead.")
+                self.call_ui(self._slot_lookup_failed, role, text, exc)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _slot_not_solved(self, text):
-        self.status.set(f"The image is not solved yet, so {text} cannot be placed from its name or position. Click "
-                        "the star on the image (Solve again if the solve failed).")
+    def _slot_lookup_failed(self, role: str, text: str, exc):
+        if getattr(self, f"{role}_name").get().strip() != text:
+            return
+        self._slot_say(role, f"{text} not found (not in this image's catalogs, and SIMBAD/VSX said: {exc}). Check "
+                             "the name, type RA Dec, or click the star on the image.", bad=True)
 
-    def _place_slot_sky(self, role: str, text: str, ra: float, dec: float):
+    def _slot_say(self, role: str, text: str, bad: bool = False):
+        """2.2.14 (item 14): every outcome of a typed name goes to the status bar, the log, and the slot's own hint
+        line (until the name in the slot changes)."""
+        self.status.set(text)
+        self.log(f"{role_label(role)}: {text}")
+        self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), text, bad)
+        self.update_star_panel()
+
+    def _slot_not_solved(self, text, role: str | None = None):
+        msg = (f"The image is not solved yet, so {text} cannot be placed from its name or position. Click the star "
+               "on the image (Solve again if the solve failed).")
+        if role is not None:
+            self._slot_say(role, msg, bad=True)
+        else:
+            self.status.set(msg)
+
+    def _place_slot_sky(self, role: str, text: str, ra: float, dec: float, reach: float = 5.0):
         if getattr(self, f"{role}_xy") is not None or getattr(self, f"{role}_name").get().strip() != text:
             return   # filled or changed meanwhile
         if not self.chart_solution or self.preview is None:
-            self._slot_not_solved(text)
+            self._slot_not_solved(text, role)
             return
         best = None
         for x, y, st in self.chart_placed:
             if st.get("ra") is None:
                 continue
             d = core.sky_separation_arcsec(ra, dec, st["ra"], st["dec"])
-            if d < 5.0 and (best is None or d < best[0]):
+            if d < reach and (best is None or d < best[0]):
                 best = (d, (x, y))
         xy = best[1] if best else self._project_to_frame(ra, dec)
         if xy is None:
-            self.status.set(f"{text} is not on this frame ({core.sexagesimal_ra(ra / 15.0)} "
-                            f"{core.sexagesimal_dec(dec)}).")
+            self._slot_say(role, f"{text} is not on this frame ({core.sexagesimal_ra(ra / 15.0)} "
+                                 f"{core.sexagesimal_dec(dec)}).", bad=True)
             return
         self._set_slot(role, xy, text)
 
     def _set_slot(self, role: str, xy, text: str):
-        for other in list(COMP_ROLES) + ["check"]:
-            oxy = getattr(self, f"{other}_xy")
+        others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
+        for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
-                self.status.set(f"{text} is already {role_label(other)}.")
+                self._slot_say(role, f"{text} is already marked as {role_label(other)}.", bad=True)   # 2.2.14 (14)
                 return
         setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
         filled = self._fill_from_chart(role, xy)
@@ -4415,9 +4687,10 @@ class App(Tk):
             getattr(self, f"{role}_name").set(text)
         self._update_pick_label()
         self.refresh_preview()
-        self.update_star_panel()
-        self.status.set((filled if filled else f"{role_label(role)} placed on {text}; type its magnitude.")
-                        + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
+        msg = ((filled if filled else f"{role_label(role)} placed on {text}; type its magnitude.")
+               + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
+        bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
+        self._slot_say(role, ("⚠ " if bad else "✓ ") + msg, bad=bad)   # 2.2.14 (item 14)
         self._vet_choice(role, xy)
 
     def _chart_star_at(self, xy, reach: float = 8.0):
@@ -4436,6 +4709,15 @@ class App(Tk):
         for _x, _y, star in self.chart_placed:
             if any(" ".join(n.lower().split()) == key for n in core.star_names(star)):
                 return star
+        # 2.2.14 (item 14): tolerant of spacing ("TYC4006-1310-1") and of a catalog prefix typed or left out
+        # ("J231144.7+570632" for "APASS J231144.7+570632"); only a single match counts.
+        for keyfn in (name_key, name_core):
+            want = keyfn(name)
+            if len(want) < 4:
+                continue
+            hits = [star for _x, _y, star in self.chart_placed if any(keyfn(n) == want for n in core.star_names(star))]
+            if len({id(s) for s in hits}) == 1:
+                return hits[0]
         return None
 
     def _chart_xy_of(self, star):
@@ -4483,6 +4765,7 @@ class App(Tk):
             if role != "target":
                 # 2.2.13 (John): type a name or RA/Dec in an empty slot and press Enter to put the marker on it.
                 w.bind("<Return>", lambda e, k=role: self._slot_lookup(k))
+                w.bind("<KP_Enter>", lambda e, k=role: self._slot_lookup(k))   # 2.2.14 (item 14): keypad Enter
             widgets.append(w)
             if mag_var is not None:
                 w = ttk.Entry(stars, textvariable=mag_var, width=8)
@@ -4551,6 +4834,14 @@ class App(Tk):
                         if role == next_slot and self.preview is not None and self.mode_key != "discovery" else "")
                 lab.configure(style="Hint.TLabel")
                 continue
+            # 2.2.14 (item 14): what Enter on a typed name did, until the name in the slot changes.
+            slot_note = self._slot_notes.get(role) if hasattr(self, "_slot_notes") else None
+            if slot_note and slot_note[0] != name:
+                slot_note = None
+            if slot_note and xy is None:
+                var.set(slot_note[1])
+                lab.configure(style="Warn.TLabel" if slot_note[2] else "Hint.TLabel")
+                continue
             if name and xy is None and role != "target" and self.preview is not None:
                 # 2.2.3: a name left from an earlier run with no marker on this image.
                 var.set("⚠ not marked on this image: click the star, or ✕ to clear the name")
@@ -4582,6 +4873,11 @@ class App(Tk):
                         style = "Good.TLabel"
                 else:
                     parts.append("no catalog B−V for this star")
+            no_v = self._no_catalog_v_note(role)
+            if no_v:
+                parts.insert(0, "⚠ " + no_v)   # 2.2.14 (item 4)
+                if style != "Bad.TLabel":
+                    style = "Warn.TLabel"
             note = self._comp_brightness_note(role, xy)
             if note:
                 parts.append(note)
@@ -4598,12 +4894,14 @@ class App(Tk):
                     parts.append("variable check: Solve first")
                 else:
                     parts.append("variable check: mark it on the image to check it by position")
+            if slot_note and not slot_note[1].startswith(("✓", "⚠")):
+                parts.insert(0, slot_note[1])   # 2.2.14 (item 14): e.g. "renamed only"
             var.set("   ".join(parts))
             lab.configure(style=style)
         self._refresh_watch_box()
 
     # ---- watch stars ------------------------------------------------------------------
-    def add_watch_at(self, xy):
+    def add_watch_at(self, xy, announce: bool = False):
         star = self._chart_star_at(xy)
         if star is not None:
             name = str(star.get("auid") or star.get("label") or "")
@@ -4621,9 +4919,9 @@ class App(Tk):
             name = f"watch {len(self.watch_list) + 1} ({xy[0]:.0f},{xy[1]:.0f})"
         if any(w["name"] == name for w in self.watch_list):
             self.watch_xy[name] = xy
-            self.status.set(f"{name} is already a watch star; its position on this frame was updated.")
             self.refresh_preview()
-            self._refresh_watch_box()
+            self._already_watching(name, f"{name} is already a watch star; its position on this frame was updated.",
+                                   announce)   # 2.2.14 (item 15)
             return name
         else:
             entry = {"name": name}
@@ -4647,7 +4945,7 @@ class App(Tk):
     def add_watch_by_name(self, name: str):
         """Watch a spare comp (from Comp health); its stored measurements become its light curve at once."""
         if any(w["name"] == name for w in self.watch_list):
-            self.status.set(f"{name} is already a watch star.")
+            self._already_watching(name, f"{name} is already a watch star.", True)   # 2.2.14 (item 15)
             return
         info = self.spare_catalog.get(name, {})
         self.watch_list.append({"name": name, "mag": info.get("mag"), "mags": dict(info.get("mags") or {}),
@@ -4678,11 +4976,38 @@ class App(Tk):
     def _refresh_watch_box(self):
         if not hasattr(self, "watch_box"):
             return
+        try:
+            sel = self.watch_box.curselection()
+            keep = self.watch_list[sel[0]]["name"] if sel and sel[0] < len(self.watch_list) else None
+        except Exception:
+            keep = None
+        keep = getattr(self, "_watch_highlight", None) or keep
         self.watch_box.delete(0, END)
         for w in self.watch_list:
             mag = f"  V {w['mag']:.2f}" if isinstance(w.get("mag"), (int, float)) else ""
             where = "on this frame" if w["name"] in self.watch_xy else "not found on this frame"
             self.watch_box.insert(END, f"{w['name']}{mag}  —  {where}")
+        # 2.2.14 (item 15): a refresh keeps the selected (or just highlighted) row selected.
+        names = [w["name"] for w in self.watch_list]
+        if keep in names:
+            try:
+                i = names.index(keep)
+                self.watch_box.selection_clear(0, END)
+                self.watch_box.selection_set(i)
+                self.watch_box.see(i)
+            except Exception:
+                pass
+
+    def _already_watching(self, name: str, text: str, announce: bool = False):
+        """2.2.14 (item 15): a star that is already watched: highlight its row in the Watch stars box and say so in the
+        status bar and the log, and in a message when it came from Add a star… (status bar only was easy to miss)."""
+        self._watch_highlight = name
+        self._refresh_watch_box()
+        self._watch_highlight = None
+        self.status.set(text)
+        self.log("Watch stars: " + text)
+        if announce:
+            messagebox.showinfo(APP_TITLE, text + "\n\nIts row is highlighted in the Watch stars box.", parent=self)
 
     def _locate_watch_stars(self):
         """After Solve: find each watch star on the new frame by catalog name, then by sky position."""
@@ -4746,17 +5071,23 @@ class App(Tk):
         """Watch a star given by name or coordinates: the labeled chart first, then the field's variables,
         then coordinates, then a SIMBAD/VSX name lookup."""
         key = " ".join(text.lower().split())
+        # 2.2.14 (item 15): a name already in the list (a loaded series' watch star) says so and highlights its row.
+        known = next((w["name"] for w in self.watch_list if name_key(w["name"]) == name_key(text)), None)
+        if known is not None:
+            self._already_watching(known, f"{known} is already a watch star.", True)
+            return
         named = self._chart_star_named(text)
         if named is not None and self._chart_xy_of(named) is not None:
-            self.add_watch_at(self._chart_xy_of(named))
+            self.add_watch_at(self._chart_xy_of(named), announce=True)
             return
         for x, y, v in self.variable_marks:
             if " ".join(str(v.get("name", "")).lower().split()) == key:
-                self._add_watch_sky(v["name"], v["ra"], v["dec"], self._variable_hover(v).replace("\n", " "))
+                self._add_watch_sky(v["name"], v["ra"], v["dec"], self._variable_hover(v).replace("\n", " "),
+                                    announce=True)
                 return
         coords = core.parse_coordinates(text)
         if coords is not None:
-            self._add_watch_sky(f"watch {coords[0]:.4f} {coords[1]:+.4f}", coords[0], coords[1], "")
+            self._add_watch_sky(f"watch {coords[0]:.4f} {coords[1]:+.4f}", coords[0], coords[1], "", announce=True)
             return
         self.status.set(f"Looking up {text} in SIMBAD and VSX…")
 
@@ -4764,7 +5095,8 @@ class App(Tk):
             try:
                 found = core.lookup_target(text)
                 self.call_ui(self._add_watch_sky, text, found["ra_hours"] * 15.0, found["dec_deg"],
-                             f"{found.get('source', 'SIMBAD')}" + (f" {found['var_type']}" if found.get("var_type") else ""))
+                             f"{found.get('source', 'SIMBAD')}" + (f" {found['var_type']}" if found.get("var_type") else ""),
+                             True)
             except Exception as exc:
                 self.call_ui(self.status.set, f"Could not find {text}.")
                 self.call_ui(messagebox.showerror, APP_TITLE, f"Could not find {text}: {exc}")
@@ -4772,18 +5104,18 @@ class App(Tk):
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
 
-    def _add_watch_sky(self, name: str, ra: float, dec: float, note: str):
+    def _add_watch_sky(self, name: str, ra: float, dec: float, note: str, announce: bool = False):
         """Add a watch star at a sky position: on a labeled chart star if one is within 5\", else projected
         onto the image with the chart solution."""
         if any(w["name"] == name for w in self.watch_list):
-            self.status.set(f"{name} is already a watch star.")
+            self._already_watching(name, f"{name} is already a watch star.", announce)   # 2.2.14 (item 15)
             return
         # 2.2.13 (John): one star, one name. A star typed by RA/Dec (or another name) that is already watched is not
         # added again (13 Oct: APASS J231239.3+565553 became a second watch star 'watch 348.1637 +56.9314').
         for w in self.watch_list:
             if w.get("ra") is not None and w.get("dec") is not None and \
                     core.sky_separation_arcsec(ra, dec, float(w["ra"]), float(w["dec"])) < WATCH_SAME_ARCSEC:
-                self.status.set(f"That star is already watched as {w['name']}.")
+                self._already_watching(w["name"], f"That star is already watched as {w['name']}.", announce)
                 return
         best = None
         for x, y, star in self.chart_placed:
@@ -4796,7 +5128,7 @@ class App(Tk):
             names = core.star_names(best[3])
             for w in self.watch_list:
                 if w["name"] in names:
-                    self.status.set(f"That star is already watched as {w['name']}.")
+                    self._already_watching(w["name"], f"That star is already watched as {w['name']}.", announce)
                     return
             if name.startswith("watch ") and best[3].get("auid"):
                 name = str(best[3]["auid"])   # a catalog star: its catalog name, not the typed coordinates
@@ -4813,7 +5145,7 @@ class App(Tk):
         if xy is not None:
             for other, oxy in self.watch_xy.items():
                 if math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
-                    self.status.set(f"That star is already watched as {other}.")
+                    self._already_watching(other, f"That star is already watched as {other}.", announce)
                     return
         if hits:
             entry["variable"] = core.variable_text({"variable": hits})
@@ -6120,7 +6452,7 @@ class App(Tk):
             return
         if not self._markers_in_order():
             return
-        if not self._transit_in_lights(lights):
+        if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
             return
         self._sequence_note()
         try:
@@ -6135,6 +6467,12 @@ class App(Tk):
             if not comp_roles:
                 raise ValueError("Mark at least one comparison star (Comps, then click the star)")
             missing = [role_label(r) for r in comp_roles if not getattr(self, f"{r}_mag").get().strip()]
+            if missing and self.chart_placed:
+                # 2.2.14 (item 4): the image is solved already, so "click it once solved" was wrong: say why.
+                raise ValueError(f"{', '.join(missing)} {'has' if len(missing) == 1 else 'have'} no catalog V: "
+                                 f"{'that star is' if len(missing) == 1 else 'those stars are'} not in the downloaded "
+                                 "catalogs (or the catalog has no V for it). Type its V in the box next to the name, "
+                                 "or pick another star")
             if missing:
                 raise ValueError(f"{', '.join(missing)} need{'s' if len(missing) == 1 else ''} a catalog magnitude "
                                  "(click it once the image is solved, or type it)")
@@ -6291,9 +6629,22 @@ class App(Tk):
         for name, (wx, wy) in self.watch_xy.items():
             cx, cy, moved = core.recenter(self.preview, wx, wy, radius)
             watch.append(core.Star(name=name, x=cx if moved <= radius else wx, y=cy if moved <= radius else wy))
-        if self.observations and self.series_mode and self.series_mode != self.mode_key:
-            if not messagebox.askyesno(APP_TITLE, f"The open series is a {MODES[self.series_mode]['name']} series and "
-                                                  f"this is {MODES[self.mode_key]['name']} mode. Start a new series?"):
+        # 2.2.14 (item 19): the mode check when a night would go into the open series. The series file records its
+        # mode; a series from before that has none, and is not checked.
+        if self.observations and self.series_mode and self.series_mode != self.mode_key \
+                and not self.series_mode_unknown:
+            name = os.path.basename(self.series_path) if self.series_path else "The open series"
+            answer = messagebox.askyesnocancel(
+                APP_TITLE, f"{name} is a {MODES[self.series_mode]['name']} series and this is "
+                           f"{MODES[self.mode_key]['name']} mode.\n\n"
+                           f"Yes: switch to {MODES[self.series_mode]['name']} mode and run there (the night can then "
+                           "be added to the series).\n"
+                           f"No: run in {MODES[self.mode_key]['name']} mode; the night starts a new series.\n"
+                           "Cancel: don't run.")
+            if answer is None:
+                return
+            if answer:
+                self._rerun_in_mode(self.series_mode)
                 return
         if not self._start_job(f"Photometry on {len(lights)} lights…"):
             return
@@ -6560,7 +6911,7 @@ class App(Tk):
             self._record_color_calibration(night, color_info)
         append = False
         plan = None
-        same_mode = not self.series_mode or self.series_mode == self.mode_key
+        same_mode = not self.series_mode or self.series_mode == self.mode_key or self.series_mode_unknown   # 2.2.14
         if self.observations and same_mode:
             filters = {obs.filt for obs in self.observations}
             warning = ""
@@ -6652,6 +7003,7 @@ class App(Tk):
                 self.log(f"Could not apply the chosen comps to {night}: {exc}")
         self.legacy_mixed.discard(night)
         self.series_mode = self.mode_key
+        self.series_mode_unknown = False   # 2.2.14 (item 19): the file records the mode from now on
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self.night_bin[night] = self._night_setup()
         self._refresh_period()
@@ -6806,6 +7158,7 @@ class App(Tk):
         meta["comps_used"] = list(self.comps_used)
         meta["star_bands"] = self.star_bands
         meta["seq_auids"] = dict(self.seq_auids)   # 2.2.13
+        meta["report_names"] = dict(self.report_names)   # 2.2.14 (item 7)
         meta["night_notes"] = self.night_notes
         meta["use_check_zp"] = bool(self.use_check_zp.get())
         meta["check_used"] = self.check_used
@@ -6879,6 +7232,8 @@ class App(Tk):
             self.star_bands = meta["star_bands"]
         if isinstance(meta.get("seq_auids"), dict):
             self.seq_auids = {**self.seq_auids, **meta["seq_auids"]}
+        given = meta.get("report_names")   # 2.2.14 (item 7)
+        self.report_names = {str(k): str(v) for k, v in given.items() if v} if isinstance(given, dict) else {}
         if isinstance(meta.get("night_notes"), dict):
             self.night_notes = dict(meta["night_notes"])
         if "use_check_zp" in meta:
@@ -6887,9 +7242,18 @@ class App(Tk):
         self._series_check = (self.check_used, str(meta.get("check_mag") or ""))   # 2.2.8
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
+        self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
         if isinstance(meta.get("watch_list"), list):
             known = {w["name"] for w in self.watch_list}
             self.watch_list += [w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name") not in known]
+            # 2.2.14 (item 15): show them at once (14 Oct: the box stayed empty after Load series): found on an
+            # image that is solved already, else listed as not found on this frame until Solve.
+            if self.chart_placed and self.preview is not None:
+                self._locate_watch_stars()
+            else:
+                self._refresh_watch_box()
+            if hasattr(self, "pick_label"):
+                self._update_pick_label()
         self.spare_catalog = dict(meta.get("spare_catalog") or {})
         self.comp_catalog_mags = {str(k): float(v) for k, v in (meta.get("comp_catalog_mags") or {}).items()
                                   if v is not None}
@@ -6914,6 +7278,7 @@ class App(Tk):
         if isinstance(meta.get("planet"), dict) and meta["planet"].get("period"):
             self.planet_info = dict(meta.get("planet_info") or {})
             self._planet_to_fields(meta["planet"])
+            self._last_planet_lookup = self.planet_name.get().strip()   # 2.2.14 (item 2): the series has its values
         names = set(meta.get("rejected") or [])
         if names:
             restored = []
@@ -6924,8 +7289,27 @@ class App(Tk):
             self.rejected.update(restored)
 
     def _write_series(self, path: str):
-        core.save_series(path, self._meta(), self.observations)
+        # 2.2.14 (item 17): keep one version back. The first write to a file in a session (Save series, or the
+        # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
+        # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
+        # from before this session. The new file is written completely (X.part) before anything is renamed.
+        part = path + ".part"
+        core.save_series(part, self._meta(), self.observations)
+        prev = series_prev_path(path)
+        key = os.path.normcase(os.path.abspath(path))
+        kept = ""
+        if prev and os.path.isfile(path) and key not in self._prev_kept:
+            try:
+                os.replace(path, prev)
+                kept = os.path.basename(prev)
+                self.log(f"Series: the previous version was kept as {kept}.")
+            except OSError as exc:
+                self.log(f"Series: could not keep the previous version as {os.path.basename(prev)} ({exc}); "
+                         "the file is overwritten.")
+        self._prev_kept.add(key)   # a new file has nothing to keep; later saves this session keep the first _prev
+        os.replace(part, path)
         self.series_path = path
+        return kept
 
     def _remember_series_dir(self, path: str):
         """2.2.3: the Save/Load series dialogs start in the folder used last time."""
@@ -6955,11 +7339,12 @@ class App(Tk):
             return
         self._remember_series_dir(path)
         try:
-            self._write_series(path)
+            kept = self._write_series(path)
         except OSError as exc:
             messagebox.showerror(APP_TITLE, f"Could not save: {exc}")
             return
-        self.status.set(f"Series saved. Next night, load this file before reducing: {path}")
+        self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
+                        + f". Next night, load this file before reducing: {path}")
 
     def load_series(self):
         kwargs = {"title": "Load observation series",
@@ -6986,6 +7371,8 @@ class App(Tk):
             self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
         self.legacy_mixed = self._legacy_nights(meta, observations)
         self.series_path = path
+        # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
+        self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         self._refresh_period()
         self.draw_output()
         self._warn_legacy(self.legacy_mixed, os.path.basename(path))
@@ -8242,8 +8629,11 @@ class App(Tk):
         names = self.active_comps or self.comps_used or [self.comp_name.get().strip() or "comp"]
         # 2.2.13 (John: "keep AAVSO happy"): AAVSO sequence stars appear under their AUID in the report.
         auid = self.seq_auids
-        comps = [core.Star(auid.get(name, name), 0, 0) for name in names]
+        # 2.2.14 (item 7): a star the run named only "check"/"comp1" carries the name typed when the report was saved.
+        given = getattr(self, "report_names", {}) or {}
+        comps = [core.Star(auid.get(name, given.get(name, name)), 0, 0) for name in names]
         check_name = self.check_used or self.check_name.get().strip() or "check"
+        check_name = given.get(check_name, check_name)
         check = (core.Star(auid.get(check_name, check_name), 0, 0)
                  if any(o.kmag is not None for o in self.observations) else None)
         return core.aavso_report(
@@ -8281,9 +8671,16 @@ class App(Tk):
         # 2.2.5: two or more comps make an ensemble report, which AAVSO accepts only with a check star.
         if len(self.active_comps or self.comps_used or []) > 1 and not any(o.kmag is not None for o in self._usable()):
             problems.append("ensemble report (more than one comp) without a check star; AAVSO requires one")
+        # 2.2.14 (item 7): a comp without a real name (the run called it comp1) goes out as that placeholder.
+        given = getattr(self, "report_names", {}) or {}
+        for name in self.active_comps or self.comps_used or []:
+            if placeholder_star_name(given.get(name, name)) and not self.seq_auids.get(name):
+                problems.append(f"a comp has no star name (the report would call it “{name}”)")
         if problems:
             if not messagebox.askyesno(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
                 return
+        if not self._name_report_check():
+            return
         scope = self._save_scope("AAVSO report")
         if scope is None:
             return
@@ -8308,6 +8705,38 @@ class App(Tk):
         self._note_report(points, path, scope)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
+
+    def _name_report_check(self) -> bool:
+        """2.2.14 (item 7): an AAVSO report must not go out with KNAME = "check" (13 Oct: the check marker never got
+        its catalog name). Ask for the star's name; no name, no report. True when the report may be saved."""
+        if not any(o.kmag is not None for o in self.observations):
+            return True
+        used = self.check_used or self.check_name.get().strip() or "check"
+        if not hasattr(self, "report_names"):
+            self.report_names = {}
+        shown = self.report_names.get(used, used)
+        if not placeholder_star_name(shown) or self.seq_auids.get(shown):
+            return True
+        guess = ""
+        star = self._chart_star_at(self.check_xy) if self.check_xy is not None and self.chart_placed else None
+        if star is not None:
+            guess = str((star.get("seq") or {}).get("auid") or star.get("auid") or star.get("label") or "")
+        if not guess and not placeholder_star_name(self.check_name.get()):
+            guess = self.check_name.get().strip()
+        self.log(f"AAVSO report: the check star has no name (the run called it “{used}”).")
+        answer = simpledialog.askstring(
+            APP_TITLE,
+            f"The check star has no name in this series (the report would say KNAME = {used}), and AAVSO needs to "
+            "know which star it is.\n\nType its AUID or catalog name (for example 000-BJR-417 or TYC 4006-956-1):",
+            initialvalue=guess, parent=self)
+        name = " ".join((answer or "").split())
+        if not name or placeholder_star_name(name):
+            messagebox.showinfo(APP_TITLE, "Report not saved: it needs the check star's name (its AUID or catalog "
+                                           "name). Save it again and type the name.")
+            return False
+        self.report_names[used] = name
+        self.log(f"AAVSO report: check star {used} reported as {name}.")
+        return True
 
     # ---- 2.2.3: save just the highlighted night, and duplicate-upload warnings --------------
     def _save_scope(self, what: str) -> str | None:
@@ -8807,15 +9236,18 @@ class UseCompsWindow:
         body = ScrollBody(top, horizontal=True)
         body.pack(fill=BOTH, expand=True)
         inner = body.inner
+        wrap = text_wrap_px(win)   # 2.2.14 (item 12): font units, not a fixed 950 px
         ttk.Label(inner, text="Comparison stars in use", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
-        ttk.Label(
+        intro = ttk.Label(
             inner,
             text="Tick the stars to average as the comparison. Every point is re-derived from the measurements already "
                  "stored, so nothing is reduced again, and you can switch back at any time. Spares were measured on the "
                  "nights reduced in 1.8 or later. The check star cannot be a comp. Colors (B-V) stay tied to the comps "
                  "the nights were reduced with.",
-            style="Hint.TLabel", wraplength=950, justify=LEFT,
-        ).pack(anchor=W, pady=(2, 8))
+            style="Hint.TLabel", wraplength=wrap, justify=LEFT,
+        )
+        intro.pack(anchor=W, pady=(2, 8))
+        wrapped = [intro]
         catalog = app._comp_catalog()
         nights = sorted({o.night for o in app.observations})
         health = core.comp_health(app.observations, list(app.comps_used), app.check_used, app._spares_in_series()) or {}
@@ -8859,12 +9291,14 @@ class UseCompsWindow:
             ttk.Label(inner, text="No spare comps in this series yet. Nights reduced in 1.8 or later after Solve "
                                   "carry spares.", style="Hint.TLabel").pack(anchor=W, pady=(8, 0))
         elif len(names) < 3:
-            ttk.Label(inner, text="Only two stars to choose from. With three or more, a noisy or drifting star stands out "
-                                  "and the ensemble averages down the noise; 2.2.2 measures extra spares when the field "
-                                  "is thin, on nights reduced again.", style="Hint.TLabel", wraplength=950,
-                      justify=LEFT).pack(anchor=W, pady=(8, 0))
+            wrapped.append(ttk.Label(inner, text="Only two stars to choose from. With three or more, a noisy or drifting "
+                                                 "star stands out and the ensemble averages down the noise; 2.2.2 "
+                                                 "measures extra spares when the field is thin, on nights reduced "
+                                                 "again.", style="Hint.TLabel", wraplength=wrap, justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
         body.fit()
         fit_to_content(win)
+        body.follow_width(wrapped, pad=16)   # 2.2.14 (item 12): the text wraps to the window's width from now on
 
     def apply(self):
         selection = [name for name, var in self.vars.items() if var.get()]
@@ -8889,42 +9323,56 @@ class SuggestWindow:
         win = Toplevel(app)
         self.win = win
         win.title(f"{APP_TITLE} — suggest apertures")
-        win.after_idle(lambda: fit_to_content(win))
         # 2.2.8: buttons first (bottom), contents in a scrolling body so the test table that arrives later fits.
+        # 2.2.14 (item 12): the window is sized once everything is in it. 2.2.8 queued the sizing first, and
+        # body.fit()'s update_idletasks ran it while the window was still empty, so it opened at the 480 px minimum
+        # and clipped the buttons (14 Oct, John's screen).
         nav = ttk.Frame(win, style="Card.TFrame", padding=(12, 6, 12, 12))
         nav.pack(fill=X, side="bottom")
         self.body = ScrollBody(win, horizontal=True)
         self.body.pack(fill=BOTH, expand=True)
         top = ttk.Frame(self.body.inner, style="Card.TFrame", padding=12)
         top.pack(fill=BOTH, expand=True)
+        wrap = text_wrap_px(win)   # 2.2.14 (item 12): in font units, not a fixed 780 px
+        wrapped = []
         ttk.Label(top, text="Suggested apertures", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         measured = ", ".join(f"{role} {f:.1f}" for role, f, _p in sizes)
         ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px" + (f"   ({basis})" if basis else ""),
                   style="Card.TLabel").pack(anchor=W, pady=(6, 0))
         if measured:
-            ttk.Label(top, text=f"Marked stars, for comparison: {measured} px. Faint or crowded stars measure noisier; "
-                                "the aperture follows the field's seeing.", style="Hint.TLabel", wraplength=780,
-                      justify=LEFT).pack(anchor=W)
+            wrapped.append(ttk.Label(top, text=f"Marked stars, for comparison: {measured} px. Faint or crowded stars "
+                                               "measure noisier; the aperture follows the field's seeing.",
+                                     style="Hint.TLabel", wraplength=wrap, justify=LEFT))
+            wrapped[-1].pack(anchor=W)
         ttk.Label(top, text="This window sets the aperture and sky ring, not which stars are used.",
                   style="Hint.TLabel").pack(anchor=W)
-        ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = {prop['sky_in']:g}    "
-                             f"sky out = {prop['sky_out']:g} px (sky ring with 4× the aperture's area)"),
-                  style="Card.TLabel", font=(core.UI_FONT, 11, "bold")).pack(anchor=W, pady=(6, 0))
-        ttk.Label(top, text="Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The seeing changes during "
-                            "the night, so the test below measures real frames and lets the check star decide.",
-                  style="Hint.TLabel", wraplength=780, justify=LEFT).pack(anchor=W, pady=(4, 0))
+        wrapped.append(ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = "
+                                            f"{prop['sky_in']:g}    sky out = {prop['sky_out']:g} px (sky ring with 4× "
+                                            "the aperture's area)"),
+                                 style="Card.TLabel", font=(core.UI_FONT, 11, "bold"), wraplength=wrap, justify=LEFT))
+        wrapped[-1].pack(anchor=W, pady=(6, 0))
+        wrapped.append(ttk.Label(top, text="Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The seeing "
+                                           "changes during the night, so the test below measures real frames and lets "
+                                           "the check star decide.",
+                                 style="Hint.TLabel", wraplength=wrap, justify=LEFT))
+        wrapped[-1].pack(anchor=W, pady=(4, 0))
         for note in notes:
-            ttk.Label(top, text=note, style="Warn.TLabel" if note.startswith("⚠") else "Hint.TLabel",
-                      wraplength=780, justify=LEFT).pack(anchor=W, pady=(4, 0))
+            wrapped.append(ttk.Label(top, text=note, style="Warn.TLabel" if note.startswith("⚠") else "Hint.TLabel",
+                                     wraplength=wrap, justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(4, 0))
         self.result_text = StringVar(value="")
         ttk.Label(top, textvariable=self.result_text, style="Box.TLabel", justify=LEFT).pack(anchor=W, pady=(10, 0))
-        self.body.fit()
         ttk.Button(nav, text="Use these aperture sizes", style="Accent.TButton", command=self.use).pack(side=LEFT)
         ttk.Button(nav, text="Test 4 apertures on 30 frames", command=lambda: app.test_apertures(fwhm, self, 30)).pack(
             side=LEFT, padx=8)
         ttk.Button(nav, text="60 frames (slower, surer)", command=lambda: app.test_apertures(fwhm, self, 60)).pack(
             side=LEFT)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
+        self.body.fit()
+        fit_to_content(win)
+        # 2.2.14 (item 12): from now on the text wraps to the window's width (resizing it rewraps); 28 = the 12 px
+        # padding on each side and a little air. Only after the sizing, so the empty first layout cannot narrow it.
+        self.body.follow_width(wrapped, pad=28)
 
     def use(self):
         self.app.radius.set(self.prop["radius"])
@@ -9143,12 +9591,13 @@ class ExportWindow:
         body.pack(fill=BOTH, expand=True)
         top = body.inner
         ttk.Label(top, text="Export", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
-        ttk.Label(
+        intro = ttk.Label(
             top,
             text="Values follow the Output page: flagged points left out if that box is ticked, check-star "
                  "correction and segment line-up as set there. The file header records every choice.",
-            style="Hint.TLabel", wraplength=700, justify=LEFT,
-        ).pack(anchor=W, pady=(2, 10))
+            style="Hint.TLabel", wraplength=text_wrap_px(win, chars=85), justify=LEFT,   # 2.2.14 (item 12)
+        )
+        intro.pack(anchor=W, pady=(2, 10))
 
         setups = ttk.Frame(top, style="Card.TFrame")
         setups.pack(fill=X, pady=(0, 8))
@@ -9184,6 +9633,7 @@ class ExportWindow:
             ttk.Checkbutton(grid, text=label, variable=self.cols[key]).grid(row=k // 4, column=k % 4, sticky=W, padx=(0, 16))
         body.fit()
         fit_to_content(win)
+        body.follow_width([intro], pad=8)   # 2.2.14 (item 12): the text wraps to the window's width from now on
 
     def current_setup(self) -> dict:
         binning = None

@@ -1535,7 +1535,7 @@ class PlannerWindow:
         planet = app.planet_from_fields()
         if not planet or not planet.get("period") or not planet.get("t0"):
             messagebox.showinfo("SHOBS-P", "The planner needs the planet's period and T0: enter the planet on the "
-                                           "Input page and press Lookup.")
+                                           "Input page and press Enter.")
             return
         if not (app.lat.get().strip() and app.lon.get().strip()):
             messagebox.showinfo("SHOBS-P", "Enter your site's latitude and longitude on the Input page first.")
@@ -1951,6 +1951,7 @@ class FinderWindow:
         if app.mode_key != "transits":
             app.set_mode("transits")
         app.planet_name.set(e["name"])
+        app._last_planet_lookup = e["name"]   # 2.2.14 (item 2): looked up below; the box's auto lookup skips it
         if not app.star_id.get().strip() or messagebox.askyesno(
                 "SHOBS-P", f"Use {e['name']} as the planet, and clear the Input page's target ({app.star_id.get()}) "
                            "and RA/Dec so the lookup fills them?", parent=self.win):
