@@ -7225,7 +7225,13 @@ class App(Tk):
         self._refresh_period()
         flagged = sum(1 for obs in night_points if obs.flag)
         clouds = sum(1 for obs in night_points if "cloud" in obs.flag.split())
-        self.log(f"Photometry done: {len(night_points)} points, {flagged} flagged ({clouds} cloud).")
+        edges = sum(1 for obs in night_points if "cloudedge" in obs.flag.split())   # 2.2.14 (item 10)
+        self.log(f"Photometry done: {len(night_points)} points, {flagged} flagged ({clouds} cloud"
+                 + (f", {edges} at a cloud edge" if edges else "") + ").")
+        if edges:
+            self.log("  'cloudedge': a point within two frames of a cloud-flagged run and far off the night's level "
+                     "(over 5× the night's scatter, at least 0.05 mag); left out like the cloud frames.")
+        self._log_zero_point_check(night)   # 2.2.14 (item 10)
         self._noise_note(night_points)
         self._warn_edges(night, night_points)
         self.draw_output()
@@ -7304,7 +7310,10 @@ class App(Tk):
             return 0.20
 
     def _apply_cloud(self) -> int:
-        return core.apply_cloud_flags(self.observations, self._cloud_fraction())
+        n = core.apply_cloud_flags(self.observations, self._cloud_fraction())
+        # 2.2.14 (item 10): outliers right next to a cloud run (see core.apply_cloud_edge_flags for the rule).
+        self._cloud_edge_count = core.apply_cloud_edge_flags(self.observations)
+        return n
 
     def cancel_job(self):
         if not self.busy:
@@ -7693,6 +7702,7 @@ class App(Tk):
             self.out_canvas.get_tk_widget().configure(width=400, height=300)
             self.out_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.out_canvas.mpl_connect("motion_notify_event", self._on_hover)
+            self.out_canvas.mpl_connect("resize_event", self._refit_lc_title)   # 2.2.14 (item 16)
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", before=host, pady=(4, 0))
         series_row = ttk.Frame(card, style="Card.TFrame")
@@ -7872,11 +7882,70 @@ class App(Tk):
             "(and use Remove night...) before reporting them.",
         )
 
+    @staticmethod
+    def title_key_text(name: str, key: list, fits) -> str:
+        """2.2.14 (item 16): "Name (× flagged, left out · ○ after flip · ◆ night mean)" when fits(text) says it fits
+        on one line, else the name over the key, the key wrapped between its items."""
+        if not key:
+            return name
+        one = f"{name} ({' · '.join(key)})"
+        if fits(one):
+            return one
+        lines, line = [name], ""
+        for item in key:
+            nxt = f"{line} · {item}" if line else item
+            if line and not fits(nxt):
+                lines.append(line)
+                nxt = item
+            line = nxt
+        lines.append(line)
+        return "\n".join(lines)
+
+    def _title_with_key(self, ax, name: str, key: list):
+        """2.2.14 (item 16): set the light-curve title with its symbol key, wrapped to the axes' current width
+        (measured with the figure's renderer, so it follows the screen's scaling and the PNG's size)."""
+        fig = ax.figure
+        try:
+            renderer = fig.canvas.get_renderer()
+            limit = 0.97 * ax.get_window_extent(renderer).width
+
+            def fits(text):
+                ax.set_title(text)
+                return ax.title.get_window_extent(renderer).width <= limit
+        except Exception:
+            width_pt = ax.get_position().width * fig.get_figwidth() * 72.0
+
+            def fits(text):
+                return len(text) * 0.6 * 12 <= width_pt     # about 0.6 em per character
+        text = self.title_key_text(name, key, fits)
+        ax.set_title(text)
+        self._lc_title = (ax, name, list(key), text.count("\n"))
+
+    def _refit_lc_title(self, _event=None):
+        """2.2.14 (item 16): the window was resized: re-wrap the title key; re-run the layout if its lines changed."""
+        held = getattr(self, "_lc_title", None)
+        if not held or self.out_canvas is None:
+            return
+        ax, name, key, lines = held
+        self._title_with_key(ax, name, key)
+        if self._lc_title[3] != lines:
+            try:
+                self.out_fig.tight_layout()
+            except Exception:
+                pass
+
+    def _jd_offset(self) -> int:
+        """2.2.14 (item 9): the whole JD subtracted on a JD time axis (the series' first day), 0 without points."""
+        jds = [o.jd for o in self.observations if math.isfinite(o.jd)] if self.observations else []
+        return int(math.floor(min(jds))) if jds else 0
+
     def _time_values(self, jd):
         """x values for the light-curve plots: JD, or matplotlib dates in UTC or local time."""
         choice = self.time_axis.get()
         if choice == "JD":
-            return np.asarray(jd, dtype=float)
+            # 2.2.14 (item 9): JD minus a whole-day offset, named in the axis label, instead of matplotlib's
+            # "+2.461326e6" corner offset.
+            return np.asarray(jd, dtype=float) - self._jd_offset()
         from matplotlib.dates import date2num
 
         stamps = [core.jd_to_datetime_utc(j) for j in jd]
@@ -7888,7 +7957,12 @@ class App(Tk):
     def _format_time_axis(self, ax):
         choice = self.time_axis.get()
         if choice == "JD":
-            ax.set_xlabel("Julian Date")
+            off = self._jd_offset()   # 2.2.14 (item 9)
+            try:
+                ax.ticklabel_format(axis="x", useOffset=False, style="plain")
+            except AttributeError:
+                pass   # not a plain number axis
+            ax.set_xlabel(f"JD − {off}" if off else "Julian Date")
             return
         from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
 
@@ -7909,6 +7983,7 @@ class App(Tk):
         self._hover_sets = []
         self._hover_annots = {}
         self._hover_key = None
+        self._lc_title = None   # 2.2.14 (item 16)
         if not self.observations:
             tp = getattr(self, "transit_page", None)
             if self.mode_key == "transits" and tp is not None and getattr(tp, "report", None) is not None:
@@ -7966,8 +8041,7 @@ class App(Tk):
             ax.errorbar(
                 tx[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
                 color=colors[i % len(colors)], ecolor="#b0b0b0", lw=0.8,
-                label=(self.night_label(night, short=True) if night else "night") + (" *" if self.night_notes.get(night) else ""),
-            )
+            )   # 2.2.14 (item 16): no legend; the time axis and the night table name the nights
             drop = mask & excluded
             if drop.any():
                 ax.plot(tx[drop], mag[drop], "x", ms=6, color="#888888", alpha=alpha_for(night, 1.0))
@@ -7979,8 +8053,12 @@ class App(Tk):
         self._hover_sets.append((ax, tx, mag, labels_raw, 0.0))
         flip_mask = np.array([o.segment == "flip" for o in obs_list]) & ~excluded
         if flip_mask.any():
-            ax.plot(tx[flip_mask], mag[flip_mask], "o", ms=6, mfc="none", mec="#333333", mew=0.6, label="after flip")
-        ax.set_title((self.star_id.get() or "Target") + ("   (x = flagged, left out)" if excluded.any() else ""))
+            for night in nights:   # 2.2.14 (item 16): rings fade with their night when another night is clicked
+                fm = flip_mask & np.array([o.night == night for o in obs_list])
+                if fm.any():
+                    ax.plot(tx[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
+        # 2.2.14 (item 16): a symbol key in the title, only for the symbols drawn (8 nights overflowed a legend).
+        key = (["× flagged, left out"] if excluded.any() else []) + (["○ after flip"] if flip_mask.any() else [])
         ax.grid(True, alpha=0.3)
         bin_text = ""
         if interval is not False:
@@ -7990,14 +8068,14 @@ class App(Tk):
             if bins:
                 bx = self._time_values(np.array([b["jd"] for b in bins]))
                 ax.errorbar(bx, [b["value"] for b in bins], yerr=[b["err"] for b in bins], fmt="D", ms=6,
-                            color="#111111", ecolor="#111111", elinewidth=1.4, capsize=3, label=f"binned ({self.bin_choice.get()})")
+                            color="#111111", ecolor="#111111", elinewidth=1.4, capsize=3)
+                key.append("◆ night mean" if interval is None else f"◆ {self.bin_choice.get()} mean")
                 self._hover_sets.append((ax, bx, np.array([b["value"] for b in bins]),
                                          [self._bin_label(b) for b in bins], 4.0))
                 errs = np.array([b["err"] for b in bins])
                 bin_text = (f"  Binned ({self.bin_choice.get()}): {len(bins)} points, typical error "
                             f"{np.median(errs):.4f} mag, spread of binned points {np.std([b['value'] for b in bins]):.4f} mag.")
-        if len(nights) > 1 or interval is not False:
-            ax.legend(fontsize=8, frameon=False)
+        self._title_with_key(ax, self.star_id.get() or "Target", key)
 
         usable = [o for o, ex in zip(obs_list, excluded) if not ex]
         ax = self.out_ax2
@@ -8017,8 +8095,13 @@ class App(Tk):
                 mask = np.array([o.night == night for o in usable])
                 a_main = alpha_for(night, 0.25 if too_short else 1.0)
                 colour = "#9aa7b0" if too_short else colors[i % len(colors)]
-                ax.plot(phase[mask], corrected[mask], "o", ms=4, color=colour, alpha=a_main)
-                ax.plot(phase[mask] + 1, corrected[mask], "o", ms=4, color=colour, alpha=0.35 * a_main)
+                # 2.2.14 (item 16): with a night clicked, it keeps its colour on top; the others fade to grey.
+                faded = highlight is not None and night != highlight
+                if faded:
+                    colour, a_main = "#b9c2c9", 0.35
+                z = 3 if highlight is not None and night == highlight else 2
+                ax.plot(phase[mask], corrected[mask], "o", ms=4, color=colour, alpha=a_main, zorder=z)
+                ax.plot(phase[mask] + 1, corrected[mask], "o", ms=4, color=colour, alpha=0.35 * a_main, zorder=z)
             if too_short:
                 ax.text(0.5, 0.5, f"One night of {span_used * 24:.1f} h covers under two cycles\nof the best period "
                                   f"({p * 24:.1f} h): the fold is not meaningful yet.\nAdd nights.",
@@ -8109,22 +8192,25 @@ class App(Tk):
             cautions.append("One night: the night-to-night spread needs more nights.")
         color_lines, color_cautions = self._color_lines(usable)
         cautions += color_cautions
-        check_vals_all = [o.check_std for o, ex in zip(obs_list, excluded)
-                          if not ex and o.check_std is not None and math.isfinite(o.check_std)]
+        # 2.2.14 (item 8): a check without a catalog magnitude still has its instrumental differential magnitude.
+        check_vals, check_kind = self._check_values(obs_list)
+        check_vals_all = [float(v) for v, ex in zip(check_vals, excluded) if not ex and math.isfinite(v)]
         comps = self.active_comps or self.comps_used
         span = (max(jd) - min(jd)) if len(jd) else 0.0
         series_lines = [
             f"Points  {len(obs_list)} ({len(usable)} used)",
             f"Nights  {len(nights)}   span {span:.1f} d",
-            "Comps   " + (", ".join(comps) if comps else "—"),
-            f"Check   {self.check_used or '—'}" + (f"   σ {np.std(check_vals_all):.3f}" if len(check_vals_all) > 1 else ""),
-            f"Filter  {filt}   bin {self.bin_choice.get()}",
+            *self._comps_lines(comps),   # 2.2.14 (item 9): wrapped, so 6+ comps do not run off the box
+            f"Check   {self.check_used or '—'}" + (f"   σ {np.std(check_vals_all):.3f}" if len(check_vals_all) > 1 else "")
+            + ("   (instrumental)" if check_kind == "instrumental" and check_vals_all else ""),
+            # 2.2.14 (item 9): the camera binning ("bin None" was the plot's binning box); plot bins only when on.
+            f"Filter  {filt}   {self._binning_text(nights)}"
+            + (f"   plot bins {self.bin_choice.get()}" if self.bin_choice.get() != "None" else ""),
         ]
         rows = self._night_rows(obs_list, mag, excluded, nights, flip_steps)
         self._fill_summary(series_lines, period_lines, color_lines, rows, cautions)
 
         ax = self.out_ax3
-        check_vals = np.array([obs.check_std if obs.check_std is not None else np.nan for obs in obs_list])
         if np.isfinite(check_vals).any():
             for i, night in enumerate(nights):
                 mask = np.array([obs.night == night for obs in obs_list]) & np.isfinite(check_vals) & ~excluded
@@ -8138,12 +8224,17 @@ class App(Tk):
             spread = f"  σ = {np.std(good):.3f}" if good.size > 1 else ""
             catalog = ""
             try:
-                if self.check_mag.get().strip():
+                if self.check_mag.get().strip() and check_kind == "reduced":
                     catalog = f"  catalog {float(self.check_mag.get()):.3f}"
             except ValueError:
                 pass
-            ax.set_title(f"Check star{spread}{catalog}")
-            ax.set_ylabel("Reduced mag")
+            if check_kind == "instrumental":
+                # 2.2.14 (item 8): no catalog V for the check, so it is shown against the comps, instrumental.
+                ax.set_title(f"Check star, instrumental{spread}")
+                ax.set_ylabel("Check − comps (instr.)")
+            else:
+                ax.set_title(f"Check star{spread}{catalog}")
+                ax.set_ylabel("Reduced mag")
         else:
             ax.set_title("No check star")
         self._format_time_axis(ax)
@@ -8181,6 +8272,7 @@ class App(Tk):
             ax.set_title("No periodogram")
         ax.grid(True, alpha=0.3)
         self.out_fig.tight_layout()
+        self._refit_lc_title()   # 2.2.14 (item 16): re-measure the title key on the laid-out axes
         self.out_canvas.draw_idle()
 
     # ---- Output summary (boxes + per-night table) ------------------------------------
@@ -8229,6 +8321,52 @@ class App(Tk):
             self.night_table.selection_remove(self.night_table.selection())
         self.draw_output()
 
+    @staticmethod
+    def _check_values(obs_list):
+        """2.2.14 (item 8): the check star's values for the plot and σ: the reduced magnitude (check_std) when the
+        check has a catalog magnitude, else its instrumental differential magnitude (check minus the comps).
+        Returns (array, "reduced" | "instrumental")."""
+        reduced = np.array([o.check_std if o.check_std is not None else np.nan for o in obs_list], dtype=float)
+        if np.isfinite(reduced).any():
+            return reduced, "reduced"
+        return np.array([core.check_instrumental(o) for o in obs_list], dtype=float), "instrumental"
+
+    @staticmethod
+    def _comps_lines(comps, width: int = 50) -> list[str]:
+        """2.2.14 (item 9): the Series box's Comps line, wrapped between names (continuation lines indented)."""
+        if not comps:
+            return ["Comps   —"]
+        lines, line = [], ""
+        for k, name in enumerate(comps):
+            piece = name + ("," if k < len(comps) - 1 else "")
+            if line and len(line) + 1 + len(piece) > width - 8:
+                lines.append(line)
+                line = piece
+            else:
+                line = f"{line} {piece}" if line else piece
+        lines.append(line)
+        return ["Comps   " + lines[0]] + ["        " + x for x in lines[1:]]
+
+    def _binning_text(self, nights) -> str:
+        """2.2.14 (item 9): "Bin 2" (or "Bin 1/2" for mixed nights) from each night's recorded reduction; a night
+        that did not record it (series saved before 2.2.3) is left out, and with none recorded the Binning box
+        (which Load series sets from the series) is used."""
+        seen = set()
+        for night in nights:
+            info = self.night_bin.get(night)
+            b = info.get("binning") if isinstance(info, dict) else info
+            try:
+                if b is not None and int(b) >= 1:
+                    seen.add(int(b))
+            except (TypeError, ValueError):
+                pass
+        if not seen:
+            try:
+                seen.add(max(int(self.binning.get() or 1), 1))
+            except Exception:
+                return "Bin ?"
+        return "Bin " + "/".join(str(b) for b in sorted(seen))
+
     def _night_rows(self, obs_list, mag, excluded, nights, flip_steps) -> list[dict]:
         from collections import Counter
 
@@ -8247,6 +8385,8 @@ class App(Tk):
             mean = f"{bins[0]['value']:.3f} ± {bins[0]['err']:.4f}" if bins else "—"
             tsig = core.robust_sigma([mag[k] for k in used])
             csig = core.robust_sigma([obs_list[k].check_std for k in used])
+            if not math.isfinite(csig):   # 2.2.14 (item 8): check without a catalog mag: instrumental σ
+                csig = core.robust_sigma([core.check_instrumental(obs_list[k]) for k in used])
             bv = [obs_list[k].bv for k in used if math.isfinite(obs_list[k].bv)]
             flags = Counter(w for k in idx for w in obs_list[k].flag.split())
             note = self.night_notes.get(night, "")
@@ -8927,7 +9067,7 @@ class App(Tk):
                 inst = o.spare_insts.get(name)
             if inst is None or not math.isfinite(inst) or not math.isfinite(o.cmag) or not math.isfinite(o.comp_cat):
                 continue
-            if set(o.flag.split()) & {"cloud", "drift", "noflux", "nocomp"}:
+            if set(o.flag.split()) & {"cloud", "cloudedge", "drift", "noflux", "nocomp"}:   # 2.2.14 (item 10)
                 continue
             out_obs.append(o)
             out_mag.append(o.comp_cat + inst - o.cmag)
@@ -8981,6 +9121,7 @@ class App(Tk):
         used = ", ".join(selection)
         self.log(f"Comps in use: {used}. {result['done']} points re-derived"
                  + (f", {result['missing']} flagged nocomp." if result["missing"] else "."))
+        self._log_zero_point_check()   # 2.2.14 (item 10)
         saved = ""
         if self.series_path:
             try:
@@ -8990,6 +9131,27 @@ class App(Tk):
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Comps in use: {used}.{saved}")
         return True
+
+    def _zero_point_check(self):
+        """2.2.14 (item 10): core.ensemble_zero_point_check for the comps in use (None when nothing to compare)."""
+        selection = list(self.active_comps or self.comps_used)
+        if len(selection) < 2 or not self.observations:
+            return None
+        try:
+            return core.ensemble_zero_point_check(self.observations, selection, list(self.comps_used),
+                                                  self._comp_catalog(), self._star_aliases())
+        except Exception:
+            return None
+
+    def _log_zero_point_check(self, night: str | None = None):
+        """2.2.14 (item 10): log a warning when the comp ensemble moves a night's level by more than a few
+        hundredths against the comps nearest the target's brightness (all nights, or just `night`)."""
+        zp = self._zero_point_check()
+        if not zp:
+            return
+        for night_key, line in zip(sorted(zp["warn"]), zp["text"]):
+            if night is None or night_key == night:
+                self.log("⚠ Ensemble zero point, " + self.label_nights(line))
 
     def show_comp_health(self):
         if not self.observations:
@@ -9010,6 +9172,7 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "The health check needs at least two stars (two comps, or a comp and a check star).")
             return
         result["positions"] = self._star_positions(result)
+        result["zero_point"] = self._zero_point_check()   # 2.2.14 (item 10)
         CompHealthWindow(self, result)
 
     def _star_positions(self, result) -> dict:
@@ -9367,7 +9530,10 @@ class App(Tk):
         plot = mpimg.imread(buf)
         ph, pw = plot.shape[0], plot.shape[1]
         dpi = 140
-        width_in = pw / dpi
+        # 2.2.14 (item 9): the three boxes side by side at their own widths (a 9 pt monospace character is about
+        # 0.075 in); the picture widens when they need more room than the plots, instead of overlapping.
+        box_w = [max(len(t) for t in (snap[k] or ["—"])) * 0.075 + 0.5 for k in ("series", "period", "color")]
+        width_in = max(pw / dpi, 0.1 + sum(box_w))
         mono = {"family": "monospace", "size": 9}
         box_lines = max(len(snap["series"]), len(snap["period"]), len(snap["color"]) or 1)
         rows = snap["rows"]
@@ -9384,13 +9550,12 @@ class App(Tk):
         fig.text(0.01, 1 - 0.25 / total, title, fontsize=11, weight="bold", va="top")
         top = 1 - 0.5 / total
         x = 0.01
-        for key, label in (("series", "Series"), ("period", "Period"), ("color", "Color")):
+        for (key, label), w_in in zip((("series", "Series"), ("period", "Period"), ("color", "Color")), box_w):
             lines = snap[key] or ["—"]
             fig.text(x, top, label, fontsize=9, weight="bold", va="top")
             fig.text(x, top - line_in * 1.1 / total, "\n".join(lines), va="top", fontdict=mono,
                      bbox={"boxstyle": "square,pad=0.4", "facecolor": "#f7f7f7", "edgecolor": "#bbbbbb"})
-            longest = max(len(t) for t in lines)
-            x += min(0.45, (longest * 0.075 + 0.5) / width_in)
+            x += w_in / width_in
         y = top - box_h / total
         header = "  ".join(f"{label:<{self._col_chars(c, rows, label)}}" for c, label in cols)
         body = ["  ".join(f"{str(r.get(c, '')):<{self._col_chars(c, rows, label)}}" for c, label in cols) for r in rows]
@@ -9402,7 +9567,7 @@ class App(Tk):
         if snap.get("cautions"):
             fig.text(0.01, y - line_in / total, "   ".join("! " + c for c in snap["cautions"])[:400], va="top",
                      fontsize=8, color="#a32020")
-        ax = fig.add_axes([0, 0, 1, (ph / dpi) / total])
+        ax = fig.add_axes([0, 0, (pw / dpi) / width_in, (ph / dpi) / total])
         ax.imshow(plot)
         ax.axis("off")
         fig.savefig(path, dpi=dpi)
@@ -9529,6 +9694,11 @@ class CompHealthWindow:
         self.artists = {}
         table.bind("<<TreeviewSelect>>", lambda e: self.highlight())
         self.table_rows = {iid: row for iid, row in zip(table.get_children(), rows)}
+        zp = result.get("zero_point")
+        if zp and zp.get("warn"):
+            # 2.2.14 (item 10): the ensemble moves the night's level against the comps nearest the target's brightness.
+            ttk.Label(top, text="⚠ Ensemble zero point: " + "\n⚠ ".join(app.label_nights(t) for t in zp["text"]),
+                      style="Warn.TLabel", wraplength=1050, justify=LEFT).pack(side="bottom", anchor=W, pady=(4, 0))
         if result.get("excluded"):
             ttk.Label(top, text="Left out of the reference so their drift does not echo in the steady stars: "
                                 + ", ".join(result["excluded"]) + ".", style="Hint.TLabel").pack(side="bottom", anchor=W)
