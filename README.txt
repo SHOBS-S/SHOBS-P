@@ -54,6 +54,43 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.2.14 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  One star, one name per series: a comp, check, watch star or spare that is a series star (by any catalog name,
+     a variable's name, within 4", or the same pixel) takes the series' name AND catalog magnitude when a night is
+     added, whatever tonight's catalogs call it; the add-night question and the log list each change. Loading a series
+     drops a session watch star that is the same star under another name. Also after a cancelled run.
+- S  Colors from one catalog per star: B-V from the AAVSO sequence or APASS when it has both bands (Gaia for stars
+     brighter than APASS's V 10), else Gaia's synthetic photometry; V-R from Gaia. The panel and the color log name
+     the catalog. The magnitude itself still comes from the AAVSO sequence first.
+- S  Deeper Gaia: the frame's own box down to G 19 (VizieR), with Gaia's synthetic B/V/R for the brighter stars;
+     every clickable star gets a magnitude in Milky Way fields. Circles and labels are capped so the image stays fast.
+- S  Spares: a click on a blue diamond adopts that spare (name, V, colors); spares far from their catalog position
+     are dropped; spares from a widened window say how many magnitudes fainter than the target they are.
+- S  A comp with no catalog magnitude is flagged when it is marked; an AAVSO report with a check star named only
+     'check' asks for its name; typed names in comp/check slots say what happened in the slot's hint and the log
+     (keypad Enter works, catalog prefixes and spacing do not matter, APASS/2MASS J-names are found on the frame).
+- S  Watch stars box fills after Load series; 'already watching' highlights the row.
+- S  Save series keeps one version back: the file as it was before this session's first save becomes X_prev.cvseries.
+- S  Wrong-mode guard: Transits mode on a known variable with no transit in the lights (or the reverse) asks whether to
+     run in the other mode; planet hosts (VSX type EP) do not count as variables.
+- S  Transmission loss vs cloud: when every measured star fades together, smoothly, with a flat sky (dew, haze), the
+     frames are labelled 'transmission loss (dew/haze?)' and can be kept (default: left out) with their error bars
+     raised by the star-to-star scatter measured in that stretch. Patchy or fast cloud stays 'cloud'. Points that sit
+     far off right at the edge of a cloud run are flagged 'cloud edge'.
+- S  Pop-up windows (Suggest apertures, Use comps, Export) open wide enough for their contents at any display scaling.
+- V  Time of maximum / minimum with O-C ('Time of max/min...' on the Output page): local polynomial with a red-noise
+     aware bootstrap error, Kwee-van Woerden and a Fourier fit as cross-checks, HJD and BJD, O-C against VSX or typed
+     elements, saved to a times CSV next to the series that grows into an O-C diagram.
+- V  Pier side for campaigns: each night's side is recorded (ROTATOR, PIERSIDE or the flip), a Side column in the night
+     table, 'Pier side as segments' lines the two sides up, and Comp health shows each star's step between sides.
+- V  Output: no legend on the light curve (a symbol key in the title instead); the clicked night stands out on the
+     phase plot; a check star without a catalog magnitude is plotted instrumentally; 'Bin N' and wrapped comps in the
+     Series box; the JD axis says 'JD - 2461326' instead of an offset; the light-curve CSV has positions for every comp;
+     a warning when the comp ensemble moves the night's level against the comps nearest the target's brightness.
+- T  The fit's rms per point and per 10-minute bin under the verdict and in the PNG (GitHub #5); the usable-point count
+     follows the data and shows the points in the fit (#7); no check-star question in Transits mode (#4); the Planet
+     box looks the planet up by itself.
+
 New in 2.2.13 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  One star list from every catalog. The image solves itself when the Photometry page opens (header plate solution
      or a catalog solve), and the AAVSO sequence, Gaia DR3, APASS DR9 and Tycho-2 are fetched together and merged:
@@ -696,6 +733,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.14 One star one name (and magnitude) per series; one-catalog colors; deeper Gaia; spares adopted on click;
+       transmission loss vs cloud; time of maximum with O-C; pier side for campaigns; Output title key, instrumental
+       check, Bin N, zero-point warning; Save series keeps _prev; wrong-mode guard; transit rms line and point count.
 2.2.13 One star list from every catalog, auto-solve, typed stars, AAVSO sequence first; target check on
        scanned lights; masters subfolder; compass and fit view; Comp health window; transit depth reference and
        cloud-flagged baseline.
@@ -934,6 +974,10 @@ Scintillation noise
 Bootstrap resampling
   Used for: Uncertainties and the 'clear winner' test in the aperture test (frames resampled with replacement, the same frames for every aperture).
   Efron, B. 1979, Annals of Statistics 7, 1.
+
+Kwee-van Woerden method
+  Used for: Times of maximum and minimum (Variables Output, Time of max/min…): the branches folded about trial times, with its error estimate; checked against a local polynomial with bootstrap errors and a Fourier series at the catalog period, and O−C against VSX elements.
+  Kwee, K. K. & van Woerden, H. 1956, Bull. Astron. Inst. Netherlands 12, 327.
 
 Median absolute deviation
   Used for: Robust scatter of light curves in the aperture test, comp health, and field scans.

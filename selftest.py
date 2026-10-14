@@ -258,6 +258,28 @@ def main() -> None:
     except Exception as exc:
         check("constrained-layout figure", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
+    section("2g 2.2.14: time of maximum and O-C (real Astropy HJD), binned rms")
+    try:
+        # SZ Lyn, 14 Oct 2026: RA 08h09m35.8s, Dec +44 28' 17"; HJD - JD about -0.53 min that morning.
+        jd_max = 2461327.90043 + 0.53 / 1440.0
+        tt = core.extremum_times(jd_max, 122.39917, 44.47139, 35.3, -81.9)
+        check("SZ Lyn HJD - JD about -0.53 min", abs((tt["hjd"] - jd_max) * 1440 + 0.53) < 0.03,
+              f"{(tt['hjd'] - jd_max) * 1440:+.3f} min")
+        oc = core.o_minus_c(tt["hjd"], 0.12053525, 2453766.839)
+        check("SZ Lyn cycle 62729, O-C about +8.3 min", oc["cycle"] == 62729 and abs(oc["oc_min"] - 8.3) < 0.2,
+              f"E {oc['cycle']}, O-C {oc['oc_min']:+.2f} min")
+    except Exception as exc:
+        check("time of maximum", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    try:
+        import transit_core as _tc
+        tb = 2461300.6 + np.arange(240) / 1440.0
+        rb = np.random.default_rng(7).normal(0, 0.003, tb.size)
+        b10 = _tc.binned_rms(tb, rb, 10.0)
+        check("10-min bin rms about rms / sqrt(10)", b10 is not None and 0.6 < b10 / (0.003 / np.sqrt(10)) < 1.5,
+              f"{b10}")
+    except Exception as exc:
+        check("binned rms", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):
