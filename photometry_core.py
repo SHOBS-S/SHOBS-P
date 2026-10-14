@@ -3430,7 +3430,8 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
     if any(abs(cat(n) - target) <= near for n in pool):
         anchor = target
     else:
-        anchor = cat(min(pool, key=lambda n: abs(cat(n) - target)))
+        # 2.2.14 review 2: the chosen comps set the level first, so a comp dropped on purpose does not come back.
+        anchor = cat(min(sel, key=lambda n: abs(cat(n) - target)))
     # 2.2.14 review: comps left out on purpose (Use comps…) are not the reference while a chosen comp is at that
     # level; they come back (named "not in use") only when none of the chosen comps is.
     ref = [n for n in sel if abs(cat(n) - anchor) <= near]
@@ -4513,7 +4514,7 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
         for ep in episodes:
             if ep["kind"] == "transmission" and night in keep:
                 for k in ep["frames"]:
-                    ordered[k].haze_err = float(ep.get("excess") or 0.0)
+                    ordered[k].haze_err = float(ep.get("excess") or 0.0) * math.sqrt(1.0 + 1.0 / max(1, ordered[k].n_comps or 1))  # target's share too
                 continue
             word = HAZE_FLAG if ep["kind"] == "transmission" else "cloud"
             for k in ep["frames"]:
@@ -5921,6 +5922,11 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
             warnings.append(f"the Fourier series at the period reads {abs(diff) * 1440:.1f} min "
                             f"{'later' if diff > 0 else 'earlier'} (more than 3 sigma): a second period, a short "
                             "branch, or the wrong period")
+    if not period:
+        # 2.2.14 review 2: without a period the bootstrap only sees the window's own residuals, which hide noise
+        # lasting minutes (tests: error low by about 2-3x on red noise).
+        notes.append("no period given: noise lasting minutes cannot be measured, so this error may be low by a factor "
+                     "of 2-3; give the elements for an honest error")
     return {"t": poly["t"], "err": err, "method": f"polynomial deg {poly['degree']} + bootstrap",
             "kind": kind, "half_width": hw, "window": win, "kvw": kvw, "poly": poly, "fourier": fourier,
             "warnings": warnings, "notes": notes}

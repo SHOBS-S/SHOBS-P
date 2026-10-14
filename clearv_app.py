@@ -4802,9 +4802,9 @@ class App(Tk):
         """2.2.14 (item 14, review): the labeled stars' names, indexed once per set of labeled stars (exact,
         spacing-free, prefix-free), so a name that is not there costs a dict lookup, not three passes over thousands of
         catalog stars on every panel refresh. Rebuilt when chart_placed is replaced or changes length."""
-        sig = (id(self.chart_placed), len(self.chart_placed))
+        sig = (self.chart_placed, len(self.chart_placed))
         cache = getattr(self, "_chart_names_cache", None)
-        if cache is not None and cache[0] == sig:
+        if cache is not None and cache[0][0] is sig[0] and cache[0][1] == sig[1]:   # the list itself, not its id
             return cache[1]
         exact, by_key, by_core = {}, {}, {}
         for _x, _y, star in self.chart_placed:
@@ -7530,6 +7530,14 @@ class App(Tk):
         n, words = self._transmission_summary(night)
         if not n:
             return
+        # 2.2.14 review 2: with one measured star the evenness across the field cannot be tested and no star-to-star
+        # scatter can be added to the errors, so the points are not offered back: they stay flagged like cloud.
+        eps = [e for e in (self._loss_report or {}).get(night, []) if e["kind"] == "transmission"]
+        if any("one star only" in " ".join(e.get("reasons", [])) for e in eps):
+            self.log(f"{self.label_nights(night)}: {n} frames lost light smoothly ({words}), but only one star was "
+                     "measured, so cloud cannot be told from dew/haze: left out (flagged). Transmission loss… on the "
+                     "Output page can still keep them.")
+            return
         self.log(f"{self.label_nights(night)}: {n} frames with {core.HAZE_LABEL} ({words}): every measured star "
                  "faded together, smoothly, with a flat sky; the differential magnitudes hold, only the noise grows.")
         keep = messagebox.askyesno(
@@ -7904,6 +7912,7 @@ class App(Tk):
             self.set_mode(self.series_mode, initial=True)
             self.log(f"Switched to {MODES[self.series_mode]['name']} mode to match {os.path.basename(path)}.")
         self._fill_base(observations, meta)
+        self._take_series_snapshot()   # 2.2.14 review 2: again, now that a pre-1.8 series' comps are filled in
         self.observations = observations
         if getattr(self, "transit_page", None) is not None and self.transit_page.report is not None:
             self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
