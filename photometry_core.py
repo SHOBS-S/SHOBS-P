@@ -2279,22 +2279,36 @@ def parse_vizier_tsv(text: str) -> list[dict]:
     return rows
 
 
-def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float, columns: list[str], sort: str, max_rows: int) -> list[dict]:
-    import urllib.parse
-
+def vizier_params(source: str, ra_deg: float, dec_deg: float, radius_deg: float, columns: list[str], sort: str,
+                  max_rows: int, box_deg: tuple[float, float] | None = None, constraints: dict | None = None) -> dict:
+    """2.2.14 (item 5): the VizieR ASU parameters: a circle (-c.rd), or a box (-c.bd, width along RA x height along
+    Dec, degrees) when the frame's footprint is known; column constraints such as {"Gmag": "<19"}."""
     params = {
         "-source": source,
         "-c": f"{ra_deg:.6f} {dec_deg:+.6f}",
-        "-c.rd": f"{radius_deg:.4f}",
         "-out": ",".join(columns),
-        "-out.max": str(max_rows),
+        "-out.max": str(int(max_rows)),
         "-sort": sort,
     }
-    query = urllib.parse.urlencode(params)
+    if box_deg:
+        params["-c.bd"] = f"{box_deg[0]:.4f}x{box_deg[1]:.4f}"
+    else:
+        params["-c.rd"] = f"{radius_deg:.4f}"
+    for column, rule in (constraints or {}).items():
+        params[column] = rule
+    return params
+
+
+def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float, columns: list[str], sort: str,
+                  max_rows: int, box_deg=None, constraints: dict | None = None, timeout: float = 60) -> list[dict]:
+    import urllib.parse
+
+    query = urllib.parse.urlencode(vizier_params(source, ra_deg, dec_deg, radius_deg, columns, sort, max_rows,
+                                                 box_deg, constraints))
     errors = []
     for host in ("https://vizier.cds.unistra.fr", "https://vizier.cfa.harvard.edu"):
         try:
-            text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=60).decode("utf-8", errors="replace")
+            text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=timeout).decode("utf-8", errors="replace")
             return parse_vizier_tsv(text)
         except Exception as exc:
             errors.append(f"{host}: {exc}")
@@ -2338,11 +2352,13 @@ def fetch_tycho2(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
     return stars
 
 
-def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V") -> list[dict]:
-    """APASS DR9 (VizieR II/336/apass9). Johnson B and V, about V 10 to 17. No R band."""
+def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", max_rows: int = 3000,
+                 box_deg=None) -> list[dict]:
+    """APASS DR9 (VizieR II/336/apass9). Johnson B and V, about V 10 to 17. No R band.
+    2.2.14 (item 5): max_rows and the frame's box (box_deg) follow the field (a Milky Way field passes 3000)."""
     rows = _vizier_query(
         "II/336/apass9", ra_deg, dec_deg, radius_deg,
-        ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag"], "Vmag", 3000,
+        ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag"], "Vmag", max_rows, box_deg=box_deg,
     )
     band = _band_for(band)
     stars = []
@@ -2365,33 +2381,215 @@ def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
     return stars
 
 
-def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", glimit: float = 17.0) -> list[dict]:
-    """Gaia DR3 from the ESA archive, with Johnson-Kron-Cousins synthetic photometry (GSPC) where it exists.
-    Positions are epoch 2016.0 and are moved to now with Gaia proper motions."""
-    import csv
-    import io
-    import urllib.parse
+# 2.2.14 (item 5): how deep Gaia is asked. 2.2.13 asked the ESA archive for TOP 3000 G < 17 in a circle, which in a
+# Milky Way field (HD 219134, Cas) stopped long before the frame's faint limit: only 512 Gaia stars on the 56' Bin 1
+# frame, and most stars one could click had no magnitude. Asking the ESA archive itself for more does not work: its
+# synchronous service aborts a deep query of a one-degree Milky Way field after about 12 s (HTTP 408; tried 14 Oct
+# 2026, with and without the GSPC join, with POLYGON and CIRCLE, ordered or not). So Gaia comes in two parts, asked
+# at the same time:
+#   - the ESA archive as in 2.2.13 (the 3000 brightest, G < 17, with the GSPC Johnson B, V, R: the colors and the
+#     best V), on the circle through the frame's corners when its plate solution is known;
+#   - VizieR's copy of Gaia DR3 (I/355), deep: G < 19 in the frame's RA/Dec box (or the circle), the brightest N
+#     stars, N about twice the star-like peaks on the image scaled to the query area (between 3000 and 20000;
+#     20000 rows came back in a few seconds); V from G and BP-RP.
+# A star in both keeps the archive's GSPC magnitudes. Live test on HD 219134's field (14 Oct 2026, a 66' x 40'
+# footprint): 2.2.13's query 3000 stars to G 15.4 in 8 s; this one 11,429 stars to G 19.0 (2,938 with GSPC) in 12.5 s.
+GAIA_DEEP_G = 19.0
+GAIA_ROWS_MIN = 3000
+GAIA_ROWS_MAX = 20000
+GAIA_ESA_ROWS = 3000
+GAIA_ESA_G = 17.0
+GAIA_ESA_TIMEOUT_S = 25.0      # 2.2.13; the VizieR fallback then fits in what is left of CATALOG_TIMEOUT_S
+GAIA_VIZIER_TIMEOUT_S = 18.0
 
-    band = _band_for(band)
-    adql = (
-        "SELECT TOP 3000 g.source_id, g.ra, g.dec, g.pmra, g.pmdec, g.phot_g_mean_mag, "
+
+def count_star_peaks(img: np.ndarray, nsigma: float = 5.0) -> int:
+    """2.2.14 (item 5): how many star-like peaks the image shows (local maxima of the lightly smoothed image above
+    nsigma; as detect_sources, without its slow neighbour test). A rough count of the stars one could click."""
+    from scipy import ndimage
+
+    data = np.array(img, dtype=np.float32, copy=True)
+    finite = np.isfinite(data)
+    if not finite.any():
+        return 0
+    med = float(np.median(data[finite]))
+    data[~finite] = med
+    sigma = 1.4826 * float(np.median(np.abs(data[finite] - med)))
+    if sigma <= 0:
+        sigma = float(np.std(data[finite])) or 1.0
+    smooth = ndimage.uniform_filter(data, size=3)
+    peaks = (smooth == ndimage.maximum_filter(smooth, size=9)) & (smooth > med + nsigma * sigma / 3.0)
+    peaks[:5, :] = peaks[-5:, :] = False
+    peaks[:, :5] = peaks[:, -5:] = False
+    return int(peaks.sum())
+
+
+def gaia_row_cap(n_peaks: int | None, frame_area_deg2: float | None, query_area_deg2: float | None,
+                 margin: float = 2.0) -> int:
+    """2.2.14 (item 5): rows to ask Gaia for, brightest first: `margin` x the stars seen on the frame, scaled up by
+    how much bigger the query area is than the frame, between GAIA_ROWS_MIN and GAIA_ROWS_MAX. Unknown counts give
+    GAIA_ROWS_MAX (deep enough; the G cut still applies)."""
+    try:
+        n = float(n_peaks)
+        ratio = float(query_area_deg2) / float(frame_area_deg2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return GAIA_ROWS_MAX
+    if not (math.isfinite(n) and math.isfinite(ratio)) or n <= 0 or ratio <= 0:
+        return GAIA_ROWS_MAX
+    return int(min(GAIA_ROWS_MAX, max(GAIA_ROWS_MIN, math.ceil(margin * n * max(ratio, 1.0)))))
+
+
+def polygon_area_deg2(corners) -> float:
+    """Area of a small sky polygon [(ra, dec), …] in square degrees (flat-sky, around its mean Dec)."""
+    pts = [(float(r), float(d)) for r, d in corners]
+    if len(pts) < 3:
+        return 0.0
+    ra0 = pts[0][0]
+    cosd = math.cos(math.radians(sum(d for _r, d in pts) / len(pts)))
+    xy = [((((r - ra0 + 180.0) % 360.0) - 180.0) * cosd, d) for r, d in pts]
+    return abs(sum(x1 * y2 - x2 * y1 for (x1, y1), (x2, y2) in zip(xy, xy[1:] + xy[:1]))) / 2.0
+
+
+def frame_footprint(wcs: dict, saved_shape: tuple[int, int], margin: float = 0.04) -> list[tuple[float, float]] | None:
+    """2.2.14 (item 5): the frame's four corners on the sky (RA, Dec, degrees) from its plate solution, pushed out
+    by `margin` of the frame size (catalog positions, proper motions, a star half off the edge). None without one."""
+    if not wcs:
+        return None
+    try:
+        h, w = float(saved_shape[0]), float(saved_shape[1])
+        cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+        k = 1.0 + 2.0 * margin
+        xs = [cx + (x - cx) * k for x in (-0.5, w - 0.5, w - 0.5, -0.5)]
+        ys = [cy + (y - cy) * k for y in (-0.5, -0.5, h - 0.5, h - 0.5)]
+        ra, dec = wcs_pixel_to_sky(wcs, xs, ys)
+        corners = [(float(r), float(d)) for r, d in zip(ra, dec)]
+    except Exception:
+        return None
+    if not all(math.isfinite(r) and math.isfinite(d) for r, d in corners):
+        return None
+    return corners
+
+
+def footprint_box(corners, ra0: float, dec0: float) -> tuple[float, float]:
+    """(width along RA, height along Dec) in degrees of the RA/Dec box around (ra0, dec0) that holds the corners."""
+    cosd = max(math.cos(math.radians(dec0)), 0.01)
+    half_w = max(abs((((float(r) - ra0 + 180.0) % 360.0) - 180.0) * cosd) for r, _d in corners)
+    half_h = max(abs(float(d) - dec0) for _r, d in corners)
+    return 2.0 * half_w, 2.0 * half_h
+
+
+def gaia_adql(ra_deg: float, dec_deg: float, radius_deg: float, glimit: float = 17.0, max_rows: int = 3000) -> str:
+    """The ESA archive query (2.2.13's, built here for testing): a circle, G < glimit, the brightest `max_rows` stars
+    with their GSPC Johnson B, V, R; 2.2.14 also asks BP-RP, for V from G where there is no GSPC."""
+    return (
+        f"SELECT TOP {int(max_rows)} g.source_id, g.ra, g.dec, g.pmra, g.pmdec, g.phot_g_mean_mag, g.bp_rp, "
         "s.v_jkc_mag, s.b_jkc_mag, s.r_jkc_mag "
         "FROM gaiadr3.gaia_source AS g "
         "LEFT OUTER JOIN gaiadr3.synthetic_photometry_gspc AS s ON s.source_id = g.source_id "
         f"WHERE 1 = CONTAINS(POINT('ICRS', g.ra, g.dec), CIRCLE('ICRS', {ra_deg:.6f}, {dec_deg:.6f}, {radius_deg:.4f})) "
-        f"AND g.phot_g_mean_mag < {glimit:.1f} "
+        f"AND g.phot_g_mean_mag < {glimit:.2f} "
         "ORDER BY g.phot_g_mean_mag"
     )
+
+
+def v_from_gaia_g(g: float | None, bp_rp: float | None) -> float | None:
+    """Johnson V from Gaia G and BP-RP (Riello et al. 2021): G - V = -0.02704 + 0.01424 C - 0.2156 C^2 + 0.01426 C^3,
+    good to about 0.03 mag, for -0.5 < BP-RP < 5. None outside."""
+    if g is None or bp_rp is None or not (-0.5 < bp_rp < 5.0):
+        return None
+    c = bp_rp
+    return g + 0.02704 - 0.01424 * c + 0.2156 * c ** 2 - 0.01426 * c ** 3
+
+
+def cap_brightest(stars: list[dict], max_rows: int) -> list[dict]:
+    """2.2.14 (item 5): the brightest `max_rows` stars (by 'bright', the catalog's own broad-band magnitude)."""
+    if len(stars) <= max_rows:
+        return stars
+    return sorted(stars, key=lambda s: (s.get("bright") is None, s.get("bright") or 0.0))[:int(max_rows)]
+
+
+def catalog_depth(stars: list[dict], max_rows: int | None = None) -> dict:
+    """2.2.14 (item 5): {n, faintest (its 'bright' magnitude), capped (the row cap was reached, so the list stops
+    at 'faintest' rather than at the magnitude cut)}."""
+    vals = [float(s["bright"]) for s in stars if s.get("bright") is not None]
+    return {"n": len(stars), "faintest": max(vals) if vals else None,
+            "capped": bool(max_rows) and len(stars) >= int(max_rows)}
+
+
+def combine_gaia(esa: list[dict], deep: list[dict], max_rows: int) -> list[dict]:
+    """2.2.14 (item 5): one Gaia list from the archive's GSPC answer and VizieR's deep one: a star in both keeps the
+    archive's entry (GSPC B, V, R); the brightest `max_rows` are kept."""
+    have = {s.get("auid") for s in esa}
+    out = list(esa) + [s for s in deep if s.get("auid") not in have]
+    return cap_brightest(out, max(int(max_rows), len(esa)))
+
+
+def _gaia_esa(ra_deg: float, dec_deg: float, radius_deg: float, band: str, glimit: float, max_rows: int,
+              timeout: float) -> list[dict]:
+    import urllib.parse
+
+    adql = gaia_adql(ra_deg, dec_deg, radius_deg, glimit, max_rows)
     query = urllib.parse.urlencode({"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": adql})
-    try:
-        text = _http_get("https://gea.esac.esa.int/tap-server/tap/sync?" + query, timeout=25).decode("utf-8", errors="replace")
-    except Exception as exc:
-        # ESA archive slow or down (25 s, 2.2.13: so the fallback still fits in the solve's 45 s): same stars from
-        # the VizieR copy of Gaia DR3.
+    text = _http_get("https://gea.esac.esa.int/tap-server/tap/sync?" + query, timeout=timeout).decode("utf-8",
+                                                                                                     errors="replace")
+    return parse_gaia_csv(text, band)
+
+
+def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", glimit: float = 17.0,
+                   max_rows: int = 3000, polygon=None) -> list[dict]:
+    """Gaia DR3 from the ESA archive, with Johnson-Kron-Cousins synthetic photometry (GSPC) where it exists.
+    Positions are epoch 2016.0 and are moved to now with Gaia proper motions.
+    2.2.14 (item 5): asked deeper than the archive's 3000 brightest (glimit > 17, more rows, or the frame's
+    footprint `polygon`), the archive's GSPC part and VizieR's deep part are fetched at the same time and combined
+    (see GAIA_DEEP_G); either one alone still answers. Stars without GSPC get V from G and BP-RP (no B, R: colors
+    only from GSPC, item 1)."""
+    import threading
+
+    band = _band_for(band)
+    deep = glimit > GAIA_ESA_G or max_rows > GAIA_ESA_ROWS or bool(polygon)
+    if not deep:
         try:
-            return fetch_gaia_dr3_vizier(ra_deg, dec_deg, radius_deg, band, glimit)
-        except Exception as exc2:
-            raise ConnectionError(f"Gaia archive: {exc}\nVizieR Gaia DR3: {exc2}") from exc2
+            return _gaia_esa(ra_deg, dec_deg, radius_deg, band, glimit, max_rows, GAIA_ESA_TIMEOUT_S)
+        except Exception as exc:
+            # ESA archive slow or down (25 s, 2.2.13: so the fallback still fits in the solve's 45 s): same stars from
+            # the VizieR copy of Gaia DR3.
+            try:
+                return fetch_gaia_dr3_vizier(ra_deg, dec_deg, radius_deg, band, glimit, max_rows)
+            except Exception as exc2:
+                raise ConnectionError(f"Gaia archive: {exc}\nVizieR Gaia DR3: {exc2}") from exc2
+    # The archive part on the circle through the frame's corners (from the frame's centre) when they are known.
+    esa_radius = (max(sky_separation_arcsec(ra_deg, dec_deg, r, d) for r, d in polygon) / 3600.0
+                  if polygon else radius_deg)
+    box = footprint_box(polygon, ra_deg, dec_deg) if polygon else None
+    results: dict = {}
+
+    def run(key, fn):
+        try:
+            results[key] = ("ok", fn())
+        except Exception as exc:
+            results[key] = ("error", exc)
+
+    jobs = [threading.Thread(target=run, daemon=True, args=("esa", lambda: _gaia_esa(
+                ra_deg, dec_deg, esa_radius, band, min(glimit, GAIA_ESA_G), GAIA_ESA_ROWS, GAIA_ESA_TIMEOUT_S))),
+            threading.Thread(target=run, daemon=True, args=("deep", lambda: fetch_gaia_dr3_vizier(
+                ra_deg, dec_deg, radius_deg, band, glimit, max_rows, box, deep=True)))]
+    for t in jobs:
+        t.start()
+    for t in jobs:
+        t.join(GAIA_ESA_TIMEOUT_S + 2.0 * GAIA_VIZIER_TIMEOUT_S)
+    esa = results.get("esa", ("error", TimeoutError("no answer")))
+    viz = results.get("deep", ("error", TimeoutError("no answer")))
+    if esa[0] != "ok" and viz[0] != "ok":
+        raise ConnectionError(f"Gaia archive: {esa[1]}\nVizieR Gaia DR3: {viz[1]}")
+    return combine_gaia(esa[1] if esa[0] == "ok" else [], viz[1] if viz[0] == "ok" else [], max_rows)
+
+
+def parse_gaia_csv(text: str, band: str = "V") -> list[dict]:
+    """The ESA archive's CSV answer as SHOBS-P star records (2.2.14: split out of fetch_gaia_dr3 for testing)."""
+    import csv
+    import io
+
+    band = _band_for(band)
     column = {"V": "v_jkc_mag", "B": "b_jkc_mag", "R": "r_jkc_mag"}[band]
     stars = []
     for row in csv.DictReader(io.StringIO(text)):
@@ -2403,23 +2601,41 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
         ra, dec = _pm_to_now(ra, dec, row.get("pmra"), row.get("pmdec"), 2016.0)
         mags = {k: _num(row.get(c)) for k, c in (("V", "v_jkc_mag"), ("B", "b_jkc_mag"), ("R", "r_jkc_mag"))}
         mags = {k: v for k, v in mags.items() if v is not None}
-        mag = _num(row.get(column))
+        v_note = ""
+        if "V" not in mags:
+            # 2.2.14 (item 5): no synthetic photometry (fainter than G 17.65, or no XP spectrum): V from G and BP-RP.
+            v_g = v_from_gaia_g(g, _num(row.get("bp_rp")))
+            if v_g is not None:
+                mags = {"V": v_g}
+                v_note = " (V from G)"
+        mag = mags.get(band) if band == "V" else _num(row.get(column))
         stars.append({"auid": f"Gaia DR3 {row.get('source_id', '')}", "label": f"{mag:.1f}" if mag is not None else "",
                       "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": "ESA Gaia archive", "pm": (_num(row.get("pmra")), _num(row.get("pmdec")))})
+                      "service": "ESA Gaia archive" + v_note, "pm": (_num(row.get("pmra")), _num(row.get("pmdec")))})
     if not stars and "error" in text.lower():
         raise ValueError("Gaia archive: " + text.strip()[:300])
     return stars
 
 
-def fetch_gaia_dr3_vizier(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", glimit: float = 17.0) -> list[dict]:
+def fetch_gaia_dr3_vizier(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", glimit: float = 17.0,
+                          max_rows: int = 3000, box_deg=None, deep: bool = False) -> list[dict]:
     """Gaia DR3 from VizieR (I/355/gaiadr3). V comes from G and BP-RP with the Gaia DR3
     photometric relation (Riello et al. 2021): G - V = -0.02704 + 0.01424 C - 0.2156 C^2 + 0.01426 C^3,
-    good to about 0.03 mag. Only V is given this way; B and R are left empty."""
+    good to about 0.03 mag. Only V is given this way; B and R are left empty.
+    2.2.14 (item 5): the G cut is asked of VizieR (not only applied here), the frame's box when known, and the row
+    cap, brightest first. deep=True: the deep half of fetch_gaia_dr3 (not a fallback)."""
     rows = _vizier_query(
         "I/355/gaiadr3", ra_deg, dec_deg, radius_deg,
-        ["Source", "RA_ICRS", "DE_ICRS", "pmRA", "pmDE", "Gmag", "BP-RP"], "Gmag", 3000,
+        ["Source", "RA_ICRS", "DE_ICRS", "pmRA", "pmDE", "Gmag", "BP-RP"], "Gmag", max_rows,
+        box_deg=box_deg, constraints={"Gmag": f"<{glimit:.2f}"}, timeout=GAIA_VIZIER_TIMEOUT_S,
     )
+    return parse_gaia_vizier_rows(rows, band, glimit, max_rows,
+                                  "VizieR I/355 (V from G and BP-RP)" if deep else
+                                  "VizieR I/355 (ESA archive unavailable; V from G only)")
+
+
+def parse_gaia_vizier_rows(rows: list[dict], band: str = "V", glimit: float = 17.0, max_rows: int = 3000,
+                           service: str = "VizieR I/355 (ESA archive unavailable; V from G only)") -> list[dict]:
     band = _band_for(band)
     stars = []
     for row in rows:
@@ -2429,27 +2645,31 @@ def fetch_gaia_dr3_vizier(ra_deg: float, dec_deg: float, radius_deg: float, band
         if ra is None or dec is None or g is None or g > glimit:
             continue
         ra, dec = _pm_to_now(ra, dec, row.get("pmRA"), row.get("pmDE"), 2016.0)
-        c = _num(row.get("BP-RP"))
-        mag = None
-        if c is not None and -0.5 < c < 5.0:
-            v_from_g = g + 0.02704 - 0.01424 * c + 0.2156 * c ** 2 - 0.01426 * c ** 3
-            mag = v_from_g if band == "V" else None
+        v_from_g = v_from_gaia_g(g, _num(row.get("BP-RP")))
+        mag = v_from_g if band == "V" else None
         stars.append({"auid": f"Gaia DR3 {row.get('Source', '')}", "label": f"{mag:.1f}" if mag is not None else "",
-                      "ra": ra, "dec": dec, "mag": mag, "mags": ({"V": v_from_g} if c is not None and -0.5 < c < 5.0 else {}),
+                      "ra": ra, "dec": dec, "mag": mag, "mags": ({"V": v_from_g} if v_from_g is not None else {}),
                       "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": "VizieR I/355 (ESA archive unavailable; V from G only)",
+                      "service": service,
                       "pm": (_num(row.get("pmRA")), _num(row.get("pmDE")))})
-    return stars
+    return cap_brightest(stars, max_rows)
 
 
-def fetch_comparison_stars(catalog: str, ra_hours: float, dec_deg: float, fov_arcmin: float, band: str = "V") -> tuple[list[dict], str]:
-    """Stars for chart matching and click-to-fill. Returns (stars, chart_id). chart_id is '' for non-AAVSO catalogs."""
+def fetch_comparison_stars(catalog: str, ra_hours: float, dec_deg: float, fov_arcmin: float, band: str = "V",
+                           depth: dict | None = None) -> tuple[list[dict], str]:
+    """Stars for chart matching and click-to-fill. Returns (stars, chart_id). chart_id is '' for non-AAVSO catalogs.
+    2.2.14 (item 5): depth (from field_depth) sets Gaia's G cut and row cap and the frame's footprint for Gaia and
+    APASS; without it the 2.2.13 query is made."""
     ra_deg = ra_hours * 15.0
     radius_deg = fov_arcmin / 60.0 / 2.0 * 1.15
+    depth = depth or {}
+    polygon = depth.get("polygon")
+    box = footprint_box(polygon, ra_deg, dec_deg) if polygon else None
     if catalog == "Gaia DR3":
-        return fetch_gaia_dr3(ra_deg, dec_deg, radius_deg, band), ""
+        return fetch_gaia_dr3(ra_deg, dec_deg, radius_deg, band, float(depth.get("glimit", 17.0)),
+                              int(depth.get("max_rows", 3000)), polygon), ""
     if catalog == "APASS DR9":
-        return fetch_apass9(ra_deg, dec_deg, radius_deg, band), ""
+        return fetch_apass9(ra_deg, dec_deg, radius_deg, band, int(depth.get("max_rows", 3000)), box), ""
     if catalog == "Tycho-2":
         return fetch_tycho2(ra_deg, dec_deg, radius_deg, band), ""
     payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, 16)
@@ -2596,6 +2816,10 @@ def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_
                 "label": (seq["label"] if seq and seq["label"] else (f"{mag:.1f}" if mag is not None else ""))}
         if entry.get("pm"):
             star["pm"] = entry["pm"]
+        # 2.2.14 (item 1): every catalog's own magnitudes, and the colors taken from ONE catalog each
+        # ({"bv": [B-V, catalog], "vr": [V-R, catalog]}); "mags" stays the best magnitude per band (MAG_ORDER).
+        star["cat_mags"] = {c: dict(src[c].get("mags") or {}) for c in src}
+        star["colors"] = star_colors(star)
         out.append(star)
     return out
 
@@ -2613,21 +2837,52 @@ def star_names(star: dict) -> list[str]:
 CATALOG_TIMEOUT_S = 45.0   # 2.2.13: a catalog slower than this is left out of this solve (Solve again retries)
 
 
+def field_depth(n_peaks: int | None, frame_shape, scale_arcsec: float | None, fov_arcmin: float,
+                polygon=None, glimit: float = GAIA_DEEP_G) -> dict:
+    """2.2.14 (item 5): how deep to ask the catalogs for one frame: {glimit, max_rows, polygon}. The query area is
+    the RA/Dec box around the frame's footprint (polygon, from a plate solution; what VizieR is asked for) or the
+    circle fetch_comparison_stars asks for."""
+    if polygon:
+        ra_c = float(np.degrees(np.arctan2(np.mean(np.sin(np.radians([r for r, _d in polygon]))),
+                                           np.mean(np.cos(np.radians([r for r, _d in polygon])))))) % 360.0
+        dec_c = float(np.mean([d for _r, d in polygon]))
+        bw, bh = footprint_box(polygon, ra_c, dec_c)
+        query_area = bw * bh
+    else:
+        query_area = math.pi * (fov_arcmin / 60.0 / 2.0 * 1.15) ** 2
+    try:
+        h, w = frame_shape
+        frame_area = float(h) * float(w) * (float(scale_arcsec) / 3600.0) ** 2
+    except (TypeError, ValueError):
+        frame_area = None
+    out = {"glimit": float(glimit), "max_rows": gaia_row_cap(n_peaks, frame_area, query_area)}
+    if polygon:
+        out["polygon"] = [(float(r), float(d)) for r, d in polygon]
+    return out
+
+
 def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, band: str = "V",
-                         catalogs=None, timeout: float = CATALOG_TIMEOUT_S, cancel=None) -> tuple[dict, dict]:
+                         catalogs=None, timeout: float = CATALOG_TIMEOUT_S, cancel=None,
+                         depth: dict | None = None) -> tuple[dict, dict]:
     """2.2.13: every catalog for one field, asked at the same time. Returns ({catalog: stars}, {catalog: error
     text}); a catalog that fails, or has not answered within `timeout` seconds, costs only its own stars. Daemon
     threads, so a slow server never holds the solve (or closing the program) hostage; `cancel` (an Event) stops
-    the wait."""
+    the wait. 2.2.14 (item 5): depth (field_depth) goes to fetch_comparison_stars."""
     import threading
     import time as _time
 
     catalogs = list(catalogs or CATALOGS)
     results: dict = {}
+    try:
+        import inspect
+        takes_depth = bool(depth) and "depth" in inspect.signature(fetch_comparison_stars).parameters
+    except (TypeError, ValueError):
+        takes_depth = False
 
     def one(cat):
         try:
-            stars, chart_id = fetch_comparison_stars(cat, ra_hours, dec_deg, fov_arcmin, band)
+            stars, chart_id = (fetch_comparison_stars(cat, ra_hours, dec_deg, fov_arcmin, band, depth=depth)
+                               if takes_depth else fetch_comparison_stars(cat, ra_hours, dec_deg, fov_arcmin, band))
             for st in stars:
                 st["catalog"] = cat
                 if cat == "AAVSO sequence":
@@ -3224,11 +3479,70 @@ VARIABLE_OTYPES = {
 }
 
 
+# 2.2.14 (item 1): a star's color comes from ONE catalog, never B from one and V from another (2.2.13's merge picks
+# each band separately, so B could be Gaia's and V APASS's, and V-R was nearly always APASS V against Gaia R; the
+# mixed zero points add scatter and a bias to the color fit and the comps' catalog colors). B-V: the AAVSO sequence
+# or APASS when that catalog has both bands, else Gaia's synthetic Johnson B and V (GSPC), else Tycho-2 (B and V both
+# from BT, VT). V-R: the AAVSO sequence when it has V and Rc, else Gaia (APASS has no R). The magnitude itself (V)
+# keeps MAG_ORDER.
+COLOR_BANDS = {"bv": ("B", "V"), "vr": ("V", "R")}
+COLOR_ORDER = {"bv": ("AAVSO sequence", "APASS DR9", "Gaia DR3", "Tycho-2"),
+               "vr": ("AAVSO sequence", "Gaia DR3")}
+
+
+def _pair_from(mags: dict, first: str, second: str):
+    try:
+        a, b = float(mags[first]), float(mags[second])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return a - b if math.isfinite(a) and math.isfinite(b) else None
+
+
+def catalog_color(star: dict, key: str = "bv") -> tuple[float | None, str]:
+    """2.2.14 (item 1): (color, catalog it came from) for key "bv" or "vr", both bands from one catalog; (None, "")
+    when no catalog has both. Reads, in turn: a stored pick ("colors": {key: [value, catalog]}, kept on comps, spares
+    and watch stars), a merged star's per-catalog entries ("sources"), or a single catalog's own "mags"."""
+    if not star:
+        return None, ""
+    first, second = COLOR_BANDS[key]
+    if isinstance(star.get("colors"), dict):
+        # A stored pick is final, also when it is empty (no catalog had both bands): never fall back to the merged
+        # "mags", whose bands may come from different catalogs.
+        pick = star["colors"].get(key)
+        if isinstance(pick, (list, tuple)) and len(pick) == 2 and pick[0] is not None:
+            return float(pick[0]), str(pick[1] or "")
+        return None, ""
+    src = star.get("sources")
+    if isinstance(src, dict) and src:
+        for cat in COLOR_ORDER[key]:
+            entry = src.get(cat)
+            if not entry:
+                continue
+            value = _pair_from(entry.get("mags") or {}, first, second)
+            if value is not None:
+                return value, cat
+        return None, ""
+    # One catalog's own star (not merged): its own bands are one catalog by construction.
+    cat = str(star.get("catalog") or "")
+    if cat and cat not in COLOR_ORDER[key] and cat != "AAVSO":
+        return None, ""
+    value = _pair_from(star.get("mags") or {}, first, second)
+    return (value, cat) if value is not None else (None, "")
+
+
+def star_colors(star: dict) -> dict:
+    """2.2.14 (item 1): {"bv": [value, catalog], "vr": [...]} for the keys a star has, ready to store (JSON)."""
+    out = {}
+    for key in COLOR_BANDS:
+        value, cat = catalog_color(star, key)
+        if value is not None:
+            out[key] = [round(float(value), 4), cat]
+    return out
+
+
 def catalog_bv(star: dict) -> float | None:
-    mags = star.get("mags") or {}
-    if mags.get("B") is not None and mags.get("V") is not None:
-        return float(mags["B"]) - float(mags["V"])
-    return None
+    """B-V from one catalog (2.2.14 item 1: see catalog_color)."""
+    return catalog_color(star, "bv")[0]
 
 
 def fetch_simbad_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> list[dict]:
@@ -3278,10 +3592,25 @@ def field_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> tuple[l
 def flag_variables(stars: list[dict], variables: list[dict], tol_arcsec: float = 6.0) -> int:
     """Mark catalog stars that sit on a known or suspected variable: star['variable'] = [matches]."""
     flagged = 0
-    for star in stars:
+    # 2.2.14 (item 5): one numpy pass per variable over all stars (a deeper Gaia list made the star x variable
+    # loop in Python take seconds in a Milky Way field); the same separation formula as sky_separation_arcsec.
+    have = [k for k, st in enumerate(stars) if st.get("ra") is not None and st.get("dec") is not None]
+    ra = np.array([float(stars[k]["ra"]) for k in have], dtype=float)
+    dec = np.array([float(stars[k]["dec"]) for k in have], dtype=float)
+    near: dict[int, list] = {}
+    for v in variables:
+        try:
+            vra, vdec = float(v["ra"]), float(v["dec"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        d_ra = np.radians(((ra - vra + 180.0) % 360.0) - 180.0) * np.cos(np.radians((dec + vdec) / 2.0))
+        sep = np.degrees(np.hypot(d_ra, np.radians(dec - vdec))) * 3600.0
+        for i in np.nonzero(sep <= tol_arcsec)[0]:
+            near.setdefault(int(have[i]), []).append(v)
+    for k, star in enumerate(stars):
         if star.get("ra") is None or star.get("dec") is None:
             continue
-        hits = [v for v in variables if sky_separation_arcsec(star["ra"], star["dec"], v["ra"], v["dec"]) <= tol_arcsec]
+        hits = near.get(k, [])
         if hits:
             star["variable"] = hits
             flagged += 1
@@ -3399,7 +3728,12 @@ def pick_spare_comps(placed: list, avoid_xy: list, shape: tuple[int, int], radiu
         if reasons is not None:
             reasons[why] = reasons.get(why, 0) + 1
 
-    for x, y, star in placed:
+    # 2.2.14 (items 1, 5): the crowding test for all stars at once (k-d tree); with a deeper Gaia list the per-star
+    # loop over every placed star became slow.
+    crowded_all = crowded_flags(np.array([(float(x), float(y)) for x, y, _st in placed], dtype=float).reshape(-1, 2),
+                                np.array([_float_or_nan(st.get("mag")) for _x, _y, st in placed]),
+                                sky_outer + radius, 3.0) if placed else np.zeros(0, dtype=bool)
+    for k, (x, y, star) in enumerate(placed):
         mag = star.get("mag")
         if mag is None or not (lo <= mag <= hi):
             continue
@@ -3415,15 +3749,7 @@ def pick_spare_comps(placed: list, avoid_xy: list, shape: tuple[int, int], radiu
         if any(p is not None and math.hypot(x - p[0], y - p[1]) < 2 * sky_outer for p in avoid_xy):
             turned_away("too close to the target, comps or check")
             continue
-        crowded = False
-        for x2, y2, other in placed:
-            if other is star or math.hypot(x2 - x, y2 - y) >= sky_outer + radius:
-                continue
-            m2 = other.get("mag")
-            if m2 is None or m2 < mag + 3.0:
-                crowded = True
-                break
-        if crowded:
+        if crowded_all[k]:
             turned_away("crowded (a neighbour in the sky ring)")
             continue
         out.append((x, y, star))
@@ -3859,9 +4185,40 @@ def bv_spectral_class(bv: float) -> str:
 
 
 def ensemble_color(comps_cat: list[dict], first: str, second: str) -> float | None:
-    """Mean catalog color (first - second) of the comps that have both bands, or None."""
-    vals = [c[first] - c[second] for c in comps_cat if c and first in c and second in c]
-    return float(np.mean(vals)) if vals else None
+    """Mean catalog color (first - second) of the comps that have both bands, or None.
+    2.2.14 (item 1): an entry may be a star record ("colors", "sources" or "mags"); its color then comes from one
+    catalog (catalog_color). A plain {band: mag} dict is read as before."""
+    value, _cats = ensemble_catalog_color(comps_cat, first, second)
+    return value
+
+
+def ensemble_catalog_color(comps_cat: list[dict], first: str, second: str) -> tuple[float | None, list[str]]:
+    """2.2.14 (item 1): (mean catalog color of the comps that have one, the catalogs it came from, comp by comp)."""
+    key = next((k for k, bands in COLOR_BANDS.items() if bands == (first, second)), None)
+    vals, cats = [], []
+    for c in comps_cat:
+        if not c:
+            continue
+        if key is not None and any(k in c for k in ("colors", "sources", "mags")):
+            value, cat = catalog_color(c, key)
+        elif first in c and second in c:
+            value, cat = float(c[first]) - float(c[second]), ""
+        else:
+            value, cat = None, ""
+        if value is not None and math.isfinite(value):
+            vals.append(float(value))
+            cats.append(cat)
+    return (float(np.mean(vals)) if vals else None), cats
+
+
+def color_sources_text(cats: list[str]) -> str:
+    """2.2.14 (item 1): 'APASS DR9' or 'APASS DR9 2, Gaia DR3 1' for the catalogs a set of colors came from."""
+    counts: dict[str, int] = {}
+    for c in cats:
+        counts[c or "catalog"] = counts.get(c or "catalog", 0) + 1
+    if len(counts) == 1:
+        return next(iter(counts))
+    return ", ".join(f"{c} {n}" for c, n in sorted(counts.items(), key=lambda kv: -kv[1]))
 
 
 # ---- Field scan (discovery mode) -----------------------------------------------------
@@ -4158,29 +4515,51 @@ def color_calibration_stars(placed: list, target_xy, radius: float, sky_outer: f
     h, w = shape
     edge = sky_outer + 3
     out = []
-    for x, y, star in placed:
+    if not placed:
+        return out
+    # 2.2.14 (item 1): the crowding test for every star at once (a k-d tree), not every candidate against every
+    # star in Python: with Gaia's thousands of stars merged in, the old O(n^2) loop stalled the window for seconds
+    # when a run started with "Also measure R and B".
+    xy = np.array([(float(x), float(y)) for x, y, _st in placed], dtype=float)
+    vmag = np.array([_float_or_nan((st.get("mags") or {}).get("V", st.get("mag"))) for _x, _y, st in placed])
+    crowded = crowded_flags(xy, vmag, 1.5 * radius, 3.0)
+    for k, (x, y, star) in enumerate(placed):
         mags = star.get("mags") or {}
-        if "B" not in mags or "V" not in mags:
-            continue
+        if "V" not in mags or catalog_color(star, "bv")[0] is None:
+            continue   # 2.2.14 (item 1): B and V from one catalog
         if star.get("variable"):
             continue
         if not (edge <= x < w - edge and edge <= y < h - edge):
             continue
         if target_xy is not None and math.hypot(x - target_xy[0], y - target_xy[1]) < 2 * radius:
             continue
-        v = mags["V"]
-        crowded = False
-        for x2, y2, other in placed:
-            if other is star or math.hypot(x2 - x, y2 - y) >= 1.5 * radius:
-                continue
-            m2 = (other.get("mags") or {}).get("V", other.get("mag"))
-            if m2 is None or m2 < v + 3.0:
-                crowded = True
-                break
-        if not crowded:
+        if not crowded[k]:
             out.append((x, y, star))
     out.sort(key=lambda item: item[2]["mags"]["V"])
     return out[:max_stars]
+
+
+def crowded_flags(xy: np.ndarray, mags: np.ndarray, reach: float, dmag: float = 3.0) -> np.ndarray:
+    """2.2.14 (item 1): crowded[i] is True when another star lies closer than `reach` px to star i and is not at least
+    `dmag` fainter (or its magnitude is unknown). All pairs from one k-d tree query, so it is fast for thousands of
+    stars (the same test the old per-star loops made)."""
+    xy = np.asarray(xy, dtype=float).reshape(-1, 2)
+    mags = np.asarray(mags, dtype=float)
+    out = np.zeros(len(xy), dtype=bool)
+    if len(xy) < 2 or not (reach > 0):
+        return out
+    from scipy.spatial import cKDTree
+    pairs = cKDTree(xy).query_pairs(float(np.nextafter(reach, 0.0)), output_type="ndarray")
+    if pairs.size == 0:
+        return out
+    i, j = pairs[:, 0], pairs[:, 1]
+    mi, mj = mags[i], mags[j]
+    with np.errstate(invalid="ignore"):
+        j_crowds_i = np.isnan(mj) | (mj < mi + dmag)
+        i_crowds_j = np.isnan(mi) | (mi < mj + dmag)
+    out[i[j_crowds_i]] = True
+    out[j[i_crowds_j]] = True
+    return out
 
 
 def relative_colors(first: np.ndarray, second: np.ndarray) -> tuple[np.ndarray, float]:

@@ -232,6 +232,17 @@ def fit_tree_columns(tree, headings: dict, cap: int = 480, firm: bool = False) -
 
 SEQ_COLOR = "#38d9e8"       # 2.2.13: AAVSO sequence stars on the image
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labelled on the image (the brightest; hover shows all)
+
+
+def _fainter_text(dm: float) -> str:
+    """2.2.14 (item 6): '2.8 mag fainter than the target' (or brighter), from the stars' instrumental magnitudes."""
+    if dm is None or not math.isfinite(float(dm)):
+        return ""
+    dm = float(dm)
+    if abs(dm) < 0.05:
+        return "as bright as the target"
+    return f"{abs(dm):.1f} mag {'fainter' if dm > 0 else 'brighter'} than the target"
 
 
 def make_constrained_figure(size_in, dpi: int = 100):
@@ -3941,6 +3952,7 @@ class App(Tk):
         for role in COMP_ROLES:
             self._mark(getattr(self, f"{role}_xy"), PICK_COLORS[role], f"C{comp_number(role)}")
         self._mark(self.check_xy, PICK_COLORS["check"], "K")
+        circles, labels = {}, []
         for x, y, star in self.chart_placed:
             if not (0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
                 continue
@@ -3959,9 +3971,17 @@ class App(Tk):
             if not star.get("variable") and not self._circle_shown(star):
                 continue
             colour = "#ff5252" if star.get("variable") else "#ffd24a"
-            self.photo_ax.plot(x, y, marker="o", mfc="none", mec=colour, ms=9, lw=1.0 if star.get("variable") else 0.8)
+            # 2.2.14 (item 5): drawn below in one go per colour (Gaia now brings thousands of stars per frame).
+            circles.setdefault(colour, []).append((x, y))
             if self.show_labels.get():
-                self.photo_ax.text(x + 4, y - 4, self._circle_label(star), color=colour, fontsize=7)
+                labels.append((star.get("mag") if star.get("mag") is not None else 99.0, x, y, star, colour))
+        # 2.2.14 (item 5): labels for the brightest few hundred circles only (thousands of labels are unreadable and
+        # took seconds to draw); hovering shows any star.
+        for _m, x, y, star, colour in sorted(labels, key=lambda item: item[0])[:CIRCLE_LABELS_MAX]:
+            self.photo_ax.text(x + 4, y - 4, self._circle_label(star), color=colour, fontsize=7)
+        for colour, pts in circles.items():
+            self.photo_ax.plot([p[0] for p in pts], [p[1] for p in pts], ls="none", marker="o", mfc="none", mec=colour,
+                               ms=9)
         for x, y, v in self._loose_variable_marks():
             if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
                 self.photo_ax.plot(x, y, marker="x", color="#ff5252", ms=7, mew=1.2)
@@ -4354,9 +4374,15 @@ class App(Tk):
         if not mags and star.get("mag") is not None:
             mags = {"V": star["mag"]}
         parts = [f"{b} {mags[b]:.2f}" for b in ("B", "V", "R") if mags.get(b) is not None]
-        if mags.get("B") is not None and mags.get("V") is not None:
-            parts.append(f"(B-V {mags['B'] - mags['V']:.2f})")
-        return "  ".join(parts) or "no magnitudes"
+        # 2.2.14 (item 1): the color from one catalog, and which one (B and V above may come from two catalogs).
+        bv, src = core.catalog_color(star, "bv")
+        if bv is not None:
+            parts.append(f"(B-V {bv:.2f}" + (f", {src})" if src else ")"))
+        text = "  ".join(parts) or "no magnitudes"
+        if star.get("fainter_than_target") is not None and star.get("widened"):
+            # 2.2.14 (item 6): a spare from a widened window says how much fainter than the target it is.
+            text += "\n" + _fainter_text(star["fainter_than_target"])
+        return text
 
     def clear_mark(self, role: str, redraw: bool = True):
         """Remove a marked star and empty its fields (and its stored catalog colors). redraw=False when clearing
@@ -4510,6 +4536,7 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image.")
             return
         xy = (float(event.xdata), float(event.ydata))
+        click_xy = xy
         snap_note = ""
         try:
             radius = float(self.radius.get())
@@ -4538,6 +4565,12 @@ class App(Tk):
             return
         if self.mode_key == "discovery":
             return
+        # 2.2.14 (item 3): a click on (or right next to) a spare comp's blue diamond adopts that spare: its own record
+        # (name, V, bands, colors, catalog), not whatever labeled star happens to be nearest the click.
+        spare = self._spare_at(click_xy, xy) if (mode in ("comp", "check") or comp_number(mode)) else None
+        if spare is not None:
+            xy = spare[1]
+            snap_note = ""
         if mode == "comp" or comp_number(mode):
             # 2.2.5: each click with Comps adds the next comparison star (C1, C2 ... C10). Clicking a star that is
             # already a comp does nothing new.
@@ -4547,6 +4580,10 @@ class App(Tk):
                     self.status.set(f"That star is already {role_label(r)}.")
                     return
             mode = self._next_comp_role(xy)
+            if spare is not None:
+                # A slot left from the series under this spare's name gets it back (as _next_comp_role does by name).
+                mode = next((r for r in COMP_ROLES if getattr(self, f"{r}_xy") is None
+                             and getattr(self, f"{r}_name").get().strip() == spare[0]), mode)
             if mode is None:
                 messagebox.showinfo(APP_TITLE, f"All {MAX_COMPS} comparison stars are marked. Right-click one to "
                                                "remove it first.")
@@ -4559,7 +4596,7 @@ class App(Tk):
             setattr(self, f"{mode}_xy", xy)
         else:
             self.check_xy = xy
-        filled = self._fill_from_chart(mode, xy)
+        filled = self._fill_from_spare(mode, spare[0]) if spare is not None else self._fill_from_chart(mode, xy)
         self._update_pick_label()
         self.refresh_preview()
         self.update_star_panel()
@@ -4857,14 +4894,22 @@ class App(Tk):
             if role != "target" and star is not None:
                 # 2.2.13: where the magnitude came from, and the AAVSO sequence label when the star has one.
                 src = (star.get("mag_source") or {}).get(star.get("band", "V")) or star.get("catalog")
+                if "V from G" in str(((star.get("sources") or {}).get(src) or {}).get("service") or ""):
+                    src = f"{src} (from G and BP-RP, ±0.03)"   # 2.2.14 (item 5): a faint star without GSPC
                 seq = star.get("seq")
                 if src or seq:
                     parts.append(f"{star.get('band', 'V')} from {src}" + (f" · AAVSO sequence {seq.get('label')}"
                                                                           if seq and seq.get("label") else ""))
             if role != "target":
-                if mags.get("B") is not None and mags.get("V") is not None:
-                    bv = mags["B"] - mags["V"]
-                    src = (star or {}).get("catalog", "") if star else ""
+                # 2.2.14 (item 1): B-V from one catalog (named), not the best B against the best V.
+                bv, src = core.catalog_color(self._colors_for(role, name) or star or {}, "bv")
+                spare_info = (self.spare_catalog.get(name) or {}) if any(m[2] == name for m in self.spare_marks) else {}
+                if spare_info.get("widened") and spare_info.get("fainter_than_target") is not None:
+                    # 2.2.14 (item 6): a spare from a widened window, adopted as a comp, shows how faint it is.
+                    # (a comp's own brightness note below already gives it, so only the check star repeats it here)
+                    parts.append("spare comp (widened window)" + ("" if comp_number(role) and self.target_xy is not None
+                                                                  else ", " + _fainter_text(spare_info["fainter_than_target"])))
+                if bv is not None:
                     if bv > core.RED_LIMIT_BV:
                         parts.append(f"⚠ very red, B−V {bv:.2f}: red giants often vary, and the color is far from most targets")
                         style = "Warn.TLabel"
@@ -4905,7 +4950,9 @@ class App(Tk):
         star = self._chart_star_at(xy)
         if star is not None:
             name = str(star.get("auid") or star.get("label") or "")
-            names = core.star_names(star)
+            # 2.2.14 (item 11): a known variable's name on the star counts too (V1441 Cas is TYC 4006-670-1).
+            names = core.star_names(star) + [str(v.get("name")) for v in star.get("variable") or []
+                                             if isinstance(v, dict) and v.get("name")]
             for w in self.watch_list:
                 same_pos = (star.get("ra") is not None and w.get("ra") is not None and w.get("dec") is not None
                             and core.sky_separation_arcsec(float(star["ra"]), float(star["dec"]), float(w["ra"]),
@@ -4915,6 +4962,8 @@ class App(Tk):
                     break
         else:
             name = ""
+        # 2.2.14 (item 11): a star already watched at this spot of the image is that watch star.
+        name = next((n for n, wxy in self.watch_xy.items() if math.hypot(wxy[0] - xy[0], wxy[1] - xy[1]) < 2.0), name)
         if not name:
             name = f"watch {len(self.watch_list) + 1} ({xy[0]:.0f},{xy[1]:.0f})"
         if any(w["name"] == name for w in self.watch_list):
@@ -4933,7 +4982,8 @@ class App(Tk):
             if star is not None:
                 entry.update({"mag": star.get("mag"), "mags": dict(star.get("mags") or {}),
                               "catalog": star.get("catalog", ""), "ra": star.get("ra"), "dec": star.get("dec"),
-                              "variable": core.variable_text(star)})
+                              "variable": core.variable_text(star),
+                              "colors": core.star_colors(star)})   # 2.2.14 (item 1)
             self.watch_list.append(entry)
             self.watch_xy[name] = xy
             self.status.set(f"Watching {name}." + ("" if star is not None or "ra" in entry else
@@ -4950,7 +5000,8 @@ class App(Tk):
         info = self.spare_catalog.get(name, {})
         self.watch_list.append({"name": name, "mag": info.get("mag"), "mags": dict(info.get("mags") or {}),
                                 "catalog": info.get("catalog", ""), "ra": info.get("ra"), "dec": info.get("dec"),
-                                "variable": info.get("variable", "")})
+                                "variable": info.get("variable", ""),
+                                "colors": dict(info.get("colors") or {})})   # 2.2.14 (item 1)
         star = self._chart_star_named(name)
         if star is not None:
             for x, y, st in self.chart_placed:
@@ -5136,7 +5187,8 @@ class App(Tk):
         hits = [v for _x, _y, v in self.variable_marks if core.sky_separation_arcsec(ra, dec, v["ra"], v["dec"]) < 6.0]
         if best is not None:
             star = best[3]
-            entry.update({"mag": star.get("mag"), "mags": dict(star.get("mags") or {}), "catalog": star.get("catalog", "")})
+            entry.update({"mag": star.get("mag"), "mags": dict(star.get("mags") or {}), "catalog": star.get("catalog", ""),
+                          "colors": core.star_colors(star)})   # 2.2.14 (item 1)
             xy = (best[1], best[2])
         elif self.chart_solution and self.chart_placed:
             xy = self._project_to_frame(ra, dec)
@@ -5190,7 +5242,8 @@ class App(Tk):
         target[0].set(name)
         target[1].set(mag)
         self.star_bands[mode] = {"name": name, "mags": dict(star.get("mags") or {}),
-                                 "source": star.get("catalog", ""), "seq": star.get("seq")}
+                                 "source": star.get("catalog", ""), "seq": star.get("seq"),
+                                 "colors": core.star_colors(star)}   # 2.2.14 (item 1): one catalog per color
         if star.get("ra") is not None and star.get("dec") is not None:
             self.comp_coords[name] = (float(star["ra"]), float(star["dec"]))
         if seq_auid := (star.get("seq") or {}).get("auid"):
@@ -5201,6 +5254,51 @@ class App(Tk):
         seq = star.get("seq")
         return (f"{role_label(mode)}: {name}  {star.get('band', 'V')} = {mag} ({star.get('catalog', 'catalog')})"
                 + (f", AAVSO sequence {seq.get('label')}" if seq else ""))
+
+    def _spare_at(self, click_xy, snapped_xy=None):
+        """2.2.14 (item 3): the spare comp whose diamond was clicked: (name, its measured position), or None. A click
+        counts when it lands on the diamond (within its drawn size, ~8 px) or when the snapped star is the spare's
+        (within ~2 px or the seeing). Only spares with a catalog record (this run's) count."""
+        if not self.spare_marks or not self._overlay("spares"):
+            return None
+        seeing = self._seeing()
+        tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
+        snapped_xy = click_xy if snapped_xy is None else snapped_xy
+        d_snap_click = math.hypot(snapped_xy[0] - click_xy[0], snapped_xy[1] - click_xy[1])
+        best = None
+        for x, y, name in self.spare_marks:
+            info = self.spare_catalog.get(name) or {}
+            if info.get("mag") is None:
+                continue
+            d_click = math.hypot(x - click_xy[0], y - click_xy[1])
+            d_snap = math.hypot(x - snapped_xy[0], y - snapped_xy[1])
+            # The snapped star is the spare, or the click is on the diamond and nearer to it than to the star the
+            # click snapped to (a neighbour).
+            if d_snap <= tight or (d_click <= 8.0 and d_click <= d_snap_click):
+                if best is None or d_snap < best[0]:
+                    best = (d_snap, name, (float(x), float(y)))
+        return (best[1], best[2]) if best is not None else None
+
+    def _fill_from_spare(self, mode: str, name: str) -> str:
+        """2.2.14 (item 3): fill a comp or check slot from a spare comp's record (spare_catalog): its name, catalog V,
+        every band, the colors (one catalog each), its sky position and AAVSO sequence AUID."""
+        info = self.spare_catalog.get(name) or {}
+        mag = info.get("mag")
+        if mag is None:
+            return ""
+        getattr(self, f"{mode}_name").set(name)
+        getattr(self, f"{mode}_mag").set(f"{float(mag):.3f}")
+        seq = info.get("seq") or None
+        self.star_bands[mode] = {"name": name, "mags": dict(info.get("mags") or {}), "source": info.get("catalog", ""),
+                                 "seq": seq, "colors": dict(info.get("colors") or {})}
+        if info.get("ra") is not None and info.get("dec") is not None:
+            self.comp_coords[name] = (float(info["ra"]), float(info["dec"]))
+        if seq and seq.get("auid"):
+            self.seq_auids[name] = seq["auid"]
+        self._update_chart_field()
+        band = self._band()
+        return (f"{role_label(mode)}: {name}  {band} = {float(mag):.3f} ({info.get('catalog') or 'catalog'}, spare comp)"
+                + (f", AAVSO sequence {seq.get('label')}" if seq and seq.get("label") else ""))
 
     def _note_sequence(self, role: str, name: str, star: dict, xy):
         """2.2.13 (review): a comp or check that keeps its name from the series (later nights) but is an AAVSO
@@ -5217,6 +5315,7 @@ class App(Tk):
         if entry.get("name") in (None, name):
             entry.update({"name": name, "seq": seq})
             entry.setdefault("mags", dict(star.get("mags") or {}))
+            entry.setdefault("colors", core.star_colors(star))   # 2.2.14 (item 1)
             self.star_bands[role] = entry
         self._update_chart_field()
 
@@ -5261,6 +5360,25 @@ class App(Tk):
         """Catalog magnitudes in every band for a comp, if it was picked from a chart."""
         entry = self.star_bands.get(role) or {}
         return dict(entry.get("mags") or {}) if entry.get("name") == name else {}
+
+    def _colors_for(self, role: str, name: str) -> dict:
+        """2.2.14 (item 1): a comp's catalog colors, each from ONE catalog: {"colors": {"bv": [value, catalog], …}}.
+        From its pick (star_bands), else from the labeled star by name or under its marker, else its spare record
+        (a pick saved before 2.2.14 kept only the best-per-band magnitudes, which are not used for a color)."""
+        entry = self.star_bands.get(role) or {}
+        if entry.get("name") == name and isinstance(entry.get("colors"), dict):
+            return {"colors": dict(entry["colors"])}
+        star = self._chart_star_named(name)
+        xy = getattr(self, f"{role}_xy", None) if (role in COMP_ROLES or role == "check") else None
+        if star is None and xy is not None:
+            seeing = self._seeing()
+            star = self._chart_star_at(xy, reach=max(2.0, seeing if math.isfinite(seeing) else 2.0))
+        if star is not None:
+            return {"colors": core.star_colors(star)}
+        info = self.spare_catalog.get(name) or {}
+        if isinstance(info.get("colors"), dict):
+            return {"colors": dict(info["colors"])}
+        return {}
 
     @staticmethod
     def _fmt(xy):
@@ -5393,6 +5511,15 @@ class App(Tk):
         reach_px = max(math.hypot(cx - tx, cy - ty) for cx in (0, width_px) for cy in (0, height_px))
         fov = 2.0 * reach_px * scale / 60.0 * (1.15 if field_solve else 1.05) + (6.0 if field_solve else 0.0)
         band = self._band()
+        # 2.2.14 (item 5): how deep to ask the catalogs. With a plate solution in the header Gaia and APASS are asked
+        # for the frame's own footprint (the RA/Dec box around its corners; the ESA archive part of Gaia the circle
+        # through them); without one the orientation is unknown, so it stays the circle that reaches every corner
+        # from the target. The AAVSO chart and Tycho keep the circle. Gaia is asked deep (G < 19) for about twice the
+        # stars seen on the image (scaled to the query area), brightest first, so every star one can click has a
+        # magnitude (core.fetch_gaia_dr3).
+        cat_fov, polygon = fov, None
+        if wcs is not None:
+            polygon = core.frame_footprint(wcs, saved_shape)
         sources = core.detect_sources(self.preview)
         # 2.2.9: very short exposures (Tessa's 0.04 s eVscope frames) show too few stars to match; the work below
         # then solves on a quick stack of the first frames instead.
@@ -5440,8 +5567,19 @@ class App(Tk):
                 # Proper motions to the night's date for this solve only (review 2.2.13: a global left set made later
                 # Input-page lookups use an old night's epoch).
                 core.PM_EPOCH_YEAR = epoch_year
+                # 2.2.14 (item 5): the star count that sets Gaia's depth, counted here (off the window's thread).
                 try:
-                    found, failed = core.fetch_field_catalogs(cone[0], cone[1], fov, band, cancel=cancel)
+                    n_peaks = core.count_star_peaks(preview_ref)
+                except Exception:
+                    n_peaks = None
+                self._chart_diag["n_peaks"] = n_peaks
+                depth = core.field_depth(n_peaks, preview_ref.shape, scale, cat_fov, polygon)
+                try:
+                    found, failed = core.fetch_field_catalogs(cone[0], cone[1], cat_fov, band, cancel=cancel,
+                                                              depth=depth)   # 2.2.14 (item 5)
+                    self._chart_diag["gaia_depth"] = dict(core.catalog_depth(found.get("Gaia DR3") or [],
+                                                                             depth["max_rows"]),
+                                                          max_rows=depth["max_rows"], footprint=bool(polygon))
                     chart_id = next((str(st.get("chartid") or "") for st in found.get("AAVSO sequence") or []
                                      if st.get("chartid")), "")
                     stars = core.merge_catalogs(found, band)
@@ -5666,6 +5804,15 @@ class App(Tk):
         self.log("Solve: " + ", ".join(f"{c} {k}" for c, k in per_cat.items() if k) + f" stars on the frame, merged "
                  f"into {len(self.chart_placed)}; with B {counts['B']}, V {counts['V']}, R {counts['R']}."
                  + (f" AAVSO chart {chart_id}: {n_seq} sequence stars." if n_seq else " No AAVSO sequence stars here."))
+        gd = diag.get("gaia_depth") or {}
+        if gd.get("n") and gd.get("faintest") is not None:
+            # 2.2.14 (item 5): how deep Gaia went, and whether the frame's star count or the G cut set it.
+            self.log(f"  Gaia DR3: {gd['n']} stars to G {gd['faintest']:.1f}"
+                     + (f" (the brightest {gd['max_rows']}, about twice the stars seen on the frame)" if gd.get("capped")
+                        else f" (every star to G {core.GAIA_DEEP_G:g})")
+                     + ("; the frame's footprint from its plate solution" if gd.get("footprint") else "")
+                     + (f". {with_mag} labeled stars with {band} on the frame for about {diag['n_peaks']} star-like "
+                        "peaks." if diag.get("n_peaks") else "."))
         for cat, err in (diag.get("catalog_errors") or {}).items():
             self.log(f"  {cat} did not answer ({err}); its stars are missing this time. Solve again to retry.")
         if counts["B"] == 0 or counts["V"] == 0:
@@ -5776,6 +5923,23 @@ class App(Tk):
                  and math.hypot(x - self.target_xy[0], y - self.target_xy[1]) > 2 * r]
         if not stars:
             return
+        if len(stars) > 1500:
+            # 2.2.14 (item 5): with Gaia asked deep there can be ten thousand labeled stars; only those within a few
+            # magnitudes of the target can be suggested, so measure those (the target's catalog V, else a zero point
+            # from a sample of the field).
+            t_star = self._chart_star_at(self.target_xy)
+            t_cat = (t_star or {}).get("mag")
+            if t_cat is None:
+                sample = sorted(stars, key=lambda s_: s_[2]["mag"])[::max(1, len(stars) // 300)]
+                try:
+                    f_s, _ = core.measure_many(self.preview, np.asarray([(x, y) for x, y, _ in sample], dtype=float),
+                                               r, si, so)
+                    zp = [st["mag"] + 2.5 * math.log10(f) for (_x, _y, st), f in zip(sample, f_s) if f > 0]
+                    t_cat = t_inst + float(np.median(zp)) if len(zp) >= 5 else None
+                except Exception:
+                    t_cat = None
+            if t_cat is not None:
+                stars = [s_ for s_ in stars if abs(s_[2]["mag"] - t_cat) <= 3.5] or stars
         xy = np.asarray([(x, y) for x, y, _ in stars], dtype=float)
         try:
             flux, _ = core.measure_many(self.preview, xy, r, si, so)
@@ -6004,7 +6168,7 @@ class App(Tk):
             comp_mag = float(self.comp_mag.get()) if self.comp_mag.get().strip() else None
         except ValueError:
             comp_mag = None
-        comp_bands = self._bands_for("comp", comp_name)
+        comp_colors = self._colors_for("comp", comp_name)   # 2.2.14 (item 1)
         solution = dict(self.chart_solution) if (self.chart_solution and self.chart_placed) else None
         field_known = (list(self.field_variables), list(self.field_check_sources)) if self.field_check_sources else None
         # Catalog colors for scan stars that sit on a labeled chart star (for the color fit).
@@ -6016,10 +6180,11 @@ class App(Tk):
                 d = [math.hypot(px - cx, py - cy) for px, py in xy]
                 k = int(np.argmin(d))
                 if d[k] <= tol:
-                    mags = star["mags"]
-                    cat_color["bv"][k] = mags["B"] - mags["V"]
-                    if "R" in mags:
-                        cat_color["vr"][k] = mags["V"] - mags["R"]
+                    # 2.2.14 (item 1): each color from one catalog.
+                    for key in ("bv", "vr"):
+                        value = core.catalog_color(star, key)[0]
+                        if value is not None:
+                            cat_color[key][k] = value
         saved_cal = core.load_color_calibration() if color else None
         # Catalog magnitudes for the scan stars that sit on a labeled (non-variable) chart star: the ensemble zero
         # point that puts the whole scan on the catalog's scale (2.2).
@@ -6231,8 +6396,8 @@ class App(Tk):
                     zp = np.asarray(stats["zero_point"], dtype=float)
                     frame_ok = (zp - np.median(zp)) < 0.24
                     ci = labels.index(role_label("comp")) if role_label("comp") in labels else None
-                    comp_cat = {"bv": (comp_bands["B"] - comp_bands["V"]) if "B" in comp_bands and "V" in comp_bands else None,
-                                "vr": (comp_bands["V"] - comp_bands["R"]) if "V" in comp_bands and "R" in comp_bands else None}
+                    # 2.2.14 (item 1): the comp's colors, each from one catalog.
+                    comp_cat = {k: core.catalog_color(comp_colors, k)[0] for k in ("bv", "vr")}
                     for key, _b1, _b2, c1, c2 in core.COLOR_INDICES:
                         inst, fit, calibrated = core.field_star_colors(stacks[c1], stacks[c2], cat_color[key], frame_ok)
                         old = (saved_cal or {}).get(key)
@@ -6526,9 +6691,10 @@ class App(Tk):
         masters = self.masters
         precalibrated = self.precalibrated
         measure_color = bool(self.measure_color.get())
-        comp_bands = [self._bands_for(role, star.name) for role, star in zip(comp_roles, comps)]
-        cat_bv = core.ensemble_color(comp_bands, "B", "V")
-        cat_vr = core.ensemble_color(comp_bands, "V", "R")
+        # 2.2.14 (item 1): each comp's catalog color from ONE catalog (not B from Gaia against V from APASS).
+        comp_colors = [self._colors_for(role, star.name) for role, star in zip(comp_roles, comps)]
+        cat_bv, cat_bv_src = core.ensemble_catalog_color(comp_colors, "B", "V")
+        cat_vr, cat_vr_src = core.ensemble_catalog_color(comp_colors, "V", "R")
         cloud_fraction = self._cloud_fraction()
         ref_shape = self.preview.shape
 
@@ -6567,6 +6733,15 @@ class App(Tk):
             ):
                 return
 
+        # 2.2.14 (item 11): the series' catalog magnitudes as they are BEFORE tonight's picks overwrite them, so a star
+        # the series already has keeps the series' magnitude when the night is added (13-14 Oct: TYC 4006-1008-1 came
+        # in with Gaia's V 8.704 over the series' 8.728).
+        self._series_catalog_before = {
+            "comps": dict(self.comp_catalog_mags),
+            "spares": {n: float(i["mag"]) for n, i in self.spare_catalog.items() if i.get("mag") is not None},
+            "spare_coords": {n: (float(i["ra"]), float(i["dec"])) for n, i in self.spare_catalog.items()
+                             if i.get("ra") is not None and i.get("dec") is not None},
+        }
         # Spare comps: labeled stars near the comps' brightness, measured every frame so a comp
         # can be swapped later ("Use comps..." on the Output page) without reducing again.
         spares = []
@@ -6585,6 +6760,12 @@ class App(Tk):
             reasons = {}
             late = {}          # turned away after the catalog checks (kept across passes: those stars are not seen again)
             faint_edge = max(comp_mags) + 2.5
+            # 2.2.14 (item 3): a spare is kept only when the image's star is where the catalog puts it (within ~2 px,
+            # or the seeing): 2.2.13 kept any peak within the aperture radius, so a diamond could sit on a
+            # neighbour, and clicking it named nothing (C4/C5 on HD 219134).
+            seeing_now = self._seeing()
+            spare_tol = min(max(2.0, seeing_now if math.isfinite(seeing_now) else 2.0), radius)
+            t_inst_now = self._inst_at(self.target_xy)
             for widen in (2.5, 3.25, 4.0):
                 reasons = {}
                 picked = core.pick_spare_comps(self.chart_placed, avoid, ref_shape, radius, sky_out,
@@ -6603,22 +6784,35 @@ class App(Tk):
                     if name in taken:
                         continue
                     cx, cy, moved = core.recenter(self.preview, x, y, radius)
-                    if moved > radius:
+                    if moved > spare_tol:
                         late["not found where the catalog puts it"] = late.get("not found where the catalog puts it", 0) + 1
                         continue
                     if not peak_ok(cx, cy):
                         late["near saturation"] = late.get("near saturation", 0) + 1
                         continue
                     spares.append(core.Star(name=name, x=cx, y=cy, catalog_mag=float(star["mag"])))
+                    # 2.2.14 (items 1, 3, 6): the spare's whole record, so a click on its diamond adopts it (name, V,
+                    # every band, the colors from one catalog, other names, AAVSO sequence label), and how much fainter
+                    # than the target it is (instrumental, on this frame) when it came from a widened window.
+                    s_inst = self._inst_at((cx, cy))
+                    dm = s_inst - t_inst_now if math.isfinite(s_inst) and math.isfinite(t_inst_now) else None
                     self.spare_catalog[name] = {"mag": float(star["mag"]), "mags": dict(star.get("mags") or {}),
                                                 "catalog": star.get("catalog", ""), "ra": star.get("ra"),
-                                                "dec": star.get("dec")}
+                                                "dec": star.get("dec"), "colors": core.star_colors(star),
+                                                "aka": [n for n in core.star_names(star) if n != name],
+                                                "seq": star.get("seq"), "mag_source": dict(star.get("mag_source") or {}),
+                                                "fainter_than_target": round(dm, 2) if dm is not None else None,
+                                                "widened": widen > 2.5}
                     taken.add(name)
                 if len(spares) >= 3:
                     break
             if widen > 2.5:
                 self.log(f"Spare comps: thin field, so the brightness window was widened to {faint_edge:.1f} mag "
                          f"({widen:g} mag fainter than the comps); {len(spares)} spare(s) found.")
+                # 2.2.14 (item 6): in a widened window every spare says how much fainter than the target it is
+                # (hover on its diamond, the star panel when it is made a comp, and the log below).
+                for sp in spares:
+                    self.spare_catalog.get(sp.name, {})["widened"] = True
             for why, n in late.items():
                 reasons[why] = reasons.get(why, 0) + n
             if reasons:
@@ -6658,11 +6852,19 @@ class App(Tk):
                 self.log("Color: comp catalog colors unknown (no catalog lists B and V for them). "
                          "Only instrumental color differences will be reported.")
             else:
-                self.log(f"Color: comp catalog B-V {f'{cat_bv:.3f}' if cat_bv is not None else 'n/a'}, "
-                         f"V-R {f'{cat_vr:.3f}' if cat_vr is not None else 'n/a'} (ensemble mean).")
+                # 2.2.14 (item 1): which catalog each color came from (both bands from that one catalog).
+                self.log(f"Color: comp catalog B-V "
+                         + (f"{cat_bv:.3f} ({core.color_sources_text(cat_bv_src)})" if cat_bv is not None else "n/a")
+                         + ", V-R "
+                         + (f"{cat_vr:.3f} ({core.color_sources_text(cat_vr_src)})" if cat_vr is not None else "n/a")
+                         + " (ensemble mean; each color from one catalog).")
             if cal_stars:
-                self.log(f"Color calibration: {len(cal_stars)} labeled field stars with catalog B and V "
-                         f"({sum(1 for *_, st in cal_stars if 'R' in st['mags'])} with R), measured on about 40 frames.")
+                bv_src = [core.catalog_color(st, "bv")[1] for *_, st in cal_stars]
+                vr_src = [c for c in (core.catalog_color(st, "vr")[1] for *_, st in cal_stars) if c]
+                self.log(f"Color calibration: {len(cal_stars)} labeled field stars with catalog B-V "
+                         f"({core.color_sources_text(bv_src)}), {len(vr_src)} with V-R"
+                         + (f" ({core.color_sources_text(vr_src)})" if vr_src else "")
+                         + ", each color from one catalog, measured on about 40 frames.")
             elif self.chart_placed:
                 self.log(f"Color calibration: only {n_cal_found} usable labeled stars with catalog B and V "
                          "(5 needed) for a field fit.")
@@ -6675,8 +6877,12 @@ class App(Tk):
                          f"({saved_cal.get('star', '')}) will be used with the comps' catalog colors.{note}")
         self.spare_marks = [(sp.x, sp.y, sp.name) for sp in spares]
         if spares:
-            self.log(f"Spare comps measured every frame ({len(spares)}): "
-                     + ", ".join(f"{sp.name} ({sp.catalog_mag:.2f})" for sp in spares))
+            def spare_words(sp):
+                info = self.spare_catalog.get(sp.name) or {}
+                if info.get("widened") and info.get("fainter_than_target") is not None:
+                    return f"{sp.name} ({sp.catalog_mag:.2f}, {_fainter_text(info['fainter_than_target'])})"   # item 6
+                return f"{sp.name} ({sp.catalog_mag:.2f})"
+            self.log(f"Spare comps measured every frame ({len(spares)}): " + ", ".join(spare_words(sp) for sp in spares))
         elif self.chart_placed:
             self.log("Spare comps: no labeled star near the comps' brightness passed the checks.")
         else:
@@ -6692,11 +6898,19 @@ class App(Tk):
         self.comp_catalog_mags.update({comp.name: float(comp.catalog_mag) for comp in comps})
         self.log(f"Photometry on {len(lights)} lights, {len(self.rejected)} rejected, aperture {radius:.1f} px, {mode} channel")
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
+        # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
-            "bv": np.array([st["mags"]["B"] - st["mags"]["V"] for *_, st in cal_stars], dtype=float),
-            "vr": np.array([st["mags"]["V"] - st["mags"]["R"] if "R" in st["mags"] else np.nan for *_, st in cal_stars],
-                           dtype=float),
+            key: np.array([np.nan if core.catalog_color(st, key)[0] is None else core.catalog_color(st, key)[0]
+                           for *_, st in cal_stars], dtype=float)
+            for key in ("bv", "vr")
         }
+        # 2.2.14 (item 1): which catalogs the colors came from, for the color log and the Output panel.
+        color_catalogs = {}
+        for key in core.COLOR_BANDS:
+            stars_src = [core.catalog_color(st, key)[1] for *_, st in cal_stars if core.catalog_color(st, key)[0] is not None]
+            comp_src = cat_bv_src if key == "bv" else cat_vr_src
+            color_catalogs[key] = {"field": core.color_sources_text(stars_src) if stars_src else "",
+                                   "comps": core.color_sources_text(comp_src) if comp_src else ""}
         cal_step = max(1, len(lights) // 40)
         cancel = self._cancel
         self._progress_start(len(lights), "Photometry")
@@ -6848,7 +7062,8 @@ class App(Tk):
                         offsets[key] = float(np.median(comp_off)) if comp_off.size else None
                 used = core.apply_color_calibration(night_points, fits, offsets, saved_cal,
                                                     {"bv": cat_bv, "vr": cat_vr})
-                color_info = {"fits": fits, "used": used, "frames": n_frames, "saved": saved_cal}
+                color_info = {"fits": fits, "used": used, "frames": n_frames, "saved": saved_cal,
+                              "catalogs": color_catalogs}   # 2.2.14 (item 1)
             self.call_ui(self._photometry_done, night_points, mode, color_info)
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
@@ -6931,8 +7146,8 @@ class App(Tk):
                     "Different comps put each night on its own zero point."
                 )
             if plan:
-                warning += ("\n\nSame stars under other catalog names: "
-                            + "; ".join(f"{a} is {b}" for a, b in plan["renamed"].items())
+                # 2.2.14 (item 11): names AND catalog magnitudes, watch stars and spares too.
+                warning += ("\n\nOne star, one name: " + "; ".join(self._same_star_words(plan))
                             + ". Yes uses the series' names and catalog magnitudes for this night.")
             # 2.2.3: compare this night's reduction settings with every other night's in the series.
             others = {n: info for n, info in self.night_bin.items() if n != night}
@@ -6974,6 +7189,7 @@ class App(Tk):
         replaced = False
         if append and plan:
             self._apply_same_star_plan(plan, night_points)
+        self._series_catalog_before = None   # 2.2.14 (item 11): used once, by this night's plan
         if append:
             if any(o.night == night for o in self.observations):
                 self.observations = [o for o in self.observations if o.night != night]
@@ -7244,6 +7460,7 @@ class App(Tk):
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
         if isinstance(meta.get("watch_list"), list):
+            self._drop_session_watch_aliases([w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name")])
             known = {w["name"] for w in self.watch_list}
             self.watch_list += [w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name") not in known]
             # 2.2.14 (item 15): show them at once (14 Oct: the box stayed empty after Load series): found on an
@@ -7287,6 +7504,30 @@ class App(Tk):
                     if os.path.basename(path) in names:
                         restored.append(path)
             self.rejected.update(restored)
+
+    def _drop_session_watch_aliases(self, series_watch: list):
+        """2.2.14 (item 11): loading a series never keeps a session watch star that is one of the series' watch stars
+        under another name (13 Oct: TYC 4006-1310-1 next to the series' APASS J231239.3+565553, 0.3" apart, which came
+        back with 0 points). The session entry gives way to the series' (its spot on this frame moves over); logged."""
+        if not self.watch_list or not series_watch:
+            return
+        series_names = [w["name"] for w in series_watch]
+        coords = {w["name"]: (float(w["ra"]), float(w["dec"])) for w in list(series_watch) + list(self.watch_list)
+                  if w.get("ra") is not None and w.get("dec") is not None}
+        index = self._name_index() if self.chart_placed else {}
+        keep = []
+        for w in self.watch_list:
+            name = w.get("name")
+            match = None if name in series_names else self._same_series_star(name, series_names, coords, index)
+            if match is None:
+                keep.append(w)
+                continue
+            xy = self.watch_xy.pop(name, None)
+            if xy is not None:
+                self.watch_xy.setdefault(match, xy)
+            self.log(f"Watch star {name} is {match} in the series (same star): the series' name is kept, "
+                     f"{name} dropped from the watch list.")
+        self.watch_list = keep
 
     def _write_series(self, path: str):
         # 2.2.14 (item 17): keep one version back. The first write to a file in a session (Save series, or the
@@ -7530,6 +7771,15 @@ class App(Tk):
             else:
                 text += " (untransformed)"
                 untransformed = True
+            # 2.2.14 (item 1): which catalogs the catalog colors came from (each star's two bands from one catalog).
+            cats = []
+            for n in sorted(per_night):
+                c = (((self.color_cal.get(n) or {}).get("catalogs") or {}).get(key) or {})
+                for part in ((f"field {c['field']}" if c.get("field") else ""), (f"comps {c['comps']}" if c.get("comps") else "")):
+                    if part and part not in cats:
+                        cats.append(part)
+            if cats:
+                text += " [catalog colors: " + "; ".join(cats) + "]"
             parts.append(text)
         if parts:
             tail = (" Untransformed colors are approximate: tick 'Also measure R and B' (with the image solved) "
@@ -7566,8 +7816,16 @@ class App(Tk):
                 text = f"calibrated with the color term saved {str(saved.get('date', ''))[:10]}"
             else:
                 text ="not calibrated (comps' catalog color plus the raw channel difference, or relative to the comps)"
+            cats = (info.get("catalogs") or {}).get(key) or {}
+            if cats.get("field") or cats.get("comps"):
+                # 2.2.14 (item 1): each star's color from one catalog; say which.
+                text += " — catalog colors: " + "; ".join(
+                    part for part in ((f"field stars {cats['field']}" if cats.get("field") else ""),
+                                      (f"comps {cats['comps']}" if cats.get("comps") else "")) if part)
             self.log(f"  {names[key]}: {text}")
         self.color_cal[night] = {"fits": fits, "used": used}
+        if info.get("catalogs"):
+            self.color_cal[night]["catalogs"] = info["catalogs"]
         good = {k: f for k, f in fits.items() if f and not f.get("problem")}
         if good:
             saved = core.load_color_calibration() or {}
@@ -8326,37 +8584,199 @@ class App(Tk):
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Note for {night} " + ("saved." if text else "removed."))
 
+    def _name_index(self) -> dict:
+        """2.2.14 (item 11): {normalised name: labeled star} for every name a labeled star answers to (its catalogs'
+        IDs, AAVSO AUID and label) and the known variables on it (VSX/SIMBAD: V1441 Cas is TYC 4006-670-1)."""
+        index = {}
+        for _x, _y, star in self.chart_placed:
+            names = list(core.star_names(star)) + [str(v.get("name")) for v in star.get("variable") or []
+                                                   if isinstance(v, dict) and v.get("name")]
+            for n in names:
+                index.setdefault(" ".join(n.lower().split()), star)
+        return index
+
+    @staticmethod
+    def _names_of(name: str, index: dict) -> set:
+        star = index.get(" ".join(str(name).lower().split()))
+        if star is None:
+            return {name}
+        names = set(core.star_names(star)) | {str(v.get("name")) for v in star.get("variable") or []
+                                              if isinstance(v, dict) and v.get("name")}
+        return names | {name}
+
+    def _series_star_coords(self) -> dict:
+        """2.2.14 (item 11): sky positions of every star the series and tonight know by name: comps and check
+        (comp_coords), spares (spare_catalog, as before tonight's picks too) and watch stars."""
+        coords = {name: (float(rd[0]), float(rd[1])) for name, rd in self.comp_coords.items()
+                  if rd and rd[0] is not None and rd[1] is not None}
+        before = getattr(self, "_series_catalog_before", None) or {}
+        for name, rd in (before.get("spare_coords") or {}).items():
+            coords.setdefault(name, rd)
+        for name, info in self.spare_catalog.items():
+            if info.get("ra") is not None and info.get("dec") is not None:
+                coords.setdefault(name, (float(info["ra"]), float(info["dec"])))
+        for w in self.watch_list:
+            if w.get("ra") is not None and w.get("dec") is not None:
+                coords.setdefault(w["name"], (float(w["ra"]), float(w["dec"])))
+        return coords
+
+    def _same_series_star(self, name: str, candidates, coords: dict, index: dict, xy_of: dict | None = None):
+        """2.2.14 (item 11): the series star (one of `candidates`) that `name` is, or None: the same name; one of the
+        labeled star's other names (either way round, known variables included); within WATCH_SAME_ARCSEC on the
+        sky; or (xy_of, tonight's pixel positions) within 2 px on this frame."""
+        candidates = [c for c in candidates if c]
+        if name in candidates:
+            return name
+        mine = self._names_of(name, index)
+        for c in candidates:
+            if c in mine or name in self._names_of(c, index):
+                return c
+        best = None
+        rd = coords.get(name)
+        if rd is not None:
+            for c in candidates:
+                rc = coords.get(c)
+                if rc is None:
+                    continue
+                d = core.sky_separation_arcsec(rd[0], rd[1], rc[0], rc[1])
+                if d <= WATCH_SAME_ARCSEC and (best is None or d < best[0]):
+                    best = (d, c)
+        if best is None and xy_of and xy_of.get(name) is not None:
+            p = xy_of[name]
+            for c in candidates:
+                q = xy_of.get(c)
+                if q is not None and math.hypot(p[0] - q[0], p[1] - q[1]) < 2.0:
+                    return c
+        return best[1] if best else None
+
     def _same_star_plan(self, prev_comps, prev_check):
         """2.2.8: tonight's comps and check matched to the series' stars by sky position (3", as same_star_aliases).
         Returns {"comps", "check", "renamed": {tonight's name: series name}} or None when nothing matches. A comp is
         matched only when the series knows its catalog magnitude. Without sky positions names are compared as
-        before."""
-        if not prev_comps and not prev_check:
+        before.
+        2.2.14 (item 11, one star, one name per series): a comp, check, watch star or spare that is a series star (by
+        any of its catalog names, a known variable's name on it, or within WATCH_SAME_ARCSEC) takes the SERIES' name
+        and the series' catalog magnitude, whatever tonight's catalogs say. Extra keys: "remag" {series name:
+        (tonight's V, series V)}, "check_mag" (tonight's, series'), "watch" and "spares" {tonight's name: series
+        name}, "spare_remag" {name: (tonight's, series')}."""
+        series_spares, series_watch = [], []
+        for o in self.observations:
+            for n in o.spare_insts:
+                if n not in series_spares:
+                    series_spares.append(n)
+            for n in getattr(o, "watch_insts", {}) or {}:
+                if n not in series_watch:
+                    series_watch.append(n)
+        if not prev_comps and not prev_check and not series_spares and not series_watch:
             return None
+        before = getattr(self, "_series_catalog_before", None) or {}
+        tonight_cat = self._comp_catalog()
+
+        def series_mag(name):
+            for src in (before.get("comps") or {}, before.get("spares") or {}, tonight_cat):
+                if src.get(name) is not None:
+                    return float(src[name])
+            return None
+
         aliases = self._star_aliases()
-        catalog = self._comp_catalog()
+        coords = self._series_star_coords()
+        index = self._name_index() if self.chart_placed else {}
         renamed = {}
         new_comps = list(self.comps_used)
+        comp_candidates = list(prev_comps) + [s for s in series_spares if s not in prev_comps]
         for i, name in enumerate(new_comps):
             if name in prev_comps:
                 continue
+            # 2.2.8: within 3" (same_star_aliases) of a series comp the series knows the magnitude of …
             match = next((p for p in prev_comps if p in aliases.get(name, ()) and p not in new_comps
-                          and catalog.get(p) is not None), None)
+                          and series_mag(p) is not None), None)
+            if not match:
+                # … 2.2.14: or any series comp or spare under another of its names / within 4".
+                match = self._same_series_star(name, [p for p in comp_candidates if p not in new_comps
+                                                      and series_mag(p) is not None], coords, index)
             if match:
                 new_comps[i] = match
                 renamed[name] = match
+        remag = {}
+        for orig, final in zip(self.comps_used, new_comps):
+            if final not in prev_comps and final not in series_spares:
+                continue
+            sm, tm = series_mag(final), tonight_cat.get(orig)
+            if sm is not None and tm is not None and abs(float(sm) - float(tm)) > 0.0005:
+                remag[final] = (float(tm), float(sm))
         new_check = self.check_used
-        if prev_check and new_check and new_check != prev_check and prev_check in aliases.get(new_check, ()):
+        if prev_check and new_check and new_check != prev_check and (
+                prev_check in aliases.get(new_check, ())
+                or self._same_series_star(new_check, [prev_check], coords, index) == prev_check):
             renamed[new_check] = prev_check
             new_check = prev_check
-        if not renamed:
+        check_mag = None
+        series_check = getattr(self, "_series_check", ("", ""))
+        if new_check and new_check == series_check[0] and str(series_check[1]).strip():
+            try:
+                s_k, t_k = float(series_check[1]), float(self.check_mag.get())
+                if abs(s_k - t_k) > 0.0005:
+                    check_mag = (t_k, s_k)
+            except (TypeError, ValueError):
+                pass
+        watch = {}
+        tonight_watch = list(self.watch_xy)
+        for name in tonight_watch:
+            if name in series_watch:
+                continue
+            match = self._same_series_star(name, series_watch, coords, index, self.watch_xy)
+            if match:
+                watch[name] = match
+        spares, spare_remag = {}, {}
+        tonight_spares = [m[2] for m in self.spare_marks]
+        for name in tonight_spares:
+            if name in series_spares:
+                continue
+            match = self._same_series_star(name, [s for s in series_spares if s not in tonight_spares
+                                                  and s not in new_comps], coords, index)
+            if match:
+                spares[name] = match
+        for name in tonight_spares:
+            final = spares.get(name, name)
+            if final not in series_spares:
+                continue
+            sm = (before.get("spares") or {}).get(final)
+            tm = (self.spare_catalog.get(name) or {}).get("mag")
+            if sm is not None and tm is not None and abs(float(sm) - float(tm)) > 0.0005:
+                spare_remag[final] = (float(tm), float(sm))
+        if not (renamed or remag or check_mag or watch or spares or spare_remag):
             return None
-        return {"comps": new_comps, "check": new_check, "renamed": renamed}
+        return {"comps": new_comps, "check": new_check, "renamed": renamed, "remag": remag, "check_mag": check_mag,
+                "watch": watch, "spares": spares, "spare_remag": spare_remag}
+
+    @staticmethod
+    def _same_star_words(plan) -> list[str]:
+        """2.2.14 (item 11): the plan in words, for the add-night question and the log."""
+        out = [f"{a} is {b}" for a, b in plan["renamed"].items()]
+        out += [f"watch star {a} is {b}" for a, b in (plan.get("watch") or {}).items()]
+        out += [f"spare {a} is {b}" for a, b in (plan.get("spares") or {}).items()]
+        out += [f"{n}: the series' V {s:.3f}, not tonight's {t:.3f}" for n, (t, s) in (plan.get("remag") or {}).items()]
+        if plan.get("check_mag"):
+            t, s = plan["check_mag"]
+            out.append(f"check {plan['check']}: the series' V {s:.3f}, not tonight's {t:.3f}")
+        return out
 
     def _apply_same_star_plan(self, plan, night_points):
         """Give tonight's stars the series' names and catalog magnitudes, and re-derive the night with them (Gaia's
-        synthetic V and Tycho's V differ by tenths, which would shift this night's zero point)."""
+        synthetic V and Tycho's V differ by tenths, which would shift this night's zero point).
+        2.2.14 (item 11): also the series' magnitude for a comp of the same name, the check star's series magnitude,
+        and watch stars and spares measured under another name are moved to the series' name (one star, one name);
+        every change is logged."""
         catalog = self._comp_catalog()
+        before = getattr(self, "_series_catalog_before", None) or {}
+        for name, (_t, s) in (plan.get("remag") or {}).items():
+            catalog[name] = s
+        for old, new in plan["renamed"].items():
+            if new not in catalog:
+                for src in (before.get("comps") or {}, before.get("spares") or {}):
+                    if src.get(new) is not None:
+                        catalog[new] = float(src[new])
+                        break
         aliases = self._star_aliases()
         series_check = getattr(self, "_series_check", ("", ""))
         for old, new in plan["renamed"].items():
@@ -8374,18 +8794,71 @@ class App(Tk):
                     entry["name"] = new
             if old in self.comp_coords and new not in self.comp_coords:
                 self.comp_coords[new] = self.comp_coords[old]
+            if old in self.seq_auids and new not in self.seq_auids:
+                self.seq_auids[new] = self.seq_auids[old]
+        # 2.2.14 (item 11): a comp of the series' own name takes the series' catalog magnitude.
+        for name, (_t, s) in (plan.get("remag") or {}).items():
+            for r in COMP_ROLES:
+                if getattr(self, f"{r}_name").get().strip() == name:
+                    getattr(self, f"{r}_mag").set(f"{s:.3f}")
+        for name in plan["comps"]:
+            if catalog.get(name) is not None and (name in (plan.get("remag") or {}) or name in plan["renamed"].values()):
+                self.comp_catalog_mags[name] = float(catalog[name])
+        if plan.get("check_mag"):
+            self.check_mag.set(str(series_check[1]).strip())
         comps_changed = plan["comps"] != self.comps_used
         self.comps_used = list(plan["comps"])
         self.check_used = plan["check"]
-        if comps_changed:
+        if comps_changed or plan.get("remag"):
             try:
                 core.recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
             except ValueError as exc:
                 self.log(f"Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
-            self.log(f"{old} is {new} (same star, within 3\"): series name"
+            self.log(f"{old} is {new} (same star): series name"
                      + (f" and V {mag:.3f}" if mag is not None and new in self.comps_used else "") + " used.")
+        for name, (t, s) in (plan.get("remag") or {}).items():
+            if name not in plan["renamed"].values():
+                self.log(f"{name}: the series' catalog V {s:.3f} used for this night, not tonight's {t:.3f} "
+                         f"(the night moves {s - t:+.3f} mag with it).")
+        if plan.get("check_mag"):
+            t, s = plan["check_mag"]
+            self.log(f"Check star {plan['check']}: the series' catalog V {s:.3f} used, not tonight's {t:.3f}.")
+        # 2.2.14 (item 11): watch stars and spares measured under another name join the series' star.
+        for kind, mapping, key in (("Watch star", plan.get("watch") or {}, "w"), ("Spare", plan.get("spares") or {}, "s")):
+            for old, new in mapping.items():
+                for o in night_points:
+                    store = o.watch_insts if key == "w" else o.spare_insts
+                    if old in store:
+                        value = store.pop(old)
+                        store.setdefault(new, value)
+                    pos = (o.pos or {}).get(key)
+                    if isinstance(pos, dict) and old in pos:
+                        p = pos.pop(old)
+                        pos.setdefault(new, p)
+                if key == "w":
+                    if any(w["name"] == new for w in self.watch_list):
+                        self.watch_list = [w for w in self.watch_list if w["name"] != old]
+                    else:
+                        for w in self.watch_list:
+                            if w["name"] == old:
+                                w["name"] = new
+                    if old in self.watch_xy:
+                        xy = self.watch_xy.pop(old)
+                        self.watch_xy.setdefault(new, xy)
+                else:
+                    info = self.spare_catalog.pop(old, None)
+                    if info is not None and new not in self.spare_catalog:
+                        self.spare_catalog[new] = info
+                    self.spare_marks = [(x, y, new if n == old else n) for x, y, n in self.spare_marks]
+                self.log(f"{kind} {old} is {new} in the series (same star): measured under the series' name.")
+        for name, (t, s) in (plan.get("spare_remag") or {}).items():
+            if name in self.spare_catalog:
+                self.spare_catalog[name]["mag"] = s
+            self.log(f"Spare {name}: the series' catalog V {s:.3f} kept, not tonight's {t:.3f}.")
+        if plan.get("watch"):
+            self._refresh_watch_box()
 
     def _adopt_series_names(self, night_points, prev_comps, prev_check):
         """Plan and apply at once (kept for callers and tests)."""
