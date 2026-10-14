@@ -2546,7 +2546,7 @@ def _gaia_esa(ra_deg: float, dec_deg: float, radius_deg: float, band: str, glimi
 
 
 def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", glimit: float = 17.0,
-                   max_rows: int = 3000, polygon=None) -> list[dict]:
+                   max_rows: int = 3000, polygon=None, status: dict | None = None) -> list[dict]:
     """Gaia DR3 from the ESA archive, with Johnson-Kron-Cousins synthetic photometry (GSPC) where it exists.
     Positions are epoch 2016.0 and are moved to now with Gaia proper motions.
     2.2.14 (item 5): asked deeper than the archive's 3000 brightest (glimit > 17, more rows, or the frame's
@@ -2589,6 +2589,12 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
         t.join(GAIA_ESA_TIMEOUT_S + 2.0 * GAIA_VIZIER_TIMEOUT_S)
     esa = results.get("esa", ("error", TimeoutError("no answer")))
     viz = results.get("deep", ("error", TimeoutError("no answer")))
+    if status is not None:
+        # 2.2.14 (review S3): which half answered, so the solve can say what is missing tonight.
+        status.update({"esa": "ok" if esa[0] == "ok" else str(esa[1]).splitlines()[0][:120],
+                       "deep": "ok" if viz[0] == "ok" else str(viz[1]).splitlines()[0][:120],
+                       "esa_faintest": max((s_.get("bright") or 0.0 for s_ in esa[1]), default=None) if esa[0] == "ok"
+                       else None})
     if esa[0] != "ok" and viz[0] != "ok":
         raise ConnectionError(f"Gaia archive: {esa[1]}\nVizieR Gaia DR3: {viz[1]}")
     return combine_gaia(esa[1] if esa[0] == "ok" else [], viz[1] if viz[0] == "ok" else [], max_rows)
@@ -2677,7 +2683,7 @@ def fetch_comparison_stars(catalog: str, ra_hours: float, dec_deg: float, fov_ar
     box = footprint_box(polygon, ra_deg, dec_deg) if polygon else None
     if catalog == "Gaia DR3":
         return fetch_gaia_dr3(ra_deg, dec_deg, radius_deg, band, float(depth.get("glimit", 17.0)),
-                              int(depth.get("max_rows", 3000)), polygon), ""
+                              int(depth.get("max_rows", 3000)), polygon, depth.get("status")), ""
     if catalog == "APASS DR9":
         return fetch_apass9(ra_deg, dec_deg, radius_deg, band, int(depth.get("max_rows", 3000)), box), ""
     if catalog == "Tycho-2":
@@ -3586,6 +3592,7 @@ VARIABLE_OTYPES = {
 COLOR_BANDS = {"bv": ("B", "V"), "vr": ("V", "R")}
 COLOR_ORDER = {"bv": ("AAVSO sequence", "APASS DR9", "Gaia DR3", "Tycho-2"),
                "vr": ("AAVSO sequence", "Gaia DR3")}
+APASS_SATURATES_V = 10.0   # review: brighter than this, Gaia GSPC's B-V comes before APASS's
 
 
 def _pair_from(mags: dict, first: str, second: str):
@@ -3612,7 +3619,13 @@ def catalog_color(star: dict, key: str = "bv") -> tuple[float | None, str]:
         return None, ""
     src = star.get("sources")
     if isinstance(src, dict) and src:
-        for cat in COLOR_ORDER[key]:
+        order = COLOR_ORDER[key]
+        apass_v = ((src.get("APASS DR9") or {}).get("mags") or {}).get("V")
+        if apass_v is not None and float(apass_v) < APASS_SATURATES_V and "Gaia DR3" in order:
+            # review: APASS saturates brighter than about V 10; Gaia's GSPC is the better B-V there.
+            order = tuple(c for c in order if c != "APASS DR9")
+            order = order[:order.index("Gaia DR3") + 1] + ("APASS DR9",) + order[order.index("Gaia DR3") + 1:]
+        for cat in order:
             entry = src.get(cat)
             if not entry:
                 continue
