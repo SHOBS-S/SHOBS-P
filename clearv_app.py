@@ -538,6 +538,7 @@ class App(Tk):
         self.active_comps = []
         self._cancel = threading.Event()
         self.align_flip = BooleanVar(value=False)
+        self.pier_segments = BooleanVar(value=False)   # 2.2.14 (item 20): each pier side normalised on its own
         self.period_bins = StringVar(value="10 min bins")
         self.night_bin = {}
         self.legacy_mixed = set()
@@ -545,6 +546,11 @@ class App(Tk):
         self.scan_marks = []
         self.chart_solution = None
         self.catalog_period = None
+        self.catalog_epoch = None       # 2.2.14 (item 13): VSX epoch (HJD) and type, for times of max/min and O-C
+        self.catalog_var_type = ""
+        self.extremum_csv = ""          # 2.2.14 (item 13): the times-of-extremum CSV chosen this session
+        self._loss_report = {}          # 2.2.14 (item 18): {night: light-loss episodes} from the last cloud check
+        self._pier_cache = {}           # 2.2.14 (item 20): pier sides of nights saved without them
         self.busy = False
         self._ui_queue = queue.Queue()
         self._photo_view = None            # zoomed view of the Photometry image: (xlim, ylim, shape)
@@ -1702,6 +1708,8 @@ class App(Tk):
         self.star_bands = {}
         self.suggested_comps = []
         self.catalog_period = None
+        self.catalog_epoch = None   # 2.2.14 (item 13)
+        self.catalog_var_type = ""
         self.chart.set("")
         if hasattr(self, "pick_label"):
             self._update_pick_label()
@@ -1957,6 +1965,8 @@ class App(Tk):
         self.ra_hours.set(f"{found['ra_hours']:.6f}")
         self.dec_deg.set(f"{found['dec_deg']:.5f}")
         self.catalog_period = found.get("period_days")
+        self.catalog_epoch = found.get("epoch_jd")   # 2.2.14 (item 13): for O-C on the Output page
+        self.catalog_var_type = found.get("var_type") or ""
         extra = ""
         if self.catalog_period:
             extra = f"   VSX period {self.catalog_period:.6f} d"
@@ -6654,10 +6664,16 @@ class App(Tk):
         self.series_mode = self.mode_key
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self.night_bin[night] = self._night_setup()
+        self.night_bin[night]["pier"] = self._night_pier(night_points)   # 2.2.14 (item 20)
         self._refresh_period()
         flagged = sum(1 for obs in night_points if obs.flag)
         clouds = sum(1 for obs in night_points if "cloud" in obs.flag.split())
-        self.log(f"Photometry done: {len(night_points)} points, {flagged} flagged ({clouds} cloud).")
+        hazy = sum(1 for obs in night_points if core.HAZE_FLAG in obs.flag.split())   # 2.2.14 (item 18)
+        self.log(f"Photometry done: {len(night_points)} points, {flagged} flagged ({clouds} cloud"
+                 + (f", {hazy} {core.HAZE_LABEL}" if hazy else "") + ").")
+        if hazy:
+            self._offer_keep_transmission(night)
+            self._refresh_period()
         self._noise_note(night_points)
         self._warn_edges(night, night_points)
         self.draw_output()
@@ -6723,6 +6739,68 @@ class App(Tk):
             out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
         return out
 
+    @staticmethod
+    def _night_pier(night_points) -> dict:
+        """2.2.14 (item 20): a night's pier sides from the first readable header of each segment (before / after the
+        meridian flip): ROTATOR (camera angle), else PIERSIDE, else the flip seen in the image orientation."""
+        def first_header(points):
+            for o in points[:5]:
+                try:
+                    return core.read_header(o.path)
+                except Exception:
+                    continue
+            return None
+
+        pts = sorted(night_points, key=lambda o: o.jd)
+        before = [o for o in pts if o.segment != "flip"]
+        after = [o for o in pts if o.segment == "flip"]
+        hb, ha = first_header(before), first_header(after)
+        return core.night_pier_info(core.header_rotator(hb) if hb else None, core.header_rotator(ha) if ha else None,
+                                    (hb or {}).get("PIERSIDE"), (ha or {}).get("PIERSIDE"), has_flip=bool(after))
+
+    def _pier_by_night(self) -> dict:
+        """2.2.14 (item 20): {night: pier info} for the series. Nights saved before 2.2.14 get theirs from their
+        frames' headers when the files are still there (then stored with the series), else from the flip alone."""
+        out = {}
+        by_night: dict = {}
+        for o in self.observations:
+            by_night.setdefault(o.night, []).append(o)
+        for night, pts in by_night.items():
+            info = self.night_bin.get(night)
+            if isinstance(info, dict) and isinstance(info.get("pier"), dict):
+                out[night] = info["pier"]
+                continue
+            # Headers are read once per night and session (the files may be on a drive that is not there).
+            cache = self._pier_cache
+            key = (night, len(pts), sum(1 for o in pts if o.segment == "flip"))
+            if key not in cache:
+                cache[key] = self._night_pier(pts)
+            pier = cache[key]
+            out[night] = pier
+            if pier.get("source") in ("ROTATOR", "PIERSIDE"):
+                if not isinstance(info, dict):
+                    info = {}
+                    self.night_bin[night] = info
+                info["pier"] = pier
+        # A night known only from its flip: before the flip is the same pier side every night on a German mount, so
+        # it takes the side names the campaign's ROTATOR / PIERSIDE nights give the two halves.
+        pairs = [(p["before"], p["after"]) for p in out.values()
+                 if p.get("source") in ("ROTATOR", "PIERSIDE") and p.get("before") and p.get("after")]
+        if pairs:
+            usual = max(set(pairs), key=pairs.count)
+            for night, p in list(out.items()):
+                if p.get("source") == "flip":
+                    out[night] = dict(p, before=usual[0], after=usual[1],
+                                      note=p.get("note", "") + f"; named {usual[0]}/{usual[1]} like the other nights")
+        return out
+
+    def _pier_values(self, points, values):
+        """2.2.14 (item 20): 'Pier side as segments': each side moved onto the reference side's level.
+        Returns (values, side_offsets result)."""
+        sides = core.point_sides(points, self._pier_by_night())
+        offs = core.side_offsets(points, values, sides)
+        return core.apply_side_offsets(sides, values, offs["offsets"]), offs
+
     def _usable(self) -> list:
         """Observations that go into the period search and the AAVSO report."""
         if not self.skip_flagged.get():
@@ -6736,7 +6814,84 @@ class App(Tk):
             return 0.20
 
     def _apply_cloud(self) -> int:
-        return core.apply_cloud_flags(self.observations, self._cloud_fraction())
+        # 2.2.14 (item 18): smooth, even fades under a flat sky are transmission loss (dew/haze), flagged "haze";
+        # nights where the user chose to keep them stay unflagged. The episodes are kept for the night table.
+        keep = {n for n, info in self.night_bin.items() if isinstance(info, dict) and info.get("keep_transmission")}
+        self._loss_report = {}
+        return core.apply_cloud_flags(self.observations, self._cloud_fraction(), keep_nights=keep,
+                                      report=self._loss_report)
+
+    def _transmission_summary(self, night: str) -> tuple[int, str]:
+        """2.2.14 (item 18): (frames, words) of a night's transmission-loss stretches, e.g. (120, '00:15–02:25, down
+        to 0.94 mag'); (0, '') when there are none."""
+        eps = [e for e in (self._loss_report or {}).get(night, []) if e["kind"] == "transmission"]
+        if not eps:
+            return 0, ""
+        parts = []
+        for e in eps:
+            try:
+                a = core.jd_to_datetime_utc(e["jd"][0]).astimezone()
+                b = core.jd_to_datetime_utc(e["jd"][1]).astimezone()
+                when = f"{a:%H:%M}–{b:%H:%M}"
+            except (OverflowError, ValueError, OSError):
+                when = f"JD {e['jd'][0]:.3f}–{e['jd'][1]:.3f}"
+            parts.append(f"{when}, down to {e['max_depth']:.2f} mag")
+        return sum(len(e["frames"]) for e in eps), "; ".join(parts)
+
+    def _offer_keep_transmission(self, night: str) -> None:
+        """2.2.14 (item 18): after photometry, a night whose lost light is transmission loss (all stars fading
+        together, smoothly, flat sky) is offered back instead of the blanket cloud cut."""
+        n, words = self._transmission_summary(night)
+        if not n:
+            return
+        self.log(f"{self.label_nights(night)}: {n} frames with {core.HAZE_LABEL} ({words}): every measured star "
+                 "faded together, smoothly, with a flat sky; the differential magnitudes hold, only the noise grows.")
+        keep = messagebox.askyesno(
+            APP_TITLE,
+            f"{n} frames of {self.night_label(night, short=True)} lost light ({words}), but every measured star "
+            "(comps, check, spares) faded by the same amount, smoothly, with a flat sky: "
+            f"{core.HAZE_LABEL}, not cloud.\n\nKeep these points (errors scaled for the lost light)?\n\n"
+            "Yes keeps them: each frame's photon error already comes from its own (reduced) fluxes, and "
+            "scintillation is a fraction of the light that arrives, so the error bars grow where the light is lost. "
+            "No leaves them flagged, like cloud. Transmission loss… on the Output page changes this later.")
+        self._set_keep_transmission(night, keep)
+
+    def _set_keep_transmission(self, night: str, keep: bool) -> None:
+        info = self.night_bin.get(night)
+        if not isinstance(info, dict):
+            info = {}
+            self.night_bin[night] = info
+        if keep:
+            info["keep_transmission"] = True
+        else:
+            info.pop("keep_transmission", None)
+        self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} points "
+                 + ("kept (errors follow the reduced light)." if keep else "left out (flagged)."))
+
+    def edit_transmission(self):
+        """2.2.14 (item 18): keep or leave out a night's transmission-loss points (the highlighted night, or the
+        only night that has some)."""
+        self._apply_cloud()
+        nights = [n for n in sorted({o.night for o in self.observations}) if self._transmission_summary(n)[0]]
+        if not nights:
+            messagebox.showinfo(APP_TITLE, f"No night has {core.HAZE_LABEL} at the current cloud limit. (Lost light "
+                                           "that is patchy, fast, or comes with a brighter sky stays flagged cloud.)")
+            return
+        night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
+        if night is None:
+            messagebox.showinfo(APP_TITLE, "Nights with " + core.HAZE_LABEL + ": "
+                                + ", ".join(self.night_label(n, short=True) for n in nights)
+                                + ".\n\nClick one in the night table first, then Transmission loss… again.")
+            return
+        n, words = self._transmission_summary(night)
+        kept = bool((self.night_bin.get(night) or {}).get("keep_transmission"))
+        keep = messagebox.askyesno(
+            APP_TITLE,
+            f"{self.night_label(night, short=True)}: {n} frames with {core.HAZE_LABEL} ({words}); now "
+            + ("kept" if kept else "left out") + ".\n\nKeep these points (errors scaled for the lost light)?")
+        if keep != kept:
+            self._set_keep_transmission(night, keep)
+            self.refit_period()
 
     def cancel_job(self):
         if not self.busy:
@@ -6817,6 +6972,7 @@ class App(Tk):
         meta["comp_catalog_mags"] = self.comp_catalog_mags
         meta["active_comps"] = list(self.active_comps)
         meta["align_flip"] = bool(self.align_flip.get())
+        meta["pier_segments"] = bool(self.pier_segments.get())   # 2.2.14 (item 20)
         meta["period_bins"] = self.period_bins.get()
         meta["night_binning"] = self.night_bin
         meta["legacy_mixed_nights"] = sorted(self.legacy_mixed)
@@ -6896,6 +7052,7 @@ class App(Tk):
         self.active_comps = list(meta.get("active_comps") or [])
         if "align_flip" in meta:
             self.align_flip.set(bool(meta["align_flip"]))
+        self.pier_segments.set(bool(meta.get("pier_segments")))   # 2.2.14 (item 20)
         if meta.get("period_bins") in PERIOD_BIN_CHOICES:
             self.period_bins.set(meta["period_bins"])
         self.night_bin = dict(meta.get("night_binning") or {})
@@ -7031,6 +7188,8 @@ class App(Tk):
         ttk.Entry(qc, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
         ttk.Label(qc, text="% below the night's median", style="Card.TLabel").pack(side=LEFT, padx=(4, 6))
         ttk.Button(qc, text="Apply", command=self.refit_period).pack(side=LEFT)
+        # 2.2.14 (item 18): keep or leave out a night's transmission-loss (dew/haze) points.
+        ttk.Button(qc, text="Transmission loss…", command=self.edit_transmission).pack(side=LEFT, padx=(6, 0))
 
         tools = ttk.Frame(card, style="Card.TFrame")
         tools.pack(fill=X, pady=(4, 0))
@@ -7039,6 +7198,10 @@ class App(Tk):
         ).pack(side=LEFT)
         ttk.Checkbutton(
             tools, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period,
+        ).pack(side=LEFT, padx=(14, 0))
+        # 2.2.14 (item 20): each pier side (camera angle) normalised on its own across the campaign.
+        ttk.Checkbutton(
+            tools, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period,
         ).pack(side=LEFT, padx=(14, 0))
         ttk.Label(tools, text="Bin", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
         bin_box = ttk.Combobox(tools, textvariable=self.bin_choice, values=BIN_CHOICES, width=10, state="readonly")
@@ -7078,6 +7241,8 @@ class App(Tk):
         ttk.Button(series_row, text="Comp health…", command=self.show_comp_health).pack(side=LEFT, padx=6)
         ttk.Button(series_row, text="Use comps…", command=self.choose_comps).pack(side=LEFT)
         ttk.Button(series_row, text="Watch stars…", command=self.show_watch).pack(side=LEFT, padx=6)
+        # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
+        ttk.Button(series_row, text="Time of max/min…", command=self.show_extremum).pack(side=LEFT)
         ttk.Label(nav, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(nav, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso).pack(side=LEFT)
         ttk.Button(nav, text="Save light-curve CSV", command=self.save_csv).pack(side=LEFT, padx=6)
@@ -7295,8 +7460,14 @@ class App(Tk):
         excluded = (flagged | not_finite) if self.skip_flagged.get() else not_finite
         # Each night's meridian-flip step, measured on the plotted magnitudes (always reported).
         flip_steps = core.flip_offsets(obs_list, list(mag), use=list(~excluded))
+        # 2.2.14 (item 20): pier side of every point, and how the sides compare across the campaign.
+        pier_by_night = self._pier_by_night()
+        sides = core.point_sides(obs_list, pier_by_night)
+        side_offs = core.side_offsets(obs_list, list(mag), sides, use=list(~excluded))
         if self.norm_segments.get():
             mag = np.array(core.normalize_segments(obs_list))
+        elif self.pier_segments.get():
+            mag = np.array(core.apply_side_offsets(sides, list(mag), side_offs["offsets"]))
         elif self.align_flip.get():
             mag = np.array(core.align_flips(obs_list, list(mag), flip_steps))
         nights = []
@@ -7329,6 +7500,7 @@ class App(Tk):
         ax.invert_yaxis()
         self._format_time_axis(ax)
         ax.set_ylabel(f"{filt} magnitude" + (" (segments lined up)" if self.norm_segments.get()
+                                             else " (pier sides lined up)" if self.pier_segments.get()   # 2.2.14
                                              else " (flip lined up)" if self.align_flip.get() and flip_steps else ""))
         labels_raw = [self._point_label(o, float(m)) for o, m in zip(obs_list, mag)]
         self._hover_sets.append((ax, tx, mag, labels_raw, 0.0))
@@ -7462,6 +7634,7 @@ class App(Tk):
                             "(the filter and colors are not real).")
         if len(nights) == 1:
             cautions.append("One night: the night-to-night spread needs more nights.")
+        cautions += self._pier_cautions(side_offs, pier_by_night, nights)   # 2.2.14 (item 20)
         color_lines, color_cautions = self._color_lines(usable)
         cautions += color_cautions
         check_vals_all = [o.check_std for o, ex in zip(obs_list, excluded)
@@ -7475,7 +7648,7 @@ class App(Tk):
             f"Check   {self.check_used or '—'}" + (f"   σ {np.std(check_vals_all):.3f}" if len(check_vals_all) > 1 else ""),
             f"Filter  {filt}   bin {self.bin_choice.get()}",
         ]
-        rows = self._night_rows(obs_list, mag, excluded, nights, flip_steps)
+        rows = self._night_rows(obs_list, mag, excluded, nights, flip_steps, pier_by_night)
         self._fill_summary(series_lines, period_lines, color_lines, rows, cautions)
 
         ax = self.out_ax3
@@ -7541,7 +7714,7 @@ class App(Tk):
     # ---- Output summary (boxes + per-night table) ------------------------------------
     SUMMARY_COLUMNS = (("night_text", "Night", 120), ("night", "JD", 90), ("pts", "Pts", 60), ("used", "used", 60),
                        ("mean", "Mean mag ± err", 145), ("tsig", "Target σ", 85), ("csig", "Check σ", 85),
-                       ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170), ("note", "Note", 260))
+                       ("side", "Side", 80), ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170), ("note", "Note", 260))
 
     def _build_summary(self, card):
         holder = ttk.Frame(card, style="Card.TFrame")
@@ -7584,7 +7757,29 @@ class App(Tk):
             self.night_table.selection_remove(self.night_table.selection())
         self.draw_output()
 
-    def _night_rows(self, obs_list, mag, excluded, nights, flip_steps) -> list[dict]:
+    def _pier_cautions(self, side_offs: dict, pier_by_night: dict, nights: list) -> list[str]:
+        """2.2.14 (item 20): warn when the series mixes pier sides without 'Pier side as segments', and say when
+        some nights' sides are unknown."""
+        out = []
+        sides = [s for s in side_offs.get("counts", {}) if s]
+        if len(sides) > 1 and not self.pier_segments.get() and not self.norm_segments.get():
+            ref = side_offs["ref"]
+            parts = [f"{s} reads {side_offs['offsets'][s]:+.3f} against {ref} ({side_offs['how'][s]})"
+                     for s in sides if s != ref]
+            out.append("Nights on both pier sides (" + ", ".join(f"{s}: {side_offs['nights'].get(s, 0)} night(s)"
+                                                                for s in sides)
+                       + "): " + "; ".join(parts) + ". Tick 'Pier side as segments' to normalise each side on its own.")
+        unknown = [n for n in nights if not (pier_by_night.get(n) or {}).get("source")]
+        if unknown and len(unknown) < len(nights) and (self.pier_segments.get() or len(sides) > 1):
+            out.append(f"Pier side unknown on {len(unknown)} night(s) (no ROTATOR, no PIERSIDE, no flip): left as "
+                       "they are.")
+        if self.pier_segments.get() and len(sides) < 2 and not self.norm_segments.get():
+            out.append("Pier side as segments has nothing to do: " + (
+                "every night is on one side." if sides else
+                "no night has ROTATOR or PIERSIDE in its headers or a meridian flip, so the sides are unknown."))
+        return out
+
+    def _night_rows(self, obs_list, mag, excluded, nights, flip_steps, pier_by_night=None) -> list[dict]:
         from collections import Counter
 
         rows = []
@@ -7604,6 +7799,13 @@ class App(Tk):
             csig = core.robust_sigma([obs_list[k].check_std for k in used])
             bv = [obs_list[k].bv for k in used if math.isfinite(obs_list[k].bv)]
             flags = Counter(w for k in idx for w in obs_list[k].flag.split())
+            # 2.2.14 (item 18): transmission loss in words, and how many such points were kept.
+            if core.HAZE_FLAG in flags:
+                flags[core.HAZE_LABEL] = flags.pop(core.HAZE_FLAG)
+            kept_haze = self._transmission_summary(night)[0] \
+                if (self.night_bin.get(night) or {}).get("keep_transmission") else 0
+            if kept_haze:
+                flags[f"kept, {core.HAZE_LABEL}"] = kept_haze
             note = self.night_notes.get(night, "")
             rows.append({
                 "night": night, "night_text": self.night_label(night, short=True), "date": date,
@@ -7611,7 +7813,11 @@ class App(Tk):
                 "value": bins[0]["value"] if bins else float("nan"), "err": bins[0]["err"] if bins else float("nan"),
                 "tsig": f"{tsig:.3f}" if math.isfinite(tsig) else "—",
                 "csig": f"{csig:.3f}" if math.isfinite(csig) else "—",
-                "flip": f"{flip_steps[night]['offset']:+.3f}" if night in flip_steps else "—",
+                # 2.2.14 (item 20): pier side(s), and a flip step over 0.02 mag marked.
+                "side": core.side_text((pier_by_night or {}).get(night)),
+                "flip": (f"{flip_steps[night]['offset']:+.3f}"
+                         + (" ⚠" if abs(flip_steps[night]["offset"]) > core.FLIP_STEP_MARK else "")
+                         if night in flip_steps else "—"),
                 "bv": f"{float(np.median(bv)):.3f}" if bv else "—",
                 "flags": ", ".join(f"{n} {w}" for w, n in flags.most_common()) or "—",
                 "note": ("* " + note) if note else "",
@@ -7711,6 +7917,8 @@ class App(Tk):
         vals = self._zero_pointed(points)
         if self.norm_segments.get():
             return core.normalize_segments(points, vals)
+        if self.pier_segments.get():   # 2.2.14 (item 20)
+            return self._pier_values(points, list(vals))[0]
         if self.align_flip.get():
             return core.align_flips(points, vals, core.flip_offsets(points, vals))
         return list(vals)
@@ -8067,7 +8275,7 @@ class App(Tk):
                 inst = o.spare_insts.get(name)
             if inst is None or not math.isfinite(inst) or not math.isfinite(o.cmag) or not math.isfinite(o.comp_cat):
                 continue
-            if set(o.flag.split()) & {"cloud", "drift", "noflux", "nocomp"}:
+            if set(o.flag.split()) & {"cloud", core.HAZE_FLAG, "drift", "noflux", "nocomp"}:   # 2.2.14: haze
                 continue
             out_obs.append(o)
             out_mag.append(o.comp_cat + inst - o.cmag)
@@ -8131,6 +8339,13 @@ class App(Tk):
         self.status.set(f"Comps in use: {used}.{saved}")
         return True
 
+    def show_extremum(self):
+        """2.2.14 (item 13): the time of maximum / minimum window for the loaded series."""
+        if not self.observations:
+            messagebox.showinfo(APP_TITLE, "There is no light curve yet: run photometry or load a series.")
+            return
+        ExtremumWindow(self)
+
     def show_comp_health(self):
         if not self.observations:
             messagebox.showinfo(APP_TITLE, "There is no series loaded.")
@@ -8138,7 +8353,8 @@ class App(Tk):
         names = list(self.comps_used) or ["comp"]
         aliases = self._star_aliases()
         result = core.comp_health([o for o in self.observations if not (set(o.flag.split()) - {"nocomp"})]
-                                  or self.observations, names, self.check_used, self._spares_in_series(), aliases)
+                                  or self.observations, names, self.check_used, self._spares_in_series(), aliases,
+                                  night_sign=self._pier_night_sign())
         if result is None:
             messagebox.showinfo(
                 APP_TITLE,
@@ -8151,6 +8367,17 @@ class App(Tk):
             return
         result["positions"] = self._star_positions(result)
         CompHealthWindow(self, result)
+
+    def _pier_night_sign(self) -> dict:
+        """2.2.14 (item 20): +1 for nights whose before-flip side is the campaign's usual one, -1 when the night ran the
+        other way round, so every night's flip step reads (other side) minus (usual side)."""
+        pier = self._pier_by_night()
+        befores = [p.get("before") for p in pier.values() if p.get("before") and p.get("after")]
+        if not befores:
+            return {}
+        usual = max(set(befores), key=befores.count)
+        return {n: (1.0 if p.get("before") == usual else -1.0 if p.get("after") == usual else 1.0)
+                for n, p in pier.items() if p.get("before") and p.get("after")}
 
     def _star_positions(self, result) -> dict:
         """Median pixel position of each star in the health check, and its median distance from the target
@@ -8593,10 +8820,10 @@ class CompHealthWindow:
         positions = result.get("positions") or {}
         table_box = ttk.Frame(top, style="Card.TFrame")
         table_box.pack(fill=X, side="bottom", pady=(6, 0))
-        cols = ("star", "role", "spread", "scatter", "flip", "nights", "pos", "dist", "verdict")
+        cols = ("star", "role", "spread", "scatter", "flip", "pier", "nights", "pos", "dist", "verdict")
         headings = {"star": "Star", "role": "Role", "spread": "Night offset", "scatter": "Scatter in night",
-                    "flip": "Flip step", "nights": "Nights", "pos": "Pixel (x, y)", "dist": "From target",
-                    "verdict": "Verdict"}
+                    "flip": "Flip step", "pier": "Both pier sides", "nights": "Nights", "pos": "Pixel (x, y)",
+                    "dist": "From target", "verdict": "Verdict"}
         table = ttk.Treeview(table_box, columns=cols, show="headings", height=min(max(len(rows), 3), 12))
         # 2.2.13 (John): the horizontal scroll bar shows only when the columns do not fit (as on the Transit fit page).
         self.hbar = ttk.Scrollbar(table_box, orient="horizontal", command=table.xview)
@@ -8612,6 +8839,7 @@ class CompHealthWindow:
                                           f"{sp:.4f}" if math.isfinite(sp) else "—",
                                           f"{sc:.4f}" if math.isfinite(sc) else "—",
                                           f"{st:+.3f}" if isinstance(st, float) and math.isfinite(st) else "—",
+                                          row.get("pier") or "—",   # 2.2.14 (item 20)
                                           row["nights"],
                                           f"({pos[0]:.0f}, {pos[1]:.0f})" if pos else "—",
                                           f"{pos[2]:.0f}" if pos and math.isfinite(pos[2]) else "—",
@@ -8627,6 +8855,10 @@ class CompHealthWindow:
         self.artists = {}
         table.bind("<<TreeviewSelect>>", lambda e: self.highlight())
         self.table_rows = {iid: row for iid, row in zip(table.get_children(), rows)}
+        pier_text = self._pier_text(rows)
+        if pier_text:
+            ttk.Label(top, text=pier_text, style="Hint.TLabel", wraplength=1050,
+                      justify=LEFT).pack(side="bottom", anchor=W, pady=(4, 0))
         if result.get("excluded"):
             ttk.Label(top, text="Left out of the reference so their drift does not echo in the steady stars: "
                                 + ", ".join(result["excluded"]) + ".", style="Hint.TLabel").pack(side="bottom", anchor=W)
@@ -8677,6 +8909,24 @@ class CompHealthWindow:
         self.fig = fig
         self.canvas = canvas
         fit_to_content(win)
+
+    @staticmethod
+    def _pier_text(rows) -> str:
+        """2.2.14 (item 20): which stars read the same on both pier sides (good comps for a campaign that flips) and
+        which step at the flip, from every night with both sides."""
+        steady = [r["label"].replace(" (check)", "") for r in rows if r.get("pier_kind") == "steady"]
+        steps = [f"{r['label'].replace(' (check)', '')} ({r['pier'].split(' ', 1)[1]})" for r in rows
+                 if r.get("pier_kind") == "steps"]
+        if not steady and not steps:
+            return ""
+        text = "Both pier sides (flip step after minus before, median over the nights with both sides): "
+        if steady:
+            text += "steady on both sides, good comps for the campaign: " + ", ".join(steady) + ". "
+        if steps:
+            text += ("steps at the flip, better not as comps (or use 'Pier side as segments'): " + ", ".join(steps)
+                     + ". A target that steps while steady comps do not points at the field position (flat, a ghost "
+                       "or the star's halo), not the comps.")
+        return text
 
     def _legend(self, selected: str | None = None):
         """2.2.13 (John): the legend in a column on the right of the plot, off the curves; the highlighted star's
@@ -8981,6 +9231,404 @@ class SuggestWindow:
             grow_to_content(self.win)
         except Exception:
             pass
+
+
+class ExtremumWindow:
+    """2.2.14 (item 13): time of maximum / minimum for one night, its O−C against VSX (or typed) elements, and a CSV of
+    times that grows night by night into an O−C diagram (plotted here once it has rows)."""
+
+    def __init__(self, app):
+        self.app = app
+        win = Toplevel(app)
+        self.win = win
+        win.title(f"{APP_TITLE} — time of maximum / minimum")
+        top = ttk.Frame(win, style="Card.TFrame", padding=10)
+        top.pack(fill=BOTH, expand=True)
+        nav = ttk.Frame(top, style="Card.TFrame")
+        nav.pack(fill=X, side="bottom", pady=(6, 0))
+        ttk.Button(nav, text="Measure", style="Accent.TButton", command=self.measure).pack(side=LEFT)
+        self.save_button = ttk.Button(nav, text="Save to times CSV", command=self.save, state="disabled")
+        self.save_button.pack(side=LEFT, padx=6)
+        ttk.Button(nav, text="Choose times CSV…", command=self.choose_csv).pack(side=LEFT)
+        ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
+        ttk.Label(top, text="Time of maximum / minimum", font=(core.UI_FONT, 15, "bold"),
+                  style="Card.TLabel").pack(anchor=W)
+        self.hint = ttk.Label(
+            top, style="Hint.TLabel", justify=LEFT,
+            text="The extremum is timed with a local polynomial (error from 500 bootstrap resamples), checked with "
+                 "Kwee & van Woerden (1956) and, with a period, a Fourier series. O−C is against the elements below "
+                 "(VSX epochs are HJD). Saved times go into one CSV per star next to the series file; it grows "
+                 "night by night into an O−C diagram.")
+        self.hint.pack(anchor=W, fill=X, pady=(2, 6))
+        self.hint.bind("<Configure>", lambda e: self.hint.configure(wraplength=max(200, e.width - 8)))
+        form = ttk.Frame(top, style="Card.TFrame")
+        form.pack(anchor=W, fill=X)
+        nights = sorted({o.night for o in app.observations})
+        self.night_names = {app.night_label(n, short=True): n for n in nights}
+        night_default = app.highlight_night if app.highlight_night in nights else (nights[-1] if nights else "")
+        self.night = StringVar(value=next((k for k, v in self.night_names.items() if v == night_default), ""))
+        self.kind = StringVar(value="minimum" if core.extremum_kind_for(app.catalog_var_type) == "min" else "maximum")
+        self.window_min = StringVar(value="")
+        period = app.catalog_period
+        epoch = app.catalog_epoch
+        self.period = StringVar(value=f"{period:.8f}" if period else "")
+        self.epoch = StringVar(value=f"{epoch:.5f}" if epoch else "")
+        self.system = StringVar(value="HJD")
+        self.source = StringVar(value="VSX" if period and epoch else ("typed" if period or epoch else ""))
+        ttk.Label(form, text="Night", style="Card.TLabel").grid(row=0, column=0, sticky=W, padx=(0, 6), pady=2)
+        ttk.Combobox(form, textvariable=self.night, values=list(self.night_names), state="readonly",
+                     width=max([len(k) for k in self.night_names] + [12]) + 2).grid(row=0, column=1, sticky=W, pady=2)
+        ttk.Label(form, text="Type", style="Card.TLabel").grid(row=0, column=2, sticky=W, padx=(14, 6))
+        ttk.Combobox(form, textvariable=self.kind, values=("maximum", "minimum"), state="readonly",
+                     width=10).grid(row=0, column=3, sticky=W)
+        ttk.Label(form, text="Half-window (min)", style="Card.TLabel").grid(row=0, column=4, sticky=W, padx=(14, 6))
+        ttk.Entry(form, textvariable=self.window_min, width=7).grid(row=0, column=5, sticky=W)
+        ttk.Label(form, text="blank = automatic", style="Hint.TLabel").grid(row=0, column=6, sticky=W, padx=(6, 0))
+        ttk.Label(form, text="Period (d)", style="Card.TLabel").grid(row=1, column=0, sticky=W, padx=(0, 6), pady=2)
+        ttk.Entry(form, textvariable=self.period, width=14).grid(row=1, column=1, sticky=W, pady=2)
+        ttk.Label(form, text="Epoch", style="Card.TLabel").grid(row=1, column=2, sticky=W, padx=(14, 6))
+        ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=1, column=3, columnspan=2, sticky=W)
+        ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
+                     width=5).grid(row=1, column=5, sticky=W)
+        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
+        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=7, sticky=W, padx=(6, 0))
+        self.result_text = StringVar(value="Choose the night and press Measure.")
+        ttk.Label(top, textvariable=self.result_text, font=(core.MONO_FONT, 10), style="Card.TLabel",
+                  justify=LEFT).pack(anchor=W, pady=(6, 4))
+        self.csv_text = StringVar(value="")
+        ttk.Label(top, textvariable=self.csv_text, style="Hint.TLabel", justify=LEFT).pack(anchor=W)
+        self.results = []
+        self.csv_path = app.extremum_csv or ""
+        self.fig = None
+        if Figure is not None:
+            self.fig = make_constrained_figure((10.5, 4.0))
+            self.ax_lc = self.fig.add_subplot(121)
+            self.ax_oc = self.fig.add_subplot(122)
+            self.canvas = FigureCanvasTkAgg(self.fig, master=top)
+            self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+        self._show_csv()
+        self.draw()
+        fit_to_content(win)
+
+    # -- inputs ---------------------------------------------------------------------------
+    def _elements(self):
+        """(period, epoch) as floats, or (None, None) when either is missing or unreadable."""
+        try:
+            p = float(self.period.get())
+            e = float(self.epoch.get())
+        except ValueError:
+            return None, None
+        if not (p > 0 and 2400000.0 < e < 2600000.0):
+            return None, None
+        return p, e
+
+    def _star(self) -> str:
+        return self.app.star_id.get().strip() or "target"
+
+    def _coords(self):
+        app = self.app
+
+        def num(var):
+            try:
+                return float(var.get()) if var.get().strip() else None
+            except ValueError:
+                return None
+        ra = num(app.ra_hours)
+        return (ra * 15.0 if ra is not None else None, num(app.dec_deg), num(app.lat), num(app.lon))
+
+    def lookup(self):
+        name = self._star()
+        if name == "target":
+            messagebox.showinfo(APP_TITLE, "Type the star's name in Star ID on the Input page first.", parent=self.win)
+            return
+        self.source.set(f"looking up {name} in VSX…")
+
+        def work():
+            try:
+                found = core._lookup_vsx(name)
+                self.app.call_ui(self._lookup_done, found, None)
+            except Exception as exc:
+                self.app.call_ui(self._lookup_done, None, exc)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _lookup_done(self, found, error):
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:
+            return
+        if error is not None or not found:
+            self.source.set(f"VSX: {error}")
+            return
+        p, e = found.get("period_days"), found.get("epoch_jd")
+        if p:
+            self.period.set(f"{p:.8f}")
+            self.app.catalog_period = p
+        if e:
+            self.epoch.set(f"{e:.5f}")
+            self.app.catalog_epoch = e
+        self.system.set("HJD")
+        self.app.catalog_var_type = found.get("var_type") or self.app.catalog_var_type
+        self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
+
+    # -- measuring ------------------------------------------------------------------------
+    def _night_points(self):
+        night = self.night_names.get(self.night.get())
+        pts = [o for o in self.app._usable() if o.night == night]
+        vals = np.asarray(self.app._analysis_values(pts), dtype=float) if pts else np.array([])
+        return night, pts, vals
+
+    def measure(self):
+        night, pts, vals = self._night_points()
+        if len(pts) < 12:
+            messagebox.showinfo(APP_TITLE, "That night has too few usable points (12 or more needed).", parent=self.win)
+            return
+        kind = "max" if self.kind.get() == "maximum" else "min"
+        period, epoch = self._elements()
+        hw = None
+        if self.window_min.get().strip():
+            try:
+                hw = float(self.window_min.get()) / 1440.0
+            except ValueError:
+                messagebox.showerror(APP_TITLE, "Half-window: minutes, or blank for automatic.", parent=self.win)
+                return
+        t = np.array([o.jd for o in pts], dtype=float)
+        guesses = [None]
+        if period and epoch:
+            # Every extremum the elements predict in this night (the night may hold two maxima of a short-period star).
+            guesses = core.predicted_extrema(float(t.min()), float(t.max()), period, epoch,
+                                             margin=0.1 * period) or [None]
+        results, problems = [], []
+        for g in guesses:
+            try:
+                r = core.measure_extremum(t, vals, kind, period=period, t_guess=g, half_width=hw)
+            except ValueError as exc:
+                problems.append(str(exc))
+                continue
+            if any(abs(r["t"] - q["t"]) < 0.05 * (period or 1.0) for q in results):
+                continue
+            results.append(r)
+        ra, dec, lat, lon = self._coords()
+        for r in results:
+            try:
+                r["times"] = core.extremum_times(r["t"], ra, dec, lat, lon)
+            except Exception as exc:
+                r["times"] = {"jd_utc": r["t"], "hjd": float("nan"), "bjd_tdb": float("nan"),
+                              "note": f"time conversion failed: {exc}"}
+            r["oc"] = None
+            if period and epoch:
+                t_sys = r["times"]["bjd_tdb" if self.system.get() == "BJD" else "hjd"]
+                if not math.isfinite(t_sys):
+                    t_sys = r["t"]   # no RA/Dec: JD against the elements (said in the text)
+                # A minimum may be a secondary eclipse (half a cycle).
+                r["oc"] = core.o_minus_c(t_sys, period, epoch, half_cycles=kind == "min")
+        self.results = results
+        self.night_key = night
+        self.save_button.configure(state="normal" if results else "disabled")
+        self.result_text.set(self._result_lines(results, problems, kind, period, epoch) if results or problems
+                             else "No extremum found.")
+        if not results:
+            self.app.log("Time of " + self.kind.get() + f" ({night}): " + "; ".join(problems or ["none found"]))
+        self.draw()
+        grow_to_content(self.win)
+
+    def _result_lines(self, results, problems, kind, period, epoch) -> str:
+        word = "max" if kind == "max" else "min"
+        lines = []
+        for r in results:
+            tm = r["times"]
+            err_min = r["err"] * 1440.0
+            if math.isfinite(tm["hjd"]):
+                lines.append(f"T{word}  HJD {tm['hjd']:.5f} ± {r['err']:.5f}  ({err_min:.1f} min)   "
+                             f"BJD_TDB {tm['bjd_tdb']:.5f}   JD {tm['jd_utc']:.5f}")
+            else:
+                lines.append(f"T{word}  JD {tm['jd_utc']:.5f} ± {r['err']:.5f}  ({err_min:.1f} min)")
+            if tm.get("note"):
+                lines.append(f"       {tm['note']}")
+            poly, kvw, fo = r["poly"], r["kvw"], r["fourier"]
+            lines.append(f"       polynomial deg {poly['degree']}: JD {poly['t']:.5f} ± {poly['err'] * 1440:.2f} min "
+                         f"({poly['n']} points, ±{r['half_width'] * 1440:.0f} min)")
+            if kvw:
+                lines.append(f"       Kwee-van Woerden: JD {kvw['t']:.5f} ± {kvw['err'] * 1440:.2f} min")
+            if fo:
+                lines.append(f"       Fourier ({fo['n_harm']} harmonics, rms {fo['rms']:.3f}): JD {fo['t']:.5f} "
+                             f"± {fo['err'] * 1440:.2f} min")
+            if r.get("oc"):
+                oc = r["oc"]
+                sys_word = self.system.get() if math.isfinite(tm["hjd"]) else "JD"
+                lines.append(f"       O−C {oc['oc_d']:+.5f} d = {oc['oc_min']:+.1f} ± {err_min:.1f} min   cycle "
+                             f"{oc['cycle']:g}   (C = {sys_word} {oc['calc']:.5f}; P {period:.8f}, E {epoch:.5f})")
+            for n in r.get("notes", []):
+                lines.append(f"       note: {n}")
+            for w in r.get("warnings", []):
+                lines.append(f"       ⚠ {w}")
+        for p in problems if not results else []:
+            lines.append(f"⚠ {p}")
+        if results and not (period and epoch):
+            lines.append("No elements: type the period and epoch (or Elements from VSX) for the O−C.")
+        return "\n".join(lines)
+
+    # -- the times CSV --------------------------------------------------------------------
+    def _default_csv(self) -> str:
+        name = core.extremum_csv_name(self._star())
+        app = self.app
+        if self.csv_path:
+            return self.csv_path
+        if app.series_path:
+            return os.path.join(os.path.dirname(app.series_path), name)
+        folder = app._out_folder()
+        return os.path.join(folder, name) if folder else ""
+
+    def choose_csv(self):
+        start = self._default_csv()
+        path = filedialog.asksaveasfilename(
+            parent=self.win, title="Times of maximum / minimum CSV (new or existing)", defaultextension=".csv",
+            initialfile=os.path.basename(start) or core.extremum_csv_name(self._star()),
+            initialdir=os.path.dirname(start) or None, filetypes=[("CSV", "*.csv")], confirmoverwrite=False)
+        if path:
+            self.csv_path = path
+            self.app.extremum_csv = path
+            self._show_csv()
+            self.draw()
+
+    def _show_csv(self):
+        path = self._default_csv()
+        if not path:
+            self.csv_text.set("Times CSV: not chosen yet (no series file or output folder); Save asks where.")
+            return
+        rows = [r for r in core.read_extremum_csv(path) if str(r.get("star")) == self._star()]
+        self.csv_text.set(f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})")
+
+    def save(self):
+        if not self.results:
+            return
+        path = self._default_csv()
+        if not path:
+            self.choose_csv()
+            path = self.csv_path
+            if not path:
+                return
+        period, epoch = self._elements()
+        kind = "max" if self.kind.get() == "maximum" else "min"
+        done = []
+        for r in self.results:
+            tm, oc = r["times"], r.get("oc") or {}
+            kvw, poly, fo = r.get("kvw") or {}, r["poly"], r.get("fourier") or {}
+            row = {"star": self._star(), "type": kind, "hjd": tm["hjd"], "bjd_tdb": tm["bjd_tdb"],
+                   "jd_utc": tm["jd_utc"], "error_d": r["err"], "error_min": r["err"] * 1440.0,
+                   "method": r["method"], "cycle": oc.get("cycle", float("nan")),
+                   "o_c_d": oc.get("oc_d", float("nan")), "o_c_min": oc.get("oc_min", float("nan")),
+                   "period_d": period if period else float("nan"), "epoch": epoch if epoch else float("nan"),
+                   "elements": (f"{self.source.get().split(' ')[0] or 'typed'} {self.system.get()}"
+                                if period and epoch else ""),
+                   "night": self.night_key, "n_points": poly["n"], "window_min": r["half_width"] * 1440.0,
+                   "kvw_jd": kvw.get("t", float("nan")), "kvw_err": kvw.get("err", float("nan")),
+                   "poly_jd": poly["t"], "poly_err": poly["err"], "fourier_jd": fo.get("t", float("nan")),
+                   "fourier_err": fo.get("err", float("nan")), "time_note": tm.get("note", ""),
+                   "note": "; ".join(r.get("warnings", []))}
+            try:
+                done.append(core.save_extremum_row(path, row))
+            except OSError as exc:
+                messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}", parent=self.win)
+                return
+        self.csv_path = path
+        self.app.extremum_csv = path
+        self.app.log(f"Time of {self.kind.get()} saved to {os.path.basename(path)} ({', '.join(done)}).")
+        self.app.status.set(f"Saved to {path}")
+        self._show_csv()
+        self.draw()
+
+    # -- plots ----------------------------------------------------------------------------
+    def draw(self):
+        if self.fig is None:
+            return
+        ax = self.ax_lc
+        ax.clear()
+        night, pts, vals = self._night_points()
+        if pts:
+            t = np.array([o.jd for o in pts])
+            t0 = math.floor(float(t.min()) - 0.5) + 0.5
+            hours = (t - t0) * 24.0
+            ax.plot(hours, vals, ".", ms=3, color="#7f8c99", alpha=0.6)
+            for r in self.results:
+                hw = r["half_width"]
+                tc = r["poly"]["t"]
+                sel = np.abs(t - tc) <= hw
+                if sel.sum() > r["poly"]["degree"] + 1:
+                    x = (t[sel] - tc) / hw
+                    coef = np.polyfit(x, vals[sel], r["poly"]["degree"])
+                    xs = np.linspace(-1, 1, 200)
+                    ax.plot((tc + xs * hw - t0) * 24.0, np.polyval(coef, xs), "-", color="#c43b3b", lw=1.6)
+                ax.axvline((r["t"] - t0) * 24.0, color="#c43b3b", lw=1.0)
+                if r.get("kvw"):
+                    ax.axvline((r["kvw"]["t"] - t0) * 24.0, color="#0067c0", lw=0.9, ls="--")
+                if r.get("fourier"):
+                    ax.axvline((r["fourier"]["t"] - t0) * 24.0, color="#2e7d32", lw=0.9, ls=":")
+                if r.get("oc"):
+                    # The predicted time on the JD axis (the light-time correction is under 9 minutes).
+                    t_sys = r["times"]["bjd_tdb" if self.system.get() == "BJD" else "hjd"]
+                    calc_jd = r["oc"]["calc"] - (t_sys - r["t"] if math.isfinite(t_sys) else 0.0)
+                    ax.axvline((calc_jd - t0) * 24.0, color="#7b2cbf", lw=0.9, ls="-.")
+            ax.invert_yaxis()
+            ax.set_xlabel(f"Hours from JD {t0:.1f}")
+            ax.set_ylabel("Magnitude")
+            key = []
+            if self.results:
+                key.append("— polynomial")
+                if any(r.get("kvw") for r in self.results):
+                    key.append("‒‒ KvW")
+                if any(r.get("fourier") for r in self.results):
+                    key.append("··· Fourier")
+                if any(r.get("oc") for r in self.results):
+                    key.append("‒· predicted (C)")
+            ax.set_title(f"{self._star()}  {self.app.night_label(night, short=True)}"
+                         + ("\n" + " · ".join(key) if key else ""), fontsize=9)
+            ax.grid(True, alpha=0.3)
+        ax = self.ax_oc
+        ax.clear()
+        period, epoch = self._elements()
+        path = self._default_csv()
+        rows = [r for r in core.read_extremum_csv(path) if str(r.get("star")) == self._star()] if path else []
+        pts_oc = []
+        for r in rows:
+            tt = r.get("bjd_tdb" if self.system.get() == "BJD" else "hjd")
+            if not (isinstance(tt, float) and math.isfinite(tt)):
+                tt = r.get("jd_utc")
+            if not (isinstance(tt, float) and math.isfinite(tt)):
+                continue
+            if period and epoch:
+                oc = core.o_minus_c(tt, period, epoch, half_cycles=r.get("type") == "min")
+                pts_oc.append((oc["cycle"], oc["oc_min"], r.get("error_min", float("nan")), r.get("type"), False))
+            elif isinstance(r.get("cycle"), float) and math.isfinite(r["cycle"]):
+                pts_oc.append((r["cycle"], r.get("o_c_min", float("nan")), r.get("error_min", float("nan")),
+                               r.get("type"), False))
+        for r in self.results:
+            if r.get("oc") and not any(abs(p[0] - r["oc"]["cycle"]) < 0.25 for p in pts_oc):
+                pts_oc.append((r["oc"]["cycle"], r["oc"]["oc_min"], r["err"] * 1440.0, r["kind"], True))
+        if pts_oc:
+            for kind, marker in (("max", "o"), ("min", "s")):
+                for unsaved in (False, True):
+                    sel = [p for p in pts_oc if p[3] == kind and p[4] == unsaved]
+                    if not sel:
+                        continue
+                    ax.errorbar([p[0] for p in sel], [p[1] for p in sel],
+                                yerr=[p[2] if math.isfinite(p[2]) else 0.0 for p in sel], fmt=marker, ms=6,
+                                capsize=3, color="#c43b3b" if unsaved else "#0067c0",
+                                mfc="none" if unsaved else None)
+            ax.axhline(0.0, color="#888888", lw=0.8)
+            ax.set_xlabel("Cycle E")
+            ax.set_ylabel("O−C (min)")
+            ax.set_title("O−C" + (f" against P {period:.8f}, E {epoch:.5f}" if period and epoch
+                                  else " as saved (each row against its own elements)")
+                         + "\n● saved max · ■ saved min · open red = this night, not saved yet", fontsize=9)
+            ax.grid(True, alpha=0.3)
+        else:
+            ax.set_axis_off()
+            ax.text(0.5, 0.5, "The O−C diagram appears here once\ntimes are saved to the CSV"
+                    + ("" if period and epoch else "\n(and elements are given)"),
+                    ha="center", va="center", transform=ax.transAxes, color="#5d6d76")
+        self.canvas.draw_idle()
 
 
 class WatchWindow:

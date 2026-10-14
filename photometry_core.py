@@ -1885,7 +1885,7 @@ def lookup_target(name: str) -> dict:
         found = vsx
         found["source"] = "VSX"
     elif vsx is not None:
-        for key in ("period_days", "var_type", "auid"):
+        for key in ("period_days", "var_type", "auid", "epoch_jd"):   # 2.2.14 (item 13): epoch
             if vsx.get(key):
                 found[key] = vsx[key]
     return found
@@ -1950,7 +1950,17 @@ def _lookup_vsx(name: str) -> dict:
         "period_days": period,
         "var_type": obj.get("VariabilityType", ""),
         "auid": obj.get("AUID", ""),
+        "epoch_jd": _vsx_epoch(obj.get("Epoch")),   # 2.2.14 (item 13): epoch of max/min for O-C (HJD in VSX)
     }
+
+
+def _vsx_epoch(text):
+    """2.2.14 (item 13): VSX's Epoch field (a full JD/HJD, sometimes with a trailing note) as a float, else None."""
+    try:
+        v = float(str(text).split()[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return v if 2400000.0 < v < 2600000.0 else None
 
 
 # 2.2.13: the epoch catalog positions are moved to (decimal year). None = now; the app sets it from the lights'
@@ -3807,26 +3817,207 @@ def precalibration_signs(path: str, header: dict) -> list[str]:
 
 # ---- Transparency ("cloud") flag ------------------------------------------------------
 
-def apply_cloud_flags(observations: list[Obs], limit: float = 0.20) -> int:
+HAZE_FLAG = "haze"   # 2.2.14 (item 18): the flag word for transmission loss (dew/haze), shown in words in the app
+HAZE_LABEL = "transmission loss (dew/haze?)"
+
+
+def _robust_std(values) -> float:
+    v = np.asarray([x for x in values if x is not None and math.isfinite(x)], dtype=float)
+    if v.size < 2:
+        return float("nan")
+    return float(1.4826 * np.median(np.abs(v - np.median(v))))
+
+
+def _star_matrix(night_obs: list[Obs]) -> np.ndarray:
+    """Frames x stars instrumental magnitudes of every measured star but the target: each comp, the check and the
+    spares seen in at least half the frames. Old series without per-comp values fall back on the comp mean."""
+    cols = []
+    n_comp = max((len(o.comp_insts) for o in night_obs), default=0)
+    for j in range(n_comp):
+        cols.append([o.comp_insts[j] if j < len(o.comp_insts) else float("nan") for o in night_obs])
+    if not cols:
+        cols.append([o.cmag for o in night_obs])
+    if sum(1 for o in night_obs if o.kmag is not None and math.isfinite(o.kmag)) >= 0.5 * len(night_obs):
+        cols.append([o.kmag if o.kmag is not None else float("nan") for o in night_obs])
+    counts: dict[str, int] = {}
+    for o in night_obs:
+        for name in o.spare_insts:
+            counts[name] = counts.get(name, 0) + 1
+    for name, n in sorted(counts.items()):
+        if n >= 0.5 * len(night_obs):
+            cols.append([o.spare_insts.get(name, float("nan")) for o in night_obs])
+    data = np.array(cols, dtype=float).T
+    data[~np.isfinite(data)] = np.nan
+    return data
+
+
+def light_loss_episodes(night_obs: list[Obs], limit: float = 0.20, min_frames: int = 6) -> list[dict]:
+    """2.2.14 (item 18): the night's stretches of lost light (comp light more than `limit` below the night's median),
+    each judged as cloud or as transmission loss (dew on the optics, haze).
+
+    Transmission loss: every measured star (comps, check, spares) fades by the same amount, smoothly, and the sky
+    stays flat. The differential magnitudes are then fine; only the noise grows. Cloud: the stars lose different
+    amounts (patchy), the loss jumps from frame to frame, or the sky jumps or brightens (lit cloud). A stretch shorter
+    than min_frames is called cloud. Each episode: {"kind": "transmission" | "cloud", "frames": [indices into the
+    time-sorted night], "jd": (first, last), "depth": median loss in mag, "max_depth", "reasons": [...]}."""
+    obs = sorted(night_obs, key=lambda o: o.jd)
+    n = len(obs)
+    rates = np.array([o.flux_comp / o.exptime if o.flux_comp > 0 and o.exptime > 0 else np.nan for o in obs])
+    good = np.isfinite(rates)
+    if good.sum() < 5 or len({round(r, 6) for r in rates[good]}) < 2 or not limit > 0:
+        return []
+    median = float(np.median(rates[good]))
+    lossy = good & (rates < (1.0 - limit) * median)
+    if not lossy.any():
+        return []
+    clear = good & ~lossy
+    stars = _star_matrix(obs)
+    ref = np.nanmedian(stars[clear], axis=0) if clear.sum() >= 3 else np.nanmedian(stars, axis=0)
+    with np.errstate(invalid="ignore"):
+        delta = stars - ref                                 # positive: fainter than on the clear frames
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        common = np.nanmedian(delta, axis=1)                # the loss all stars share, frame by frame
+    rate_loss = -2.5 * np.log10(np.where(good, rates, np.nan) / median)
+    common = np.where(np.isfinite(common), common, rate_loss)
+    jd = np.array([o.jd for o in obs])
+    sky = np.array([o.sky / o.exptime if o.exptime > 0 and math.isfinite(o.sky) else np.nan for o in obs])
+    cad = float(np.median(np.diff(jd))) if n > 1 else 0.0
+
+    # Group the lost frames: a stretch ends at 5 clear frames in a row or a gap of 30 minutes.
+    idx = np.where(lossy)[0]
+    groups, cur = [], [int(idx[0])]
+    for a, b in zip(idx[:-1], idx[1:]):
+        if (b - a) > 5 or jd[b] - jd[a] > 30.0 / 1440.0:
+            groups.append(cur)
+            cur = []
+        cur.append(int(b))
+    groups.append(cur)
+
+    # Clear-sky yardsticks: frame-to-frame noise of the common loss, of each star against it, and of the sky.
+    def diff_noise(v, sel):
+        v = v[sel]
+        v = v[np.isfinite(v)]
+        return _robust_std(np.diff(v)) / math.sqrt(2.0) if v.size >= 6 else float("nan")
+
+    noise_common = diff_noise(common, clear)
+    resid = delta - common[:, None]
+    n_stars = stars.shape[1]
+    star_noise_clear = [diff_noise(resid[:, j], clear) for j in range(n_stars)]
+    sky_clear = float(np.nanmedian(sky[clear])) if np.isfinite(sky[clear]).any() else float("nan")
+    sky_noise_clear = diff_noise(sky, clear)
+
+    episodes = []
+    for g in groups:
+        span = list(range(g[0], g[-1] + 1))   # clear frames inside the stretch count too: patchy cloud flickers
+        sel = np.zeros(n, dtype=bool)
+        sel[span] = True
+        reasons = []
+        depth = float(np.nanmedian(common[g])) if np.isfinite(common[g]).any() else float("nan")
+        max_depth = float(np.nanmax(common[g])) if np.isfinite(common[g]).any() else float("nan")
+        grow = 10.0 ** (0.4 * max(0.0, depth if math.isfinite(depth) else 0.0))   # noise grows as the light drops
+        kind = "transmission"
+        if len(g) < min_frames:
+            kind = "cloud"
+            reasons.append(f"brief ({len(g)} frame{'s' if len(g) != 1 else ''})")
+        # 1. Smooth: the shared loss follows a slow curve (running median over 7 frames) without jumps.
+        c = common[sel]
+        c = c[np.isfinite(c)]
+        if c.size >= 7:
+            pad = np.pad(c, 3, mode="edge")
+            run = np.array([np.median(pad[k:k + 7]) for k in range(c.size)])
+            rough = _robust_std(c - run)
+            jump = float(np.max(np.abs(np.diff(c))))
+            base = noise_common if math.isfinite(noise_common) else 0.01
+            if rough > max(0.02, 3.0 * base * grow) or jump > max(0.15, 8.0 * base * grow):
+                kind = "cloud"
+                reasons.append(f"the loss changes fast ({rough:.3f} mag frame-to-frame scatter, jumps up to "
+                               f"{jump:.2f} mag)")
+        # 2. Even: every star loses the same amount (needs two or more stars).
+        if n_stars >= 2:
+            offsets = []
+            uneven_noise = []
+            for j in range(n_stars):
+                r = resid[sel, j]
+                r = r[np.isfinite(r)]
+                rc = resid[clear, j]
+                rc = rc[np.isfinite(rc)]
+                if r.size >= 3 and rc.size >= 3:
+                    offsets.append(float(np.median(r) - np.median(rc)))
+                    ns = star_noise_clear[j] if math.isfinite(star_noise_clear[j]) else 0.01
+                    uneven_noise.append(_robust_std(r) / max(ns * grow, 0.003))
+            if offsets:
+                spread = max(offsets) - min(offsets)
+                if spread > max(0.06, 0.15 * (depth if math.isfinite(depth) else 0.0)):
+                    kind = "cloud"
+                    reasons.append(f"the stars lose different amounts (up to {spread:.2f} mag apart)")
+                elif uneven_noise and float(np.median(uneven_noise)) > 4.0:
+                    kind = "cloud"
+                    reasons.append("the stars flicker against each other")
+        else:
+            reasons.append("one star only, so evenness across the field was not checked")
+        # 3. Flat sky: no jumps and no brightening (cloud lit by the Moon or towns).
+        s = sky[sel]
+        s = s[np.isfinite(s)]
+        if s.size >= 4 and math.isfinite(sky_clear) and sky_clear > 0:
+            rise = float(np.median(s) / sky_clear - 1.0)
+            jitter = _robust_std(np.diff(s)) / math.sqrt(2.0)
+            ref_noise = sky_noise_clear if math.isfinite(sky_noise_clear) else 0.0
+            # Jumps: frame-to-frame changes far beyond the clear-sky noise in more than one frame in ten (a robust
+            # scatter alone would not see jumps in a quarter of the frames).
+            jumps = float(np.mean(np.abs(np.diff(s)) > max(5.0 * ref_noise, 0.05 * sky_clear)))
+            if rise > 0.25:
+                kind = "cloud"
+                reasons.append(f"the sky brightens by {rise * 100:.0f}%")
+            elif jumps > 0.10 or jitter > 3.0 * ref_noise + 0.02 * sky_clear:
+                kind = "cloud"
+                reasons.append("the sky jumps")
+        if kind == "transmission":
+            reasons.insert(0, "all stars fade together, smoothly, with a flat sky")
+        episodes.append({"kind": kind, "frames": list(g), "jd": (float(jd[g[0]]), float(jd[g[-1]])),
+                         "depth": depth, "max_depth": max_depth, "reasons": reasons,
+                         "minutes": float((jd[g[-1]] - jd[g[0]]) * 1440.0 + cad * 1440.0)})
+    return episodes
+
+
+def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=None,
+                      report: dict | None = None) -> int:
     """Flag frames whose comparison-star light is more than `limit` (a fraction) below that
     night's median. Dew, cloud, haze, and twilight dim every star; the bright target and the
     fainter comps do not dim identically, so those frames drift. Re-applying replaces old
-    'cloud' flags. Returns how many frames are flagged."""
+    'cloud' flags. Returns how many frames are flagged.
+
+    2.2.14 (item 18): a stretch where all measured stars fade together, smoothly, under a flat sky is transmission
+    loss (dew/haze), flagged 'haze' instead of 'cloud' (light_loss_episodes). Nights in keep_nights keep those
+    points unflagged: their errors already follow the reduced light, since each frame's photon noise comes from its
+    own fluxes and scintillation is a fraction of the light that does arrive. report, when given, is filled with
+    {night: episodes}."""
     flagged = 0
+    keep = set(keep_nights or ())
     by_night: dict[str, list[Obs]] = {}
     for obs in observations:
         by_night.setdefault(obs.night, []).append(obs)
-    for night_obs in by_night.values():
-        rates = [o.flux_comp / o.exptime for o in night_obs if o.flux_comp > 0 and o.exptime > 0]
-        # Series written before v1.3 stored a constant placeholder here; leave those alone.
-        usable = len(rates) >= 5 and len({round(r, 6) for r in rates}) > 1
-        median = float(np.median(rates)) if usable else 0.0
+    for night, night_obs in by_night.items():
         for o in night_obs:
-            words = [w for w in o.flag.split() if w != "cloud"]
-            if usable and limit > 0 and o.exptime > 0 and o.flux_comp / o.exptime < (1.0 - limit) * median:
-                words.append("cloud")
+            o.flag = " ".join(w for w in o.flag.split() if w not in ("cloud", HAZE_FLAG))
+        try:
+            episodes = light_loss_episodes(night_obs, limit)
+        except Exception:
+            episodes = []
+        if report is not None:
+            report[night] = episodes
+        if not episodes:
+            continue
+        ordered = sorted(night_obs, key=lambda o: o.jd)
+        for ep in episodes:
+            if ep["kind"] == "transmission" and night in keep:
+                continue
+            word = HAZE_FLAG if ep["kind"] == "transmission" else "cloud"
+            for k in ep["frames"]:
+                o = ordered[k]
+                o.flag = " ".join(o.flag.split() + [word])
                 flagged += 1
-            o.flag = " ".join(words)
     return flagged
 
 
@@ -4586,6 +4777,11 @@ CREDITS = [
         ("Bootstrap resampling", "Uncertainties and the 'clear winner' test in the aperture test (frames resampled "
          "with replacement, the same frames for every aperture).",
          "Efron, B. 1979, Annals of Statistics 7, 1.", ""),
+        # 2.2.14 (item 13): times of maximum / minimum.
+        ("Kwee-van Woerden method", "Times of maximum and minimum (Variables Output, Time of max/min…): the "
+         "branches folded about trial times, with its error estimate; checked against a local polynomial with "
+         "bootstrap errors and a Fourier series at the catalog period, and O−C against VSX elements.",
+         "Kwee, K. K. & van Woerden, H. 1956, Bull. Astron. Inst. Netherlands 12, 327.", ""),
         ("Median absolute deviation", "Robust scatter of light curves in the aperture test, comp health, and field scans.",
          "Hampel, F. R. 1974, JASA 69, 383; Rousseeuw, P. J. & Croux, C. 1993, JASA 88, 1273.", ""),
         ("AAVSO Extended File Format", "Variable-star report files.", "American Association of Variable Star Observers.",
@@ -4725,10 +4921,420 @@ def convert_times(jd_utc: np.ndarray, system: str, ra_deg: float | None, dec_deg
     raise ValueError(f"Unknown time system {system}")
 
 
+# ---- Times of maximum / minimum and O-C (2.2.14 item 13) --------------------------------
+# 2.2.14 (item 13): the time of a light-curve extremum from one night, three ways (Kwee & van Woerden 1956; a local
+# polynomial with bootstrap errors; a Fourier series at a known period as a cross-check), its O-C against catalog
+# (VSX) or typed elements, and a CSV of times that grows night by night into an O-C diagram. Works on the light
+# curve alone (any camera, solved or not); HJD/BJD need RA/Dec (typed, looked up, or from the solve).
+
+EXTREMUM_COLUMNS = ("star", "type", "hjd", "bjd_tdb", "jd_utc", "error_d", "error_min", "method", "cycle", "o_c_d",
+                    "o_c_min", "period_d", "epoch", "elements", "night", "n_points", "window_min", "kvw_jd",
+                    "kvw_err", "poly_jd", "poly_err", "fourier_jd", "fourier_err", "time_note", "note")
+
+ECLIPSING_TYPES = ("EA", "EB", "EW", "E", "ELL")
+
+
+def extremum_kind_for(var_type: str) -> str:
+    """'min' for eclipsing binaries (their elements count minima), 'max' for pulsators and the rest."""
+    head = _re.split(r"[^A-Za-z]", str(var_type or "").strip().upper())[0]
+    return "min" if head in ECLIPSING_TYPES else "max"
+
+
+def _running_median(t: np.ndarray, m: np.ndarray, width: float) -> np.ndarray:
+    lo = np.searchsorted(t, t - width / 2.0, side="left")
+    hi = np.searchsorted(t, t + width / 2.0, side="right")
+    return np.array([np.median(m[a:b]) for a, b in zip(lo, hi)])
+
+
+def _clean_sorted(t, m):
+    t = np.asarray(t, dtype=float)
+    m = np.asarray(m, dtype=float)
+    ok = np.isfinite(t) & np.isfinite(m)
+    t, m = t[ok], m[ok]
+    order = np.argsort(t)
+    return t[order], m[order]
+
+
+def extremum_window(t, m, kind: str = "max", t_guess: float | None = None, period: float | None = None,
+                    depart: float = 0.35) -> dict:
+    """Locate one extremum roughly and choose a window around it.
+
+    The curve is smoothed with a running median; the extremum is the brightest (kind 'max', smallest magnitude) or
+    faintest point of the smoothed curve (near t_guess when given: within a quarter period, or a quarter of the
+    night). The half-width is where the smoothed curve has moved `depart` x the night's amplitude from the extreme,
+    taking the nearer side so the window is symmetric (Kwee-van Woerden needs both branches).
+    Returns {"t0", "half_width", "amplitude", "short_side": '' | 'before' | 'after', "n_before", "n_after"}."""
+    t, m = _clean_sorted(t, m)
+    if t.size < 12:
+        raise ValueError("too few points to find an extremum (need 12 or more)")
+    dt = float(np.median(np.diff(t))) if t.size > 1 else 0.0
+    span = float(t[-1] - t[0])
+    width = max(7.0 * dt, 0.03 * period if period else 0.02 * span)
+    sm = _running_median(t, m, width)
+    sign = -1.0 if kind == "max" else 1.0     # brighter = smaller magnitude
+    if t_guess is not None and math.isfinite(t_guess):
+        reach = 0.25 * period if period else 0.25 * span
+        near = np.abs(t - t_guess) <= reach
+        if not near.any():
+            raise ValueError("no points near the expected time")
+        idx = np.where(near)[0]
+        i0 = int(idx[np.argmax(sign * sm[idx])])
+    else:
+        i0 = int(np.argmax(sign * sm))
+    amp = float(np.max(sm) - np.min(sm))
+    if not amp > 0:
+        raise ValueError("the light curve is flat; no extremum to time")
+    level = depart * amp
+
+    def reach_side(step):
+        k = i0
+        while 0 <= k + step < t.size:
+            k += step
+            if abs(sm[k] - sm[i0]) >= level:
+                return abs(t[k] - t[i0]), True
+        return abs(t[k] - t[i0]), False
+
+    d_before, ok_before = reach_side(-1)
+    d_after, ok_after = reach_side(+1)
+    short = "" if ok_before and ok_after else ("before" if not ok_before else "after")
+    hw = min(d_before, d_after)
+    t0 = float(t[i0])
+    n_before = int(np.sum((t >= t0 - hw) & (t < t0)))
+    n_after = int(np.sum((t > t0) & (t <= t0 + hw)))
+    return {"t0": t0, "half_width": float(hw), "amplitude": amp, "short_side": short,
+            "n_before": n_before, "n_after": n_after, "cadence": dt}
+
+
+def kwee_van_woerden(t, m, t_guess: float, half_width: float, n_trial: int = 201) -> dict:
+    """Time of a symmetric extremum by Kwee & van Woerden (1956, BAN 12, 327).
+
+    For trial times T the curve is folded about T and S(T) = mean of (m(T + tau) - m(T - tau))^2 over pairs tau =
+    cadence, 2 x cadence ... half_width (linear interpolation between the measured points). S is smallest where the
+    two branches match; a parabola S = aT^2 + bT + c through the trials around the smallest S gives
+    T0 = -b / 2a and sigma^2 = (4ac - b^2) / (4a^2 (Z - 1)) with Z = N / 4 (N measured points within half_width),
+    as in the paper. Returns {"t", "err", "n", "s_min"}; raises ValueError when the window is not covered."""
+    t, m = _clean_sorted(t, m)
+    hw = float(half_width)
+    dt = float(np.median(np.diff(t))) if t.size > 2 else 0.0
+    if not (hw > 0 and dt > 0):
+        raise ValueError("Kwee-van Woerden: no window")
+    shift = 0.5 * hw
+    lo_t, hi_t = max(t_guess - shift, t[0] + hw), min(t_guess + shift, t[-1] - hw)
+    if hi_t <= lo_t:
+        raise ValueError("Kwee-van Woerden: the extremum is not covered on both sides")
+    taus = np.arange(1, int(hw / dt) + 1) * dt
+    if taus.size < 3:
+        raise ValueError("Kwee-van Woerden: too few points in the window")
+    trials = np.linspace(lo_t, hi_t, n_trial)
+    s = np.array([np.mean((np.interp(T + taus, t, m) - np.interp(T - taus, t, m)) ** 2) for T in trials])
+    k = int(np.argmin(s))
+    half = max(3, n_trial // 10)
+    a_, b_ = max(0, k - half), min(n_trial, k + half + 1)
+    if b_ - a_ < 5:
+        raise ValueError("Kwee-van Woerden: the minimum of S is at the edge of the search")
+    x = trials[a_:b_] - trials[k]
+    a, b, c = np.polyfit(x, s[a_:b_], 2)
+    if not a > 0:
+        raise ValueError("Kwee-van Woerden: S has no minimum here")
+    t0 = float(trials[k] - b / (2.0 * a))
+    n = int(np.sum(np.abs(t - t0) <= hw))
+    z = n / 4.0
+    var = (4.0 * a * c - b * b) / (4.0 * a * a * (z - 1.0)) if z > 1 else float("nan")
+    return {"t": t0, "err": float(math.sqrt(var)) if var > 0 else float("nan"), "n": n,
+            "s_min": float(c - b * b / (4.0 * a))}
+
+
+def _poly_extreme(x, y, degree: int, kind: str, limit: float = 0.85):
+    coef = np.polyfit(x, y, degree)
+    roots = np.roots(np.polyder(coef))
+    cand = [float(r.real) for r in roots if abs(r.imag) < 1e-9 and abs(r.real) <= limit]
+    if not cand:
+        return None, coef
+    vals = np.polyval(coef, cand)
+    pick = int(np.argmin(vals)) if kind == "max" else int(np.argmax(vals))
+    # Must be a true extremum of the right kind (second derivative sign).
+    second = np.polyval(np.polyder(coef, 2), cand[pick])
+    if (kind == "max" and second <= 0) or (kind == "min" and second >= 0):
+        return None, coef
+    return cand[pick], coef
+
+
+def poly_extremum(t, m, t_guess: float, half_width: float, kind: str = "max", degree: int | None = None,
+                  n_boot: int = 500, seed: int = 1) -> dict:
+    """Time of an extremum from a polynomial fitted to the points within half_width of t_guess.
+
+    The degree (2-5) is chosen by the Bayesian information criterion unless given; the error is the scatter of the
+    extremum over n_boot bootstrap resamples of the points (Efron 1979), with half the change when the degree goes
+    up by one added in quadrature (the model's own uncertainty on an asymmetric peak).
+    Returns {"t", "err", "boot_err", "model_err", "degree", "n"}."""
+    t, m = _clean_sorted(t, m)
+    hw = float(half_width)
+    sel = np.abs(t - t_guess) <= hw
+    x, y = (t[sel] - t_guess) / hw, m[sel]
+    n = int(x.size)
+    if n < 8:
+        raise ValueError("polynomial: too few points in the window")
+    if degree is None:
+        best = None
+        for d in range(2, 6):
+            if n < d + 6:
+                break
+            coef = np.polyfit(x, y, d)
+            rss = float(np.sum((np.polyval(coef, x) - y) ** 2))
+            bic = n * math.log(max(rss, 1e-30) / n) + (d + 1) * math.log(n)
+            if best is None or bic < best[0]:
+                best = (bic, d)
+        degree = best[1] if best else 2
+    x0, _ = _poly_extreme(x, y, degree, kind)
+    if x0 is None:
+        raise ValueError("polynomial: no extremum inside the window")
+    model_err = 0.0
+    if n >= degree + 7:
+        x1, _ = _poly_extreme(x, y, degree + 1, kind)
+        if x1 is not None:
+            model_err = 0.5 * abs(x1 - x0) * hw
+    rng = np.random.default_rng(seed)
+    boots = []
+    for _ in range(int(n_boot)):
+        idx = rng.integers(0, n, n)
+        if np.unique(x[idx]).size <= degree + 1:
+            continue
+        xb, _ = _poly_extreme(x[idx], y[idx], degree, kind)
+        if xb is not None:
+            boots.append(xb)
+    boots = np.asarray(boots)
+    if boots.size < max(20, n_boot // 4):
+        raise ValueError("polynomial: the bootstrap could not find the extremum often enough")
+    boot_err = float(np.std(boots, ddof=1)) * hw
+    return {"t": float(t_guess + x0 * hw), "err": float(math.hypot(boot_err, model_err)), "boot_err": boot_err,
+            "model_err": float(model_err), "degree": int(degree), "n": n}
+
+
+def _fourier_design(t, period, n_harm, t_ref):
+    ph = 2.0 * math.pi * (np.asarray(t) - t_ref) / period
+    cols = [np.ones_like(ph)]
+    for k in range(1, n_harm + 1):
+        cols += [np.cos(k * ph), np.sin(k * ph)]
+    return np.vstack(cols).T
+
+
+def fourier_extremum(t, m, period: float, t_guess: float, kind: str = "max", n_harm: int | None = None,
+                     n_boot: int = 200, seed: int = 2) -> dict:
+    """Cross-check: a Fourier series at a known period (harmonics chosen by BIC, up to 8) fitted to the whole night,
+    and the time of its extremum within a quarter period of t_guess. Error from refits with the residuals
+    resampled. Returns {"t", "err", "n_harm", "rms", "n"}."""
+    t, m = _clean_sorted(t, m)
+    if not (period and period > 0):
+        raise ValueError("Fourier: needs a period")
+    n = t.size
+    t_ref = float(t_guess)
+    if n_harm is None:
+        best = None
+        for h in range(1, 9):
+            if n < 2 * h + 8:
+                break
+            a = _fourier_design(t, period, h, t_ref)
+            coef, *_ = np.linalg.lstsq(a, m, rcond=None)
+            rss = float(np.sum((a @ coef - m) ** 2))
+            bic = n * math.log(max(rss, 1e-30) / n) + (2 * h + 1) * math.log(n)
+            if best is None or bic < best[0]:
+                best = (bic, h)
+        if best is None:
+            raise ValueError("Fourier: too few points")
+        n_harm = best[1]
+    a = _fourier_design(t, period, n_harm, t_ref)
+    coef, *_ = np.linalg.lstsq(a, m, rcond=None)
+    model = a @ coef
+    resid = m - model
+    grid = t_ref + np.linspace(-0.25, 0.25, 2001) * period
+    g = _fourier_design(grid, period, n_harm, t_ref)
+
+    def extreme(c):
+        v = g @ c
+        return float(grid[int(np.argmin(v)) if kind == "max" else int(np.argmax(v))])
+
+    t0 = extreme(coef)
+    rng = np.random.default_rng(seed)
+    boots = []
+    for _ in range(int(n_boot)):
+        cb, *_ = np.linalg.lstsq(a, model + rng.choice(resid, n, replace=True), rcond=None)
+        boots.append(extreme(cb))
+    return {"t": t0, "err": float(np.std(boots, ddof=1)), "n_harm": int(n_harm),
+            "rms": float(np.sqrt(np.mean(resid ** 2))), "n": int(n)}
+
+
+def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_guess: float | None = None,
+                     half_width: float | None = None, n_boot: int = 500, seed: int = 1) -> dict:
+    """One night's time of maximum or minimum (JD of the input times): the local polynomial with its bootstrap error
+    is adopted; Kwee-van Woerden and (with a period) a Fourier series are measured alongside as checks.
+    Returns {"t", "err", "method", "kind", "half_width", "window", "kvw", "poly", "fourier", "warnings", "notes"};
+    raises ValueError when the extremum cannot be timed."""
+    t, m = _clean_sorted(t, m)
+    win = extremum_window(t, m, kind, t_guess, period)
+    hw = float(half_width) if half_width else win["half_width"]
+    warnings = []
+    if win["short_side"]:
+        warnings.append(f"the night {'starts' if win['short_side'] == 'before' else 'ends'} close to the "
+                        f"{'maximum' if kind == 'max' else 'minimum'}: one branch is short")
+    if win["short_side"] and win["half_width"] <= 0:
+        raise ValueError(f"the {'maximum' if kind == 'max' else 'minimum'} is at the "
+                         f"{'start' if win['short_side'] == 'before' else 'end'} of the night: not covered on both sides")
+    if win["n_before"] < 5 or win["n_after"] < 5:
+        raise ValueError(f"the {'maximum' if kind == 'max' else 'minimum'} is not covered on both sides "
+                         f"({win['n_before']} points before, {win['n_after']} after)")
+    poly = poly_extremum(t, m, win["t0"], hw, kind, n_boot=n_boot, seed=seed)
+    # Second pass centred on the first answer, so the window is symmetric about the extremum itself.
+    poly = poly_extremum(t, m, poly["t"], hw, kind, n_boot=n_boot, seed=seed)
+    try:
+        kvw = kwee_van_woerden(t, m, poly["t"], hw)
+    except ValueError as exc:
+        kvw = None
+        warnings.append(str(exc))
+    fourier = None
+    if period:
+        try:
+            fourier = fourier_extremum(t, m, period, poly["t"], kind, seed=seed + 1)
+        except ValueError as exc:
+            warnings.append(str(exc))
+    notes = []
+    if kvw and math.isfinite(kvw.get("err", float("nan"))):
+        diff = kvw["t"] - poly["t"]
+        if abs(diff) > 3.0 * math.hypot(poly["err"], kvw["err"]):
+            # Synthetic HADS maxima (fast rise, slow fall) put KvW ~1 min late: it assumes mirror-image branches.
+            notes.append(f"Kwee-van Woerden reads {abs(diff) * 1440:.1f} min {'later' if diff > 0 else 'earlier'}: "
+                         "the extremum is asymmetric (KvW assumes mirror-image branches), so the polynomial is used")
+    if fourier and math.isfinite(fourier.get("err", float("nan"))):
+        diff = fourier["t"] - poly["t"]
+        if abs(diff) > 3.0 * math.hypot(poly["err"], fourier["err"]):
+            warnings.append(f"the Fourier series at the period reads {abs(diff) * 1440:.1f} min "
+                            f"{'later' if diff > 0 else 'earlier'} (more than 3 sigma): a second period, a short "
+                            "branch, or the wrong period")
+    return {"t": poly["t"], "err": poly["err"], "method": f"polynomial deg {poly['degree']} + bootstrap",
+            "kind": kind, "half_width": hw, "window": win, "kvw": kvw, "poly": poly, "fourier": fourier,
+            "warnings": warnings, "notes": notes}
+
+
+def predicted_extrema(t_start: float, t_end: float, period: float, epoch: float, margin: float = 0.0) -> list:
+    """Times epoch + E x period that fall inside [t_start - margin, t_end + margin]."""
+    if not (period and period > 0):
+        return []
+    e0 = math.ceil((t_start - margin - epoch) / period)
+    e1 = math.floor((t_end + margin - epoch) / period)
+    return [epoch + e * period for e in range(e0, e1 + 1)]
+
+
+def o_minus_c(t_obs: float, period: float, epoch: float, half_cycles: bool = False) -> dict:
+    """Cycle count E (nearest whole cycle, or half cycle for a secondary minimum), calculated time epoch + E x P and
+    O-C in days and minutes. t_obs and epoch must be in the same time system (VSX epochs are HJD)."""
+    e = (float(t_obs) - float(epoch)) / float(period)
+    cycle = round(e * 2.0) / 2.0 if half_cycles else float(round(e))
+    calc = float(epoch) + cycle * float(period)
+    oc = float(t_obs) - calc
+    return {"cycle": cycle, "calc": calc, "oc_d": oc, "oc_min": oc * 1440.0}
+
+
+def extremum_times(jd_utc: float, ra_deg, dec_deg, lat, lon) -> dict:
+    """HJD (UTC) and BJD (TDB) of one geocentric JD (UTC). Without RA/Dec both are NaN; without a site the
+    geocentre is used (at most ~0.02 s different)."""
+    out = {"jd_utc": float(jd_utc), "hjd": float("nan"), "bjd_tdb": float("nan"), "note": ""}
+    if ra_deg is None or dec_deg is None:
+        out["note"] = "no RA/Dec: HJD/BJD not computed (light-time correction up to 8.3 min missing)"
+        return out
+    site_note = ""
+    if lat is None or lon is None:
+        lat, lon, site_note = 0.0, 0.0, "site unknown: geocentre used"
+    for key, system in (("hjd", "HJD_UTC"), ("bjd_tdb", "BJD_TDB")):
+        out[key] = float(convert_times(np.array([jd_utc]), system, ra_deg, dec_deg, lat, lon)[0])
+    out["note"] = site_note
+    return out
+
+
+def extremum_csv_name(star: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "-_+." else "_" for ch in str(star or "target").strip()) or "target"
+    return f"{safe}_times_of_extremum.csv"
+
+
+def read_extremum_csv(path: str) -> list[dict]:
+    """Rows of a times-of-extremum CSV (comment lines skipped), numbers as floats where they parse."""
+    rows = []
+    if not path or not os.path.exists(path):
+        return rows
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        lines = [ln.rstrip("\r\n") for ln in fh if ln.strip() and not ln.startswith("#")]
+    if not lines:
+        return rows
+    head = [h.strip() for h in lines[0].split(",")]
+    for ln in lines[1:]:
+        parts = ln.split(",")
+        row = {}
+        for k, v in zip(head, parts):
+            v = v.strip()
+            try:
+                row[k] = float(v) if k not in ("star", "type", "method", "elements", "night", "time_note", "note") \
+                    else v
+            except ValueError:
+                row[k] = v if v else float("nan")
+        rows.append(row)
+    return rows
+
+
+def save_extremum_row(path: str, row: dict) -> str:
+    """Add one time of extremum to the CSV (created if missing). A row for the same star and type within 0.01 d is
+    replaced (a re-measurement). The first '# Created' line is kept and an '# Updated' line follows.
+    Returns 'added' or 'replaced'."""
+    old = read_extremum_csv(path)
+    created = None
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            first = fh.readline().strip()
+        if first.startswith("# Created"):
+            created = first
+
+    def key_t(r):
+        for k in ("hjd", "jd_utc"):
+            v = r.get(k)
+            if isinstance(v, float) and math.isfinite(v):
+                return v
+        return float("nan")
+
+    new_t = key_t(row)
+    kept = [r for r in old if not (str(r.get("star")) == str(row.get("star")) and r.get("type") == row.get("type")
+                                   and abs(key_t(r) - new_t) < 0.01)]
+    status = "replaced" if len(kept) < len(old) else "added"
+    rows = sorted(kept + [row], key=lambda r: (key_t(r) if math.isfinite(key_t(r)) else 0.0))
+
+    def cell(k, v):
+        if isinstance(v, float):
+            if not math.isfinite(v):
+                return ""
+            if k in ("hjd", "bjd_tdb", "jd_utc", "kvw_jd", "poly_jd", "fourier_jd", "epoch"):
+                return f"{v:.5f}"
+            if k in ("error_d", "o_c_d", "kvw_err", "poly_err", "fourier_err"):
+                return f"{v:.5f}"
+            if k == "period_d":
+                return f"{v:.8f}"
+            if k == "cycle":
+                return f"{v:g}"
+            return f"{v:.2f}"
+        if isinstance(v, int):
+            return str(v)
+        return str(v if v is not None else "").replace(",", ";").replace("\n", " ").strip()[:160]
+
+    with AsciiWriter(path) as fh:
+        fh.write((created or created_line()) + "\n")
+        if created:
+            fh.write(f"# Updated {dtg()} by SHOBS-P\n")
+        fh.write(",".join(EXTREMUM_COLUMNS) + "\n")
+        for r in rows:
+            fh.write(",".join(cell(k, r.get(k, "")) for k in EXTREMUM_COLUMNS) + "\n")
+    return status
+
+
 # ---- Comparison ensemble health -------------------------------------------------------
 
 def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
-                spare_names: list[str] | None = None, aliases: dict | None = None) -> dict | None:
+                spare_names: list[str] | None = None, aliases: dict | None = None,
+                night_sign: dict | None = None) -> dict | None:
     """Measure each comp, spare comp, and the check star against the others, frame by frame.
 
     For every star, its instrumental magnitude minus the mean of the other stars in the same
@@ -4736,6 +5342,10 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     from night to night, or scatters more than the rest, is the one to drop. The reference
     for each star uses only the stars present in most frames, so a spare that exists on a
     few nights cannot shift the others.
+
+    2.2.14 (item 20): each star's flip step on every night with both sides ("flip_steps": {night: step}, after minus
+    before, times night_sign[night] when given so every night reads the same pair of pier sides the same way), with
+    "pier" / "pier_kind" from pier_verdicts: steady on both sides, or a stepper.
     """
     spare_names = list(spare_names or [])
     aliases = aliases or {}
@@ -4802,6 +5412,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
         for j, lab in enumerate(labels):
             within = []
             steps = []
+            night_steps = {}   # 2.2.14 (item 20)
             seg_scatter = []
             for night in night_list:
                 sel = (night_arr == night) & np.isfinite(resid[:, j])
@@ -4814,6 +5425,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                     if pre.sum() >= 3 and post.sum() >= 3:
                         m_pre, m_post = float(np.median(resid[pre, j])), float(np.median(resid[post, j]))
                         steps.append(m_post - m_pre)
+                        night_steps[night] = (m_post - m_pre) * float((night_sign or {}).get(night, 1.0))
                         # Scatter with the step taken out, to judge whether the step is real.
                         flat = np.concatenate([resid[pre, j] - m_pre, resid[post, j] - m_post])
                         seg_scatter.append(1.4826 * float(np.median(np.abs(flat))))
@@ -4823,7 +5435,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                             "scatter": float(np.median(within)) if within else float("nan"),
                             "flip_step": max(steps, key=abs) if steps else float("nan"),
                             "seg_scatter": float(np.median(seg_scatter)) if seg_scatter else float("nan"),
-                            "nights": len(meds)})
+                            "nights": len(meds), "flip_steps": night_steps})
         spreads = np.array([s["night_spread"] for j, s in enumerate(summary)
                             if math.isfinite(s["night_spread"]) and core_set[j]])
         typical = float(np.median(spreads)) if spreads.size else float("nan")
@@ -4872,6 +5484,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
             core_set[j] = False
             excluded.append(labels[j])
         nightly, summary, resid = evaluate(core_set)
+    pier_verdicts(summary)   # 2.2.14 (item 20)
     return {"labels": labels, "kinds": kinds, "nights": night_list, "nightly": nightly, "summary": summary,
             "excluded": excluded, "too_few": False,
             # 2.2.2: frame-by-frame residuals for the within-night plot.
@@ -5197,6 +5810,158 @@ def rotator_difference(a: float, b: float) -> float:
     position), so the angles are compared modulo 180°."""
     d = angle_difference(a, b)
     return min(d, 180.0 - d)
+
+
+# ---- Pier side across a campaign (2.2.14 item 20) ---------------------------------------
+# 2.2.14 (item 20): HD 219134, 25 Sep–14 Oct: the 210° (after-meridian) side read 0.02–0.06 brighter than the 30°
+# side on 3 of 5 nights, the check star moving the same way. Each night records which side (camera angle) each of its
+# segments was on, so a campaign can be normalised side by side and comps that step at the flip can be found.
+
+FLIP_STEP_MARK = 0.02   # a night's flip step above this is marked in the night table
+
+
+def side_label(angle) -> str:
+    """'30°' for a rotator reading (to the nearest degree, 360 = 0)."""
+    return f"{int(round(float(angle))) % 360}°"
+
+
+def night_pier_info(rot_before=None, rot_after=None, pier_before=None, pier_after=None,
+                    has_flip: bool = False) -> dict:
+    """A night's pier sides: {"source", "before", "after", "note"}. before/after label the segment before the
+    meridian flip and the one after it ('' when the night has no such segment).
+
+    ROTATOR (or ROTATANG ...) readings name the side by camera angle ('30°' / '210°'). Without them, the header's
+    PIERSIDE ('East' / 'West'). Without either, a night with a flip seen in the image orientation gets 'before flip' /
+    'after flip'; a night without one gets no side at all (it cannot be placed)."""
+    def num(v):
+        try:
+            v = float(v)
+            return v if math.isfinite(v) else None
+        except (TypeError, ValueError):
+            return None
+
+    rb, ra = num(rot_before), num(rot_after)
+    out = {"source": "", "before": "", "after": "", "note": ""}
+    if rb is not None or ra is not None:
+        out["source"] = "ROTATOR"
+        out["before"] = side_label(rb) if rb is not None else ""
+        if has_flip and ra is not None:
+            out["after"] = side_label(ra)
+            if rb is not None and angle_difference(ra, rb) <= 2.0:
+                # The camera was turned back to its first angle after the flip: same angle, other pier side.
+                out["after"] = side_label(ra) + " flipped"
+        elif has_flip and rb is not None:
+            out["after"] = side_label(rb + 180.0)
+        return out
+    pb = str(pier_before or "").strip().lower()
+    pa = str(pier_after or "").strip().lower()
+    if pb or pa:
+        def word(p):
+            return "East" if "east" in p else "West" if "west" in p else (p.title() if p else "")
+        out["source"] = "PIERSIDE"
+        out["before"] = word(pb)
+        out["after"] = word(pa) if has_flip else ""
+        return out
+    if has_flip:
+        out["source"] = "flip"
+        out["before"], out["after"] = "before flip", "after flip"
+        out["note"] = "no ROTATOR or PIERSIDE in the headers: sides from the image orientation (the flip)"
+        return out
+    out["note"] = "no ROTATOR or PIERSIDE and no flip: pier side unknown"
+    return out
+
+
+def side_text(info: dict | None) -> str:
+    """Night table text for a night's sides: '30°', '30°/210°', 'before/after flip', or '—'."""
+    if not info:
+        return "—"
+    b, a = info.get("before") or "", info.get("after") or ""
+    if info.get("source") == "flip":
+        return "before/after flip"
+    if b and a:
+        return f"{b}/{a}"
+    return b or a or "—"
+
+
+def point_sides(observations: list[Obs], pier_by_night: dict) -> list[str]:
+    """Each point's side label from its night's pier info and its segment ('' when unknown)."""
+    out = []
+    for o in observations:
+        info = pier_by_night.get(o.night) or {}
+        out.append((info.get("after") if o.segment == "flip" else info.get("before")) or "")
+    return out
+
+
+def side_offsets(observations: list[Obs], values, sides: list[str], use=None, min_points: int = 5) -> dict:
+    """2.2.14 (item 20): how much each pier side reads brighter or fainter than the reference side (the side with
+    the most points). Nights with both sides give the cleanest answer (the star cannot change much within a night):
+    the median over those nights of (side median - reference side median). A side never seen together with the
+    reference side on one night falls back on the whole-series medians (less safe for a variable star).
+    Returns {"ref", "offsets": {side: mag}, "how": {side: words}, "counts": {side: points}, "nights": {side: n}}."""
+    vals = np.asarray(values, dtype=float)
+    ok = np.isfinite(vals) & np.array([bool(s) for s in sides], dtype=bool)
+    if use is not None:
+        ok &= np.asarray(use, dtype=bool)
+    counts: dict[str, int] = {}
+    nights_of: dict[str, set] = {}
+    for o, s, good in zip(observations, sides, ok):
+        if good:
+            counts[s] = counts.get(s, 0) + 1
+            nights_of.setdefault(s, set()).add(o.night)
+    out = {"ref": "", "offsets": {}, "how": {}, "counts": counts, "nights": {s: len(n) for s, n in nights_of.items()}}
+    if not counts:
+        return out
+    ref = max(counts, key=lambda s: (counts[s], s))
+    out["ref"] = ref
+    out["offsets"][ref] = 0.0
+    out["how"][ref] = "reference"
+    by = {}
+    for o, s, v, good in zip(observations, sides, vals, ok):
+        if good:
+            by.setdefault((o.night, s), []).append(v)
+    for side in counts:
+        if side == ref:
+            continue
+        steps = []
+        for night in sorted(nights_of[side] & nights_of[ref]):
+            a, b = by.get((night, side), []), by.get((night, ref), [])
+            if len(a) >= min_points and len(b) >= min_points:
+                steps.append(float(np.median(a) - np.median(b)))
+        if steps:
+            out["offsets"][side] = float(np.median(steps))
+            out["how"][side] = f"median step on {len(steps)} night{'s' if len(steps) != 1 else ''} with both sides"
+        else:
+            sv = vals[ok & np.array([s == side for s in sides])]
+            rv = vals[ok & np.array([s == ref for s in sides])]
+            out["offsets"][side] = float(np.median(sv) - np.median(rv))
+            out["how"][side] = "series medians (no night has both sides)"
+    return out
+
+
+def apply_side_offsets(sides: list[str], values, offsets: dict) -> list[float]:
+    """Each point moved onto the reference side's level ('pier side as segments')."""
+    return [float(v) - offsets.get(s, 0.0) if s else float(v) for s, v in zip(sides, values)]
+
+
+def pier_verdicts(summary: list[dict], steady: float = 0.01, stepper: float = 0.02) -> list[dict]:
+    """2.2.14 (item 20): from comp_health's per-star flip steps (one per night with both sides), which stars read
+    the same on both pier sides and which step. Adds "pier" (words) and "pier_kind" ('steady' / 'steps' / '') to
+    each summary row and returns the rows."""
+    for row in summary:
+        steps = [v for v in (row.get("flip_steps") or {}).values() if math.isfinite(v)]
+        if not steps:
+            row["pier"], row["pier_kind"] = "—", ""
+            continue
+        med = float(np.median(steps))
+        worst = max(steps, key=abs)
+        n = len(steps)
+        if abs(med) > stepper or (n >= 2 and sum(1 for s in steps if abs(s) > stepper) > n / 2):
+            row["pier"], row["pier_kind"] = f"STEPS {med:+.3f} ({n} night{'s' if n != 1 else ''})", "steps"
+        elif abs(med) <= steady and abs(worst) <= stepper:
+            row["pier"], row["pier_kind"] = f"steady {med:+.3f} ({n} night{'s' if n != 1 else ''})", "steady"
+        else:
+            row["pier"], row["pier_kind"] = f"{med:+.3f}, worst {worst:+.3f} ({n})", ""
+    return summary
 
 
 def edge_problems(observations: list, shape: tuple, comp_names: list[str], check_name: str, margin: float,

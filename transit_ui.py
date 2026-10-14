@@ -608,7 +608,7 @@ class TransitPage:
                  "flip_source": "the frames' flip segment", "flagged": None}
         used = {id(o) for o in obs}
         clouded = [o for o in app.observations if o.night == night and id(o) not in used and math.isfinite(o.mag)
-                   and o.flag and set(o.flag.split()) <= {"cloud"}]
+                   and o.flag and set(o.flag.split()) <= {"cloud", core.HAZE_FLAG}]   # 2.2.14: haze too
         if clouded:
             cjd = np.array([o.jd for o in clouded])
             cmag = np.array([o.mag for o in clouded])
