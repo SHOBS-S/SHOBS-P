@@ -3103,6 +3103,94 @@ def star_inst(obs: Obs, name: str, comp_names: list[str], aliases: dict | None =
     return v
 
 
+def check_instrumental(obs: Obs) -> float:
+    """2.2.14 (item 8): the check star's instrumental differential magnitude (check minus the comp ensemble, both
+    instrumental), NaN when the check was not measured. Used when the check has no catalog magnitude, so there is
+    no reduced check magnitude (check_std) to plot; it still shows whether the check stayed steady."""
+    k, c = obs.kmag, obs.cmag
+    if k is None or c is None or not math.isfinite(k) or not math.isfinite(c):
+        return float("nan")
+    return float(k - c)
+
+
+ZP_WARN_MAG = 0.025      # 2.2.14 (item 10): "a few hundredths"
+ZP_NEAR_MAG = 1.0        # comps within this many magnitudes count as "near the target's brightness"
+
+
+def ensemble_zero_point_check(observations: list[Obs], selection: list[str], comp_names: list[str],
+                              catalog: dict, aliases: dict | None = None, limit: float = ZP_WARN_MAG,
+                              near: float = ZP_NEAR_MAG) -> dict | None:
+    """2.2.14 (item 10): does the chosen comp ensemble move the night's level compared with the comps nearest the
+    target's brightness?
+
+    Faint comps can carry a colour term, a non-linearity or a sky-subtraction bias that bright comps do not, and
+    in an ensemble that shifts the whole night (13 Oct, HD 219134: 6 comps incl. 11-13 mag stars gave 5.383, the
+    8.7 mag comp alone 5.501). The reference set is the comps (the chosen ones and the run's own) within `near`
+    mag of the target's median; when none is that close (a bright target), those within `near` mag of the comp
+    nearest the target in brightness. Frame by frame the target is reduced against both sets (only frames without
+    flags, with every star measured), and the night's median difference is the shift.
+
+    Returns None when there is nothing to compare (fewer than two chosen comps with catalog magnitudes, or the
+    reference set is the chosen set), else {"reference": [names], "selection": [names], "nights": {night:
+    {"shift", "level_sel", "level_ref", "sigma_sel", "sigma_ref", "n"}}, "warn": [nights over the limit],
+    "text": [one plain line per warned night]}. Positive shift = the chosen ensemble makes the target fainter."""
+    def cat(n):
+        try:
+            v = float(catalog.get(n))
+        except (TypeError, ValueError):
+            return float("nan")
+        return v
+
+    sel = [n for n in selection if math.isfinite(cat(n))]
+    if len(sel) < 2:
+        return None
+    pool = list(dict.fromkeys(sel + [n for n in comp_names if math.isfinite(cat(n))]))
+    clean = [o for o in observations if not o.flag and math.isfinite(o.mag)]
+    if not clean:
+        return None
+    target = float(np.median([o.mag for o in clean]))
+    ref = [n for n in pool if abs(cat(n) - target) <= near]
+    if not ref:
+        closest = min(pool, key=lambda n: abs(cat(n) - target))
+        ref = [n for n in pool if abs(cat(n) - cat(closest)) <= near]
+    if not ref or set(ref) == set(sel):
+        return None
+    sel_cat = float(np.mean([cat(n) for n in sel]))
+    ref_cat = float(np.mean([cat(n) for n in ref]))
+    by_night: dict = {}
+    for o in clean:
+        if not math.isfinite(o.target_inst):
+            continue
+        si = [star_inst(o, n, comp_names, aliases) for n in sel]
+        ri = [star_inst(o, n, comp_names, aliases) for n in ref]
+        if not all(math.isfinite(v) for v in si + ri):
+            continue
+        by_night.setdefault(o.night, []).append((sel_cat + o.target_inst - float(np.mean(si)),
+                                                 ref_cat + o.target_inst - float(np.mean(ri))))
+    out = {"reference": ref, "selection": sel, "nights": {}, "warn": [], "text": []}
+    for night, pairs in by_night.items():
+        if len(pairs) < 5:
+            continue
+        a = np.array(pairs)
+        shift = float(np.median(a[:, 0] - a[:, 1]))
+        out["nights"][night] = {"shift": shift, "level_sel": float(np.median(a[:, 0])),
+                                "level_ref": float(np.median(a[:, 1])), "sigma_sel": robust_sigma(a[:, 0]),
+                                "sigma_ref": robust_sigma(a[:, 1]), "n": len(pairs)}
+        if abs(shift) > limit:
+            out["warn"].append(night)
+    if not out["nights"]:
+        return None
+    ref_text = ", ".join(f"{n} (V {cat(n):.2f})" for n in ref)
+    for night in sorted(out["warn"]):
+        r = out["nights"][night]
+        out["text"].append(
+            f"{night}: the {len(sel)} chosen comps put the target at {r['level_sel']:.3f} (σ {r['sigma_sel']:.3f}); "
+            f"the comp(s) nearest its brightness, {ref_text}, at {r['level_ref']:.3f} (σ {r['sigma_ref']:.3f}): "
+            f"{r['shift']:+.3f} mag apart. Comps much fainter than the target can shift the zero point (colour, "
+            "linearity, sky); compare both sets in Use comps… before reporting.")
+    return out
+
+
 def _own_inst(obs: Obs, name: str, comp_names: list[str]) -> float:
     if name in comp_names:
         k = comp_names.index(name)
@@ -3518,6 +3606,20 @@ def _pos_fields(obs: Obs) -> list[str]:
             + xy(comps[1] if len(comps) > 1 else None) + xy(pos.get("k")))
 
 
+def _extra_comp_pos_fields(obs: Obs, n_comps: int) -> list[str]:
+    """2.2.14 (item 9): pixel positions of comps 3..n_comps, appended after the older columns so a reader that
+    looks columns up by name (or by their old place) still works."""
+    out = []
+    comps = list((obs.pos or {}).get("c") or [])
+    for k in range(2, n_comps):
+        p = comps[k] if k < len(comps) else None
+        try:
+            out += [f"{float(p[0]):.1f}", f"{float(p[1]):.1f}"]
+        except (TypeError, ValueError, IndexError):
+            out += ["", ""]
+    return out
+
+
 def segment_words(observations: list[Obs]) -> list[str]:
     """2.2.2: the segment column in words: "before flip" / "after flip" on a night with a meridian flip,
     "no flip" on a night without one (the stored value stays "" or "flip")."""
@@ -3528,13 +3630,17 @@ def segment_words(observations: list[Obs]) -> list[str]:
 
 def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = None, scint: dict | None = None) -> None:
     corrected = apply_night_zero_point(observations) if observations else []
+    n_comps = max([len((o.pos or {}).get("c") or []) for o in observations] + [2])   # 2.2.14 (item 9)
     with AsciiWriter(path) as fh:
         fh.write(created_line() + "\n")
         fh.write(
             "jd,mag,merr,filter,zero_pointed_mag,comp_inst_mag,check_inst_mag,check_reduced_mag,"
             "airmass,exptime,fwhm_px,peak,raw_peak,sky,flag,night,segment,segment_normalized_mag,"
             "b_minus_v,v_minus_r,b_minus_v_diff,v_minus_r_diff,color_calibration,"
-            "target_x,target_y,comp1_x,comp1_y,comp2_x,comp2_y,check_x,check_y,night_note,file,scint_mag,err_total\n"
+            "target_x,target_y,comp1_x,comp1_y,comp2_x,comp2_y,check_x,check_y,night_note,file,scint_mag,err_total"
+            # 2.2.14 (item 9): every comp's position, comps 3 and up appended at the end (old columns keep their place).
+            + "".join(f",comp{k + 1}_x,comp{k + 1}_y" for k in range(2, n_comps))
+            + "\n"
         )
         normalized = normalize_segments(observations) if observations else []
         seg_words = segment_words(observations)
@@ -3572,6 +3678,7 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
                     os.path.basename(obs.path).replace(",", "_"),
                     num(scint_mag(obs, scint)),
                     num(point_err(obs, scint)),
+                    *_extra_comp_pos_fields(obs, n_comps),
                 ])
                 + "\n"
             )
@@ -3827,6 +3934,65 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20) -> int:
                 words.append("cloud")
                 flagged += 1
             o.flag = " ".join(words)
+    return flagged
+
+
+CLOUD_EDGE_FRAMES = 2       # 2.2.14 (item 10): how far (in frames) from a cloud-flagged frame a point can be flagged
+CLOUD_EDGE_SIGMA = 5.0      # ... and how far off the local level it must be (robust sigmas of the night)
+CLOUD_EDGE_MIN_MAG = 0.05   # ... but never less than this (a quiet night's 5 sigma can be a few millimag)
+
+
+def apply_cloud_edge_flags(observations: list[Obs]) -> int:
+    """2.2.14 (item 10): flag 'cloudedge' on outlying points at the edge of a cloud-flagged run.
+
+    Frames just before or after a cloud run often lose less light than the cloud limit (so they pass the cloud
+    flag), but the cloud edge crosses the target and the comps at different moments and the point lands far off
+    (13 Oct: two points at 5.75 / 6.0 on a 5.5 star next to a cloud run). The rule is kept narrow so good data stay:
+    1. only points within CLOUD_EDGE_FRAMES frames of a 'cloud' frame (in time order, and not separated from it by
+       a gap of more than three typical frame spacings) can be flagged; nothing else on the night is looked at;
+    2. only if the point sits more than max(CLOUD_EDGE_SIGMA x the night's robust scatter, CLOUD_EDGE_MIN_MAG,
+       3 x its own error) from the median of the 10 nearest clean points (no flags, not next to cloud);
+    3. points that already carry another flag keep it and are not double-flagged.
+    A real eclipse or flare starting right at a cloud run could be caught; that is why only the frames touching
+    the run are looked at. Re-applying replaces old 'cloudedge' flags. Returns how many points are flagged."""
+    for o in observations:
+        if "cloudedge" in o.flag.split():
+            o.flag = " ".join(w for w in o.flag.split() if w != "cloudedge")
+    flagged = 0
+    by_night: dict[str, list[Obs]] = {}
+    for obs in observations:
+        by_night.setdefault(obs.night, []).append(obs)
+    for night_obs in by_night.values():
+        pts = sorted(night_obs, key=lambda o: o.jd)
+        cloud_idx = [k for k, o in enumerate(pts) if "cloud" in o.flag.split()]
+        if not cloud_idx or len(pts) < 10:
+            continue
+        jd = np.array([o.jd for o in pts])
+        step = float(np.median(np.diff(jd)))
+        if not step > 0:
+            continue
+        near = set()
+        for c in cloud_idx:
+            for k in range(max(0, c - CLOUD_EDGE_FRAMES), min(len(pts), c + CLOUD_EDGE_FRAMES + 1)):
+                if k != c and abs(jd[k] - jd[c]) <= 3.0 * step * abs(k - c):
+                    near.add(k)
+        clean = [k for k, o in enumerate(pts) if not o.flag and k not in near and math.isfinite(o.mag)]
+        if len(clean) < 10:
+            continue
+        sigma = robust_sigma([pts[k].mag for k in clean])
+        if not math.isfinite(sigma):
+            continue
+        clean_jd = jd[clean]
+        clean_mag = np.array([pts[k].mag for k in clean])
+        for k in sorted(near):
+            o = pts[k]
+            if o.flag or not math.isfinite(o.mag):
+                continue
+            local = float(np.median(clean_mag[np.argsort(np.abs(clean_jd - jd[k]))[:10]]))
+            err = o.merr if o.merr is not None and math.isfinite(o.merr) else 0.0
+            if abs(o.mag - local) > max(CLOUD_EDGE_SIGMA * sigma, CLOUD_EDGE_MIN_MAG, 3.0 * err):
+                o.flag = "cloudedge"
+                flagged += 1
     return flagged
 
 
