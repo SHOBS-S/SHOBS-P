@@ -1241,6 +1241,9 @@ class Obs:
     watch_insts: dict = field(default_factory=dict)
     # Pixel positions used in this frame: {"t": [x, y], "c": [[x, y], ...], "k": [x, y]}.
     pos: dict = field(default_factory=dict)
+    # 2.2.14 (item 18, review): extra error (mag) for a kept transmission-loss point: the star-to-star scatter measured
+    # in its stretch beyond photon noise. Set by apply_cloud_flags each time; not saved with the series.
+    haze_err: float = 0.0
 
 
 def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
@@ -1955,11 +1958,14 @@ def _lookup_vsx(name: str) -> dict:
 
 
 def _vsx_epoch(text):
-    """2.2.14 (item 13): VSX's Epoch field (a full JD/HJD, sometimes with a trailing note) as a float, else None."""
+    """2.2.14 (item 13): VSX's Epoch field (a full JD/HJD, sometimes with a trailing note) as a float, else None.
+    Review: a 5-digit epoch is JD - 2400000 ('53766.839'), a 7-digit one the full JD."""
     try:
         v = float(str(text).split()[0])
     except (TypeError, ValueError, IndexError):
         return None
+    if 10000.0 <= v < 100000.0:
+        v += 2400000.0
     return v if 2400000.0 < v < 2600000.0 else None
 
 
@@ -4376,9 +4382,15 @@ def light_loss_episodes(night_obs: list[Obs], limit: float = 0.20, min_frames: i
                                f"{jump:.2f} mag)")
                 break
         # 2. Even: every star loses the same amount (needs two or more stars).
+        # 2.2.14 review: photon noise grows only as 10^(0.2 x depth), so a uniform cloud bank with 0.02-0.03 mag of
+        # star-to-star patchiness passed the old 4 x 10^(0.4 x depth) flicker test; tightened, and the spread limit
+        # no longer opens up with depth.
+        excess = 0.0
         if n_stars >= 2:
             offsets = []
             uneven_noise = []
+            excess_sq = []
+            photon_grow = 10.0 ** (0.2 * max(0.0, depth if math.isfinite(depth) else 0.0))
             for j in range(n_stars):
                 r = resid[sel, j]
                 r = r[np.isfinite(r)]
@@ -4387,13 +4399,19 @@ def light_loss_episodes(night_obs: list[Obs], limit: float = 0.20, min_frames: i
                 if r.size >= 3 and rc.size >= 3:
                     offsets.append(float(np.median(r) - np.median(rc)))
                     ns = star_noise_clear[j] if math.isfinite(star_noise_clear[j]) else 0.01
-                    uneven_noise.append(_robust_std(r) / max(ns * grow, 0.003))
+                    rs = _robust_std(r)
+                    uneven_noise.append(rs / max(ns, 0.002))
+                    excess_sq.append(rs ** 2 - (ns * photon_grow) ** 2)
+            if excess_sq:
+                # Each star's scatter about the shared loss beyond its photon noise; resid is measured against the
+                # stars' median, which takes away about 1/n of it.
+                excess = math.sqrt(max(0.0, float(np.median(excess_sq))) * n_stars / (n_stars - 1.0))
             if offsets:
                 spread = max(offsets) - min(offsets)
-                if spread > max(0.06, 0.15 * (depth if math.isfinite(depth) else 0.0)):
+                if spread > max(0.06, 0.05 * (depth if math.isfinite(depth) else 0.0)):
                     kind = "cloud"
                     reasons.append(f"the stars lose different amounts (up to {spread:.2f} mag apart)")
-                elif uneven_noise and float(np.median(uneven_noise)) > 4.0:
+                elif uneven_noise and float(np.median(uneven_noise)) > 2.5 * photon_grow:
                     kind = "cloud"
                     reasons.append("the stars flicker against each other")
         else:
@@ -4417,9 +4435,26 @@ def light_loss_episodes(night_obs: list[Obs], limit: float = 0.20, min_frames: i
         if kind == "transmission":
             reasons.insert(0, "all stars fade together, smoothly, with a flat sky")
         episodes.append({"kind": kind, "frames": list(g), "jd": (float(jd[g[0]]), float(jd[g[-1]])),
-                         "depth": depth, "max_depth": max_depth, "reasons": reasons,
+                         "depth": depth, "max_depth": max_depth, "reasons": reasons, "excess": float(excess),
                          "minutes": float((jd[g[-1]] - jd[g[0]]) * 1440.0 + cad * 1440.0)})
     return episodes
+
+
+def _plain_cloud_episode(night_obs: list[Obs], limit: float, exc: Exception) -> list[dict]:
+    """2.2.14 review: the pre-2.2.14 cut (comp light more than `limit` below the night's median) as one 'cloud'
+    episode, used when light_loss_episodes fails."""
+    obs = sorted(night_obs, key=lambda o: o.jd)
+    rates = [o.flux_comp / o.exptime if o.flux_comp > 0 and o.exptime > 0 else float("nan") for o in obs]
+    good = [r for r in rates if math.isfinite(r)]
+    if len(good) < 5 or len({round(r, 6) for r in good}) < 2 or not limit > 0:
+        return []
+    median = float(np.median(good))
+    frames = [k for k, r in enumerate(rates) if math.isfinite(r) and r < (1.0 - limit) * median]
+    if not frames:
+        return []
+    return [{"kind": "cloud", "frames": frames, "jd": (obs[frames[0]].jd, obs[frames[-1]].jd),
+             "depth": float("nan"), "max_depth": float("nan"), "excess": 0.0,
+             "reasons": [f"check failed ({exc}); plain cut"], "minutes": 0.0, "failed": True, "error": str(exc)}]
 
 
 def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=None,
@@ -4431,9 +4466,12 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
 
     2.2.14 (item 18): a stretch where all measured stars fade together, smoothly, under a flat sky is transmission
     loss (dew/haze), flagged 'haze' instead of 'cloud' (light_loss_episodes). Nights in keep_nights keep those
-    points unflagged: their errors already follow the reduced light, since each frame's photon noise comes from its
-    own fluxes and scintillation is a fraction of the light that does arrive. report, when given, is filled with
-    {night: episodes}."""
+    points unflagged: each frame's photon noise already comes from its own (reduced) fluxes, and scintillation is a
+    fraction of the light that does arrive; on top of that (review) each kept point gets the star-to-star scatter
+    measured in its stretch beyond photon noise (Obs.haze_err, added in quadrature by point_err), so the error bars
+    stay honest even if a smooth cloud bank was taken for haze. report, when given, is filled with
+    {night: episodes}. When the classification fails, the night falls back on the plain cut (all 'cloud') and the
+    episode list says so (reason 'check failed: ...')."""
     flagged = 0
     keep = set(keep_nights or ())
     by_night: dict[str, list[Obs]] = {}
@@ -4442,10 +4480,12 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
     for night, night_obs in by_night.items():
         for o in night_obs:
             o.flag = " ".join(w for w in o.flag.split() if w not in ("cloud", HAZE_FLAG))
+            o.haze_err = 0.0
         try:
             episodes = light_loss_episodes(night_obs, limit)
-        except Exception:
-            episodes = []
+        except Exception as exc:
+            # 2.2.14 review: never lose the cloud cut itself; fall back on the plain rate cut, all 'cloud'.
+            episodes = _plain_cloud_episode(night_obs, limit, exc)
         if report is not None:
             report[night] = episodes
         if not episodes:
@@ -4453,6 +4493,8 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
         ordered = sorted(night_obs, key=lambda o: o.jd)
         for ep in episodes:
             if ep["kind"] == "transmission" and night in keep:
+                for k in ep["frames"]:
+                    ordered[k].haze_err = float(ep.get("excess") or 0.0)
                 continue
             word = HAZE_FLAG if ep["kind"] == "transmission" else "cloud"
             for k in ep["frames"]:
@@ -5614,13 +5656,15 @@ def _poly_extreme(x, y, degree: int, kind: str, limit: float = 0.85):
 
 
 def poly_extremum(t, m, t_guess: float, half_width: float, kind: str = "max", degree: int | None = None,
-                  n_boot: int = 500, seed: int = 1) -> dict:
+                  n_boot: int = 500, seed: int = 1, block_minutes: float = 5.0, noise=None) -> dict:
     """Time of an extremum from a polynomial fitted to the points within half_width of t_guess.
 
     The degree (2-5) is chosen by the Bayesian information criterion unless given; the error is the scatter of the
     extremum over n_boot bootstrap resamples of the points (Efron 1979), with half the change when the degree goes
     up by one added in quadrature (the model's own uncertainty on an asymmetric peak).
-    Returns {"t", "err", "boot_err", "model_err", "degree", "n"}."""
+    2.2.14 review: the bootstrap treats the points as independent, so with red noise (seeing, guiding, thin cloud) it
+    was ~4x too small; it is multiplied by the residuals' time-averaging beta (Pont et al. 2006; Winn et al. 2008).
+    Returns {"t", "err", "boot_err", "model_err", "beta", "degree", "n"}."""
     t, m = _clean_sorted(t, m)
     hw = float(half_width)
     sel = np.abs(t - t_guess) <= hw
@@ -5628,17 +5672,9 @@ def poly_extremum(t, m, t_guess: float, half_width: float, kind: str = "max", de
     n = int(x.size)
     if n < 8:
         raise ValueError("polynomial: too few points in the window")
-    if degree is None:
-        best = None
-        for d in range(2, 6):
-            if n < d + 6:
-                break
-            coef = np.polyfit(x, y, d)
-            rss = float(np.sum((np.polyval(coef, x) - y) ** 2))
-            bic = n * math.log(max(rss, 1e-30) / n) + (d + 1) * math.log(n)
-            if best is None or bic < best[0]:
-                best = (bic, d)
-        degree = best[1] if best else 2
+    free_degree = degree is None
+    if free_degree:
+        degree = _bic_degree(x, y)
     x0, _ = _poly_extreme(x, y, degree, kind)
     if x0 is None:
         raise ValueError("polynomial: no extremum inside the window")
@@ -5649,19 +5685,87 @@ def poly_extremum(t, m, t_guess: float, half_width: float, kind: str = "max", de
             model_err = 0.5 * abs(x1 - x0) * hw
     rng = np.random.default_rng(seed)
     boots = []
+    # 2.2.14 review: a moving-block bootstrap of the residuals (blocks of ~block_minutes added back onto the fitted
+    # curve at the same times), so noise correlated over minutes (seeing, guiding, thin cloud) is resampled together
+    # and widens the spread as it should; with white noise it is the ordinary residual bootstrap.
+    cad = float(np.median(np.diff(t[sel]))) if n > 1 else 0.0
+    blk = int(max(1, min(n // 4, round(block_minutes / 1440.0 / cad)))) if cad > 0 else 1
+    fit = np.polyval(np.polyfit(x, y, degree), x)
+    res = y - fit
+    # The window's own residuals hide red noise (the polynomial bends into it); the whole night's residuals about a
+    # Fourier series at the period (noise=) show it, so their blocks are used when given.
+    pool = np.asarray(noise, dtype=float) if noise is not None else res
+    pool = pool[np.isfinite(pool)]
+    if pool is not res and pool.size >= 2 * n:
+        # Whole-night residuals: each draw is one stretch of real noise as long as the window ("prayer bead" style,
+        # cf. Desert et al. 2009 for transit times), so correlations of any length up to the window survive.
+        blk = n
+    if pool.size < blk + 1:
+        pool = res
     for _ in range(int(n_boot)):
-        idx = rng.integers(0, n, n)
-        if np.unique(x[idx]).size <= degree + 1:
-            continue
-        xb, _ = _poly_extreme(x[idx], y[idx], degree, kind)
+        starts = rng.integers(0, pool.size - blk + 1, int(math.ceil(n / blk)))
+        idx = (starts[:, None] + np.arange(blk)[None, :]).ravel()[:n]
+        yb = fit + pool[idx]
+        # Review: the degree is chosen again on every resample, so a degree that flips with the noise (3, 4 or 5 on
+        # a HADS maximum) widens the spread as it widens the real scatter.
+        xb, _ = _poly_extreme(x, yb, _bic_degree(x, yb) if free_degree else degree, kind)
         if xb is not None:
             boots.append(xb)
     boots = np.asarray(boots)
     if boots.size < max(20, n_boot // 4):
         raise ValueError("polynomial: the bootstrap could not find the extremum often enough")
-    boot_err = float(np.std(boots, ddof=1)) * hw
+    # What the residuals still hide (a fit bends into minutes-long noise): their time-averaging beta, taken at the
+    # worst bin length up to half the window (whole-night residuals when given, else the window's own).
+    beta = _red_beta_max(pool, max(2, n), min_bins=4)
+    boot_err = float(np.std(boots, ddof=1)) * hw * beta
     return {"t": float(t_guess + x0 * hw), "err": float(math.hypot(boot_err, model_err)), "boot_err": boot_err,
-            "model_err": float(model_err), "degree": int(degree), "n": n}
+            "model_err": float(model_err), "beta": float(beta), "degree": int(degree), "n": n}
+
+
+def _bic_degree(x, y) -> int:
+    """Polynomial degree 2-5 with the smallest Bayesian information criterion (2 when too few points)."""
+    n = len(x)
+    best = None
+    for d in range(2, 6):
+        if n < d + 6:
+            break
+        coef = np.polyfit(x, y, d)
+        rss = float(np.sum((np.polyval(coef, x) - y) ** 2))
+        bic = n * math.log(max(rss, 1e-30) / n) + (d + 1) * math.log(n)
+        if best is None or bic < best[0]:
+            best = (bic, d)
+    return best[1] if best else 2
+
+
+def _red_beta_max(resid, max_bin: int, min_bins: int = 6) -> float:
+    """2.2.14 review: time-averaging beta (Pont et al. 2006; Winn et al. 2008) of evenly spaced residuals, the
+    largest over bin lengths 2 .. max_bin points with at least min_bins bins; 1 for white noise (never below 1)."""
+    r = np.asarray(resid, dtype=float)
+    r = r[np.isfinite(r)]
+    s1 = float(np.std(r)) if r.size else 0.0
+    best = 1.0
+    if r.size < 20 or s1 <= 0:
+        return best
+    for nb in range(2, int(max_bin) + 1):
+        m = r.size // nb
+        if m < min_bins:
+            break
+        means = r[: m * nb].reshape(m, nb).mean(axis=1)
+        best = max(best, float(np.std(means)) / (s1 / math.sqrt(nb) * math.sqrt(m / (m - 1.0))))
+    return best
+
+
+def _red_beta(t, resid, span_days: float) -> float:
+    """2.2.14 review: transit_core.red_noise_beta on fit residuals, averaging over up to half the window (<= 30 min)."""
+    import transit_core as _tc
+    t = np.asarray(t, dtype=float)
+    if t.size < 20:
+        return 1.0
+    cad = float(np.median(np.diff(t)))
+    try:
+        return float(_tc.red_noise_beta(t, resid, cad, max_minutes=min(30.0, max(2.0, span_days * 1440.0))))
+    except Exception:
+        return 1.0
 
 
 def _fourier_design(t, period, n_harm, t_ref):
@@ -5713,7 +5817,10 @@ def fourier_extremum(t, m, period: float, t_guess: float, kind: str = "max", n_h
     for _ in range(int(n_boot)):
         cb, *_ = np.linalg.lstsq(a, model + rng.choice(resid, n, replace=True), rcond=None)
         boots.append(extreme(cb))
-    return {"t": t0, "err": float(np.std(boots, ddof=1)), "n_harm": int(n_harm),
+    beta = _red_beta(t, resid, 0.25 * period)   # 2.2.14 review: red noise, as for the polynomial
+    err = float(np.std(boots, ddof=1)) * beta if len(boots) > 1 else float("nan")
+    return {"t": t0, "err": err, "beta": float(beta), "n_harm": int(n_harm),
+            "resid": resid,
             "rms": float(np.sqrt(np.mean(resid ** 2))), "n": int(n)}
 
 
@@ -5736,9 +5843,25 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
     if win["n_before"] < 5 or win["n_after"] < 5:
         raise ValueError(f"the {'maximum' if kind == 'max' else 'minimum'} is not covered on both sides "
                          f"({win['n_before']} points before, {win['n_after']} after)")
-    poly = poly_extremum(t, m, win["t0"], hw, kind, n_boot=n_boot, seed=seed)
+    noise = None
+    if period:
+        # 2.2.14 review: the whole night's residuals about a Fourier series carry the red noise for the bootstrap.
+        # The number of harmonics is chosen on 5-minute means, so the series cannot bend into minutes-long noise
+        # (chosen on every frame, BIC took 7-8 harmonics and hid half of it).
+        try:
+            n_harm = None
+            edges = np.arange(t[0], t[-1] + 5.0 / 1440.0, 5.0 / 1440.0)
+            which = np.digitize(t, edges)
+            tb = np.array([t[which == k].mean() for k in np.unique(which)])
+            mb = np.array([m[which == k].mean() for k in np.unique(which)])
+            if tb.size >= 12:
+                n_harm = fourier_extremum(tb, mb, period, win["t0"], kind, n_boot=0)["n_harm"]
+            noise = fourier_extremum(t, m, period, win["t0"], kind, n_harm=n_harm, n_boot=0)["resid"]
+        except (ValueError, np.linalg.LinAlgError):
+            noise = None
+    poly = poly_extremum(t, m, win["t0"], hw, kind, n_boot=max(50, n_boot // 5), seed=seed, noise=noise)
     # Second pass centred on the first answer, so the window is symmetric about the extremum itself.
-    poly = poly_extremum(t, m, poly["t"], hw, kind, n_boot=n_boot, seed=seed)
+    poly = poly_extremum(t, m, poly["t"], hw, kind, n_boot=n_boot, seed=seed, noise=noise)
     try:
         kvw = kwee_van_woerden(t, m, poly["t"], hw)
     except ValueError as exc:
@@ -5751,19 +5874,33 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
         except ValueError as exc:
             warnings.append(str(exc))
     notes = []
+    # 2.2.14 review: the adopted error is never below half the disagreement with the Fourier series (and, for a
+    # minimum, which is usually symmetric, with Kwee-van Woerden; on an asymmetric maximum KvW's bias is known).
+    err = poly["err"]
+    floor = 0.0
+    if fourier:
+        floor = 0.5 * abs(fourier["t"] - poly["t"])
+    if kind == "min" and kvw:
+        floor = max(floor, 0.5 * abs(kvw["t"] - poly["t"]))
+    if floor > err:
+        notes.append(f"error raised from {err * 1440:.2f} to {floor * 1440:.2f} min: half the difference between "
+                     "the methods")
+        err = floor
+    if poly.get("beta", 1.0) > 1.2:
+        notes.append(f"red noise: the bootstrap error was multiplied by beta {poly['beta']:.1f}")
     if kvw and math.isfinite(kvw.get("err", float("nan"))):
         diff = kvw["t"] - poly["t"]
-        if abs(diff) > 3.0 * math.hypot(poly["err"], kvw["err"]):
+        if abs(diff) > 3.0 * math.hypot(err, kvw["err"]):
             # Synthetic HADS maxima (fast rise, slow fall) put KvW ~1 min late: it assumes mirror-image branches.
             notes.append(f"Kwee-van Woerden reads {abs(diff) * 1440:.1f} min {'later' if diff > 0 else 'earlier'}: "
                          "the extremum is asymmetric (KvW assumes mirror-image branches), so the polynomial is used")
     if fourier and math.isfinite(fourier.get("err", float("nan"))):
         diff = fourier["t"] - poly["t"]
-        if abs(diff) > 3.0 * math.hypot(poly["err"], fourier["err"]):
+        if abs(diff) > 3.0 * math.hypot(poly["err"], fourier["err"]) and abs(diff) > 2.0 * err:
             warnings.append(f"the Fourier series at the period reads {abs(diff) * 1440:.1f} min "
                             f"{'later' if diff > 0 else 'earlier'} (more than 3 sigma): a second period, a short "
                             "branch, or the wrong period")
-    return {"t": poly["t"], "err": poly["err"], "method": f"polynomial deg {poly['degree']} + bootstrap",
+    return {"t": poly["t"], "err": err, "method": f"polynomial deg {poly['degree']} + bootstrap",
             "kind": kind, "half_width": hw, "window": win, "kvw": kvw, "poly": poly, "fourier": fourier,
             "warnings": warnings, "notes": notes}
 
@@ -5788,15 +5925,15 @@ def o_minus_c(t_obs: float, period: float, epoch: float, half_cycles: bool = Fal
 
 
 def extremum_times(jd_utc: float, ra_deg, dec_deg, lat, lon) -> dict:
-    """HJD (UTC) and BJD (TDB) of one geocentric JD (UTC). Without RA/Dec both are NaN; without a site the
-    geocentre is used (at most ~0.02 s different)."""
+    """HJD (UTC) and BJD (TDB) of one geocentric JD (UTC). Without RA/Dec both are NaN; without a site, a point on the
+    equator at longitude 0 stands in (the site changes the light time by at most ~0.02 s)."""
     out = {"jd_utc": float(jd_utc), "hjd": float("nan"), "bjd_tdb": float("nan"), "note": ""}
     if ra_deg is None or dec_deg is None:
         out["note"] = "no RA/Dec: HJD/BJD not computed (light-time correction up to 8.3 min missing)"
         return out
     site_note = ""
     if lat is None or lon is None:
-        lat, lon, site_note = 0.0, 0.0, "site unknown: geocentre used"
+        lat, lon, site_note = 0.0, 0.0, "site unknown: computed for 0° N 0° E (at most 0.02 s off)"
     for key, system in (("hjd", "HJD_UTC"), ("bjd_tdb", "BJD_TDB")):
         out[key] = float(convert_times(np.array([jd_utc]), system, ra_deg, dec_deg, lat, lon)[0])
     out["note"] = site_note
@@ -5808,8 +5945,21 @@ def extremum_csv_name(star: str) -> str:
     return f"{safe}_times_of_extremum.csv"
 
 
+_EXTREMUM_NUMBERS = ("hjd", "bjd_tdb", "jd_utc", "error_d", "error_min", "cycle", "o_c_d", "o_c_min", "period_d",
+                     "epoch", "n_points", "window_min", "kvw_jd", "kvw_err", "poly_jd", "poly_err", "fourier_jd",
+                     "fourier_err")
+
+
+def same_star_text(a, b) -> bool:
+    """2.2.14 review: star names in the times CSV match ignoring case and spacing ('SZ Lyn' = 'sz  lyn')."""
+    def norm(x):
+        return " ".join(str(x or "").split()).lower()
+    return norm(a) == norm(b)
+
+
 def read_extremum_csv(path: str) -> list[dict]:
-    """Rows of a times-of-extremum CSV (comment lines skipped), numbers as floats where they parse."""
+    """Rows of a times-of-extremum CSV (comment lines skipped), our number columns as floats; text columns and any
+    column SHOBS-P does not know (added by hand or by another program) stay text, so a rewrite keeps them."""
     rows = []
     if not path or not os.path.exists(path):
         return rows
@@ -5823,13 +5973,25 @@ def read_extremum_csv(path: str) -> list[dict]:
         row = {}
         for k, v in zip(head, parts):
             v = v.strip()
-            try:
-                row[k] = float(v) if k not in ("star", "type", "method", "elements", "night", "time_note", "note") \
-                    else v
-            except ValueError:
-                row[k] = v if v else float("nan")
+            if k in _EXTREMUM_NUMBERS:
+                try:
+                    row[k] = float(v)
+                except ValueError:
+                    row[k] = float("nan") if not v else v
+            else:
+                row[k] = v
         rows.append(row)
     return rows
+
+
+def _extremum_header(path: str) -> list[str]:
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for ln in fh:
+            if ln.strip() and not ln.startswith("#"):
+                return [h.strip() for h in ln.rstrip("\r\n").split(",")]
+    return []
 
 
 def save_extremum_row(path: str, row: dict) -> str:
@@ -5852,8 +6014,10 @@ def save_extremum_row(path: str, row: dict) -> str:
         return float("nan")
 
     new_t = key_t(row)
-    kept = [r for r in old if not (str(r.get("star")) == str(row.get("star")) and r.get("type") == row.get("type")
+    kept = [r for r in old if not (same_star_text(r.get("star"), row.get("star")) and r.get("type") == row.get("type")
                                    and abs(key_t(r) - new_t) < 0.01)]
+    extra = [h for h in _extremum_header(path) if h and h not in EXTREMUM_COLUMNS]   # 2.2.14 review: keep them
+    columns = list(EXTREMUM_COLUMNS) + extra
     status = "replaced" if len(kept) < len(old) else "added"
     rows = sorted(kept + [row], key=lambda r: (key_t(r) if math.isfinite(key_t(r)) else 0.0))
 
@@ -5878,9 +6042,9 @@ def save_extremum_row(path: str, row: dict) -> str:
         fh.write((created or created_line()) + "\n")
         if created:
             fh.write(f"# Updated {dtg()} by SHOBS-P\n")
-        fh.write(",".join(EXTREMUM_COLUMNS) + "\n")
+        fh.write(",".join(columns) + "\n")
         for r in rows:
-            fh.write(",".join(cell(k, r.get(k, "")) for k in EXTREMUM_COLUMNS) + "\n")
+            fh.write(",".join(cell(k, r.get(k, "")) for k in columns) + "\n")
     return status
 
 
@@ -7048,6 +7212,9 @@ def scint_mag(obs, setup: dict | None) -> float:
 def point_err(obs, setup: dict | None) -> float:
     """2.2.2: a point's magnitude error, with scintillation added in quadrature when it is switched on and known."""
     e = obs.merr
+    extra = getattr(obs, "haze_err", 0.0) or 0.0   # 2.2.14 (item 18): kept transmission-loss points
+    if extra > 0 and math.isfinite(e):
+        e = math.hypot(e, extra)
     s = scint_mag(obs, setup)
     if math.isfinite(s):
         return math.hypot(e, s) if math.isfinite(e) else s
