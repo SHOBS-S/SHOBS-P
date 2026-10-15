@@ -1514,10 +1514,15 @@ class App(Tk):
         srow = ttk.Frame(card, style="Card.TFrame")
         srow.pack(fill=X, pady=(0, 8))
         self.series_status = StringVar(value="")
-        ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel").pack(side=LEFT)
-        ttk.Button(srow, text="Load series…", command=self.load_series).pack(side=LEFT, padx=(12, 0))
+        # 2.2.16 (item 12): the line wraps to the room left beside the buttons (no fixed width).
         self.close_series_button = ttk.Button(srow, text="Close series", command=self.close_series)
-        self.close_series_button.pack(side=LEFT, padx=6)
+        self.close_series_button.pack(side=RIGHT, padx=(6, 0))
+        load_in = ttk.Button(srow, text="Load series…", command=self.load_series)
+        load_in.pack(side=RIGHT, padx=(12, 0))
+        self._add_tooltip(load_in, self.LOAD_SERIES_TIP)
+        status_label = ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel", justify=LEFT)
+        status_label.pack(side=LEFT, fill=X, expand=True)
+        status_label.bind("<Configure>", lambda e: status_label.configure(wraplength=max(200, e.width - 8)), add="+")
         self.update_series_status()
 
         nav = ttk.Frame(card, style="Card.TFrame")
@@ -1732,6 +1737,9 @@ class App(Tk):
                 different = sep > 60.0
             except (TypeError, ValueError):
                 different = True
+        if different and old_star and p.get("host") and not core.same_object_name(old_star, p["host"]):
+            # 2.2.16 (item 11): a planet of another star: the old field's comps, check and watch stars go too.
+            self.clear_target(quiet=True, why=f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}")
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
             self.dec_deg.set(f"{p['dec']:.5f}")
@@ -1936,8 +1944,17 @@ class App(Tk):
             self.status.set(f"Star ID set to {good}.")
             self._auto_lookup()
 
-    def clear_target(self, quiet: bool = False):
-        """Empty the target (Star ID, RA, Dec) and the marked stars and comp/check fields that belong to it."""
+    def clear_target(self, quiet: bool = False, why: str = ""):
+        """Empty the target (Star ID, RA, Dec) and the marked stars and comp/check fields that belong to it.
+        2.2.16 (item 11): the whole old field goes: every comp C1-C10 and the check (names, magnitudes, markers),
+        suggested comps, spare marks, the watch stars added this session, and the slots' hint lines. why: logged in one
+        line with what was cleared (a new series, new lights, a new target)."""
+        old = self.star_id.get().strip()
+        named = [getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES]
+        n_comps = sum(1 for r, n in zip(COMP_ROLES, named) if n or getattr(self, f"{r}_xy") is not None)
+        had_check = bool(self.check_name.get().strip() or self.check_xy is not None)
+        series_watch = set(getattr(self, "_series_watch_names", ()) or ()) if self.observations else set()
+        session_watch = [w.get("name") for w in self.watch_list if w.get("name") not in series_watch]
         self.star_id.set("")
         self.ra_hours.set("")
         self.dec_deg.set("")
@@ -1947,6 +1964,28 @@ class App(Tk):
             self.clear_mark(role, redraw=False)
         self.star_bands = {}
         self.suggested_comps = []
+        # 2.2.16 (item 11): the rest of the old field (15 Oct: a stale "✓ Comp 5 … Marker at (747, 169)" showed with
+        # no marker, and TOI-2046's comp names went into HD 219134's series).
+        self.spare_marks = []
+        if not self.observations:
+            self.spare_catalog = {}   # an open series keeps its own spares (they are saved with it)
+        if session_watch:
+            self.watch_list = [w for w in self.watch_list if w.get("name") not in session_watch]
+            for name in session_watch:
+                self.watch_xy.pop(name, None)
+            try:
+                self._refresh_watch_box()
+            except Exception:
+                pass
+        if hasattr(self, "_slot_notes"):
+            self._slot_notes = {}
+        if why:
+            what = ([f"target {old}"] if old else []) + ([f"{n_comps} comp{'s' if n_comps != 1 else ''}"] if n_comps
+                                                         else []) \
+                + (["check star"] if had_check else []) + (["suggested comps and spare marks"]) \
+                + ([f"{len(session_watch)} watch star{'s' if len(session_watch) != 1 else ''} added this session"]
+                   if session_watch else [])
+            self.log(f"Cleared the old field ({', '.join(what)}): {why}.")
         self.catalog_period = None
         self.target_var_type = ""   # 2.2.14 (item 19)
         self.catalog_epoch = None   # 2.2.14 (item 13)
@@ -1959,6 +1998,24 @@ class App(Tk):
         self.refresh_preview()
         if not quiet:
             self.status.set("Target, comps, and check cleared. Type the new Star ID and press Enter to look it up.")
+
+    def _other_target_why(self, star, ra_hours=None, dec_deg=None) -> str:
+        """2.2.16 (item 11): why a target (a loaded series', a new mode's) is another star than the Input page's, or ""
+        for the same star or no target to compare. With RA/Dec on both sides the positions decide (over 1° apart);
+        without them (no header pointing, no lookup) the Star IDs are compared, ignoring spacing and case."""
+        cur = self.star_id.get().strip()
+        new = str(star or "").strip()
+        if not cur or not new:
+            return ""
+        try:
+            a = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
+            b = (float(ra_hours) * 15.0, float(dec_deg))
+        except (TypeError, ValueError):
+            a = b = None
+        if a is not None and b is not None and all(map(math.isfinite, a + b)):
+            sep = core.sky_separation_arcsec(a[0], a[1], b[0], b[1]) / 3600.0
+            return f"{new}, {sep:.0f}° from {cur}" if sep > 1.0 else ""
+        return "" if core.same_object_name(cur, new) else f"{new}, not {cur}"
 
     def _check_target_field(self, header: dict):
         """Lights pointing far from the Input page's target (a target left over from another star): offer to clear
@@ -2007,12 +2064,12 @@ class App(Tk):
             self._field_question_declined = key
             self.log(f"Kept {name} as the target although the lights point {sep:.0f}° away.")
             return
-        self.clear_target(quiet=True)
+        # 2.2.16 (item 11): one log line says what was cleared and why.
+        self.clear_target(quiet=True, why=f"these lights are a different field, {sep:.0f}° from {name}"
+                                          + ("" if generic else f"; looking up {obj}"))
         if not generic:
             self.star_id.set(obj)
             self.lookup_star()
-        self.log(f"Old target {name} cleared: these lights are a different field."
-                 + ("" if generic else f" Looking up {obj}."))
 
     def _check_lights_targets(self, lights: list, first_header: dict):
         """2.2.13 (John: "there are more observers like me out there"): when the lights are scanned,
@@ -2153,7 +2210,15 @@ class App(Tk):
                        if target is not None else "")
                     + ". Check that these are the right lights, or update the target on the Input page.")
             self.log("Lights: " + text)
-            messagebox.showwarning(APP_TITLE, text)
+            # 2.2.16 (item 11): without pointing, OBJECT is what says the field changed: offer the same clearing as a
+            # field change (target, every comp and the check, suggested comps, spares, session watch stars).
+            import re
+            star = re.sub(r"\s+[b-h]$", "", obj)
+            if messagebox.askyesno(APP_TITLE, text + f"\n\nClear the old target, comps, and check star, and look up "
+                                                     f"{star}?", default="no"):
+                self.clear_target(quiet=True, why=f"the lights' FITS OBJECT is {obj}, not {name}; looking up {star}")
+                self.star_id.set(star)
+                self.lookup_star()
 
     def _check_lights_pointing(self, header: dict):
         """Discovery shows the Field centre box only when the lights cannot say where they point."""
@@ -8137,21 +8202,26 @@ class App(Tk):
                 self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not auto-save the series: {exc}")
-        self._check_planet_transits(night)   # 2.2.15 (item 1): in the background; flags arrive later
+        self._check_planet_transits(night, source="run")   # 2.2.15 (item 1): in the background; flags arrive later
 
     # ---- 2.2.15 (item 1): planet transits in a Variables campaign -------------------------------------------
     PLANET_RETRY_S = 600.0   # a failed lookup (offline, unknown star) is tried again after this long
 
-    def _check_planet_transits(self, nights, user: bool = False) -> None:
+    def _check_planet_transits(self, nights, user: bool = False, source: str = "") -> None:
         """2.2.15 (item 1): John's campaign rule: no campaign data while a planet of the target transits. In
         Variables mode, look up the Star ID's transiting planets (NASA Exoplanet Archive) in a background thread
         (once per star and session), then count each night's frames in each predicted transit window. nights: one
         night (after photometry) or several (a loaded series; Planet transits…), answered with one question. Nothing
         is said when there is no Star ID, no lookup, no planet, no transit in the frames, or no network (user=True,
         from the button: the status line says so). Needs only the frames' times and the Star ID (no plate solution,
-        no header pointing); RA/Dec, when known, put the frames on BJD_TDB like the ephemeris."""
+        no header pointing); RA/Dec, when known, put the frames on BJD_TDB like the ephemeris.
+        2.2.16 (item 9): source says where the frames come from ("run": tonight's run, "loaded": a series just loaded,
+        "series": the open series); the question names it, and is dropped when the series, mode or Star ID changed
+        while the lookup ran."""
         if isinstance(nights, str):
             nights = [nights]
+        if source not in ("run", "loaded", "series"):
+            source = "run" if len(nights) == 1 and not self.series_path else "series"
         if self.mode_key != "variables":
             return
         star = self.star_id.get().strip()
@@ -8162,23 +8232,70 @@ class App(Tk):
         if not points:
             return
         key = name_key(star)
+        ctx = self._planet_check_context(source, star)   # 2.2.16 (item 9)
         cached = self._planet_eph_cache.get(key)
         if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
-            self.call_ui(self._planet_transits_found, points, cached[1], user)
+            if cached[1] and not user:
+                self._planet_check_status(ctx)
+            self.call_ui(self._planet_transits_found, points, cached[1], user, ctx)
             return
+        if not user:   # (Planet transits… has said so already)
+            self._planet_check_status(ctx)
 
         def work():
             try:
                 planets = tcore.transiting_planet_ephemerides(star)
             except Exception:
                 planets = None   # offline or an unexpected reply: silent
-            self.call_ui(self._campaign_planets_done, key, points, planets, user)
+            self.call_ui(self._campaign_planets_done, key, points, planets, user, ctx)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _campaign_planets_done(self, key: str, points: dict, planets, user: bool = False) -> None:
+    def _campaign_planets_done(self, key: str, points: dict, planets, user: bool = False, ctx=None) -> None:
         self._planet_eph_cache[key] = (time.time(), planets)
-        self._planet_transits_found(points, planets, user)
+        self._planet_transits_found(points, planets, user, ctx)
+
+    # 2.2.16 (item 9): where the checked frames come from, so the question cannot pass for the lights just picked.
+    def _planet_check_context(self, source: str, star: str) -> dict:
+        lights = self.light_dir.get().strip()
+        series = os.path.basename(self.series_path) if self.series_path else ""
+        if source == "run":
+            where = f"Tonight's run ({star}" + (f", {self._folder_text(lights)}" if lights else "") + ")"
+            status = f"Checking {star}'s planets for tonight's run…"
+        else:
+            name = f"Series {series}" if series else "The open series (not saved yet)"
+            where = name + (" (just loaded)" if source == "loaded" else "")
+            status = f"Checking {star}'s planets for the {'loaded ' if source == 'loaded' else ''}series…"
+        return {"source": source, "star": name_key(star), "star_text": star, "mode": self.mode_key,
+                "series": self.series_path, "gen": getattr(self, "_series_gen", 0), "lights": lights,
+                "where": where, "status": status, "status_before": self.status.get()}
+
+    @staticmethod
+    def _folder_text(folder: str) -> str:
+        """A lights folder in a few words: its name, with the folder above when the name alone says little
+        ('TOI-2046/Lights')."""
+        norm = os.path.normpath(folder)
+        base = os.path.basename(norm)
+        parent = os.path.basename(os.path.dirname(norm))
+        if parent and base.lower().rstrip("0123456789_- ") in ("light", "lights", "lightframes", "light frames", ""):
+            return f"{parent}/{base}"
+        return base or folder
+
+    def _planet_check_status(self, ctx: dict) -> None:
+        if ctx:
+            self.status.set(ctx["status"])
+
+    def _planet_check_stale(self, ctx) -> str:
+        """Why the context of a planet check changed while the lookup ran ("" when it did not)."""
+        if not ctx:
+            return ""
+        if getattr(self, "_series_gen", 0) != ctx["gen"]:
+            return "the series was closed or replaced"
+        if self.mode_key != ctx["mode"]:
+            return "the mode was switched"
+        if name_key(self.star_id.get().strip()) != ctx["star"]:
+            return "the Star ID changed"
+        return ""
 
     def _frame_bjd_offsets(self, pts):
         """2.2.15 (item 1, review): BJD_TDB minus JD (days) per frame when the target's RA/Dec are known (the site
@@ -8234,10 +8351,18 @@ class App(Tk):
         return (f"{n} frame{'s' if n != 1 else ''} fall{'s' if n == 1 else ''} in planet {hit['letter']}'s transit"
                 + (f" ({inner})" if inner else ""))
 
-    def _planet_transits_found(self, points: dict, planets, user: bool = False) -> None:
+    def _planet_transits_found(self, points: dict, planets, user: bool = False, ctx=None) -> None:
         """2.2.15 (item 1): the lookup is back (on the UI thread). A night may have been replaced, the series closed
         or saved meanwhile: only the nights' points still in the series are looked at, and an open series file is
         written again when flags change. Nights not asked before get one question together."""
+        # 2.2.16 (item 9): the "Checking …" status goes back to what it said; a changed context drops the question.
+        if ctx and self.status.get() == ctx["status"]:
+            self.status.set(ctx["status_before"])
+        stale = self._planet_check_stale(ctx)
+        if stale:
+            self.log(f"Planet-transit check for {ctx['where']} dropped: {stale} while {ctx['star_text']}'s planets "
+                     "were looked up. (Planet transits… on the Output page checks the open series.)")
+            return
         if not planets or self.series_mode != "variables":
             if user:
                 self.status.set("Planet transits: no transiting planet with an ephemeris was found for the Star ID "
@@ -8278,11 +8403,19 @@ class App(Tk):
             else:
                 asks.append(night)
         if asks:
+            # 2.2.16 (item 9): say where the frames come from (15 Oct: a loaded series' question arrived while new
+            # lights were being picked and looked like theirs).
+            where = (ctx or {}).get("where") or (f"Series {os.path.basename(self.series_path)}" if self.series_path
+                                                 else "The open series")
+            lights_now = self.light_dir.get().strip()
+            if ctx and lights_now and lights_now != ctx["lights"]:
+                where += (f" — not the lights now picked ({self._folder_text(lights_now)}), which "
+                          "have not been run yet")
             if len(asks) == 1:
                 what = "; ".join(self._planet_hits_text(h) for h in self._night_info(asks[0])["planet_transits"])
-                head = f"{self.night_label(asks[0], short=True)}: {what}."
+                head = f"{where}:\n{self.night_label(asks[0], short=True)}: {what}."
             else:
-                head = (f"{len(asks)} nights have frames in a predicted planet transit:\n  • "
+                head = (f"{where}:\n{len(asks)} nights have frames in a predicted planet transit:\n  • "
                         + "\n  • ".join(f"{self.night_label(n, short=True)}: "
                                         + "; ".join(self._planet_hits_text(h)
                                                     for h in self._night_info(n)["planet_transits"])
@@ -8333,7 +8466,7 @@ class App(Tk):
         if not nights:
             if all_nights and self.mode_key == "variables" and self.star_id.get().strip():
                 self.status.set("Planet transits: looking up the Star ID's planets and checking every night…")
-                self._check_planet_transits(all_nights, user=True)
+                self._check_planet_transits(all_nights, user=True, source="series")
                 return
             messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs in "
                                            "Variables mode when the Star ID has transiting planets in the NASA "
@@ -8656,6 +8789,15 @@ class App(Tk):
 
     def _meta(self) -> dict:
         meta = {key: getattr(self, key).get() for key in self._META_STRINGS}
+        # 2.2.16 (item 11): a comp or check name is saved only from a slot with a marker, or one the series used
+        # (15 Oct: an auto-save wrote TOI-2046's comp2-comp6 names and V into HD 219134's series, from slots left
+        # with names but no markers). Every save (Save series, auto-save, a night added) comes through here.
+        used = {str(n).strip() for n in (self.comps_used or ()) if n}
+        for role, keep in [(r, used) for r in COMP_ROLES] + [("check", {str(self.check_used or "").strip()} - {""})]:
+            name = str(meta.get(f"{role}_name") or "").strip()
+            if name and getattr(self, f"{role}_xy", None) is None and name not in keep:
+                meta[f"{role}_name"] = ""
+                meta[f"{role}_mag"] = ""
         for key in self._META_NUMBERS:
             try:
                 meta[key] = float(getattr(self, key).get())
@@ -8896,7 +9038,9 @@ class App(Tk):
         """The Input page's series line: "Series: HD_219134.cvseries — 8 nights, last 13–14 Oct"."""
         obs = [o for o in self.observations if o.night]
         if not obs:
-            return "No series loaded — this run will be a single night"
+            # 2.2.16 (item 12): say how to add the night to a series instead.
+            return ("No series loaded — this run will be a single night. To add a night to a series, Load series… "
+                    "before running.")
         name = os.path.basename(self.series_path) if self.series_path else "not saved yet"
         nights = {o.night for o in obs}
         timed = [o for o in obs if o.jd is not None and math.isfinite(o.jd)]
@@ -8908,17 +9052,69 @@ class App(Tk):
         year = f" {datetime.now().year}"
         if label.endswith(year):
             label = label[:-len(year)]
-        return f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}"
+        return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
+                "After the run you'll be asked to add the night.")   # 2.2.16 (item 12)
+
+    LOAD_SERIES_TIP = ("Load series… replaces what is open: the open series is set aside (you are offered a save "
+                       "first if it has unsaved changes), and a series of another star clears this target's comps, "
+                       "check and watch stars.")
+
+    def _add_tooltip(self, widget, text: str):
+        """2.2.16 (item 12): a small hover note on a widget (shown after a short pause, gone when the pointer leaves).
+        Wraps at about 50 characters of the UI font, so it sizes itself on any screen."""
+        state = {"tip": None, "job": None}
+
+        def show():
+            state["job"] = None
+            if state["tip"] is not None:
+                return
+            try:
+                x = widget.winfo_rootx() + 12
+                y = widget.winfo_rooty() + widget.winfo_height() + 4
+                tip = Toplevel(widget)
+                tip.wm_overrideredirect(True)
+                tip.wm_geometry(f"+{x}+{y}")
+                ttk.Label(tip, text=text, style="Hint.TLabel", justify=LEFT, padding=6, relief="solid", borderwidth=1,
+                          wraplength=int(tkfont.Font(widget, font=(core.UI_FONT, 10)).measure("0" * 50))).pack()
+                state["tip"] = tip
+            except Exception:
+                state["tip"] = None
+
+        def enter(_e=None):
+            if state["job"] is None and state["tip"] is None:
+                state["job"] = widget.after(500, show)
+
+        def leave(_e=None):
+            if state["job"] is not None:
+                try:
+                    widget.after_cancel(state["job"])
+                except Exception:
+                    pass
+                state["job"] = None
+            if state["tip"] is not None:
+                try:
+                    state["tip"].destroy()
+                except Exception:
+                    pass
+                state["tip"] = None
+
+        widget.bind("<Enter>", enter, add="+")
+        widget.bind("<Leave>", leave, add="+")
+        widget.bind("<ButtonPress>", leave, add="+")
 
     def update_series_status(self):
         """Refresh the Input page's series line (load, close, save, a night added or removed, a new series)."""
         if not hasattr(self, "series_status"):
             return
         self.series_status.set(self.series_status_text())
-        try:
-            self.close_series_button.configure(state="normal" if self.observations else "disabled")
-        except Exception:
-            pass
+        # 2.2.16 (item 15): the Input and Output pages' Close series buttons are enabled together.
+        for button in (getattr(self, "close_series_button", None), getattr(self, "close_series_button_out", None)):
+            if button is None:
+                continue
+            try:
+                button.configure(state="normal" if self.observations else "disabled")
+            except Exception:
+                pass
 
     def _offer_series_save(self, then: str) -> bool:
         """2.2.15 (item 7, review): before closing or replacing an open series with unsaved points: Yes saves first,
@@ -8945,6 +9141,7 @@ class App(Tk):
         (keep_night: tonight's night keeps its color calibration), a mode switch that closes the series, and Load
         series. Watch stars and AUIDs that came from a loaded series go (except into a new series started from tonight's
         run, which used them); ones added this session stay."""
+        self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9): a pending planet check is stale
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
         self.series_path = ""
@@ -9068,6 +9265,11 @@ class App(Tk):
             return
         if self.observations or self.series_path:
             self._clear_series_state()   # 2.2.15 review: nothing of the series set aside goes into this one
+        self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9)
+        # 2.2.16 (item 11): a series of another star never inherits this field's target, comps, check or watch stars.
+        why = self._other_target_why(meta.get("star_id"), meta.get("ra_hours"), meta.get("dec_deg"))
+        if why:
+            self.clear_target(quiet=True, why=f"{os.path.basename(path)} is {why}")
         watch_before = {w.get("name") for w in self.watch_list}
         auids_before = set(self.seq_auids)
         self._apply_meta(meta)
@@ -9103,7 +9305,7 @@ class App(Tk):
         # one question for all nights with frames in a transit; silent otherwise).
         unchecked = [n for n in nights if not self._night_info(n).get("planet_transits")]
         if unchecked:
-            self._check_planet_transits(unchecked)
+            self._check_planet_transits(unchecked, source="loaded")   # 2.2.16 (item 9): names the file
 
     def _page_output(self):
         page = ttk.Frame(self.pages)
@@ -9188,7 +9390,13 @@ class App(Tk):
         series_row.pack(fill=X, side="bottom", before=nav, pady=(6, 0))
         ttk.Label(series_row, text="Series", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(series_row, text="Save series", command=self.save_series).pack(side=LEFT)
-        ttk.Button(series_row, text="Load series", command=self.load_series).pack(side=LEFT, padx=6)
+        load_out = ttk.Button(series_row, text="Load series", command=self.load_series)
+        load_out.pack(side=LEFT, padx=(6, 0))
+        self._add_tooltip(load_out, self.LOAD_SERIES_TIP)   # 2.2.16 (item 12)
+        # 2.2.16 (item 15): Close series here too (same as the Input page's), enabled only with a series open.
+        self.close_series_button_out = ttk.Button(series_row, text="Close series", command=self.close_series)
+        self.close_series_button_out.pack(side=LEFT, padx=6)
+        self.update_series_status()
         ttk.Button(series_row, text="Add series file…", command=self.add_series_file).pack(side=LEFT)
         ttk.Button(series_row, text="Remove night…", command=self.remove_night).pack(side=LEFT, padx=6)
         ttk.Button(series_row, text="Night notes…", command=self.edit_night_note).pack(side=LEFT)
