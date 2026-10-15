@@ -181,7 +181,7 @@ STRETCH_PAGES = ("blink", "photo")
 STRETCH_BLACK_STEPS = (0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0)
 STRETCH_WHITE_STEPS = (90.0, 95.0, 97.0, 98.0, 99.0, 99.5, 99.7, 99.8, 99.9, 99.95, 99.99, 100.0)
 STRETCH_DEBOUNCE_MS = 250
-BLINK_CACHE_BYTES = 1_000_000_000   # 2.2.15: pictures plus the small float16 copies kept for re-stretching
+BLINK_CACHE_BYTES = 1_500_000_000   # 2.2.15: pictures plus the small float16 copies kept for re-stretching
 # Page indices (2.2: the Debayer step is gone; the first frame is debayered as soon as it is calibrated).
 STEP_INPUT, STEP_BLINK, STEP_CAL, STEP_PHOTO, STEP_OUTPUT = range(5)
 
@@ -609,6 +609,7 @@ class App(Tk):
         self._stretch_jobs = {}
         self._blink_restretch_gen = 0
         self._photo_disp = None          # (image, token, stretch, display array) of the last Photometry drawing
+        self._radec_filled = None        # 2.2.15: (RA, Dec) texts a solve filled in from the field centre
         self.show_tips = BooleanVar(value=bool(self.settings.get("photo_tips", True)))   # 2.2.15 (GitHub #3)
         self._counts = {}
         self.chart_placed = []
@@ -752,6 +753,7 @@ class App(Tk):
         self.masters_binning = None
         self.calibrated = None
         self.preview = None
+        self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self.preview_is_debayered = False
         self.chart_placed = []
         self.blink_playing = False
@@ -1714,6 +1716,7 @@ class App(Tk):
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
             self.dec_deg.set(f"{p['dec']:.5f}")
+            self._radec_filled = None   # 2.2.15
             filled.append("RA/Dec")
         if p.get("host") and (not old_star or different):
             self.star_id.set(p["host"])
@@ -1735,6 +1738,8 @@ class App(Tk):
         self.status.set(f"{p['name']}: P {p['period']:.6f} d.")
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
+        if "RA/Dec" in filled:
+            self._try_auto_target("lookup")   # 2.2.15 (review): the image may be solved already
 
     def _planets_for_star(self, star: str, found: dict):
         """2.2.7 (Transits): a Star ID lookup also finds the star's planets: one transiting planet is looked up and
@@ -1917,6 +1922,7 @@ class App(Tk):
         self.star_id.set("")
         self.ra_hours.set("")
         self.dec_deg.set("")
+        self._radec_filled = None   # 2.2.15
         self.target_xy = None
         for role in COMP_ROLES + ("check",):
             self.clear_mark(role, redraw=False)
@@ -2181,6 +2187,7 @@ class App(Tk):
             return
         self.ra_hours.set(f"{found['ra_hours']:.6f}")
         self.dec_deg.set(f"{found['dec_deg']:.5f}")
+        self._radec_filled = None   # 2.2.15: the target's own RA/Dec now
         self.catalog_period = found.get("period_days")
         self.target_var_type = str(found.get("var_type") or "")   # 2.2.14 (item 19)
         self.catalog_epoch = found.get("epoch_jd")   # 2.2.14 (item 13): for O-C on the Output page
@@ -2198,11 +2205,7 @@ class App(Tk):
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
         # 2.2.15 (GitHub #3): the image was solved before the lookup answered: put the Target marker on it now.
-        if self.chart_placed and self._auto_target_marker("lookup"):
-            self._suggest_comps()
-            self._update_pick_label()
-            self.update_star_panel()
-            self.refresh_preview()
+        self._try_auto_target("lookup")
 
     def scan_folders(self):
         for key, var in (
@@ -2675,7 +2678,7 @@ class App(Tk):
         if key not in self._blink_cache:
             self._blink_cache_order.append(key)
         self._blink_cache[key] = value
-        # Keep memory bounded (about 1 GB of pictures and float16 copies); the oldest go first.
+        # Keep memory bounded (about 1.5 GB of pictures and float16 copies, ~1000 Bin 1 frames); the oldest go first.
         size = sum(getattr(v, "nbytes", 0) for v in value if isinstance(v, np.ndarray))
         limit = max(50, int(BLINK_CACHE_BYTES // max(1, size)))
         while len(self._blink_cache_order) > limit:
@@ -2890,7 +2893,7 @@ class App(Tk):
                                     "black_text": black_text, "white_text": white_text}
         try:
             from tkinter import font as tkfont
-            length = int(tkfont.Font(root=parent, family=core.UI_FONT, size=10).measure("n" * 11))
+            length = int(tkfont.Font(root=parent, family=core.UI_FONT, size=10).measure("n" * 9))
         except Exception:
             length = 110
         length = max(80, length)
@@ -3296,6 +3299,7 @@ class App(Tk):
         self.masters_binning = binning
         self.calibrated = calibrated
         self.preview = calibrated
+        self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self._preview_token = getattr(self, "_preview_token", 0) + 1   # 2.2.13: a new image -> Fit view
         self._seeing_cache = None   # 2.2.8
         self.preview_header = header
@@ -3343,6 +3347,7 @@ class App(Tk):
         # calibrated mosaic here).
         old_shape = getattr(self, "_marks_shape", None)
         self.preview = mono
+        self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self._preview_token = getattr(self, "_preview_token", 0) + 1
         self._seeing_cache = None   # 2.2.8
         self.preview_is_debayered = True
@@ -3421,6 +3426,9 @@ class App(Tk):
         # Catalog / Solve row (John); the row on the left keeps the measurement settings.
         view = ttk.LabelFrame(options, text="View", style="Group.TLabelframe", padding=(8, 2, 8, 4))
         view.pack(side=RIGHT, padx=(10, 0))
+        # 2.2.15 (review): the switches on one line, the display stretch (GitHub #1) on a second line under them.
+        view_box, view = view, ttk.Frame(view, style="Card.TFrame")
+        view.pack(side="top", anchor=W)
         ttk.Checkbutton(view, text="Show variables (red ○ ×)", variable=self.show_variables,
                         command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
         ttk.Checkbutton(view, text="Show apertures", variable=self.show_apertures,
@@ -3434,6 +3442,7 @@ class App(Tk):
                                                    command=self.refresh_preview)
         self.view_fit_button = ttk.Button(view, text="Fit view", command=self.reset_photo_view)
         self.view_fit_button.pack(side=LEFT)
+        self._stretch_controls(view_box, "photo").pack(side="top", anchor=W, pady=(4, 0))
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
             _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
@@ -3443,15 +3452,22 @@ class App(Tk):
         self.pick_label_widget.pack(anchor=W)
         # 2.2.15 (GitHub #3): first-time guidance, "1 Solve → 2 Target → 3 Comps → 4 Check → Run" with the current step
         # highlighted (Hide tips / Show tips, remembered); (GitHub #1) the display stretch at the right of the row.
+        # Review: the step labels and Hide tips on one line, what to do now on its own line under them (wrapped to the
+        # row's width); the stretch sits in the View box.
         self.step_row = ttk.Frame(card, style="Card.TFrame")
         self.step_row.pack(fill=X, pady=(2, 0))
-        self._stretch_controls(self.step_row, "photo").pack(side=RIGHT, padx=(10, 0))
         self.step_strip = ttk.Frame(self.step_row, style="Card.TFrame")
+        self.step_line = ttk.Frame(self.step_strip, style="Card.TFrame")
+        self.step_line.pack(side="top", fill=X)
         self._step_widgets = []
         self._step_names = None
         self.step_text = StringVar(value="")
-        self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel")
-        self.step_hide_button = ttk.Button(self.step_strip, text="Hide tips", command=lambda: self._set_tips(False))
+        self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel",
+                                         justify=LEFT)
+        self.step_text_label.pack(side="top", anchor=W, fill=X)
+        self.step_strip.bind("<Configure>", lambda e: self.step_text_label.configure(
+            wraplength=max(int(e.width) - 20, 200)), add="+")
+        self.step_hide_button = ttk.Button(self.step_line, text="Hide tips", command=lambda: self._set_tips(False))
         self.step_show_button = ttk.Button(self.step_row, text="Show tips", command=lambda: self._set_tips(True))
         self._place_step_strip()
 
@@ -3657,20 +3673,17 @@ class App(Tk):
             for w in self._step_widgets:
                 w.destroy()
             self._step_widgets = []
-            self.step_text_label.pack_forget()
             self.step_hide_button.pack_forget()
-            # Hide tips first, at the right, so a narrow window wraps the text rather than losing the button.
+            # Hide tips first, at the right of the step labels.
             self.step_hide_button.pack(side=RIGHT, padx=(10, 0))
             for k, name in enumerate(names):
                 if k:
-                    arrow = ttk.Label(self.step_strip, text="→", style="StepTodo.TLabel")
+                    arrow = ttk.Label(self.step_line, text="→", style="StepTodo.TLabel")
                     arrow.pack(side=LEFT)
                     self._step_widgets.append(arrow)
-                lab = ttk.Label(self.step_strip, text=name, style="StepTodo.TLabel")
+                lab = ttk.Label(self.step_line, text=name, style="StepTodo.TLabel")
                 lab.pack(side=LEFT)
                 self._step_widgets.append(lab)
-            self.step_text_label.configure(wraplength=text_wrap_px(self.step_strip, 55), justify=LEFT)
-            self.step_text_label.pack(side=LEFT, padx=(10, 0))
             self._step_names = names
         labels = self._step_widgets[0::2]
         for k, lab in enumerate(labels):
@@ -3683,11 +3696,24 @@ class App(Tk):
         self._step_state = (names, done, current, text)
         self.step_text.set(text)
 
+    def _radec_is_fill(self) -> bool:
+        """2.2.15 (review): the RA/Dec boxes still hold the field centre a solve filled in (not the target's)."""
+        filled = getattr(self, "_radec_filled", None)
+        return bool(filled) and (self.ra_hours.get().strip(), self.dec_deg.get().strip()) == tuple(filled)
+
+    def _try_auto_target(self, why: str = "lookup"):
+        """The automatic Target marker on an image solved before the RA/Dec arrived; redraws when it placed one."""
+        if self.chart_placed and self._auto_target_marker(why):
+            self._suggest_comps()
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
+
     def _auto_target_marker(self, why: str = "solve") -> bool:
         """2.2.15 (GitHub #3): once the image is solved and the target's RA/Dec are known, put the Target marker on the
         target (centred on the star like a click) unless one is placed already. Returns True when it placed one."""
         if (self.mode_key == "discovery" or self.target_xy is not None or not self.chart_solution
-                or self.preview is None or not self.preview_is_debayered):
+                or self.preview is None or not self.preview_is_debayered or self._radec_is_fill()):
             return False
         try:
             ra, dec = float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get())
@@ -3718,20 +3744,30 @@ class App(Tk):
             edge = float(self.sky_out.get()) + 2
         except (TypeError, ValueError):
             edge = 4.0
-        if not (math.isfinite(xy[0]) and math.isfinite(xy[1]) and edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
-            self.log(f"Target: {name} ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)}) is not on this "
-                     "frame by its plate solution; click the target by hand.")
+        where = f"{name} ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)})"
+        if not (math.isfinite(xy[0]) and math.isfinite(xy[1]) and 0 <= xy[0] < w and 0 <= xy[1] < h):
+            self.log(f"Target: {where} is not on this frame by its plate solution; click the target by hand.")
             return False
-        # Centred on the star exactly as a click is (the star nearest the point, sized by the seeing).
+        if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
+            self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
+                     f"{xy[1]:.0f})); no marker placed.")
+            return False
+        # Centred on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
+        # (review): no marker, rather than one on blank sky.
         try:
             radius = float(self.radius.get())
             seeing = self._seeing()
             info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None)
-            if info["found"] and info["shift"] <= max(3.0, radius):
-                xy = (float(info["x"]), float(info["y"]))
+            found = bool(info["found"]) and info["shift"] <= max(3.0, radius)
         except Exception:
-            pass
+            found = False
+        if not found:
+            self.log(f"Target: no star where the plate solution puts {where}, at ({xy[0]:.0f}, {xy[1]:.0f}); click "
+                     "the target.")
+            return False
+        xy = (float(info["x"]), float(info["y"]))
         self.target_xy = xy
+        self._auto_target_xy = xy
         self.log(f"Target: marker placed on {name} at ({xy[0]:.0f}, {xy[1]:.0f}) from its RA/Dec and the plate solution"
                  + (" (after the lookup)" if why == "lookup" else "") + ". Click with Target to move it if it is not "
                  "your star.")
@@ -5966,8 +6002,9 @@ class App(Tk):
             query = (pointing[0] / 15.0, pointing[1])
             self.log(f"Solve: field center from the FITS header, RA {pointing[0] / 15.0:.5f} h, Dec "
                      f"{pointing[1]:+.4f}°.")
-        # 2.2.15 (GitHub #3): the target's own RA/Dec (looked up or typed), not a field centre filled in below.
-        radec_given = bool(self.ra_hours.get().strip() and self.dec_deg.get().strip())
+        # 2.2.15 (GitHub #3): the target's own RA/Dec (looked up or typed), not a field centre filled in below or by an
+        # earlier solve.
+        radec_given = bool(self.ra_hours.get().strip() and self.dec_deg.get().strip()) and not self._radec_is_fill()
         if (not self.ra_hours.get().strip() or not self.dec_deg.get().strip()) and \
                 (not auto or self.mode_key == "discovery" or self.target_xy is not None):
             # 2.2.13: an automatic solve in Variables/Transits with no target yet leaves the target's RA/Dec alone.
@@ -5979,6 +6016,8 @@ class App(Tk):
                 fill = (float(t_ra) / 15.0, float(t_dec))
             self.ra_hours.set(f"{fill[0]:.6f}")
             self.dec_deg.set(f"{fill[1]:.5f}")
+            # 2.2.15 (review): remember what was filled, so a later solve does not take it for the target's RA/Dec.
+            self._radec_filled = (self.ra_hours.get().strip(), self.dec_deg.get().strip()) if fill is query else None
         try:
             target_radec = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
         except (TypeError, ValueError):
@@ -6291,8 +6330,8 @@ class App(Tk):
             }
         except (TypeError, ValueError):
             self.chart_solution = None
-        if diag.get("radec_given", True):
-            self._auto_target_marker()   # 2.2.15 (GitHub #3): before the comps are suggested around it
+        auto_target = diag.get("radec_given", True) and self._auto_target_marker()   # 2.2.15 (GitHub #3): before
+        # the comps are suggested around it
         self._seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in self.chart_placed
                            if st.get("seq")} if self.mode_key != "discovery" else set()
         self._seq_note_for = None
@@ -6321,6 +6360,12 @@ class App(Tk):
                 "Look at the circles. Are they on real stars, in the pattern the catalogs show?",
             ):
                 self.chart_placed = []
+                if auto_target and self.target_xy == getattr(self, "_auto_target_xy", None):
+                    # 2.2.15 (review): the Target marker this solve placed goes with it.
+                    self.target_xy = None
+                    self._update_pick_label()
+                    self.update_star_panel()
+                    self.log("Target: the marker placed from that solve was removed with it; click the target.")
                 self.refresh_preview()
                 return
         with_mag = sum(1 for _, _, star in self.chart_placed if star.get("mag") is not None)

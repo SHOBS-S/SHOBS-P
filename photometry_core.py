@@ -519,13 +519,19 @@ def stretch_display(data: np.ndarray, stretch=None, limits=None, step: int | Non
     (percentiles, see stretch_limits). NaN shows black. The data are not changed."""
     s = stretch_settings(stretch)
     lo, hi = limits if limits is not None else stretch_limits(data, s["black"], s["white"], step)
-    x = (np.asarray(data, dtype=np.float32) - np.float32(lo)) * np.float32(1.0 / (hi - lo))
-    x = np.nan_to_num(x, nan=0.0, posinf=1.0, neginf=0.0)
+    x = np.array(data, dtype=np.float32)          # one working copy; everything below is done in place
+    x -= np.float32(lo)
+    x *= np.float32(1.0 / (hi - lo))
+    np.nan_to_num(x, copy=False, nan=0.0, posinf=1.0, neginf=0.0)
     np.clip(x, 0.0, 1.0, out=x)
     if s["mode"] == "log":
-        x = np.log10(1.0 + STRETCH_LOG_A * x) / np.float32(math.log10(1.0 + STRETCH_LOG_A))
+        x *= np.float32(STRETCH_LOG_A)
+        np.log1p(x, out=x)
+        x *= np.float32(1.0 / math.log(1.0 + STRETCH_LOG_A))
     elif s["mode"] == "asinh":
-        x = np.arcsinh(x / np.float32(STRETCH_ASINH_B)) / np.float32(math.asinh(1.0 / STRETCH_ASINH_B))
+        x *= np.float32(1.0 / STRETCH_ASINH_B)
+        np.arcsinh(x, out=x)
+        x *= np.float32(1.0 / math.asinh(1.0 / STRETCH_ASINH_B))
     return x.astype(np.float32, copy=False)
 
 
