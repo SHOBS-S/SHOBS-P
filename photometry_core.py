@@ -451,6 +451,70 @@ def bin_plain(img: np.ndarray, factor: int) -> np.ndarray:
     return cropped.reshape(h // factor, factor, w // factor, factor).mean(axis=(1, 3)).astype(np.float32)
 
 
+# ---- 2.2.15 (GitHub #1): display stretch for the Blink and Photometry images (display only, never the data) ----
+STRETCH_MODES = ("linear", "log", "asinh")
+STRETCH_DEFAULT = {"mode": "linear", "black": 5.0, "white": 99.5}   # the look before 2.2.15
+STRETCH_LOG_A = 1000.0      # log: log10(1 + a x) / log10(1 + a), as in DS9
+STRETCH_ASINH_B = 0.1       # asinh: asinh(x / b) / asinh(1 / b); smaller b = stronger
+STRETCH_SAMPLE_PIXELS = 4_000_000   # percentiles from a regular sample above this many pixels
+
+
+def stretch_settings(value=None) -> dict:
+    """A display stretch as {"mode", "black", "white"} (black and white points as percentiles of the image), with
+    anything missing or out of range replaced by the default."""
+    out = dict(STRETCH_DEFAULT)
+    if isinstance(value, dict):
+        if value.get("mode") in STRETCH_MODES:
+            out["mode"] = value["mode"]
+        for key in ("black", "white"):
+            try:
+                v = float(value.get(key))
+                if math.isfinite(v):
+                    out[key] = min(max(v, 0.0), 100.0)
+            except (TypeError, ValueError):
+                pass
+    if out["black"] >= out["white"]:
+        out["black"], out["white"] = STRETCH_DEFAULT["black"], STRETCH_DEFAULT["white"]
+    return out
+
+
+def stretch_limits(data: np.ndarray, black: float = 5.0, white: float = 99.5, step: int | None = None):
+    """Data values at the black and white percentiles (from every `step`-th pixel; by default a regular sample of
+    about STRETCH_SAMPLE_PIXELS). Always lo < hi."""
+    data = np.asarray(data)
+    if step is None:
+        step = max(1, int(math.ceil(math.sqrt(data.size / STRETCH_SAMPLE_PIXELS)))) if data.size else 1
+    sample = data[::step, ::step] if data.ndim == 2 and step > 1 else data
+    finite = sample[np.isfinite(sample)]
+    if finite.size:
+        lo, hi = (float(v) for v in np.percentile(finite, [black, white]))
+    else:
+        lo, hi = 0.0, 1.0
+    if not hi > lo:
+        hi = lo + 1.0
+    return lo, hi
+
+
+def stretch_display(data: np.ndarray, stretch=None, limits=None, step: int | None = None) -> np.ndarray:
+    """Map image data to display values 0..1 (float32): linear, log or asinh between the black and white points
+    (percentiles, see stretch_limits). NaN shows black. The data are not changed."""
+    s = stretch_settings(stretch)
+    lo, hi = limits if limits is not None else stretch_limits(data, s["black"], s["white"], step)
+    x = (np.asarray(data, dtype=np.float32) - np.float32(lo)) * np.float32(1.0 / (hi - lo))
+    x = np.nan_to_num(x, nan=0.0, posinf=1.0, neginf=0.0)
+    np.clip(x, 0.0, 1.0, out=x)
+    if s["mode"] == "log":
+        x = np.log10(1.0 + STRETCH_LOG_A * x) / np.float32(math.log10(1.0 + STRETCH_LOG_A))
+    elif s["mode"] == "asinh":
+        x = np.arcsinh(x / np.float32(STRETCH_ASINH_B)) / np.float32(math.asinh(1.0 / STRETCH_ASINH_B))
+    return x.astype(np.float32, copy=False)
+
+
+def stretch_to_uint8(data: np.ndarray, stretch=None, limits=None, step: int | None = None) -> np.ndarray:
+    """stretch_display as an 8-bit picture (0..255), for the Blink cache."""
+    return (stretch_display(data, stretch, limits, step) * np.float32(255.0)).astype(np.uint8)
+
+
 def bin_image(img: np.ndarray, factor: int) -> np.ndarray:
     """Bin a raw color (Bayer) frame and keep it a Bayer mosaic.
 

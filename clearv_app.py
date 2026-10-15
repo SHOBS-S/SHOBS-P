@@ -176,6 +176,12 @@ PERIOD_BIN_CHOICES = ("Every point", "5 min bins", "10 min bins", "30 min bins")
 BIN_CHOICES = ("None", "Night", "60 min", "30 min", "15 min", "10 min")
 STEPS = ("Input", "Blink", "Calibrate", "Photometry", "Output")
 BLINK_SPEEDS = ("0.25 s/frame", "0.5 s/frame", "1 s/frame", "2 s/frame")  # 2.2.3; 0.25 in 2.2.11 (John)
+# 2.2.15 (GitHub #1): display stretch. The sliders step through these black / white points (percentiles).
+STRETCH_PAGES = ("blink", "photo")
+STRETCH_BLACK_STEPS = (0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0)
+STRETCH_WHITE_STEPS = (90.0, 95.0, 97.0, 98.0, 99.0, 99.5, 99.7, 99.8, 99.9, 99.95, 99.99, 100.0)
+STRETCH_DEBOUNCE_MS = 250
+BLINK_CACHE_BYTES = 1_000_000_000   # 2.2.15: pictures plus the small float16 copies kept for re-stretching
 # Page indices (2.2: the Debayer step is gone; the first frame is debayered as soon as it is calibrated).
 STEP_INPUT, STEP_BLINK, STEP_CAL, STEP_PHOTO, STEP_OUTPUT = range(5)
 
@@ -597,6 +603,13 @@ class App(Tk):
         self._blink_artist = None
         self.blink_speed = StringVar(value=self._blink_speed_text(self.settings.get("blink_seconds", 1.0)))
         self.blink_speed.trace_add("write", lambda *_: self._remember_blink_speed())
+        # 2.2.15 (GitHub #1): display stretch of the Blink and Photometry images, one each, remembered.
+        self.stretch = {page: core.stretch_settings(self.settings.get(f"stretch_{page}")) for page in STRETCH_PAGES}
+        self._stretch_vars = {}
+        self._stretch_jobs = {}
+        self._blink_restretch_gen = 0
+        self._photo_disp = None          # (image, token, stretch, display array) of the last Photometry drawing
+        self.show_tips = BooleanVar(value=bool(self.settings.get("photo_tips", True)))   # 2.2.15 (GitHub #3)
         self._counts = {}
         self.chart_placed = []
         self.comps_used = []
@@ -873,6 +886,13 @@ class App(Tk):
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
         style.configure("Box.TLabel", background="#ffffff", foreground="#1c2b33", font=(core.MONO_FONT, 9))
+        # 2.2.15 (GitHub #3): the Photometry page's step hint.
+        style.configure("StepOn.TLabel", background="#c47a2c", foreground="#ffffff", font=(core.UI_FONT, 9, "bold"),
+                        padding=(6, 1))
+        style.configure("StepDone.TLabel", background="#ffffff", foreground="#2e7d32", font=(core.UI_FONT, 9),
+                        padding=(6, 1))
+        style.configure("StepTodo.TLabel", background="#ffffff", foreground="#8a979e", font=(core.UI_FONT, 9),
+                        padding=(6, 1))
         self._apply_theme(getattr(self, "mode_key", "variables"))
 
     def _apply_theme(self, mode: str):
@@ -2117,6 +2137,12 @@ class App(Tk):
             f"{found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
+        # 2.2.15 (GitHub #3): the image was solved before the lookup answered: put the Target marker on it now.
+        if self.chart_placed and self._auto_target_marker("lookup"):
+            self._suggest_comps()
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
 
     def scan_folders(self):
         for key, var in (
@@ -2485,6 +2511,7 @@ class App(Tk):
         ttk.Label(tools, text="Speed", style="Card.TLabel").pack(side=LEFT, padx=(10, 2))
         ttk.Combobox(tools, textvariable=self.blink_speed, values=BLINK_SPEEDS, width=12, state="readonly").pack(side=LEFT)
         ttk.Button(tools, text="Reject / restore", command=self.toggle_reject).pack(side=LEFT, padx=6)
+        self._stretch_controls(card, "blink").pack(anchor=W, pady=(0, 4))   # 2.2.15 (GitHub #1)
         self.blink_label = StringVar(value="No lights loaded.")
         ttk.Label(card, textvariable=self.blink_label, style="Hint.TLabel").pack(anchor=W)
         host = ttk.Frame(card, style="Card.TFrame")
@@ -2561,29 +2588,67 @@ class App(Tk):
             b = 1
         return (path, b)
 
-    def _blink_picture(self, path, binning):
-        """Read one frame and make the small 8-bit picture Blink shows (about 1000 px wide)."""
+    def _blink_picture(self, path, binning, stretch=None):
+        """Read one frame and make the small 8-bit picture Blink shows (about 1000 px wide). 2.2.15: returns
+        (picture, exposure, small float16 copy, stretch); the copy (offset and scaled so float16 holds it) lets a new
+        stretch be drawn without reading the file again."""
         data, header = core.read_fits(path)
         data = core.bin_image(data, binning)
         if data.shape[1] > 1000:
             step = int(math.ceil(data.shape[1] / 1000))
             data = data[::step, ::step]
-        sample = data[::4, ::4]
-        finite = sample[np.isfinite(sample)]
-        lo, hi = (np.percentile(finite, [5, 99.5]) if finite.size else (0.0, 1.0))
-        if not hi > lo:
-            hi = lo + 1.0
-        pic = np.clip((np.nan_to_num(data, nan=lo) - lo) * (255.0 / (hi - lo)), 0, 255).astype(np.uint8)
-        return pic, core.header_exptime(header)
+        lo, hi = core.stretch_limits(data, 5.0, 99.5, step=4)
+        small = np.clip((np.asarray(data, dtype=np.float32) - np.float32(lo)) / np.float32(hi - lo), -6e4, 6e4)
+        small = small.astype(np.float16)
+        stretch = dict(stretch or self.stretch["blink"])
+        pic = core.stretch_to_uint8(small, stretch, step=4)
+        return pic, core.header_exptime(header), small, stretch
+
+    def _blink_restretch(self, value, stretch):
+        """A cached Blink frame drawn again with another stretch (from its float16 copy: no file read)."""
+        pic, exptime, small = value[0], value[1], (value[2] if len(value) > 2 else None)
+        if small is None:
+            return value
+        return core.stretch_to_uint8(small, stretch, step=4), exptime, small, dict(stretch)
 
     def _blink_store(self, key, value):
+        if key not in self._blink_cache:
+            self._blink_cache_order.append(key)
         self._blink_cache[key] = value
-        self._blink_cache_order.append(key)
-        # Keep memory bounded (about 700 MB of pictures); the oldest go first.
-        limit = max(50, int(7e8 // max(1, value[0].nbytes)))
+        # Keep memory bounded (about 1 GB of pictures and float16 copies); the oldest go first.
+        size = sum(getattr(v, "nbytes", 0) for v in value if isinstance(v, np.ndarray))
+        limit = max(50, int(BLINK_CACHE_BYTES // max(1, size)))
         while len(self._blink_cache_order) > limit:
             old = self._blink_cache_order.pop(0)
             self._blink_cache.pop(old, None)
+
+    def _blink_stretch_changed(self):
+        """2.2.15: a new Blink stretch. The frame on screen is redrawn now; the other cached frames are redrawn from
+        their float16 copies in the background (a frame still waiting is redrawn when it is shown)."""
+        self._blink_restretch_gen += 1
+        gen = self._blink_restretch_gen
+        stretch = dict(self.stretch["blink"])
+        self.show_blink()
+        items = [(k, v) for k, v in self._blink_cache.items() if len(v) > 3 and v[3] != stretch]
+        if not items:
+            return
+
+        def work():
+            for key, value in items:
+                if gen != self._blink_restretch_gen:
+                    return
+                try:
+                    new = self._blink_restretch(value, stretch)
+                except Exception:
+                    continue
+                self.call_ui(self._blink_put_restretched, key, new, gen)
+                time.sleep(0.001)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _blink_put_restretched(self, key, value, gen):
+        if gen == self._blink_restretch_gen and key in self._blink_cache:
+            self._blink_cache[key] = value
 
     def _start_blink_preload(self):
         """Read the frames ahead of the one on screen in a background thread."""
@@ -2702,7 +2767,10 @@ class App(Tk):
                 self.blink_label.set(f"{os.path.basename(path)}  unreadable: {exc}")
                 return
             self._blink_store(key, cached)
-        pic, exptime = cached
+        if len(cached) > 3 and cached[3] != self.stretch["blink"]:
+            cached = self._blink_restretch(cached, self.stretch["blink"])   # 2.2.15: drawn with another stretch
+            self._blink_cache[key] = cached
+        pic, exptime = cached[0], cached[1]
         mark = "REJECTED" if rejected else "keep"
         self.blink_label.set(
             f"{self.blink_index + 1}/{len(self.blink_paths)}  {mark}  rejected {len(self.rejected)}  {os.path.basename(path)}  "
@@ -2738,6 +2806,112 @@ class App(Tk):
         bottom = min(0.2, 4.0 * pt / h)
         side = min(0.2, 4.0 * pt / w)
         fig.subplots_adjust(left=side, right=1.0 - side, bottom=bottom, top=top)
+
+    # ---- 2.2.15 (GitHub #1): display stretch controls (Blink and Photometry) ---------------------------
+    @staticmethod
+    def _nearest_step(steps, value) -> int:
+        return min(range(len(steps)), key=lambda k: abs(steps[k] - float(value)))
+
+    @staticmethod
+    def _pct_text(value) -> str:
+        return f"{float(value):g}%"
+
+    def _stretch_controls(self, parent, page: str):
+        """A compact 'Stretch' row: linear / log / asinh, black and white points (percentiles of the image), Reset.
+        Display only: the measurements never see it."""
+        s = self.stretch[page]
+        box = ttk.Frame(parent, style="Card.TFrame")
+        mode = StringVar(value=s["mode"])
+        black = DoubleVar(value=self._nearest_step(STRETCH_BLACK_STEPS, s["black"]))
+        white = DoubleVar(value=self._nearest_step(STRETCH_WHITE_STEPS, s["white"]))
+        black_text = StringVar(value=self._pct_text(s["black"]))
+        white_text = StringVar(value=self._pct_text(s["white"]))
+        self._stretch_vars[page] = {"mode": mode, "black": black, "white": white,
+                                    "black_text": black_text, "white_text": white_text}
+        try:
+            from tkinter import font as tkfont
+            length = int(tkfont.Font(root=parent, family=core.UI_FONT, size=10).measure("n" * 11))
+        except Exception:
+            length = 110
+        length = max(80, length)
+        ttk.Label(box, text="Stretch", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        combo = ttk.Combobox(box, textvariable=mode, values=core.STRETCH_MODES, width=7, state="readonly")
+        combo.pack(side=LEFT)
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._stretch_moved(page))
+        ttk.Label(box, text="black", style="Card.TLabel").pack(side=LEFT, padx=(10, 2))
+        ttk.Scale(box, from_=0, to=len(STRETCH_BLACK_STEPS) - 1, variable=black, orient="horizontal", length=length,
+                  command=lambda _v: self._stretch_moved(page, "black")).pack(side=LEFT)
+        ttk.Label(box, textvariable=black_text, style="Hint.TLabel", width=6).pack(side=LEFT, padx=(2, 0))
+        ttk.Label(box, text="white", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
+        ttk.Scale(box, from_=0, to=len(STRETCH_WHITE_STEPS) - 1, variable=white, orient="horizontal", length=length,
+                  command=lambda _v: self._stretch_moved(page, "white")).pack(side=LEFT)
+        ttk.Label(box, textvariable=white_text, style="Hint.TLabel", width=6).pack(side=LEFT, padx=(2, 0))
+        ttk.Button(box, text="Reset", command=lambda: self._stretch_reset(page)).pack(side=LEFT, padx=(8, 0))
+        return box
+
+    def _stretch_from_vars(self, page: str, moved: str | None = None) -> dict:
+        v = self._stretch_vars[page]
+        cur = dict((getattr(self, "_pending_stretch", {}) or {}).get(page) or self.stretch[page])
+        cur["mode"] = v["mode"].get() if v["mode"].get() in core.STRETCH_MODES else cur["mode"]
+        if moved == "black":
+            k = int(round(float(v["black"].get())))
+            cur["black"] = STRETCH_BLACK_STEPS[min(max(k, 0), len(STRETCH_BLACK_STEPS) - 1)]
+        if moved == "white":
+            k = int(round(float(v["white"].get())))
+            cur["white"] = STRETCH_WHITE_STEPS[min(max(k, 0), len(STRETCH_WHITE_STEPS) - 1)]
+        return cur
+
+    def _stretch_moved(self, page: str, moved: str | None = None):
+        """A slider or the mode box moved: show the new numbers now, redraw once the user pauses (debounced)."""
+        if page not in self._stretch_vars:
+            return
+        new = self._stretch_from_vars(page, moved)
+        v = self._stretch_vars[page]
+        v["black_text"].set(self._pct_text(new["black"]))
+        v["white_text"].set(self._pct_text(new["white"]))
+        self._pending_stretch = getattr(self, "_pending_stretch", {})
+        self._pending_stretch[page] = new
+        job = self._stretch_jobs.get(page)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._stretch_jobs[page] = self.after(STRETCH_DEBOUNCE_MS, lambda: self._apply_stretch(page))
+
+    def _stretch_reset(self, page: str):
+        v = self._stretch_vars.get(page)
+        d = dict(core.STRETCH_DEFAULT)
+        if v is not None:
+            v["mode"].set(d["mode"])
+            v["black"].set(self._nearest_step(STRETCH_BLACK_STEPS, d["black"]))
+            v["white"].set(self._nearest_step(STRETCH_WHITE_STEPS, d["white"]))
+            v["black_text"].set(self._pct_text(d["black"]))
+            v["white_text"].set(self._pct_text(d["white"]))
+        self._pending_stretch = getattr(self, "_pending_stretch", {})
+        self._pending_stretch[page] = d
+        self._apply_stretch(page)
+
+    def _apply_stretch(self, page: str, stretch: dict | None = None):
+        """Use a new display stretch on one page and remember it in the settings."""
+        self._stretch_jobs[page] = None
+        if stretch is None:
+            stretch = (getattr(self, "_pending_stretch", {}) or {}).pop(page, None)
+        if stretch is None:
+            return
+        stretch = core.stretch_settings(stretch)
+        if stretch["black"] >= stretch["white"]:
+            return
+        if stretch == self.stretch[page]:
+            return
+        self.stretch[page] = stretch   # a new dict: the Blink reader thread may hold the old one
+        self.settings[f"stretch_{page}"] = dict(stretch)
+        self._save_settings()
+        if page == "blink":
+            if self.blink_paths:
+                self._blink_stretch_changed()
+        elif self.preview is not None:
+            self.refresh_preview()
 
     def _page_calibrate(self):
         page = ttk.Frame(self.pages)
@@ -3207,6 +3381,19 @@ class App(Tk):
         self.pick_label = StringVar(value="No stars marked.")
         self.pick_label_widget = ttk.Label(card, textvariable=self.pick_label, style="Hint.TLabel")
         self.pick_label_widget.pack(anchor=W)
+        # 2.2.15 (GitHub #3): first-time guidance, "1 Solve → 2 Target → 3 Comps → 4 Check → Run" with the current step
+        # highlighted (Hide tips / Show tips, remembered); (GitHub #1) the display stretch at the right of the row.
+        self.step_row = ttk.Frame(card, style="Card.TFrame")
+        self.step_row.pack(fill=X, pady=(2, 0))
+        self._stretch_controls(self.step_row, "photo").pack(side=RIGHT, padx=(10, 0))
+        self.step_strip = ttk.Frame(self.step_row, style="Card.TFrame")
+        self._step_widgets = []
+        self._step_names = None
+        self.step_text = StringVar(value="")
+        self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel")
+        self.step_hide_button = ttk.Button(self.step_strip, text="Hide tips", command=lambda: self._set_tips(False))
+        self.step_show_button = ttk.Button(self.step_row, text="Show tips", command=lambda: self._set_tips(True))
+        self._place_step_strip()
 
         body = ttk.Frame(card, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True, pady=6)
@@ -3303,7 +3490,7 @@ class App(Tk):
         self.after_idle(self._fit_photo_panel)   # Stars and Discovery panels differ in width
         self.pick_label_widget.pack_forget()
         if mode != "discovery":
-            self.pick_label_widget.pack(anchor=W, before=self.photo_body)
+            self.pick_label_widget.pack(anchor=W, before=getattr(self, "step_row", self.photo_body))
         self.candidates_only_box.pack_forget()
         if mode == "discovery":
             self.candidates_only_box.pack(side=LEFT, padx=(0, 10), before=self.view_fit_button)
@@ -3340,6 +3527,155 @@ class App(Tk):
                 "The image is solved on its own; clicking any star then fills in its ID and magnitude from every "
                 "catalog (AAVSO sequence first), shown in the panel at right with its color and a variable-star "
                 "check. Cyan circles are AAVSO sequence stars. Right-click a marker to clear it.")
+        self._update_step_hint()
+
+    # ---- 2.2.15 (GitHub #3): step hint on the Photometry page ----------------------------------
+    def photo_steps(self):
+        """The Photometry page's steps for the mode, which are done, which one is current, and what to do now:
+        (names, done indexes, current index, text)."""
+        solved = bool(self.chart_placed)
+        solving = bool(getattr(self, "_solving", False))
+        ready = self.preview is not None and self.preview_is_debayered
+        if self.mode_key == "discovery":
+            names = ("1 Solve", "2 Scan field")
+            done = {0} if solved else set()
+            if solved:
+                return names, done, 1, "Solved. Watch or exclude stars if you like, then Scan field."
+            if not ready:
+                return names, done, 0, "Calibrate first (Calibrate page); the field is solved straight away."
+            if solving:
+                return names, done, 0, "Solving the field…"
+            return names, done, 0, ("Not solved: check the field centre on the Input page and the Optics box, then "
+                                    "Solve again.")
+        names = ("1 Solve", "2 Target", "3 Comps", "4 Check", "Run")
+        target = self.target_xy is not None
+        comps = bool(self._comp_roles_marked())
+        check = self.check_xy is not None
+        done = {k for k, flag in enumerate((solved, target, comps, check)) if flag}
+        not_solved = "" if solved else " (Not solved: type their magnitudes.)"
+        if not ready:
+            return names, done, 0, "Calibrate first (Calibrate page); the image is solved straight away."
+        if not solved and not target:
+            if solving:
+                return names, done, 0, "Solving the image… You can click the target meanwhile (Target)."
+            return names, done, 0, "Not solved: click the target on the image (Target), then the comps; or Solve again."
+        if not target:
+            return names, done, 1, "Solved. Pick Target and click the target star."
+        if not comps:
+            return names, done, 2, ("Pick Comps and click comparison stars"
+                                    + (" (green rings: suggested, near the target's brightness)." if
+                                       self.suggested_comps else ".") + not_solved)
+        if not check:
+            return names, done, 3, "Pick Check and click a check star: a steady star that tests the comps." + not_solved
+        return names, done, 4, "Ready: Run photometry."
+
+    def _place_step_strip(self):
+        if not hasattr(self, "step_strip"):
+            return
+        self.step_strip.pack_forget()
+        self.step_show_button.pack_forget()
+        if self.show_tips.get():
+            self.step_strip.pack(side=LEFT, fill=X, expand=True)
+            self._update_step_hint()
+        else:
+            self.step_show_button.pack(side=LEFT)
+
+    def _set_tips(self, on: bool):
+        self.show_tips.set(bool(on))
+        self.settings["photo_tips"] = bool(on)
+        self._save_settings()
+        self._place_step_strip()
+
+    def _update_step_hint(self):
+        if not hasattr(self, "step_strip") or not self.show_tips.get():
+            return
+        try:
+            names, done, current, text = self.photo_steps()
+        except Exception:
+            return
+        if names != self._step_names:
+            for w in self._step_widgets:
+                w.destroy()
+            self._step_widgets = []
+            self.step_text_label.pack_forget()
+            self.step_hide_button.pack_forget()
+            # Hide tips first, at the right, so a narrow window wraps the text rather than losing the button.
+            self.step_hide_button.pack(side=RIGHT, padx=(10, 0))
+            for k, name in enumerate(names):
+                if k:
+                    arrow = ttk.Label(self.step_strip, text="→", style="StepTodo.TLabel")
+                    arrow.pack(side=LEFT)
+                    self._step_widgets.append(arrow)
+                lab = ttk.Label(self.step_strip, text=name, style="StepTodo.TLabel")
+                lab.pack(side=LEFT)
+                self._step_widgets.append(lab)
+            self.step_text_label.configure(wraplength=text_wrap_px(self.step_strip, 55), justify=LEFT)
+            self.step_text_label.pack(side=LEFT, padx=(10, 0))
+            self._step_names = names
+        labels = self._step_widgets[0::2]
+        for k, lab in enumerate(labels):
+            if k == current:
+                lab.configure(style="StepOn.TLabel", text=names[k])
+            elif k in done:
+                lab.configure(style="StepDone.TLabel", text="✓ " + names[k])
+            else:
+                lab.configure(style="StepTodo.TLabel", text=names[k])
+        self._step_state = (names, done, current, text)
+        self.step_text.set(text)
+
+    def _auto_target_marker(self, why: str = "solve") -> bool:
+        """2.2.15 (GitHub #3): once the image is solved and the target's RA/Dec are known, put the Target marker on the
+        target (centred on the star like a click) unless one is placed already. Returns True when it placed one."""
+        if (self.mode_key == "discovery" or self.target_xy is not None or not self.chart_solution
+                or self.preview is None or not self.preview_is_debayered):
+            return False
+        try:
+            ra, dec = float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get())
+        except (TypeError, ValueError):
+            return False
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return False
+        name = self.star_id.get().strip() or "the target"
+        # The catalog star at the target's position first (proper motion is applied to the night), else the plate
+        # solution's pixel for its RA/Dec.
+        best = None
+        for x, y, st in self.chart_placed:
+            if st.get("ra") is None or st.get("dec") is None:
+                continue
+            d = core.sky_separation_arcsec(ra, dec, st["ra"], st["dec"])
+            if d < 5.0 and (best is None or d < best[0]):
+                best = (d, (float(x), float(y)))
+        if best is not None:
+            xy = best[1]
+        else:
+            try:
+                x, y = core.sky_to_pixel(ra, dec, self.chart_solution)
+            except Exception:
+                return False
+            xy = (float(x), float(y))
+        h, w = self.preview.shape[:2]
+        try:
+            edge = float(self.sky_out.get()) + 2
+        except (TypeError, ValueError):
+            edge = 4.0
+        if not (math.isfinite(xy[0]) and math.isfinite(xy[1]) and edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
+            self.log(f"Target: {name} ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)}) is not on this "
+                     "frame by its plate solution; click the target by hand.")
+            return False
+        # Centred on the star exactly as a click is (the star nearest the point, sized by the seeing).
+        try:
+            radius = float(self.radius.get())
+            seeing = self._seeing()
+            info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None)
+            if info["found"] and info["shift"] <= max(3.0, radius):
+                xy = (float(info["x"]), float(info["y"]))
+        except Exception:
+            pass
+        self.target_xy = xy
+        self.log(f"Target: marker placed on {name} at ({xy[0]:.0f}, {xy[1]:.0f}) from its RA/Dec and the plate solution"
+                 + (" (after the lookup)" if why == "lookup" else "") + ". Click with Target to move it if it is not "
+                 "your star.")
+        return True
 
     # ---- Discovery panel (2.2) ------------------------------------------------------------
     def _build_discovery_panel(self, panel):
@@ -3959,6 +4295,7 @@ class App(Tk):
         self._prog = None
 
     def refresh_preview(self):
+        self._update_step_hint()   # 2.2.15 (GitHub #3)
         if self.photo_canvas is None or self.preview is None:
             return
         img = self.preview
@@ -3979,12 +4316,14 @@ class App(Tk):
                     or abs(cur_y[1] - cur_y[0]) < abs(full_y[1] - full_y[0]) - 1):
                 self._photo_view = (cur_x, cur_y, img.shape)
         self.photo_ax.clear()
-        finite = img[np.isfinite(img)]
-        if finite.size:
-            lo, hi = np.percentile(finite, [5, 99.5])
-        else:
-            lo, hi = 0, 1
-        self.photo_ax.imshow(img, cmap="gray", origin="upper", vmin=lo, vmax=hi, interpolation="nearest")
+        # 2.2.15 (GitHub #1): the display stretch chosen under the image (default: linear, 5% to 99.5% as before).
+        # Kept between redraws of the same image, so placing a marker does not stretch the frame again.
+        stretch = self.stretch["photo"]
+        cache = self._photo_disp
+        if cache is None or cache[0] is not img or cache[1] != token or cache[2] != stretch:
+            cache = (img, token, dict(stretch), core.stretch_display(img, stretch))
+            self._photo_disp = cache
+        self.photo_ax.imshow(cache[3], cmap="gray", origin="upper", vmin=0.0, vmax=1.0, interpolation="nearest")
         self._mark(self.target_xy, PICK_COLORS["target"], "T")
         for role in COMP_ROLES:
             self._mark(getattr(self, f"{role}_xy"), PICK_COLORS[role], f"C{comp_number(role)}")
@@ -5281,6 +5620,7 @@ class App(Tk):
             f"Target {self._fmt(self.target_xy)}    {comp_text}    Check {self._fmt(self.check_xy)}"
             + (f"    Watch {len(self.watch_xy)} of {len(self.watch_list)} on this frame" if self.watch_list else "")
         )
+        self._update_step_hint()   # 2.2.15 (GitHub #3)
 
     def _fill_from_chart(self, mode, xy):
         """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form."""
@@ -5516,6 +5856,8 @@ class App(Tk):
             query = (pointing[0] / 15.0, pointing[1])
             self.log(f"Solve: field center from the FITS header, RA {pointing[0] / 15.0:.5f} h, Dec "
                      f"{pointing[1]:+.4f}°.")
+        # 2.2.15 (GitHub #3): the target's own RA/Dec (looked up or typed), not a field centre filled in below.
+        radec_given = bool(self.ra_hours.get().strip() and self.dec_deg.get().strip())
         if (not self.ra_hours.get().strip() or not self.dec_deg.get().strip()) and \
                 (not auto or self.mode_key == "discovery" or self.target_xy is not None):
             # 2.2.13: an automatic solve in Variables/Transits with no target yet leaves the target's RA/Dec alone.
@@ -5596,12 +5938,14 @@ class App(Tk):
         preview_ref, preview_path = self.preview, self.preview_path
         target_xy = self.target_xy if not field_solve else (tx, ty)
         self._chart_diag = {"scale": scale, "camera_bin": camera_bin, "sources": len(sources), "target": target_xy,
-                            "auto": auto, "ref": (ra_hours * 15.0, dec)}
+                            "auto": auto, "ref": (ra_hours * 15.0, dec), "radec_given": radec_given}
         # An approximate scale (frames from another telescope) gets a wider search.
         slop = 0.15 if self.scale_approx else 0.06
         epoch_year = core.header_epoch_year(self.preview_header or {})
         if not self._start_job(f"Solving: fetching AAVSO, Gaia, APASS and Tycho stars ({fov:.0f}′ field, {band} band)…"):
             return
+        self._solving = True          # 2.2.15 (GitHub #3): for the step hint
+        self._update_step_hint()
         vet_cache = {"field": getattr(self, "_field_var_cache", None)}
         cancel = self._cancel
 
@@ -5746,6 +6090,8 @@ class App(Tk):
 
     def _label_done(self, catalog, chart_id, stars, match_set, solved, placed, band, error, vet=None):
         self._end_job()
+        self._solving = False
+        self._update_step_hint()
         diag = getattr(self, "_chart_diag", {})
         auto = diag.get("auto", False)
         if error is not None:
@@ -5835,6 +6181,8 @@ class App(Tk):
             }
         except (TypeError, ValueError):
             self.chart_solution = None
+        if diag.get("radec_given", True):
+            self._auto_target_marker()   # 2.2.15 (GitHub #3): before the comps are suggested around it
         self._seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in self.chart_placed
                            if st.get("seq")} if self.mode_key != "discovery" else set()
         self._seq_note_for = None
