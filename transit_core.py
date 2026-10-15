@@ -465,6 +465,101 @@ def transit_window_check(t_min: float, t_max: float, planet: dict) -> dict | Non
     return best
 
 
+def transit_windows(t_min: float, t_max: float, planet: dict, pad: float = 0.0) -> list[dict]:
+    """2.2.15 (item 1): every predicted transit of the planet that overlaps [t_min, t_max], with the same half-width
+    as transit_window_check (T14/2 + 3x the propagated ephemeris uncertainty) plus `pad` days on each side (JD
+    against BJD: pad about 15 minutes). Each: {"lo", "hi" (window incl. the pad), "tc", "epoch", "t1", "t4" (the
+    transit itself, tc -/+ T14/2), "unc" (1 sigma of tc, days)}. Empty without a usable ephemeris."""
+    try:
+        period = float(planet["period"])
+        t0 = float(planet["t0"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not (math.isfinite(period) and period > 0 and math.isfinite(t0)):
+        return []
+    if not (math.isfinite(t_min) and math.isfinite(t_max)) or t_max < t_min:
+        return []
+    t14 = float(planet.get("t14") or 0.1)
+    out = []
+    n0 = math.floor((t_min - t0) / period) - 1
+    n1 = math.ceil((t_max - t0) / period) + 1
+    if n1 - n0 > 10000:   # a span of thousands of orbits: not a night of frames
+        return []
+    for n in range(n0, n1 + 1):
+        tc = t0 + n * period
+        unc = math.hypot(float(planet.get("t0_err") or 0.0), abs(n) * float(planet.get("period_err") or 0.0))
+        half = t14 / 2 + 3 * unc + pad
+        if tc + half >= t_min and tc - half <= t_max:
+            out.append({"lo": tc - half, "hi": tc + half, "tc": tc, "epoch": n, "t1": tc - t14 / 2,
+                        "t4": tc + t14 / 2, "unc": unc})
+    return out
+
+
+def planet_letter(name: str) -> str:
+    """2.2.15 (item 1): 'HD 219134 b' -> 'b' (the name itself when it does not end in a planet letter)."""
+    m = re.search(r"\s([b-z])$", str(name or "").strip())
+    return m.group(1) if m else str(name or "").strip()
+
+
+def planet_transit_frames(observations, planets, pad: float = 0.0105) -> list[dict]:
+    """2.2.15 (item 1): which frames fall in a predicted transit of each planet. observations need only .jd
+    (geocentric JD; the default pad of 15 minutes covers JD against BJD). Returns one entry per planet with frames
+    inside a window: {"planet", "letter", "frames": n, "jd": [first, last frame inside], "windows": [[lo, hi], ...]
+    (incl. pad), "t1", "t4" (the first such transit, no pad), "unc" (days)}."""
+    jds = [float(o.jd) for o in observations if o.jd is not None and math.isfinite(float(o.jd))]
+    if not jds or not planets:
+        return []
+    t_min, t_max = min(jds), max(jds)
+    out = []
+    for p in planets:
+        wins = transit_windows(t_min, t_max, p, pad)
+        if not wins:
+            continue
+        inside = [t for t in jds if any(w["lo"] <= t <= w["hi"] for w in wins)]
+        if not inside:
+            continue
+        first = next(w for w in wins if any(w["lo"] <= t <= w["hi"] for t in inside))
+        out.append({"planet": p.get("name") or "", "letter": planet_letter(p.get("name") or ""),
+                    "frames": len(inside), "jd": [min(inside), max(inside)],
+                    "windows": [[w["lo"], w["hi"]] for w in wins], "t1": first["t1"], "t4": first["t4"],
+                    "unc": first["unc"]})
+    return out
+
+
+def transiting_planet_ephemerides(star: str) -> list[dict] | None:
+    """2.2.15 (item 1): the transiting planets of a star typed as the Star ID, with what a transit window needs:
+    [{"name", "period", "period_err", "t0", "t0_err", "t14" (days)}], using the most precise published ephemeris
+    now (as lookup_nea does). [] when the Archive knows the star but it has no transiting planet with an
+    ephemeris; None when the star is unknown or the Archive cannot be reached."""
+    info = nea_resolve(star)
+    if info is None:
+        return None
+    system = info.get("system") or ""
+    if not info.get("planets") or not system or "'" in system:
+        return []
+    rows = _nea_query("select pl_name,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,tran_flag "
+                      f"from pscomppars where hostname = '{system}'")
+    out = []
+    now = now_jd()
+    for row in rows:
+        if str(row.get("tran_flag", "")).strip() not in ("1", "1.0"):
+            continue
+        name = row.get("pl_name") or ""
+        period, t0 = _f(row.get("pl_orbper")), _f(row.get("pl_tranmid"))
+        if not period or not t0:
+            continue
+        p = {"name": name, "period": period, "period_err": _f(row.get("pl_orbpererr1")), "t0": t0,
+             "t0_err": _f(row.get("pl_tranmiderr1")), "t14": (_f(row.get("pl_trandur")) or 0) / 24.0 or None}
+        try:
+            best = most_precise_ephemeris(name, now, (p["period"], p["period_err"], p["t0"], p["t0_err"], ""))
+        except Exception:
+            best = None
+        if best is not None:
+            p.update(period=best["period"], period_err=best["period_err"], t0=best["t0"], t0_err=best["t0_err"])
+        out.append(p)
+    return sorted(out, key=lambda q: q["name"])
+
+
 def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_flip=None, flip_step=None,
                flagged_mask=None) -> dict:
     """2.2.13: the data, start values, priors and flip time shared by fit_transit and lsq_fit."""

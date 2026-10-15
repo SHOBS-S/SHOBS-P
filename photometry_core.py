@@ -4524,6 +4524,26 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
     return flagged
 
 
+TRANSIT_FLAG = "transit"   # 2.2.15 (item 1): a frame taken while a planet of the target transits (campaign rule)
+
+
+def set_transit_flags(observations: list[Obs], windows, on: bool) -> int:
+    """2.2.15 (item 1): flag (on=True) or unflag the frames whose time falls in any of the windows ([[lo, hi], ...],
+    JD). Other flags are left alone; the flag is stored with the series like any other. Returns how many frames
+    carry the flag afterwards (of those in a window)."""
+    wins = [(float(a), float(b)) for a, b in (windows or [])]
+    n = 0
+    for o in observations:
+        if not any(a <= o.jd <= b for a, b in wins):
+            continue
+        words = [w for w in o.flag.split() if w != TRANSIT_FLAG]
+        if on:
+            words.append(TRANSIT_FLAG)
+            n += 1
+        o.flag = " ".join(words)
+    return n
+
+
 CLOUD_EDGE_LABEL = "cloud edge"   # 2.2.14 (item 10): the 'cloudedge' flag in words (night table)
 CLOUD_EDGE_FRAMES = 2       # 2.2.14 (item 10): how far (in frames) from a cloud-flagged frame a point can be flagged
 CLOUD_EDGE_SIGMA = 5.0      # ... and how far off the local level it must be (robust sigmas of the night)

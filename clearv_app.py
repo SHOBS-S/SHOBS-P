@@ -649,6 +649,8 @@ class App(Tk):
         self._loss_report = {}          # 2.2.14 (item 18): {night: light-loss episodes} from the last cloud check
         self._loss_failed_logged = set()
         self._pier_cache = {}           # 2.2.14 (item 20): pier sides of nights saved without them
+        self._planet_eph_cache = {}     # 2.2.15 (item 1): {star key: (time, transiting planets or None)} per session
+        self._zp_caution_cache = None   # 2.2.15 (item 2): (key, caution text) of the last zero-point check
         self.busy = False
         self._ui_queue = queue.Queue()
         self._photo_view = None            # zoomed view of the Photometry image: (xlim, ylim, shape)
@@ -7339,6 +7341,139 @@ class App(Tk):
                 self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not auto-save the series: {exc}")
+        self._check_planet_transits(night)   # 2.2.15 (item 1): in the background; flags arrive later
+
+    # ---- 2.2.15 (item 1): planet transits in a Variables campaign -------------------------------------------
+    PLANET_RETRY_S = 600.0   # a failed lookup (offline, unknown star) is tried again after this long
+
+    def _check_planet_transits(self, night: str) -> None:
+        """2.2.15 (item 1): John's campaign rule: no campaign data while a planet of the target transits. In
+        Variables mode, look up the Star ID's transiting planets (NASA Exoplanet Archive) in a background thread
+        (once per star and session), then count the night's frames in each predicted transit window. Nothing is said
+        when there is no Star ID, no lookup, no planet, no transit in the frames, or no network. Needs only the
+        frames' times and the Star ID (no plate solution, no header pointing)."""
+        if self.mode_key != "variables":
+            return
+        star = self.star_id.get().strip()
+        if not star:
+            return
+        points = [o for o in self.observations if o.night == night]
+        if not points:
+            return
+        key = name_key(star)
+        cached = self._planet_eph_cache.get(key)
+        if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
+            self.call_ui(self._planet_transits_found, night, points, cached[1])
+            return
+
+        def work():
+            try:
+                planets = tcore.transiting_planet_ephemerides(star)
+            except Exception:
+                planets = None   # offline or an unexpected reply: silent
+            self.call_ui(self._campaign_planets_done, key, night, points, planets)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _campaign_planets_done(self, key: str, night: str, points: list, planets) -> None:
+        self._planet_eph_cache[key] = (time.time(), planets)
+        self._planet_transits_found(night, points, planets)
+
+    def _planet_hits_text(self, hit: dict) -> str:
+        """'9 frames fall in planet b's transit (05:17–06:12 local, ±1 min)'."""
+        try:
+            a = core.jd_to_datetime_utc(hit["t1"]).astimezone()
+            b = core.jd_to_datetime_utc(hit["t4"]).astimezone()
+            when = f"{a:%H:%M}–{b:%H:%M} local"
+        except (OverflowError, ValueError, OSError, KeyError):
+            when = ""
+        unc = float(hit.get("unc") or 0.0) * 1440
+        if when and unc >= 0.5:
+            when += f", ±{unc:.0f} min"
+        n = int(hit["frames"])
+        return (f"{n} frame{'s' if n != 1 else ''} fall{'s' if n == 1 else ''} in planet {hit['letter']}'s transit"
+                + (f" ({when})" if when else ""))
+
+    def _planet_transits_found(self, night: str, points: list, planets) -> None:
+        """2.2.15 (item 1): the lookup is back (on the UI thread). The night may have been replaced, the series
+        closed or saved meanwhile: only the night's points still in the series are looked at, and an open series
+        file is written again when flags change."""
+        if not planets:
+            return
+        current = [o for o in self.observations if o.night == night]
+        ids = {id(o) for o in current}
+        if not current or not any(id(o) in ids for o in points) or self.series_mode != "variables":
+            return   # the night was removed or replaced, or the series closed, before the lookup returned
+        try:
+            hits = tcore.planet_transit_frames(current, planets)
+        except Exception:
+            return
+        info = self._night_info(night, create=True)
+        if not hits:
+            info.pop("planet_transits", None)
+            return
+        info["planet_transits"] = [{k: h[k] for k in ("planet", "letter", "frames", "jd", "windows", "t1", "t4", "unc")}
+                                   for h in hits]
+        label = self.label_nights(night)
+        for h in hits:
+            self.log(f"{label}: {self._planet_hits_text(h)} (campaign rule: no data while a planet transits).")
+        if "transit_flagged" in info:   # asked already for this night: keep that answer
+            self._set_transit_flags(night, bool(info["transit_flagged"]), quiet=True)
+            return
+        what = "; ".join(self._planet_hits_text(h) for h in hits)
+        flag = messagebox.askyesno(
+            APP_TITLE,
+            f"{self.night_label(night, short=True)}: {what}.\n\nLeave those frames out (flagged \"transit\", like "
+            "cloud)?\n\nYes (the default) follows the campaign rule: no data while a planet transits. The frames stay "
+            "in the series and Planet transits… on the Output page puts them back.\nNo keeps them.", default="yes")
+        self._set_transit_flags(night, flag)
+
+    def _set_transit_flags(self, night: str, flag: bool, quiet: bool = False) -> None:
+        info = self._night_info(night, create=True)
+        hits = info.get("planet_transits") or []
+        windows = [w for h in hits for w in h.get("windows", [])]
+        pts = [o for o in self.observations if o.night == night]
+        before = [o.flag for o in pts]
+        n = core.set_transit_flags(pts, windows, flag)
+        info["transit_flagged"] = bool(flag)
+        if not quiet:
+            self.log(f"{self.label_nights(night)}: frames in a planet transit "
+                     + (f"left out (flagged transit, {n})." if flag else "kept (not flagged)."))
+        if before == [o.flag for o in pts] and quiet:
+            return
+        self._refresh_period()
+        self.draw_output()
+        if self.series_path:
+            try:
+                self._write_series(self.series_path)
+                self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}.")
+            except OSError as exc:
+                self.log(f"Could not save the series with the planet transit flags: {exc}")
+
+    def edit_planet_transits(self):
+        """2.2.15 (item 1): leave out or keep a night's frames that fell in a planet transit (the highlighted night,
+        or the only night that has some)."""
+        nights = [n for n in sorted({o.night for o in self.observations})
+                  if self._night_info(n).get("planet_transits")]
+        if not nights:
+            messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs after "
+                                           "photometry in Variables mode when the Star ID has transiting planets in "
+                                           "the NASA Exoplanet Archive.)")
+            return
+        night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
+        if night is None:
+            messagebox.showinfo(APP_TITLE, "Nights with frames in a planet transit: "
+                                + ", ".join(self.night_label(n, short=True) for n in nights)
+                                + ".\n\nClick one in the night table first, then Planet transits… again.")
+            return
+        info = self._night_info(night)
+        what = "; ".join(self._planet_hits_text(h) for h in info["planet_transits"])
+        now = bool(info.get("transit_flagged"))
+        flag = messagebox.askyesno(
+            APP_TITLE, f"{self.night_label(night, short=True)}: {what}; now " + ("left out" if now else "kept")
+            + ".\n\nLeave them out (campaign rule: no data while a planet transits)?", default="yes" if now else "no")
+        if flag != now or "transit_flagged" not in info:
+            self._set_transit_flags(night, flag)
 
     def _warn_edges(self, night: str, night_points: list):
         """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat)."""
@@ -7967,6 +8102,8 @@ class App(Tk):
         ttk.Button(qc, text="Apply", command=self.refit_period).pack(side=LEFT)
         # 2.2.14 (item 18): keep or leave out a night's transmission-loss (dew/haze) points.
         ttk.Button(qc, text="Transmission loss…", command=self.edit_transmission).pack(side=LEFT, padx=(6, 0))
+        # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
+        ttk.Button(qc, text="Planet transits…", command=self.edit_planet_transits).pack(side=LEFT, padx=(6, 0))
 
         tools = ttk.Frame(card, style="Card.TFrame")
         tools.pack(fill=X, pady=(4, 0))
@@ -8508,6 +8645,7 @@ class App(Tk):
         if len(nights) == 1:
             cautions.append("One night: the night-to-night spread needs more nights.")
         cautions += self._pier_cautions(side_offs, pier_by_night, nights)   # 2.2.14 (item 20)
+        cautions += self._zero_point_cautions()   # 2.2.15 (item 2)
         color_lines, color_cautions = self._color_lines(usable)
         cautions += color_cautions
         # 2.2.14 (item 8): a check without a catalog magnitude still has its instrumental differential magnitude.
@@ -8782,6 +8920,16 @@ class App(Tk):
                 if self._night_info(night).get("keep_transmission") else 0
             if kept_haze:
                 flags[f"kept, {core.HAZE_LABEL}"] = kept_haze
+            # 2.2.15 (item 1): frames in a planet's predicted transit, flagged or kept.
+            planet_hits = self._night_info(night).get("planet_transits") or []
+            if planet_hits:
+                letters = "/".join(str(h.get("letter") or "?") for h in planet_hits)
+                if core.TRANSIT_FLAG in flags:
+                    flags[f"in planet {letters} transit"] = flags.pop(core.TRANSIT_FLAG)
+                elif self._night_info(night).get("transit_flagged") is False:
+                    flags[f"kept, in planet {letters} transit"] = sum(int(h.get("frames") or 0) for h in planet_hits)
+            if core.TRANSIT_FLAG in flags:
+                flags["in a planet transit"] = flags.pop(core.TRANSIT_FLAG)
             note = self.night_notes.get(night, "")
             rows.append({
                 "night": night, "night_text": self.night_label(night, short=True), "date": date,
@@ -9569,6 +9717,36 @@ class App(Tk):
         except Exception:
             return None
 
+    def _zero_point_cautions(self) -> list[str]:
+        """2.2.15 (item 2): the ensemble zero-point warning (logged and in Comp health since 2.2.14) as one Output
+        caution, so it is also on the Output page and the saved PNG. Cached on what the check depends on."""
+        selection = list(self.active_comps or self.comps_used)
+        obs = self.observations
+        if len(selection) < 2 or not obs:
+            return []
+        try:
+            cat = self._comp_catalog()
+            key = (id(obs), len(obs), obs[0].jd, obs[-1].jd, tuple(selection), tuple(self.comps_used),
+                   tuple(sorted((n, cat.get(n)) for n in set(selection) | set(self.comps_used))),
+                   sum(1 for o in obs if o.flag), round(sum(o.mag for o in obs if math.isfinite(o.mag)), 6))
+        except Exception:
+            key = None
+        if key is not None and self._zp_caution_cache and self._zp_caution_cache[0] == key:
+            return list(self._zp_caution_cache[1])
+        zp = self._zero_point_check()
+        out = []
+        if zp and zp.get("warn"):
+            ref = ", ".join(zp["reference"])
+            shifts = "; ".join(
+                f"{self.night_label(n, short=True)}: {abs(zp['nights'][n]['shift']):.3f} mag "
+                + ("fainter" if zp["nights"][n]["shift"] > 0 else "brighter") for n in sorted(zp["warn"]))
+            out.append(f"Ensemble zero point: the {len(zp['selection'])} comps in use put the target off the level "
+                       f"the comp(s) nearest its brightness give ({ref}) by more than {core.ZP_WARN_MAG:.3f} mag "
+                       f"({shifts}). Compare both sets in Use comps… before reporting.")
+        if key is not None:
+            self._zp_caution_cache = (key, list(out))
+        return out
+
     def _log_zero_point_check(self, night: str | None = None):
         """2.2.14 (item 10): log a warning when the comp ensemble moves a night's level by more than a few
         hundredths against the comps nearest the target's brightness (all nights, or just `night`)."""
@@ -9591,7 +9769,9 @@ class App(Tk):
             return
         names = list(self.comps_used) or ["comp"]
         aliases = self._star_aliases()
-        result = core.comp_health([o for o in self.observations if not (set(o.flag.split()) - {"nocomp"})]
+        # 2.2.15 (item 1): a planet transit dims the target only, so those frames still count for the comps.
+        result = core.comp_health([o for o in self.observations
+                                   if not (set(o.flag.split()) - {"nocomp", core.TRANSIT_FLAG})]
                                   or self.observations, names, self.check_used, self._spares_in_series(), aliases,
                                   night_sign=self._pier_night_sign())
         if result is None:
@@ -10388,6 +10568,7 @@ class UseCompsWindow:
             listed.add(n)
             listed.update(aliases.get(n, ()))
             names.append((n, role))
+        widened_rows = 0
         for r, (name, role) in enumerate(names, 1):
             var = BooleanVar(value=name in current or bool(set(aliases.get(name, ())) & current))
             self.vars[name] = var
@@ -10399,6 +10580,15 @@ class UseCompsWindow:
             sc = row.get("scatter", float("nan"))
             mag = catalog.get(name)
             shown = name + "".join(f" = {a}" for a in aliases.get(name, ()))
+            # 2.2.15 (item 5): a spare from a widened window (thin field) says how much fainter than the target it is,
+            # as on the Photometry panel and the diamond's hover (2.2.14 item 6).
+            spare_info = next((app.spare_catalog.get(n) for n in (name, *aliases.get(name, ()))
+                               if (app.spare_catalog.get(n) or {}).get("widened")), None) or {}
+            faint = _fainter_text(spare_info["fainter_than_target"]) \
+                if spare_info.get("fainter_than_target") is not None else ""
+            if faint:
+                role = f"{role} (widened window): {faint}"
+                widened_rows += 1
             for c, text in enumerate((shown, role, f"{mag:.3f}" if mag is not None else "—",
                                       f"{len(measured)} of {len(nights)}",
                                       f"{sp:.4f}" if isinstance(sp, float) and math.isfinite(sp) else "—",
@@ -10414,6 +10604,13 @@ class UseCompsWindow:
                                                  "star stands out and the ensemble averages down the noise; 2.2.2 "
                                                  "measures extra spares when the field is thin, on nights reduced "
                                                  "again.", style="Hint.TLabel", wraplength=wrap, justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
+        if widened_rows:
+            # 2.2.15 (item 5)
+            wrapped.append(ttk.Label(inner, text="Spares from a widened window (a thin field) are much fainter than "
+                                                 "the target: their noise can dominate the ensemble and they can shift "
+                                                 "its zero point. Prefer comps within about a magnitude of the target.",
+                                     style="Hint.TLabel", wraplength=wrap, justify=LEFT))
             wrapped[-1].pack(anchor=W, pady=(8, 0))
         body.fit()
         fit_to_content(win)
