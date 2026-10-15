@@ -2016,6 +2016,9 @@ class FinderWindow:
         if not app.star_id.get().strip() or messagebox.askyesno(
                 "SHOBS-P", f"Use {e['name']} as the planet, and clear the Input page's target ({app.star_id.get()}) "
                            "and RA/Dec so the lookup fills them?", parent=self.win):
+            # 2.2.16 (item 11): the old target's whole field goes (comps, check, spares, session watch stars).
+            if app.star_id.get().strip() and not core.same_object_name(app.star_id.get(), e["name"]):
+                app.clear_target(quiet=True, why=f"{e['name']} chosen in the transit planner")
             app.star_id.set("")
             app.ra_hours.set("")
             app.dec_deg.set("")
