@@ -617,6 +617,8 @@ class App(Tk):
         self.check_used = ""
         self.report_names = {}        # 2.2.14 (item 7): placeholder name ("check") -> the name typed for reports
         self._slot_notes = {}         # 2.2.14 (item 14): role -> (typed name, outcome) shown on the slot's hint line
+        self._slot_typed = {}         # 2.2.16 (item 8): role -> the name as last typed by a key in its box
+        self._slot_keying = None      # 2.2.16 (item 8): the slot a key was just pressed in (its text changes next)
         self._prev_kept = set()       # 2.2.14 (item 17): series files whose _prev copy was made this session
         self.series_mode_unknown = False   # 2.2.14 (item 19): the loaded series file does not say its mode (old)
         self.target_var_type = ""     # 2.2.14 (item 19): VSX type of the looked-up target ("" = none known)
@@ -897,6 +899,9 @@ class App(Tk):
                         padding=(6, 1))
         style.configure("StepTodo.TLabel", background="#ffffff", foreground="#8a979e", font=(core.UI_FONT, 9),
                         padding=(6, 1))
+        # 2.2.16 (item 10): "1 Not solved" in amber.
+        style.configure("StepWarn.TLabel", background="#fff1dc", foreground="#b35c00", font=(core.UI_FONT, 9, "bold"),
+                        padding=(6, 1))
         self._apply_theme(getattr(self, "mode_key", "variables"))
 
     def _apply_theme(self, mode: str):
@@ -1029,6 +1034,8 @@ class App(Tk):
             self.status.set(f"Wrote {path}")
 
     def show_step(self, index: int):
+        if index != STEP_PHOTO and getattr(self, "photo_popout", None) is not None:
+            self.photo_bring_back()   # 2.2.16 (item 16): leaving the Photometry step brings the image back
         self.current_step = index
         self._on_credits = False
         if hasattr(self, "back_to_transit"):
@@ -1102,6 +1109,8 @@ class App(Tk):
                     tp.refresh()
                 except Exception:
                     pass
+        if getattr(self, "photo_popout", None) is not None:
+            self.photo_bring_back()   # 2.2.16 (item 16)
         self.mode_key = mode
         m = MODES[mode]
         self._apply_theme(mode)
@@ -3450,9 +3459,19 @@ class App(Tk):
         # 2.2.5: Discovery's switch to see only the scan candidates and watch stars (shown in Discovery only).
         self.candidates_only_box = ttk.Checkbutton(view, text="Candidates only", variable=self.candidates_only,
                                                    command=self.refresh_preview)
-        self.view_fit_button = ttk.Button(view, text="Fit view", command=self.reset_photo_view)
-        self.view_fit_button.pack(side=LEFT)
         self._stretch_controls(view_box, "photo").pack(side="top", anchor=W, pady=(4, 0))
+        # 2.2.16 (item 16, GitHub #2): zoom buttons for a trackpad (no wheel to find), Fit (the old "Fit view", one
+        # control), and Pop out: the image in its own resizable window. On their own line under the stretch, so the
+        # View box does not get wider.
+        zoom = ttk.Frame(view_box, style="Card.TFrame")
+        zoom.pack(side="top", anchor=W, pady=(4, 0))
+        ttk.Label(zoom, text="Zoom", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        ttk.Button(zoom, text="−", width=3, command=lambda: self.photo_zoom_step(1.5)).pack(side=LEFT)
+        ttk.Button(zoom, text="+", width=3, command=lambda: self.photo_zoom_step(1 / 1.5)).pack(side=LEFT, padx=(2, 0))
+        self.view_fit_button = ttk.Button(zoom, text="Fit", command=self.reset_photo_view)
+        self.view_fit_button.pack(side=LEFT, padx=(2, 0))
+        self.popout_button = ttk.Button(zoom, text="Pop out", command=self.photo_pop_out)
+        self.popout_button.pack(side=LEFT, padx=(10, 0))
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
             _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
@@ -3475,8 +3494,13 @@ class App(Tk):
         self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel",
                                          justify=LEFT)
         self.step_text_label.pack(side="top", anchor=W, fill=X)
-        self.step_strip.bind("<Configure>", lambda e: self.step_text_label.configure(
-            wraplength=max(int(e.width) - 20, 200)), add="+")
+        # 2.2.16 (item 16, GitHub #2): how to enlarge the image, for anyone who never finds wheel zoom on a trackpad.
+        self.step_zoom_tip = ttk.Label(self.step_strip, text="Wheel to zoom, drag to pan. On a trackpad: the − + Fit "
+                                                             "buttons in the View box, or Pop out for a bigger window.",
+                                       style="Hint.TLabel", justify=LEFT)
+        self.step_zoom_tip.pack(side="top", anchor=W, fill=X)
+        self.step_strip.bind("<Configure>", lambda e: [lab.configure(wraplength=max(int(e.width) - 20, 200))
+                                                       for lab in (self.step_text_label, self.step_zoom_tip)], add="+")
         self.step_hide_button = ttk.Button(self.step_line, text="Hide tips", command=lambda: self._set_tips(False))
         self.step_show_button = ttk.Button(self.step_row, text="Show tips", command=lambda: self._set_tips(True))
         self._place_step_strip()
@@ -3502,6 +3526,8 @@ class App(Tk):
         self.after_idle(self._fit_photo_panel)
         plot_host = ttk.Frame(body, style="Card.TFrame")
         plot_host.pack(side=LEFT, fill=BOTH, expand=True)
+        self.photo_plot_host = plot_host   # 2.2.16 (item 16)
+        self.photo_popout = None           # 2.2.16 (item 16): the pop-out window's parts while the image is in it
         if Figure is None:
             ttk.Label(plot_host, text="matplotlib is not installed.", style="Card.TLabel").pack()
             self.photo_canvas = None
@@ -3516,10 +3542,13 @@ class App(Tk):
             self.photo_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.photo_canvas.get_tk_widget().bind(
                 "<Map>", lambda _e: self.after(50, self._fit_visible_canvases), add="+")
-            self.photo_canvas.mpl_connect("button_press_event", self._photo_press_event)
-            self.photo_canvas.mpl_connect("button_release_event", self._photo_release_event)
-            self.photo_canvas.mpl_connect("scroll_event", self._photo_scroll)
-            self.photo_canvas.mpl_connect("motion_notify_event", self._photo_motion)
+            self._connect_photo_canvas(self.photo_canvas)   # 2.2.16 (item 16): also for the pop-out's canvas
+            self._photo_canvas_home = self.photo_canvas
+            # 2.2.16 (item 16): what the page shows while the image is in its own window.
+            self.photo_placeholder = ttk.Frame(plot_host, style="Card.TFrame")
+            ttk.Label(self.photo_placeholder, text="Image is in its own window —", style="Card.TLabel").pack(
+                side=LEFT, padx=(0, 6))
+            ttk.Button(self.photo_placeholder, text="Bring back", command=self.photo_bring_back).pack(side=LEFT)
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", before=body, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_CAL)).pack(side=LEFT)
@@ -3579,7 +3608,7 @@ class App(Tk):
             self.pick_label_widget.pack(anchor=W, before=getattr(self, "step_row", self.photo_body))
         self.candidates_only_box.pack_forget()
         if mode == "discovery":
-            self.candidates_only_box.pack(side=LEFT, padx=(0, 10), before=self.view_fit_button)
+            self.candidates_only_box.pack(side=LEFT, padx=(0, 10))   # 2.2.16 (item 16): Fit is on the zoom line
             self.disc_tools.pack(side=LEFT)
             self.disc_panel.pack(fill=BOTH, expand=True)
             self.scan_button.pack(side=RIGHT, before=self.label_button)
@@ -3616,12 +3645,28 @@ class App(Tk):
         self._update_step_hint()
 
     # ---- 2.2.15 (GitHub #3): step hint on the Photometry page ----------------------------------
+    def _solve_step_state(self) -> str:
+        """2.2.16 (item 10): the first step's state: 'solved', 'solving', 'failed' (tried on this image, no lock or no
+        catalog answer), 'impossible' (the lights do not say where they point and no RA/Dec is given), or 'todo'
+        (not calibrated yet, or not tried on this image yet)."""
+        if self.chart_placed:
+            return "solved"
+        if getattr(self, "_solving", False):
+            return "solving"
+        if self.preview is None or not self.preview_is_debayered:
+            return "todo"
+        token = getattr(self, "_preview_token", 0)
+        if getattr(self, "_solve_tried_for", None) != token:
+            return "todo"
+        return "impossible" if getattr(self, "_solve_impossible_for", None) == token else "failed"
+
     def photo_steps(self):
         """The Photometry page's steps for the mode, which are done, which one is current, and what to do now:
         (names, done indexes, current index, text)."""
         solved = bool(self.chart_placed)
         solving = bool(getattr(self, "_solving", False))
         ready = self.preview is not None and self.preview_is_debayered
+        state = self._solve_step_state()   # 2.2.16 (item 10)
         if self.mode_key == "discovery":
             names = ("1 Solve", "2 Scan field")
             done = {0} if solved else set()
@@ -3631,8 +3676,13 @@ class App(Tk):
                 return names, done, 0, "Calibrate first (Calibrate page); the field is solved straight away."
             if solving:
                 return names, done, 0, "Solving the field…"
+            if state == "impossible":
+                return names, done, 0, ("Not solved: these lights do not say where they point. Type the field centre "
+                                        "on the Input page, then press Solve again (top right).")
+            if state == "todo":
+                return names, done, 0, "The field is solved on its own when this page opens (or press Solve again)."
             return names, done, 0, ("Not solved: check the field centre on the Input page and the Optics box, then "
-                                    "Solve again.")
+                                    "press Solve again (top right).")
         names = ("1 Solve", "2 Target", "3 Comps", "4 Check", "Run")
         target = self.target_xy is not None
         comps = bool(self._comp_roles_marked())
@@ -3644,7 +3694,16 @@ class App(Tk):
         if not solved and not target:
             if solving:
                 return names, done, 0, "Solving the image… You can click the target meanwhile (Target)."
-            return names, done, 0, "Not solved: click the target on the image (Target), then the comps; or Solve again."
+            # 2.2.16 (item 10): failed -> point at the Solve again button; no solve possible -> click the target.
+            if state == "impossible":
+                return names, done, 0, ("Not solved: these lights do not say where they point and no RA/Dec is given: "
+                                        "click the target on the image (Target), then the comps; or enter the target "
+                                        "on the Input page and press Solve again.")
+            if state == "todo":
+                return names, done, 0, ("The image is solved on its own when this page opens (or press Solve again); "
+                                        "you can click the target meanwhile (Target).")
+            return names, done, 0, ("Not solved: press Solve again (top right) to retry, or click the target on the "
+                                    "image (Target), then the comps.")
         if not target:
             return names, done, 1, "Solved. Pick Target and click the target star."
         if not comps:
@@ -3696,8 +3755,15 @@ class App(Tk):
                 self._step_widgets.append(lab)
             self._step_names = names
         labels = self._step_widgets[0::2]
+        solve_state = self._solve_step_state()   # 2.2.16 (item 10): the first step in three states
         for k, lab in enumerate(labels):
-            if k == current:
+            if k == 0 and solve_state == "solved":
+                lab.configure(style="StepDone.TLabel", text="✓ 1 Solved")
+            elif k == 0 and solve_state in ("failed", "impossible"):
+                lab.configure(style="StepWarn.TLabel", text="1 Not solved")
+            elif k == 0 and solve_state == "solving":
+                lab.configure(style="StepOn.TLabel" if k == current else "StepTodo.TLabel", text="1 Solving…")
+            elif k == current:
                 lab.configure(style="StepOn.TLabel", text=names[k])
             elif k in done:
                 lab.configure(style="StepDone.TLabel", text="✓ " + names[k])
@@ -4356,8 +4422,17 @@ class App(Tk):
         radii = [round(f * fwhm, 1) for f in (1.2, 1.5, 1.8, 2.2)]
         radii = sorted({max(r, 2.0) for r in radii})
         rmax = max(radii)
-        sky_in = float(math.ceil(max(rmax + 3.0, 3.2 * fwhm)))
+        sky_in = core.sky_inner_radius(rmax, fwhm)   # 2.2.16 (item 1): at least r + 1.5 x FWHM
         sky_out = float(math.ceil(math.sqrt(sky_in ** 2 + 4.0 * rmax ** 2)))
+        # 2.2.16 (item 1): 2.6 and 3.0 x FWHM are measured too (cheap: the frames are read anyway) and join the
+        # comparison only when the best of the four is the largest, with their own sky ring further out. 3.0 x is
+        # rounded down so it never trips the "much larger than the stars" check at Run.
+        extra = sorted({r for r in (round(2.6 * fwhm, 1), math.floor(3.0 * fwhm * 10.0) / 10.0) if r > rmax + 0.05})
+        rings = {r: (sky_in, sky_out) for r in radii}
+        if extra:
+            x_in = core.sky_inner_radius(max(extra), fwhm)
+            x_out = float(math.ceil(math.sqrt(x_in ** 2 + 4.0 * max(extra) ** 2)))
+            rings.update({r: (x_in, x_out) for r in extra})
         n = min(frames, len(lights))
         picks = [lights[int(round(k))] for k in np.linspace(0, len(lights) - 1, n)]
         pts = [self.target_xy or test_c1, test_c1, test_c2, self.check_xy]
@@ -4369,10 +4444,12 @@ class App(Tk):
         cancel = self._cancel
         self._progress_start(n, "Aperture test")
         self.log(f"Aperture test: r = {', '.join(f'{r:g}' for r in radii)} px, sky {sky_in:g}–{sky_out:g} px, "
-                 f"{n} frames; judged on the {ref_label} against the comps.")
+                 f"{n} frames; judged on the {ref_label} against the comps."
+                 + (f" Also r = {', '.join(f'{r:g}' for r in extra)} px (sky {rings[extra[0]][0]:g}–"
+                    f"{rings[extra[0]][1]:g}), used if the largest of the four is best." if extra else ""))
 
         def work():
-            rows = {r: [] for r in radii}
+            rows = {r: [] for r in radii + extra}
             seeing = []
             last = {"sources": None, "reg": None}
             try:
@@ -4402,19 +4479,26 @@ class App(Tk):
                             seeing.append(f)
                         exp = core.header_exptime(header)
                         frame_rows = {}
-                        for r in radii:
-                            flux, _sky = core.measure_many(data, pos[good], r, sky_in, sky_out)
+                        for r in radii + extra:
+                            flux, _sky = core.measure_many(data, pos[good], r, *rings[r])   # 2.2.16 (item 1)
                             mags = np.full(4, np.nan)
                             with np.errstate(divide="ignore", invalid="ignore"):
                                 mags[good] = np.where(flux > 0, -2.5 * np.log10(flux / exp), np.nan)
                             frame_rows[r] = mags
-                        for r in radii:  # all apertures or none, so every aperture has the same frames
+                        for r in radii + extra:  # all apertures or none, so every aperture has the same frames
                             rows[r].append(frame_rows[r])
                     except Exception as exc:
                         self.call_ui(self.log, f"  aperture test skipped {os.path.basename(path)}: {exc}")
                     self.call_ui(self._progress, i)
                 result = core.aperture_test_stats({r: np.array(rows[r]) for r in radii if rows[r]}, ref_label,
                                                   has_comp2=not np.isnan(xy[2, 0]))
+                best = result.get("ref_best")
+                if extra and best is not None and abs(best["r"] - rmax) < 0.05 and rows[rmax]:
+                    # 2.2.16 (item 1): the best is the largest aperture tried: let 2.6 and 3.0 x FWHM compete too.
+                    result = core.aperture_test_stats({r: np.array(rows[r]) for r in radii + extra if rows[r]},
+                                                      ref_label, has_comp2=not np.isnan(xy[2, 0]))
+                    result["extended"] = list(extra)
+                result["rings"] = rings
                 result["suggested_r"] = min(radii, key=lambda r: abs(r - 1.8 * fwhm))
                 self.call_ui(self._aperture_test_done, window, result, seeing, sky_in, sky_out, ref_label, None)
             except Exception as exc:
@@ -4742,11 +4826,23 @@ class App(Tk):
     def _photo_scroll(self, event):
         if self.preview is None or event.inaxes is not self.photo_ax or event.xdata is None:
             return
-        h, w = self.preview.shape
-        factor = 1 / 1.3 if event.button == "up" else 1.3
+        self._photo_zoom_about(event.xdata, event.ydata, 1 / 1.3 if event.button == "up" else 1.3)
+
+    def photo_zoom_step(self, factor: float):
+        """2.2.16 (item 16, GitHub #2): the View box's − and + buttons: zoom about the middle of the current view
+        (×1.5 per click), clamped like the wheel zoom."""
+        if self.photo_canvas is None or self.preview is None:
+            return
         x0, x1 = self.photo_ax.get_xlim()
         y0, y1 = self.photo_ax.get_ylim()
-        cx, cy = event.xdata, event.ydata
+        self._photo_zoom_about((x0 + x1) / 2.0, (y0 + y1) / 2.0, factor)
+
+    def _photo_zoom_about(self, cx: float, cy: float, factor: float):
+        """Zoom the Photometry image by factor (< 1 zooms in) about (cx, cy): the wheel (2.2) and, 2.2.16 (item 16),
+        the − / + buttons."""
+        h, w = self.preview.shape
+        x0, x1 = self.photo_ax.get_xlim()
+        y0, y1 = self.photo_ax.get_ylim()
         nx0, nx1 = cx + (x0 - cx) * factor, cx + (x1 - cx) * factor
         ny0, ny1 = cy + (y0 - cy) * factor, cy + (y1 - cy) * factor
         if abs(nx1 - nx0) >= w or abs(ny1 - ny0) >= h:
@@ -4761,6 +4857,136 @@ class App(Tk):
             self.photo_ax.set_ylim(ny0, ny1)
             self._store_photo_view()
         self.photo_canvas.draw_idle()
+
+    # ---- 2.2.16 (item 16, GitHub #2): the image in its own window ------------------------------------------------
+    def _connect_photo_canvas(self, canvas):
+        """The Photometry image's mouse handlers (click, drag, wheel, hover) on a canvas of photo_fig."""
+        canvas.mpl_connect("button_press_event", self._photo_press_event)
+        canvas.mpl_connect("button_release_event", self._photo_release_event)
+        canvas.mpl_connect("scroll_event", self._photo_scroll)
+        canvas.mpl_connect("motion_notify_event", self._photo_motion)
+
+    def _popout_geometry(self) -> str:
+        """Where the pop-out opens: the size and place it had last time (settings), kept on the screen; the first time
+        about 60% × 75% of the screen, centred."""
+        try:
+            sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+        except Exception:
+            sw, sh = 1920, 1080
+        saved = self.settings.get("photo_popout") if isinstance(self.settings.get("photo_popout"), dict) else {}
+        try:
+            w, h = int(saved["w"]), int(saved["h"])
+            x, y = int(saved["x"]), int(saved["y"])
+        except (KeyError, TypeError, ValueError):
+            w, h = int(sw * 0.6), int(sh * 0.75)
+            x, y = (sw - w) // 2, (sh - h) // 3
+        w, h = min(max(w, 320), sw), min(max(h, 240), sh)
+        x, y = min(max(x, 0), max(sw - w, 0)), min(max(y, 0), max(sh - h, 0))
+        return f"{w}x{h}+{x}+{y}"
+
+    def _save_popout_geometry(self, win):
+        try:
+            geo = {"w": int(win.winfo_width()), "h": int(win.winfo_height()), "x": int(win.winfo_x()),
+                   "y": int(win.winfo_y())}
+        except Exception:
+            return
+        if geo["w"] < 50 or geo["h"] < 50:
+            return   # not laid out (never shown)
+        self.settings["photo_popout"] = geo
+        self._save_settings()
+
+    def _popout_moved(self, win):
+        job = getattr(self, "_popout_save_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._popout_save_job = self.after(700, lambda: self._save_popout_geometry(win)
+                                           if self.photo_popout and self.photo_popout["win"] is win else None)
+
+    def photo_pop_out(self):
+        """Move the image (one figure, nothing to sync) into its own resizable window: a second Tk canvas on the same
+        figure, which becomes self.photo_canvas; clicks there mark stars as on the page. The page shows a Bring back
+        line. The image comes back on close, Bring back, a run, a mode switch or leaving the Photometry step."""
+        if getattr(self, "_photo_canvas_home", None) is None:
+            return
+        pop = self.photo_popout
+        if pop is not None:
+            try:
+                pop["win"].deiconify()
+                pop["win"].lift()
+            except Exception:
+                pass
+            return
+        win = Toplevel(self)
+        win.title(f"{APP_TITLE} — Photometry image")
+        win.geometry(self._popout_geometry())
+        win.minsize(320, 240)
+        legend = ttk.Frame(win, style="Card.TFrame", padding=(6, 2))
+        legend.pack(side="bottom", fill=X)
+        canvas = FigureCanvasTkAgg(self.photo_fig, master=win)   # the figure now draws here
+        canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+        canvas.get_tk_widget().bind("<Map>", lambda _e: self.after(50, self._fit_visible_canvases), add="+")
+        home = self._photo_canvas_home
+        if canvas.callbacks is not home.callbacks:
+            # Older matplotlib keeps the handlers on the canvas; newer on the figure (already connected: once only).
+            self._connect_photo_canvas(canvas)
+        self._photo_press = None
+        self.photo_popout = {"win": win, "canvas": canvas, "legend": legend}
+        self.photo_canvas = canvas
+        try:
+            home.get_tk_widget().pack_forget()
+            if getattr(self, "legend_row", None) is not None:
+                self.legend_row.pack_forget()
+            self.photo_placeholder.pack(side="top", anchor=W, pady=12)
+        except Exception:
+            pass
+        self._legend_home = self.legend_row
+        self.legend_row = legend   # the symbol legend goes with the image
+        win.protocol("WM_DELETE_WINDOW", self.photo_bring_back)
+        # Remembered as it is moved or resized (shortly after), so quitting the app with the window open keeps it too.
+        win.bind("<Configure>", lambda e, w=win: self._popout_moved(w) if e.widget is w else None, add="+")
+        self._popout_fit_after(win, canvas)
+        self.refresh_preview()
+        self.status.set("The image is in its own window: resize it as you like. Close it (or Bring back) to put it "
+                        "back on the page.")
+
+    def _popout_fit_after(self, win, canvas):
+        try:
+            win.update_idletasks()
+            fit_figure_to_widget(self.photo_fig, canvas)
+        except Exception:
+            pass
+
+    def photo_bring_back(self):
+        """The image back on the Photometry page (the pop-out window closes); remembers the window's size and place."""
+        pop = self.photo_popout
+        if pop is None:
+            return
+        self.photo_popout = None
+        self._save_popout_geometry(pop["win"])
+        home = self._photo_canvas_home
+        self._photo_press = None
+        self.photo_canvas = home
+        try:
+            self.photo_fig.set_canvas(home)   # the figure draws on the page's canvas again
+        except Exception:
+            pass
+        self.legend_row = getattr(self, "_legend_home", None) or self.legend_row
+        try:
+            self.photo_placeholder.pack_forget()
+            self.legend_row.pack(side="bottom", fill=X, pady=(2, 0))
+            home.get_tk_widget().pack(fill=BOTH, expand=True)
+        except Exception:
+            pass
+        try:
+            pop["win"].destroy()
+        except Exception:
+            pass
+        # A size or screen-scale change made in the window: fit the figure to the page's widget again, then redraw.
+        self.after(50, self._fit_visible_canvases)
+        self.refresh_preview()
 
     def _photo_press_event(self, event):
         if event.inaxes is not self.photo_ax or self.preview is None:
@@ -5194,11 +5420,11 @@ class App(Tk):
             return
         if getattr(self, f"{role}_xy") is not None:
             # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
-            self._slot_say(role, f"{role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
-                                 "then Enter places the name).")
+            self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
+                                 "then Enter places the name).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
             return
         if self.preview is None or not self.preview_is_debayered:
-            self._slot_say(role, f"Calibrate first, so {text} can be found on the image.", bad=True)
+            self._slot_say(role, f"⚠ Calibrate first, so {text} can be found on the image.", bad=True)
             return
         star = self._chart_star_named(text)
         if star is not None and self._chart_xy_of(star) is not None:
@@ -5231,7 +5457,7 @@ class App(Tk):
     def _slot_lookup_failed(self, role: str, text: str, exc):
         if getattr(self, f"{role}_name").get().strip() != text:
             return
-        self._slot_say(role, f"{text} not found (not in this image's catalogs, and SIMBAD/VSX said: {exc}). Check "
+        self._slot_say(role, f"⚠ {text} not found (not in this image's catalogs, and SIMBAD/VSX said: {exc}). Check "
                              "the name, type RA Dec, or click the star on the image.", bad=True)
 
     def _slot_say(self, role: str, text: str, bad: bool = False):
@@ -5246,7 +5472,7 @@ class App(Tk):
         msg = (f"The image is not solved yet, so {text} cannot be placed from its name or position. Click the star "
                "on the image (Solve again if the solve failed).")
         if role is not None:
-            self._slot_say(role, msg, bad=True)
+            self._slot_say(role, "⚠ " + msg, bad=True)   # 2.2.16 (item 8)
         else:
             self.status.set(msg)
 
@@ -5265,7 +5491,7 @@ class App(Tk):
                 best = (d, (x, y))
         xy = best[1] if best else self._project_to_frame(ra, dec)
         if xy is None:
-            self._slot_say(role, f"{text} is not on this frame ({core.sexagesimal_ra(ra / 15.0)} "
+            self._slot_say(role, f"⚠ {text} is not on this frame ({core.sexagesimal_ra(ra / 15.0)} "
                                  f"{core.sexagesimal_dec(dec)}).", bad=True)
             return
         self._set_slot(role, xy, text)
@@ -5274,7 +5500,7 @@ class App(Tk):
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
-                self._slot_say(role, f"{text} is already marked as {role_label(other)}.", bad=True)   # 2.2.14 (14)
+                self._slot_say(role, f"⚠ {text} is already marked as {role_label(other)}.", bad=True)   # 2.2.14 (14)
                 return
         setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
         filled = self._fill_from_chart(role, xy)
@@ -5380,6 +5606,9 @@ class App(Tk):
                 # 2.2.13 (John): type a name or RA/Dec in an empty slot and press Enter to put the marker on it.
                 w.bind("<Return>", lambda e, k=role: self._slot_lookup(k))
                 w.bind("<KP_Enter>", lambda e, k=role: self._slot_lookup(k))   # 2.2.14 (item 14): keypad Enter
+                # 2.2.16 (item 8): a key in the box marks the name that follows as typed here (waiting for Enter),
+                # not left from an earlier run. The widget binding runs before the Entry inserts the character.
+                w.bind("<Key>", lambda e, k=role: self._slot_key(k), add="+")
             widgets.append(w)
             if mag_var is not None:
                 w = ttk.Entry(stars, textvariable=mag_var, width=8)
@@ -5395,7 +5624,7 @@ class App(Tk):
             self.star_status[role] = var
             self.star_status_labels[role] = lab
             self.star_row_widgets[role] = widgets
-            name_var.trace_add("write", lambda *_: self.update_star_panel())
+            name_var.trace_add("write", lambda *_, k=role: self._slot_name_changed(k))   # 2.2.16 (item 8)
         stars.columnconfigure(1, weight=1)
         self.field_check_text = StringVar(value="Variable-star check: Solve to check the field against VSX and SIMBAD.")
         ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=460, justify=LEFT).grid(
@@ -5414,6 +5643,24 @@ class App(Tk):
         ttk.Button(row, text="Add a star…", command=self.add_watch_dialog).pack(side=LEFT)
         ttk.Button(row, text="Remove selected", command=self._remove_selected_watch).pack(side=LEFT, padx=6)
         ttk.Button(row, text="Watch light curves…", command=self.show_watch).pack(side=RIGHT)
+
+    def _slot_key(self, role: str):
+        """2.2.16 (item 8): a key was pressed in a comp/check name box; the change it makes is the user's typing."""
+        self._slot_keying = role
+        try:
+            self.after_idle(self._slot_key_done)
+        except Exception:
+            pass
+
+    def _slot_key_done(self):
+        self._slot_keying = None
+
+    def _slot_name_changed(self, role: str):
+        """2.2.16 (item 8): a slot's name changed; remember it as typed when a key in that box changed it."""
+        if role != "target" and self._slot_keying == role:
+            self._slot_typed[role] = getattr(self, f"{role}_name").get().strip()
+            self._slot_keying = None
+        self.update_star_panel()
 
     def update_star_panel(self):
         """Catalog color, red-color warning, and variable-star check for the target, comps, and check star."""
@@ -5455,6 +5702,13 @@ class App(Tk):
             if slot_note and xy is None:
                 var.set(slot_note[1])
                 lab.configure(style="Warn.TLabel" if slot_note[2] else "Hint.TLabel")
+                continue
+            if (name and xy is None and role != "target" and self.mode_key != "discovery"
+                    and getattr(self, "_slot_typed", {}).get(role) == name):
+                # 2.2.16 (item 8): typed here and not yet looked up; the "not marked" warning is for names left from
+                # an earlier run or series.
+                var.set("press Enter to find and mark this star")
+                lab.configure(style="Hint.TLabel")
                 continue
             if name and xy is None and role != "target" and self.preview is not None:
                 # 2.2.3: a name left from an earlier run with no marker on this image.
@@ -5516,8 +5770,10 @@ class App(Tk):
                     parts.append("variable check: Solve first")
                 else:
                     parts.append("variable check: mark it on the image to check it by position")
-            if slot_note and not slot_note[1].startswith(("✓", "⚠")):
-                parts.insert(0, slot_note[1])   # 2.2.14 (item 14): e.g. "renamed only"
+            if slot_note and "  Marker at (" not in slot_note[1]:
+                # 2.2.14 (item 14): e.g. "renamed only" (2.2.16 item 8: now with its ✓; a placed star's line is not
+                # repeated, the panel shows the star itself)
+                parts.insert(0, slot_note[1])
             var.set("   ".join(parts))
             lab.configure(style=style)
         self._refresh_watch_box()
@@ -5986,6 +6242,10 @@ class App(Tk):
             if not auto:
                 messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page).")
             return
+        # 2.2.16 (item 10): this image has had a solve attempt (the step strip says "Not solved" if it fails).
+        tried_before = getattr(self, "_solve_tried_for", None)
+        self._solve_tried_for = getattr(self, "_preview_token", 0)
+        self._solve_impossible_for = None
         field_solve = self.target_xy is None or self.mode_key == "discovery"
         wcs = core.header_wcs(self.preview_header or {})
         superpixel = 1 if self.pattern.get() == core.MONO else 2
@@ -6020,6 +6280,8 @@ class App(Tk):
             pointing = core.header_pointing(self.preview_header or {})
             if pointing is None:
                 self.field_centre_needed = True
+                self._solve_impossible_for = self._solve_tried_for   # 2.2.16 (item 10)
+                self._update_step_hint()
                 self._layout_input_for_mode()
                 if auto:
                     self.status.set("Field not solved: these lights do not say where they point. Type the field "
@@ -6088,6 +6350,7 @@ class App(Tk):
                 # The header's plate solution knows the true scale of the frame as saved.
                 scale = wcs["scale_arcsec"] * binning * superpixel
         except Exception as exc:
+            self._update_step_hint()   # 2.2.16 (item 10): "1 Not solved"
             if auto:
                 self.status.set(f"Field not solved: check RA, Dec, focal length, and pixel size ({exc}).")
                 return
@@ -6124,6 +6387,7 @@ class App(Tk):
         slop = 0.15 if self.scale_approx else 0.06
         epoch_year = core.header_epoch_year(self.preview_header or {})
         if not self._start_job(f"Solving: fetching AAVSO, Gaia, APASS and Tycho stars ({fov:.0f}′ field, {band} band)…"):
+            self._solve_tried_for = tried_before   # 2.2.16 (item 10): busy, so not tried after all
             return
         self._solving = True          # 2.2.15 (GitHub #3): for the step hint
         self._update_step_hint()
@@ -6828,6 +7092,7 @@ class App(Tk):
         catalog_used = f"catalog {self._band()} (best of AAVSO, APASS, Gaia, Tycho per star)"
         if not self._start_job(f"Scanning {len(xy)} stars in {len(lights)} frames…"):
             return
+        self.photo_bring_back()   # 2.2.16 (item 16)
         self._progress_start(len(lights), "Field scan")
         self.log(f"Field scan: {len(xy)} stars, {len(lights)} frames, aperture {radius:.1f} px"
                  + (", with R and B" if color else "")
@@ -7460,6 +7725,7 @@ class App(Tk):
         if not self._start_job(f"Photometry on {len(lights)} lights…"):
             self._restore_series_catalog()
             return
+        self.photo_bring_back()   # 2.2.16 (item 16): the run's progress and results show on the page
         if watch:
             self.log(f"Watch stars measured every frame ({len(watch)}): " + ", ".join(w.name for w in watch))
         missing_watch = [w["name"] for w in self.watch_list if w["name"] not in self.watch_xy]
@@ -11488,6 +11754,7 @@ class SuggestWindow:
         self.app = app
         self.fwhm = fwhm
         self.prop = dict(prop)
+        self.prop_seeing = dict(prop)   # 2.2.16 (item 1): the seeing-only suggestion, shown as "Before the test" later
         win = Toplevel(app)
         self.win = win
         win.title(f"{APP_TITLE} — suggest apertures")
@@ -11514,11 +11781,17 @@ class SuggestWindow:
             wrapped[-1].pack(anchor=W)
         ttk.Label(top, text="This window sets the aperture and sky ring, not which stars are used.",
                   style="Hint.TLabel").pack(anchor=W)
-        wrapped.append(ttk.Label(top, text=(f"Aperture r = {prop['radius']:g} px (1.8 × FWHM)    sky in = "
-                                            f"{prop['sky_in']:g}    sky out = {prop['sky_out']:g} px (sky ring with 4× "
-                                            "the aperture's area)"),
+        # 2.2.16 (item 1): the bold line always shows what "Use these aperture sizes" sets (self.prop): the seeing-only
+        # suggestion first, the tested sizes after a test (the seeing-only one then moves to a grey "Before the test").
+        self.headline = StringVar(value=self._sizes_text(self.prop))
+        wrapped.append(ttk.Label(top, textvariable=self.headline,
                                  style="Card.TLabel", font=(core.UI_FONT, 11, "bold"), wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(6, 0))
+        self.headline_label = wrapped[-1]
+        self.before_text = StringVar(value="")
+        self.before_label = ttk.Label(top, textvariable=self.before_text, style="Hint.TLabel", wraplength=wrap,
+                                      justify=LEFT)
+        wrapped.append(self.before_label)   # packed under the bold line once a test has run
         wrapped.append(ttk.Label(top, text="Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The seeing "
                                            "changes during the night, so the test below measures real frames and lets "
                                            "the check star decide.",
@@ -11542,6 +11815,14 @@ class SuggestWindow:
         # padding on each side and a little air. Only after the sizing, so the empty first layout cannot narrow it.
         self.body.follow_width(wrapped, pad=28)
 
+    def _sizes_text(self, prop) -> str:
+        """2.2.16 (item 1): "Aperture r = 8.4 px (2.2 × FWHM)    sky in = 15    sky out = 23 px (…)" for these sizes."""
+        r, s_in, s_out = float(prop["radius"]), float(prop["sky_in"]), float(prop["sky_out"])
+        mult = f" ({r / self.fwhm:.1f} × FWHM)" if self.fwhm and math.isfinite(self.fwhm) and self.fwhm > 0 else ""
+        area = (s_out ** 2 - s_in ** 2) / r ** 2 if r > 0 else float("nan")
+        ring = f" (sky ring with {area:.0f}× the aperture's area)" if math.isfinite(area) and area > 0 else ""
+        return f"Aperture r = {r:g} px{mult}    sky in = {s_in:g}    sky out = {s_out:g} px{ring}"
+
     def use(self):
         self.app.radius.set(self.prop["radius"])
         self.app.sky_in.set(self.prop["sky_in"])
@@ -11559,7 +11840,9 @@ class SuggestWindow:
         if not rows:
             self.result_text.set("The test measured no frames.")
             return
-        lines = [f"Measured on {rows[0]['n']} frames; sky ring {sky_in:g}–{sky_out:g} px. "
+        ring_x = (result.get("rings") or {}).get((result.get("extended") or [None])[0])
+        lines = [f"Measured on {rows[0]['n']} frames; sky ring {sky_in:g}–{sky_out:g} px"
+                 + (f" ({ring_x[0]:g}–{ring_x[1]:g} px for r ≥ {result['extended'][0]:g})" if ring_x else "") + ". "
                  f"± is one standard error; 'lowest' is how often that aperture stays lowest when the frames are "
                  f"resampled ({result['boot']} times)."]
         if seeing:
@@ -11573,6 +11856,12 @@ class SuggestWindow:
         lines.append("")
         best = result.get("ref_best")
         tbest = result.get("target_best")
+        if result.get("extended"):
+            # 2.2.16 (item 1): the largest of the four apertures was best, so 2.6 and 3.0 × FWHM were compared too.
+            lines.insert(len(lines) - 1, f"The largest of the first four apertures was best, so the test went on to r = "
+                                         f"{', '.join(f'{r:g}' for r in result['extended'])} px (2.6 and 3.0 × FWHM"
+                                         + (f"; their sky ring {ring_x[0]:g}–{ring_x[1]:g} px" if ring_x else "")
+                                         + ").")
         if best is not None and best["ref_win"] >= 0.8:
             pick = best["r"]
             lines.append(f"Clear winner: r = {pick:g} has the lowest {ref_label} scatter in {best['ref_win']:.0%} "
@@ -11585,9 +11874,33 @@ class SuggestWindow:
             lines.append(f"The target alone prefers r = {tbest['r']:g} ({tbest['target_win']:.0%}). If the target is "
                          "much fainter than the check star, that can be the better choice; if it truly varies, its "
                          "scatter includes the variation.")
-        self.prop = {"radius": pick, "sky_in": sky_in, "sky_out": sky_out}
-        lines.append(f"Use these aperture sizes now sets r = {pick:g}, sky {sky_in:g}–{sky_out:g}.")
+        tried = [row["r"] for row in rows]
+        if best is not None and best["ref_win"] >= 0.8 and len(tried) > 1:
+            # 2.2.16 (item 1): say it plainly when the winner sits at either end of what was tried.
+            if abs(pick - max(tried)) < 0.05:
+                lines.append(f"Best at the edge of the tried range (r = {pick:g}, the largest tried); a larger aperture "
+                             "may be better. A close neighbour, trailing or defocus can do this; check the image.")
+            elif abs(pick - min(tried)) < 0.05:
+                lines.append(f"Best at the edge of the tried range (r = {pick:g}, the smallest tried); a smaller "
+                             "aperture may be better (faint stars often prefer 1–1.2 × FWHM).")
+        # 2.2.16 (item 1): the sky ring that was measured with the picked aperture (2.6/3.0 × FWHM have their own).
+        p_in, p_out = (result.get("rings") or {}).get(pick, (sky_in, sky_out))
+        self.prop = {"radius": pick, "sky_in": p_in, "sky_out": p_out}
+        lines.append(f"Use these aperture sizes now sets r = {pick:g}, sky {p_in:g}–{p_out:g}.")
         self.result_text.set("\n".join(lines))
+        # 2.2.16 (item 1): the bold line follows what the button sets; the seeing-only suggestion moves under it.
+        self.headline.set(self._sizes_text(self.prop))
+        s = self.prop_seeing
+        mult = (f" ({float(s['radius']) / self.fwhm:.1f} × FWHM)"
+                if self.fwhm and math.isfinite(self.fwhm) and self.fwhm > 0 else "")
+        self.before_text.set(f"Before the test: r = {s['radius']:g} px{mult}, sky {s['sky_in']:g}–{s['sky_out']:g} px "
+                             "(from the seeing alone).")
+        if not getattr(self, "_before_shown", False):
+            try:
+                self.before_label.pack(anchor=W, after=self.headline_label)
+            except Exception:
+                pass
+            self._before_shown = True
         self._refit()
 
     def _refit(self):

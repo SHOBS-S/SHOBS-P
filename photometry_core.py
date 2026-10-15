@@ -3848,12 +3848,18 @@ def variable_text(star: dict) -> str:
 # ---- Aperture suggestion (2.0) ------------------------------------------------------------
 
 def suggest_apertures(fwhm: float) -> dict:
-    """Aperture radius 1.8 x FWHM, sky ring starting at the larger of r + 3 and 3.2 x FWHM, and a sky ring
-    with four times the aperture's area."""
+    """Aperture radius 1.8 x FWHM, sky ring starting at the largest of r + 3, 3.2 x FWHM and r + 1.5 x FWHM, and a sky
+    ring with four times the aperture's area."""
     r = max(3.0, round(1.8 * fwhm, 1))
-    sky_in = float(math.ceil(max(r + 3.0, 3.2 * fwhm)))
+    sky_in = sky_inner_radius(r, fwhm)
     sky_out = float(math.ceil(math.sqrt(sky_in ** 2 + 4.0 * r ** 2)))
     return {"radius": r, "sky_in": sky_in, "sky_out": sky_out}
+
+
+def sky_inner_radius(r: float, fwhm: float) -> float:
+    """2.2.16 (item 1): the sky ring starts at least 1.5 x FWHM outside the aperture (and r + 3, 3.2 x FWHM as before),
+    so the star's wings stay out of the sky; the outer radius then keeps the ring's area (4 x the aperture's)."""
+    return float(math.ceil(max(r + 3.0, 3.2 * fwhm, r + 1.5 * fwhm)))
 
 
 def robust_sigma(values) -> float:
