@@ -4218,7 +4218,12 @@ class App(Tk):
                 cam_last = cam_n[-1] if cam_n else ""
                 text = f"{scope_n} / {cam_last}" if cam_last and cam_last not in scope_n else scope_n
             else:
-                text = core.instrument_without_mount(stored) or "not recorded"
+                parts = [p.strip() for p in stored.split(" / ")]
+                if len(parts) >= 2 and not core.clean_telescope_name(parts[0]):
+                    # 2.2.16 (review): like the live path: the mount is no telescope
+                    text = "telescope not recorded / " + " / ".join(p for p in parts[1:] if p)
+                else:
+                    text = core.instrument_without_mount(stored) or "not recorded"
             return dict(out, telescope=text, scale=None)
         ap, focal, pix = box(self.aperture_mm), box(self.focal_mm), box(self.pixel_um)
         # 2.2.16 (item 5): Telescope field > TELESCOP unless it names the mount > aperture and focal length.
@@ -6576,6 +6581,8 @@ class App(Tk):
         self._update_step_hint()
         vet_cache = {"field": getattr(self, "_field_var_cache", None)}
         cancel = self._cancel
+        # 2.2.16 (review): progress from this solve's catalog threads only; the lights it was for.
+        self._solve_token = solve_token = (getattr(self, "_solve_token", (0, None))[0] + 1, preview_path)
 
         def work():
             try:
@@ -6614,16 +6621,19 @@ class App(Tk):
                 depth = core.field_depth(n_peaks, preview_ref.shape, scale, cat_fov, polygon)
                 depth["status"] = {}   # review S3: filled by fetch_gaia_dr3 (which half answered)
                 cat_info = {}
-                self.call_ui(self._catalog_progress, None, "start", None)   # 2.2.16 (item 2)
+                self.call_ui(self._catalog_progress, None, "start", None, solve_token)   # 2.2.16 (item 2)
                 try:
                     found, failed = core.fetch_field_catalogs(
                         cone[0], cone[1], cat_fov, band, cancel=cancel, depth=depth,   # 2.2.14 (item 5)
-                        progress=lambda c, st, d: self.call_ui(self._catalog_progress, c, st, d),   # 2.2.16 (item 2)
-                        info=cat_info)
+                        progress=lambda c, st, d: self.call_ui(self._catalog_progress, c, st, d, solve_token),
+                        info=cat_info)   # 2.2.16 (item 2; review: tagged with this solve)
                     self.call_ui(self.log, self._catalog_times_text(cat_info, found, failed))   # 2.2.16 (item 2)
+                    self._chart_diag["cache_on"] = bool(cat_info.get("cache"))
                     self._chart_diag["gaia_depth"] = dict(core.catalog_depth(found.get("Gaia DR3") or [],
-                                                                             depth["max_rows"]),
+                                                                             cat_info.get("max_rows",
+                                                                                          depth["max_rows"])),
                                                           max_rows=depth["max_rows"], footprint=bool(polygon),
+                                                          asked_rows=cat_info.get("max_rows", depth["max_rows"]),
                                                           status=dict(depth.get("status") or {}))
                     chart_id = next((str(st.get("chartid") or "") for st in found.get("AAVSO sequence") or []
                                      if st.get("chartid")), "")
@@ -6724,26 +6734,20 @@ class App(Tk):
     # ---- 2.2.16 (item 2): catalog progress and timings ------------------------------------------------------
     _CAT_ORDER = ("AAVSO sequence", "APASS DR9", "Tycho-2", "Gaia DR3")   # the status line's order (Gaia is slowest)
 
-    def _catalog_progress(self, cat, state, detail):
+    def _catalog_progress(self, cat, state, detail, token=None):
         """Main thread (via call_ui): one catalog's progress. The status line reads "Catalogs: AAVSO ✓ APASS ✓
-        Tycho ✓ Gaia… 18 s" while the solve waits; Gaia's deep half arriving after the solve is logged."""
+        Tycho ✓ Gaia… 18 s" while the solve waits; Gaia's deep half arriving after the solve is logged.
+        2.2.16 (review): token = the solve that asked; progress from an earlier (abandoned) solve is dropped, and a
+        late Gaia half for other lights is worded neutrally."""
+        current = getattr(self, "_solve_token", None)
+        if state == "late":
+            self._catalog_late(cat, detail or {}, token is None or token[1] == getattr(self, "preview_path", None))
+            return
+        if token is not None and token != current:
+            return
         if state == "start":
             self._cat_progress = {c: "…" for c in self._CAT_ORDER}
             self._cat_seconds = 0
-        elif state == "late":
-            d = detail or {}
-            if d.get("n") and not d.get("error"):
-                self.log(f"Gaia DR3: the deep part (VizieR, to G {core.GAIA_DEEP_G:g}) arrived after the solve, "
-                         f"{d['seconds']:.0f} s after it was asked: {d['n']:,} Gaia stars"
-                         + ("; kept for this field, so Solve again uses them at once." if d.get("cached")
-                            else "; Solve again to use them."))
-                if not self.busy:
-                    self.status.set("Gaia's deep stars arrived after the solve: Solve again to use them.")
-            else:
-                self.log(f"Gaia DR3: the deep part (VizieR) did not finish ({d.get('error') or 'no answer'}, "
-                         f"{d.get('seconds', 0):.0f} s); stars fainter than the archive's G 17 have no Gaia magnitude "
-                         "this time. Solve again to retry.")
-            return
         elif state == "tick":
             self._cat_seconds = int(detail or 0)
         elif cat is not None:
@@ -6757,6 +6761,40 @@ class App(Tk):
         parts = [f"{core.CATALOG_SHORT.get(c, c)}{'' if v == '…' else ' '}{v}" for c, v in prog.items()]
         secs = getattr(self, "_cat_seconds", 0)
         self.status.set("Catalogs: " + " ".join(parts) + (f" {secs} s" if secs else ""))
+
+    def _catalog_late(self, cat, d, same_lights):
+        """2.2.16 (item 2; review): Gaia's deep half after the solve, worded by what really happened."""
+        secs = f"{d.get('seconds', 0):.0f} s after it was asked"
+        if d.get("arrived"):
+            text = (f"Gaia DR3: the deep part (VizieR, to G {core.GAIA_DEEP_G:g}) arrived after the solve, {secs}: "
+                    f"{d.get('n', 0):,} Gaia stars")
+            if d.get("archive_missing"):
+                text += f" (the ESA archive part did not answer: {d['archive_missing']}; no Gaia colors from it)"
+            cached = d.get("cached")
+            if d.get("incomplete"):
+                text += f". VizieR says the answer was cut short ({d['incomplete']}), so it is not kept"
+            elif cached is True:
+                text += ". Kept for this field"
+            elif cached is False:
+                text += ". It could not be saved for this field (see the next lines)"
+            if same_lights:
+                text += ("; Solve again to use them" + (" (at once)." if cached is True else "."))
+                if not self.busy:
+                    self.status.set("Gaia's deep stars arrived after the solve: Solve again to use them.")
+            else:
+                text += ("; they are used when that field is solved again." if cached is True else
+                         " (that solve was for other lights).")
+        else:
+            text = (f"Gaia DR3: the deep part (VizieR) did not finish ({d.get('error') or 'no answer'}, {secs}); "
+                    "stars fainter than the archive's G 17 have no Gaia magnitude from that solve."
+                    + (" Solve again to retry." if same_lights else ""))
+        self.log(text)
+        for err in core.CATALOG_CACHE_ERRORS[:]:
+            self.log(f"  Catalog cache: could not save {err}")
+            try:
+                core.CATALOG_CACHE_ERRORS.remove(err)
+            except ValueError:
+                pass
 
     @staticmethod
     def _catalog_times_text(info, found, failed) -> str:
@@ -6784,7 +6822,17 @@ class App(Tk):
                          + half("VizieR deep", g.get("deep"), g.get("deep_s"), g.get("deep_n")) + "]")
             parts.append(text)
         tag = " (field cache on)" if (info or {}).get("cache") else ""
-        return "Catalogs" + tag + ": " + ("; ".join(parts) if parts else "none asked") + "."
+        text = "Catalogs" + tag + ": " + ("; ".join(parts) if parts else "none asked") + "."
+        # 2.2.16 (review): answers VizieR cut short (used tonight, not kept) and cache writes that failed
+        inc = dict((info or {}).get("incomplete") or {})
+        g_inc = ((info or {}).get("gaia") or {}).get("incomplete") or {}
+        for half, why in g_inc.items():
+            inc[f"Gaia DR3 ({'ESA archive' if half == 'esa' else 'VizieR deep'})"] = why
+        for cat, why in inc.items():
+            text += f"\n  {cat}: the server says the answer was cut short ({why}); used, not kept."
+        for err in (info or {}).get("cache_errors") or []:
+            text += f"\n  Catalog cache: could not save {err}"
+        return text
 
     def _label_done(self, catalog, chart_id, stars, match_set, solved, placed, band, error, vet=None):
         self._end_job()
@@ -6934,7 +6982,7 @@ class App(Tk):
             else:
                 why = "about twice the stars seen on the frame"
             self.log(f"  Gaia DR3: {gd['n']} stars to G {gd['faintest']:.1f}"
-                     + (f" (the brightest {gd['max_rows']}, {why})" if gd.get("capped")
+                     + (f" (the brightest {gd.get('asked_rows', gd['max_rows'])}, {why})" if gd.get("capped")
                         else f" (every star to G {core.GAIA_DEEP_G:g})")
                      + ("; the frame's footprint from its plate solution" if gd.get("footprint") else "")
                      + (f". {with_mag} labeled stars with {band} on the frame for about {diag['n_peaks']} star-like "
@@ -6944,8 +6992,9 @@ class App(Tk):
             # 2.2.16 (item 2): not lost: it finishes in the background (logged when it arrives).
             faint = gst.get("esa_faintest")
             self.log("  Gaia: the deep VizieR part is still running; the solve went on with the archive's stars (to G "
-                     + (f"{faint:.1f}" if faint else "about 17") + "). It finishes in the background and is kept "
-                     "for this field; the log says when it arrives.")
+                     + (f"{faint:.1f}" if faint else "about 17") + "). It finishes in the background"
+                     + (" and is kept for this field" if diag.get("cache_on") else "")
+                     + "; the log says when it arrives.")
         elif gst.get("deep") not in (None, "ok") and gst.get("esa") == "ok":
             # 2.2.14 (review S3): half of Gaia missing; say what that costs tonight.
             faint = gst.get("esa_faintest")
@@ -7551,7 +7600,7 @@ class App(Tk):
                         result["color_fits"][key] = fit
                         if calibrated is not None:
                             values, method = calibrated, "field"
-                        elif ci is not None and comp_cat[key] is not None and old and not old.get("problem"):
+                        elif ci is not None and comp_cat[key] is not None and core.color_fit_usable(old):
                             values, method = comp_cat[key] + old["k"] * (inst - inst[ci]), "saved"
                         elif ci is not None and comp_cat[key] is not None:
                             values, method = comp_cat[key] + (inst - inst[ci]), "comps"
@@ -9715,7 +9764,7 @@ class App(Tk):
             n_cal = sum(1 for m in methods if m)
             field_nights = {o.night for o, m in zip(vals, methods) if m == "field"}
             fits = [((self.color_cal.get(n) or {}).get("fits") or {}).get(key) for n in field_nights]
-            fits = [f for f in fits if f and not f.get("problem")]
+            fits = [f for f in fits if core.color_fit_usable(f)]   # 2.2.16 (item 3 review)
             # Calibration uncertainty: the fit scatter over the number of stars that set the line.
             sys_err = float(np.median([f["scatter"] / math.sqrt(f["n"]) for f in fits])) if fits else 0.0
             text = f"{label} {st[0]:.3f} ± {math.hypot(st[1], sys_err):.3f}"
@@ -9796,7 +9845,7 @@ class App(Tk):
         self.color_cal[night] = {"fits": fits, "used": used}
         if info.get("catalogs"):
             self.color_cal[night]["catalogs"] = info["catalogs"]
-        good = {k: f for k, f in fits.items() if f and not f.get("problem")}
+        good = {k: f for k, f in fits.items() if core.color_fit_usable(f)}
         if good:
             saved = core.load_color_calibration() or {}
             saved.update(good)
@@ -10658,7 +10707,7 @@ class App(Tk):
             methods = [core.color_method(o, key) for o in vals]
             field_nights = {o.night for o, m in zip(vals, methods) if m == "field"}
             fits = [((self.color_cal.get(n) or {}).get("fits") or {}).get(key) for n in field_nights]
-            fits = [f for f in fits if f and not f.get("problem")]
+            fits = [f for f in fits if core.color_fit_usable(f)]   # 2.2.16 (item 3 review)
             sys_err = float(np.median([f["scatter"] / math.sqrt(f["n"]) for f in fits])) if fits else 0.0
             lines.append(f"{label:5s} {st[0]:.3f} ± {math.hypot(st[1], sys_err):.3f}")
             if key == "bv":
@@ -13321,7 +13370,8 @@ class ScanView:
         fit = (result.get("color_fits") or {}).get("bv")
         color_note = {
             "field": (f" B−V is calibrated to catalog colors with {fit['n']} labeled field stars "
-                      f"(color term {fit['k']:.2f}, scatter {fit['scatter']:.3f})." if fit else ""),
+                      f"(color term {fit['k']:.2f}, scatter {fit['scatter']:.3f})." if core.color_fit_usable(fit)
+                      else ""),   # 2.2.16 (item 3 review): a failed fit has no k / scatter
             "saved": " B−V uses the color term saved from an earlier field fit, anchored on the comp's catalog color.",
             "comps": " B−V is the comp's catalog color plus the raw channel difference (untransformed; too few "
                      "field stars with catalog B and V to calibrate).",

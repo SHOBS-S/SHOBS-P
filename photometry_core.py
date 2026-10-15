@@ -2384,6 +2384,44 @@ def parse_vizier_tsv(text: str) -> list[dict]:
     return rows
 
 
+class CatalogRows(list):
+    """2.2.16 (review): a list of rows or stars that remembers why it may be incomplete ('' when complete), from
+    VizieR's '#' comment lines (an error, a time limit, a truncated answer). Such an answer is used but not cached."""
+    incomplete = ""
+
+
+_VIZIER_BAD = _re.compile(r"error|truncat|time.?limit|timeout|timed out|overflow|aborted|incomplete", _re.IGNORECASE)
+
+
+def vizier_markers(text: str) -> list[str]:
+    """2.2.16 (review): VizieR's '#' comment lines that say an answer is not complete."""
+    out = []
+    for line in str(text or "").splitlines():
+        if line.startswith("#") and _VIZIER_BAD.search(line):
+            out.append(line.strip()[:160])
+    return out
+
+
+def rows_incomplete(rows, max_rows: int | None) -> str:
+    """2.2.16 (review): why a VizieR answer is not complete: an error marker always; a truncation/overflow marker only
+    when fewer rows came back than were asked for (VizieR reports OVERFLOW whenever -out.max is reached)."""
+    marks = list(getattr(rows, "markers", []) or [])
+    if not marks:
+        return ""
+    errors = [m for m in marks if _re.search(r"error|time.?limit|timeout|timed out|aborted", m, _re.IGNORECASE)]
+    if errors:
+        return errors[0]
+    if max_rows is None or len(rows) < int(max_rows):
+        return marks[0]
+    return ""
+
+
+def _with_incomplete(stars: list, rows, max_rows: int | None) -> list:
+    out = CatalogRows(stars)
+    out.incomplete = rows_incomplete(rows, max_rows)
+    return out
+
+
 def vizier_params(source: str, ra_deg: float, dec_deg: float, radius_deg: float, columns: list[str], sort: str,
                   max_rows: int, box_deg: tuple[float, float] | None = None, constraints: dict | None = None) -> dict:
     """2.2.14 (item 5): the VizieR ASU parameters: a circle (-c.rd), or a box (-c.bd, width along RA x height along
@@ -2414,7 +2452,9 @@ def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
     for host in ("https://vizier.cds.unistra.fr", "https://vizier.cfa.harvard.edu"):
         try:
             text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=timeout).decode("utf-8", errors="replace")
-            return parse_vizier_tsv(text)
+            rows = CatalogRows(parse_vizier_tsv(text))
+            rows.markers = vizier_markers(text)   # 2.2.16 (review): kept so an incomplete answer is never cached
+            return rows
         except Exception as exc:
             errors.append(f"{host}: {exc}")
     raise ConnectionError("VizieR request failed.\n" + "\n".join(errors))
@@ -2455,7 +2495,7 @@ def fetch_tycho2(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
         stars.append({"auid": name, "label": f"{mag:.1f}" if mag is not None else "", "ra": ra, "dec": dec,
                       "mag": mag, "mags": mags, "band": band, "catalog": "Tycho-2", "bright": vt,
                       "service": "VizieR I/259", "pm": (_num(row.get("pmRA")), _num(row.get("pmDE"))), "pos0": pos0})
-    return stars
+    return _with_incomplete(stars, rows, 3000)   # 2.2.16 (review)
 
 
 def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", max_rows: int = 3000,
@@ -2484,7 +2524,7 @@ def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
         stars.append({"auid": _position_name("APASS", ra, dec), "label": f"{mag:.1f}" if mag is not None else "",
                       "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "APASS DR9", "bright": v,
                       "service": "VizieR II/336"})
-    return stars
+    return _with_incomplete(stars, rows, max_rows)   # 2.2.16 (review)
 
 
 # 2.2.14 (item 5): how deep Gaia is asked. 2.2.13 asked the ESA archive for TOP 3000 G < 17 in a circle, which in a
@@ -2714,12 +2754,15 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
     limit = GAIA_ESA_TIMEOUT_S + 2.0 * GAIA_VIZIER_TIMEOUT_S if wait_s is None else max(float(wait_s), 1.0)
     for t in jobs.values():
         t.join(max(0.0, limit - (_time.monotonic() - t0)))
+    saved_halves = {}
     for h in jobs:
-        if h in half_keys and results.get(h, ("",))[0] == "ok" and results[h][1]:
-            catalog_cache_save(half_keys[h], results[h][1])   # 2.2.16 (item 2): each half on its own
+        got = results.get(h)
+        if h in half_keys and got and got[0] == "ok" and got[1] and not getattr(got[1], "incomplete", ""):
+            saved_halves[h] = catalog_cache_save(half_keys[h], got[1])   # 2.2.16 (item 2): each half on its own
     esa = results.get("esa", ("error", TimeoutError("no answer")))
-    pending = "deep" not in results and "deep" in jobs and jobs["deep"].is_alive() and on_late is not None
-    viz = results.get("deep", ("error", TimeoutError("no answer")))
+    viz_now = results.get("deep")   # 2.2.16 (review): read once, then decide whether it is still running
+    pending = viz_now is None and "deep" in jobs and jobs["deep"].is_alive() and on_late is not None
+    viz = viz_now or ("error", TimeoutError("no answer"))
     if status is not None:
         # 2.2.14 (review S3): which half answered, so the solve can say what is missing tonight.
         status.update({"esa": "ok" if esa[0] == "ok" else str(esa[1]).splitlines()[0][:120],
@@ -2731,7 +2774,10 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
                        "esa_s": times.get("esa"), "deep_s": times.get("deep"),
                        "esa_n": len(esa[1]) if esa[0] == "ok" else None,
                        "deep_n": len(viz[1]) if viz[0] == "ok" else None,
-                       "esa_cached": bool(from_cache.get("esa")), "deep_cached": bool(from_cache.get("deep"))})
+                       "esa_cached": bool(from_cache.get("esa")), "deep_cached": bool(from_cache.get("deep")),
+                       "cache_failed": [h for h, ok in saved_halves.items() if not ok],
+                       "incomplete": {h: getattr(results[h][1], "incomplete", "") for h in ("esa", "deep")
+                                      if results.get(h, ("",))[0] == "ok" and getattr(results[h][1], "incomplete", "")}})
     if pending:
         esa_now = esa
 
@@ -2739,17 +2785,21 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
             # 2.2.16 (item 2): the deep half, past the solve's deadline.
             jobs["deep"].join(deep_timeout * 2.0 + 5.0)
             late = results.get("deep", ("error", TimeoutError(f"no answer within {_time.monotonic() - t0:.0f} s")))
-            if late[0] == "ok" and late[1] and "deep" in half_keys:
-                catalog_cache_save(half_keys["deep"], late[1])
+            saved = None   # None: no cache in use; True / False: whether it was written
+            incomplete = getattr(late[1], "incomplete", "") if late[0] == "ok" else ""
+            if late[0] == "ok" and late[1] and "deep" in half_keys and not incomplete:
+                saved = catalog_cache_save(half_keys["deep"], late[1])
             if status is not None:
                 status["deep_late"] = "ok" if late[0] == "ok" else str(late[1]).splitlines()[0][:120]
                 status["deep_s"] = times.get("deep")
+            # 2.2.16 (review): what really happened: cached or not, and the archive half's state, said apart.
+            extra = {"cached": saved, "incomplete": incomplete,
+                     "archive_missing": "" if esa_now[0] == "ok" else str(esa_now[1]).splitlines()[0][:160]}
             try:
                 if late[0] == "ok":
-                    on_late(combine_gaia(esa_now[1] if esa_now[0] == "ok" else [], late[1], max_rows),
-                            "" if esa_now[0] == "ok" else f"archive part missing: {esa_now[1]}")
+                    on_late(combine_gaia(esa_now[1] if esa_now[0] == "ok" else [], late[1], max_rows), "", extra)
                 else:
-                    on_late(None, str(late[1]).splitlines()[0][:200])
+                    on_late(None, str(late[1]).splitlines()[0][:200], extra)
             except Exception:
                 pass
 
@@ -2808,9 +2858,10 @@ def fetch_gaia_dr3_vizier(ra_deg: float, dec_deg: float, radius_deg: float, band
         ["Source", "RA_ICRS", "DE_ICRS", "pmRA", "pmDE", "Gmag", "BP-RP"], "Gmag", max_rows,
         box_deg=box_deg, constraints={"Gmag": f"<{glimit:.2f}"}, timeout=timeout,
     )
-    return parse_gaia_vizier_rows(rows, band, glimit, max_rows,
-                                  "VizieR I/355 (V from G and BP-RP)" if deep else
-                                  "VizieR I/355 (ESA archive unavailable; V from G only)")
+    return _with_incomplete(parse_gaia_vizier_rows(rows, band, glimit, max_rows,
+                                                   "VizieR I/355 (V from G and BP-RP)" if deep else
+                                                   "VizieR I/355 (ESA archive unavailable; V from G only)"),
+                            rows, max_rows)   # 2.2.16 (review)
 
 
 def parse_gaia_vizier_rows(rows: list[dict], band: str = "V", glimit: float = 17.0, max_rows: int = 3000,
@@ -3055,7 +3106,7 @@ CATALOG_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".shobs_p_cache", "cat
 CATALOG_CACHE_DAYS = 30.0
 CATALOG_CACHE_GRID_DEG = 0.05
 CATALOG_CACHE_VERSION = 1
-CACHE_ROWS = (3000, 4000, 5000, 6000, 8000, 10000, 12000, 16000, 20000)
+CACHE_ROWS = (3000, 4000, 5000, 6000, 8000, 10000, 12000, 16000, 20000, 24000, 30000)
 CATALOG_SHORT = {"AAVSO sequence": "AAVSO", "APASS DR9": "APASS", "Gaia DR3": "Gaia", "Tycho-2": "Tycho"}
 CATALOG_CACHE_FORCE = None   # tests: True / False overrides the "real network fetch only" check
 
@@ -3091,18 +3142,22 @@ def canonical_field_request(ra_hours: float, dec_deg: float, fov_arcmin: float, 
         out_depth = {k: v for k, v in depth.items() if k not in ("polygon", "max_rows", "glimit")}
         if "glimit" in depth:
             out_depth["glimit"] = round(float(depth["glimit"]), 2)
-        if "max_rows" in depth:
-            rows = int(depth["max_rows"])
-            out_depth["max_rows"] = next((r for r in CACHE_ROWS if r >= rows), rows)
+        # 2.2.16 (review): the widened area gets proportionally more rows, so the frame itself keeps as many stars
+        # as the request before widening would have given it.
+        area_ratio = (fov_c / max(float(fov_arcmin), 1e-6)) ** 2
         if depth.get("polygon"):
             # The frame's own box (around tonight's centre), widened by the largest shift, rounded up.
-            bw, bh = footprint_box(depth["polygon"], float(ra_hours) * 15.0, float(dec_deg))
-            bw, bh = _ceil_step(bw + 2.0 * shift_deg, step), _ceil_step(bh + 2.0 * shift_deg, step)
+            bw0, bh0 = footprint_box(depth["polygon"], float(ra_hours) * 15.0, float(dec_deg))
+            bw, bh = _ceil_step(bw0 + 2.0 * shift_deg, step), _ceil_step(bh0 + 2.0 * shift_deg, step)
+            area_ratio = (bw * bh) / max(bw0 * bh0, 1e-9)
             cosd = max(math.cos(math.radians(dec_c)), 0.01)
             hw, hh = bw / 2.0 / cosd, bh / 2.0
             out_depth["polygon"] = [((ra_c - hw) % 360.0, dec_c - hh), ((ra_c + hw) % 360.0, dec_c - hh),
                                     ((ra_c + hw) % 360.0, dec_c + hh), ((ra_c - hw) % 360.0, dec_c + hh)]
             out_depth["_box"] = (bw, bh)
+        if "max_rows" in depth:
+            rows = int(math.ceil(int(depth["max_rows"]) * max(area_ratio, 1.0)))
+            out_depth["max_rows"] = next((r for r in CACHE_ROWS if r >= rows), CACHE_ROWS[-1])
     return ra_c / 15.0, dec_c, fov_c, out_depth
 
 
@@ -3129,27 +3184,55 @@ def _cache_path(key: dict) -> str:
     return os.path.join(CATALOG_CACHE_DIR, f"{slug}_{hashlib.sha1(text.encode()).hexdigest()[:20]}.json")
 
 
+CATALOG_CACHE_ERRORS: list = []   # 2.2.16 (review): save failures, logged once by the next fetch_field_catalogs
+
+
+def _json_safe(v):
+    """2.2.16 (review): numpy scalars to Python numbers, NaN / inf to None, tuples to lists (JSON, allow_nan=False)."""
+    if isinstance(v, dict):
+        return {str(k): _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, np.generic):
+        v = v.item()
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
+
+
+def _replace_retry(src: str, dst: str, tries: int = 6, pause: float = 0.15) -> None:
+    """2.2.16 (review): os.replace, retried briefly on PermissionError (Windows: the target or a file in a folder is
+    open in another thread, an antivirus scan or the search indexer right after writing)."""
+    import time as _time
+
+    for k in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if k == tries - 1:
+                raise
+            _time.sleep(pause * (k + 1))
+
+
 def catalog_cache_save(key: dict, stars: list[dict], now: float | None = None) -> bool:
-    """2.2.16 (item 2): one catalog's answer, written atomically (.part, then os.replace). False on any failure."""
+    """2.2.16 (item 2): one catalog's answer, written atomically (.part, then os.replace). False on any failure (the
+    reason goes to CATALOG_CACHE_ERRORS for the log)."""
     import time as _time
 
     path = _cache_path(key)
+    tmp = f"{path}.{os.getpid()}.{threading_ident()}.part"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        rows = []
-        for st in stars:
-            row = {k: v for k, v in st.items() if k != "status"}
-            for k in ("pm", "pos0"):
-                if row.get(k) is not None:
-                    row[k] = list(row[k])
-            rows.append(row)
-        payload = {"key": key, "created": float(now if now is not None else _time.time()), "stars": rows}
-        tmp = f"{path}.{os.getpid()}.{threading_ident()}.part"
+        rows = [_json_safe({k: v for k, v in st.items() if k != "status"}) for st in stars]
+        payload = {"key": _json_safe(key), "created": float(now if now is not None else _time.time()), "stars": rows}
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, allow_nan=False)
-        os.replace(tmp, path)
+        _replace_retry(tmp, path)
         return True
-    except Exception:
+    except Exception as exc:
+        CATALOG_CACHE_ERRORS.append(f"{key.get('catalog', '?')}{' ' + key['half'] if key.get('half') else ''}: "
+                                    f"{type(exc).__name__}: {exc}"[:200])
         try:
             os.remove(tmp)
         except Exception:
@@ -3221,8 +3304,8 @@ def catalog_cache_prune(now: float | None = None) -> int:
 
 def _cacheable(catalog: str, stars: list[dict], status: dict | None) -> bool:
     """2.2.16 (item 2): only a complete answer is kept: never Gaia with a half missing or the VizieR fallback."""
-    if not stars:
-        return False
+    if not stars or getattr(stars, "incomplete", ""):
+        return False   # 2.2.16 (review): VizieR said the answer was cut short
     if catalog == "Gaia DR3":
         st = status or {}
         if st and (st.get("esa") != "ok" or st.get("deep") != "ok"):
@@ -3256,6 +3339,8 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
     info.setdefault("times", {})
     info.setdefault("cached", {})
     info["cache"] = bool(use_cache)
+    if depth and depth.get("max_rows"):
+        info["max_rows"] = int(depth["max_rows"])   # 2.2.16 (review): the row cap actually asked
 
     def tell(cat, state, detail=None):
         if progress is not None:
@@ -3292,13 +3377,17 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             # running then finishes in the background and is cached / reported (no silent loss).
             cat_depth["wait_s"] = max(0.5, timeout - (_time.monotonic() - t0) - min(1.5, 0.25 * timeout))
 
-            def late(stars, error, key=key):
+            def late(stars, error, extra=None):
                 secs = _time.monotonic() - t0
+                extra = extra or {}
                 if stars is not None:
                     for st in stars:
                         st["catalog"] = cat
+                # 2.2.16 (review): "cached" is the real save result (None when the cache is not in use).
                 tell(cat, "late", {"n": len(stars) if stars is not None else 0, "error": error, "seconds": secs,
-                                   "cached": bool(key is not None and stars is not None)})
+                                   "arrived": stars is not None, "cached": extra.get("cached"),
+                                   "archive_missing": extra.get("archive_missing", ""),
+                                   "incomplete": extra.get("incomplete", "")})
             cat_depth["on_late"] = late
             if key is not None:
                 cat_depth["cache_key"] = key
@@ -3320,6 +3409,8 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
                     return
             elif key is not None and _cacheable(cat, stars, status):
                 catalog_cache_save(key, stars)
+            if getattr(stars, "incomplete", ""):
+                info.setdefault("incomplete", {})[cat] = stars.incomplete
             tell(cat, "ok", len(stars))
         except Exception as exc:
             results[cat] = ("error", str(exc).splitlines()[0][:200] if str(exc) else exc.__class__.__name__)
@@ -3343,6 +3434,12 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             catalog_cache_prune()
         except Exception:
             pass
+    # 2.2.16 (review): cache writes that failed (one log line each in the app)
+    while CATALOG_CACHE_ERRORS:
+        try:
+            info.setdefault("cache_errors", []).append(CATALOG_CACHE_ERRORS.pop(0))
+        except IndexError:
+            break
     found, errors = {}, {}
     for cat in catalogs:
         state = results.get(cat)
@@ -5494,6 +5591,12 @@ def fit_color_term(inst: np.ndarray, catalog: np.ndarray, min_stars: int = 5, cl
         return color_fit_failure(exc)
 
 
+def color_fit_usable(fit) -> bool:
+    """2.2.16 (item 3 review): a color fit whose k, a, scatter can be read and used (not None, failed or a problem)."""
+    return (isinstance(fit, dict) and not fit.get("failed") and not fit.get("problem")
+            and all(fit.get(k) is not None for k in ("k", "a", "scatter", "n")))
+
+
 def color_fit_failure(exc) -> dict:
     """2.2.16 (item 3): a color fit that could not be done; 'problem' keeps every caller from using it."""
     reason = f"color fit failed: {type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else f"color fit failed: {exc}"
@@ -5610,9 +5713,9 @@ def apply_color_calibration(observations: list[Obs], fits: dict, comp_offsets: d
         offset = (comp_offsets or {}).get(key)
         old = (saved or {}).get(key)
         method = ""
-        if fit and not fit.get("problem") and offset is not None and math.isfinite(offset):
+        if color_fit_usable(fit) and offset is not None and math.isfinite(offset):
             method = "field"
-        elif old and not old.get("problem") and cat_colors.get(key) is not None:
+        elif color_fit_usable(old) and cat_colors.get(key) is not None:
             method = "saved"
         for obs in observations:
             diff = obs.bv_diff if key == "bv" else obs.vr_diff
@@ -5649,7 +5752,7 @@ def field_star_colors(first: np.ndarray, second: np.ndarray, catalog: np.ndarray
     rel = np.vstack([relative_colors(f, s)[0] for f, s in zip(first, second)])
     inst, inst_err = robust_mean_err(rel, axis=0)
     fit = fit_color_term(inst, catalog, inst_err=inst_err)
-    calibrated = fit["a"] + fit["k"] * inst if fit and not fit["problem"] else None
+    calibrated = fit["a"] + fit["k"] * inst if color_fit_usable(fit) else None
     return inst, fit, calibrated
 
 
@@ -7785,22 +7888,51 @@ def aperture_mm_hint(text: str) -> str:
 # AZ-GTi, CGEM, CGX, AVX…), case-insensitive. "Mount" only counts when not the first word (Mount Wilson 60-inch).
 _MOUNT_WORDS = _re.compile(
     r"eqmod|eqascom|\bascom\b|simulator|ioptron|\bonstep\b|paramount|10\s?micron|\bgs\s?server\b|green\s?swamp"
-    r"|\bcpwi\b|star\s?adventurer|skyguider|\bindi\b|\blosmandy\b|\bwarpastron\b|\bnyx[-\s]?\d"
-    r"|\b(?:eq|heq|neq|cem|gem|am|cgem|cgx|avx|zeq|rst|azeq|eqm)[-\s]?\d+(?![\d.]*\s*(?:mm|cm|in|\"|m\b))"
-    r"|\bcgem\b|\bcgx\b|\bavx\b|\baz[-\s]?(?:gti|eq|\d)|\bmount\b",
+    r"|\bcpwi\b|star\s?adventurer|skyguider|\bindi\b|\blosmandy\b|\bwarpastron\b|\bnyx[-\s]?\d|\basiair\b"
+    r"|\b(?:eq|heq|neq|cem|gem|am|cgem|cgx|avx|zeq|rst|azeq|eqm|gm|sxp|sxd|sx)[-\s]?\d"
+    r"|\bcgem\b|\bcgx\b|\bavx\b|\baz[-\s]?(?:gti|eq|\d)|\bmount\b"
+    # 2.2.16 (review): Astro-Physics GTO mounts (1100GTO, Mach1/Mach2GTO), Avalon, Losmandy Gemini controller,
+    # 10Micron GM1000/GM2000, Mesu, Fornax, Vixen SXP/SXD, AstroTrac, Benro Polaris
+    r"|\d{3,4}\s?gto\b|\bmach\s?[12]\b|\bmach[12]\s?gto|\bavalon\b|\bgemini[-\s]?\d|\bmesu\b|\bfornax\b"
+    r"|\bvixen\s+sx|\bastrotrac\b|\bbenro\b|\bap\s?\d{3,4}\b(?!\s?gtx)",
     _re.IGNORECASE)
+# 2.2.16 (review): words and sizes that name a telescope (OTA): when present the value is a telescope, even with a
+# driver tag ("LX200 (INDI)") or a mount after "on" ("C11 on CGEM").
+_OTA_WORDS = _re.compile(
+    r"\blx\s?\d{2,3}|\bc\s?(?:5|6|8|9\.25|11|14)\b|edge\s?hd|\brc\s?\d*\b|\bcdk\s?\d*|\bridk\b|newton|refractor|\bapo\b"
+    r"|\bsct\b|\bacf\b|dobson|\bdob\b|maksutov|\bmak\s?\d|ritchey|cassegrain|astrograph|\brasa\b|hyperstar|\bed\s?\d"
+    r"|\d+\s?ed\b|\d+(?:\.\d+)?\s?(?:mm|cm|in|inch|\")(?![a-z])|\bf/\s?\d|fsq|esprit|stellarvue|askar|takahashi"
+    r"|william optics|evscope|seestar|\bcpc\b|nexstar|planewave|officina|lunt|apertura|explore scientific|\bgtx\b"
+    r"|\d+\s?gtx|\b\d{2,4}/\d{3,5}\b|\b\d(?:\.\d+)?\s?m\b",
+    _re.IGNORECASE)
+_GENERIC_TELESCOPE = {"telescope", "main", "mount", "scope", "ota", "default", "none", "unknown", "n/a", "na"}
+
+
+def clean_telescope_name(text) -> str:
+    """2.2.16 (item 5; review): the telescope a TELESCOP value names, or '' when it names a mount, a driver or
+    nothing in particular. A driver tag "(INDI)" / "(ASCOM)", a "Telescope:" prefix and an "on <mount>" tail are
+    dropped ("Telescope: C11 on CGEM" -> "C11")."""
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    t = _re.sub(r"^\s*telescope\s*:\s*", "", t, flags=_re.IGNORECASE)
+    t = _re.sub(r"\s*\((?:indi|ascom|alpaca)\)\s*$", "", t, flags=_re.IGNORECASE)
+    head = _re.split(r"\s+on\s+", t, maxsplit=1, flags=_re.IGNORECASE)[0].strip()
+    if not head or head.lower() in _GENERIC_TELESCOPE:
+        return ""
+    if _OTA_WORDS.search(head):
+        return head
+    for m in _MOUNT_WORDS.finditer(head):
+        if m.group(0).lower() == "mount" and m.start() == 0:
+            continue   # "Mount Wilson 60-inch": a place, not a mount
+        return ""
+    return head
 
 
 def is_mount_name(text) -> bool:
-    """2.2.16 (item 5): True when a TELESCOP value names a mount or a mount driver, not a telescope."""
-    t = str(text or "").strip()
-    if not t:
-        return False
-    for m in _MOUNT_WORDS.finditer(t):
-        if m.group(0).lower() == "mount" and m.start() == 0:
-            continue   # "Mount Wilson 60-inch": a place, not a mount
-        return True
-    return False
+    """2.2.16 (item 5): True when a TELESCOP value names a mount, a mount driver or nothing in particular, not a
+    telescope ("EQMod Mount", "ZWO AM5", "Telescope Simulator"); False for "LX200 (INDI)", "C11 on CGEM"."""
+    return bool(str(text or "").strip()) and not clean_telescope_name(text)
 
 
 def telescope_text(name: str = "", telescop: str = "", aperture_mm=None, focal_mm=None) -> str:
@@ -7817,9 +7949,7 @@ def telescope_text(name: str = "", telescop: str = "", aperture_mm=None, focal_m
             return f if math.isfinite(f) and f > 0 else None
         except (TypeError, ValueError):
             return None
-    tel = str(telescop or "").strip()
-    if is_mount_name(tel):
-        tel = ""
+    tel = clean_telescope_name(telescop)   # 2.2.16 (review): mount/driver parts left out
     ap, focal = num(aperture_mm), num(focal_mm)
     scope = " ".join(p for p in (f"{ap / 1000.0:.2f} m" if ap else "", tel) if p)
     if focal:
@@ -7830,6 +7960,9 @@ def telescope_text(name: str = "", telescop: str = "", aperture_mm=None, focal_m
 def instrument_without_mount(text: str) -> str:
     """2.2.16 (item 5): a stored '<TELESCOP> / <INSTRUME>' with a mount-like TELESCOP part left out."""
     parts = [p.strip() for p in str(text or "").split(" / ")]
+    if len(parts) >= 2:   # '<TELESCOP> / <INSTRUME>': only the telescope part is judged
+        tel = clean_telescope_name(parts[0])
+        return " / ".join(p for p in [tel] + parts[1:] if p)
     return " / ".join(p for p in parts if p and not is_mount_name(p))
 
 

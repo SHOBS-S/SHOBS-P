@@ -1596,7 +1596,14 @@ class TransitPage:
         # Never write into an earlier package: a second save of the same night becomes ..._2 (2.2).
         # 2.2.16 (item 4): folder only (no zip; an old package's .zip still counts as taken).
         out, k = os.path.join(folder, base), 2
-        while os.path.exists(out) or os.path.exists(out + ".zip") or os.path.exists(out + ".part"):
+        while True:
+            stale = getattr(self, "_stale_parts", set())
+            if os.path.normcase(os.path.abspath(out + ".part")) in stale:
+                # 2.2.16 (review): a duplicate .part left by an "unchanged" save whose removal failed then
+                if _remove_tree(out + ".part"):
+                    stale.discard(os.path.normcase(os.path.abspath(out + ".part")))
+            if not (os.path.exists(out) or os.path.exists(out + ".zip") or os.path.exists(out + ".part")):
+                break
             out, k = os.path.join(folder, f"{base}_{k}"), k + 1
         base = os.path.basename(out)
         final = out
@@ -1611,14 +1618,32 @@ class TransitPage:
             if (last and last.get("print") == fingerprint and os.path.isdir(last.get("folder", ""))
                     and os.path.normcase(os.path.dirname(os.path.abspath(last["folder"])))
                     == os.path.normcase(os.path.abspath(folder))):
-                shutil.rmtree(out, ignore_errors=True)
+                if not _remove_tree(out):
+                    self._stale_parts = getattr(self, "_stale_parts", set()) | {os.path.normcase(os.path.abspath(out))}
                 self.app.log(f"ExoFOP package unchanged: {last['folder']} (same fit and files; nothing new written)")
                 self.app.status.set(f"ExoFOP package unchanged: {os.path.basename(last['folder'])}")
                 return
-            os.replace(out, final)
         except Exception:
             shutil.rmtree(out, ignore_errors=True)
             raise
+        # 2.2.16 (review): on Windows renaming a folder fails while a file in it is still held open (antivirus,
+        # indexer right after writing): retry briefly; if it still fails, keep the .part folder and say so.
+        renamed = False
+        for k in range(8):
+            try:
+                os.replace(out, final)
+                renamed = True
+                break
+            except OSError:
+                import time as _time
+                _time.sleep(0.25 * (k + 1))
+        if not renamed:
+            self.app.log(f"ExoFOP package written to {out}, but it could not be renamed to {os.path.basename(final)} "
+                         "(a file in it was still open). Rename the folder yourself, or save the package again.")
+            messagebox.showwarning("SHOBS-P", f"The ExoFOP package is complete in\n{out}\nbut the folder could not be "
+                                              f"renamed to {os.path.basename(final)}. Rename it yourself, or save "
+                                              "the package again.", parent=self.app)
+            return
         self._last_package = {"print": fingerprint, "folder": final}
         out = final
         self.app.log(f"ExoFOP package folder: {out}")
@@ -1658,7 +1683,21 @@ class TransitPage:
         return files, png_print
 
 
-_CREATED_LINE = re.compile(r"^[\s#\"']*Created\b", re.IGNORECASE)
+# The DTG stamp lines only: "# Created 151200Z OCT 26 by SHOBS-P" (CSV, reports) and "Created        151200Z OCT 26"
+# (fit file); a user line that merely starts with "Created" still counts.
+def _remove_tree(path: str, tries: int = 5) -> bool:
+    """2.2.16 (review): remove a folder, retried briefly (Windows: a file in it may still be open); True when gone."""
+    import time as _time
+
+    for k in range(tries):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return True
+        _time.sleep(0.2 * (k + 1))
+    return not os.path.exists(path)
+
+
+_CREATED_LINE = re.compile(r"^#?\s*Created\s+\d{6}Z [A-Z]{3} \d{2}( by SHOBS-P)?\s*$")
 
 
 def package_fingerprint(files, png_print=None) -> str:
