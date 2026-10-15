@@ -738,10 +738,11 @@ def _flip_info(prob_s, flat, summary, best_rel: dict, chi2_s: float, setup: dict
 
 
 def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False, after_flip=None,
-            flip_step=None) -> dict:
+            flip_step=None, flagged_mask=None) -> dict:
     """2.2.13: the fit_transit model by least squares only (no MCMC), with Jacobian errors after the same error
-    rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step."""
-    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step)
+    rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step.
+    2.2.16 (item 6): flagged_mask (flagged frames put back, error bars doubled) as in fit_transit."""
+    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
     t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
     prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
                           detrend_time, S["ld"], S["t_flip"])
@@ -890,6 +891,116 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         result["flags"].insert(0, ("warn", note))
     v["note"] = note
     return result
+
+
+# 2.2.16 (item 6): leave-one-comp-out check. A comp whose removal moves the depth or Tc by more than this many sigma
+# of the main fit is named in a caution (TOI-2046 b, 14-15 Oct: four comp sets gave depths 1.46-1.65 %).
+COMP_LOO_SIGMA = 1.0
+
+
+def _pct(v: float) -> str:
+    return f"{v * 100:.2f} %"
+
+
+def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
+                       detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
+                       cancel=None, log=None) -> dict | None:
+    """2.2.16 (item 6): refit the light curve once per comp with that comp left out of the ensemble.
+
+    flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
+    comp's instrumental magnitude in the same frames and names their names. The ensemble is the mean of the comps'
+    instrumental magnitudes, so leaving comp j out multiplies each point by 10^(0.4 (ens_without_j - ens_all)); the
+    relative error bars stay as they are. Each refit is lsq_fit (least squares, no MCMC) with the same planet priors,
+    detrending, flip and flagged frames as the main fit; shifts are measured against a least-squares fit of the full
+    ensemble and compared with the main fit's (MCMC) uncertainties. Returns None with fewer than 2 comps or when no
+    refit could be made. cancel: a threading.Event; set, it raises RuntimeError("Cancelled") between refits."""
+    say = log or (lambda _m: None)
+    cm = np.asarray(comp_mags, dtype=float)
+    if cm.ndim != 2 or cm.shape[1] < 2 or cm.shape[0] != len(np.atleast_1d(flux)):
+        return None
+    m = cm.shape[1]
+    names = [str(n) for n in names][:m] + [f"comp {k + 1}" for k in range(len(names), m)]
+    flux = np.asarray(flux, dtype=float)
+    err = np.asarray(err, dtype=float)
+    kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
+              flagged_mask=flagged_mask)
+    with np.errstate(invalid="ignore"):
+        ens_all = np.mean(cm, axis=1)
+    try:
+        ref = lsq_fit(t, flux, err, airmass, planet, **kw)
+    except Exception as exc:
+        say(f"  comp check skipped: no least-squares fit of the full ensemble ({exc})")
+        return None
+    ref_depth, ref_tc = float(ref["depth"][0]), float(ref["p"]["tc"])
+    sd = float(main_summary["depth"][1]) if "depth" in main_summary else float("nan")
+    st = float(main_summary["tc"][1]) if "tc" in main_summary else float("nan")
+    fits, skipped = [], []
+    for j in range(m):
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("Cancelled")
+        if progress is not None:
+            progress(j + 1, m)
+        with np.errstate(invalid="ignore", over="ignore"):
+            ens = np.mean(np.delete(cm, j, axis=1), axis=1)
+            factor = 10 ** (0.4 * (ens - ens_all))
+        try:
+            f = lsq_fit(t, flux * factor, err * factor, airmass, planet, **kw)
+        except Exception as exc:
+            # No usable points (or no fit) without this comp: skipped silently on the page, noted in the log.
+            skipped.append(names[j])
+            say(f"  comp check: leaving out {names[j]}: no fit ({exc})")
+            continue
+        fits.append({"name": names[j], "depth": float(f["depth"][0]), "tc": float(f["p"]["tc"]),
+                     "d_depth": float(f["depth"][0]) - ref_depth, "d_tc": float(f["p"]["tc"]) - ref_tc,
+                     "n_points": int(len(f["t"]))})
+    if not fits:
+        return None
+    flags = []
+    for f in fits:
+        parts = []
+        if math.isfinite(sd) and sd > 0 and abs(f["d_depth"]) > COMP_LOO_SIGMA * sd:
+            parts.append(f"makes the transit {_pct(abs(f['d_depth']))} "
+                         f"{'deeper' if f['d_depth'] > 0 else 'shallower'} ({abs(f['d_depth']) / sd:.1f}σ)")
+        if math.isfinite(st) and st > 0 and abs(f["d_tc"]) > COMP_LOO_SIGMA * st:
+            parts.append(f"moves Tc {abs(f['d_tc']) * 86400:.0f} s {'later' if f['d_tc'] > 0 else 'earlier'} "
+                         f"({abs(f['d_tc']) / st:.1f}σ)")
+        f["flagged"] = bool(parts)
+        if parts:
+            flags.append(("warn", f"Leaving out {f['name']} " + " and ".join(parts) + ". The comp choice moves this "
+                                  "result by more than its statistical error: check that comp (variable? a trend?) "
+                                  "before reporting."))
+    depths = [f["depth"] for f in fits]
+    tcs = [f["tc"] for f in fits]
+    out = {"n_comps": m, "names": names, "fits": fits, "skipped": skipped, "single": m == 2,
+           "ref": {"depth": ref_depth, "tc": ref_tc}, "depth_min": min(depths), "depth_max": max(depths),
+           "depth_spread": max(depths) - min(depths), "tc_spread_s": (max(tcs) - min(tcs)) * 86400.0,
+           "sigma_depth": sd, "sigma_tc": st}
+    stat = f"; statistical ± {_pct(sd)}" if math.isfinite(sd) else ""
+    note = (f"Comp choice (each of the {m} comps left out in turn, least squares): depth "
+            f"{out['depth_min'] * 100:.2f}–{_pct(out['depth_max'])} (spread {_pct(out['depth_spread'])}{stat}), "
+            f"Tc spread {out['tc_spread_s']:.0f} s.")
+    if out["single"]:
+        note += " With 2 comps each refit uses a single comp."
+    if skipped:
+        note += f" No refit without {', '.join(skipped)} (too few usable points)."
+    if not flags:
+        note += " No comp moves the depth or Tc by more than 1σ."
+    out["note"] = note
+    out["flags"] = flags + [("info", note)]
+    out["text"] = comp_systematic_text(out)
+    return out
+
+
+def comp_systematic_text(loo: dict | None) -> str:
+    """2.2.16 (item 6): one line for the fit file: the leave-one-comp-out spread as a systematic (comp choice)."""
+    if not loo:
+        return ""
+    single = " (2 comps: each refit has a single comp)" if loo.get("single") else ""
+    flagged = [f["name"] for f in loo.get("fits", []) if f.get("flagged")]
+    return (f"depth spread {loo['depth_spread'] * 100:.2f} % ({loo['depth_min'] * 100:.2f} to "
+            f"{loo['depth_max'] * 100:.2f} %), Tc spread {loo['tc_spread_s']:.0f} s; leave-one-comp-out over "
+            f"{loo['n_comps']} comps{single}"
+            + (f"; moved > 1 sigma by leaving out {', '.join(flagged)}" if flagged else ""))
 
 
 def cautions(flags, verdict: dict | None) -> list:
@@ -2100,7 +2211,10 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
             f"  Photometric aperture: {ap_text}\n"
             f"  Coverage: {cov}{span}\n"
             f"  Result: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, depth "
-            f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n")
+            f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n"
+            # 2.2.16 (item 6): the comp-choice spread, beside the statistical errors above.
+            + (f"  Systematic (comp choice): {comp_systematic_text(result['comp_loo'])}\n"
+               if result.get("comp_loo") else ""))
 
 
 def fit_text(result: dict, meta: dict) -> str:
@@ -2145,6 +2259,9 @@ def fit_text(result: dict, meta: dict) -> str:
     ff = result.get("free_fit")
     if ff:
         lines.append(f"Free-shape check Rp/R* {ff['p']['k']:.4f}, a/R* {ff['p']['a_rs']:.2f}, b {ff['p']['b']:.3f}")
+    if result.get("comp_loo"):
+        # 2.2.16 (item 6)
+        lines.append("Systematic (comp choice) " + comp_systematic_text(result["comp_loo"]))
     lines += [f"Meridian flip    {ln}" if i == 0 else f"                 {ln}" for i, ln in enumerate(flip_lines(result))]
     wf = result.get("with_flagged")
     if wf:

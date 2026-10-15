@@ -9806,6 +9806,38 @@ class App(Tk):
         # date2num works on naive datetimes; strip the zone after converting.
         return np.array(date2num([t.replace(tzinfo=None) for t in stamps]))
 
+    @staticmethod
+    def _fit_ylim(ax, y, err, use, invert: bool = True) -> bool:
+        """2.2.16 (item 13): y-limits from the used points with their error bars and a margin (8 %, at least
+        0.005 mag), never from flagged or left-out points. False (limits untouched) without a used point."""
+        y = np.asarray(y, dtype=float)
+        use = np.asarray(use, dtype=bool) & np.isfinite(y)
+        if not use.any():
+            return False
+        e = np.zeros(int(use.sum()))
+        if err is not None:
+            e = np.asarray(err, dtype=float)[use]
+            e = np.where(np.isfinite(e), np.abs(e), 0.0)
+        lo, hi = float(np.min(y[use] - e)), float(np.max(y[use] + e))
+        pad = max((hi - lo) * 0.08, 0.005)
+        ax.set_ylim((hi + pad, lo - pad) if invert else (lo - pad, hi + pad))
+        return True
+
+    @staticmethod
+    def _pin_off_scale(ax, x, y, mask, alpha: float = 1.0) -> int:
+        """2.2.16 (item 13): points in mask that fall outside the y-limits (but inside the x-limits) drawn pinned at
+        the plot's edge as small amber × (not clipped), so they show without flattening the curve. Returns how many."""
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        lo, hi = sorted(float(v) for v in ax.get_ylim())
+        xlo, xhi = sorted(float(v) for v in ax.get_xlim())
+        sel = (np.asarray(mask, dtype=bool) & np.isfinite(x) & np.isfinite(y) & (x >= xlo) & (x <= xhi)
+               & ((y < lo) | (y > hi)))
+        if sel.any():
+            ax.plot(x[sel], np.clip(y[sel], lo, hi), "x", ms=4, mew=1.1, color="#c26a00", alpha=alpha,
+                    clip_on=False, zorder=5)
+        return int(sel.sum())
+
     def _zoom_axes(self, ax, obs_list, x, mag, err, excluded, night: str, t0: float):
         """2.2.15 (item 6): the light curve zoomed to one night: x in hours from the night's first point (its local
         start time in the label), y fitted to the night's points with their error bars (flagged ones too when the
@@ -9921,7 +9953,7 @@ class App(Tk):
         raw_alpha = 0.25 if interval is not False else 1.0
         # 2.2.15 (item 6): a night clicked in a series zooms the light curve to it (hours from its first point, the
         # y-axis fitted to its points); clicking it again shows the whole series. The other nights stay drawn (faded)
-        # on the same hours scale, off to the sides. The check plot keeps the series.
+        # on the same hours scale, off to the sides. 2.2.16 (item 14): the check plot follows the zoom.
         zoom = highlight if len(nights) > 1 else None
         zoom_jd = [o.jd for o in obs_list if o.night == zoom and math.isfinite(o.jd)] if zoom is not None else []
         if zoom is not None and not zoom_jd:
@@ -9981,6 +10013,17 @@ class App(Tk):
                 errs = np.array([b["err"] for b in bins])
                 bin_text = (f"  Binned ({self.bin_choice.get()}): {len(bins)} points, typical error "
                             f"{np.median(errs):.4f} mag, spread of binned points {np.std([b['value'] for b in bins]):.4f} mag.")
+        # 2.2.16 (item 13): the y-axis from the used points (zoomed: _zoom_axes did that night); flagged points beyond
+        # it are pinned at the edge as small × and counted in the title key (12-13 Oct's cloud points from 4.9 to
+        # 6.0 flattened all nine nights).
+        if zoom is None:
+            self._fit_ylim(ax, mag, err, ~excluded)
+        off_scale = 0
+        for night in nights:
+            nm = np.array([o.night == night for o in obs_list], dtype=bool)
+            off_scale += self._pin_off_scale(ax, lc_x, mag, excluded & nm & in_zoom, alpha_for(night, 1.0))
+        if off_scale:
+            key.append(f"{off_scale} flagged off scale")
         self._title_with_key(ax, (self.star_id.get() or "Target")
                              + (f" · {self.night_label(zoom, short=True)}" if zoom is not None else ""), key)
 
@@ -10120,17 +10163,40 @@ class App(Tk):
         self._fill_summary(series_lines, period_lines, color_lines, rows, cautions)
 
         ax = self.out_ax3
+        # 2.2.16 (item 14): with a night zoomed on the light curve, the check star shows the same night on the same
+        # hours axis, its y fitted to that night's used points; clicking the night again restores both.
+        cx = lc_x if zoom is not None else tx
         if np.isfinite(check_vals).any():
             for i, night in enumerate(nights):
-                mask = np.array([obs.night == night for obs in obs_list]) & np.isfinite(check_vals) & ~excluded
-                ax.plot(tx[mask], check_vals[mask], "o", ms=3, color=colors[i % len(colors)], alpha=alpha_for(night, 1.0))
-            good = check_vals[np.isfinite(check_vals) & ~excluded]
+                nm = np.array([obs.night == night for obs in obs_list])
+                mask = nm & np.isfinite(check_vals) & ~excluded
+                ax.plot(cx[mask], check_vals[mask], "o", ms=3, color=colors[i % len(colors)], alpha=alpha_for(night, 1.0))
+                # 2.2.16 (item 13): flagged frames' check values drawn as × like the light curve's (left out).
+                fmask = nm & np.isfinite(check_vals) & excluded
+                if fmask.any():
+                    ax.plot(cx[fmask], check_vals[fmask], "x", ms=5, color="#888888", alpha=alpha_for(night, 1.0))
             sel = np.isfinite(check_vals) & ~excluded
-            self._hover_sets.append((ax, tx[sel], check_vals[sel],
+            self._hover_sets.append((ax, cx[sel & in_zoom], check_vals[sel & in_zoom],
                                      [f"check {v:.4f}\n{self._time_text(o.jd)}  {o.night}\n{os.path.basename(o.path)}"
-                                      for o, v in zip([obs_list[k] for k in np.where(sel)[0]], check_vals[sel])], 0.0))
+                                      for o, v in zip([obs_list[k] for k in np.where(sel & in_zoom)[0]],
+                                                      check_vals[sel & in_zoom])], 0.0))
             ax.invert_yaxis()
+            in_view = sel & in_zoom
+            if zoom is not None and not in_view.any():
+                in_view = np.isfinite(check_vals) & in_zoom   # the night has only flagged check points
+            good = check_vals[in_view]
+            self._fit_ylim(ax, check_vals, None, in_view)
+            if zoom is not None:
+                ax.set_xlim(self.out_ax1.get_xlim())
+            c_off = 0
+            for night in nights:
+                nm = np.array([o.night == night for o in obs_list], dtype=bool)
+                c_off += self._pin_off_scale(ax, cx, check_vals, nm & excluded & in_zoom, alpha_for(night, 1.0))
             spread = f"  σ = {np.std(good):.3f}" if good.size > 1 else ""
+            if zoom is not None:
+                spread = (f" · {self.night_label(zoom, short=True)}"
+                          + (f" σ {np.std(good):.3f}" if good.size > 1 else ""))
+            off_txt = f"  ({c_off} flagged off scale)" if c_off else ""
             catalog = ""
             try:
                 if self.check_mag.get().strip() and check_kind == "reduced":
@@ -10139,14 +10205,22 @@ class App(Tk):
                 pass
             if check_kind == "instrumental":
                 # 2.2.14 (item 8): no catalog V for the check, so it is shown against the comps, instrumental.
-                ax.set_title(f"Check star, instrumental{spread}")
+                ax.set_title(f"Check star, instrumental{spread}{off_txt}")
                 ax.set_ylabel("Check − comps (instr.)")
             else:
-                ax.set_title(f"Check star{spread}{catalog}")
+                ax.set_title(f"Check star{spread}{catalog}{off_txt}")
                 ax.set_ylabel("Reduced mag")
         else:
             ax.set_title("No check star")
-        self._format_time_axis(ax)
+        if zoom is not None and np.isfinite(check_vals).any():
+            # 2.2.16 (item 14): the light curve's hours axis and label.
+            try:
+                ax.ticklabel_format(axis="x", useOffset=False, style="plain")
+            except AttributeError:
+                pass
+            ax.set_xlabel(self.out_ax1.get_xlabel())
+        else:
+            self._format_time_axis(ax)
         ax.grid(True, alpha=0.3)
 
         ax = self.out_ax4
@@ -13328,6 +13402,9 @@ class ScanView:
                 ax.axvline(0.5 * (r["jd"][b - 1] + r["jd"][b]), color="#7a5c99", ls="--", lw=0.9,
                            label="flip / rotator move" if kind == "flip" else "gap")
         ax.invert_yaxis()
+        # 2.2.16 (item 13): y from the curve's measured points with a margin, as on the Variables light curve. A
+        # field scan flags no frames (clouds are taken out by each frame's zero point), so nothing is pinned here.
+        App._fit_ylim(ax, lc, None, good)
         name = r["labels"][i]
         if r.get("radec"):
             name += "  " + core.format_radec(*r["radec"][i])
