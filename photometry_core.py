@@ -5510,6 +5510,9 @@ CREDITS = [
          "branches folded about trial times, with its error estimate; checked against a local polynomial with "
          "bootstrap errors and a Fourier series at the catalog period, and O−C against VSX elements.",
          "Kwee, K. K. & van Woerden, H. 1956, Bull. Astron. Inst. Netherlands 12, 327.", ""),
+        # 2.2.15 (item 13): display stretch.
+        ("Asinh stretch", "Display stretch on the Blink and Photometry images (asinh option; display only).",
+         "Lupton, R. H., Gunn, J. E. & Szalay, A. S. 1999, AJ 118, 1406.", ""),
         ("Median absolute deviation", "Robust scatter of light curves in the aperture test, comp health, and field scans.",
          "Hampel, F. R. 1974, JASA 69, 383; Rousseeuw, P. J. & Croux, C. 1993, JASA 88, 1273.", ""),
         ("AAVSO Extended File Format", "Variable-star report files.", "American Association of Variable Star Observers.",

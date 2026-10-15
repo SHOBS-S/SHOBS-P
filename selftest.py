@@ -280,6 +280,32 @@ def main() -> None:
     except Exception as exc:
         check("binned rms", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
+    section("2h 2.2.15: planet windows in BJD (real Astropy), pier sides, display stretch")
+    try:
+        import transit_core as _tc
+        # HD 219134, 12-13 Oct 2026: BJD_TDB - JD about +5.9 min; planet b's predicted ingress 05:17 EDT (09:17 UT).
+        jd0 = np.array([2461326.88])
+        bjd = core.convert_times(jd0, "BJD_TDB", 348.34919, 57.17055, 35.0, -80.0)
+        check("HD 219134 BJD - JD about +5.9 min", abs((bjd[0] - jd0[0]) * 1440 - 5.94) < 0.1,
+              f"{(bjd[0] - jd0[0]) * 1440:+.2f} min")
+        pb = {"name": "HD 219134 b", "period": 3.0929386, "t14": 0.945 / 24, "t0": None}
+        win = _tc.transit_windows(2461326.5, 2461327.0, {**pb, "t0": 2461326.8854 + 3.0929386 * 5})
+        check("transit window found from an ephemeris five orbits away", len(win) == 1, f"{len(win)} window(s)")
+    except Exception as exc:
+        check("planet windows", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+    try:
+        g = core.pier_side_groups([29, 30, 30, 26, 34, 210, 209, 210])
+        check("29/30/26/34 are one side, 209/210 the other", len({g[a] for a in (26, 29, 30, 34)}) == 1
+              and g[209] == g[210] and g[30] != g[210], str(g))
+        img = np.random.default_rng(1).normal(100, 5, (64, 64)).astype(np.float32)
+        before = img.copy()
+        for mode in ("linear", "log", "asinh"):
+            d = core.stretch_display(img, {"mode": mode, "black": 5.0, "white": 99.5})
+        check("display stretch 0..1 and the data untouched", float(d.min()) >= 0 and float(d.max()) <= 1
+              and np.array_equal(img, before))
+    except Exception as exc:
+        check("pier sides / stretch", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):

@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.13
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.15
 ======================================================
 
 Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -53,6 +53,34 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.15 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  Photometry page tips (GitHub #3): a step strip "1 Solve -> 2 Target -> 3 Comps -> 4 Check -> Run" shows where you
+     are; Hide tips / Show tips. Once the image is solved and the target's RA/Dec are known, the Target marker is put
+     on the target by itself (centred like a click; never moves a marker you placed; not placed when no star is there
+     or the RA/Dec are only the field centre). Without a solve the tip says "click the target".
+- S  Display stretch on Blink and Photometry (GitHub #1): linear, log or asinh with black and white points (Stretch
+     controls; Reset). Display only: the measured data never change. Remembered per page.
+- S  Series line at the top of the Input page: "Series: X.cvseries - 8 nights, last 13-14 Oct" or "No series loaded -
+     this run will be a single night", with Load series... and Close series. Closing, loading another series or
+     switching modes over unsaved points offers a save first; nothing of a closed series is carried into the next.
+- S  Upload links: "Open AAVSO WebObs..." (Variables) and "Open AAVSO Exoplanet Database..." (Transits) on the Results
+     rows; after a report save the status line names the file and offers the upload page.
+- S  Night table flag "dew/haze?" (the log keeps "transmission loss (dew/haze?)"); the Output cautions include the
+     ensemble zero-point warning; Use comps says how many magnitudes fainter than the target a widened-window spare is.
+- V  Planet transits in a campaign: when the Star ID has transiting planets (NASA Exoplanet Archive, most precise
+     ephemeris), every frame is checked against each planet's predicted transit (T14 plus the ephemeris uncertainty,
+     in BJD_TDB when the RA/Dec are known). The log and night table say "N frames fall in planet b's transit" and
+     you are asked once per night whether to flag them ("transit", left out like cloud; Planet transits... changes
+     the answer). Nights of a loaded series are checked too. Planet-transit frames never go into an AAVSO report.
+- V  Clicking a night in the night table zooms the light curve to that night (hours from its first point, y fitted to
+     its points; click again for the whole series); the other nights' means fade with their points; the PNG saved
+     while zoomed is that night's plot.
+- V  Pier sides grouped: camera angles within 5 degrees are one side and their 180-degree partners the other (29 and
+     30 degrees are one side), in the Side column, the pier-side caution, Pier side as segments and Comp health.
+- T  "Open ExoFOP..." beside the ExoFOP package opens the target's ExoFOP-TESS page (TOI or TIC), with a one-time note
+     on how uploads work. The package's fit file gives the telescope/camera from the headers and Optics box, the
+     pixel scale in "/px, the aperture radius in arcsec, and the coverage (Full / Ingress / Egress / Partial / None).
 
 New in 2.2.14 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  One star, one name per series: a comp, check, watch star or spare that is a series star (by any catalog name,
@@ -733,6 +761,10 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.15 Photometry tips and automatic target marker (#3); display stretch (#1); Input-page series line with Close
+       series; AAVSO and ExoFOP upload links; ExoFOP fit-file equipment, scale and coverage; planet transits flagged
+       in Variables campaigns; night click zooms the light curve; pier sides grouped within 5 degrees; dew/haze? flag;
+       zero-point warning in the cautions; fainter-than-target in Use comps.
 2.2.14 One star one name (and magnitude) per series; one-catalog colors; deeper Gaia; spares adopted on click;
        transmission loss vs cloud; time of maximum with O-C; pier side for campaigns; Output title key, instrumental
        check, Bin N, zero-point warning; Save series keeps _prev; wrong-mode guard; transit rms line and point count.
@@ -978,6 +1010,10 @@ Bootstrap resampling
 Kwee-van Woerden method
   Used for: Times of maximum and minimum (Variables Output, Time of max/min…): the branches folded about trial times, with its error estimate; checked against a local polynomial with bootstrap errors and a Fourier series at the catalog period, and O−C against VSX elements.
   Kwee, K. K. & van Woerden, H. 1956, Bull. Astron. Inst. Netherlands 12, 327.
+
+Asinh stretch
+  Used for: Display stretch on the Blink and Photometry images (asinh option; display only).
+  Lupton, R. H., Gunn, J. E. & Szalay, A. S. 1999, AJ 118, 1406.
 
 Median absolute deviation
   Used for: Robust scatter of light curves in the aperture test, comp health, and field scans.
