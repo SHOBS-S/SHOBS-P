@@ -7802,24 +7802,29 @@ class App(Tk):
     # ---- 2.2.15 (item 1): planet transits in a Variables campaign -------------------------------------------
     PLANET_RETRY_S = 600.0   # a failed lookup (offline, unknown star) is tried again after this long
 
-    def _check_planet_transits(self, night: str) -> None:
+    def _check_planet_transits(self, nights, user: bool = False) -> None:
         """2.2.15 (item 1): John's campaign rule: no campaign data while a planet of the target transits. In
         Variables mode, look up the Star ID's transiting planets (NASA Exoplanet Archive) in a background thread
-        (once per star and session), then count the night's frames in each predicted transit window. Nothing is said
-        when there is no Star ID, no lookup, no planet, no transit in the frames, or no network. Needs only the
-        frames' times and the Star ID (no plate solution, no header pointing)."""
+        (once per star and session), then count each night's frames in each predicted transit window. nights: one
+        night (after photometry) or several (a loaded series; Planet transits…), answered with one question. Nothing
+        is said when there is no Star ID, no lookup, no planet, no transit in the frames, or no network (user=True,
+        from the button: the status line says so). Needs only the frames' times and the Star ID (no plate solution,
+        no header pointing); RA/Dec, when known, put the frames on BJD_TDB like the ephemeris."""
+        if isinstance(nights, str):
+            nights = [nights]
         if self.mode_key != "variables":
             return
         star = self.star_id.get().strip()
         if not star:
             return
-        points = [o for o in self.observations if o.night == night]
+        points = {n: [o for o in self.observations if o.night == n] for n in nights}
+        points = {n: p for n, p in points.items() if p}
         if not points:
             return
         key = name_key(star)
         cached = self._planet_eph_cache.get(key)
         if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
-            self.call_ui(self._planet_transits_found, night, points, cached[1])
+            self.call_ui(self._planet_transits_found, points, cached[1], user)
             return
 
         def work():
@@ -7827,64 +7832,137 @@ class App(Tk):
                 planets = tcore.transiting_planet_ephemerides(star)
             except Exception:
                 planets = None   # offline or an unexpected reply: silent
-            self.call_ui(self._campaign_planets_done, key, night, points, planets)
+            self.call_ui(self._campaign_planets_done, key, points, planets, user)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _campaign_planets_done(self, key: str, night: str, points: list, planets) -> None:
+    def _campaign_planets_done(self, key: str, points: dict, planets, user: bool = False) -> None:
         self._planet_eph_cache[key] = (time.time(), planets)
-        self._planet_transits_found(night, points, planets)
+        self._planet_transits_found(points, planets, user)
+
+    def _frame_bjd_offsets(self, pts):
+        """2.2.15 (item 1, review): BJD_TDB minus JD (days) per frame when the target's RA/Dec are known (the site
+        if known, else the geocentre: a few milliseconds), else None (the windows are then padded 15 minutes)."""
+        try:
+            ra = float(self.ra_hours.get()) * 15.0
+            dec = float(self.dec_deg.get())
+        except (TypeError, ValueError):
+            return None
+        try:
+            lat, lon = float(self.lat.get()), float(self.lon.get())
+        except (TypeError, ValueError):
+            lat, lon = 0.0, 0.0
+        try:
+            jd = np.array([o.jd for o in pts], dtype=float)
+            off = np.asarray(core.convert_times(jd, "BJD_TDB", ra, dec, lat, lon), dtype=float) - jd
+        except Exception:
+            return None
+        if off.shape != jd.shape or not np.isfinite(off).all() or np.abs(off).max() > 0.01:
+            return None
+        return off
+
+    @staticmethod
+    def _local_hm(jd) -> str:
+        try:
+            return f"{core.jd_to_datetime_utc(float(jd) + 0.5 / 1440).astimezone():%H:%M}"   # to the nearest minute
+        except (OverflowError, ValueError, OSError, TypeError):
+            return ""
 
     def _planet_hits_text(self, hit: dict) -> str:
-        """'9 frames fall in planet b's transit (05:17–06:12 local, ±1 min)'."""
-        try:
-            a = core.jd_to_datetime_utc(hit["t1"]).astimezone()
-            b = core.jd_to_datetime_utc(hit["t4"]).astimezone()
-            when = f"{a:%H:%M}–{b:%H:%M} local"
-        except (OverflowError, ValueError, OSError, KeyError):
-            when = ""
-        unc = float(hit.get("unc") or 0.0) * 1440
-        if when and unc >= 0.5:
-            when += f", ±{unc:.0f} min"
+        """'9 frames fall in planet b's transit (frames 05:02–05:25 local; transit 05:17–06:14 ±1 min, plus 15 min
+        for JD vs BJD)', with what was assumed. Every time is in the frames' own system (JD UTC, shown local)."""
         n = int(hit["frames"])
+        parts = []
+        f0, f1 = (hit.get("jd") or [None, None])[:2]
+        a, b = self._local_hm(f0), self._local_hm(f1)
+        if a and b:
+            parts.append(f"frames {a}–{b} local")
+        t1, t4 = self._local_hm(hit.get("t1")), self._local_hm(hit.get("t4"))
+        if t1 and t4:
+            unc = float(hit.get("unc") or 0.0) * 1440
+            tr = f"transit {t1}–{t4}" + (f" ±{unc:.0f} min" if unc >= 0.5 else "")
+            pad = float(hit.get("pad") or 0.0)
+            if not hit.get("bjd", False) and pad > 0.002:
+                tr += f", plus {pad * 1440:.0f} min for JD vs BJD"
+            parts.append(tr)
+        notes = []
+        if hit.get("t14_assumed"):
+            notes.append(f"T14 not published; {tcore.T14_ASSUMED * 24:.1f} h assumed")
+        if hit.get("unc_known") is False:
+            notes.append("ephemeris uncertainty not published")
+        inner = "; ".join(parts + notes)
         return (f"{n} frame{'s' if n != 1 else ''} fall{'s' if n == 1 else ''} in planet {hit['letter']}'s transit"
-                + (f" ({when})" if when else ""))
+                + (f" ({inner})" if inner else ""))
 
-    def _planet_transits_found(self, night: str, points: list, planets) -> None:
-        """2.2.15 (item 1): the lookup is back (on the UI thread). The night may have been replaced, the series
-        closed or saved meanwhile: only the night's points still in the series are looked at, and an open series
-        file is written again when flags change."""
-        if not planets:
+    def _planet_transits_found(self, points: dict, planets, user: bool = False) -> None:
+        """2.2.15 (item 1): the lookup is back (on the UI thread). A night may have been replaced, the series closed
+        or saved meanwhile: only the nights' points still in the series are looked at, and an open series file is
+        written again when flags change. Nights not asked before get one question together."""
+        if not planets or self.series_mode != "variables":
+            if user:
+                self.status.set("Planet transits: no transiting planet with an ephemeris was found for the Star ID "
+                                "(or the NASA Exoplanet Archive could not be reached).")
             return
-        current = [o for o in self.observations if o.night == night]
-        ids = {id(o) for o in current}
-        if not current or not any(id(o) in ids for o in points) or self.series_mode != "variables":
-            return   # the night was removed or replaced, or the series closed, before the lookup returned
-        try:
-            hits = tcore.planet_transit_frames(current, planets)
-        except Exception:
-            return
-        info = self._night_info(night, create=True)
-        if not hits:
-            info.pop("planet_transits", None)
-            return
-        info["planet_transits"] = [{k: h[k] for k in ("planet", "letter", "frames", "jd", "windows", "t1", "t4", "unc")}
-                                   for h in hits]
-        label = self.label_nights(night)
-        for h in hits:
-            self.log(f"{label}: {self._planet_hits_text(h)} (campaign rule: no data while a planet transits).")
-        if "transit_flagged" in info:   # asked already for this night: keep that answer
-            self._set_transit_flags(night, bool(info["transit_flagged"]), quiet=True)
-            return
-        what = "; ".join(self._planet_hits_text(h) for h in hits)
-        flag = messagebox.askyesno(
-            APP_TITLE,
-            f"{self.night_label(night, short=True)}: {what}.\n\nLeave those frames out (flagged \"transit\", like "
-            "cloud)?\n\nYes (the default) follows the campaign rule: no data while a planet transits. The frames stay "
-            "in the series and Planet transits… on the Output page puts them back.\nNo keeps them.", default="yes")
-        self._set_transit_flags(night, flag)
+        changed, asks, found = False, [], False
+        for night, pts in points.items():
+            current = [o for o in self.observations if o.night == night]
+            ids = {id(o) for o in current}
+            if not current or not any(id(o) in ids for o in pts):
+                continue   # the night was removed or replaced, or the series closed, before the lookup returned
+            offsets = self._frame_bjd_offsets(current)
+            try:
+                hits = tcore.planet_transit_frames(current, planets, offsets=offsets,
+                                                   pad=tcore.BJD_PAD if offsets is not None else tcore.JD_BJD_PAD)
+            except Exception:
+                continue
+            # A night without hits is not touched (a loaded series stays as saved); one with hits gets its record.
+            info = self._night_info(night, create=bool(hits))
+            if not hits:
+                old = info.pop("planet_transits", None)
+                info.pop("transit_flagged", None)
+                if old:   # an earlier check found some (another ephemeris): put those frames back
+                    windows = [w for h in old for w in h.get("windows", [])]
+                    before = [o.flag for o in current]
+                    core.set_transit_flags(current, windows, False)
+                    changed = changed or before != [o.flag for o in current]
+                continue
+            found = True
+            info["planet_transits"] = [
+                {k: h.get(k) for k in ("planet", "letter", "frames", "jd", "windows", "t1", "t4", "unc", "pad", "bjd",
+                                       "t14_assumed", "unc_known")} for h in hits]
+            label = self.label_nights(night)
+            for h in hits:
+                self.log(f"{label}: {self._planet_hits_text(h)} (campaign rule: no data while a planet transits).")
+            if "transit_flagged" in info:   # asked already for this night: keep that answer
+                changed = self._set_transit_flags(night, bool(info["transit_flagged"]), quiet=True) or changed
+            else:
+                asks.append(night)
+        if asks:
+            if len(asks) == 1:
+                what = "; ".join(self._planet_hits_text(h) for h in self._night_info(asks[0])["planet_transits"])
+                head = f"{self.night_label(asks[0], short=True)}: {what}."
+            else:
+                head = (f"{len(asks)} nights have frames in a predicted planet transit:\n  • "
+                        + "\n  • ".join(f"{self.night_label(n, short=True)}: "
+                                        + "; ".join(self._planet_hits_text(h)
+                                                    for h in self._night_info(n)["planet_transits"])
+                                        for n in asks))
+            flag = messagebox.askyesno(
+                APP_TITLE,
+                f"{head}\n\nLeave those frames out (flagged \"transit\", like cloud)?\n\nYes (the default) follows the "
+                "campaign rule: no data while a planet transits" + (" (every night listed)" if len(asks) > 1 else "")
+                + ". The frames stay in the series and Planet transits… on the Output page puts them back; they never "
+                "go in a report.\nNo keeps them.", default="yes")
+            for n in asks:
+                self._set_transit_flags(n, flag)
+            changed = True
+        if changed:
+            self._after_transit_flags()
+        elif user and not found:
+            self.status.set("Planet transits: no frame of the series falls in a predicted transit.")
 
-    def _set_transit_flags(self, night: str, flag: bool, quiet: bool = False) -> None:
+    def _set_transit_flags(self, night: str, flag: bool, quiet: bool = False) -> bool:
+        """Flag or unflag a night's frames in its stored transit windows. True when a flag changed."""
         info = self._night_info(night, create=True)
         hits = info.get("planet_transits") or []
         windows = [w for h in hits for w in h.get("windows", [])]
@@ -7895,8 +7973,9 @@ class App(Tk):
         if not quiet:
             self.log(f"{self.label_nights(night)}: frames in a planet transit "
                      + (f"left out (flagged transit, {n})." if flag else "kept (not flagged)."))
-        if before == [o.flag for o in pts] and quiet:
-            return
+        return before != [o.flag for o in pts]
+
+    def _after_transit_flags(self) -> None:
         self._refresh_period()
         self.draw_output()
         if self.series_path:
@@ -7908,13 +7987,17 @@ class App(Tk):
 
     def edit_planet_transits(self):
         """2.2.15 (item 1): leave out or keep a night's frames that fell in a planet transit (the highlighted night,
-        or the only night that has some)."""
-        nights = [n for n in sorted({o.night for o in self.observations})
-                  if self._night_info(n).get("planet_transits")]
+        or the only night that has some). With no night checked yet, check the series now."""
+        all_nights = sorted({o.night for o in self.observations})
+        nights = [n for n in all_nights if self._night_info(n).get("planet_transits")]
         if not nights:
-            messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs after "
-                                           "photometry in Variables mode when the Star ID has transiting planets in "
-                                           "the NASA Exoplanet Archive.)")
+            if all_nights and self.mode_key == "variables" and self.star_id.get().strip():
+                self.status.set("Planet transits: looking up the Star ID's planets and checking every night…")
+                self._check_planet_transits(all_nights, user=True)
+                return
+            messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs in "
+                                           "Variables mode when the Star ID has transiting planets in the NASA "
+                                           "Exoplanet Archive.)")
             return
         night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
         if night is None:
@@ -7930,6 +8013,7 @@ class App(Tk):
             + ".\n\nLeave them out (campaign rule: no data while a planet transits)?", default="yes" if now else "no")
         if flag != now or "transit_flagged" not in info:
             self._set_transit_flags(night, flag)
+            self._after_transit_flags()
 
     def _warn_edges(self, night: str, night_points: list):
         """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat)."""
@@ -8616,6 +8700,11 @@ class App(Tk):
             "Point Input at the new night's bias, dark, flat, and lights, run the flow, and choose Yes when asked to add the night.\n\n"
             "The star positions are not stored, so mark the target and comps again on the new night's frame.",
         )
+        # 2.2.15 (item 1, review): nights without a planet-transit check get one now (one lookup in the background,
+        # one question for all nights with frames in a transit; silent otherwise).
+        unchecked = [n for n in nights if not self._night_info(n).get("planet_transits")]
+        if unchecked:
+            self._check_planet_transits(unchecked)
 
     def _page_output(self):
         page = ttk.Frame(self.pages)
@@ -8643,7 +8732,8 @@ class App(Tk):
         qc = ttk.Frame(card, style="Card.TFrame")
         qc.pack(fill=X, pady=(4, 0))
         ttk.Checkbutton(
-            qc, text="Leave flagged points (sat, drift, cloud) out of the period and report",
+            qc, text="Leave flagged points (sat, drift, cloud) out of the period and report (planet-transit frames "
+                     "never go in a report)",
             variable=self.skip_flagged, command=self.refit_period,
         ).pack(side=LEFT)
         ttk.Label(qc, text="Cloud flag: comp light more than", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
@@ -9524,7 +9614,10 @@ class App(Tk):
                 if core.TRANSIT_FLAG in flags:
                     flags[f"in planet {letters} transit"] = flags.pop(core.TRANSIT_FLAG)
                 elif self._night_info(night).get("transit_flagged") is False:
-                    flags[f"kept, in planet {letters} transit"] = sum(int(h.get("frames") or 0) for h in planet_hits)
+                    # review: frames in the union of the windows (b and c overlapping count once)
+                    wins = [w for h in planet_hits for w in h.get("windows", [])]
+                    flags[f"kept, in planet {letters} transit"] = sum(
+                        1 for k in idx if any(a <= obs_list[k].jd <= b for a, b in wins))
             if core.TRANSIT_FLAG in flags:
                 flags["in a planet transit"] = flags.pop(core.TRANSIT_FLAG)
             note = self.night_notes.get(night, "")
@@ -10325,7 +10418,8 @@ class App(Tk):
             cat = self._comp_catalog()
             key = (id(obs), len(obs), obs[0].jd, obs[-1].jd, tuple(selection), tuple(self.comps_used),
                    tuple(sorted((n, cat.get(n)) for n in set(selection) | set(self.comps_used))),
-                   sum(1 for o in obs if o.flag), round(sum(o.mag for o in obs if math.isfinite(o.mag)), 6))
+                   hash(tuple(o.flag for o in obs)),   # review: any flag change (cloud -> haze too) re-checks
+                   round(sum(o.mag for o in obs if math.isfinite(o.mag)), 6))
         except Exception:
             key = None
         if key is not None and self._zp_caution_cache and self._zp_caution_cache[0] == key:
@@ -10481,6 +10575,11 @@ class App(Tk):
         self._refresh_period()
         self.draw_output()
 
+    @staticmethod
+    def _report_points(points: list) -> list:
+        """2.2.15 (item 1, review): report points without the frames flagged in a planet transit (always)."""
+        return [o for o in points if core.TRANSIT_FLAG not in o.flag.split()]
+
     def _report_text(self, observations: list | None = None) -> str:
         # Name the stars the reduction actually used, not whatever is in the form now.
         names = self.active_comps or self.comps_used or [self.comp_name.get().strip() or "comp"]
@@ -10493,8 +10592,10 @@ class App(Tk):
         check_name = given.get(check_name, check_name)
         check = (core.Star(auid.get(check_name, check_name), 0, 0)
                  if any(o.kmag is not None for o in self.observations) else None)
+        # 2.2.15 (item 1, review): frames in a planet transit never go in a report (campaign rule), even with
+        # "Leave flagged points out" unticked.
         return core.aavso_report(
-            self._usable() if observations is None else observations,
+            self._report_points(self._usable() if observations is None else observations),
             self.observer.get(),
             self.star_id.get() or "target",
             comps,
@@ -10542,6 +10643,11 @@ class App(Tk):
         if scope is None:
             return
         points = [o for o in self._usable() if scope == "series" or o.night == self.highlight_night]
+        in_transit = len(points) - len(self._report_points(points))
+        points = self._report_points(points)   # 2.2.15 (item 1, review)
+        if in_transit:
+            self.log(f"AAVSO report: {in_transit} frame{'s' if in_transit != 1 else ''} in a planet transit left out "
+                     "of the report.")
         if not points:
             messagebox.showinfo(APP_TITLE, "No usable points to report for that choice.")
             return

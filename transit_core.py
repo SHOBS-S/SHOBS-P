@@ -479,7 +479,7 @@ def transit_windows(t_min: float, t_max: float, planet: dict, pad: float = 0.0) 
         return []
     if not (math.isfinite(t_min) and math.isfinite(t_max)) or t_max < t_min:
         return []
-    t14 = float(planet.get("t14") or 0.1)
+    t14 = float(planet.get("t14") or T14_ASSUMED)
     out = []
     n0 = math.floor((t_min - t0) / period) - 1
     n1 = math.ceil((t_max - t0) / period) + 1
@@ -501,28 +501,47 @@ def planet_letter(name: str) -> str:
     return m.group(1) if m else str(name or "").strip()
 
 
-def planet_transit_frames(observations, planets, pad: float = 0.0105) -> list[dict]:
+JD_BJD_PAD = 0.0105    # 2.2.15 (item 1): 15 minutes: geocentric JD against BJD_TDB differs by up to 8.3 minutes
+BJD_PAD = 0.0007       # ... about 1 minute when the frames' times are converted to BJD_TDB (RA/Dec known)
+T14_ASSUMED = 0.1      # days (2.4 h): the window's T14 when the Archive does not publish one
+
+
+def planet_transit_frames(observations, planets, pad: float = JD_BJD_PAD, offsets=None) -> list[dict]:
     """2.2.15 (item 1): which frames fall in a predicted transit of each planet. observations need only .jd
-    (geocentric JD; the default pad of 15 minutes covers JD against BJD). Returns one entry per planet with frames
-    inside a window: {"planet", "letter", "frames": n, "jd": [first, last frame inside], "windows": [[lo, hi], ...]
-    (incl. pad), "t1", "t4" (the first such transit, no pad), "unc" (days)}."""
-    jds = [float(o.jd) for o in observations if o.jd is not None and math.isfinite(float(o.jd))]
-    if not jds or not planets:
+    (geocentric JD UTC). offsets: BJD_TDB minus JD per frame (RA/Dec known), so the frames are compared with the
+    ephemeris in its own time system; without them the default pad of 15 minutes covers JD against BJD.
+    Returns one entry per planet with frames inside a window, everything in the frames' JD (UTC), so the flags,
+    the stored windows and the labels share one time system: {"planet", "letter", "frames": n, "jd": [first, last
+    frame inside], "windows": [[lo, hi], ...] (incl. pad), "t1", "t4" (the first such transit, no pad), "unc"
+    (days), "pad" (days), "bjd" (bool), "t14_assumed" (bool), "unc_known" (bool)}."""
+    pairs = []
+    for k, o in enumerate(observations):
+        try:
+            jd = float(o.jd)
+            off = float(offsets[k]) if offsets is not None else 0.0
+        except (TypeError, ValueError, IndexError):
+            continue
+        if math.isfinite(jd) and math.isfinite(off):
+            pairs.append((jd, jd + off))
+    if not pairs or not planets:
         return []
-    t_min, t_max = min(jds), max(jds)
+    shift = float(np.median([b - a for a, b in pairs]))   # BJD - JD over the night (constant to a second)
+    t_min, t_max = min(b for _a, b in pairs), max(b for _a, b in pairs)
     out = []
     for p in planets:
         wins = transit_windows(t_min, t_max, p, pad)
         if not wins:
             continue
-        inside = [t for t in jds if any(w["lo"] <= t <= w["hi"] for w in wins)]
+        inside = [a for a, b in pairs if any(w["lo"] <= b <= w["hi"] for w in wins)]
         if not inside:
             continue
-        first = next(w for w in wins if any(w["lo"] <= t <= w["hi"] for t in inside))
+        first = next(w for w in wins if any(w["lo"] <= b <= w["hi"] for _a, b in pairs))
         out.append({"planet": p.get("name") or "", "letter": planet_letter(p.get("name") or ""),
                     "frames": len(inside), "jd": [min(inside), max(inside)],
-                    "windows": [[w["lo"], w["hi"]] for w in wins], "t1": first["t1"], "t4": first["t4"],
-                    "unc": first["unc"]})
+                    "windows": [[w["lo"] - shift, w["hi"] - shift] for w in wins],
+                    "t1": first["t1"] - shift, "t4": first["t4"] - shift, "unc": first["unc"], "pad": pad,
+                    "bjd": offsets is not None, "t14_assumed": not p.get("t14"),
+                    "unc_known": p.get("t0_err") is not None and p.get("period_err") is not None})
     return out
 
 
@@ -537,8 +556,22 @@ def transiting_planet_ephemerides(star: str) -> list[dict] | None:
     system = info.get("system") or ""
     if not info.get("planets") or not system or "'" in system:
         return []
-    rows = _nea_query("select pl_name,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,tran_flag "
+    rows = _nea_query("select pl_name,pl_orbper,pl_tranmid,pl_trandur,tran_flag "
                       f"from pscomppars where hostname = '{system}'")
+    # Uncertainties as lookup_nea gets them: the composite table, else the default parameter set; a missing column
+    # or table only leaves them unknown.
+    errs = {}
+    for table, extra in (("pscomppars", ""), ("ps", " and default_flag = 1")):
+        try:
+            got = _nea_query(f"select pl_name,pl_orbpererr1,pl_tranmiderr1 from {table} where hostname = "
+                             f"'{system}'{extra}")
+        except Exception:
+            continue
+        for r in got:
+            have = errs.setdefault(r.get("pl_name") or "", {})
+            for k in ("pl_orbpererr1", "pl_tranmiderr1"):
+                if have.get(k) is None and _f(r.get(k)) is not None:
+                    have[k] = abs(_f(r.get(k)))
     out = []
     now = now_jd()
     for row in rows:
@@ -548,8 +581,9 @@ def transiting_planet_ephemerides(star: str) -> list[dict] | None:
         period, t0 = _f(row.get("pl_orbper")), _f(row.get("pl_tranmid"))
         if not period or not t0:
             continue
-        p = {"name": name, "period": period, "period_err": _f(row.get("pl_orbpererr1")), "t0": t0,
-             "t0_err": _f(row.get("pl_tranmiderr1")), "t14": (_f(row.get("pl_trandur")) or 0) / 24.0 or None}
+        e = errs.get(name, {})
+        p = {"name": name, "period": period, "period_err": e.get("pl_orbpererr1"), "t0": t0,
+             "t0_err": e.get("pl_tranmiderr1"), "t14": (_f(row.get("pl_trandur")) or 0) / 24.0 or None}
         try:
             best = most_precise_ephemeris(name, now, (p["period"], p["period_err"], p["t0"], p["t0_err"], ""))
         except Exception:
