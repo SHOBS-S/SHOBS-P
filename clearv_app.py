@@ -315,6 +315,14 @@ def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
         pass
 
 
+def ui_scale(widget) -> float:
+    """2.2.16 (item 12, review): the display's scaling against 96 dpi (1.0 at least), for pixel offsets and padding."""
+    try:
+        return max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
+    except Exception:
+        return 1.0
+
+
 def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
     """2.2.14 (item 12): a wrap width in screen pixels for about `chars` characters of the UI font, so it scales with
     the display (a fixed 780 px is a narrow column on a high-DPI screen); at most 60% of the screen."""
@@ -1552,7 +1560,8 @@ class App(Tk):
         self._add_tooltip(load_in, self.LOAD_SERIES_TIP)
         status_label = ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel", justify=LEFT)
         status_label.pack(side=LEFT, fill=X, expand=True)
-        status_label.bind("<Configure>", lambda e: status_label.configure(wraplength=max(200, e.width - 8)), add="+")
+        status_label.bind("<Configure>", lambda e: status_label.configure(
+            wraplength=max(int(200 * ui_scale(status_label)), e.width - int(8 * ui_scale(status_label)))), add="+")
         self.update_series_status()
 
         nav = ttk.Frame(card, style="Card.TFrame")
@@ -2012,6 +2021,10 @@ class App(Tk):
         if hasattr(self, "_slot_notes"):
             self._slot_notes = {}
         self._slot_typed = {}   # 2.2.16 (item 8, review): typed names belong to the image they were typed on
+        # review: AUIDs added this session belong to the old field (an open series keeps its own).
+        series_auids = set(getattr(self, "_series_auid_keys", ()) or ()) if self.observations else set()
+        for key in [k for k in self.seq_auids if k not in series_auids]:
+            self.seq_auids.pop(key, None)
         if why:
             what = ([f"target {old}"] if old else []) + ([f"{n_comps} comp{'s' if n_comps != 1 else ''}"] if n_comps
                                                          else []) \
@@ -2033,13 +2046,27 @@ class App(Tk):
             self.status.set("Target, comps, and check cleared. Type the new Star ID and press Enter to look it up.")
 
     def _other_target_why(self, star, ra_hours=None, dec_deg=None) -> str:
-        """2.2.16 (item 11): why a target (a loaded series', a new mode's) is another star than the Input page's, or ""
-        for the same star or no target to compare. With RA/Dec on both sides the positions decide (over 1° apart);
-        without them (no header pointing, no lookup) the Star IDs are compared, ignoring spacing and case."""
+        """2.2.16 (item 11): why a loaded series' target is another star than the Input page's, or "" (see
+        _other_target)."""
+        return self._other_target(star, ra_hours, dec_deg)[0]
+
+    def _other_target(self, star, ra_hours=None, dec_deg=None):
+        """2.2.16 (item 11): (why, sure): why a loaded series' target is another star than the Input page's ("" for
+        the same star or nothing to compare), and whether that is certain. With RA/Dec on both sides the positions
+        decide (over 1° apart): sure. Without them (no header pointing, no lookup) the Star IDs are compared, ignoring
+        spacing and case: not sure (HIP 114622 is HD 219134), so the caller asks. No Star ID on the Input page but
+        comps or the check named or marked: those belong to no known target, so they are another field's: sure."""
         cur = self.star_id.get().strip()
         new = str(star or "").strip()
-        if not cur or not new:
-            return ""
+        if not new:
+            return "", False
+        if not cur:
+            n = sum(1 for r in list(COMP_ROLES) + ["check"]
+                    if getattr(self, f"{r}_name").get().strip() or getattr(self, f"{r}_xy") is not None)
+            if n or self.target_xy is not None:
+                return (f"{new}, and the Input page had no Star ID for the {n} comp/check star"
+                        f"{'s' if n != 1 else ''} marked or named"), True
+            return "", False
         try:
             a = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
             b = (float(ra_hours) * 15.0, float(dec_deg))
@@ -2047,8 +2074,8 @@ class App(Tk):
             a = b = None
         if a is not None and b is not None and all(map(math.isfinite, a + b)):
             sep = core.sky_separation_arcsec(a[0], a[1], b[0], b[1]) / 3600.0
-            return f"{new}, {sep:.0f}° from {cur}" if sep > 1.0 else ""
-        return "" if core.same_object_name(cur, new) else f"{new}, not {cur}"
+            return (f"{new}, {sep:.0f}° from {cur}", True) if sep > 1.0 else ("", False)
+        return ("", False) if core.same_object_name(cur, new) else (f"{new}, not {cur}", False)
 
     def _check_target_field(self, header: dict):
         """Lights pointing far from the Input page's target (a target left over from another star): offer to clear
@@ -2247,8 +2274,10 @@ class App(Tk):
             # field change (target, every comp and the check, suggested comps, spares, session watch stars).
             import re
             star = re.sub(r"\s+[b-h]$", "", obj)
-            if messagebox.askyesno(APP_TITLE, text + f"\n\nClear the old target, comps, and check star, and look up "
-                                                     f"{star}?", default="no"):
+            if self.busy:   # review: never offer to wipe the field during a run: a warning, as before 2.2.16
+                messagebox.showwarning(APP_TITLE, text)
+            elif messagebox.askyesno(APP_TITLE, text + f"\n\nClear the old target, comps, and check star, and look "
+                                                       f"up {star}?", default="no"):
                 self.clear_target(quiet=True, why=f"the lights' FITS OBJECT is {obj}, not {name}; looking up {star}")
                 self.star_id.set(star)
                 self.lookup_star()
@@ -8431,8 +8460,6 @@ class App(Tk):
         ctx = self._planet_check_context(source, star)   # 2.2.16 (item 9)
         cached = self._planet_eph_cache.get(key)
         if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
-            if cached[1] and not user:
-                self._planet_check_status(ctx)
             self.call_ui(self._planet_transits_found, points, cached[1], user, ctx)
             return
         if not user:   # (Planet transits… has said so already)
@@ -8558,6 +8585,9 @@ class App(Tk):
         if stale:
             self.log(f"Planet-transit check for {ctx['where']} dropped: {stale} while {ctx['star_text']}'s planets "
                      "were looked up. (Planet transits… on the Output page checks the open series.)")
+            if user:   # review: the button's "looking up…" line must not stay
+                self.status.set(f"Planet transits: check dropped ({stale}). Press Planet transits… again to check "
+                                "the open series.")
             return
         if not planets or self.series_mode != "variables":
             if user:
@@ -8997,10 +9027,18 @@ class App(Tk):
         # 2.2.16 (item 11): a comp or check name is saved only from a slot with a marker, or one the series used
         # (15 Oct: an auto-save wrote TOI-2046's comp2-comp6 names and V into HD 219134's series, from slots left
         # with names but no markers). Every save (Save series, auto-save, a night added) comes through here.
-        used = {str(n).strip() for n in (self.comps_used or ()) if n}
-        for role, keep in [(r, used) for r in COMP_ROLES] + [("check", {str(self.check_used or "").strip()} - {""})]:
+        # review: the keep-set is every name the series knows (its file's comp/check names, the comps and check of
+        # any run, catalog magnitudes, report names), so a night added with fewer comps or no check never blanks
+        # the series' own; only names of another field are left out.
+        known = set(getattr(self, "_series_names", ()) or ())
+        series_check = (getattr(self, "_series_check", None) or ("",))[0]
+        known |= {name_key(n) for n in list(self.comps_used or ()) + [self.check_used, series_check]
+                  + list(self.comp_catalog_mags or {}) + list(self.active_comps or ())
+                  + [x for kv in (self.report_names or {}).items() for x in kv]}
+        known.discard("")
+        for role in list(COMP_ROLES) + ["check"]:
             name = str(meta.get(f"{role}_name") or "").strip()
-            if name and getattr(self, f"{role}_xy", None) is None and name not in keep:
+            if name and getattr(self, f"{role}_xy", None) is None and name_key(name) not in known:
                 meta[f"{role}_name"] = ""
                 meta[f"{role}_mag"] = ""
         for key in self._META_NUMBERS:
@@ -9124,6 +9162,8 @@ class App(Tk):
             self.use_check_zp.set(bool(meta["use_check_zp"]))
         self.check_used = meta.get("check_used") or ""
         self._series_check = (self.check_used, str(meta.get("check_mag") or ""))   # 2.2.8
+        # 2.2.16 (item 11, review): the comp and check names this series' file holds (kept by _meta's rule).
+        self._series_names = {name_key(meta.get(f"{r}_name")) for r in list(COMP_ROLES) + ["check"]} - {""}
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
@@ -9204,7 +9244,10 @@ class App(Tk):
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
         # from before this session. The new file is written completely (X.part) before anything is renamed.
         part = path + ".part"
-        core.save_series(part, self._meta(), self.observations)
+        meta = self._meta()
+        core.save_series(part, meta, self.observations)
+        # 2.2.16 (item 11, review): the names now in the file are the series' own from here on.
+        self._series_names = {name_key(meta.get(f"{r}_name")) for r in list(COMP_ROLES) + ["check"]} - {""}
         prev = series_prev_path(path)
         key = os.path.normcase(os.path.abspath(path))
         kept = ""
@@ -9273,17 +9316,26 @@ class App(Tk):
             state["job"] = None
             if state["tip"] is not None:
                 return
+            tip = None
             try:
-                x = widget.winfo_rootx() + 12
-                y = widget.winfo_rooty() + widget.winfo_height() + 4
+                # review: everything measured before the window exists; pixel offsets scaled with the display.
+                wrap = text_wrap_px(widget, 50)
+                k = ui_scale(widget)
+                x = widget.winfo_rootx() + int(12 * k)
+                y = widget.winfo_rooty() + widget.winfo_height() + int(4 * k)
                 tip = Toplevel(widget)
                 tip.wm_overrideredirect(True)
                 tip.wm_geometry(f"+{x}+{y}")
-                ttk.Label(tip, text=text, style="Hint.TLabel", justify=LEFT, padding=6, relief="solid", borderwidth=1,
-                          wraplength=int(tkfont.Font(widget, font=(core.UI_FONT, 10)).measure("0" * 50))).pack()
+                ttk.Label(tip, text=text, style="Hint.TLabel", justify=LEFT, padding=int(6 * k), relief="solid",
+                          borderwidth=1, wraplength=wrap).pack()
                 state["tip"] = tip
             except Exception:
                 state["tip"] = None
+                if tip is not None:   # never leave an empty borderless window behind
+                    try:
+                        tip.destroy()
+                    except Exception:
+                        pass
 
         def enter(_e=None):
             if state["job"] is None and state["tip"] is None:
@@ -9365,6 +9417,7 @@ class App(Tk):
         self._pier_cache = {k: v for k, v in self._pier_cache.items()
                             if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
         self._series_check = ("", "")
+        self._series_names = set()   # 2.2.16 (item 11, review)
         self._zp_caution_cache = None
         self._series_saved_fp = None
         self.extremum_csv = self.extremum_csv_star = ""
@@ -9473,8 +9526,18 @@ class App(Tk):
         self._slot_typed = {}   # 2.2.16 (item 8, review): the series' names are not typed here
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9)
         # 2.2.16 (item 11): a series of another star never inherits this field's target, comps, check or watch stars.
-        why = self._other_target_why(meta.get("star_id"), meta.get("ra_hours"), meta.get("dec_deg"))
-        if why:
+        why, sure = self._other_target(meta.get("star_id"), meta.get("ra_hours"), meta.get("dec_deg"))
+        if why and not sure:
+            # review: names alone cannot see aliases (HIP 114622 is HD 219134): ask; No (the default) keeps the field.
+            cur = self.star_id.get().strip()
+            sure = messagebox.askyesno(
+                APP_TITLE, f"{os.path.basename(path)} is a series of {meta.get('star_id')}; the Input page's target is "
+                           f"{cur}. Without positions to compare, SHOBS-P cannot tell whether they are the same star "
+                           f"(another catalog's name?).\n\nYes: they are different stars: clear {cur}'s comps, check "
+                           "star and watch stars.\nNo: the same star: keep what is marked.", default="no")
+            if not sure:
+                self.log(f"Kept the marked stars: {meta.get('star_id')} taken as another name of {cur}.")
+        if why and sure:
             self.clear_target(quiet=True, why=f"{os.path.basename(path)} is {why}")
         watch_before = {w.get("name") for w in self.watch_list}
         auids_before = set(self.seq_auids)
