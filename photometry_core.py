@@ -6722,10 +6722,12 @@ def night_pier_info(rot_before=None, rot_after=None, pier_before=None, pier_afte
 
 
 def pier_side_groups(angles, tol: float = PIER_ANGLE_TOL) -> dict:
-    """2.2.15 (item 10): camera angles grouped into pier sides. Angles within ±tol of each other are one side (29°
-    and 30°; 358° and 2° across 360), their 180° partners the other side of the same pair (210°). Each group is
-    named by its most frequent angle (ties: the smaller). angles: readings in degrees (one per night and segment,
-    repeats count); None / NaN are skipped. Returns {whole-degree angle: representative whole-degree angle}."""
+    """2.2.15 (item 10): camera angles grouped into pier sides. An angle joins a side when it is within ±tol of any
+    angle already on it (29° and 30°; 358° and 2° across 360), but never more than 2·tol from the side's most
+    frequent angle, so a chain cannot walk toward the other side. The 180° partners of a side are the other side of
+    the same pair (210°). Each side is named by its most frequent angle (ties: the smaller). The result does not
+    depend on the order of the readings. angles: readings in degrees (one per night and segment, repeats count);
+    None / NaN are skipped. Returns {whole-degree angle: representative whole-degree angle}."""
     counts: dict[int, int] = {}
     for a in angles:
         try:
@@ -6735,19 +6737,27 @@ def pier_side_groups(angles, tol: float = PIER_ANGLE_TOL) -> dict:
         if math.isfinite(a):
             k = int(round(a)) % 360
             counts[k] = counts.get(k, 0) + 1
-    families: list[list] = []   # [axis angle, representative of its side, representative of the other side]
     out: dict[int, int] = {}
-    for a, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        fam = next((f for f in families if rotator_difference(a, f[0]) <= tol), None)
-        if fam is None:
-            families.append([a, a, None])
-            out[a] = a
-        elif angle_difference(a, fam[0]) <= tol:
-            out[a] = fam[1]
-        else:
-            if fam[2] is None:
-                fam[2] = a
-            out[a] = fam[2]
+    remaining = set(counts)
+    reach = min(2.0 * tol, 45.0)
+    while remaining:
+        # The most frequent angle left anchors a pair of sides; its family grows by links within tol (mod 180).
+        axis = min(remaining, key=lambda x: (-counts[x], x))
+        family, frontier = {axis}, [axis]
+        while frontier:
+            x = frontier.pop()
+            for y in sorted(remaining - family):
+                if rotator_difference(x, y) <= tol and rotator_difference(y, axis) <= reach:
+                    family.add(y)
+                    frontier.append(y)
+        remaining -= family
+        near = [x for x in family if angle_difference(x, axis) <= 90.0]
+        far = [x for x in family if angle_difference(x, axis) > 90.0]
+        for side in (near, far):
+            if side:
+                rep = min(side, key=lambda x: (-counts[x], x))
+                for x in side:
+                    out[x] = rep
     return out
 
 
@@ -6758,7 +6768,7 @@ def group_pier_sides(pier_by_night: dict, tol: float = PIER_ANGLE_TOL) -> dict:
     """2.2.15 (item 10): {night: pier info} with every angle side label ('29°', '209° flipped') renamed to its
     group's representative ('30°', '210° flipped'), so nights a degree apart count as one side. Works on the labels
     alone, so series saved by 2.2.14 (per-night angles) group without re-reduction. The infos are copied, never
-    changed in place; a renamed one keeps its own reading in "angles" ('29°/209°')."""
+    changed in place; a renamed one keeps its own readings in "read" ({"before": '29°', "after": '209°'})."""
     def parse(label):
         m = _SIDE_ANGLE.match(str(label or ""))
         return (float(m.group(1)), m.group(2)) if m else None
@@ -6783,7 +6793,7 @@ def group_pier_sides(pier_by_night: dict, tol: float = PIER_ANGLE_TOL) -> dict:
                 if rep is not None:
                     new[key] = f"{rep}°{got[1]}"
         if (new.get("before"), new.get("after")) != (info.get("before"), info.get("after")):
-            new["angles"] = side_text(info)
+            new["read"] = {"before": info.get("before") or "", "after": info.get("after") or ""}
         out[night] = new
     return out
 

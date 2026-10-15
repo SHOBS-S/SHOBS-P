@@ -1091,6 +1091,7 @@ class App(Tk):
             self.series_path = ""
             self.series_mode = ""
             self.period = None
+            self.highlight_night = None   # 2.2.15 review: no zoom left on a closed series
             self.draw_output()
         self.mode_key = mode
         m = MODES[mode]
@@ -7734,6 +7735,7 @@ class App(Tk):
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
             )
         replaced = False
+        self.highlight_night = None   # 2.2.15 review: a night added or replaced shows the whole series, unzoomed
         if append and plan:
             self._apply_same_star_plan(plan, night_points)
         if append:
@@ -8592,6 +8594,7 @@ class App(Tk):
             messagebox.showerror(APP_TITLE, f"Could not read {os.path.basename(path)}:\n{exc}")
             return
         self._apply_meta(meta)
+        self.highlight_night = None   # 2.2.15 review: a loaded series opens unzoomed
         if self.series_mode != self.mode_key and self.series_mode in MODES:
             self.set_mode(self.series_mode, initial=True)
             self.log(f"Switched to {MODES[self.series_mode]['name']} mode to match {os.path.basename(path)}.")
@@ -9069,7 +9072,10 @@ class App(Tk):
         # y-axis fitted to its points); clicking it again shows the whole series. The other nights stay drawn (faded)
         # on the same hours scale, off to the sides. The check plot keeps the series.
         zoom = highlight if len(nights) > 1 else None
-        zoom_t0 = min(o.jd for o in obs_list if o.night == zoom) if zoom is not None else 0.0
+        zoom_jd = [o.jd for o in obs_list if o.night == zoom and math.isfinite(o.jd)] if zoom is not None else []
+        if zoom is not None and not zoom_jd:
+            zoom = None   # 2.2.15 review: a night without a usable time cannot be zoomed
+        zoom_t0 = min(zoom_jd) if zoom_jd else 0.0
         lc_x = (jd - zoom_t0) * 24.0 if zoom is not None else tx
         in_zoom = np.array([zoom is None or o.night == zoom for o in obs_list], dtype=bool)
         for i, night in enumerate(nights):
@@ -9437,7 +9443,18 @@ class App(Tk):
             ref = side_offs["ref"]
             parts = [f"{s} reads {side_offs['offsets'][s]:+.3f} against {ref} ({side_offs['how'][s]})"
                      for s in sides if s != ref]
-            head = ("Nights on both pier sides (" + ", ".join(f"{s}: {side_offs['nights'].get(s, 0)} night(s)"
+            # 2.2.15 review: a side grouped from several readings names them ("30° (29°/30°)").
+            read: dict = {}
+            for info in pier_by_night.values():
+                for key in ("before", "after"):
+                    label = (info or {}).get(key)
+                    if label:
+                        read.setdefault(label, set()).add(((info or {}).get("read") or {}).get(key) or label)
+
+            def named(s):
+                got = sorted(read.get(s, ()), key=lambda t: (len(t), t))
+                return f"{s} ({'/'.join(got)})" if len(got) > 1 or (got and got[0] != s) else s
+            head = ("Nights on both pier sides (" + ", ".join(f"{named(s)}: {side_offs['nights'].get(s, 0)} night(s)"
                                                              for s in sides) + "): ")
             if varies:
                 # 2.2.14 review: on a short-period or large-amplitude star the "offset" is mostly the star changing.
@@ -9493,7 +9510,7 @@ class App(Tk):
         for night in nights:
             idx = [k for k, o in enumerate(obs_list) if o.night == night]
             used = [k for k in idx if not excluded[k]]
-            first = min(obs_list[k].jd for k in idx)
+            first = min((obs_list[k].jd for k in idx if math.isfinite(obs_list[k].jd)), default=float("nan"))
             try:
                 local = core.jd_to_datetime_utc(first).astimezone()
                 date = f"{local:%b} {local.day}"
@@ -9802,6 +9819,7 @@ class App(Tk):
             self._apply_meta(meta)
         legacy = self._legacy_nights(meta, obs)
         self.legacy_mixed |= legacy
+        self.highlight_night = None   # 2.2.15 review: nights added from a file show the whole series
         self._fill_base(obs, meta)
         for name, info in (meta.get("spare_catalog") or {}).items():
             self.spare_catalog.setdefault(name, info)
