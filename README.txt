@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.15
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.16
 ======================================================
 
 Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -53,6 +53,39 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.16 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  Bigger Photometry image (GitHub #2): zoom buttons (- + Fit) in the View box, and "Pop out" moves the image into
+     its own window you can make as large as you like (a second monitor works; the window remembers its place).
+     Closing it puts the image back on the page.
+- S  Faster solve: each field's catalog answers are kept on disk for 30 days (proper motions reapplied), so solving
+     the same field again is quick. The status line shows each catalog as it arrives (AAVSO, APASS, Gaia ...) and
+     stars can be marked once the sequence and APASS are in; Gaia's deep half finishes in the background. Answers a
+     server cut short are used but not kept.
+- S  Photometry step strip: "1 Solving..." while it works, "1 Solved" when done, "1 Not solved" (amber, pointing to
+     Solve again) when it failed.
+- S  Typed comp/check names: while a typed name waits for Enter the slot says "press Enter to find and mark this
+     star"; Enter always gives a check-mark or warning line.
+- S  A new target or field clears the old one: loading a series of another star (or new lights of another field, or
+     a mode switch that changes the target) clears the old target, comps C1-C10, check, magnitudes, suggestions,
+     spares, session watch stars and slot notes. When only names can be compared you are asked (No keeps what is
+     marked). Comp names without a marker are never saved into a series.
+- S  Suggest apertures: the bold headline shows exactly what "Use these aperture sizes" will set; when the best size
+     is at the edge of the tried range, 2.6 and 3.0 x FWHM are tried too; the sky ring starts at least 1.5 x FWHM
+     outside the aperture.
+- S  Telescope name: a mount name in the TELESCOP header ('EQMod Mount' from the ASIAIR) is ignored; a new Telescope
+     box in Optics names your telescope (else "0.36 m, f 2900 mm" from the Optics box).
+- S  Color-fit failures no longer stop the photometry run (the night is kept; the log says the color fit failed).
+- S  Series hints on the Input page; "Close series" also on the Output page.
+- V  Light-curve y-axis from the used points: flagged points far off scale show as small amber x at the edge ("N
+     flagged off scale" in the title) instead of flattening the curve. Same for the check panel and Discovery curves.
+- V  The check-star panel follows the night zoom (same hours axis and night, its own sigma).
+- V  The planet-transit question names the series and night it is about.
+- T  Leave-one-comp-out check after each transit fit: each comp is left out in turn and the fit redone. The spread is
+     reported as a systematic (comp choice) in the notes and the ExoFOP fit file. A comp is named in a caution only
+     when leaving it out moves the depth or Tc beyond the statistical error and beyond its own noise, and it is the
+     odd one out; with 2 comps no comp is ever named.
+- T  ExoFOP package: a folder only (no zip); a second save with nothing changed is skipped.
 
 New in 2.2.15 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Photometry page tips (GitHub #3): a step strip "1 Solve -> 2 Target -> 3 Comps -> 4 Check -> Run" shows where you
@@ -761,6 +794,10 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.16 Pop-out and zoom for the Photometry image (#2); catalog cache and per-catalog progress; three-state
+       solve step; a new target clears the old field; Suggest apertures headline; telescope name; color-fit guard;
+       leave-one-comp-out check on transit fits; ExoFOP package as a folder; light-curve y from used points; check
+       panel follows the night zoom; series hints and Close series on Output.
 2.2.15 Photometry tips and automatic target marker (#3); display stretch (#1); Input-page series line with Close
        series; AAVSO and ExoFOP upload links; ExoFOP fit-file equipment, scale and coverage; planet transits flagged
        in Variables campaigns; night click zooms the light curve; pier sides grouped within 5 degrees; dew/haze? flag;

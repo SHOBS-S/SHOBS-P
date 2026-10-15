@@ -306,6 +306,19 @@ def main() -> None:
     except Exception as exc:
         check("pier sides / stretch", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
+    section("2i 2.2.16: VizieR markers, mount names, comp odd-one-out")
+    try:
+        import transit_core as _tc
+        col = "#Column\te_Vmag\t(F6.3)\t[0/7]? Vmag uncertainty\t[ucd=stat.error;phot.mag]\n"
+        check("APASS column description is not an error marker", not core.vizier_markers(col))
+        check("a VizieR error line is", bool(core.vizier_markers("#++++ Error: query aborted\n")))
+        check("'EQMod Mount' is a mount, not a telescope", core.is_mount_name("EQMod Mount")
+              and not core.is_mount_name("Celestron RC 14"))
+        check("one bad comp of three is the odd one out", _tc._odd_one_out([0.30, -0.15, -0.15]) == 0
+              and _tc._odd_one_out([0.3, -0.3]) is None)
+    except Exception as exc:
+        check("2.2.16 checks", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):
