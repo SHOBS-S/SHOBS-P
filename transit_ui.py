@@ -1403,7 +1403,7 @@ class TransitPage:
         self.app.log(f"AAVSO exoplanet report: {path}")
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
-                              "the AAVSO Exoplanet Database (check AAVSO's current exoplanet instructions first)")
+                              "the AAVSO Exoplanet Database (check its current instructions)")
 
     def open_aavso_exoplanet(self):
         """2.2.15 (item 8): AAVSO Exoplanet Database's submit page."""
@@ -1433,8 +1433,11 @@ class TransitPage:
         app = self.app
         url, what = self.exofop_page()
         home = url == core.EXOFOP_TESS_URL
-        if not app.settings.get("exofop_hint_shown"):
+        # The hint once on the first click, and once more the first time ExoFOP's home has to stand in.
+        if not app.settings.get("exofop_hint_shown") or (home and not app.settings.get("exofop_home_hint_shown")):
             app.settings["exofop_hint_shown"] = True
+            if home:
+                app.settings["exofop_home_hint_shown"] = True
             try:
                 app._save_settings()
             except Exception:
