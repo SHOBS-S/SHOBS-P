@@ -66,7 +66,26 @@ except ImportError:  # pragma: no cover
     fits = None
 
 
-FITS_EXTS = (".fits", ".fit", ".fts", ".fits.gz", ".fit.gz")
+# 2.2.15 (items 8, 9): upload pages, all in one place. AAVSO's WebObs 2.0 photometry submit page and the AAVSO
+# Exoplanet Database submit page (both checked 15 Oct 2026), and ExoFOP-TESS.
+AAVSO_WEBOBS_URL = "https://apps.aavso.org/v2/data/submit/photometry/"
+AAVSO_EXOPLANET_URL = "https://apps.aavso.org/exosite/submit"
+EXOFOP_TESS_URL = "https://exofop.ipac.caltech.edu/tess/"
+
+
+def exofop_target_url(toi=None, tic=None) -> str:
+    """2.2.15 (item 9): the ExoFOP-TESS page of a TOI (target.php?toi=NNNN) or a TIC (target.php?id=NNN); ''
+    when neither is known. TOI-2046 b or "2046.01" -> toi=2046; "TIC 468574941" -> id=468574941."""
+    m = _re.search(r"(\d+)", str(toi or ""))
+    if m and int(m.group(1)) > 0:
+        return f"{EXOFOP_TESS_URL}target.php?toi={int(m.group(1))}"
+    m = _re.search(r"(\d+)", str(tic or ""))
+    if m and int(m.group(1)) > 0:
+        return f"{EXOFOP_TESS_URL}target.php?id={int(m.group(1))}"
+    return ""
+
+
+FITS_EXTS =(".fits", ".fit", ".fts", ".fits.gz", ".fit.gz")
 # 2.2.1: PixInsight's XISF is read too (uncompressed, zlib, or zlib with byte shuffling).
 IMAGE_EXTS = FITS_EXTS + (".fits.fz", ".xisf")
 

@@ -1232,7 +1232,7 @@ def _f(value):
 # Columns in the Planetary Systems Composite table (pscomppars). It has no reference-name column and may lack
 # the uncertainty columns, so those are asked for separately and a failure there never blocks the lookup.
 NEA_COLUMNS = ("pl_name,hostname,pl_orbper,pl_tranmid,pl_trandur,pl_trandep,pl_ratror,pl_ratdor,pl_imppar,"
-               "pl_orbincl,st_teff,st_logg,st_rad,sy_vmag,sy_tmag,ra,dec,pl_orbper_reflink,pl_tranmid_reflink")
+               "pl_orbincl,st_teff,st_logg,st_rad,sy_vmag,sy_tmag,ra,dec,pl_orbper_reflink,pl_tranmid_reflink,tic_id")
 NEA_ERR_COLUMNS = "pl_orbpererr1,pl_tranmiderr1,pl_ratrorerr1,pl_ratdorerr1,pl_impparerr1"
 
 # Survey prefixes as the Archive spells them, so "Wasp-12 b" or "tres-3b" still matches.
@@ -1431,6 +1431,7 @@ def lookup_nea(name: str) -> dict:
         "inc": _f(row.get("pl_orbincl")), "teff": _f(row.get("st_teff")), "logg": _f(row.get("st_logg")),
         "vmag": _f(row.get("sy_vmag")), "tmag": _f(row.get("sy_tmag")),
         "ra": _f(row.get("ra")), "dec": _f(row.get("dec")), "source": "NASA Exoplanet Archive",
+        "tic": str(row.get("tic_id") or "").strip(),   # 2.2.15 (item 9): "TIC 468574941", for its ExoFOP page
         "reference": ("ephemeris: " + refs[0] if refs[0] else "") + eph_note,
         # 2.2.6: what was typed, and the planet's other names, so the Input page can say what it resolved to.
         "typed": clean, "aliases": list((info or {}).get("aliases") or []) if info and info.get("resolved") == pl_name else [],
@@ -1528,6 +1529,7 @@ def lookup_exofop_toi(name: str) -> dict:
     depth_ppm = g("Depth (ppm)")
     planet = {
         "name": f"TOI-{row.get('TOI', want)}", "host": f"TIC {row.get('TIC ID', '')}",
+        "tic": f"TIC {row.get('TIC ID', '')}" if str(row.get("TIC ID", "")).strip() else "",   # 2.2.15 (item 9)
         "period": g("Period (days)"), "period_err": g("Period (days) err", "Period (days) Error"),
         "t0": g("Epoch (BJD)"), "t0_err": g("Epoch (BJD) err", "Epoch (BJD) Error"),
         "t14": (g("Duration (hours)") or 0) / 24.0 or None,
@@ -1552,6 +1554,37 @@ def lookup_planet(name: str) -> dict:
         except Exception as exc:
             errors.append(f"ExoFOP: {exc}")
     raise ValueError("\n".join(errors))
+
+
+def exofop_ids(planet: dict | None, *names: str) -> tuple[str, str]:
+    """2.2.15 (item 9): (TOI number, TIC number) for the planet's ExoFOP-TESS page, '' when not known. A TOI named as
+    the planet or its host (or typed) comes first, then the TIC (lookup's tic_id, or a "TIC nnn" name), then a TOI
+    among the planet's other names (a confirmed planet that was a TOI)."""
+    import re
+
+    p = planet or {}
+    own = [str(v or "") for v in (p.get("name"), p.get("host"), p.get("typed"), *names)]
+    aliases = [str(a or "") for a in (p.get("aliases") or [])]
+
+    def toi_in(texts):
+        for t in texts:
+            m = re.search(r"(?i)\bTOI[-\s]?(\d+)", t)
+            if m and int(m.group(1)) > 0:
+                return m.group(1)
+        return ""
+
+    def tic_in(texts):
+        for t in texts:
+            m = re.search(r"(?i)\bTIC[-\s]?(\d+)", t)
+            if m and int(m.group(1)) > 0:
+                return m.group(1)
+        return ""
+
+    toi = toi_in(own)
+    tic = tic_in([str(p.get("tic") or "")] + own + aliases)
+    if not toi and not tic:
+        toi = toi_in(aliases)
+    return toi, tic
 
 
 def complete_planet(p: dict) -> dict:
@@ -1870,6 +1903,67 @@ def _dtg() -> str:
 def _created() -> str:
     import photometry_core as core
     return core.created_line()
+
+
+def transit_coverage(t, tc: float | None, t14: float | None) -> str:
+    """2.2.15 (item 11): how much of the transit the data cover, for ExoFOP: "Full" (from before ingress to after
+    egress, the fitted Tc ± T14/2), "Ingress" or "Egress" (only that contact), else "Partial" (only the bottom, say).
+    '' when Tc or T14 is unknown."""
+    t = np.asarray(t, dtype=float)
+    t = t[np.isfinite(t)]
+    if not t.size or tc is None or not t14 or not math.isfinite(tc) or not math.isfinite(t14) or t14 <= 0:
+        return ""
+    t1, t4 = tc - t14 / 2.0, tc + t14 / 2.0
+    start, end = float(t.min()), float(t.max())
+    has_ingress = start < t1 < end
+    has_egress = start < t4 < end
+    if has_ingress and has_egress:
+        return "Full"
+    if has_ingress:
+        return "Ingress"
+    if has_egress:
+        return "Egress"
+    return "Partial"
+
+
+def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
+    """2.2.15 (item 11): the "For ExoFOP" block of the package's fit file: telescope/camera from the headers and the
+    Optics box (meta "telescope"; "not recorded" when neither says), filter, pixel scale ("/px), the photometry
+    aperture in px and arcsec, coverage (Full / Ingress / Egress / Partial) and the result."""
+    s = result["summary"]
+    t = np.asarray(result["t"], dtype=float)
+    scale = meta.get("scale_arcsec")
+    radius = meta.get("radius_px")
+    if scale:
+        how = []
+        if meta.get("bin"):
+            how.append(f"Bin {meta['bin']}")
+        if meta.get("camera_bin", 1) and meta.get("camera_bin", 1) > 1:
+            how.append(f"camera bin {meta['camera_bin']}")
+        if meta.get("superpixel", 1) == 2:
+            how.append("color superpixel")
+        scale_text = f'{scale:.2f}"/px' + (f" ({', '.join(how)})" if how else "")
+    else:
+        scale_text = "not recorded"
+    if radius:
+        ap_text = f"r {radius:g} px" + (f' = {radius * scale:.1f}"' if scale else "")
+        if meta.get("sky"):
+            ap_text += f", sky {meta['sky']} px"
+    else:
+        ap_text = meta.get("aperture") or "not recorded"
+    tc = s["tc"][0] if "tc" in s else None
+    t14 = s["t14"][0] if "t14" in s else (result.get("planet") or {}).get("t14")
+    cov = transit_coverage(t, tc, t14) or "not known"
+    span = f" ({t.min():.5f} to {t.max():.5f} BJD_TDB)" if t.size else ""
+    return ("\nFor ExoFOP (time-series upload)\n"
+            f"  Telescope/camera: {meta.get('telescope') or 'not recorded'}\n"
+            f"  Filter: {meta.get('filter', 'CV')} ("
+            + ("monochrome camera" if mono else "one-shot color camera") + ", untransformed)\n"
+            f"  Pixel scale: {scale_text}\n"
+            f"  Photometric aperture: {ap_text}\n"
+            f"  Coverage: {cov}{span}\n"
+            f"  Result: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, depth "
+            f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n")
 
 
 def fit_text(result: dict, meta: dict) -> str:

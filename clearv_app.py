@@ -949,7 +949,14 @@ class App(Tk):
         # pages, not the status bar (its credits line was cut in half at the bottom edge).
         status.pack(fill=X, side="bottom", before=outer)
         self.status = StringVar(value="Choose the calibration and light folders to begin.")
-        ttk.Label(status, textvariable=self.status, style="Status.TLabel").pack(anchor=W, padx=12, pady=(4, 0))
+        # 2.2.15 (item 8): after a report save the status line offers the upload page (a button beside the text,
+        # gone with the next status message).
+        status_row = ttk.Frame(status, style="Side.TFrame")
+        status_row.pack(fill=X, padx=12, pady=(4, 0))
+        ttk.Label(status_row, textvariable=self.status, style="Status.TLabel").pack(side=LEFT)
+        self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
+        self._status_offer = ("", "")   # (status text it belongs to, URL)
+        self.status.trace_add("write", lambda *_: self._status_changed())
         ttk.Label(
             status,
             text="© Shiloh Hill Observatory    Built on Astropy, photutils, ccdproc, NumPy, SciPy, Matplotlib    "
@@ -1385,6 +1392,48 @@ class App(Tk):
             self.status.set(f"Saved {path}")
             messagebox.showinfo(APP_TITLE, f"Saved\n{path}" + (f"\n\n{advice}" if advice else ""))
 
+    # ---- upload links (2.2.15, item 8) -------------------------------------------------------
+    def open_link(self, url: str, what: str = ""):
+        """Open a web page in the default browser; the status line says where, or what to type if it fails."""
+        try:
+            import webbrowser
+            ok = webbrowser.open(url)
+        except Exception:
+            ok = False
+        if ok is False:
+            self.status.set(f"Could not open a browser: go to {url}")
+        else:
+            self.status.set(f"Opened {what or url} in your browser.")
+        self.log(f"Opened {url}")
+
+    def offer_upload(self, path: str, button: str, url: str, where: str):
+        """After a report save: the status line names the saved file and offers the upload page."""
+        text = f"Saved {os.path.basename(path)}. Upload it on {where}:"
+        self.status.set(text)
+        self._status_offer = (text, url)
+        try:
+            self.status_link.configure(text=button)
+            self.status_link.pack(side=LEFT, padx=(8, 0))
+        except Exception:
+            pass
+
+    def _open_status_link(self):
+        text, url = self._status_offer
+        if url:
+            self.open_link(url)
+
+    def _status_changed(self):
+        text, url = getattr(self, "_status_offer", ("", ""))
+        if url and self.status.get() != text:
+            self._status_offer = ("", "")
+            try:
+                self.status_link.pack_forget()
+            except Exception:
+                pass
+
+    def open_webobs(self):
+        self.open_link(core.AAVSO_WEBOBS_URL, "AAVSO WebObs (upload the report with its file tool)")
+
     def output_directory(self, title: str, parent=None) -> str:
         folder = self._out_folder()
         if folder:
@@ -1418,11 +1467,20 @@ class App(Tk):
             style="Hint.TLabel",
         ).pack(anchor=W, pady=(2, 8))
 
+        # 2.2.15 (item 7): which series this run joins, with Load series… / Close series beside it.
+        srow = ttk.Frame(card, style="Card.TFrame")
+        srow.pack(fill=X, pady=(0, 8))
+        self.series_status = StringVar(value="")
+        ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel").pack(side=LEFT)
+        ttk.Button(srow, text="Load series…", command=self.load_series).pack(side=LEFT, padx=(12, 0))
+        self.close_series_button = ttk.Button(srow, text="Close series", command=self.close_series)
+        self.close_series_button.pack(side=LEFT, padx=6)
+        self.update_series_status()
+
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(12, 0))
         ttk.Button(nav, text="Scan folders", command=self.scan_folders).pack(side=LEFT)
         ttk.Button(nav, text="Try it with sample data…", command=self.write_demo).pack(side=LEFT, padx=8)
-        ttk.Button(nav, text="Load series", command=self.load_series).pack(side=LEFT, padx=8)
         ttk.Button(nav, text="Next: Blink", command=lambda: self.show_step(STEP_BLINK)).pack(side=RIGHT)
 
         # Frames
@@ -3531,6 +3589,56 @@ class App(Tk):
         self.log(f"Noise: scintillation sets the error bars{exp_txt}: about {s_med:.3f} mag per point from the "
                  f"atmosphere against {p_med:.3f} mag photon noise. Longer exposures (defocused if needed) or binning "
                  "points reduce it; scintillation falls as the square root of the exposure time." + head)
+
+    def exofop_equipment(self, night: str = "") -> dict:
+        """2.2.15 (item 11): the ExoFOP notes' equipment for a night: "0.36 m RC, f 2845 mm / ZWO ASI2600MC Duo" from
+        the lights' TELESCOP / INSTRUME and the Optics box (aperture, focal length), the working pixel scale ("/px:
+        pixel size / focal length × camera bin × Binning × 2 for a color camera's superpixel), and the photometry
+        aperture radius (px). Missing parts say "not recorded"; scale and radius are None when unknown."""
+        setup = (self.night_bin.get(night) or {}) if night else {}
+
+        def num(v):
+            try:
+                f = float(v)
+                return f if math.isfinite(f) and f > 0 else None
+            except (TypeError, ValueError):
+                return None
+        try:
+            lights = self._lights()
+            head = core.read_header(lights[0]) if lights else {}
+        except Exception:
+            head = {}
+        head = head or {}
+        tel = str(head.get("TELESCOP") or "").strip()
+        cam = str(head.get("INSTRUME") or "").strip()
+        stored = str(setup.get("instrument") or "").strip()
+        if stored and stored != " / ".join(p for p in (tel, cam) if p):
+            tel, cam = stored, ""   # the night's own header names (its lights are not the ones on the Input page)
+        ap, focal, pix = num(self.aperture_mm.get()), num(self.focal_mm.get()), num(self.pixel_um.get())
+        scope = " ".join(p for p in (f"{ap / 1000.0:.2f} m" if ap else "", tel) if p)
+        if focal:
+            scope = (scope + ", " if scope else "") + f"f {focal:.0f} mm"
+        if scope and cam:
+            line = f"{scope} / {cam}"
+        elif scope:
+            line = f"{scope} / camera not recorded" if not stored else scope
+        elif cam:
+            line = f"telescope not recorded / {cam}"
+        else:
+            line = "not recorded"
+        binning = int(num(setup.get("binning")) or num(self.binning.get()) or 1)
+        try:
+            camera_bin = max(int(float(head.get("XBINNING") or 1)), 1)
+        except (TypeError, ValueError):
+            camera_bin = 1
+        superpixel = 1 if self.pattern.get() == core.MONO else 2
+        scale = pix / focal * 206.265 * camera_bin * binning * superpixel if (pix and focal) else None
+        radius = num(setup.get("radius")) or num(self.radius.get())
+        sky_in = num(setup.get("sky_in")) or num(self.sky_in.get())
+        sky_out = num(setup.get("sky_out")) or num(self.sky_out.get())
+        return {"telescope": line, "scale": scale, "binning": binning, "camera_bin": camera_bin,
+                "superpixel": superpixel, "radius_px": radius,
+                "sky": f"{sky_in:g}-{sky_out:g}" if sky_in and sky_out else ""}
 
     def _lights_instrument(self) -> str:
         """'<TELESCOP> / <INSTRUME>' from the first light's header ('' when the header names neither)."""
@@ -7854,7 +7962,97 @@ class App(Tk):
         self._prev_kept.add(key)   # a new file has nothing to keep; later saves this session keep the first _prev
         os.replace(part, path)
         self.series_path = path
+        self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7)
+        self.update_series_status()
         return kept
+
+    # ---- series status line (2.2.15, item 7) ------------------------------------------------
+    def _series_fingerprint(self):
+        """What the open series holds now (points, flags, nights' setup, chosen comps), to tell unsaved changes."""
+        pts = tuple((o.night, round(o.jd, 6) if o.jd is not None and math.isfinite(o.jd) else None, o.flag or "",
+                     round(o.mag, 6) if o.mag is not None and math.isfinite(o.mag) else None)
+                    for o in self.observations)
+        return hash((pts, tuple(self.active_comps or ()), repr(sorted(self.night_bin.items(), key=lambda kv: kv[0]))))
+
+    def series_unsaved(self) -> bool:
+        """True when the open series has points that are not in its file (never saved, or changed since)."""
+        if not self.observations:
+            return False
+        if not self.series_path:
+            return True
+        return getattr(self, "_series_saved_fp", None) != self._series_fingerprint()
+
+    def series_status_text(self) -> str:
+        """The Input page's series line: "Series: HD_219134.cvseries — 8 nights, last 13–14 Oct"."""
+        obs = [o for o in self.observations if o.night]
+        if not obs:
+            return "No series loaded — this run will be a single night"
+        name = os.path.basename(self.series_path) if self.series_path else "not saved yet"
+        nights = {o.night for o in obs}
+        timed = [o for o in obs if o.jd is not None and math.isfinite(o.jd)]
+        last_obs = max(timed, key=lambda o: o.jd) if timed else None
+        last_night = last_obs.night if last_obs else max(nights)
+        label = self.night_label(last_night, short=True, jd=min(o.jd for o in timed if o.night == last_night)
+                                 if last_obs else None)
+        from datetime import datetime
+        year = f" {datetime.now().year}"
+        if label.endswith(year):
+            label = label[:-len(year)]
+        return f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}"
+
+    def update_series_status(self):
+        """Refresh the Input page's series line (load, close, save, a night added or removed, a new series)."""
+        if not hasattr(self, "series_status"):
+            return
+        self.series_status.set(self.series_status_text())
+        try:
+            self.close_series_button.configure(state="normal" if self.observations else "disabled")
+        except Exception:
+            pass
+
+    def close_series(self):
+        """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
+        next run is a single night. Unsaved points are offered a save first."""
+        if not self.observations:
+            self.update_series_status()
+            self.status.set("No series is open.")
+            return
+        if self.busy:
+            messagebox.showinfo(APP_TITLE, "Wait for the current run to finish (or cancel it) before closing the series.")
+            return
+        name = os.path.basename(self.series_path) if self.series_path else "The series"
+        if self.series_unsaved():
+            what = ("has changes that are not saved" if self.series_path
+                    else f"({len({o.night for o in self.observations})} night(s)) has not been saved")
+            answer = messagebox.askyesnocancel(
+                APP_TITLE, f"{name} {what}.\n\nYes: save the series first, then close it.\n"
+                           "No: close it without saving.\nCancel: keep it open.")
+            if answer is None:
+                return
+            if answer:
+                self.save_series()
+                if self.series_unsaved():
+                    return   # the save dialog was cancelled or failed: keep it open
+        had_file = bool(self.series_path)
+        name = os.path.basename(self.series_path) if self.series_path else name
+        self.observations = []
+        self.series_path = ""
+        self.series_mode = ""
+        self.series_mode_unknown = False
+        self.period = None
+        self.color_cal = {}
+        self.night_bin = {}
+        self.legacy_mixed = set()
+        self.active_comps = []
+        self.reports_saved = {}
+        self.highlight_night = None
+        self._series_saved_fp = None
+        self.extremum_csv = self.extremum_csv_star = ""
+        self._take_series_snapshot()
+        self.draw_output()
+        self.update_series_status()
+        self.log(f"Series closed: {name} (the file on disk is unchanged)." if had_file else "Series closed.")
+        self.status.set("Series closed. The next run is a single night (a new series).")
 
     def _remember_series_dir(self, path: str):
         """2.2.3: the Save/Load series dialogs start in the folder used last time."""
@@ -7921,6 +8119,7 @@ class App(Tk):
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         self._refresh_period()
+        self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7): the series as on disk
         self.draw_output()
         self._warn_legacy(self.legacy_mixed, os.path.basename(path))
         nights = sorted({obs.night for obs in observations})
@@ -8023,6 +8222,8 @@ class App(Tk):
         ttk.Button(series_row, text="Time of max/min…", command=self.show_extremum).pack(side=LEFT)
         ttk.Label(nav, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(nav, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso).pack(side=LEFT)
+        # 2.2.15 (item 8): AAVSO's upload page for the saved report.
+        ttk.Button(nav, text="Open AAVSO WebObs…", command=self.open_webobs).pack(side=LEFT, padx=(6, 0))
         ttk.Button(nav, text="Save light-curve CSV", command=self.save_csv).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Export…", command=self.open_export).pack(side=LEFT)
         ttk.Button(nav, text="Save plot PNG", command=self.save_png).pack(side=LEFT, padx=6)
@@ -8285,6 +8486,7 @@ class App(Tk):
             ax.set_xlabel(f"Local time ({zone})")
 
     def draw_output(self):
+        self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
         if self.out_canvas is None:
             return
         for ax in (self.out_ax1, self.out_ax2, self.out_ax3, self.out_ax4):
@@ -9785,6 +9987,7 @@ class App(Tk):
         self._note_report(points, path, scope)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
+        self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs")   # 2.2.15 (item 8)
 
     def _name_report_check(self) -> bool:
         """2.2.14 (item 7): an AAVSO report must not go out with KNAME = "check" (13 Oct: the check marker never got
