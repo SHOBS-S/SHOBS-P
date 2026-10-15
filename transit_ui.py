@@ -167,7 +167,11 @@ class TransitPage:
         ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(results, text="Save AAVSO exoplanet report…", style="Accent.TButton",
                    command=self.save_aavso).pack(side=LEFT)
-        ttk.Button(results, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT, padx=6)
+        # 2.2.15 (items 8, 9): the upload pages, beside the saves they are for.
+        ttk.Button(results, text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet).pack(
+            side=LEFT, padx=(6, 0))
+        ttk.Button(results, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT, padx=(6, 0))
+        ttk.Button(results, text="Open ExoFOP…", command=self.open_exofop).pack(side=LEFT, padx=6)
         ttk.Button(results, text="Save light-curve CSV…", command=app.save_csv).pack(side=LEFT)
         # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
         ttk.Button(results, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
@@ -595,6 +599,15 @@ class TransitPage:
                 "aperture": f"r {app.radius.get():g} px, sky {app.sky_in.get():g}-{app.sky_out.get():g} px",
                 "comps": ", ".join(app.active_comps or app.comps_used), "source": f"night {night}",
                 "scint": app._scint_note() if hasattr(app, "_scint_note") else ""}
+        # 2.2.15 (item 11): the ExoFOP notes' telescope/camera, pixel scale and aperture for this night.
+        try:
+            eq = app.exofop_equipment(night)
+        except Exception:
+            eq = {}
+        if eq:
+            meta.update(telescope=eq.get("telescope", ""), scale_arcsec=eq.get("scale"), radius_px=eq.get("radius_px"),
+                        bin=eq.get("binning"), camera_bin=eq.get("camera_bin", 1), superpixel=eq.get("superpixel", 1),
+                        sky=eq.get("sky", ""))
         try:
             meta["comp_noise"] = core.comp_noise_warning(obs)  # 2.2.8
         except Exception:
@@ -1387,8 +1400,60 @@ class TransitPage:
             return
         with core.AsciiWriter(path, newline="\n") as fh:
             fh.write(tc.aavso_exoplanet_report(self.result, meta))
-        self.app.status.set(f"Saved {os.path.basename(path)}. Check AAVSO's current exoplanet instructions before "
-                            "uploading.")
+        self.app.log(f"AAVSO exoplanet report: {path}")
+        # 2.2.15 (item 8): the status line names the file and offers the upload page.
+        self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
+                              "the AAVSO Exoplanet Database (check AAVSO's current exoplanet instructions first)")
+
+    def open_aavso_exoplanet(self):
+        """2.2.15 (item 8): AAVSO Exoplanet Database's submit page."""
+        self.app.open_link(core.AAVSO_EXOPLANET_URL, "the AAVSO Exoplanet Database's submit page")
+
+    def exofop_page(self) -> tuple[str, str]:
+        """2.2.15 (item 9): (URL, what) of the target's ExoFOP-TESS page: by TOI, else by TIC, else ExoFOP's home."""
+        app = self.app
+        names = [app.planet_name.get().strip(), app.star_id.get().strip()]
+        info = dict(app.planet_info or {})
+        typed = names[0].replace(" ", "").lower()
+        known = {str(info.get(k) or "").replace(" ", "").lower() for k in ("name", "typed")}
+        if typed and typed not in known:
+            info = {}   # the last lookup was for another planet
+        if self.report is not None:
+            rp = self.report.get("planet") or {}
+            names += [str(rp.get("name") or ""), str(rp.get("host") or "")]
+        toi, tic = tc.exofop_ids(info, *names)
+        url = core.exofop_target_url(toi=toi, tic=tic)
+        if url:
+            return url, (f"ExoFOP's page for TOI-{toi}" if toi and f"toi={int(toi)}" in url else f"ExoFOP's page for TIC {tic}")
+        return core.EXOFOP_TESS_URL, "ExoFOP-TESS"
+
+    def open_exofop(self):
+        """2.2.15 (item 9): open the target's ExoFOP-TESS page (TOI or TIC), else ExoFOP-TESS's home. The first time,
+        a hint on how ExoFOP uploads work."""
+        app = self.app
+        url, what = self.exofop_page()
+        home = url == core.EXOFOP_TESS_URL
+        if not app.settings.get("exofop_hint_shown"):
+            app.settings["exofop_hint_shown"] = True
+            try:
+                app._save_settings()
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "SHOBS-P",
+                ("No TOI or TIC number is known for this target, so ExoFOP-TESS's home page opens: search for the star "
+                 "there.\n\n" if home else "")
+                + "ExoFOP-TESS is for TESS targets (TOIs and TIC stars) only, and uploading needs an ExoFOP account "
+                  "(log in first).\n\n"
+                  "Time series: on the target's page, logged in, choose \"Add new\" in the Time Series section and "
+                  "upload the light curve (CSV) and fit notes from the ExoFOP package.\n"
+                  "Files (plot, report): Files \"Add new\" on the same page, with the same data tag.\n\n"
+                  "Data tag: YYYYMMDD_username_description_n (for example 20261015_jsmith_SHOBS-P-transit_1); the "
+                  "description may use only letters, numbers and hyphens.",
+                parent=app)
+        app.open_link(url, what)
+        if home:
+            app.status.set("Opened ExoFOP-TESS (no TOI or TIC number known for this target): search for the star there.")
 
     def save_package(self):
         if not self.result:
@@ -1423,15 +1488,8 @@ class TransitPage:
         txt = os.path.join(out, f"{base}_fit.txt")
         with core.AsciiWriter(txt) as fh:
             fh.write(tc.fit_text(r, meta))
-            fh.write("\nFor ExoFOP (time-series upload)\n"
-                     f"  Telescope/camera: {meta.get('notes', '')}\n"
-                     f"  Filter: {meta.get('filter', 'CV')} ("
-                     + ("monochrome camera" if self.app.pattern.get() == core.MONO else "one-shot color camera")
-                     + ", untransformed)\n"
-                     f"  Photometric aperture: {meta.get('aperture', '')}\n"
-                     f"  Coverage: {r['t'].min():.5f} to {r['t'].max():.5f} BJD_TDB\n"
-                     f"  Result: Tc {r['summary']['tc'][0]:.5f} ± {r['summary']['tc'][1]:.5f}, depth "
-                     f"{r['summary']['depth'][0] * 1e6:.0f} ± {r['summary']['depth'][1] * 1e6:.0f} ppm\n")
+            # 2.2.15 (item 11): equipment from the headers and Optics box, pixel scale, aperture, coverage.
+            fh.write(tc.exofop_notes(r, meta, mono=self.app.pattern.get() == core.MONO))
         files.append(txt)
         rep = os.path.join(out, f"AAVSO_{planet}_{meta.get('obsdate', '')}_SHOBS-P.txt")
         with core.AsciiWriter(rep, newline="\n") as fh:
