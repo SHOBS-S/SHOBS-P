@@ -3,11 +3,14 @@ ExoFOP package. Built by the App in clearv_app.py; everything here reaches the A
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import math
 import os
+import re
+import shutil
 import threading
 import traceback
-import zipfile
 from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, Y, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
     filedialog, messagebox, ttk
 
@@ -1474,11 +1477,40 @@ class TransitPage:
         date = datetime.fromtimestamp((float(r["t"].min()) - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
         base = f"{planet}_{date}_{meta.get('obscode') or 'obs'}_SHOBS-P"
         # Never write into an earlier package: a second save of the same night becomes ..._2 (2.2).
+        # 2.2.16 (item 4): folder only (no zip; an old package's .zip still counts as taken).
         out, k = os.path.join(folder, base), 2
-        while os.path.exists(out) or os.path.exists(out + ".zip"):
+        while os.path.exists(out) or os.path.exists(out + ".zip") or os.path.exists(out + ".part"):
             out, k = os.path.join(folder, f"{base}_{k}"), k + 1
         base = os.path.basename(out)
+        final = out
+        # 2.2.16 (item 4): written into <folder>.part first; kept (renamed) only when it differs from the last package
+        # of this fit in this folder (a double-click had made identical _3 and _4).
+        out = final + ".part"
         os.makedirs(out, exist_ok=True)
+        try:
+            files, png_print = self._write_package_files(out, base, r, meta, planet)
+            fingerprint = package_fingerprint(files, png_print)
+            last = getattr(self, "_last_package", None)
+            if (last and last.get("print") == fingerprint and os.path.isdir(last.get("folder", ""))
+                    and os.path.normcase(os.path.dirname(os.path.abspath(last["folder"])))
+                    == os.path.normcase(os.path.abspath(folder))):
+                shutil.rmtree(out, ignore_errors=True)
+                self.app.log(f"ExoFOP package unchanged: {last['folder']} (same fit and files; nothing new written)")
+                self.app.status.set(f"ExoFOP package unchanged: {os.path.basename(last['folder'])}")
+                return
+            os.replace(out, final)
+        except Exception:
+            shutil.rmtree(out, ignore_errors=True)
+            raise
+        self._last_package = {"print": fingerprint, "folder": final}
+        out = final
+        self.app.log(f"ExoFOP package folder: {out}")
+        self.app.saved_notice(out, "Package folder: light curve (CSV), fit and ExoFOP notes (text), plot, and an "
+                                   "AAVSO exoplanet report.")
+
+    def _write_package_files(self, out, base, r, meta, planet):
+        """2.2.16 (item 4): the package's files in folder out; returns (paths, the plot's PNG bytes without its DTG
+        stamp, for the fingerprint, or None without a plot)."""
         files = []
         lc = os.path.join(out, f"{base}_lightcurve.csv")
         with open(lc, "w", newline="", encoding="utf-8") as fh:
@@ -1498,17 +1530,36 @@ class TransitPage:
         with core.AsciiWriter(rep, newline="\n") as fh:
             fh.write(tc.aavso_exoplanet_report(r, meta))
         files.append(rep)
+        png_print = None
         if self.fig is not None:
             png = os.path.join(out, f"{base}_plot.png")
             self._save_fig(png, stamp=True, dpi=150)
             files.append(png)
-        zpath = out + ".zip"
-        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-            for f in files:
-                z.write(f, arcname=os.path.join(base, os.path.basename(f)))
-        self.app.log(f"ExoFOP package: {out} (and {os.path.basename(zpath)})")
-        self.app.saved_notice(out, f"Package folder and {os.path.basename(zpath)}: light curve (CSV), fit and ExoFOP "
-                                   "notes (text), plot, and an AAVSO exoplanet report.")
+            buf = io.BytesIO()
+            self._save_fig(buf, stamp=False, dpi=150, format="png")
+            png_print = buf.getvalue()
+        return files, png_print
+
+
+_CREATED_LINE = re.compile(r"^[\s#\"']*Created\b", re.IGNORECASE)
+
+
+def package_fingerprint(files, png_print=None) -> str:
+    """2.2.16 (item 4): what a package says, ignoring its DTG ("Created ...") lines and the files' names (a new
+    package's names carry its _N): the text files' other lines in order, and the plot without its stamp."""
+    h = hashlib.sha256()
+    for path in files:
+        ext = os.path.splitext(path)[1].lower()
+        h.update(ext.encode() + b"\0")
+        if ext == ".png":
+            if png_print is not None:
+                h.update(hashlib.sha256(png_print).digest())
+            continue
+        with open(path, "rb") as fh:
+            for line in fh.read().decode("utf-8", "replace").splitlines():
+                if not _CREATED_LINE.match(line):
+                    h.update(line.encode("utf-8") + b"\n")
+    return h.hexdigest()
 
 
 def wrap_to_width(text: str, width_px: float, size: float, weight: str = "normal", dpi: float = 130) -> list:

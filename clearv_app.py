@@ -558,6 +558,10 @@ class App(Tk):
         self.aperture_hint = StringVar(value=core.aperture_mm_hint(self.aperture_mm.get()))
         self.use_scint = BooleanVar(value=bool(self.settings.get("use_scint", True)))
         self.aperture_mm.trace_add("write", lambda *_: self._remember_scint())
+        # 2.2.16 (item 5): the telescope's name for the ExoFOP file and the night setup (ASIAIR's TELESCOP is the
+        # mount). Blank = from the header (unless it names a mount) and the aperture / focal length.
+        self.telescope_name = StringVar(value=str(self.settings.get("telescope_name", "") or ""))
+        self.telescope_name.trace_add("write", lambda *_: self._remember_telescope())
         self.use_scint.trace_add("write", lambda *_: self._remember_scint())
         self.planet_name = StringVar()
         self.pl_period = StringVar()
@@ -1258,6 +1262,32 @@ class App(Tk):
             self.settings[key] = value
             self._save_settings()
 
+    def _remember_telescope(self):
+        """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
+        if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
+            return
+        value = self.telescope_name.get().strip()
+        if self.settings.get("telescope_name", "") != value:
+            self.settings["telescope_name"] = value
+            self._save_settings()
+
+    def _telescope_text(self, header: dict | None = None) -> str:
+        """2.2.16 (item 5): the telescope as written out: the Telescope field, else a TELESCOP that is not a mount,
+        with the Optics box's aperture and focal length ("0.36 m, f 2900 mm" when the header names only the mount)."""
+        def box(var):
+            try:
+                return var.get()
+            except Exception:
+                return None
+        if header is None:
+            try:
+                lights = self._lights()
+                header = core.read_header(lights[0]) if lights else {}
+            except Exception:
+                header = {}
+        return core.telescope_text(self.telescope_name.get(), str((header or {}).get("TELESCOP") or ""),
+                                   box(self.aperture_mm), box(self.focal_mm))
+
     def _remember_scint(self):
         """2.2.2: the aperture and the scintillation switch are remembered between sessions."""
         # 2.2.9: a borrowed aperture (another telescope's frames) is not the user's own: not remembered.
@@ -1650,18 +1680,20 @@ class App(Tk):
         site.columnconfigure(1, weight=1)
         optics = self._group(right, "Optics")
         optics.pack(fill=X, pady=(10, 0))
-        self._field(optics, 0, "Telescope aperture (mm)", self.aperture_mm, width=12, hint="for the scintillation error")
-        self._field(optics, 1, "Focal length (mm)", self.focal_mm, width=12)
-        self._field(optics, 2, "Pixel size (µm)", self.pixel_um, width=12)
-        ttk.Label(optics, text="Binning", style="Card.TLabel").grid(row=3, column=0, sticky=W, padx=(0, 10), pady=3)
+        # 2.2.16 (item 5): the telescope's name (row 0; the header's TELESCOP is often the mount).
+        self._field(optics, 0, "Telescope", self.telescope_name, width=12, hint="blank = from the header")
+        self._field(optics, 1, "Telescope aperture (mm)", self.aperture_mm, width=12, hint="for the scintillation error")
+        self._field(optics, 2, "Focal length (mm)", self.focal_mm, width=12)
+        self._field(optics, 3, "Pixel size (µm)", self.pixel_um, width=12)
+        ttk.Label(optics, text="Binning", style="Card.TLabel").grid(row=4, column=0, sticky=W, padx=(0, 10), pady=3)
         ttk.Combobox(optics, textvariable=self.binning, values=(1, 2, 4), width=6, state="readonly").grid(
-            row=3, column=1, sticky=W, pady=3)
+            row=4, column=1, sticky=W, pady=3)
         ttk.Label(optics, text="same-color pixels only; colors stay separate", style="Hint.TLabel").grid(
-            row=3, column=2, sticky=W, padx=(8, 0))
+            row=4, column=2, sticky=W, padx=(8, 0))
         ttk.Checkbutton(optics, text="Include scintillation (atmospheric twinkling) in the error bars",
-                        variable=self.use_scint).grid(row=4, column=0, columnspan=3, sticky=W, pady=(2, 3))
+                        variable=self.use_scint).grid(row=5, column=0, columnspan=3, sticky=W, pady=(2, 3))
         ttk.Label(optics, textvariable=self.aperture_hint, style="Hint.TLabel", foreground="#a32020").grid(
-            row=5, column=0, columnspan=3, sticky=W)
+            row=6, column=0, columnspan=3, sticky=W)
         optics.columnconfigure(1, weight=1)
         return page
 
@@ -2486,13 +2518,14 @@ class App(Tk):
         self.focal_mm.set(focal)
         self.pixel_um.set(round(pixel, 2))
         self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
+        self.telescope_name.set("")   # 2.2.16 (item 5): your telescope's name is not theirs (comes back with yours)
         self.log(f"MicroObservatory setup: site {lat:.4f}, {lon:.4f} ({where}); optics {focal:.0f} mm, {pixel:.2f} µm "
                  f"({'from the header scale' if scale else 'approximate'}); monochrome, CV, saturation 4000 ADU. "
                  "Your own setup comes back when you scan your own lights.")
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
     _SETUP_NAMES = ("lat", "lon", "elevation", "focal_mm", "pixel_um", "aperture_mm", "pattern", "debayer_mode",
-                    "sat_limit", "binning")
+                    "sat_limit", "binning", "telescope_name")   # 2.2.16 (item 5): telescope_name
 
     def _setup_value(self, name: str):
         """A Site/Optics/camera box's value; "" when a number box is empty (real Tk raises TclError on .get())."""
@@ -2570,6 +2603,7 @@ class App(Tk):
             for key in ("focal_mm", "pixel_um", "aperture_mm"):
                 if key in opt:
                     getattr(self, key).set(round(opt[key], 2) if key != "aperture_mm" else f"{opt[key]:.0f}")
+            self.telescope_name.set("")   # 2.2.16 (item 5): another telescope; yours comes back with your setup
             got = ", ".join(f"{k.split('_')[0]} from {v}" for k, v in opt["source"].items())
             self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
                      + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
@@ -4147,11 +4181,18 @@ class App(Tk):
         if stored and stored != " / ".join(p for p in (tel, cam) if p):
             # 2.2.15 review: the night was taken with other lights than the ones on the Input page: its own header
             # names, verbatim, and no scale (this setup's optics and binning may not be that night's).
-            return dict(out, telescope=stored, scale=None)
+            # 2.2.16 (item 5): its stored telescope text when it has one; a mount-like TELESCOP is left out.
+            scope_n = str(setup.get("telescope") or "").strip()
+            cam_n = [p for p in core.instrument_without_mount(stored).split(" / ") if p]
+            if scope_n:
+                cam_last = cam_n[-1] if cam_n else ""
+                text = f"{scope_n} / {cam_last}" if cam_last and cam_last not in scope_n else scope_n
+            else:
+                text = core.instrument_without_mount(stored) or "not recorded"
+            return dict(out, telescope=text, scale=None)
         ap, focal, pix = box(self.aperture_mm), box(self.focal_mm), box(self.pixel_um)
-        scope = " ".join(p for p in (f"{ap / 1000.0:.2f} m" if ap else "", tel) if p)
-        if focal:
-            scope = (scope + ", " if scope else "") + f"f {focal:.0f} mm"
+        # 2.2.16 (item 5): Telescope field > TELESCOP unless it names the mount > aperture and focal length.
+        scope = core.telescope_text(self.telescope_name.get(), tel, ap, focal)
         if scope and cam:
             line = f"{scope} / {cam}"
         elif scope:
@@ -6495,9 +6536,14 @@ class App(Tk):
                 self._chart_diag["n_peaks"] = n_peaks
                 depth = core.field_depth(n_peaks, preview_ref.shape, scale, cat_fov, polygon)
                 depth["status"] = {}   # review S3: filled by fetch_gaia_dr3 (which half answered)
+                cat_info = {}
+                self.call_ui(self._catalog_progress, None, "start", None)   # 2.2.16 (item 2)
                 try:
-                    found, failed = core.fetch_field_catalogs(cone[0], cone[1], cat_fov, band, cancel=cancel,
-                                                              depth=depth)   # 2.2.14 (item 5)
+                    found, failed = core.fetch_field_catalogs(
+                        cone[0], cone[1], cat_fov, band, cancel=cancel, depth=depth,   # 2.2.14 (item 5)
+                        progress=lambda c, st, d: self.call_ui(self._catalog_progress, c, st, d),   # 2.2.16 (item 2)
+                        info=cat_info)
+                    self.call_ui(self.log, self._catalog_times_text(cat_info, found, failed))   # 2.2.16 (item 2)
                     self._chart_diag["gaia_depth"] = dict(core.catalog_depth(found.get("Gaia DR3") or [],
                                                                              depth["max_rows"]),
                                                           max_rows=depth["max_rows"], footprint=bool(polygon),
@@ -6597,6 +6643,71 @@ class App(Tk):
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
+
+    # ---- 2.2.16 (item 2): catalog progress and timings ------------------------------------------------------
+    _CAT_ORDER = ("AAVSO sequence", "APASS DR9", "Tycho-2", "Gaia DR3")   # the status line's order (Gaia is slowest)
+
+    def _catalog_progress(self, cat, state, detail):
+        """Main thread (via call_ui): one catalog's progress. The status line reads "Catalogs: AAVSO ✓ APASS ✓
+        Tycho ✓ Gaia… 18 s" while the solve waits; Gaia's deep half arriving after the solve is logged."""
+        if state == "start":
+            self._cat_progress = {c: "…" for c in self._CAT_ORDER}
+            self._cat_seconds = 0
+        elif state == "late":
+            d = detail or {}
+            if d.get("n") and not d.get("error"):
+                self.log(f"Gaia DR3: the deep part (VizieR, to G {core.GAIA_DEEP_G:g}) arrived after the solve, "
+                         f"{d['seconds']:.0f} s after it was asked: {d['n']:,} Gaia stars"
+                         + ("; kept for this field, so Solve again uses them at once." if d.get("cached")
+                            else "; Solve again to use them."))
+                if not self.busy:
+                    self.status.set("Gaia's deep stars arrived after the solve: Solve again to use them.")
+            else:
+                self.log(f"Gaia DR3: the deep part (VizieR) did not finish ({d.get('error') or 'no answer'}, "
+                         f"{d.get('seconds', 0):.0f} s); stars fainter than the archive's G 17 have no Gaia magnitude "
+                         "this time. Solve again to retry.")
+            return
+        elif state == "tick":
+            self._cat_seconds = int(detail or 0)
+        elif cat is not None:
+            prog = getattr(self, "_cat_progress", None)
+            if prog is None:
+                prog = self._cat_progress = {c: "…" for c in self._CAT_ORDER}
+            prog[cat] = {"ok": "✓", "cached": "✓", "error": "✗"}.get(state, "…")
+        if not getattr(self, "_solving", False):
+            return
+        prog = getattr(self, "_cat_progress", None) or {}
+        parts = [f"{core.CATALOG_SHORT.get(c, c)}{'' if v == '…' else ' '}{v}" for c, v in prog.items()]
+        secs = getattr(self, "_cat_seconds", 0)
+        self.status.set("Catalogs: " + " ".join(parts) + (f" {secs} s" if secs else ""))
+
+    @staticmethod
+    def _catalog_times_text(info, found, failed) -> str:
+        """2.2.16 (item 2): one log line: each catalog's time (or "saved copy") and star count; Gaia's two halves."""
+        times = (info or {}).get("times") or {}
+        cached = (info or {}).get("cached") or {}
+        parts = []
+        for cat in list(core.CATALOGS) + [c for c in times if c not in core.CATALOGS]:
+            if cat not in times and cat not in (failed or {}) and cat not in (found or {}):
+                continue
+            if cached.get(cat):
+                text = f"{cat} saved copy ({len((found or {}).get(cat) or []):,} stars)"
+            elif cat in (found or {}):
+                text = f"{cat} {times.get(cat, 0.0):.1f} s ({len(found[cat]):,} stars)"
+            else:
+                text = f"{cat} failed after {times.get(cat, 0.0):.1f} s" if cat in times else f"{cat} no answer"
+            if cat == "Gaia DR3" and not cached.get(cat) and (info or {}).get("gaia"):
+                g = info["gaia"]
+
+                def half(name, ok, secs, n):
+                    if ok == "ok":
+                        return f"{name} ✓ {secs:.1f} s, {n:,}" if secs is not None and n is not None else f"{name} ✓"
+                    return f"{name} ✗ ({ok})" if ok else f"{name} not asked"
+                text += (" [" + half("ESA archive", g.get("esa"), g.get("esa_s"), g.get("esa_n")) + "; "
+                         + half("VizieR deep", g.get("deep"), g.get("deep_s"), g.get("deep_n")) + "]")
+            parts.append(text)
+        tag = " (field cache on)" if (info or {}).get("cache") else ""
+        return "Catalogs" + tag + ": " + ("; ".join(parts) if parts else "none asked") + "."
 
     def _label_done(self, catalog, chart_id, stars, match_set, solved, placed, band, error, vet=None):
         self._end_job()
@@ -6752,7 +6863,13 @@ class App(Tk):
                      + (f". {with_mag} labeled stars with {band} on the frame for about {diag['n_peaks']} star-like "
                         "peaks." if diag.get("n_peaks") else "."))
         gst = gd.get("status") or {}
-        if gst.get("deep") not in (None, "ok") and gst.get("esa") == "ok":
+        if gst.get("deep") == "still running" and gst.get("esa") == "ok":
+            # 2.2.16 (item 2): not lost: it finishes in the background (logged when it arrives).
+            faint = gst.get("esa_faintest")
+            self.log("  Gaia: the deep VizieR part is still running; the solve went on with the archive's stars (to G "
+                     + (f"{faint:.1f}" if faint else "about 17") + "). It finishes in the background and is kept "
+                     "for this field; the log says when it arrives.")
+        elif gst.get("deep") not in (None, "ok") and gst.get("esa") == "ok":
             # 2.2.14 (review S3): half of Gaia missing; say what that costs tonight.
             faint = gst.get("esa_faintest")
             self.log("  Gaia: the deep VizieR part did not answer (" + str(gst["deep"]) + "); stars fainter than G "
@@ -7347,7 +7464,12 @@ class App(Tk):
                     # 2.2.14 (item 1): the comp's colors, each from one catalog.
                     comp_cat = {k: core.catalog_color(comp_colors, k)[0] for k in ("bv", "vr")}
                     for key, _b1, _b2, c1, c2 in core.COLOR_INDICES:
-                        inst, fit, calibrated = core.field_star_colors(stacks[c1], stacks[c2], cat_color[key], frame_ok)
+                        try:
+                            inst, fit, calibrated = core.field_star_colors(stacks[c1], stacks[c2], cat_color[key], frame_ok)
+                        except Exception as exc:   # 2.2.16 (item 3): a color failure must not lose the scan
+                            self.call_ui(self.log, f"  Scan color: color fit failed: {type(exc).__name__}: {exc}")
+                            result[key] = None
+                            continue
                         old = (saved_cal or {}).get(key)
                         result["color_fits"][key] = fit
                         if calibrated is not None:
@@ -7864,7 +7986,7 @@ class App(Tk):
         cancel = self._cancel
         self._progress_start(len(lights), "Photometry")
 
-        def work():
+        def work_inner():
             night_points = []
             cal_samples = {"bv": [], "vr": []}   # (obs, relative colors, comps' relative color)
             cancelled = False
@@ -7993,27 +8115,45 @@ class App(Tk):
                 return
             color_info = None
             if measure_color and night_points:
-                # Use only frames that pass QC (sat, drift, and tonight's cloud flag) for the color fit.
-                core.apply_cloud_flags(night_points, cloud_fraction)
-                fits, offsets = {}, {}
-                n_frames = 0
-                for key, *_ in core.COLOR_INDICES:
-                    samples = cal_samples[key]
-                    good = [smp for smp in samples if not smp[0].flag]
-                    if len(good) >= 8:
-                        samples = good
-                    if samples:
-                        n_frames = max(n_frames, len(samples))
-                        inst, inst_err = core.robust_mean_err(np.vstack([smp[1] for smp in samples]), axis=0)
-                        fits[key] = core.fit_color_term(inst, cal_catalog[key], inst_err=inst_err)
-                        comp_off = np.array([smp[2] for smp in samples], dtype=float)
-                        comp_off = comp_off[np.isfinite(comp_off)]
-                        offsets[key] = float(np.median(comp_off)) if comp_off.size else None
-                used = core.apply_color_calibration(night_points, fits, offsets, saved_cal,
-                                                    {"bv": cat_bv, "vr": cat_vr})
-                color_info = {"fits": fits, "used": used, "frames": n_frames, "saved": saved_cal,
-                              "catalogs": color_catalogs}   # 2.2.14 (item 1)
+                # 2.2.16 (item 3): the color step can never stop the run; on any error the night is kept without
+                # the color term (the frames' raw colors stay as measured) and _photometry_done always runs.
+                try:
+                    # Use only frames that pass QC (sat, drift, and tonight's cloud flag) for the color fit.
+                    core.apply_cloud_flags(night_points, cloud_fraction)
+                    fits, offsets = {}, {}
+                    n_frames = 0
+                    for key, *_ in core.COLOR_INDICES:
+                        samples = cal_samples[key]
+                        good = [smp for smp in samples if not smp[0].flag]
+                        if len(good) >= 8:
+                            samples = good
+                        if samples:
+                            n_frames = max(n_frames, len(samples))
+                            try:
+                                inst, inst_err = core.robust_mean_err(np.vstack([smp[1] for smp in samples]), axis=0)
+                                fits[key] = core.fit_color_term(inst, cal_catalog[key], inst_err=inst_err)
+                            except Exception as exc:
+                                fits[key] = core.color_fit_failure(exc)
+                            comp_off = np.array([smp[2] for smp in samples], dtype=float)
+                            comp_off = comp_off[np.isfinite(comp_off)]
+                            offsets[key] = float(np.median(comp_off)) if comp_off.size else None
+                    used = core.apply_color_calibration(night_points, fits, offsets, saved_cal,
+                                                        {"bv": cat_bv, "vr": cat_vr})
+                    color_info = {"fits": fits, "used": used, "frames": n_frames, "saved": saved_cal,
+                                  "catalogs": color_catalogs}   # 2.2.14 (item 1)
+                except Exception as exc:
+                    self.call_ui(self.log, f"Color calibration: color fit failed: {type(exc).__name__}: {exc} — "
+                                           "continuing without the color term.")
+                    color_info = None
             self.call_ui(self._photometry_done, night_points, mode, color_info)
+
+        def work():
+            # 2.2.16 (item 3): whatever goes wrong in the worker, the job ends (buttons back, cursor back).
+            try:
+                work_inner()
+            except Exception as exc:
+                traceback.print_exc()
+                self.call_ui(self._photometry_done, [], mode, None, True, f"{type(exc).__name__}: {exc}")
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
@@ -8051,9 +8191,14 @@ class App(Tk):
                  f"unflipped): {len(moved)} frames from {os.path.basename(paths[start])} on are treated as after "
                  "the flip.")
 
-    def _photometry_done(self, night_points, mode, color_info=None, cancelled=False):
+    def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
         self._end_job()
         if cancelled:
+            if error:   # 2.2.16 (item 3): the worker hit an error outside the per-frame guard
+                self._progress_end("Stopped by an error; nothing was added.")
+                self.log(f"Photometry stopped by an error ({error}). Nothing was added to the series.")
+                self._restore_series_catalog(stars=True)
+                return
             self._progress_end("Cancelled; nothing was added.")
             self.log("Photometry cancelled. Nothing was added to the series.")
             self._restore_series_catalog(stars=True)   # 2.2.14 (item 11, review)
@@ -8074,7 +8219,10 @@ class App(Tk):
             obs.filt = filt
         self._mark_rotator_excursion(night_points)
         if color_info:
-            self._record_color_calibration(night, color_info)
+            try:   # 2.2.16 (item 3): a bad color record must not lose the night
+                self._record_color_calibration(night, color_info)
+            except Exception as exc:
+                self.log(f"  color fit failed: {type(exc).__name__}: {exc} — continuing without the color term.")
         append = False
         plan = None
         same_mode = not self.series_mode or self.series_mode == self.mode_key or self.series_mode_unknown   # 2.2.14
@@ -8525,6 +8673,15 @@ class App(Tk):
         inst = self._lights_instrument()
         if inst:
             out["instrument"] = inst
+        # 2.2.16 (item 5): the telescope as written out (Telescope field / TELESCOP unless a mount / aperture and
+        # focal length). "instrument" stays the raw header identity: nights are compared on it (series saved before
+        # 2.2.16 have it), so changing it would call John's own earlier nights "other equipment".
+        try:
+            scope = self._telescope_text()
+        except Exception:
+            scope = ""
+        if scope:
+            out["telescope"] = scope
         # The header's OBSERVER names who took the frames; the Input page box names who reduces them.
         try:
             lights = self._lights()
