@@ -706,6 +706,12 @@ class TransitPage:
                 self.draw(preview=preview)
                 self._notes_text([("warn", text)])
                 return
+        if getattr(self, "_checking", False):
+            # 2.2.16 (item 6, review): the comp check runs right after "Done"; a status line, not a modal box.
+            if not auto:
+                self.app.status.set("Still checking the comps (a few seconds); Fit transit again when it is done, "
+                                    "or Cancel the check.")
+            return
         if auto:
             if self.app.busy:
                 return
@@ -781,8 +787,11 @@ class TransitPage:
         self.prog_text.set(f"MCMC {'burn-in' if phase == 'burn-in' else 'step'} {done:,} of {total:,}")
 
     def _clear_progress(self):
-        """A new source: the last fit's message no longer applies (unless a fit is still running)."""
+        """A new source: the last fit's message no longer applies (unless a fit is still running). 2.2.16 (item 6,
+        review): a comp check still running belongs to the old fit: its progress and result lines stay off the page
+        from now on (_loo_shown)."""
         if not self._fitting:
+            self._loo_shown = False
             self.prog_text.set("")
             self._show_progress()
 
@@ -831,6 +840,7 @@ class TransitPage:
         token = object()
         self._loo_token = token
         self._checking = True
+        self._loo_shown = True
         self._loo_done_text = self.prog_text.get()
         m = int(np.shape(job["comp_mags"])[1])
         self.bar.configure(value=0, maximum=m)
@@ -857,7 +867,8 @@ class TransitPage:
     def _comp_progress(self, token, done, total):
         if token is getattr(self, "_loo_token", None) and getattr(self, "_checking", False):
             self.bar.configure(maximum=total, value=done - 1)
-            self.prog_text.set(f"Checking comps ({done} of {total})…")
+            if getattr(self, "_loo_shown", True):
+                self.prog_text.set(f"Checking comps ({done} of {total})…")
 
     def _comp_check_done(self, token, r, loo, error):
         if token is not getattr(self, "_loo_token", None):
@@ -866,9 +877,10 @@ class TransitPage:
         self.app._end_job()
         done_text = getattr(self, "_loo_done_text", "")
         try:
+            if (r is not self.result or self._signature() != self._fit_signature
+                    or not getattr(self, "_loo_shown", True)):
+                return   # the page shows another fit (or other data) now: its own text stays
             self.prog_text.set(done_text)
-            if r is not self.result or self._signature() != self._fit_signature:
-                return   # the page shows another fit (or other data) now
             if error is not None:
                 self.app.log(("Comp check cancelled." if error == "Cancelled" else f"Comp check skipped: {error}"))
                 return
@@ -882,6 +894,8 @@ class TransitPage:
                 if level == "warn":
                     self.app.log("Transit fit: " + text)
             flagged = [f["name"] for f in loo["fits"] if f.get("flagged")]
+            if loo.get("unnamed"):
+                flagged.append("comp choice")
             self.prog_text.set(done_text + ("   " if done_text else "") + f"Comps checked: depth spread "
                                f"{loo['depth_spread'] * 100:.2f} %, Tc spread {loo['tc_spread_s']:.0f} s"
                                + (f" (⚠ {', '.join(flagged)})" if flagged else ""))
@@ -1581,6 +1595,11 @@ class TransitPage:
     def save_package(self):
         if not self.result:
             messagebox.showinfo("SHOBS-P", "Fit a transit first.")
+            return
+        if getattr(self, "_checking", False):
+            # 2.2.16 (item 6, review): the package's fit file carries the comp-choice line; wait for it.
+            messagebox.showinfo("SHOBS-P", "The comps are still being checked (a few seconds). Save the ExoFOP "
+                                           "package when that is done, so it carries the comp-choice line.")
             return
         if not self._confirm_export():
             return

@@ -893,13 +893,45 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     return result
 
 
-# 2.2.16 (item 6): leave-one-comp-out check. A comp whose removal moves the depth or Tc by more than this many sigma
-# of the main fit is named in a caution (TOI-2046 b, 14-15 Oct: four comp sets gave depths 1.46-1.65 %).
+# 2.2.16 (item 6): leave-one-comp-out check. A comp is named in a caution only when (1) leaving it out moves the
+# depth or Tc by more than COMP_LOO_SIGMA sigma of the main fit, (2) that move is more than COMP_LOO_NOISE times what
+# the comp's own frame-to-frame noise would cause, and (3) it is the odd one out: its move is opposite in sign to every
+# other comp's and at least COMP_LOO_ODD times the largest of them. Shifts are measured against the full ensemble, so
+# one bad comp also moves every good comp's refit the other way (its weight grows); the odd-one-out rule keeps those
+# good comps from being named. With 2 comps the two refits are mirror images, so no comp is ever named. A significant
+# move with no odd one out gives an unnamed caution. (TOI-2046 b, 14-15 Oct: four comp sets gave depths 1.46-1.65 %.)
 COMP_LOO_SIGMA = 1.0
+COMP_LOO_NOISE = 3.0
+COMP_LOO_ODD = 1.5
 
 
 def _pct(v: float) -> str:
     return f"{v * 100:.2f} %"
+
+
+def _p2p(x) -> float:
+    """Point-to-point white noise of a series: rms of first differences / sqrt(2) (slow trends cancel)."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size < 3:
+        return float("nan")
+    d = np.diff(x)
+    return float(np.sqrt(np.mean(d * d)) / math.sqrt(2.0))
+
+
+def _odd_one_out(shifts) -> int | None:
+    """Index of the comp whose shift is opposite in sign to all others and >= COMP_LOO_ODD x the largest of them;
+    None with fewer than 3 shifts or when no comp stands out."""
+    s = np.asarray(shifts, dtype=float)
+    if s.size < 3 or not np.all(np.isfinite(s)):
+        return None
+    j = int(np.argmax(np.abs(s)))
+    others = np.delete(s, j)
+    if s[j] == 0 or np.any(np.sign(others) == np.sign(s[j])):
+        return None
+    if abs(s[j]) < COMP_LOO_ODD * float(np.max(np.abs(others))):
+        return None
+    return j
 
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
@@ -909,11 +941,14 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
 
     flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
     comp's instrumental magnitude in the same frames and names their names. The ensemble is the mean of the comps'
-    instrumental magnitudes, so leaving comp j out multiplies each point by 10^(0.4 (ens_without_j - ens_all)); the
-    relative error bars stay as they are. Each refit is lsq_fit (least squares, no MCMC) with the same planet priors,
-    detrending, flip and flagged frames as the main fit; shifts are measured against a least-squares fit of the full
-    ensemble and compared with the main fit's (MCMC) uncertainties. Returns None with fewer than 2 comps or when no
-    refit could be made. cancel: a threading.Event; set, it raises RuntimeError("Cancelled") between refits."""
+    instrumental magnitudes, so leaving comp j out multiplies each point by 10^(0.4 (ens_without_j - ens_all)). The
+    relative error bars are kept as they are, so each refit's errors are APPROXIMATE (a real rerun would also change
+    the ensemble's error term); only the refits' best values are used. Each refit is lsq_fit (least squares, no MCMC)
+    with the same planet priors, detrending, flip and flagged frames as the main fit; shifts are measured against a
+    least-squares fit of the full ensemble and compared with the main fit's (MCMC) uncertainties, with the noise
+    each comp's removal adds by itself, and with the other comps' shifts (see COMP_LOO_*). Returns None with fewer
+    than 2 comps or when no refit could be made. cancel: a threading.Event; set, it raises RuntimeError("Cancelled")
+    between refits."""
     say = log or (lambda _m: None)
     cm = np.asarray(comp_mags, dtype=float)
     if cm.ndim != 2 or cm.shape[1] < 2 or cm.shape[0] != len(np.atleast_1d(flux)):
@@ -932,8 +967,16 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         say(f"  comp check skipped: no least-squares fit of the full ensemble ({exc})")
         return None
     ref_depth, ref_tc = float(ref["depth"][0]), float(ref["p"]["tc"])
+    ref_sd, ref_st = float(ref["depth"][1]), float(ref["err"].get("tc", float("nan")))
     sd = float(main_summary["depth"][1]) if "depth" in main_summary else float("nan")
     st = float(main_summary["tc"][1]) if "tc" in main_summary else float("nan")
+    used = np.isfinite(flux)
+    if flagged_mask is not None:
+        try:
+            used &= ~np.asarray(flagged_mask, dtype=bool)
+        except Exception:
+            pass
+    noise_main = _p2p(flux[used])
     fits, skipped = [], []
     for j in range(m):
         if cancel is not None and cancel.is_set():
@@ -943,6 +986,10 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         with np.errstate(invalid="ignore", over="ignore"):
             ens = np.mean(np.delete(cm, j, axis=1), axis=1)
             factor = 10 ** (0.4 * (ens - ens_all))
+        # Shift expected from this comp's own white noise alone: the main fit's (least-squares) sigma scaled by the
+        # noise the swap adds relative to the light curve's own point-to-point noise.
+        noise_j = _p2p(((flux * factor) - flux)[used])
+        ratio = noise_j / noise_main if math.isfinite(noise_main) and noise_main > 0 else float("nan")
         try:
             f = lsq_fit(t, flux * factor, err * factor, airmass, planet, **kw)
         except Exception as exc:
@@ -952,29 +999,56 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
             continue
         fits.append({"name": names[j], "depth": float(f["depth"][0]), "tc": float(f["p"]["tc"]),
                      "d_depth": float(f["depth"][0]) - ref_depth, "d_tc": float(f["p"]["tc"]) - ref_tc,
-                     "n_points": int(len(f["t"]))})
+                     "n_points": int(len(f["t"])), "exp_depth": ref_sd * ratio, "exp_tc": ref_st * ratio})
     if not fits:
         return None
-    flags = []
+
+    def significant(f, key, sig, exp_key):
+        d, e = abs(f[key]), f[exp_key]
+        return (math.isfinite(sig) and sig > 0 and d > COMP_LOO_SIGMA * sig
+                and (not math.isfinite(e) or d > COMP_LOO_NOISE * e))
+
     for f in fits:
+        f["sig_depth"] = significant(f, "d_depth", sd, "exp_depth")
+        f["sig_tc"] = significant(f, "d_tc", st, "exp_tc")
+        f["flagged"] = False
+    complete = len(fits) == m          # the odd-one-out test needs every comp's refit
+    flags = []
+    unnamed = []
+    for key, sig_key, sig in (("d_depth", "sig_depth", sd), ("d_tc", "sig_tc", st)):
+        if not any(f[sig_key] for f in fits):
+            continue
+        j = _odd_one_out([f[key] for f in fits]) if complete and m >= 3 else None
+        if j is not None and fits[j][sig_key]:
+            fits[j]["flagged"] = True
+            fits[j].setdefault("why", []).append(key)
+        else:
+            unnamed.append(key)
+    for f in fits:
+        if not f["flagged"]:
+            continue
         parts = []
-        if math.isfinite(sd) and sd > 0 and abs(f["d_depth"]) > COMP_LOO_SIGMA * sd:
+        if "d_depth" in f["why"]:
             parts.append(f"makes the transit {_pct(abs(f['d_depth']))} "
                          f"{'deeper' if f['d_depth'] > 0 else 'shallower'} ({abs(f['d_depth']) / sd:.1f}σ)")
-        if math.isfinite(st) and st > 0 and abs(f["d_tc"]) > COMP_LOO_SIGMA * st:
+        if "d_tc" in f["why"]:
             parts.append(f"moves Tc {abs(f['d_tc']) * 86400:.0f} s {'later' if f['d_tc'] > 0 else 'earlier'} "
                          f"({abs(f['d_tc']) / st:.1f}σ)")
-        f["flagged"] = bool(parts)
-        if parts:
-            flags.append(("warn", f"Leaving out {f['name']} " + " and ".join(parts) + ". The comp choice moves this "
-                                  "result by more than its statistical error: check that comp (variable? a trend?) "
-                                  "before reporting."))
+        flags.append(("warn", f"Leaving out {f['name']} " + " and ".join(parts) + ". The comp choice moves this "
+                              "result by more than its statistical error: check that comp (variable? a trend?) "
+                              "before reporting."))
+    if unnamed:
+        what = " and ".join({"d_depth": "the depth", "d_tc": "Tc"}[k] for k in unnamed)
+        why = ("with 2 comps the two refits mirror each other, so neither can be blamed" if m == 2 else
+               "no single comp stands out")
+        flags.append(("warn", f"The comp choice moves {what} by more than its statistical error ({why}). Treat "
+                              "the comp spread below as a systematic error, or try other comps."))
     depths = [f["depth"] for f in fits]
     tcs = [f["tc"] for f in fits]
     out = {"n_comps": m, "names": names, "fits": fits, "skipped": skipped, "single": m == 2,
            "ref": {"depth": ref_depth, "tc": ref_tc}, "depth_min": min(depths), "depth_max": max(depths),
            "depth_spread": max(depths) - min(depths), "tc_spread_s": (max(tcs) - min(tcs)) * 86400.0,
-           "sigma_depth": sd, "sigma_tc": st}
+           "sigma_depth": sd, "sigma_tc": st, "unnamed": unnamed}
     stat = f"; statistical ± {_pct(sd)}" if math.isfinite(sd) else ""
     note = (f"Comp choice (each of the {m} comps left out in turn, least squares): depth "
             f"{out['depth_min'] * 100:.2f}–{_pct(out['depth_max'])} (spread {_pct(out['depth_spread'])}{stat}), "
@@ -983,8 +1057,8 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         note += " With 2 comps each refit uses a single comp."
     if skipped:
         note += f" No refit without {', '.join(skipped)} (too few usable points)."
-    if not flags:
-        note += " No comp moves the depth or Tc by more than 1σ."
+    if not flags and math.isfinite(sd) and math.isfinite(st):
+        note += f" No comp moves the depth or Tc by more than {COMP_LOO_SIGMA:g}σ beyond its own noise."
     out["note"] = note
     out["flags"] = flags + [("info", note)]
     out["text"] = comp_systematic_text(out)
@@ -1000,7 +1074,8 @@ def comp_systematic_text(loo: dict | None) -> str:
     return (f"depth spread {loo['depth_spread'] * 100:.2f} % ({loo['depth_min'] * 100:.2f} to "
             f"{loo['depth_max'] * 100:.2f} %), Tc spread {loo['tc_spread_s']:.0f} s; leave-one-comp-out over "
             f"{loo['n_comps']} comps{single}"
-            + (f"; moved > 1 sigma by leaving out {', '.join(flagged)}" if flagged else ""))
+            + (f"; moved > {COMP_LOO_SIGMA:g} sigma by leaving out {', '.join(flagged)}" if flagged else "")
+            + ("; moved > " + f"{COMP_LOO_SIGMA:g} sigma, no single comp to blame" if loo.get("unnamed") else ""))
 
 
 def cautions(flags, verdict: dict | None) -> list:

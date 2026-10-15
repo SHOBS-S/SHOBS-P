@@ -9023,7 +9023,10 @@ class App(Tk):
             self.status.set("Nothing is running.")
             return
         self._cancel.set()
-        self.log("Cancel requested; stopping after the current frame…")
+        if getattr(getattr(self, "transit_page", None), "_checking", False):
+            self.log("Cancel requested; stopping the comp check after the current refit…")   # 2.2.16 (item 6)
+        else:
+            self.log("Cancel requested; stopping after the current frame…")
 
     def _refresh_period(self):
         self._apply_cloud()
@@ -9995,7 +9998,8 @@ class App(Tk):
         sel = (np.asarray(mask, dtype=bool) & np.isfinite(x) & np.isfinite(y) & (x >= xlo) & (x <= xhi)
                & ((y < lo) | (y > hi)))
         if sel.any():
-            ax.plot(x[sel], np.clip(y[sel], lo, hi), "x", ms=4, mew=1.1, color="#c26a00", alpha=alpha,
+            inset = (hi - lo) * 0.01   # 2.2.16 (review): just inside the frame, so clip_on=False never spills out
+            ax.plot(x[sel], np.clip(y[sel], lo + inset, hi - inset), "x", ms=4, mew=1.1, color="#c26a00", alpha=alpha,
                     clip_on=False, zorder=5)
         return int(sel.sum())
 
@@ -10343,10 +10347,16 @@ class App(Tk):
                                                       check_vals[sel & in_zoom])], 0.0))
             ax.invert_yaxis()
             in_view = sel & in_zoom
+            good = check_vals[in_view]   # σ only from used points (2.2.16 item 14, review)
+            only_flagged = False
             if zoom is not None and not in_view.any():
                 in_view = np.isfinite(check_vals) & in_zoom   # the night has only flagged check points
-            good = check_vals[in_view]
+                only_flagged = bool(in_view.any())
             self._fit_ylim(ax, check_vals, None, in_view)
+            if zoom is not None and not in_view.any():
+                # 2.2.16 (item 14, review): the check star was measured on other nights only.
+                ax.text(0.5, 0.5, "No check points this night", transform=ax.transAxes, ha="center",
+                        va="center", fontsize=9, color="#5d6d76")
             if zoom is not None:
                 ax.set_xlim(self.out_ax1.get_xlim())
             c_off = 0
@@ -10356,7 +10366,8 @@ class App(Tk):
             spread = f"  σ = {np.std(good):.3f}" if good.size > 1 else ""
             if zoom is not None:
                 spread = (f" · {self.night_label(zoom, short=True)}"
-                          + (f" σ {np.std(good):.3f}" if good.size > 1 else ""))
+                          + (f" σ {np.std(good):.3f}" if good.size > 1 else "")
+                          + (" (flagged points only)" if only_flagged else ""))
             off_txt = f"  ({c_off} flagged off scale)" if c_off else ""
             catalog = ""
             try:
