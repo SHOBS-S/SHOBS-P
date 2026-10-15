@@ -975,7 +975,8 @@ class App(Tk):
         # gone with the next status message).
         status_row = ttk.Frame(status, style="Side.TFrame")
         status_row.pack(fill=X, padx=12, pady=(4, 0))
-        ttk.Label(status_row, textvariable=self.status, style="Status.TLabel").pack(side=LEFT)
+        self.status_label = ttk.Label(status_row, textvariable=self.status, style="Status.TLabel")
+        self.status_label.pack(side=LEFT)
         self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
         self._status_offer = ("", "")   # (status text it belongs to, URL)
         self.status.trace_add("write", lambda *_: self._status_changed())
@@ -1088,10 +1089,7 @@ class App(Tk):
             ):
                 return
             self.observations = []
-            self.series_path = ""
-            self.series_mode = ""
-            self.period = None
-            self.highlight_night = None   # 2.2.15 review: no zoom left on a closed series
+            self._clear_series_state()   # 2.2.15 review
             self.draw_output()
         self.mode_key = mode
         m = MODES[mode]
@@ -1425,18 +1423,20 @@ class App(Tk):
             ok = False
         if ok is False:
             self.status.set(f"Could not open a browser: go to {url}")
+            self.log(f"Could not open a browser for {url}")
         else:
             self.status.set(f"Opened {what or url} in your browser.")
-        self.log(f"Opened {url}")
+            self.log(f"Opened {url}")
 
     def offer_upload(self, path: str, button: str, url: str, where: str):
         """After a report save: the status line names the saved file and offers the upload page."""
-        text = f"Saved {os.path.basename(path)}. Upload it on {where}:"
+        # 2.2.15 review: short, and the button has its own slot on the right, so a long line never hides it.
+        text = f"Saved {os.path.basename(path)} — upload to {where}:"
         self.status.set(text)
         self._status_offer = (text, url)
         try:
             self.status_link.configure(text=button)
-            self.status_link.pack(side=LEFT, padx=(8, 0))
+            self.status_link.pack(side=RIGHT, padx=(8, 0), before=self.status_label)
         except Exception:
             pass
 
@@ -3934,13 +3934,20 @@ class App(Tk):
         the lights' TELESCOP / INSTRUME and the Optics box (aperture, focal length), the working pixel scale ("/px:
         pixel size / focal length × camera bin × Binning × 2 for a color camera's superpixel), and the photometry
         aperture radius (px). Missing parts say "not recorded"; scale and radius are None when unknown."""
-        setup = (self.night_bin.get(night) or {}) if night else {}
+        setup = self._night_info(night) if night else {}
 
         def num(v):
             try:
                 f = float(v)
                 return f if math.isfinite(f) and f > 0 else None
             except (TypeError, ValueError):
+                return None
+
+        def box(var):
+            # 2.2.15 review: an empty Tk DoubleVar/IntVar raises TclError on .get(); an empty box is "not set".
+            try:
+                return num(var.get())
+            except Exception:
                 return None
         try:
             lights = self._lights()
@@ -3951,33 +3958,48 @@ class App(Tk):
         tel = str(head.get("TELESCOP") or "").strip()
         cam = str(head.get("INSTRUME") or "").strip()
         stored = str(setup.get("instrument") or "").strip()
+        binning = int(num(setup.get("binning")) or box(self.binning) or 1)
+        try:
+            superpixel = 1 if self.pattern.get() == core.MONO else 2
+        except Exception:
+            superpixel = 2
+        radius = num(setup.get("radius")) or box(self.radius)
+        sky_in = num(setup.get("sky_in")) or box(self.sky_in)
+        sky_out = num(setup.get("sky_out")) or box(self.sky_out)
+        out = {"binning": binning, "camera_bin": 1, "superpixel": superpixel, "radius_px": radius,
+               "sky": f"{sky_in:g}-{sky_out:g}" if sky_in and sky_out else ""}
         if stored and stored != " / ".join(p for p in (tel, cam) if p):
-            tel, cam = stored, ""   # the night's own header names (its lights are not the ones on the Input page)
-        ap, focal, pix = num(self.aperture_mm.get()), num(self.focal_mm.get()), num(self.pixel_um.get())
+            # 2.2.15 review: the night was taken with other lights than the ones on the Input page: its own header
+            # names, verbatim, and no scale (this setup's optics and binning may not be that night's).
+            return dict(out, telescope=stored, scale=None)
+        ap, focal, pix = box(self.aperture_mm), box(self.focal_mm), box(self.pixel_um)
         scope = " ".join(p for p in (f"{ap / 1000.0:.2f} m" if ap else "", tel) if p)
         if focal:
             scope = (scope + ", " if scope else "") + f"f {focal:.0f} mm"
         if scope and cam:
             line = f"{scope} / {cam}"
         elif scope:
-            line = f"{scope} / camera not recorded" if not stored else scope
+            line = f"{scope} / camera not recorded"
         elif cam:
             line = f"telescope not recorded / {cam}"
         else:
             line = "not recorded"
-        binning = int(num(setup.get("binning")) or num(self.binning.get()) or 1)
-        try:
-            camera_bin = max(int(float(head.get("XBINNING") or 1)), 1)
-        except (TypeError, ValueError):
-            camera_bin = 1
-        superpixel = 1 if self.pattern.get() == core.MONO else 2
-        scale = pix / focal * 206.265 * camera_bin * binning * superpixel if (pix and focal) else None
-        radius = num(setup.get("radius")) or num(self.radius.get())
-        sky_in = num(setup.get("sky_in")) or num(self.sky_in.get())
-        sky_out = num(setup.get("sky_out")) or num(self.sky_out.get())
-        return {"telescope": line, "scale": scale, "binning": binning, "camera_bin": camera_bin,
-                "superpixel": superpixel, "radius_px": radius,
-                "sky": f"{sky_in:g}-{sky_out:g}" if sky_in and sky_out else ""}
+        camera_bin = 1
+        for key in ("XBINNING", "BINNING", "XBIN"):   # the keys the solve reads (the first one present counts)
+            if head.get(key) in (None, ""):
+                continue
+            try:
+                camera_bin = max(int(float(head.get(key, 1))), 1)
+                break
+            except (TypeError, ValueError):
+                continue
+        if pix and focal:
+            scale = pix / focal * 206.265 * camera_bin * binning * superpixel
+        else:
+            # No focal length or pixel size in the Optics box: the header's scale of the frame as saved.
+            stored_scale = core.header_plate_scale(head) if head else None
+            scale = stored_scale * binning * superpixel if stored_scale else None
+        return dict(out, telescope=line, scale=scale, camera_bin=camera_bin)
 
     def _lights_instrument(self) -> str:
         """'<TELESCOP> / <INSTRUME>' from the first light's header ('' when the header names neither)."""
@@ -7745,17 +7767,13 @@ class App(Tk):
             self.observations = core.merge_nights(self.observations, night_points)
         else:
             replaced = bool(self.observations)
+            old_path = self.series_path
             self.observations = night_points
-            kept = self.color_cal.get(night)
-            self.color_cal = {night: kept} if kept else {}
-            self.night_bin = {}
-            self.legacy_mixed = set()
-            self.active_comps = []
-            self.reports_saved = {}
-            if replaced and self.series_path:
+            # 2.2.15 review: one clean-up for every way a series is set aside (tonight's color calibration stays).
+            self._clear_series_state(keep_night=night)
+            if replaced and old_path:
                 # Never overwrite the file of the series that was just set aside.
-                self.log(f"New series started; {os.path.basename(self.series_path)} was left unchanged on disk.")
-                self.series_path = ""
+                self.log(f"New series started; {os.path.basename(old_path)} was left unchanged on disk.")
         # Keep a comp selection made with "Use comps..." for the nights added after it.
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
@@ -8582,6 +8600,68 @@ class App(Tk):
         except Exception:
             pass
 
+    def _offer_series_save(self, then: str) -> bool:
+        """2.2.15 (item 7, review): before closing or replacing an open series with unsaved points: Yes saves first,
+        No goes on without saving, Cancel stops. True when the caller may go on."""
+        if not self.series_unsaved():
+            return True
+        name = os.path.basename(self.series_path) if self.series_path else "The series"
+        what = ("has changes that are not saved" if self.series_path
+                else f"({len({o.night for o in self.observations})} night(s)) has not been saved")
+        answer = messagebox.askyesnocancel(
+            APP_TITLE, f"{name} {what}.\n\nYes: save the series first, then {then}.\n"
+                       f"No: {then} without saving.\nCancel: keep it open.")
+        if answer is None:
+            return False
+        if answer:
+            self.save_series()
+            if self.series_unsaved():
+                return False   # the save dialog was cancelled or failed: keep it open
+        return True
+
+    def _clear_series_state(self, keep_night: str = ""):
+        """2.2.15 review: forget everything that belongs to the open series (not its points: the caller sets those),
+        so none of it is written into the next series. Used by Close series, a new series started from a run
+        (keep_night: tonight's night keeps its color calibration), a mode switch that closes the series, and Load
+        series. Watch stars and AUIDs that came from a loaded series go (except into a new series started from tonight's
+        run, which used them); ones added this session stay."""
+        kept = self.color_cal.get(keep_night) if keep_night else None
+        self.color_cal = {keep_night: kept} if kept else {}
+        self.series_path = ""
+        self.series_mode = ""
+        self.series_mode_unknown = False
+        self.period = None
+        self.night_bin = {}            # with it the nights' setup, pier sides and planet-transit info (item 1)
+        self.legacy_mixed = set()
+        self.active_comps = []
+        self.reports_saved = {}
+        self.night_notes = {n: v for n, v in self.night_notes.items() if n == keep_night} if keep_night else {}
+        self.highlight_night = None
+        self._loss_report = {}
+        if hasattr(self, "_loss_failed_logged"):
+            self._loss_failed_logged = set()
+        self._pier_cache = {k: v for k, v in self._pier_cache.items()
+                            if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
+        self._series_check = ("", "")
+        self._zp_caution_cache = None
+        self._series_saved_fp = None
+        self.extremum_csv = self.extremum_csv_star = ""
+        # A new series started from tonight's run keeps the watch stars and AUIDs that run used (they are now its).
+        from_series = set(getattr(self, "_series_watch_names", ()) or ()) if not keep_night else set()
+        if from_series:
+            self.watch_list = [w for w in self.watch_list if w.get("name") not in from_series]
+            for name in from_series:
+                self.watch_xy.pop(name, None)
+            if hasattr(self, "_refresh_watch_box"):
+                try:
+                    self._refresh_watch_box()
+                except Exception:
+                    pass
+        for key in (getattr(self, "_series_auid_keys", ()) or ()) if not keep_night else ():
+            self.seq_auids.pop(key, None)
+        self._series_watch_names = set()
+        self._series_auid_keys = set()
+
     def close_series(self):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
         next run is a single night. Unsaved points are offered a save first."""
@@ -8592,37 +8672,21 @@ class App(Tk):
         if self.busy:
             messagebox.showinfo(APP_TITLE, "Wait for the current run to finish (or cancel it) before closing the series.")
             return
-        name = os.path.basename(self.series_path) if self.series_path else "The series"
-        if self.series_unsaved():
-            what = ("has changes that are not saved" if self.series_path
-                    else f"({len({o.night for o in self.observations})} night(s)) has not been saved")
-            answer = messagebox.askyesnocancel(
-                APP_TITLE, f"{name} {what}.\n\nYes: save the series first, then close it.\n"
-                           "No: close it without saving.\nCancel: keep it open.")
-            if answer is None:
-                return
-            if answer:
-                self.save_series()
-                if self.series_unsaved():
-                    return   # the save dialog was cancelled or failed: keep it open
+        if not self._offer_series_save("close it"):
+            return
         had_file = bool(self.series_path)
-        name = os.path.basename(self.series_path) if self.series_path else name
+        name = os.path.basename(self.series_path) if self.series_path else "The series"
         self.observations = []
-        self.series_path = ""
-        self.series_mode = ""
-        self.series_mode_unknown = False
-        self.period = None
-        self.color_cal = {}
-        self.night_bin = {}
-        self.legacy_mixed = set()
-        self.active_comps = []
-        self.reports_saved = {}
-        self.highlight_night = None
-        self._series_saved_fp = None
-        self.extremum_csv = self.extremum_csv_star = ""
+        self._clear_series_state()
         self._take_series_snapshot()
         self.draw_output()
         self.update_series_status()
+        tp = getattr(self, "transit_page", None)
+        if tp is not None:
+            try:
+                tp.refresh()   # 2.2.15 review: its night list and any fit of the closed series go
+            except Exception:
+                pass
         self.log(f"Series closed: {name} (the file on disk is unchanged)." if had_file else "Series closed.")
         self.status.set("Series closed. The next run is a single night (a new series).")
 
@@ -8662,6 +8726,9 @@ class App(Tk):
                         + f". Next night, load this file before reducing: {path}")
 
     def load_series(self):
+        # 2.2.15 (review): an open series with unsaved points is offered a save first, as Close series does.
+        if self.observations and not self._offer_series_save("load another"):
+            return
         kwargs = {"title": "Load observation series",
                   "filetypes": [("SHOBS-P series", "*.cvseries"), ("JSON", "*.json"), ("All", "*.*")]}
         start_dir = self.settings.get("series_dir", "")
@@ -8677,8 +8744,15 @@ class App(Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"Could not read {os.path.basename(path)}:\n{exc}")
             return
+        if self.observations or self.series_path:
+            self._clear_series_state()   # 2.2.15 review: nothing of the series set aside goes into this one
+        watch_before = {w.get("name") for w in self.watch_list}
+        auids_before = set(self.seq_auids)
         self._apply_meta(meta)
         self.highlight_night = None   # 2.2.15 review: a loaded series opens unzoomed
+        # 2.2.15 review: remember what the file brought, so Close series takes it away again.
+        self._series_watch_names = {w.get("name") for w in self.watch_list} - watch_before
+        self._series_auid_keys = set(self.seq_auids) - auids_before
         if self.series_mode != self.mode_key and self.series_mode in MODES:
             self.set_mode(self.series_mode, initial=True)
             self.log(f"Switched to {MODES[self.series_mode]['name']} mode to match {os.path.basename(path)}.")

@@ -2036,16 +2036,24 @@ def _created() -> str:
 
 def transit_coverage(t, tc: float | None, t14: float | None) -> str:
     """2.2.15 (item 11): how much of the transit the data cover, for ExoFOP: "Full" (from before ingress to after
-    egress, the fitted Tc ± T14/2), "Ingress" or "Egress" (only that contact), else "Partial" (only the bottom, say).
-    '' when Tc or T14 is unknown."""
+    egress, the fitted Tc ± T14/2), "Ingress" or "Egress" (only that contact), "Partial" (inside the transit but
+    neither contact: only the bottom, say), "None (data miss the predicted transit)" when no point falls in it.
+    A contact counts as covered only with a point within 2 × the median cadence (at least 10 min) of it, so a gap
+    across the contact does not count. '' when Tc or T14 is unknown."""
     t = np.asarray(t, dtype=float)
-    t = t[np.isfinite(t)]
+    t = np.sort(t[np.isfinite(t)])
     if not t.size or tc is None or not t14 or not math.isfinite(tc) or not math.isfinite(t14) or t14 <= 0:
         return ""
     t1, t4 = tc - t14 / 2.0, tc + t14 / 2.0
-    start, end = float(t.min()), float(t.max())
-    has_ingress = start < t1 < end
-    has_egress = start < t4 < end
+    start, end = float(t[0]), float(t[-1])
+    if not ((t >= t1) & (t <= t4)).any():
+        return "None (data miss the predicted transit)"
+    cadence = float(np.median(np.diff(t))) if t.size > 1 else 0.0
+    reach = max(2.0 * cadence, 10.0 / 1440.0)
+
+    def covered(contact):
+        return start < contact < end and bool((np.abs(t - contact) <= reach).any())
+    has_ingress, has_egress = covered(t1), covered(t4)
     if has_ingress and has_egress:
         return "Full"
     if has_ingress:
