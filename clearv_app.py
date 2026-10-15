@@ -1090,9 +1090,18 @@ class App(Tk):
                 "here (the file on disk is not changed), so nights reduced next start a new series.\n\nSwitch?",
             ):
                 return
+            if not self._offer_series_save("switch modes"):   # 2.2.15 review 2: unsaved points are offered a save
+                return
             self.observations = []
             self._clear_series_state()   # 2.2.15 review
+            self._take_series_snapshot()
             self.draw_output()
+            tp = getattr(self, "transit_page", None)
+            if tp is not None:
+                try:
+                    tp.refresh()
+                except Exception:
+                    pass
         self.mode_key = mode
         m = MODES[mode]
         self._apply_theme(mode)
@@ -2679,7 +2688,7 @@ class App(Tk):
         if key not in self._blink_cache:
             self._blink_cache_order.append(key)
         self._blink_cache[key] = value
-        # Keep memory bounded (about 1.5 GB of pictures and float16 copies, ~1000 Bin 1 frames); the oldest go first.
+        # Keep memory bounded (about 1.5 GB of pictures and float16 copies, ~500 Bin 1 frames); the oldest go first.
         size = sum(getattr(v, "nbytes", 0) for v in value if isinstance(v, np.ndarray))
         limit = max(50, int(BLINK_CACHE_BYTES // max(1, size)))
         while len(self._blink_cache_order) > limit:
@@ -8706,6 +8715,8 @@ class App(Tk):
             self.seq_auids.pop(key, None)
         self._series_watch_names = set()
         self._series_auid_keys = set()
+        if not keep_night:
+            self.report_names = {}   # 2.2.15 review 2: the closed series' report names stay with it
 
     def close_series(self):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
