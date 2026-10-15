@@ -5100,7 +5100,7 @@ class App(Tk):
         win = Toplevel(self)
         win.title(f"{APP_TITLE} — Photometry image")
         win.geometry(self._popout_geometry())
-        win.minsize(320, 240)
+        win.minsize(int(320 * ui_scale(self)), int(240 * ui_scale(self)))   # 2.2.16 (round-2 review): scaled
         legend = ttk.Frame(win, style="Card.TFrame", padding=(6, 2))
         legend.pack(side="bottom", fill=X)
         canvas = FigureCanvasTkAgg(self.photo_fig, master=win)   # the figure now draws here
@@ -9589,11 +9589,21 @@ class App(Tk):
                            "star and watch stars.\nNo: the same star: keep what is marked.", default="no")
             if not sure:
                 self.log(f"Kept the marked stars: {meta.get('star_id')} taken as another name of {cur}.")
+        kept_marked = {}
+        if why and not sure:
+            # 2.2.16 (round-2 review): "keep what is marked" keeps the marked slots' names and V too; the file's
+            # names fill only the slots without a marker.
+            for role in COMP_ROLES + ("check",):
+                if getattr(self, f"{role}_xy", None) is not None:
+                    kept_marked[role] = (getattr(self, f"{role}_name").get(), getattr(self, f"{role}_mag").get())
         if why and sure:
             self.clear_target(quiet=True, why=f"{os.path.basename(path)} is {why}")
         watch_before = {w.get("name") for w in self.watch_list}
         auids_before = set(self.seq_auids)
         self._apply_meta(meta)
+        for role, (name, mag) in kept_marked.items():
+            getattr(self, f"{role}_name").set(name)
+            getattr(self, f"{role}_mag").set(mag)
         self.highlight_night = None   # 2.2.15 review: a loaded series opens unzoomed
         # 2.2.15 review: remember what the file brought, so Close series takes it away again.
         self._series_watch_names = {w.get("name") for w in self.watch_list} - watch_before

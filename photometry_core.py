@@ -2390,14 +2390,18 @@ class CatalogRows(list):
     incomplete = ""
 
 
-_VIZIER_BAD = _re.compile(r"error|truncat|time.?limit|timeout|timed out|overflow|aborted|incomplete", _re.IGNORECASE)
+# "error" not after a dot or a letter: VizieR's column descriptions carry UCDs such as "stat.error" (APASS e_Vmag).
+_VIZIER_ERR = r"(?<![.\w])error|time.?limit|timeout|timed out|aborted"
+_VIZIER_BAD = _re.compile(_VIZIER_ERR + r"|truncat|overflow|incomplete", _re.IGNORECASE)
+# 2.2.16 (round-2 review): table/column description lines are never status markers.
+_VIZIER_DESCRIPTIVE = ("#Column", "#Title", "#Table", "#Name", "#Coosys", "#Explanations", "#RESOURCE")
 
 
 def vizier_markers(text: str) -> list[str]:
-    """2.2.16 (review): VizieR's '#' comment lines that say an answer is not complete."""
+    """2.2.16 (review): VizieR's '#' comment lines that say an answer is not complete (description lines skipped)."""
     out = []
     for line in str(text or "").splitlines():
-        if line.startswith("#") and _VIZIER_BAD.search(line):
+        if line.startswith("#") and not line.startswith(_VIZIER_DESCRIPTIVE) and _VIZIER_BAD.search(line):
             out.append(line.strip()[:160])
     return out
 
@@ -2408,7 +2412,7 @@ def rows_incomplete(rows, max_rows: int | None) -> str:
     marks = list(getattr(rows, "markers", []) or [])
     if not marks:
         return ""
-    errors = [m for m in marks if _re.search(r"error|time.?limit|timeout|timed out|aborted", m, _re.IGNORECASE)]
+    errors = [m for m in marks if _re.search(_VIZIER_ERR, m, _re.IGNORECASE)]
     if errors:
         return errors[0]
     if max_rows is None or len(rows) < int(max_rows):

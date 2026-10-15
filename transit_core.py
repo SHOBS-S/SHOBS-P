@@ -756,7 +756,7 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
     e = lsq_errors(prob_s)
     p = prob_s.full(x_s)
     out = {"p": dict(p, tc=p["tc"] + S["t_ref"]), "err": dict(zip(prob_s.free, map(float, e))), "chi2": chi2_s,
-           "error_scale": scale, "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
+           "error_scale": scale, "rchi_raw": float(rchi), "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
            is not None else None, "cadence": S["cadence"], "t": S["t_abs"]}
     out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
     out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
@@ -968,6 +968,10 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         return None
     ref_depth, ref_tc = float(ref["depth"][0]), float(ref["p"]["tc"])
     ref_sd, ref_st = float(ref["depth"][1]), float(ref["err"].get("tc", float("nan")))
+    # 2.2.16 (round-2 review): lsq_fit never scales error bars DOWN (reduced chi-square < 1, as on TOI-2046 b at
+    # 0.34-0.44); the noise gate uses the sigma the scatter supports.
+    shrink = math.sqrt(min(float(ref.get("rchi_raw", 1.0)), 1.0)) if math.isfinite(ref.get("rchi_raw", 1.0)) else 1.0
+    ref_sd, ref_st = ref_sd * shrink, ref_st * shrink
     sd = float(main_summary["depth"][1]) if "depth" in main_summary else float("nan")
     st = float(main_summary["tc"][1]) if "tc" in main_summary else float("nan")
     used = np.isfinite(flux)

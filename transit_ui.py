@@ -428,6 +428,7 @@ class TransitPage:
             self._fit_signature = None
             self._fill_table()
             self.draw()
+            self._loo_shown = False   # 2.2.16 (round-2 review): a comp check still running belongs to that fit
             self.prog_text.set("")
             self._show_progress()
             self._notes_text([("warn", "The photometry, the comps, or the planet changed since the last fit, so that "
@@ -657,6 +658,13 @@ class TransitPage:
 
     # ---- fit -------------------------------------------------------------------------------
     def fit(self, auto: bool = False, with_flagged: bool = False):
+        if getattr(self, "_checking", False):
+            # 2.2.16 (item 6, review): the comp check runs right after "Done"; a status line, not a modal box, and
+            # before any question (round 2).
+            if not auto:
+                self.app.status.set("Still checking the comps (a few seconds); Fit transit again when it is done, "
+                                    "or Cancel the check.")
+            return
         # 2.2.12: a report's ephemeris is still being looked up: the fit starts by itself when it is in.
         if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
             if not auto:
@@ -706,12 +714,6 @@ class TransitPage:
                 self.draw(preview=preview)
                 self._notes_text([("warn", text)])
                 return
-        if getattr(self, "_checking", False):
-            # 2.2.16 (item 6, review): the comp check runs right after "Done"; a status line, not a modal box.
-            if not auto:
-                self.app.status.set("Still checking the comps (a few seconds); Fit transit again when it is done, "
-                                    "or Cancel the check.")
-            return
         if auto:
             if self.app.busy:
                 return
@@ -904,7 +906,14 @@ class TransitPage:
         finally:
             self._show_progress()
             try:
-                if self.app.status.get() == "Checking the comps…":
+                # 2.2.16 (round-2 review): app.log sets the status line; end on a short summary instead.
+                if error == "Cancelled":
+                    self.app.status.set("Transit fit done; comp check cancelled.")
+                elif loo and r is self.result:
+                    warned = any(lvl == "warn" for lvl, _x in loo["flags"])
+                    self.app.status.set("Transit fit done; comps checked"
+                                        + (" — see the caution in the notes." if warned else "."))
+                elif self.app.status.get() == "Checking the comps…":
                     self.app.status.set("Transit fit done.")
             except Exception:
                 pass
@@ -1425,6 +1434,8 @@ class TransitPage:
         if not self.result or self.fig is None:
             messagebox.showinfo("SHOBS-P", "Fit a transit first.")
             return
+        if self._still_checking("plot PNG"):
+            return
         meta = self.meta_for_files or {}
         name = ((self.result.get("planet") or {}).get("name") or "planet").replace(" ", "")
         filt = str(meta.get("filter") or "CV").strip() or "CV"
@@ -1523,6 +1534,8 @@ class TransitPage:
         if not self.result:
             messagebox.showinfo("SHOBS-P", "Fit a transit first.")
             return
+        if self._still_checking("AAVSO exoplanet report"):
+            return
         if not self._confirm_export():
             return
         meta = self._file_meta()
@@ -1592,14 +1605,20 @@ class TransitPage:
         if home:
             app.status.set("Opened ExoFOP-TESS (no TOI or TIC number known for this target): search for the star there.")
 
+    def _still_checking(self, what: str) -> bool:
+        """2.2.16 (item 6, review): files written while the comp check runs would miss its comp-choice line and
+        cautions; say so and let the user save when it is done."""
+        if not getattr(self, "_checking", False):
+            return False
+        messagebox.showinfo("SHOBS-P", f"The comps are still being checked (a few seconds). Save the {what} when "
+                                       "that is done, so it carries the comp-choice result.")
+        return True
+
     def save_package(self):
         if not self.result:
             messagebox.showinfo("SHOBS-P", "Fit a transit first.")
             return
-        if getattr(self, "_checking", False):
-            # 2.2.16 (item 6, review): the package's fit file carries the comp-choice line; wait for it.
-            messagebox.showinfo("SHOBS-P", "The comps are still being checked (a few seconds). Save the ExoFOP "
-                                           "package when that is done, so it carries the comp-choice line.")
+        if self._still_checking("ExoFOP package"):
             return
         if not self._confirm_export():
             return
