@@ -631,6 +631,24 @@ class TransitPage:
             extra["flagged"] = {"t": core.convert_times(cjd, "BJD_TDB", ra, dec, lat, lon), "jd": cjd, "flux": cflux,
                                 "err": cerr, "airmass": cam, "after_flip": np.array([o.segment == "flip" for o in clouded],
                                                                                     dtype=bool), "label": "cloud"}
+        # 2.2.16 (item 6): each comp's instrumental magnitude in every frame, for the leave-one-comp-out check
+        # (comps only: nothing here needs a plate solution, header pointing or a color camera).
+        try:
+            sel = list(app.active_comps or app.comps_used)
+            if len(sel) >= 2:
+                try:
+                    aliases = app._star_aliases()
+                except Exception:
+                    aliases = None
+
+                def insts(points):
+                    return np.array([[core.star_inst(o, n, app.comps_used, aliases) for n in sel] for o in points],
+                                    dtype=float).reshape(len(points), len(sel))
+                extra["comp_mags"], extra["comp_names"] = insts(obs), sel
+                if extra.get("flagged") is not None:
+                    extra["flagged"]["comp_mags"] = insts(clouded)
+        except Exception:
+            extra.pop("comp_mags", None)
         self._data_extra = extra
         return t, flux, err, am, meta
 
@@ -716,6 +734,19 @@ class TransitPage:
                 excluded = {"t": fl["t"], "jd": fl["jd"], "label": label}
         if after is not None and not (np.any(after) and not np.all(after)):
             after = None
+        # 2.2.16 (item 6): the same data and settings for the leave-one-comp-out check after the fit (photometry
+        # with 2+ comps only; a report has no per-comp data).
+        self._loo_pending = None
+        cmags = extra.get("comp_mags")
+        if self.report is None and cmags is not None and np.ndim(cmags) == 2 and np.shape(cmags)[1] >= 2:
+            if flagged_mask is not None:
+                fc = (fl or {}).get("comp_mags")
+                cmags = np.vstack([cmags, fc]) if fc is not None and np.shape(fc)[1:] == np.shape(cmags)[1:] else None
+            if cmags is not None and len(cmags) == len(t):
+                self._loo_pending = {"t": t, "flux": flux, "err": err, "am": am, "after": after,
+                                     "flagged_mask": flagged_mask, "comp_mags": cmags,
+                                     "names": list(extra.get("comp_names") or []), "planet": planet,
+                                     "da": da, "dt": dt}
         flip_source = extra.get("flip_source", "")
         cancel = self.app._cancel
         self.bar.configure(value=0, maximum=1)
@@ -757,9 +788,10 @@ class TransitPage:
         try:
             self.bar.pack_forget()
             self.prog_label.pack_forget()
-            if self._fitting:
+            busy = self._fitting or getattr(self, "_checking", False)   # 2.2.16 (item 6): the comp check too
+            if busy:
                 self.bar.pack(side=LEFT)
-            if self._fitting or self.prog_text.get():
+            if busy or self.prog_text.get():
                 self.prog_label.pack(side=LEFT, padx=8)
                 self.prog_row.pack(fill=X, side="bottom", pady=(4, 0), before=self.results_row)
             else:
@@ -774,6 +806,91 @@ class TransitPage:
             self._finish_fit(result, meta, error)
         finally:
             self._show_progress()
+        # 2.2.16 (item 6): then the leave-one-comp-out check; it can never undo or fail the fit just shown.
+        try:
+            if error is None and result is not None and result is self.result:
+                self._start_comp_check()
+            else:
+                self._loo_pending = None
+        except Exception:
+            self._loo_pending = None
+
+    # ---- 2.2.16 (item 6): leave-one-comp-out check -----------------------------------------
+    def _start_comp_check(self):
+        """Refit once per comp with that comp left out (least squares, same priors and settings), in the
+        background as the fit runs; the result adds cautions and the comp-choice spread to the notes and files."""
+        job, self._loo_pending = getattr(self, "_loo_pending", None), None
+        r = self.result
+        if not job or r is None or self.report is not None or _state(r.get("verdict")) == "none":
+            return
+        if self.app.busy or not self.app._start_job("Checking the comps…"):
+            return
+        token = object()
+        self._loo_token = token
+        self._checking = True
+        self._loo_done_text = self.prog_text.get()
+        m = int(np.shape(job["comp_mags"])[1])
+        self.bar.configure(value=0, maximum=m)
+        self.prog_text.set(f"Checking comps (1 of {m})…")
+        self._show_progress()
+        app = self.app
+        cancel = app._cancel
+        summary = dict(r["summary"])
+
+        def work():
+            try:
+                loo = tc.leave_one_comp_out(job["t"], job["flux"], job["err"], job["am"], job["comp_mags"],
+                                            job["names"], job["planet"], summary, detrend_airmass=job["da"],
+                                            detrend_time=job["dt"], after_flip=job["after"],
+                                            flagged_mask=job["flagged_mask"],
+                                            progress=lambda j, n: app.call_ui(self._comp_progress, token, j, n),
+                                            cancel=cancel, log=lambda msg: app.call_ui(app.log, msg))
+                app.call_ui(self._comp_check_done, token, r, loo, None)
+            except Exception as exc:
+                app.call_ui(self._comp_check_done, token, r, None, str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _comp_progress(self, token, done, total):
+        if token is getattr(self, "_loo_token", None) and getattr(self, "_checking", False):
+            self.bar.configure(maximum=total, value=done - 1)
+            self.prog_text.set(f"Checking comps ({done} of {total})…")
+
+    def _comp_check_done(self, token, r, loo, error):
+        if token is not getattr(self, "_loo_token", None):
+            return
+        self._checking = False
+        self.app._end_job()
+        done_text = getattr(self, "_loo_done_text", "")
+        try:
+            self.prog_text.set(done_text)
+            if r is not self.result or self._signature() != self._fit_signature:
+                return   # the page shows another fit (or other data) now
+            if error is not None:
+                self.app.log(("Comp check cancelled." if error == "Cancelled" else f"Comp check skipped: {error}"))
+                return
+            if not loo:
+                return
+            r["comp_loo"] = loo
+            r["flags"] = list(r.get("flags") or []) + list(loo["flags"])
+            self._notes_text(tc.cautions(r["flags"], r.get("verdict")))
+            self.app.log("Transit fit: " + loo["note"])
+            for level, text in loo["flags"]:
+                if level == "warn":
+                    self.app.log("Transit fit: " + text)
+            flagged = [f["name"] for f in loo["fits"] if f.get("flagged")]
+            self.prog_text.set(done_text + ("   " if done_text else "") + f"Comps checked: depth spread "
+                               f"{loo['depth_spread'] * 100:.2f} %, Tc spread {loo['tc_spread_s']:.0f} s"
+                               + (f" (⚠ {', '.join(flagged)})" if flagged else ""))
+        except Exception as exc:
+            self.app.log(f"Comp check not shown: {exc}")
+        finally:
+            self._show_progress()
+            try:
+                if self.app.status.get() == "Checking the comps…":
+                    self.app.status.set("Transit fit done.")
+            except Exception:
+                pass
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
