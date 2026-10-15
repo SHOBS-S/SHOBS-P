@@ -7443,6 +7443,9 @@ class App(Tk):
             out[night] = pier
             if pier.get("source") in ("ROTATOR", "PIERSIDE"):
                 self._night_info(night, create=True)["pier"] = pier
+        # 2.2.15 (item 10): angles within ±5° are one side (29° and 30°), their 180° partners the other; the stored
+        # per-night angles stay as read, the grouping is made here for every use (table, caution, segments, health).
+        out = core.group_pier_sides(out)
         # A night known only from its flip: before the flip is the same pier side every night on a German mount, so
         # it takes the side names the campaign's ROTATOR / PIERSIDE nights give the two halves.
         pairs = [(p["before"], p["after"]) for p in out.values()
@@ -8263,6 +8266,31 @@ class App(Tk):
         # date2num works on naive datetimes; strip the zone after converting.
         return np.array(date2num([t.replace(tzinfo=None) for t in stamps]))
 
+    def _zoom_axes(self, ax, obs_list, x, mag, err, excluded, night: str, t0: float):
+        """2.2.15 (item 6): the light curve zoomed to one night: x in hours from the night's first point (its local
+        start time in the label), y fitted to the night's points with their error bars (flagged ones too when the
+        night has no other)."""
+        sel = np.array([o.night == night for o in obs_list]) & np.isfinite(mag) & np.isfinite(x)
+        use = sel & ~excluded if (sel & ~excluded).any() else sel
+        if use.any():
+            e = np.where(np.isfinite(err[use]), err[use], 0.0)
+            lo, hi = float(np.min(mag[use] - e)), float(np.max(mag[use] + e))
+            pad = max((hi - lo) * 0.08, 0.005)
+            ax.set_ylim(hi + pad, lo - pad)   # magnitudes: bright at the top
+            xs = x[sel]
+            span = float(xs.max() - xs.min())
+            xpad = max(span * 0.03, 0.05)
+            ax.set_xlim(float(xs.min()) - xpad, float(xs.max()) + xpad)
+        try:
+            ax.ticklabel_format(axis="x", useOffset=False, style="plain")
+        except AttributeError:
+            pass
+        try:
+            local = core.jd_to_datetime_utc(t0).astimezone()
+            ax.set_xlabel(f"Hours from the night's first point ({local:%H:%M} local, {local:%b} {local.day})")
+        except (OverflowError, ValueError, OSError):
+            ax.set_xlabel("Hours from the night's first point")
+
     def _format_time_axis(self, ax):
         choice = self.time_axis.get()
         if choice == "JD":
@@ -8350,32 +8378,43 @@ class App(Tk):
         ax = self.out_ax1
         interval = self._bin_interval()
         raw_alpha = 0.25 if interval is not False else 1.0
+        # 2.2.15 (item 6): a night clicked in a series zooms the light curve to it (hours from its first point, the
+        # y-axis fitted to its points); clicking it again shows the whole series. The other nights stay drawn (faded)
+        # on the same hours scale, off to the sides. The check plot keeps the series.
+        zoom = highlight if len(nights) > 1 else None
+        zoom_t0 = min(o.jd for o in obs_list if o.night == zoom) if zoom is not None else 0.0
+        lc_x = (jd - zoom_t0) * 24.0 if zoom is not None else tx
+        in_zoom = np.array([zoom is None or o.night == zoom for o in obs_list], dtype=bool)
         for i, night in enumerate(nights):
             mask = np.array([obs.night == night for obs in obs_list])
             keep = mask & ~excluded
             ax.errorbar(
-                tx[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
+                lc_x[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
                 color=colors[i % len(colors)], ecolor="#b0b0b0", lw=0.8,
             )   # 2.2.14 (item 16): no legend; the time axis and the night table name the nights
             drop = mask & excluded
             if drop.any():
-                ax.plot(tx[drop], mag[drop], "x", ms=6, color="#888888", alpha=alpha_for(night, 1.0))
+                ax.plot(lc_x[drop], mag[drop], "x", ms=6, color="#888888", alpha=alpha_for(night, 1.0))
         ax.invert_yaxis()
-        self._format_time_axis(ax)
+        if zoom is not None:
+            self._zoom_axes(ax, obs_list, lc_x, mag, err, excluded, zoom, zoom_t0)
+        else:
+            self._format_time_axis(ax)
         ax.set_ylabel(f"{filt} magnitude" + (" (segments lined up)" if self.norm_segments.get()
                                              else " (pier sides lined up)" if self.pier_segments.get()   # 2.2.14
                                              else " (flip lined up)" if self.align_flip.get() and flip_steps else ""))
         labels_raw = [self._point_label(o, float(m)) for o, m in zip(obs_list, mag)]
-        self._hover_sets.append((ax, tx, mag, labels_raw, 0.0))
+        self._hover_sets.append((ax, lc_x[in_zoom], mag[in_zoom], [t for t, z in zip(labels_raw, in_zoom) if z], 0.0))
         flip_mask = np.array([o.segment == "flip" for o in obs_list]) & ~excluded
         if flip_mask.any():
             for night in nights:   # 2.2.14 (item 16): rings fade with their night when another night is clicked
                 fm = flip_mask & np.array([o.night == night for o in obs_list])
                 if fm.any():
-                    ax.plot(tx[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
+                    ax.plot(lc_x[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
         # 2.2.14 (item 16): a symbol key in the title, only for the symbols drawn (8 nights overflowed a legend).
         # 2.2.14 review: only drawn × count (a NaN point is left out but not plotted).
-        key = (["× flagged, left out"] if (excluded & np.isfinite(mag)).any() else []) + (["○ after flip"] if flip_mask.any() else [])
+        key = ((["× flagged, left out"] if (excluded & np.isfinite(mag) & in_zoom).any() else [])
+               + (["○ after flip"] if (flip_mask & in_zoom).any() else []))
         ax.grid(True, alpha=0.3)
         bin_text = ""
         if interval is not False:
@@ -8383,16 +8422,23 @@ class App(Tk):
             bins = core.bin_points([obs_list[k] for k in kept], [float(mag[k]) for k in kept], interval,
                                    self._scint_setup())
             if bins:
-                bx = self._time_values(np.array([b["jd"] for b in bins]))
-                ax.errorbar(bx, [b["value"] for b in bins], yerr=[b["err"] for b in bins], fmt="D", ms=6,
-                            color="#111111", ecolor="#111111", elinewidth=1.4, capsize=3)
+                bx = ((np.array([b["jd"] for b in bins]) - zoom_t0) * 24.0 if zoom is not None
+                      else self._time_values(np.array([b["jd"] for b in bins])))
+                # 2.2.15 (item 3): the means fade with their night when another night is clicked, like the points.
+                for night in nights:
+                    sel = [k for k, b in enumerate(bins) if b["night"] == night]
+                    if sel:
+                        ax.errorbar(bx[sel], [bins[k]["value"] for k in sel], yerr=[bins[k]["err"] for k in sel],
+                                    fmt="D", ms=6, color="#111111", ecolor="#111111", elinewidth=1.4, capsize=3,
+                                    alpha=alpha_for(night, 1.0))
                 key.append("◆ night mean" if interval is None else f"◆ {self.bin_choice.get()} mean")
                 self._hover_sets.append((ax, bx, np.array([b["value"] for b in bins]),
                                          [self._bin_label(b) for b in bins], 4.0))
                 errs = np.array([b["err"] for b in bins])
                 bin_text = (f"  Binned ({self.bin_choice.get()}): {len(bins)} points, typical error "
                             f"{np.median(errs):.4f} mag, spread of binned points {np.std([b['value'] for b in bins]):.4f} mag.")
-        self._title_with_key(ax, self.star_id.get() or "Target", key)
+        self._title_with_key(ax, (self.star_id.get() or "Target")
+                             + (f" · {self.night_label(zoom, short=True)}" if zoom is not None else ""), key)
 
         usable = [o for o, ex in zip(obs_list, excluded) if not ex]
         ax = self.out_ax2
@@ -8629,7 +8675,8 @@ class App(Tk):
         ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500, justify=LEFT).pack(anchor=W)
 
     def _on_night_click(self, event):
-        """Click a night to highlight it on the plots; click it again to show every night."""
+        """Click a night to highlight it on the plots (2.2.15: the light curve zooms to it); click it again to show
+        every night."""
         row = self.night_table.identify_row(event.y)
         night = self._night_by_item.get(row) if row else None
         if night is None:
@@ -8774,14 +8821,14 @@ class App(Tk):
             bv = [obs_list[k].bv for k in used if math.isfinite(obs_list[k].bv)]
             flags = Counter(w for k in idx for w in obs_list[k].flag.split())
             # 2.2.14 (item 18): transmission loss in words, and how many such points were kept.
-            if core.HAZE_FLAG in flags:
-                flags[core.HAZE_LABEL] = flags.pop(core.HAZE_FLAG)
+            if core.HAZE_FLAG in flags:   # 2.2.15 (item 4): the short form; the log keeps the full wording
+                flags[core.HAZE_SHORT] = flags.pop(core.HAZE_FLAG)
             if "cloudedge" in flags:   # 2.2.14 (item 10): in words too
                 flags[core.CLOUD_EDGE_LABEL] = flags.pop("cloudedge")
             kept_haze = self._transmission_summary(night)[0] \
                 if self._night_info(night).get("keep_transmission") else 0
             if kept_haze:
-                flags[f"kept, {core.HAZE_LABEL}"] = kept_haze
+                flags[f"kept, {core.HAZE_SHORT}"] = kept_haze
             note = self.night_notes.get(night, "")
             rows.append({
                 "night": night, "night_text": self.night_label(night, short=True), "date": date,
@@ -8832,7 +8879,7 @@ class App(Tk):
         errs = [r["err"] for r in rows if math.isfinite(r["err"])]
         if len(means) > 1:
             self.spread_text.set(f"Spread of nightly means {np.std(means):.4f} mag  (typical error {np.median(errs):.4f})"
-                                 + ("     Click a night to highlight it; click it again to show all." if len(rows) > 1 else ""))
+                                 + ("     Click a night to zoom the light curve to it; click it again to show all." if len(rows) > 1 else ""))
         else:
             self.spread_text.set("")
         self.caution_text.set("   ".join("⚠ " + c for c in cautions))

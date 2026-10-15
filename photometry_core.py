@@ -4278,6 +4278,7 @@ def precalibration_signs(path: str, header: dict) -> list[str]:
 
 HAZE_FLAG = "haze"   # 2.2.14 (item 18): the flag word for transmission loss (dew/haze), shown in words in the app
 HAZE_LABEL = "transmission loss (dew/haze?)"
+HAZE_SHORT = "dew/haze?"   # 2.2.15 (item 4): the night table's short form (the log keeps HAZE_LABEL)
 
 
 def _robust_std(values) -> float:
@@ -6563,6 +6564,7 @@ def rotator_difference(a: float, b: float) -> float:
 # segments was on, so a campaign can be normalised side by side and comps that step at the flip can be found.
 
 FLIP_STEP_MARK = 0.02   # a night's flip step above this is marked in the night table
+PIER_ANGLE_TOL = 5.0    # 2.2.15 (item 10): camera angles within this many degrees are one pier side
 
 
 def side_label(angle) -> str:
@@ -6592,7 +6594,7 @@ def night_pier_info(rot_before=None, rot_after=None, pier_before=None, pier_afte
         out["before"] = side_label(rb) if rb is not None else ""
         if has_flip and ra is not None:
             out["after"] = side_label(ra)
-            if rb is not None and angle_difference(ra, rb) <= 2.0:
+            if rb is not None and angle_difference(ra, rb) <= PIER_ANGLE_TOL:
                 # The camera was turned back to its first angle after the flip: same angle, other pier side.
                 out["after"] = side_label(ra) + " flipped"
         elif has_flip and rb is not None:
@@ -6613,6 +6615,73 @@ def night_pier_info(rot_before=None, rot_after=None, pier_before=None, pier_afte
         out["note"] = "no ROTATOR or PIERSIDE in the headers: sides from the image orientation (the flip)"
         return out
     out["note"] = "no ROTATOR or PIERSIDE and no flip: pier side unknown"
+    return out
+
+
+def pier_side_groups(angles, tol: float = PIER_ANGLE_TOL) -> dict:
+    """2.2.15 (item 10): camera angles grouped into pier sides. Angles within ±tol of each other are one side (29°
+    and 30°; 358° and 2° across 360), their 180° partners the other side of the same pair (210°). Each group is
+    named by its most frequent angle (ties: the smaller). angles: readings in degrees (one per night and segment,
+    repeats count); None / NaN are skipped. Returns {whole-degree angle: representative whole-degree angle}."""
+    counts: dict[int, int] = {}
+    for a in angles:
+        try:
+            a = float(a)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(a):
+            k = int(round(a)) % 360
+            counts[k] = counts.get(k, 0) + 1
+    families: list[list] = []   # [axis angle, representative of its side, representative of the other side]
+    out: dict[int, int] = {}
+    for a, _n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        fam = next((f for f in families if rotator_difference(a, f[0]) <= tol), None)
+        if fam is None:
+            families.append([a, a, None])
+            out[a] = a
+        elif angle_difference(a, fam[0]) <= tol:
+            out[a] = fam[1]
+        else:
+            if fam[2] is None:
+                fam[2] = a
+            out[a] = fam[2]
+    return out
+
+
+_SIDE_ANGLE = _re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*°(.*)$")
+
+
+def group_pier_sides(pier_by_night: dict, tol: float = PIER_ANGLE_TOL) -> dict:
+    """2.2.15 (item 10): {night: pier info} with every angle side label ('29°', '209° flipped') renamed to its
+    group's representative ('30°', '210° flipped'), so nights a degree apart count as one side. Works on the labels
+    alone, so series saved by 2.2.14 (per-night angles) group without re-reduction. The infos are copied, never
+    changed in place; a renamed one keeps its own reading in "angles" ('29°/209°')."""
+    def parse(label):
+        m = _SIDE_ANGLE.match(str(label or ""))
+        return (float(m.group(1)), m.group(2)) if m else None
+
+    readings = []
+    for info in pier_by_night.values():
+        for key in ("before", "after"):
+            got = parse((info or {}).get(key))
+            if got is not None:
+                readings.append(got[0])
+    groups = pier_side_groups(readings, tol)
+    out = {}
+    for night, info in pier_by_night.items():
+        if not isinstance(info, dict):
+            out[night] = info
+            continue
+        new = dict(info)
+        for key in ("before", "after"):
+            got = parse(info.get(key))
+            if got is not None:
+                rep = groups.get(int(round(got[0])) % 360)
+                if rep is not None:
+                    new[key] = f"{rep}°{got[1]}"
+        if (new.get("before"), new.get("after")) != (info.get("before"), info.get("after")):
+            new["angles"] = side_text(info)
+        out[night] = new
     return out
 
 
