@@ -2011,6 +2011,7 @@ class App(Tk):
                 pass
         if hasattr(self, "_slot_notes"):
             self._slot_notes = {}
+        self._slot_typed = {}   # 2.2.16 (item 8, review): typed names belong to the image they were typed on
         if why:
             what = ([f"target {old}"] if old else []) + ([f"{n_comps} comp{'s' if n_comps != 1 else ''}"] if n_comps
                                                          else []) \
@@ -4397,15 +4398,16 @@ class App(Tk):
         except (TypeError, ValueError):
             return True
         prop = core.suggest_apertures(fwhm)
-        if r > 3.0 * fwhm or r < 0.9 * fwhm:
-            kind = "much larger" if r > 3.0 * fwhm else "smaller"
+        too_big = r > 3.0 * fwhm + 0.05   # 2.2.16 (review): the aperture test's own 3.0 × FWHM is not "too big"
+        if too_big or r < 0.9 * fwhm:
+            kind = "much larger" if too_big else "smaller"
             self.log(f"Aperture check: r = {r:g} px is {kind} than the stars (FWHM {fwhm:.1f} px); suggested r = "
                      f"{prop['radius']:g}, sky {prop['sky_in']:g}-{prop['sky_out']:g} px.")
             return messagebox.askyesno(
                 APP_TITLE,
                 f"The aperture (r = {r:g} px) is {kind} than the stars on this frame (FWHM {fwhm:.1f} px).\n\n"
                 + ("A large aperture collects sky noise and neighboring stars; scatter can be several times worse. "
-                   if r > 3.0 * fwhm else "A small aperture loses starlight as the seeing changes. ")
+                   if too_big else "A small aperture loses starlight as the seeing changes. ")
                 + f"Suggest… would use r = {prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px.\n\n"
                 "Run with the current aperture anyway?")
         return True
@@ -4533,7 +4535,7 @@ class App(Tk):
         # 2.2.16 (item 1): 2.6 and 3.0 x FWHM are measured too (cheap: the frames are read anyway) and join the
         # comparison only when the best of the four is the largest, with their own sky ring further out. 3.0 x is
         # rounded down so it never trips the "much larger than the stars" check at Run.
-        extra = sorted({r for r in (round(2.6 * fwhm, 1), math.floor(3.0 * fwhm * 10.0) / 10.0) if r > rmax + 0.05})
+        extra = sorted({r for r in (round(2.6 * fwhm, 1), math.floor(3.0 * fwhm * 10.0 + 1e-6) / 10.0) if r > rmax + 0.05})
         rings = {r: (sky_in, sky_out) for r in radii}
         if extra:
             x_in = core.sky_inner_radius(max(extra), fwhm)
@@ -4601,9 +4603,12 @@ class App(Tk):
                 best = result.get("ref_best")
                 if extra and best is not None and abs(best["r"] - rmax) < 0.05 and rows[rmax]:
                     # 2.2.16 (item 1): the best is the largest aperture tried: let 2.6 and 3.0 x FWHM compete too.
+                    four = result
                     result = core.aperture_test_stats({r: np.array(rows[r]) for r in radii + extra if rows[r]},
                                                       ref_label, has_comp2=not np.isnan(xy[2, 0]))
                     result["extended"] = list(extra)
+                    # review: a clear winner of the four is kept when the larger ones only split the wins with it
+                    result["four_best"] = four.get("ref_best")
                 result["rings"] = rings
                 result["suggested_r"] = min(radii, key=lambda r: abs(r - 1.8 * fwhm))
                 self.call_ui(self._aperture_test_done, window, result, seeing, sky_in, sky_out, ref_label, None)
@@ -4972,30 +4977,63 @@ class App(Tk):
         canvas.mpl_connect("scroll_event", self._photo_scroll)
         canvas.mpl_connect("motion_notify_event", self._photo_motion)
 
-    def _popout_geometry(self) -> str:
-        """Where the pop-out opens: the size and place it had last time (settings), kept on the screen; the first time
-        about 60% × 75% of the screen, centred."""
+    def _virtual_screen(self):
+        """(x, y, w, h) of the whole desktop (every monitor; x/y can be negative with a monitor on the left or above),
+        or the primary screen when Tk cannot say."""
         try:
             sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
         except Exception:
             sw, sh = 1920, 1080
+        try:
+            vx, vy = int(self.winfo_vrootx()), int(self.winfo_vrooty())
+            vw, vh = int(self.winfo_vrootwidth()), int(self.winfo_vrootheight())
+            if vw >= sw and vh >= sh:
+                return vx, vy, vw, vh
+        except Exception:
+            pass
+        return 0, 0, sw, sh
+
+    def _popout_geometry(self) -> str:
+        """Where the pop-out opens: the size and place it had last time (settings), on whichever monitor that was;
+        moved back to the main screen only when its title bar would be out of reach (review: a window kept on a second
+        monitor stays there). The first time about 60% × 75% of the main screen, centred."""
+        try:
+            sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+        except Exception:
+            sw, sh = 1920, 1080
+        vx, vy, vw, vh = self._virtual_screen()
         saved = self.settings.get("photo_popout") if isinstance(self.settings.get("photo_popout"), dict) else {}
+        default = (int(sw * 0.6), int(sh * 0.75))
         try:
             w, h = int(saved["w"]), int(saved["h"])
             x, y = int(saved["x"]), int(saved["y"])
         except (KeyError, TypeError, ValueError):
-            w, h = int(sw * 0.6), int(sh * 0.75)
+            w, h = default
             x, y = (sw - w) // 2, (sh - h) // 3
-        w, h = min(max(w, 320), sw), min(max(h, 240), sh)
-        x, y = min(max(x, 0), max(sw - w, 0)), min(max(y, 0), max(sh - h, 0))
-        return f"{w}x{h}+{x}+{y}"
+        w, h = min(max(w, 320), vw), min(max(h, 240), vh)
+        # The title bar must be reachable: at least 100 px of it across, its top inside the desktop.
+        reachable = (x + w - 100 > vx and x + 100 < vx + vw and vy <= y < vy + vh - 40)
+        if not reachable:
+            w, h = min(w, sw), min(h, sh)
+            x, y = (sw - w) // 2, (sh - h) // 3
+        return f"{w}x{h}+{x}+{y}"   # "+-1200" = 1200 px left of the main screen (a bare "-" would mean from the right)
 
     def _save_popout_geometry(self, win):
+        import re
+        geo = None
         try:
-            geo = {"w": int(win.winfo_width()), "h": int(win.winfo_height()), "x": int(win.winfo_x()),
-                   "y": int(win.winfo_y())}
+            # review: wm geometry round-trips exactly ("900x700+-1200+50" with a monitor on the left)
+            m = re.match(r"^(\d+)x(\d+)\+?(-?\d+)\+?(-?\d+)$", str(win.geometry()).strip())
+            if m:
+                geo = dict(zip(("w", "h", "x", "y"), (int(v) for v in m.groups())))
         except Exception:
-            return
+            geo = None
+        if geo is None:
+            try:
+                geo = {"w": int(win.winfo_width()), "h": int(win.winfo_height()), "x": int(win.winfo_x()),
+                       "y": int(win.winfo_y())}
+            except Exception:
+                return
         if geo["w"] < 50 or geo["h"] < 50:
             return   # not laid out (never shown)
         self.settings["photo_popout"] = geo
@@ -5283,6 +5321,7 @@ class App(Tk):
             getattr(self, f"{role}_name").set("")
             getattr(self, f"{role}_mag").set("")
         self.star_bands.pop(role, None)
+        getattr(self, "_slot_typed", {}).pop(role, None)   # 2.2.16 (item 8, review)
         if role != "target":
             self._update_chart_field()
         if not redraw:
@@ -5762,11 +5801,20 @@ class App(Tk):
         self._slot_keying = None
 
     def _slot_name_changed(self, role: str):
-        """2.2.16 (item 8): a slot's name changed; remember it as typed when a key in that box changed it."""
-        if role != "target" and self._slot_keying == role:
-            self._slot_typed[role] = getattr(self, f"{role}_name").get().strip()
+        """2.2.16 (item 8): a slot's name changed; remember it as typed (for this image) when a key in that box
+        changed it, or (review) the box has the keyboard focus, which also covers a paste from the mouse or the
+        context menu. Code that sets a name never focuses the box."""
+        if role != "target" and (self._slot_keying == role or self._slot_box_focused(role)):
+            self._slot_typed[role] = (getattr(self, "_preview_token", 0), getattr(self, f"{role}_name").get().strip())
             self._slot_keying = None
         self.update_star_panel()
+
+    def _slot_box_focused(self, role: str) -> bool:
+        try:
+            entry = self.star_row_widgets[role][1]
+            return self.focus_get() is entry
+        except Exception:
+            return False
 
     def update_star_panel(self):
         """Catalog color, red-color warning, and variable-star check for the target, comps, and check star."""
@@ -5810,7 +5858,7 @@ class App(Tk):
                 lab.configure(style="Warn.TLabel" if slot_note[2] else "Hint.TLabel")
                 continue
             if (name and xy is None and role != "target" and self.mode_key != "discovery"
-                    and getattr(self, "_slot_typed", {}).get(role) == name):
+                    and getattr(self, "_slot_typed", {}).get(role) == (getattr(self, "_preview_token", 0), name)):
                 # 2.2.16 (item 8): typed here and not yet looked up; the "not marked" warning is for names left from
                 # an earlier run or series.
                 var.set("press Enter to find and mark this star")
@@ -9422,6 +9470,7 @@ class App(Tk):
             return
         if self.observations or self.series_path:
             self._clear_series_state()   # 2.2.15 review: nothing of the series set aside goes into this one
+        self._slot_typed = {}   # 2.2.16 (item 8, review): the series' names are not typed here
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9)
         # 2.2.16 (item 11): a series of another star never inherits this field's target, comps, check or watch stars.
         why = self._other_target_why(meta.get("star_id"), meta.get("ra_hours"), meta.get("dec_deg"))
@@ -12291,7 +12340,9 @@ class SuggestWindow:
         lines.append(f"{'r (px)':>7}  {ref_label + ' scatter':>23}  {'lowest':>7}  {'target scatter':>17}  {'lowest':>7}")
         for row in rows:
             lines.append(f"{row['r']:>7g}  {row['ref_sigma']:>14.4f} ± {row['ref_err']:.4f}  {row['ref_win']:>6.0%}"
-                         f"  {row['target_sigma']:>8.4f} ± {row['target_err']:.4f}  {row['target_win']:>6.0%}")
+                         f"  {row['target_sigma']:>8.4f} ± {row['target_err']:.4f}  {row['target_win']:>6.0%}"
+                         + (f"  (sky {ring_x[0]:g}–{ring_x[1]:g})" if ring_x and row["r"] in result["extended"]
+                            else ""))   # 2.2.16 (item 1, review): their own, wider ring
         lines.append("")
         best = result.get("ref_best")
         tbest = result.get("target_best")
@@ -12301,10 +12352,18 @@ class SuggestWindow:
                                          f"{', '.join(f'{r:g}' for r in result['extended'])} px (2.6 and 3.0 × FWHM"
                                          + (f"; their sky ring {ring_x[0]:g}–{ring_x[1]:g} px" if ring_x else "")
                                          + ").")
+        four = result.get("four_best")
         if best is not None and best["ref_win"] >= 0.8:
             pick = best["r"]
             lines.append(f"Clear winner: r = {pick:g} has the lowest {ref_label} scatter in {best['ref_win']:.0%} "
                          "of resamples.")
+        elif result.get("extended") and four is not None and four["ref_win"] >= 0.8:
+            # 2.2.16 (item 1, review): the first four had a clear winner (the largest); the larger apertures only share
+            # its plateau. Never fall back to a size the four-way test beat.
+            pick = four["r"]
+            lines.append(f"The larger apertures were no better than r = {pick:g} (the differences are within the "
+                         f"noise); r = {pick:g} stays, the clear winner of the first four ({four['ref_win']:.0%} of "
+                         "resamples).")
         else:
             pick = result.get("suggested_r") or (best or rows[0])["r"]
             lines.append(f"No clear winner: the differences are within the noise (no aperture is lowest in 80% of "
