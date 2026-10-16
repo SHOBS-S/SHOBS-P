@@ -1462,7 +1462,10 @@ class App(Tk):
         """2.2.3: identifies the results on screen; a new run, an added night or other comps make a new key."""
         obs = self.observations or []
         tp = getattr(self, "transit_page", None)
-        fit = id(tp.result) if self.mode_key == "transits" and tp is not None and tp.result is not None else None
+        fit = None
+        if self.mode_key == "transits" and tp is not None and tp.result is not None:
+            import transit_ui as _tu
+            fit = _tu.fit_serial(tp.result)   # 2.2.17 review: a fit counter (id() can be reused)
         # 2.2.17: id of the list itself (an empty `or []` made a new key on every call)
         return (id(self.observations), len(obs), round(obs[0].jd, 6) if obs else 0,
                 round(obs[-1].jd, 6) if obs else 0,
@@ -12102,13 +12105,6 @@ class App(Tk):
         self.log(f"Comps in use: {used}. {result['done']} points re-derived"
                  + (f", {result['missing']} flagged nocomp." if result["missing"] else "."))
         self._log_zero_point_check()   # 2.2.14 (item 10)
-        # 2.2.17 (item 4): in Transits mode the transit fit follows the new comps (refits on its page).
-        tp = getattr(self, "transit_page", None)
-        if self.mode_key == "transits" and tp is not None:
-            try:
-                tp.comps_changed()
-            except Exception:
-                traceback.print_exc()
         saved = ""
         if self.series_path:
             try:
@@ -12117,6 +12113,14 @@ class App(Tk):
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Comps in use: {used}.{saved}")
+        # 2.2.17 (item 4): in Transits mode the transit fit follows the new comps (refits on its page); after the status
+        # line, so "Refitting…" is what it says (review).
+        tp = getattr(self, "transit_page", None)
+        if self.mode_key == "transits" and tp is not None:
+            try:
+                tp.comps_changed()
+            except Exception:
+                traceback.print_exc()
         return True
 
     def _zero_point_check(self):

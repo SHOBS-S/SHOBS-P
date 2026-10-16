@@ -330,6 +330,8 @@ class TransitPage:
             self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
+        if self.report is None:
+            self._trim_source_check()   # review: before the stale check, so the signature has no stale trim
         self._check_stale(auto=shown)
         self._count_text()
         self._update_comp_buttons()
@@ -366,11 +368,14 @@ class TransitPage:
             name = (r.get("planet") or {}).get("name") or "the planet"
             kept = ""
             if app.observations:
-                target = app.planet_name.get().strip() or app.star_id.get().strip() or "your"
-                kept = (f" Your {target} photometry is kept; choose its night above (or Close report) to go back.")
+                target = app.planet_name.get().strip() or app.star_id.get().strip()
+                # 2.2.17 review nit: no "Your your photometry" when the Input page names no target
+                kept = (f" Your {target + ' ' if target else ''}photometry is kept; choose its night above (or Close "
+                        "report) to go back.")
             # 2.2.17 (item 7): the program that wrote the report (#SOFTWARE), not always "EXOTIC".
             self.banner.set(f"Fitting {report_kind(r.get('header'))}: {name}, {self._report_date()}, {len(r['t'])} "
-                            f"points from {os.path.basename(r.get('path', ''))}." + kept)
+                            f"points from {os.path.basename(r.get('path', ''))}." + kept
+                            + (" " + r["time_note"] if r.get("time_note") else ""))   # 2.2.17 review
             try:
                 self.close_report_button.pack(side=LEFT, padx=(0, 6), after=self.night_box)
             except Exception:
@@ -527,6 +532,7 @@ class TransitPage:
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not read {os.path.basename(path)}:\n{exc}")
             return
+        self._report_time_system(rep)   # 2.2.17 review: #DATE_TYPE other than BJD_TDB
         self._clear_progress()
         self.report = rep
         self._reset_trim()      # 2.2.17 (item 5)
@@ -728,6 +734,8 @@ class TransitPage:
                 messagebox.showinfo("SHOBS-P", "Still looking up this planet's ephemeris; the fit starts by itself "
                                                "as soon as it is in.")
             return
+        if self.report is None:
+            self._trim_source_check()   # review: a series change drops the trim
         planet = self.current_planet()
         if not planet:
             if not auto:
@@ -993,6 +1001,11 @@ class TransitPage:
                 messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}")
             return
         if self._signature() != getattr(self, "_pending_signature", None):
+            if self._refit_pending:
+                # 2.2.17 review: comps changed while this fit ran; the automatic refit follows (_fit_done).
+                self.prog_text.set("Comps changed during the fit: refitting with the new comps…")
+                self.draw(placeholder="Refitting with the new comps…")
+                return
             # 2.2.7: the data changed while this fit ran (a report opened or closed, another night picked): the
             # result belongs to other data, so it is not shown.
             self.prog_text.set("Fit finished for data no longer shown; not used.")
@@ -1004,11 +1017,16 @@ class TransitPage:
             flags = result.setdefault("flags", [])
             flags.insert(1 if flags else 0, ("warn", meta["comp_noise"]))   # after the verdict line
             self.app.log("Comps: " + meta["comp_noise"])
+        if self.report is not None and self.report.get("time_note"):
+            # 2.2.17 review: the report's time system, converted or not, in the notes and fit file.
+            tn = self.report["time_note"]
+            result.setdefault("flags", []).append(("warn" if tn.startswith("⚠") else "info", tn.lstrip("⚠ ")))
         if meta.get("trim"):
             # 2.2.17 (item 5): the trimmed span in the notes (page, PNG, fit file) and on the plot.
             result["trim"] = meta["trim"]
             result.setdefault("flags", []).append(("info", meta["trim"]["text"]))
             self.app.log("Transit fit: " + meta["trim"]["text"])
+        result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
         self.meta_for_files = meta
@@ -1487,6 +1505,40 @@ class TransitPage:
         self._set_margins()
         self.canvas.draw_idle()
 
+    def _report_time_system(self, rep):
+        """2.2.17 review: the fit, Tc and the trim's clock times assume BJD_TDB. A report in HJD_UTC is moved to BJD_TDB
+        (TDB − UTC; the helio/bary difference is a few seconds); one in JD_UTC is converted when the star's position
+        is known, else it stays as it is and the banner and notes say its times are JD_UTC. rep["time_note"] says
+        what was done; rep["date_type"] is what the times now are."""
+        dt = str((rep.get("header") or {}).get("DATE_TYPE", "")).strip().upper().replace(" ", "_")
+        rep["date_type"], rep["time_note"] = "BJD_TDB", ""
+        if not dt or dt.startswith("BJD"):
+            return
+        t = np.asarray(rep["t"], dtype=float)
+        if dt.startswith("HJD"):
+            rep["t"] = t + 69.184 / 86400.0
+            rep["time_note"] = ("The report's times are HJD_UTC; SHOBS-P moved them to BJD_TDB (+69.184 s; good to a "
+                                "few seconds).")
+            return
+        if dt.startswith("JD"):
+            radec = self._report_radec(rep)
+            if radec is not None:
+                h = rep.get("header") or {}
+                try:
+                    rep["t"] = core.convert_times(t, "BJD_TDB", radec[0], radec[1], float(h.get("OBSLAT")),
+                                                  float(h.get("OBSLON")))
+                except Exception:
+                    rep["t"] = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
+                rep["time_note"] = "The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB."
+            else:
+                rep["date_type"] = "JD_UTC"
+                rep["time_note"] = ("⚠ The report's times are JD_UTC, not BJD_TDB, and the star's position is not known "
+                                    "(enter the star on the Input page and open the report again): Tc is in JD_UTC, up "
+                                    "to ±8 min from BJD_TDB, with no usable O − C.")
+            return
+        rep["time_note"] = (f"⚠ The report's times are {dt}, which SHOBS-P does not convert; it fits them as BJD_TDB, so "
+                            "Tc may be off.")
+
     # ---- 2.2.17 (item 4): Comp health and Use comps from the Transit fit page ---------------
     def _comp_windows_ok(self) -> str:
         """'' when Comp health / Use comps can open here, else why not (a report shown, or no photometry)."""
@@ -1532,19 +1584,32 @@ class TransitPage:
         if self.report is not None:
             return       # the page shows a report; the photometry's fit is redone when its night is chosen again
         self._auto_tried = None      # the same comps as an earlier automatic fit still refit
+        comps = ", ".join(self.app.active_comps or self.app.comps_used)
         if self._fitting or getattr(self, "_checking", False):
             self._refit_pending = True
             self._check_stale(auto=False)
-            self.app.log("Transit fit: comps changed; refitting when the current fit or comp check ends.")
+            # Review: one consistent message: the refit is automatic.
+            what = "fit" if self._fitting else "comp check"
+            self._notes_text([("info", f"Comps changed (now {comps}): the transit is refitted with them as soon as "
+                                       f"the running {what} ends.")])
+            self.app.log(f"Transit fit: comps changed; refitting when the running {what} ends.")
+            self.app.status.set(f"Comps in use: {comps}. The transit refits when the running {what} ends.")
             return
         on_screen = getattr(self.app, "transit_page_on_screen", lambda: True)()
         self._check_stale(auto=on_screen)
         if self._fitting:
-            comps = ", ".join(self.app.active_comps or self.app.comps_used)
             self._notes_text([("info", f"Comps changed (now {comps}): refitting with the same settings…")])
+            self.app.status.set(f"Comps in use: {comps}. Refitting the transit…")
 
     def _run_pending_refit(self):
-        if not self._refit_pending or self.app.busy or self._fitting or getattr(self, "_checking", False):
+        if not self._refit_pending or self._fitting or getattr(self, "_checking", False):
+            return      # our own fit or check calls this again when it ends
+        if self.report is not None or not getattr(self.app, "transit_page_on_screen", lambda: True)():
+            self._refit_pending = False   # review: refitted when the page is next shown (refresh), never unannounced
+            return
+        if self.app.busy:
+            # Review: another job holds the app; look again shortly instead of leaving the flag set for ever.
+            self.app.after(1000, self._run_pending_refit)
             return
         self._refit_pending = False
         if self.report is None and getattr(self.app, "transit_page_on_screen", lambda: True)():
@@ -1552,9 +1617,9 @@ class TransitPage:
             self._check_stale(auto=True)
 
     # ---- 2.2.17 (item 5): trim -------------------------------------------------------------
-    def _report_radec(self):
+    def _report_radec(self, report=None):
         """The report's target RA/Dec (degrees) when the Input page or the planet lookup is for the same star."""
-        rp = (self.report or {}).get("planet") or {}
+        rp = ((report if report is not None else self.report) or {}).get("planet") or {}
         names = {_norm(rp.get("name")), _norm(rp.get("host"))} - {""}
         app = self.app
         mine = {_norm(app.planet_name.get()), _norm(app.star_id.get())} - {""}
@@ -1579,6 +1644,9 @@ class TransitPage:
         if jd is not None and len(jd) == len(t):
             off = t - np.asarray(jd, dtype=float)
             exact = True
+        elif (self.report or {}).get("date_type") == "JD_UTC":
+            off = np.zeros(t.shape)      # 2.2.17 review: the times are JD_UTC already
+            exact = True
         else:
             radec = self._report_radec()
             if radec is not None:
@@ -1594,7 +1662,7 @@ class TransitPage:
     def _bjd_to_clock(self, bjd: float, tmap=None) -> str:
         tmap = tmap or self._time_map
         off = float(np.interp(bjd, tmap[0], tmap[1])) if tmap is not None and len(tmap[0]) else 69.184 / 86400.0
-        return tc.jd_to_local(bjd - off).strftime("%H:%M")
+        return tc.jd_to_local(bjd - off + 30.0 / 86400.0).strftime("%H:%M")   # nearest minute (review)
 
     def _clock_to_bjd(self, text: str, tmap) -> float | None:
         """A trim box: local clock time (as parse_clock reads it) or a BJD_TDB number -> BJD_TDB; None when empty.
@@ -1606,6 +1674,8 @@ class TransitPage:
             return None
         if re.fullmatch(r"24\d{5}(\.\d*)?", raw):
             return float(raw)
+        if re.fullmatch(r"[4-9]\d{4}\.\d*", raw):
+            return float(raw) + 2400000.0     # review: a reduced JD (61329.699)
         h, m = parse_clock(raw)
         if tmap is None or not len(tmap[0]):
             raise ValueError("no data to trim")
@@ -1651,15 +1721,17 @@ class TransitPage:
         if af is not None and not (np.any(af) and not np.all(af)):
             ex["after_flip"] = None
         fl = ex.get("flagged")
+        n_flagged = 0
         if fl is not None and len(fl.get("t", [])):
             fk = self._trim_mask(fl["t"])
+            n_flagged = int((~fk).sum())
             if not fk.all():
                 ex["flagged"] = ({k: (np.asarray(v)[fk] if isinstance(v, np.ndarray) and len(v) == len(fk) else v)
                                   for k, v in fl.items()} if fk.any() else None)
-        info = self._trim_info(t, flux, ~keep)
+        info = self._trim_info(t, flux, ~keep, n_flagged, (fl or {}).get("label") or "flagged")
         return t[keep], flux[keep], err[keep], am[keep], info
 
-    def _trim_info(self, t, flux, cut):
+    def _trim_info(self, t, flux, cut, n_flagged=0, flag_label="flagged"):
         spans = []
         for lo, hi in self._trims:
             m = cut & (t >= lo) & (t <= hi)
@@ -1673,13 +1745,23 @@ class TransitPage:
                           f"{'s' if s_['n'] != 1 else ''})" for s_ in spans)
         n = int(cut.sum())
         approx = "" if exact else " Local times are approximate (±8 min: the report's star position is not known)."
-        text = (f"Trimmed: {where}. These {n} points are left out of the fit, the verdict, the rms, the comp check "
-                f"and the saved files; Clear trim puts them back.{approx}")
+        fl_text = (f" ({n_flagged} {flag_label}-flagged frame{'s' if n_flagged != 1 else ''} there are left out too)"
+                   if n_flagged else "")
+        text = (f"Trimmed: {where}{fl_text}. These {n} points are left out of the fit, the verdict, the rms, the comp "
+                f"check and the saved files; Clear trim puts them back.{approx}")
         note = ("SHOBS-P: trimmed (left out of the fit) " + "; ".join(
             f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local, {s_['n']} points)"
             for s_ in spans))
-        return {"spans": spans, "n": n, "text": text, "report_note": note, "exact": exact,
+        return {"spans": spans, "n": n, "n_flagged": n_flagged, "text": text, "report_note": note, "exact": exact,
                 "t": t[cut], "flux": np.asarray(flux, dtype=float)[cut]}
+
+    def _trim_source_check(self):
+        """Review: a trim belongs to its data; a loaded, closed or new series (same night key or not) drops it."""
+        gen = getattr(self.app, "_series_gen", 0)
+        if self._trims and getattr(self, "_trim_gen", gen) != gen:
+            self._reset_trim()
+            self.app.log("Transit fit: the series changed, so the trim was cleared.")
+        self._trim_gen = gen
 
     def _reset_trim(self):
         self._trims = []
@@ -1694,7 +1776,10 @@ class TransitPage:
     def _update_trim_text(self):
         trim = (self.result or {}).get("trim")
         if trim:
-            self.trim_text.set("Trimmed: " + ", ".join(f"{s_['clock']} ({s_['n']} pts)" for s_ in trim["spans"]))
+            # Review: short (no wrap needed at high DPI); the notes name every span.
+            sp = trim["spans"]
+            self.trim_text.set(f"Trimmed: {sp[0]['clock']} ({sp[0]['n']} pts)" if len(sp) == 1 else
+                               f"Trimmed: {len(sp)} spans, {trim['n']} pts (see the notes)")
         elif self._trims:
             self.trim_text.set(f"{len(self._trims)} trimmed span{'s' if len(self._trims) != 1 else ''} set; "
                                "Fit transit applies it.")
@@ -1712,6 +1797,9 @@ class TransitPage:
             messagebox.showinfo("SHOBS-P", "Type a From and/or To time (local, HHMM or HH:MM, or BJD_TDB), or drag "
                                            "across the plot, then Trim and refit.")
             return
+        if self.report is None:
+            self._trim_source_check()
+        self._trim_gen = getattr(self.app, "_series_gen", 0)
         try:
             self._data_extra = {}
             t = np.asarray(self._data()[0], dtype=float)
@@ -1860,6 +1948,10 @@ class TransitPage:
         if wf:
             note = (f"SHOBS-P: fit INCLUDES {wf['n']} frames flagged {wf['label']} (error bars x{wf['factor']:g})")
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
+        if (self.report or {}).get("date_type") == "JD_UTC" and self.result is not None:
+            # 2.2.17 review: never a silent mis-time: the times stayed JD_UTC.
+            meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
+                             + "SHOBS-P: times are JD_UTC from the source report (not converted; star position unknown)")
         trim = (self.result or {}).get("trim")
         if trim:
             # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
@@ -2077,7 +2169,10 @@ class TransitPage:
         meta = self._file_meta()
         planet = _file_planet(r["planet"].get("name"))
         from datetime import datetime, timezone
-        date = datetime.fromtimestamp((float(r["t"].min()) - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
+        t_first = float(r["t"].min())
+        if r.get("trim") is not None and len(r["trim"].get("t", [])):
+            t_first = min(t_first, float(np.min(r["trim"]["t"])))   # review: a trim never moves the package's date
+        date = datetime.fromtimestamp((t_first - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
         base = f"{planet}_{date}_{meta.get('obscode') or 'obs'}_SHOBS-P"
         # 2.2.17 (item 9): the folder is ExoFOP_<planet>_<tag>; the files inside keep <planet>_<tag> names.
         dir_prefix = "ExoFOP_"
@@ -2245,6 +2340,14 @@ def _norm(name) -> str:
 # the link the notes add after them.
 COMP_CAUTION_PREFIXES = ("The comparison stars set most of the noise", "Leaving out ", "The comp choice moves")
 COMP_LINK = "→ Open Comp health…"
+_FIT_SERIAL = __import__("itertools").count(1)   # 2.2.17 review: one number per fit (id() can be reused)
+
+
+def fit_serial(result) -> int:
+    """2.2.17 review: the fit's serial for App._results_key (given one when a fit was set without _finish_fit)."""
+    if "_serial" not in result:
+        result["_serial"] = next(_FIT_SERIAL)
+    return result["_serial"]
 
 
 def report_software(header) -> str:
@@ -2255,8 +2358,10 @@ def report_software(header) -> str:
         return ""
     words, name, version = raw.split(" "), [], ""
     for w in words:
-        if re.fullmatch(r"[vV]?\d+(\.\d+)*[A-Za-z0-9.\-]*", w) and name:
-            version = w[1:] if w[:1] in "vV" else w
+        # Review: EXOTIC writes "v4.3.2.dev160+gd77c750dc.d20260911": the leading numbers are the version.
+        m = re.match(r"[vV]?(\d+(?:\.\d+){0,2})", w)
+        if m and name:
+            version = m.group(1)
             break
         name.append(w)
     label = " ".join(name)[:40].strip()
