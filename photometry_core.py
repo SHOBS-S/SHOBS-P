@@ -1240,6 +1240,15 @@ def is_sloan(band) -> bool:
     return str(band or "").strip().upper() in SLOAN_BANDS
 
 
+def filter_band(code) -> str:
+    """2.2.17 (item 1, review): the catalog band an AAVSO filter code is reduced in: SG/SR/SI/SZ/SU themselves, B for
+    B/TB, R for R/TR, V for everything else (V, CV, TG…), as filter_for_mode / _FILTER_NAMES pair them."""
+    c = str(code or "").strip().upper()
+    if c in SLOAN_BANDS:
+        return c
+    return {"B": "B", "TB": "B", "R": "R", "TR": "R"}.get(c, "V")
+
+
 def band_label(band) -> str:
     """2.2.17 (item 1): a band as people write it: "i\u2032" for SI, "g\u2032" for SG; V, B, R unchanged."""
     text = str(band or "")
@@ -1249,24 +1258,34 @@ def band_label(band) -> str:
 def sloan_band_code(value) -> str | None:
     """2.2.17 (item 1): the AAVSO Sloan code (SG, SR, SI, SZ, SU) for a FITS FILTER value, or None.
     Accepted, case-, space-, underscore- and hyphen-insensitive: g' (any prime or apostrophe), gp, g_prime,
-    sdss g, Sloan g, sloan_g', g-sdss, SG; the same for r, i, z, u. A Sloan filter must SAY it is Sloan (a prime,
-    "p"/"prime", "sdss"/"sloan", or the AAVSO code SG/SR/SI/SZ/SU): a bare G or R (either case) stays the imaging
-    filter it always was (TG / TR, see _FILTER_NAMES), and a bare I, Z or U is not recognised (Johnson-Cousins I is
-    not calibrated here), so Johnson/Cousins R and I are never taken for Sloan r and i."""
+    sdss g, Sloan g, sloan_g', g-sdss, SG; the same for r, i, z, u. Review S5: brand words and brackets are allowed
+    around ONE band letter when the value says Sloan/SDSS anywhere or primes the letter ("g' (Sloan)", "r (sdss)",
+    "Baader Sloan r'", "Astrodon Sloan g'"). A Sloan filter must SAY it is Sloan (a prime, "p"/"prime",
+    "sdss"/"sloan", or the AAVSO code SG/SR/SI/SZ/SU): a bare G or R (either case) stays the imaging filter it
+    always was (TG / TR, see _FILTER_NAMES), and a bare I, Z or U is not recognised (Johnson-Cousins I is not
+    calibrated here), so Johnson/Cousins R and I are never taken for Sloan r and i."""
     text = str(value or "").strip().lower()
     for ch in _PRIME_CHARS:
         text = text.replace(ch, "'")
-    text = _re.sub(r"[\s_\-.]+", "", text).replace("filter", "")
-    m = _re.fullmatch(r"(sloan|sdss)?([ugriz])('|p|prime)?(sloan|sdss)?", text)
+    compact = _re.sub(r"[\s_\-.()\[\]{},/]+", "", text).replace("filter", "")
+    m = _re.fullmatch(r"(sloan|sdss)?([ugriz])('|p|prime)?(sloan|sdss)?", compact)
     if m and (m.group(1) or m.group(3) or m.group(4)):
         return "S" + m.group(2).upper()
-    m = _re.fullmatch(r"s([ugriz])", text)
+    m = _re.fullmatch(r"s([ugriz])", compact)
     if m:
         return "S" + m.group(1).upper()
+    # Words: "sloan"/"sdss" split off wherever they stand, brackets and separators are spaces.
+    spaced = _re.sub(r"(sloan|sdss)", r" \1 ", text)
+    words = [w for w in _re.split(r"[\s_\-.()\[\]{},/]+", spaced) if w and w != "filter"]
+    says_sloan = any(w in ("sloan", "sdss") for w in words)
+    letters = [_re.fullmatch(r"([ugriz])('|p|prime)?", w) for w in words]
+    letters = [lm for lm in letters if lm]
+    if len(letters) == 1 and (says_sloan or letters[0].group(2)):
+        return "S" + letters[0].group(1).upper()
     return None
 
 # 2.2.11: the filters a monochrome camera can be set to by hand (Calibrate page) when the header does not say:
-# label -> (AAVSO filter code, comp band). Only bands the comp catalogs carry (B, V, R; 2.2.17: Sloan g' r' i' z').
+# label -> (AAVSO filter code, comp band). Only bands the comp catalogs carry (B, V, R; 2.2.17: Sloan g' r' i' z' u').
 MONO_FILTER_CHOICES = {
     "V (Johnson V)": ("V", "V"),
     "B (Johnson B)": ("B", "B"),
@@ -2446,8 +2465,9 @@ def _hms_to_deg(text: str) -> float:
 
 def _vsp_band(name: str) -> str | None:
     raw = str(name or "").strip()
-    # 2.2.17 (item 1): Sloan bands in a VSP sequence (SG/SR/SI, "g'", "Sloan g"…; a lowercase single letter is Sloan
-    # in VSP, which lists Johnson-Cousins bands in capitals).
+    # 2.2.17 (item 1): Sloan bands in a VSP sequence (SG/SR/SI, "g'", "Sloan g"…). The lowercase single-letter rule
+    # is only a harmless fallback: VSP writes Johnson-Cousins bands in capitals (V, B, Rc, Ic, U), so a lowercase
+    # u/g/r/i/z can only be Sloan.
     if raw in ("u", "g", "r", "i", "z"):
         return "S" + raw.upper()
     sloan = sloan_band_code(raw)
@@ -2472,8 +2492,10 @@ def chart_stars(payload: dict, band: str = "V") -> list[dict]:
                 mags[key] = float(entry.get("mag"))
             except (TypeError, ValueError):
                 continue
-        if band not in mags:
+        if band not in mags and not is_sloan(band):
             continue
+        # 2.2.17 (item 1, review S4): on a Sloan run a sequence star without that band is kept, with no magnitude
+        # (mag None), so its AUID, label and chart still name it; its Sloan magnitude comes from APASS or Gaia.
         ra = _angle(item["ra"], hours=True)
         dec = _angle(item["dec"], hours=False)
         stars.append({
@@ -2481,7 +2503,7 @@ def chart_stars(payload: dict, band: str = "V") -> list[dict]:
             "label": str(item.get("label", "")),
             "ra": ra,
             "dec": dec,
-            "mag": mags[band],
+            "mag": mags.get(band),
             "mags": mags,
             "band": band,
         })
@@ -3003,7 +3025,8 @@ def sdss_to_prime(mags: dict) -> dict:
     system (APASS, AAVSO SG/SR/SI), inverting the SDSS transformation (Tucker et al. 2006, AN 327, 821; SDSS DR7
     "jeg_photometric_eq_dr1"): g' = g - 0.060 ((g-r) - 0.53), r' = r - 0.035 ((r-i) - 0.21), i' = i - 0.041 ((r-i) - 0.21),
     z' = z + 0.030 ((i-z) - 0.09), u' = u. A band whose partner color is missing is left as it is (the change is a
-    few hundredths, below the G and BP-RP relations' scatter). Keys SU/SG/SR/SI/SZ."""
+    few hundredths, below the G and BP-RP relations' scatter). Keys SU/SG/SR/SI/SZ. The published equations use the
+    primed colors; using the SDSS colors instead (the inverse to first order) differs by about 1 mmag."""
     g, r, i, z = (mags.get(k) for k in ("SG", "SR", "SI", "SZ"))
     out = dict(mags)
     if g is not None and r is not None:
@@ -4018,6 +4041,7 @@ def _fit_placement(e: np.ndarray, n: np.ndarray, x: np.ndarray, y: np.ndarray, m
 
 SOLVE_RETRY_HITS = 8         # 2.2.17 (item 1): the app accepts a field solve from 8 matched stars
 SOLVE_POINTING_SLACK_ARCMIN = 3.0
+SOLVE_RETRY_FRACTION = 0.15  # 2.2.17 (review S3): a retry needs 15% of the catalog stars it tried matched
 
 
 def solve_field(sources: list, stars: list[dict], ra_deg: float, dec_deg: float, scale_arcsec: float,
@@ -4029,7 +4053,8 @@ def solve_field(sources: list, stars: list[dict], ra_deg: float, dec_deg: float,
     happens and the frame's size is known (frame_shape, h x w px), the solve is tried again on the same footprint on
     both sides: the image stars inside the frame's inscribed circle and the catalog stars inside that circle around
     the pointing, first with the usual numbers of stars, then with twice as many; last, twice as many on the frame's
-    whole circle (half-diagonal x 1.1 plus SOLVE_POINTING_SLACK_ARCMIN). The best answer is kept, so a field that
+    whole circle (half-diagonal x 1.1 plus SOLVE_POINTING_SLACK_ARCMIN). A retry counts only with SOLVE_RETRY_FRACTION
+    of its catalog stars matched and a tight fit (review S3); the best answer is kept, so a field that
     solved before is unchanged (the retries run only below SOLVE_RETRY_HITS)."""
     best = _solve_field_once(sources, stars, ra_deg, dec_deg, scale_arcsec, tolerance_px, scale_range, n_src, n_cat)
     if frame_shape is None or (best is not None and best.get("hits", 0) >= SOLVE_RETRY_HITS):
@@ -4052,10 +4077,18 @@ def solve_field(sources: list, stars: list[dict], ra_deg: float, dec_deg: float,
         if len(src_k) < 6 or len(cat_k) < 6:
             continue
         again = _solve_field_once(src_k, cat_k, ra_deg, dec_deg, scale_arcsec, tolerance_px, scale_range, ns, nc)
-        if again is not None and (best is None or again.get("hits", 0) > best.get("hits", 0)):
+        # 2.2.17 (review S3): more catalog stars give a chance match more room, so a retry is kept only with
+        # SOLVE_RETRY_FRACTION of the catalog stars tried matched (at least SOLVE_RETRY_HITS) and a tight fit
+        # (rms under half the match tolerance). Wrong fields reached 5-6 of 90 on the dense TOI-5933 field;
+        # the right Moeller fields match 35-52.
+        if again is None:
+            continue
+        need = max(SOLVE_RETRY_HITS, math.ceil(SOLVE_RETRY_FRACTION * min(nc, len(cat_k))))
+        if again.get("hits", 0) < need or not again.get("rms", float("inf")) < 0.5 * tolerance_px:
+            continue
+        if best is None or again.get("hits", 0) > best.get("hits", 0):
             best = again
-        if best is not None and best.get("hits", 0) >= SOLVE_RETRY_HITS:
-            break
+        break
     return best
 
 
@@ -4136,9 +4169,12 @@ def _solve_field_once(sources: list, stars: list[dict], ra_deg: float, dec_deg: 
     j = dist.argmin(axis=1)
     hit = dist.min(axis=1) < tolerance_px
     placed = [(float(all_src[j[i], 0]), float(all_src[j[i], 1]), cat[i]) for i in range(len(cat)) if hit[i]]
+    d_hit = dist.min(axis=1)[hit]
     return {"hits": int(hit.sum()), "angle": par["angle"], "mirrored": mirrored, "scale_factor": par["scale_factor"],
             "placed": placed, "target_xy": (par["tx"], par["ty"]), "score": (int(hit.sum()), 0.0),
-            "match_count": len(cat)}
+            "match_count": len(cat),
+            # 2.2.17 (review S3): rms of the matched stars' offsets, px (the retry's acceptance test)
+            "rms": float(np.sqrt(np.mean(d_hit ** 2))) if d_hit.size else float("inf")}
 
 
 def place_stars(stars: list[dict], solution: dict, target_xy: tuple[float, float], ra_deg: float, dec_deg: float, scale_arcsec: float) -> list[tuple[float, float, dict]]:
