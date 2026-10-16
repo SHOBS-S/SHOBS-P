@@ -1090,6 +1090,7 @@ class App(Tk):
             self.photo_bring_back()   # 2.2.16 (item 16): leaving the Photometry step brings the image back
         self.current_step = index
         self._on_credits = False
+        self._variable_view = False   # 2.2.17 (item 4)
         if hasattr(self, "back_to_transit"):
             self.back_to_transit.pack_forget()
         if index == STEP_OUTPUT and self.mode_key == "discovery":
@@ -1429,7 +1430,16 @@ class App(Tk):
             stem += f"_{dates}"
         stem += "_SHOBS-P"
         names = [f"AAVSO_{stem}.txt", f"{stem}_lightcurve.csv", f"{stem}_lightcurve.png"]
-        return ["".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in n) for n in names]
+        names = ["".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in n) for n in names]
+        tp = getattr(self, "transit_page", None)
+        if self.mode_key == "transits" and tp is not None and tp.result is not None:
+            # 2.2.17 (item 9 nit): the Transit fit page's report and PNG join the set, so one fit's report, CSV and
+            # PNG share one number (the PNG had its own counter: _5 beside _4).
+            try:
+                names += tp.family_names()
+            except Exception:
+                pass
+        return names
 
     def _save_dates(self) -> str:
         """2.2.5: DD-MON-YYYY of the first point being saved, or first_to_last when they fall on different UTC dates."""
@@ -1448,8 +1458,13 @@ class App(Tk):
     def _results_key(self):
         """2.2.3: identifies the results on screen; a new run, an added night or other comps make a new key."""
         obs = self.observations or []
-        return (id(obs), len(obs), round(obs[0].jd, 6) if obs else 0, round(obs[-1].jd, 6) if obs else 0,
-                tuple(self.active_comps or self.comps_used), self.highlight_night if self._save_one_night else None)
+        tp = getattr(self, "transit_page", None)
+        fit = id(tp.result) if self.mode_key == "transits" and tp is not None and tp.result is not None else None
+        # 2.2.17: id of the list itself (an empty `or []` made a new key on every call)
+        return (id(self.observations), len(obs), round(obs[0].jd, 6) if obs else 0,
+                round(obs[-1].jd, 6) if obs else 0,
+                tuple(self.active_comps or self.comps_used), self.highlight_night if self._save_one_night else None,
+                fit)   # 2.2.17 (item 9 nit): a new transit fit starts a new numbered set
 
     def _family_path(self, folder: str, filename: str) -> str:
         """2.2.3: one number for one save. The first of the three files saved for these results picks the lowest
@@ -10125,8 +10140,14 @@ class App(Tk):
                                           command=lambda: self.show_step(STEP_OUTPUT))
         return page
 
+    def transit_page_on_screen(self) -> bool:
+        """2.2.17 (item 4): the Transit fit page is the page shown (Transits mode, Output step, not Variable View)."""
+        return (self.mode_key == "transits" and getattr(self, "current_step", None) == STEP_OUTPUT
+                and not getattr(self, "_on_credits", False) and not getattr(self, "_variable_view", False))
+
     def show_variables_view(self):
         """Transits mode: the light-curve details page (the Variables Output page) for the open series."""
+        self._variable_view = True   # 2.2.17 (item 4)
         self.page_frames[STEP_OUTPUT].lift()
         self.back_to_transit.pack(side=RIGHT, padx=(8, 0), before=self.output_back)
         self.draw_output()
@@ -11808,6 +11829,13 @@ class App(Tk):
         self.log(f"Comps in use: {used}. {result['done']} points re-derived"
                  + (f", {result['missing']} flagged nocomp." if result["missing"] else "."))
         self._log_zero_point_check()   # 2.2.14 (item 10)
+        # 2.2.17 (item 4): in Transits mode the transit fit follows the new comps (refits on its page).
+        tp = getattr(self, "transit_page", None)
+        if self.mode_key == "transits" and tp is not None:
+            try:
+                tp.comps_changed()
+            except Exception:
+                traceback.print_exc()
         saved = ""
         if self.series_path:
             try:

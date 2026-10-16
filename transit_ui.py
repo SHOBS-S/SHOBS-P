@@ -159,6 +159,41 @@ class TransitPage:
         ttk.Button(row4, text="Tonight's transits…", command=lambda: FinderWindow(app)).pack(side=LEFT)
         ttk.Button(row4, text="Transit planner…", command=lambda: PlannerWindow(app)).pack(side=LEFT, padx=(6, 0))
         ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT, padx=6)
+        # 2.2.17 (item 4): Variable View's comp windows here too; a Use comps change refits the transit.
+        self.comp_health_button = ttk.Button(row4, text="Comp health…", command=self.open_comp_health)
+        self.comp_health_button.pack(side=LEFT, padx=(12, 0))
+        self.use_comps_button = ttk.Button(row4, text="Use comps…", command=self.open_use_comps)
+        self.use_comps_button.pack(side=LEFT, padx=(6, 0))
+        self.comp_hint = StringVar(value="")
+        ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        self._refit_pending = False
+
+        # 2.2.17 (item 5): leave out a stretch of time and refit (no new reduction, same comps).
+        trim_row = ttk.Frame(card, style="Card.TFrame")
+        trim_row.pack(fill=X, pady=(2, 2))
+        ttk.Label(trim_row, text="Trim", style="Card.TLabel").pack(side=LEFT)
+        ttk.Label(trim_row, text="from", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
+        self.trim_from = StringVar(value="")
+        from_box = ttk.Entry(trim_row, textvariable=self.trim_from, width=13)
+        from_box.pack(side=LEFT)
+        ttk.Label(trim_row, text="to", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
+        self.trim_to = StringVar(value="")
+        to_box = ttk.Entry(trim_row, textvariable=self.trim_to, width=13)
+        to_box.pack(side=LEFT)
+        for box in (from_box, to_box):
+            try:
+                box.bind("<Return>", lambda _e: self.trim_and_refit())
+            except Exception:
+                pass
+        ttk.Button(trim_row, text="Trim and refit", command=self.trim_and_refit).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(trim_row, text="Clear trim", command=self.clear_trim).pack(side=LEFT, padx=(6, 0))
+        self.trim_text = StringVar(value="")
+        ttk.Label(trim_row, textvariable=self.trim_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        self._trims = []          # [(BJD_TDB from, to)]; ±inf for an open end
+        self._drag = None         # the span last dragged across the plot (exact BJD behind the boxes' clock text)
+        self._time_map = None     # (BJD_TDB sorted, BJD − JD UTC there, exact?) of the source shown
+        self._span = None
+        self._update_trim_text()
 
         prog = ttk.Frame(card, style="Card.TFrame")
         prog.pack(fill=X, side="bottom", pady=(4, 0))
@@ -248,6 +283,14 @@ class TransitPage:
         body.bind("<Configure>", self._fit_strip, add="+")
         self.notes.tag_configure("warn", foreground="#b35c00")
         self.notes.tag_configure("info", foreground="#33424d")
+        # 2.2.17 (item 4): the comp-choice caution's link to Comp health.
+        try:
+            self.notes.tag_configure("link", foreground="#1565c0", underline=True)
+            self.notes.tag_bind("link", "<Button-1>", lambda _e: self.open_comp_health())
+            self.notes.tag_bind("link", "<Enter>", lambda _e: self.notes.configure(cursor="hand2"))
+            self.notes.tag_bind("link", "<Leave>", lambda _e: self.notes.configure(cursor=""))
+        except Exception:
+            pass
         self.notes.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         self._notes_shown = True
         self.fig = None
@@ -269,6 +312,7 @@ class TransitPage:
             self.draw(placeholder="No transit fit yet: pick a night or open an exoplanet report, then Fit transit.")
         # 2.2.11: no hint here (the plot's placeholder says what to do); the notes column shows only real notes.
         self._notes_text([])
+        self._update_comp_buttons()
 
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
@@ -288,6 +332,7 @@ class TransitPage:
         self.planet_text.set(planet_summary(self.current_planet()))
         self._check_stale(auto=shown)
         self._count_text()
+        self._update_comp_buttons()
 
     def _night_picked(self):
         key = self._night_keys.get(self.night_label.get())
@@ -304,6 +349,7 @@ class TransitPage:
         self.night.set("")
         self.result = None
         self._fit_signature = None
+        self._reset_trim()      # 2.2.17 (item 5): a trim belongs to its source
         self._show_source()
         self._fill_table()
         self.draw()
@@ -322,15 +368,16 @@ class TransitPage:
             if app.observations:
                 target = app.planet_name.get().strip() or app.star_id.get().strip() or "your"
                 kept = (f" Your {target} photometry is kept; choose its night above (or Close report) to go back.")
-            self.banner.set(f"Fitting an EXOTIC report: {name}, {self._report_date()}, {len(r['t'])} points from "
-                            f"{os.path.basename(r.get('path', ''))}." + kept)
+            # 2.2.17 (item 7): the program that wrote the report (#SOFTWARE), not always "EXOTIC".
+            self.banner.set(f"Fitting {report_kind(r.get('header'))}: {name}, {self._report_date()}, {len(r['t'])} "
+                            f"points from {os.path.basename(r.get('path', ''))}." + kept)
             try:
                 self.close_report_button.pack(side=LEFT, padx=(0, 6), after=self.night_box)
             except Exception:
                 pass
             self._show_flip_check(True)
-            app.set_report_note(f"The Transit fit page is showing an EXOTIC report for {name}, not the photometry "
-                                "set up here.")
+            app.set_report_note(f"The Transit fit page is showing {report_kind(r.get('header'))} for {name}, not the "
+                                "photometry set up here.")
         else:
             self.banner.set("")
             try:
@@ -339,6 +386,7 @@ class TransitPage:
                 pass
             self._show_flip_check(False)
             app.set_report_note("")
+        self._update_comp_buttons()
 
     def _show_flip_check(self, report_loaded: bool):
         """2.2.13: the "meridian flip at the largest gap" box, only for a loaded report (photometry has its flip
@@ -376,6 +424,8 @@ class TransitPage:
 
     def _use_night(self, auto: bool = True):
         self._clear_progress()
+        if self.report is not None or self.night.get() != self.source_night:
+            self._reset_trim()      # 2.2.17 (item 5): a trim belongs to its source
         self.report = None
         self._show_source()
         self.result = None
@@ -403,12 +453,14 @@ class TransitPage:
         if r and r.get("n_points") is not None:
             m = int(r["n_points"])
             text += f"; {m} in this fit" + (f" ({m - n} flagged put back)" if m > n else "")
+            if r.get("trim"):
+                text += f", {r['trim']['n']} trimmed"     # 2.2.17 (item 5)
         self.source_text.set(text)
 
     def _signature(self):
         """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet."""
         if self.report is not None:
-            return ("report", id(self.report))
+            return ("report", id(self.report), tuple(self._trims))   # 2.2.17 (item 5): the trim too
         night = self.night.get()
         obs = [o for o in self.app._usable() if o.night == night]
         if not obs:
@@ -416,7 +468,8 @@ class TransitPage:
         mags = [o.mag for o in obs if math.isfinite(o.mag)]
         return (night, len(obs), round(float(sum(mags)), 6), round(float(sum(o.jd for o in obs)), 6),
                 tuple(self.app.active_comps or self.app.comps_used), planet_summary(self.current_planet()),
-                str(self.app._scint_setup() if hasattr(self.app, "_scint_setup") else None))
+                str(self.app._scint_setup() if hasattr(self.app, "_scint_setup") else None),
+                tuple(self._trims))   # 2.2.17 (item 5)
 
     def _check_stale(self, auto: bool = False):
         """Clear a fit whose photometry, comps, or planet have changed since; fit fresh data when asked."""
@@ -476,6 +529,7 @@ class TransitPage:
             return
         self._clear_progress()
         self.report = rep
+        self._reset_trim()      # 2.2.17 (item 5)
         self.night.set("")
         self.night_label.set("")
         h = rep["header"]
@@ -493,10 +547,11 @@ class TransitPage:
         need_eph = not (rep.get("planet") or {}).get("t0") and self.current_planet() is rep.get("planet")
         what = ("looking up the ephemeris…" if need_eph else
                 "fitting…" if not self.app.busy else "press Fit transit when the current job ends")
-        self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from EXOTIC: {what}")
+        writer = report_software(h) or "the report"
+        self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from {writer}: {what}")
         self._notes_text([("info", "Report loaded and being fitted. SHOBS-P refits its light curve and lists "
-                                   "EXOTIC's results beside SHOBS-P's. Cancel stops the fit; Fit transit runs it "
-                                   "again with other settings.")])
+                                   f"the report's own results ({writer}) beside SHOBS-P's. Cancel stops the fit; Fit "
+                                   "transit runs it again with other settings.")])
         if need_eph:
             self._eph_pending = rep
             self._find_ephemeris(rep)
@@ -546,7 +601,8 @@ class TransitPage:
         self._fill_table()
         if not self.app.busy:
             name = planet.get("name") or "the planet"
-            self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from EXOTIC: fitting…")
+            self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from "
+                                  f"{report_software(rep.get('header')) or 'the report'}: fitting…")
             self.fit(auto=True)
         else:
             self.draw(placeholder="Press Fit transit when the current job ends.")
@@ -622,7 +678,8 @@ class TransitPage:
         # measurements to put back. Nothing here needs the images, a plate solution or header pointing.
         after = np.array([o.segment == "flip" for o in obs], dtype=bool)
         extra = {"after_flip": after if (after.any() and (~after).any()) else None,
-                 "flip_source": "the frames' flip segment", "flagged": None}
+                 "flip_source": "the frames' flip segment", "flagged": None,
+                 "jd": jd}   # 2.2.17 (item 5): JD UTC beside BJD_TDB, for the trim's local clock times
         used = {id(o) for o in obs}
         clouded = [o for o in app.observations if o.night == night and id(o) not in used and math.isfinite(o.mag)
                    and o.flag and set(o.flag.split()) <= {"cloud", "cloudedge", core.HAZE_FLAG}]   # 2.2.14 (items 10, 18)
@@ -680,6 +737,11 @@ class TransitPage:
         try:
             self._data_extra = {}
             t, flux, err, am, meta = self._data()
+            # 2.2.17 (item 5): trimmed spans are left out of everything below (kept in memory; Clear trim).
+            self._time_map = self._time_map_for(t)
+            t, flux, err, am, trim = self._apply_trim(t, flux, err, am)
+            if trim:
+                meta["trim"] = trim
         except Exception as exc:
             if auto:
                 self._notes_text([("info", str(exc))])
@@ -829,6 +891,7 @@ class TransitPage:
                 self._loo_pending = None
         except Exception:
             self._loo_pending = None
+        self._run_pending_refit()   # 2.2.17 (item 4): comps changed while this fit ran
 
     # ---- 2.2.16 (item 6): leave-one-comp-out check -----------------------------------------
     def _start_comp_check(self):
@@ -918,6 +981,7 @@ class TransitPage:
                     self.app.status.set("Transit fit done.")
             except Exception:
                 pass
+            self._run_pending_refit()   # 2.2.17 (item 4): comps changed while the check ran
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
@@ -940,6 +1004,11 @@ class TransitPage:
             flags = result.setdefault("flags", [])
             flags.insert(1 if flags else 0, ("warn", meta["comp_noise"]))   # after the verdict line
             self.app.log("Comps: " + meta["comp_noise"])
+        if meta.get("trim"):
+            # 2.2.17 (item 5): the trimmed span in the notes (page, PNG, fit file) and on the plot.
+            result["trim"] = meta["trim"]
+            result.setdefault("flags", []).append(("info", meta["trim"]["text"]))
+            self.app.log("Transit fit: " + meta["trim"]["text"])
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
         self.meta_for_files = meta
@@ -954,6 +1023,7 @@ class TransitPage:
         self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
         self.draw()
         self._show_refit_flagged()
+        self._update_trim_text()
 
     # ---- display ---------------------------------------------------------------------------
     def _set_columns(self):
@@ -961,6 +1031,10 @@ class TransitPage:
         cols = ["param", "shobs", "free", "pub"] + (["exotic"] if self.report is not None else [])
         self._display_cols = cols
         self.table.configure(displaycolumns=cols)
+        try:
+            self.table.heading("exotic", text=self._report_column(), anchor=W)   # 2.2.17 (item 7)
+        except Exception:
+            pass
 
     def _table_xview(self, first, last):
         try:
@@ -998,7 +1072,7 @@ class TransitPage:
         """2.2.10: each column as wide as its heading or its widest value, no more, so no column hogs the strip
         and no horizontal scroll bar is needed."""
         labels = {"param": "Parameter", "shobs": "SHOBS-P (MCMC)", "free": "Free shape", "pub": "Published / prior",
-                  "exotic": "EXOTIC report"}
+                  "exotic": self._report_column()}   # 2.2.17 (item 7)
         try:
             from tkinter import font as tkfont
             head = tkfont.Font(self.table, font=(core.UI_FONT, 10, "bold"))
@@ -1241,6 +1315,12 @@ class TransitPage:
         self.notes.configure(state="normal")
         self.notes.delete("1.0", END)
         for level, text in flags:
+            if level == "warn" and self._comp_link_wanted(text):
+                # 2.2.17 (item 4): a comp-choice caution links straight to Comp health.
+                self.notes.insert(END, "⚠ " + text + " ", level)
+                self.notes.insert(END, COMP_LINK, (level, "link"))
+                self.notes.insert(END, "\n\n", level)
+                continue
             self.notes.insert(END, ("⚠ " if level == "warn" else "• ") + text + "\n\n", level)
         self.notes.configure(state="disabled")
         self._show_notes(bool(flags))
@@ -1290,6 +1370,7 @@ class TransitPage:
         ax, axr = self.ax, self.ax_r
         ax.clear()
         axr.clear()
+        self._make_span_selector(None)   # 2.2.17 (item 5): a drag means something only on a fitted plot
         self._has_title = bool(r)
         self._single_panel = False
         axr.set_visible(True)
@@ -1348,7 +1429,8 @@ class TransitPage:
             exm = tc.occultation(tc.separation(tt, ex["Tc"][0], r["period"], a_ex, min(b_ex, a_ex * 0.99)),
                                  ex["Rp/R*"][0], u1, u2)
             ax.plot((tt - best["tc"]) * 24, exm, "--", color=PINK, lw=1.3,
-                    label=f"EXOTIC: Rp/R* {ex['Rp/R*'][0]:.3f}, b {b_ex:.2f}")
+                    label=f"{report_software((self.report or {}).get('header')) or 'Report'}: "
+                          f"Rp/R* {ex['Rp/R*'][0]:.3f}, b {b_ex:.2f}")   # 2.2.17 (item 7)
         if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
             xp = (r["tc_pred"] - best["tc"]) * 24
             ax.axvline(xp, color="#888", ls="--", lw=0.8)
@@ -1364,6 +1446,7 @@ class TransitPage:
                 a_.axvline(xf, color="#7b1fa2", ls="-.", lw=1.0)
             ax.text(xf, 0.99, f" flip: step {flip['step'][0] * 100:+.1f} ± {flip['step'][1] * 100:.1f}%",
                     transform=ax.get_xaxis_transform(), ha="left", va="top", fontsize=8, color="#7b1fa2")
+        trim_x = self._draw_trim(r, best, x)   # 2.2.17 (item 5)
         ax.set_ylabel("Relative flux")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8, loc="lower left", frameon=False)
@@ -1389,6 +1472,9 @@ class TransitPage:
         axr.grid(alpha=0.3)
         # 2.2.9: the x range is the data plus the fitted transit, never stretched to a predicted Tc far away.
         xd_lo, xd_hi = float(np.nanmin(x)), float(np.nanmax(x))
+        if trim_x:
+            # 2.2.17 (item 5): the greyed trimmed spans stay in view.
+            xd_lo, xd_hi = min(xd_lo, trim_x[0]), max(xd_hi, trim_x[1])
         if t14 / 2 >= xd_lo and -t14 / 2 <= xd_hi:
             x_lo, x_hi = min(xd_lo, -t14 / 2) - 0.25, max(xd_hi, t14 / 2) + 0.25
         else:
@@ -1397,8 +1483,367 @@ class TransitPage:
         ax.set_xlim(x_lo, x_hi)
         for label in ax.get_xticklabels():
             label.set_visible(False)
+        self._make_span_selector(best["tc"])   # 2.2.17 (item 5): drag across the plot to fill the trim boxes
         self._set_margins()
         self.canvas.draw_idle()
+
+    # ---- 2.2.17 (item 4): Comp health and Use comps from the Transit fit page ---------------
+    def _comp_windows_ok(self) -> str:
+        """'' when Comp health / Use comps can open here, else why not (a report shown, or no photometry)."""
+        if self.report is not None and self.app.observations:
+            return ("Comp health and Use comps are for this session's photometry: choose its night above (or Close "
+                    "report).")
+        if self.report is not None or not self.app.observations:
+            return "Comp health needs this session's photometry."
+        return ""
+
+    def _update_comp_buttons(self):
+        why = self._comp_windows_ok()
+        for button in (self.comp_health_button, self.use_comps_button):
+            try:
+                button.configure(state="disabled" if why else "normal")
+            except Exception:
+                pass
+        self.comp_hint.set(why)
+
+    def open_comp_health(self):
+        why = self._comp_windows_ok()
+        if why:
+            self.app.status.set(why)
+            return
+        self.app.show_comp_health()
+
+    def open_use_comps(self):
+        why = self._comp_windows_ok()
+        if why:
+            self.app.status.set(why)
+            return
+        self.app.choose_comps()
+
+    def _comp_link_wanted(self, text: str) -> bool:
+        """A comp-choice caution (the comp-noise warning, the leave-one-comp-out cautions) gets a Comp health link
+        when Comp health can open (this session's photometry is shown)."""
+        return str(text).startswith(COMP_CAUTION_PREFIXES) and not self._comp_windows_ok()
+
+    def comps_changed(self):
+        """Called by the App after Use comps applied a new comp set in Transits mode: the shown fit is stale; refit
+        now when this page is on screen (else when it is next shown), or once the fit or comp check running now
+        ends (its result is not shown: _finish_fit and _comp_check_done see the changed signature)."""
+        if self.report is not None:
+            return       # the page shows a report; the photometry's fit is redone when its night is chosen again
+        self._auto_tried = None      # the same comps as an earlier automatic fit still refit
+        if self._fitting or getattr(self, "_checking", False):
+            self._refit_pending = True
+            self._check_stale(auto=False)
+            self.app.log("Transit fit: comps changed; refitting when the current fit or comp check ends.")
+            return
+        on_screen = getattr(self.app, "transit_page_on_screen", lambda: True)()
+        self._check_stale(auto=on_screen)
+        if self._fitting:
+            comps = ", ".join(self.app.active_comps or self.app.comps_used)
+            self._notes_text([("info", f"Comps changed (now {comps}): refitting with the same settings…")])
+
+    def _run_pending_refit(self):
+        if not self._refit_pending or self.app.busy or self._fitting or getattr(self, "_checking", False):
+            return
+        self._refit_pending = False
+        if self.report is None and getattr(self.app, "transit_page_on_screen", lambda: True)():
+            self._auto_tried = None
+            self._check_stale(auto=True)
+
+    # ---- 2.2.17 (item 5): trim -------------------------------------------------------------
+    def _report_radec(self):
+        """The report's target RA/Dec (degrees) when the Input page or the planet lookup is for the same star."""
+        rp = (self.report or {}).get("planet") or {}
+        names = {_norm(rp.get("name")), _norm(rp.get("host"))} - {""}
+        app = self.app
+        mine = {_norm(app.planet_name.get()), _norm(app.star_id.get())} - {""}
+        if names & mine:
+            try:
+                return app.target_radec_deg()
+            except Exception:
+                pass
+        info = getattr(app, "planet_info", None) or {}
+        if names & ({_norm(info.get("name")), _norm(info.get("host"))} - {""}) and info.get("ra") is not None \
+                and info.get("dec") is not None:
+            return float(info["ra"]), float(info["dec"])
+        return None
+
+    def _time_map_for(self, t):
+        """(BJD_TDB sorted, BJD_TDB − JD_UTC there, exact) for the clock times of the trim. Photometry: from each
+        frame's JD and BJD. A report has BJD only: BJD − JD from the target's position when known (a few seconds),
+        else TDB − UTC alone (local times then good to about ±8 minutes)."""
+        t = np.asarray(t, dtype=float)
+        ok = np.isfinite(t)
+        jd = (self._data_extra or {}).get("jd") if self.report is None else None
+        if jd is not None and len(jd) == len(t):
+            off = t - np.asarray(jd, dtype=float)
+            exact = True
+        else:
+            radec = self._report_radec()
+            if radec is not None:
+                off = np.asarray(tc.bjd_minus_jd_days(t - 69.184 / 86400.0, radec[0], radec[1]), dtype=float)
+                exact = True
+            else:
+                off = np.full(t.shape, 69.184 / 86400.0)
+                exact = False
+        ok &= np.isfinite(off)
+        order = np.argsort(t[ok])
+        return t[ok][order], off[ok][order], exact
+
+    def _bjd_to_clock(self, bjd: float, tmap=None) -> str:
+        tmap = tmap or self._time_map
+        off = float(np.interp(bjd, tmap[0], tmap[1])) if tmap is not None and len(tmap[0]) else 69.184 / 86400.0
+        return tc.jd_to_local(bjd - off).strftime("%H:%M")
+
+    def _clock_to_bjd(self, text: str, tmap) -> float | None:
+        """A trim box: local clock time (as parse_clock reads it) or a BJD_TDB number -> BJD_TDB; None when empty.
+        A clock time is taken on the date that puts it nearest the middle of the data, so 00:42 on a night that
+        started at 20:41 is the next morning's 00:42."""
+        import datetime as _dt
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        if re.fullmatch(r"24\d{5}(\.\d*)?", raw):
+            return float(raw)
+        h, m = parse_clock(raw)
+        if tmap is None or not len(tmap[0]):
+            raise ValueError("no data to trim")
+        ts, off = tmap[0], tmap[1]
+        jd_mid = float(np.median(ts) - np.median(off))
+        mid = tc.jd_to_local(jd_mid)
+        best = None
+        for d in (-1, 0, 1):
+            local = _dt.datetime.combine(mid.date() + _dt.timedelta(days=d), _dt.time(h, m)).astimezone()
+            jd = local.timestamp() / 86400.0 + 2440587.5
+            if best is None or abs(jd - jd_mid) < abs(best - jd_mid):
+                best = jd
+        return best + float(np.interp(best, ts - off, off))
+
+    def _trim_mask(self, t, trims=None):
+        """True for the points kept (outside every trimmed span)."""
+        t = np.asarray(t, dtype=float)
+        keep = np.ones(t.shape, dtype=bool)
+        for lo, hi in (self._trims if trims is None else trims):
+            keep &= ~((t >= lo) & (t <= hi))
+        return keep
+
+    def _apply_trim(self, t, flux, err, am):
+        """Leave the trimmed points out of the arrays (and the flip flags, comp matrix and flagged frames that go with
+        them). Returns (t, flux, err, am, trim info or None)."""
+        if not self._trims:
+            return t, flux, err, am, None
+        t = np.asarray(t, dtype=float)
+        keep = self._trim_mask(t)
+        if keep.all():
+            return t, flux, err, am, None
+        if int(keep.sum()) < 20:
+            raise ValueError(f"The trim leaves {int(keep.sum())} points; a transit fit needs at least 20. Clear trim "
+                             "and trim less.")
+        flux, err, am = np.asarray(flux, dtype=float), np.asarray(err, dtype=float), np.asarray(am, dtype=float)
+        ex = self._data_extra if self._data_extra is not None else {}
+        n = len(t)
+        for key in ("after_flip", "comp_mags", "jd"):
+            v = ex.get(key)
+            if v is not None and len(v) == n:
+                ex[key] = np.asarray(v)[keep]
+        af = ex.get("after_flip")
+        if af is not None and not (np.any(af) and not np.all(af)):
+            ex["after_flip"] = None
+        fl = ex.get("flagged")
+        if fl is not None and len(fl.get("t", [])):
+            fk = self._trim_mask(fl["t"])
+            if not fk.all():
+                ex["flagged"] = ({k: (np.asarray(v)[fk] if isinstance(v, np.ndarray) and len(v) == len(fk) else v)
+                                  for k, v in fl.items()} if fk.any() else None)
+        info = self._trim_info(t, flux, ~keep)
+        return t[keep], flux[keep], err[keep], am[keep], info
+
+    def _trim_info(self, t, flux, cut):
+        spans = []
+        for lo, hi in self._trims:
+            m = cut & (t >= lo) & (t <= hi)
+            if m.any():
+                first, last = float(t[m].min()), float(t[m].max())
+                spans.append({"first": first, "last": last, "n": int(m.sum()),
+                              "clock": f"{self._bjd_to_clock(first)}–{self._bjd_to_clock(last)}"})
+        spans.sort(key=lambda s_: s_["first"])
+        exact = bool(self._time_map[2]) if self._time_map else False
+        where = "; ".join(f"{s_['clock']} local (BJD_TDB {s_['first']:.5f}–{s_['last']:.5f}, {s_['n']} point"
+                          f"{'s' if s_['n'] != 1 else ''})" for s_ in spans)
+        n = int(cut.sum())
+        approx = "" if exact else " Local times are approximate (±8 min: the report's star position is not known)."
+        text = (f"Trimmed: {where}. These {n} points are left out of the fit, the verdict, the rms, the comp check "
+                f"and the saved files; Clear trim puts them back.{approx}")
+        note = ("SHOBS-P: trimmed (left out of the fit) " + "; ".join(
+            f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local, {s_['n']} points)"
+            for s_ in spans))
+        return {"spans": spans, "n": n, "text": text, "report_note": note, "exact": exact,
+                "t": t[cut], "flux": np.asarray(flux, dtype=float)[cut]}
+
+    def _reset_trim(self):
+        self._trims = []
+        self._drag = None
+        try:
+            self.trim_from.set("")
+            self.trim_to.set("")
+        except Exception:
+            pass
+        self._update_trim_text()
+
+    def _update_trim_text(self):
+        trim = (self.result or {}).get("trim")
+        if trim:
+            self.trim_text.set("Trimmed: " + ", ".join(f"{s_['clock']} ({s_['n']} pts)" for s_ in trim["spans"]))
+        elif self._trims:
+            self.trim_text.set(f"{len(self._trims)} trimmed span{'s' if len(self._trims) != 1 else ''} set; "
+                               "Fit transit applies it.")
+        else:
+            self.trim_text.set("local time (HHMM or HH:MM) or BJD_TDB; or drag across the plot")
+
+    def trim_and_refit(self):
+        """Add the From–To span (an empty From = from the start, an empty To = to the end) to the trimmed spans and
+        refit the same data (no new reduction; the same comps)."""
+        if self._fitting or getattr(self, "_checking", False) or self.app.busy:
+            self.app.status.set("Wait for the current fit or check to end, then Trim and refit.")
+            return
+        a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
+        if not a and not b:
+            messagebox.showinfo("SHOBS-P", "Type a From and/or To time (local, HHMM or HH:MM, or BJD_TDB), or drag "
+                                           "across the plot, then Trim and refit.")
+            return
+        try:
+            self._data_extra = {}
+            t = np.asarray(self._data()[0], dtype=float)
+            tmap = self._time_map_for(t)
+            self._time_map = tmap
+            drag = self._drag or {}
+            lo = drag["lo"] if drag and a and a == drag.get("from") else self._clock_to_bjd(a, tmap)
+            hi = drag["hi"] if drag and b and b == drag.get("to") else self._clock_to_bjd(b, tmap)
+        except ValueError as exc:
+            messagebox.showerror("SHOBS-P", f"Trim: {exc}")
+            return
+        lo = -math.inf if lo is None else lo
+        hi = math.inf if hi is None else hi
+        if lo > hi:
+            messagebox.showerror("SHOBS-P", f"Trim: From ({a}) is after To ({b}).")
+            return
+        trims = self._trims + [(lo, hi)]
+        inside = ~self._trim_mask(t, [(lo, hi)])
+        if not inside.any():
+            messagebox.showinfo("SHOBS-P", "No points fall between From and To: nothing to trim.")
+            return
+        kept = int(self._trim_mask(t, trims).sum())
+        if kept < 20:
+            messagebox.showerror("SHOBS-P", f"That trim would leave {kept} points; a transit fit needs at least 20.")
+            return
+        self._trims = trims
+        self._drag = None
+        self.app.log(f"Transit fit: trimming {int(inside.sum())} points ({a or 'start'} to {b or 'end'}) and refitting.")
+        self._update_trim_text()
+        self.fit()
+
+    def clear_trim(self):
+        if not self._trims:
+            self.trim_from.set("")
+            self.trim_to.set("")
+            self._drag = None
+            self.app.status.set("Nothing is trimmed.")
+            return
+        if self._fitting or getattr(self, "_checking", False) or self.app.busy:
+            self.app.status.set("Wait for the current fit or check to end, then Clear trim.")
+            return
+        self._reset_trim()
+        self.app.log("Transit fit: trim cleared; refitting all points.")
+        self.fit()
+
+    def _span_dragged(self, lo: float, hi: float):
+        """A drag across the fitted plot: its ends (BJD_TDB) into the From and To boxes, as local clock times; the
+        exact times are used unless a box is edited."""
+        a, b = self._bjd_to_clock(lo), self._bjd_to_clock(hi)
+        self._drag = {"from": a, "to": b, "lo": lo, "hi": hi}
+        self.trim_from.set(a)
+        self.trim_to.set(b)
+        r = self.result or {}
+        t = np.asarray(r.get("t", []), dtype=float)
+        n = int(((t >= lo) & (t <= hi)).sum()) if t.size else 0
+        self.app.status.set(f"Trim span {a}–{b} ({n} point{'s' if n != 1 else ''}) marked: Trim and refit leaves it out.")
+
+    def _make_span_selector(self, tc0):
+        """A matplotlib SpanSelector on the fitted plot (hours from the fitted Tc), or none when tc0 is None."""
+        old, self._span = self._span, None
+        if old is not None:
+            try:
+                old.disconnect_events()
+            except Exception:
+                pass
+        if tc0 is None or self.fig is None:
+            return
+        try:
+            from matplotlib.widgets import SpanSelector
+        except Exception:
+            return
+
+        def onselect(x0, x1):
+            if not (math.isfinite(x0) and math.isfinite(x1)) or abs(x1 - x0) < 1e-6:
+                return
+            self._span_dragged(tc0 + min(x0, x1) / 24.0, tc0 + max(x0, x1) / 24.0)
+        style = dict(facecolor="#9aa7b0", alpha=0.3)
+        try:
+            self._span = SpanSelector(self.ax, onselect, "horizontal", useblit=False, props=style, minspan=0.5 / 60)
+        except TypeError:
+            try:
+                self._span = SpanSelector(self.ax, onselect, "horizontal", useblit=False, rectprops=style,
+                                          minspan=0.5 / 60)
+            except Exception:
+                self._span = None
+        except Exception:
+            self._span = None
+
+    def _draw_trim(self, r, best, x):
+        """Grey the trimmed spans (both panels) and show their points faintly; returns the x range they need."""
+        trim = r.get("trim")
+        if not trim or not trim.get("spans"):
+            return None
+        ax, axr = self.ax, self.ax_r
+        pad = max(float(r.get("cadence_days") or 0) * 24 / 2, 0.5 / 60)
+        lo, hi = math.inf, -math.inf
+        for k, sp in enumerate(trim["spans"]):
+            x0, x1 = (sp["first"] - best["tc"]) * 24 - pad, (sp["last"] - best["tc"]) * 24 + pad
+            for a_ in (ax, axr):
+                a_.axvspan(x0, x1, color="#c8d0d6", alpha=0.45, lw=0, zorder=0,
+                           label="trimmed (not fitted)" if (a_ is ax and k == 0) else None)
+            ax.text((x0 + x1) / 2, 0.99, f"trimmed\n{sp['clock']}", transform=ax.get_xaxis_transform(), ha="center",
+                    va="top", fontsize=7, color="#5d6d76")
+            lo, hi = min(lo, x0), max(hi, x1)
+        try:
+            # The trimmed points themselves, faint: their raw flux over the fit's baseline at the nearest time.
+            tt = np.asarray(trim["t"], dtype=float)
+            ft = np.asarray(trim["flux"], dtype=float) / float(r.get("flux_median") or 1.0)
+            order = np.argsort(r["t"])
+            base = np.interp(tt, np.asarray(r["t"])[order], np.asarray(r["baseline"])[order])
+            ax.plot((tt - best["tc"]) * 24, ft / base, "x", color="#b0bac1", ms=3, mew=0.6, zorder=1)
+        except Exception:
+            pass
+        return lo, hi
+
+    # ---- 2.2.17 (items 7, 9): names ---------------------------------------------------------
+    def _report_column(self) -> str:
+        """The table column of the opened report: "SHOBS-P 2.2.16 report", "EXOTIC 4.3.2 report", else "Report"."""
+        sw = report_software((self.report or {}).get("header"))
+        return f"{sw} report" if sw else "Report"
+
+    def family_names(self) -> list:
+        """The transit report and plot PNG names: AAVSO_<planet>_<date>_SHOBS-P.txt, <planet>_<filter>_<date>
+        _SHOBS-P_transit.png. 2.2.17 (item 9): saved as one numbered set with the light-curve CSV (App._family_path)."""
+        r = self.result or {}
+        meta = self.meta_for_files or {}
+        name = _file_planet(((r.get("planet") or {}).get("name")) or (self.current_planet() or {}).get("name"))
+        filt = str(meta.get("filter") or "CV").strip() or "CV"
+        date = str(meta.get("obsdate") or "").strip()
+        png = f"{name}_{filt}_{date}_SHOBS-P_transit.png" if date else f"{name}_{filt}_SHOBS-P_transit.png"
+        names = [f"AAVSO_{name}_{date}_SHOBS-P.txt", png]
+        return ["".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in n) for n in names]
 
     # ---- files -----------------------------------------------------------------------------
     def _file_meta(self) -> dict:
@@ -1415,6 +1860,10 @@ class TransitPage:
         if wf:
             note = (f"SHOBS-P: fit INCLUDES {wf['n']} frames flagged {wf['label']} (error bars x{wf['factor']:g})")
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
+        trim = (self.result or {}).get("trim")
+        if trim:
+            # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(trim["report_note"])
         fnote = tc.flip_report_note(self.result or {})
         if fnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
@@ -1437,13 +1886,10 @@ class TransitPage:
             return
         if self._still_checking("plot PNG"):
             return
-        meta = self.meta_for_files or {}
-        name = ((self.result.get("planet") or {}).get("name") or "planet").replace(" ", "")
-        filt = str(meta.get("filter") or "CV").strip() or "CV"
-        date = str(meta.get("obsdate") or "").strip()
-        fname = f"{name}_{filt}_{date}_SHOBS-P_transit.png" if date else f"{name}_{filt}_SHOBS-P_transit.png"
+        fname = self.family_names()[1]
+        # 2.2.17 (item 9 nit): one number for the report, CSV and PNG of one fit (the PNG had its own _N counter).
         path = self.app.output_path(fname, title="Save transit plot PNG", defaultextension=".png",
-                                    filetypes=[("PNG", "*.png")], parent=self.app)
+                                    filetypes=[("PNG", "*.png")], parent=self.app, family=True)
         if not path:
             return
         try:
@@ -1481,7 +1927,7 @@ class TransitPage:
         all_cols = ["param", "shobs", "free", "pub", "exotic"]
         cols = list(getattr(self, "_display_cols", None) or all_cols[:4])
         labels = {"param": "Parameter", "shobs": "SHOBS-P (MCMC)", "free": "Free shape", "pub": "Published / prior",
-                  "exotic": "EXOTIC report"}
+                  "exotic": self._report_column()}   # 2.2.17 (item 7)
         heads = [labels[c] for c in cols]
         rows = [heads]
         for iid in self.table.get_children():
@@ -1491,7 +1937,8 @@ class TransitPage:
                 vals = []
             by_col = dict(zip(all_cols, [str(v) for v in vals]))
             rows.append([by_col.get(c, "") for c in cols])
-        notes = [ln.strip() for ln in self.notes.get("1.0", END).split("\n") if ln.strip()]
+        # 2.2.17 (item 4): the notes without the on-screen Comp health link.
+        notes = [ln.replace(" " + COMP_LINK, "").strip() for ln in self.notes.get("1.0", END).split("\n") if ln.strip()]
         w_in = pw / 130.0
         # 2.2.12: lines are wrapped by their measured width at their own size and weight (the old estimate of
         # 13 characters an inch ran long bold verdicts off the edge), and notes are wrapped in full, not cut.
@@ -1540,10 +1987,10 @@ class TransitPage:
         if not self._confirm_export():
             return
         meta = self._file_meta()
-        name = (self.result["planet"].get("name") or "planet").replace(" ", "")
-        path = self.app.output_path(f"AAVSO_{name}_{meta.get('obsdate', '')}_SHOBS-P.txt",
-                                    title="Save AAVSO exoplanet report", defaultextension=".txt",
-                                    filetypes=[("Text", "*.txt")], parent=self.app)
+        # 2.2.17 (item 9 nit): one number for the report, CSV and PNG of one fit.
+        path = self.app.output_path(self.family_names()[0], title="Save AAVSO exoplanet report",
+                                    defaultextension=".txt", filetypes=[("Text", "*.txt")], parent=self.app,
+                                    family=True)
         if not path:
             return
         with core.AsciiWriter(path, newline="\n") as fh:
@@ -1628,13 +2075,15 @@ class TransitPage:
             return
         r = self.result
         meta = self._file_meta()
-        planet = (r["planet"].get("name") or "planet").replace(" ", "")
+        planet = _file_planet(r["planet"].get("name"))
         from datetime import datetime, timezone
         date = datetime.fromtimestamp((float(r["t"].min()) - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
         base = f"{planet}_{date}_{meta.get('obscode') or 'obs'}_SHOBS-P"
+        # 2.2.17 (item 9): the folder is ExoFOP_<planet>_<tag>; the files inside keep <planet>_<tag> names.
+        dir_prefix = "ExoFOP_"
         # Never write into an earlier package: a second save of the same night becomes ..._2 (2.2).
         # 2.2.16 (item 4): folder only (no zip; an old package's .zip still counts as taken).
-        out, k = os.path.join(folder, base), 2
+        out, k = os.path.join(folder, dir_prefix + base), 2
         while True:
             stale = getattr(self, "_stale_parts", set())
             if os.path.normcase(os.path.abspath(out + ".part")) in stale:
@@ -1643,8 +2092,8 @@ class TransitPage:
                     stale.discard(os.path.normcase(os.path.abspath(out + ".part")))
             if not (os.path.exists(out) or os.path.exists(out + ".zip") or os.path.exists(out + ".part")):
                 break
-            out, k = os.path.join(folder, f"{base}_{k}"), k + 1
-        base = os.path.basename(out)
+            out, k = os.path.join(folder, f"{dir_prefix}{base}_{k}"), k + 1
+        base = os.path.basename(out)[len(dir_prefix):]
         final = out
         # 2.2.16 (item 4): written into <folder>.part first; kept (renamed) only when it differs from the last package
         # of this fit in this folder (a double-click had made identical _3 and _4).
@@ -1686,8 +2135,8 @@ class TransitPage:
         self._last_package = {"print": fingerprint, "folder": final}
         out = final
         self.app.log(f"ExoFOP package folder: {out}")
-        self.app.saved_notice(out, "Package folder: light curve (CSV), fit and ExoFOP notes (text), plot, and an "
-                                   "AAVSO exoplanet report.")
+        # 2.2.17 (item 9): no AAVSO report copy inside (John); Save AAVSO exoplanet report writes that one.
+        self.app.saved_notice(out, "Package folder: light curve (CSV), fit and ExoFOP notes (text), and the plot.")
 
     def _write_package_files(self, out, base, r, meta, planet):
         """2.2.16 (item 4): the package's files in folder out; returns (paths, the plot's PNG bytes without its DTG
@@ -1707,10 +2156,7 @@ class TransitPage:
             # 2.2.15 (item 11): equipment from the headers and Optics box, pixel scale, aperture, coverage.
             fh.write(tc.exofop_notes(r, meta, mono=self.app.pattern.get() == core.MONO))
         files.append(txt)
-        rep = os.path.join(out, f"AAVSO_{planet}_{meta.get('obsdate', '')}_SHOBS-P.txt")
-        with core.AsciiWriter(rep, newline="\n") as fh:
-            fh.write(tc.aavso_exoplanet_report(r, meta))
-        files.append(rep)
+        # 2.2.17 (item 9): the AAVSO exoplanet report is no longer copied into the package (John's choice).
         png_print = None
         if self.fig is not None:
             png = os.path.join(out, f"{base}_plot.png")
@@ -1793,6 +2239,41 @@ def _state(verdict) -> str:
 
 def _norm(name) -> str:
     return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+# 2.2.17 (item 4): the comp-choice cautions (photometry_core.comp_noise_warning, transit_core.leave_one_comp_out) and
+# the link the notes add after them.
+COMP_CAUTION_PREFIXES = ("The comparison stars set most of the noise", "Leaving out ", "The comp choice moves")
+COMP_LINK = "→ Open Comp health…"
+
+
+def report_software(header) -> str:
+    """2.2.17 (item 7): the program that wrote an AAVSO exoplanet report, from #SOFTWARE: "EXOTIC v4.3.2" ->
+    "EXOTIC 4.3.2", "SHOBS-P 2.2.16" -> "SHOBS-P 2.2.16"; '' when the header does not say."""
+    raw = " ".join(str((header or {}).get("SOFTWARE", "") or "").split())
+    if not raw:
+        return ""
+    words, name, version = raw.split(" "), [], ""
+    for w in words:
+        if re.fullmatch(r"[vV]?\d+(\.\d+)*[A-Za-z0-9.\-]*", w) and name:
+            version = w[1:] if w[:1] in "vV" else w
+            break
+        name.append(w)
+    label = " ".join(name)[:40].strip()
+    return (label + (f" {version}" if version else "")).strip()
+
+
+def report_kind(header) -> str:
+    """2.2.17 (item 7): "a SHOBS-P 2.2.16 report", "an EXOTIC 4.3.2 report", or "an AAVSO exoplanet report"."""
+    sw = report_software(header)
+    if not sw:
+        return "an AAVSO exoplanet report"
+    return ("an " if sw[0].lower() in "aeiou" else "a ") + sw + " report"
+
+
+def _file_planet(name) -> str:
+    """2.2.17 (item 9): the planet in file and folder names, one spelling everywhere: "KELT-16 b" -> "KELT-16b"."""
+    return "".join(str(name or "planet").split()) or "planet"
 
 
 def parse_clock(text):
