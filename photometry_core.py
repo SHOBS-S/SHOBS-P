@@ -116,6 +116,8 @@ def frame_number(path: str):
             break
     else:
         name = os.path.splitext(name)[0]
+    if re.search(r"(?<!\d)\d{4}-\d{2}-\d{2}$", name):
+        return None   # ends in a date (…_2026-10-02), not a frame counter
     m = re.search(r"(?<!\d)(\d{1,5})$", name)
     return int(m.group(1)) if m else None
 
@@ -151,26 +153,51 @@ def frame_labels(paths: list[str]) -> dict:
 _FRAME_LABEL_CACHE = {}
 
 
-def frame_label(path: str, siblings: list[str] | None = None) -> str:
-    """One frame's label (see frame_labels), worked out from every image file in its folder so it is the same on the
-    Blink page, in the log and in the CSV whatever is rejected; from `siblings` (or the frame alone) when the folder
-    is gone (a series made on another PC)."""
-    folder = os.path.dirname(str(path))
+def _folder_frame_labels(folder: str):
+    """({lights: label}, {every image but SHOBS-P masters: label}) for a folder, cached by the folder's modification
+    time. The lights set is the list Blink shows for lights (masters out, then split_lights), so numbers, letters and
+    #k positions match the page; the second set is the Flats list (masters out)."""
     try:
         key = (folder, os.path.getmtime(folder))
     except OSError:
-        key = None
-    if key is not None:
-        labels = _FRAME_LABEL_CACHE.get(key)
-        if labels is None:
-            labels = frame_labels(list_fits(folder))
-            if len(_FRAME_LABEL_CACHE) > 20:
-                _FRAME_LABEL_CACHE.clear()
-            _FRAME_LABEL_CACHE[key] = labels
+        return None
+    hit = _FRAME_LABEL_CACHE.get(key)
+    if hit is None:
+        images = [p for p in list_fits(folder) if not is_shobsp_master_name(p)]
+        try:
+            lights = split_lights(images)[0]
+        except Exception:
+            lights = images
+        hit = (frame_labels(lights), frame_labels(images))
+        if len(_FRAME_LABEL_CACHE) > 20:
+            _FRAME_LABEL_CACHE.clear()
+        _FRAME_LABEL_CACHE[key] = hit
+    return hit
+
+
+def frame_label(path: str, fallback: dict | None = None) -> str:
+    """One frame's label (see frame_labels), worked out from its folder's frame list (lights as Blink lists them, else
+    every image but masters, e.g. flats) so it is the same on the Blink page, in the log and in the CSV whatever is
+    rejected. When the folder is gone (a series made on another PC): `fallback` ({path: label} from frame_labels of
+    that night's files, computed once by the caller), else the file's own number."""
+    sets = _folder_frame_labels(os.path.dirname(str(path)))
+    for labels in (sets or ()):
         if path in labels:
             return labels[path]
-    labels = frame_labels(list(siblings) if siblings and path in siblings else [path])
-    return labels.get(path, "")
+    if fallback and path in fallback:
+        return fallback[path]
+    return frame_labels([path]).get(path, "")
+
+
+def frame_labels_for(paths: list[str]) -> list[str]:
+    """frame_label for many frames, one folder look-up per folder (the Blink rejected list, the run log)."""
+    sets, out = {}, []
+    for p in paths:
+        folder = os.path.dirname(str(p))
+        if folder not in sets:
+            sets[folder] = _folder_frame_labels(folder) or ()
+        out.append(next((labels[p] for labels in sets[folder] if p in labels), None) or frame_label(p))
+    return out
 
 
 def frame_list_text(labels: list[str], limit: int = 40) -> str:
@@ -4617,9 +4644,18 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
             + ",frame"   # 2.2.17 (item 6): the frame's own number from its file name (as on the Blink page), last
             + "\n"
         )
-        by_night = {}
+        by_night, night_labels, dir_ok = {}, {}, {}
         for obs in observations:
             by_night.setdefault(obs.night, []).append(obs.path)
+
+        def frame_of(obs):
+            # The folder's labels; a night whose folder is gone gets frame_labels of its files once (not per point).
+            folder = os.path.dirname(obs.path)
+            if dir_ok.setdefault(folder, os.path.isdir(folder)):
+                return frame_label(obs.path)
+            if obs.night not in night_labels:
+                night_labels[obs.night] = frame_labels(by_night[obs.night])
+            return frame_label(obs.path, night_labels[obs.night])
         normalized = normalize_segments(observations) if observations else []
         seg_words = segment_words(observations)
         for k, (obs, zp, nm) in enumerate(zip(observations, corrected, normalized)):
@@ -4657,7 +4693,7 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
                     num(scint_mag(obs, scint)),
                     num(point_err(obs, scint)),
                     *_extra_comp_pos_fields(obs, n_comps),
-                    frame_label(obs.path, by_night.get(obs.night)).replace(",", "_"),
+                    frame_of(obs).replace(",", "_"),
                 ])
                 + "\n"
             )

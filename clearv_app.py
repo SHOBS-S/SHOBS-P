@@ -608,7 +608,9 @@ class App(Tk):
         self.period = None
         self.rejected = set()
         self.blink_paths = []
-        self._blink_times = {}   # 2.2.17 (item 6): {path: local clock time of the exposure}
+        # 2.2.17 (item 6): {path: local clock time of the exposure}; also written by the Blink preload thread (single
+        # dict stores, atomic under the GIL; Tk is never touched from there).
+        self._blink_times = {}
         self.blink_index = 0
         self.blink_playing = False
         self._blink_loaded_from = None
@@ -2751,8 +2753,8 @@ class App(Tk):
         ttk.Button(rej, text="Show", command=self.show_listed_frame).pack(side=RIGHT, padx=(4, 4))
         self.blink_rejected_box.pack(side=RIGHT)
         ttk.Label(rej, text="Rejected frame", style="Card.TLabel").pack(side=RIGHT, padx=(12, 4))
-        rej.bind("<Configure>", lambda e: self.blink_rejected_label.configure(
-            wraplength=max(int(e.width) - 360, 200)), add="+")
+        rej.bind("<Configure>", lambda e: self._wrap_rejected_label(int(e.width)), add="+")
+        self._rejected_right = [w for w in rej.winfo_children() if w is not self.blink_rejected_label]
         host = ttk.Frame(card, style="Card.TFrame")
         host.pack(fill=BOTH, expand=True, pady=6)
         if Figure is None:
@@ -2985,7 +2987,7 @@ class App(Tk):
     # ---- 2.2.17 (item 6): frame numbers from the file names; explicit reject / keep; the rejected list ----------
     def frame_label(self, path) -> str:
         """The frame's own number from its file name (core.frame_label): the same on Blink, in the log and the CSV."""
-        return core.frame_label(path, self.blink_paths if path in (self.blink_paths or []) else None)
+        return core.frame_label(path)
 
     def _frame_time(self, path) -> str:
         """Local clock time of the exposure start (from DATE-OBS / JD in the header), '' when the header has none."""
@@ -3001,15 +3003,25 @@ class App(Tk):
 
     @staticmethod
     def _header_clock(header) -> str:
+        # Review: mid_jd first (JD keywords, a DATE-OBS with a UTC offset such as MicroObservatory's
+        # "2015-01-25T19:39:40.386-0700", DATE-OBS + TIME-OBS); the exposure start is mid-exposure minus half of it.
         try:
-            text = str(header.get("DATE-OBS") or header.get("DATE_OBS") or "").strip()
-            if "T" in text:   # exposure start in UTC (the usual case)
-                return f"{core._parse_iso(text).astimezone():%H:%M:%S}"
-        except Exception:
-            pass
-        try:   # JD keywords, a local time with an offset, DATE-OBS + TIME-OBS
             jd = core.mid_jd(header) - core.header_exptime(header) / 2.0 / 86400.0
             return f"{core.jd_to_datetime_utc(float(jd)).astimezone():%H:%M:%S}"
+        except Exception:
+            pass
+        try:   # without astropy's Time: DATE-OBS read here, its UTC offset (if any) applied
+            import re
+            from datetime import timedelta
+            text = str(header.get("DATE-OBS") or header.get("DATE_OBS") or "").strip()
+            if "T" not in text:
+                return ""
+            off = timedelta(0)
+            m = re.search(r"T[0-9:.]+([+-])(\d{2}):?(\d{2})$", text)
+            if m:
+                off = (1 if m.group(1) == "+" else -1) * timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
+                text = text[: m.start(1)]
+            return f"{(core._parse_iso(text) - off).astimezone():%H:%M:%S}"
         except Exception:
             return ""
 
@@ -3045,9 +3057,14 @@ class App(Tk):
         else:
             self.status.set(f"{self._frame_words(path).capitalize()} is not rejected.")
 
-    def toggle_reject(self):
-        """Older name: rejects only (never silently restores; Keep does that)."""
-        self.reject_frame()
+    def _wrap_rejected_label(self, width: int):
+        """Review: the rejected list wraps in what the row's right-hand group (picker and buttons) leaves, measured
+        (so it follows Windows display scaling), not a fixed pixel allowance."""
+        try:
+            right = sum(int(w.winfo_reqwidth()) for w in self._rejected_right) + int(40 * ui_scale(self))
+        except Exception:
+            right = int(360 * ui_scale(self))
+        self.blink_rejected_label.configure(wraplength=max(width - right, int(200 * ui_scale(self))))
 
     def _rejected_in_list(self) -> list:
         """The rejected frames among the frames Blink lists (lights or flats), in list order."""
@@ -3057,12 +3074,12 @@ class App(Tk):
         if not hasattr(self, "blink_rejected_text"):
             return
         paths = self._rejected_in_list()
-        sig = (tuple(paths), self.blink_source.get())
-        if sig == getattr(self, "_rejected_list_sig", None):
-            return   # nothing changed (Blink playing): no file-system work per frame
-        self._rejected_list_sig = sig
         what = "flats" if self.blink_source.get() == "flats" else "frames"
-        labels = [self.frame_label(p) for p in paths]
+        labels = core.frame_labels_for(paths)   # one folder look-up (cached by the folder's modification time)
+        sig = (tuple(paths), tuple(labels), self.blink_source.get())
+        if sig == getattr(self, "_rejected_list_sig", None):
+            return   # nothing changed (Blink playing)
+        self._rejected_list_sig = sig
         if paths:
             self.blink_rejected_text.set(f"Rejected {what} ({len(paths)}): {core.frame_list_text(labels)}")
         else:
@@ -3830,9 +3847,9 @@ class App(Tk):
             self._photo_canvas_home = self.photo_canvas
             # 2.2.16 (item 16): what the page shows while the image is in its own window.
             self.photo_placeholder = ttk.Frame(plot_host, style="Card.TFrame")
-            ttk.Label(self.photo_placeholder, text="Image is in its own window —", style="Card.TLabel").pack(
-                side=LEFT, padx=(0, 6))
-            ttk.Button(self.photo_placeholder, text="Bring back", command=self.photo_bring_back).pack(side=LEFT)
+            # 2.2.17 (review): one Bring back button on the page (the View box's Pop out button reads Bring back).
+            ttk.Label(self.photo_placeholder, text="Image is in its own window (Bring back in the View box).",
+                      style="Card.TLabel").pack(side=LEFT, padx=(0, 6))
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", before=body, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_CAL)).pack(side=LEFT)
@@ -3878,7 +3895,9 @@ class App(Tk):
         mode = self.mode_key
         pop = getattr(self, "photo_popout", None)
         if pop is not None and pop.get("bar") is not None and getattr(self, "_popout_bar_mode", None) != mode:
-            self._build_popout_bar(pop["bar"])   # 2.2.17 (item 2): the pop-out mirrors the page's star buttons
+            # 2.2.17 (item 2): a guard only: set_mode brings the image back before it lays the page out, so this
+            # runs only if a layout change ever happens with the image out.
+            self._build_popout_bar(pop["bar"])
         self.run_button.pack_forget()
         self.scan_button.pack_forget()
         self.pick_tools.pack_forget()
@@ -8368,7 +8387,7 @@ class App(Tk):
         rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
             self.log(f"Rejected frames ({len(rej_lights)}): "
-                     + core.frame_list_text([core.frame_label(p) for p in rej_lights]))
+                     + core.frame_list_text(core.frame_labels_for(rej_lights)))
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
