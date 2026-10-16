@@ -8529,7 +8529,8 @@ class App(Tk):
             srcs = {comp.name: self._band_source_text(role, comp.name) for role, comp in zip(comp_roles, comps)}
             if check is not None:
                 srcs[check.name] = self._band_source_text("check", check.name)
-            self.comp_band_sources = {"band": self._band(), "sources": srcs}
+            self.comp_band_sources = {"band": self._band(), "sources": srcs, "comps": [c.name for c in comps],
+                                      "check": check.name if check is not None else ""}
             self.log(f"Comps in {label}: " + "; ".join(
                 f"{comp.name} {label} {float(comp.catalog_mag):.3f} ({srcs.get(comp.name) or 'typed'})" for comp in comps)
                 + (f"; check {check.name} {label} " + (f"{float(check.catalog_mag):.3f}" if check.catalog_mag is not None
@@ -8904,6 +8905,10 @@ class App(Tk):
         self._take_series_snapshot()   # 2.2.14 (item 11): the series (added to or new) as it now is
         self.night_bin[night] = self._night_setup()
         self.night_bin[night]["pier"] = self._night_pier(night_points)   # 2.2.14 (item 20)
+        if (self.comp_band_sources or {}).get("band") == filt:
+            # 2.2.17 (round 2): the night's Sloan comp/check sources go with the series (report notes after Load).
+            self.comp_band_sources["night"] = night
+            self.night_bin[night]["band_sources"] = {k: v for k, v in self.comp_band_sources.items() if k != "night"}
         self._refresh_period()
         flagged = sum(1 for obs in night_points if obs.flag)
         clouds = sum(1 for obs in night_points if "cloud" in obs.flag.split())
@@ -11930,6 +11935,14 @@ class App(Tk):
                 self.comp_catalog_mags[name] = float(catalog[name])
         if plan.get("check_mag"):
             self.check_mag.set(str(series_check[1]).strip())
+        cbs = self.comp_band_sources if isinstance(getattr(self, "comp_band_sources", None), dict) else {}
+        if cbs.get("sources"):
+            # 2.2.17 (round 2): the Sloan sources follow the stars to their series names
+            ren = plan["renamed"]
+            cbs["sources"] = {ren.get(n, n): v for n, v in cbs["sources"].items()}
+            cbs["comps"] = [ren.get(n, n) for n in cbs.get("comps") or []]
+            if cbs.get("check"):
+                cbs["check"] = ren.get(cbs["check"], cbs["check"])
         comps_changed = plan["comps"] != self.comps_used
         self.comps_used = list(plan["comps"])
         self.check_used = plan["check"]
@@ -12314,37 +12327,56 @@ class App(Tk):
 
     def _sloan_report_note(self, points=None) -> str:
         """2.2.17 (item 1): for a Sloan run, the AAVSO report notes say where the comp/check magnitudes came from
-        ("; comp/check mags SI from APASS DR9 2; Gaia DR3 G/BP-RP (+/-0.04) 1"), ASCII. '' otherwise."""
-        info = self.comp_band_sources if isinstance(getattr(self, "comp_band_sources", None), dict) else {}
-        if not info or not core.is_sloan(info.get("band")) or info.get("band") != self._band():
-            return ""
-        # 2.2.17 (review S6): only when every reported point is this run's: one filter and this run's comps (a
-        # series report spanning other filters or comp sets is not described by tonight's sources).
+        ("; comp/check mags SI from APASS DR9 2; Gaia DR3 G/BP-RP (+/-0.04) 1"), ASCII. '' otherwise.
+        Review S6: only when every reported point has the same Sloan filter. Round 2: the sources are kept per night in
+        the series (night setup "band_sources"), so a closed and reloaded series still gets its note; nights with the
+        same sources are described once, otherwise night by night. A night with no record (a series saved before
+        2.2.17, or a comp set changed with Use comps) leaves the note out rather than guess."""
         pts = list(points or [])
-        if not pts or any(getattr(o, "filt", "") != self._filter_code() for o in pts):
+        filts = {getattr(o, "filt", "") for o in pts}
+        if len(filts) != 1:
             return ""
-        comps_now = set((info.get("sources") or {}))
+        filt = next(iter(filts))
+        if not core.is_sloan(filt):
+            return ""
         used = set(self.active_comps or self.comps_used or [])
-        if not used or not used <= comps_now:
+        live = self.comp_band_sources if isinstance(getattr(self, "comp_band_sources", None), dict) else {}
+        per_night = {}
+        for night in sorted({o.night for o in pts}):
+            info = self._night_info(night).get("band_sources")
+            if not isinstance(info, dict) and live.get("night") == night:
+                info = live
+            if not isinstance(info, dict) or info.get("band") != filt:
+                return ""
+            srcs = dict(info.get("sources") or {})
+            comps = set(info.get("comps") or [n for n in srcs if n != info.get("check")])
+            if used and comps != used:
+                return ""   # the comps used now are not the ones these sources describe
+            per_night[night] = srcs
+
+        def describe(srcs):
+            counts: dict = {}
+            for text in srcs.values():
+                if not text:
+                    key = "typed"
+                elif "from Gaia G and BP-RP" in text:
+                    key = "Gaia DR3 G/BP-RP (" + text.rsplit(",", 1)[-1].strip().replace("\u00b1", "+/-") + ")"
+                elif "GSPC" in text:
+                    key = "Gaia DR3 GSPC"
+                else:
+                    key = text.split(",")[0]
+                counts[key] = counts.get(key, 0) + 1
+            return "; ".join(f"{k} {n}" for k, n in counts.items())
+
+        texts = {n: describe(srcs) for n, srcs in per_night.items()}
+        if not texts or not all(texts.values()):
             return ""
-        nights = {o.night for o in pts}
-        if len(nights) > 1 and any(set(self.night_bin.get(n, {}).get("comps") or used) != used for n in nights
-                                   if isinstance(self.night_bin.get(n), dict)):
-            return ""
-        counts: dict = {}
-        for text in (info.get("sources") or {}).values():
-            if not text:
-                key = "typed"
-            elif "from Gaia G and BP-RP" in text:
-                key = "Gaia DR3 G/BP-RP (" + text.rsplit(",", 1)[-1].strip().replace("\u00b1", "+/-") + ")"   # ASCII
-            elif "GSPC" in text:
-                key = "Gaia DR3 GSPC"
-            else:
-                key = text.split(",")[0]
-            counts[key] = counts.get(key, 0) + 1
-        what = "; ".join(f"{k} {n}" for k, n in counts.items())
+        if len(set(texts.values())) == 1:
+            what = next(iter(texts.values()))
+        else:
+            what = " / ".join(f"{n}: {t}" for n, t in texts.items())
         lead = "; " if self.notes.get().strip() else ""
-        return f"{lead}comp/check mags {info['band']} from {what}" if what else ""
+        return f"{lead}comp/check mags {filt} from {what}"
 
     def _report_text(self, observations: list | None = None) -> str:
         # Name the stars the reduction actually used, not whatever is in the form now.
