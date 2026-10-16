@@ -6762,7 +6762,7 @@ CREDITS = [
          "Gaia Collaboration, Prusti et al. 2016, A&A 595, A1; Gaia Collaboration, Vallenari et al. 2023, A&A 674, A1; "
          "Gaia Collaboration, Montegriffo et al. 2023, A&A 674, A33 (synthetic photometry).",
          "https://www.cosmos.esa.int/gaia"),
-        ("APASS (AAVSO)", "Comparison stars, Johnson B and V, field stars for B-V calibration.",
+        ("APASS (AAVSO)", "Comparison stars, Johnson B and V and Sloan g', r', i' (2.2.17), field stars for B-V calibration.",
          "\"This research was made possible through the use of the AAVSO Photometric All-Sky Survey (APASS), funded "
          "by the Robert Martin Ayers Sciences Fund and NSF AST-1412587.\" Henden, A. A. et al. 2016, VizieR II/336.",
          "https://www.aavso.org/apass"),
@@ -6799,6 +6799,18 @@ CREDITS = [
          "Lomb, N. R. 1976, Ap&SS 39, 447; Scargle, J. D. 1982, ApJ 263, 835; VanderPlas, J. T. 2018, ApJS 236, 16.", ""),
         ("Gaia G, BP-RP to Johnson V", "V for Gaia stars when the ESA archive is unavailable.",
          "Riello, M. et al. 2021, A&A 649, A3.", ""),
+        # 2.2.17 (item 1): Sloan filters.
+        ("Gaia G, BP-RP to SDSS g, r, i, z", "Sloan magnitudes for Gaia stars without synthetic SDSS photometry "
+         "(no value outside each relation's color range).",
+         "Gaia DR3 documentation, section 5.5.1 (Carrasco, J. M. & Bellazzini, M.), Tables 5.8 and 5.10; Riello, M. et "
+         "al. 2021, A&A 649, A3.",
+         "https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html"),
+        ("Gaia DR3 synthetic SDSS photometry", "Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).",
+         "Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.", ""),
+        ("SDSS to primed Sloan system", "Puts SDSS-system magnitudes on the primed g', r', i', z' system of APASS "
+         "and AAVSO sequences.", "Tucker, D. L. et al. 2006, Astron. Nachr. 327, 821.", ""),
+        ("Sloan limb darkening", "Quadratic limb-darkening coefficients for transit fits in Sloan filters.",
+         "Claret, A. 2004, A&A 428, 1001 (VizieR J/A+A/428/1001, table 4).", ""),
         ("Tycho BT, VT to Johnson B, V", "Johnson magnitudes for Tycho-2 stars.",
          "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.", ""),
         ("HJD and BJD_TDB", "Heliocentric and barycentric times in exports (computed with Astropy).",
@@ -6825,7 +6837,7 @@ CREDITS = [
          "Jensen, E. 2013, Tapir: A web interface for transit/eclipse observability, Astrophysics Source Code "
          "Library ascl:1306.007.", "https://astro.swarthmore.edu/transits/"),
         ("EXOTIC and Exoplanet Watch", "SHOBS-P reads EXOTIC's AAVSO exoplanet reports to compare fits, and writes "
-         "the same report format. No EXOTIC code is used.",
+         "the same report format (and uses its filter names, e.g. SI for Sloan i'). No EXOTIC code is used.",
          "Zellem, R. T. et al. 2020, PASP 132, 054401. EXOTIC is developed by Exoplanet Watch, a citizen science project "
          "managed by NASA's Jet Propulsion Laboratory.", "https://exoplanets.nasa.gov/exoplanet-watch/"),
         ("FITS World Coordinate System", "Plate solutions written in the FITS header (TAN projection), used to "
@@ -6837,6 +6849,14 @@ CREDITS = [
         ("Scintillation noise", "The atmospheric twinkling term added to each point's error bar (2.2.2), from "
          "the telescope aperture, airmass, exposure time and site elevation.",
          "Young, A. T. 1967, AJ 72, 747; Osborn, J. et al. 2015, MNRAS 452, 1707 (modified Young approximation).", ""),
+        # 2.2.17 (item 8): photon noise in electrons.
+        ("CCD equation", "Each point's photon and sky noise in electrons (camera gain EGAIN, binning, debayer and "
+         "flat accounted for), including the sky-level error term.",
+         "Merline, W. J. & Howell, S. B. 1995, Experimental Astronomy 6, 163.", ""),
+        # 2.2.17 (item 10): honest period significance.
+        ("False-alarm probability", "Periodogram FAP; for long periods a night-counting check (permutation test on "
+         "the nightly means) so a few nights cannot look significant.",
+         "Baluev, R. V. 2008, MNRAS 385, 1279.", ""),
         ("Bootstrap resampling", "Uncertainties and the 'clear winner' test in the aperture test (frames resampled "
          "with replacement, the same frames for every aperture).",
          "Efron, B. 1979, Annals of Statistics 7, 1.", ""),
