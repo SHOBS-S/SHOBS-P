@@ -670,6 +670,7 @@ class App(Tk):
         self.active_comps = []
         self._cancel = threading.Event()
         self.align_flip = BooleanVar(value=False)
+        self.airmass_view = BooleanVar(value=False)   # 2.2.17 (item 10): airmass-corrected night means (display only)
         self.pier_segments = BooleanVar(value=False)   # 2.2.14 (item 20): each pier side normalised on its own
         self.period_bins = StringVar(value="10 min bins")
         self.night_bin = {}
@@ -8483,6 +8484,10 @@ class App(Tk):
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
             self.log(f"Rejected frames ({len(rej_lights)}): "
                      + core.frame_list_text(core.frame_labels_for(rej_lights)))
+        # 2.2.17 (item 8): photon noise in electrons (EGAIN, binning, superpixel, flat); said once in the log.
+        noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
+                                               [target] + comps, radius, sky_in, sky_out)
+        electrons = noise_setup.get("electrons")
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
@@ -8536,6 +8541,8 @@ class App(Tk):
                     obs = core.reduce_frame(
                         data, header, f_target, f_comps, f_check, radius, sky_in, sky_out,
                         lat, lon, ra_hours, dec_deg, float("inf"), aligned=reg is not None,
+                        electrons=electrons if (np.ndim(electrons) == 0 or np.shape(electrons) == data.shape) else
+                        float(np.nanmedian(electrons)),   # 2.2.17 (item 8)
                     )
                     # Saturation is judged on the raw frame, where binning cannot hide a clipped core.
                     total_bin = binning * (1 if pattern == core.MONO else 2)
@@ -9175,6 +9182,33 @@ class App(Tk):
         messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}: near the frame edge or a weak part of the flat:\n\n  • "
                                + "\n  • ".join(problems))
 
+    def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
+                            sky_out) -> dict:
+        """2.2.17 (item 8): electrons per image unit for this run's photon noise (core.photon_noise_setup), from the
+        first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once."""
+        try:
+            header = core.read_header(lights[0]) if lights else {}
+        except Exception:
+            header = {}
+        flat = getattr(masters, "flat", None) if masters is not None else None
+        bias_removed = bool(precalibrated or getattr(masters, "bias", None) is not None
+                            or getattr(masters, "dark", None) is not None)
+        sky_k = float("nan")
+        if core.header_e_per_adu(header) is None or precalibrated:
+            try:
+                sky_k = core.sky_electrons_estimate(self.preview, stars, radius, sky_in, sky_out)
+            except Exception:
+                sky_k = float("nan")
+        try:
+            setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k)
+        except Exception as exc:
+            setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
+                                                                  "image units taken as electrons."}
+        self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
+                             "k": setup.get("k_median")}
+        self.log(setup.get("note", ""))
+        return setup
+
     def _night_setup(self) -> dict:
         """2.2.3: what a night's reduction used, stored per night in the series so later nights can be compared."""
         def num(var):
@@ -9211,6 +9245,9 @@ class App(Tk):
         used = getattr(self.masters, "used", None) if self.masters is not None else None
         if used:
             out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
+        model = getattr(self, "_noise_model", None)
+        if model and model.get("source"):
+            out["photon_noise"] = dict(model)   # 2.2.17 (item 8): how the photon noise was converted to electrons
         return out
 
     @staticmethod
@@ -9455,6 +9492,125 @@ class App(Tk):
                 except Exception:
                     pass
             self.period["carried_by"] = loo["carried_by"]
+            # 2.2.17 (item 10): a FAP that counts nights, and the airmass / color check of the nightly means.
+            self._period_airmass_checks(usable, corrected, jd, values, point_nights)
+
+    def _period_airmass_checks(self, usable, corrected, jd, values, point_nights):
+        """2.2.17 (item 10): before a best period is shown as significant. (b) its FAP counting nights
+        (core.period_night_fap); (a) the nightly means of the fold's values (check-star corrected when that is on)
+        against each night's median airmass (core.airmass_trend); (c) when they follow airmass, the period is
+        demoted if it disappears with the trend taken out or without the high-airmass nights
+        (core.period_airmass_check). Airmass: the points' own, else from the target's RA/Dec and the site; without
+        either the check is skipped with one log line."""
+        try:
+            lo, hi = float(self.min_period.get()), float(self.max_period.get())
+        except (TypeError, ValueError):
+            return
+        try:
+            self.period["night_fap"] = core.period_night_fap(jd, values, point_nights, self.period, lo, hi)
+        except Exception:
+            self.period["night_fap"] = None
+        night_am = self._night_airmasses(usable)
+        means = core.nightly_means(corrected, [o.night for o in usable])
+        for m in means:
+            m["airmass"] = night_am.get(m["night"], float("nan"))
+        trend = core.airmass_trend(means)
+        self.period["airmass_trend"] = trend
+        self.period["night_means"] = means
+        key = (trend.get("skip") or "", len(means))
+        if trend.get("skip") and getattr(self, "_airmass_skip_logged", None) != key:
+            self._airmass_skip_logged = key
+            if trend["skip"] == "no airmass":
+                self.log("Airmass check of the period skipped: no airmass (type the site on the Input page and the "
+                         "target's RA/Dec, or use frames with pointing in the headers).")
+        try:
+            self.period["airmass_check"] = core.period_airmass_check(
+                jd, values, point_nights, night_am, self.period, lo, hi, trend,
+                name=lambda n: self.night_label(n, short=True))
+        except Exception:
+            self.period["airmass_check"] = None
+
+    def _draw_airmass_corrected(self, ax, usable, zoom):
+        """2.2.17 (item 10): with "Airmass-corrected night means" ticked, each night's mean of the fold's values with
+        the airmass trend taken out (hollow orange diamonds) beside the uncorrected mean (small filled ones), on the
+        whole-series light curve. Display only: the corrected values never go into a report, CSV or the period."""
+        if not self.airmass_view.get() or zoom is not None or not self.period or not usable:
+            return
+        trend = self.period.get("airmass_trend") or {}
+        means = self.period.get("night_means") or []
+        slope, ref = trend.get("slope", float("nan")), trend.get("ref_airmass", float("nan"))
+        if not (math.isfinite(slope) and math.isfinite(ref)):
+            ax.text(0.01, 0.02, "Airmass-corrected night means: not available ("
+                    + (trend.get("skip") or "no airmass trend fitted") + ")", transform=ax.transAxes, fontsize=8,
+                    color="#5d6d76", ha="left", va="bottom")
+            return
+        t_by = {}
+        for o in usable:
+            if math.isfinite(o.jd):
+                t_by.setdefault(o.night, []).append(o.jd)
+        rows = [(float(np.mean(t_by[m["night"]])), m["mean"], m["mean"] - slope * (m["airmass"] - ref), m)
+                for m in means if m["night"] in t_by and math.isfinite(m.get("airmass", float("nan")))]
+        if not rows:
+            return
+        x = self._time_values(np.array([r[0] for r in rows]))
+        y0 = np.array([r[1] for r in rows])
+        y1 = np.array([r[2] for r in rows])
+        ax.plot(x, y0, "D", ms=4, color="#b86e00", alpha=0.45, zorder=6)
+        ax.plot(x, y1, "D", ms=8, mfc="none", mec="#b86e00", mew=1.6, zorder=7)
+        lo, hi = sorted(ax.get_ylim())
+        both = np.concatenate([y0, y1])
+        pad = 0.1 * max(float(both.max() - both.min()), 0.005)
+        lo, hi = min(lo, float(both.min()) - pad), max(hi, float(both.max()) + pad)
+        ax.set_ylim(hi, lo)   # magnitudes: bright at the top
+        ax.text(0.01, 0.02, "◇ airmass-corrected night means", transform=ax.transAxes, fontsize=8, color="#b86e00",
+                ha="left", va="bottom")
+        self._hover_sets.append((ax, x, y1, [f"{self.night_label(r[3]['night'], short=True)} night mean\n"
+                                             f"{r[1]:.4f} → {r[2]:.4f} airmass-corrected\n(airmass "
+                                             f"{r[3]['airmass']:.2f}, {slope:+.3f} mag per airmass; display only)"
+                                             for r in rows], 6.0))
+
+    def _night_airmasses(self, points) -> dict:
+        """2.2.17 (item 10): {night: median airmass}: from the points' airmass, else (no pointing in the headers)
+        from the target's catalog RA/Dec and the site at up to 7 times through the night (cached)."""
+        out = {}
+        by_night = {}
+        for o in points:
+            by_night.setdefault(o.night, []).append(o)
+        try:
+            ra = float(self.ra_hours.get()) if self.ra_hours.get().strip() else None
+            dec = float(self.dec_deg.get()) if self.dec_deg.get().strip() else None
+            lat = float(self.lat.get()) if self.lat.get().strip() else None
+            lon = float(self.lon.get()) if self.lon.get().strip() else None
+        except (TypeError, ValueError):
+            ra = dec = lat = lon = None
+        cache = getattr(self, "_night_am_cache", None)
+        if cache is None:
+            cache = self._night_am_cache = {}
+        for night, pts in by_night.items():
+            own = [o.airmass for o in pts if o.airmass is not None and math.isfinite(o.airmass)]
+            if len(own) >= max(1, len(pts) // 2):
+                out[night] = float(np.median(own))
+                continue
+            if None in (ra, dec, lat, lon):
+                continue
+            jds = sorted(o.jd for o in pts if math.isfinite(o.jd))
+            if not jds:
+                continue
+            ck = (night, round(ra, 4), round(dec, 3), round(lat, 3), round(lon, 3), round(jds[0], 4), len(jds))
+            if ck not in cache:
+                picks = [jds[int(i)] for i in np.linspace(0, len(jds) - 1, min(7, len(jds)))]
+                vals = []
+                for t in picks:
+                    try:
+                        a = core.airmass(ra, dec, lat, lon, t)
+                    except Exception:
+                        continue
+                    if math.isfinite(a) and a > 0:
+                        vals.append(a)
+                cache[ck] = float(np.median(vals)) if vals else float("nan")
+            if math.isfinite(cache[ck]):
+                out[night] = cache[ck]
+        return out
 
     _META_STRINGS = (
         "observer", "star_id", "chart", "comp_name", "comp_mag", "check_name", "check_mag",
@@ -10043,6 +10199,9 @@ class App(Tk):
             row, text="Line up segments (nights, meridian flip)",
             variable=self.norm_segments, command=self.refit_period,
         ).pack(side=LEFT, padx=(14, 4))
+        # 2.2.17 (item 10): each night's mean with the airmass trend taken out, on the plot only.
+        ttk.Checkbutton(row, text="Airmass-corrected night means", variable=self.airmass_view,
+                        command=self.draw_output).pack(side=LEFT, padx=(14, 4))
         ttk.Label(row, text="Time axis", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
         axis_box = ttk.Combobox(row, textvariable=self.time_axis, values=("JD", "UTC", "Local time"), width=10, state="readonly")
         axis_box.pack(side=LEFT)
@@ -10601,6 +10760,7 @@ class App(Tk):
                              + (f" · {self.night_label(zoom, short=True)}" if zoom is not None else ""), key)
 
         usable = [o for o, ex in zip(obs_list, excluded) if not ex]
+        self._draw_airmass_corrected(self.out_ax1, usable, zoom)   # 2.2.17 (item 10): display only
         ax = self.out_ax2
         cautions = []
         period_lines = []
@@ -10644,7 +10804,13 @@ class App(Tk):
             # 2.2.8: say plainly when no period is significant (FAP above 1%, or one night carries it), so a best
             # peak is never read as the star's period (HD 219134: 'periods' from night offsets and day aliases).
             carried_now = self.period.get("carried_by") or []
-            significant = math.isfinite(fap) and fap <= 0.01 and not carried_now and not too_short
+            # 2.2.17 (item 10): the FAP counting nights must agree, and a period from the nights' airmass is demoted.
+            night_fap = (self.period.get("night_fap") or {}).get("fap", float("nan"))
+            nights_say_no = math.isfinite(night_fap) and night_fap > 0.01
+            am_check = self.period.get("airmass_check") or {}
+            am_trend = self.period.get("airmass_trend") or {}
+            significant = (math.isfinite(fap) and fap <= 0.01 and not carried_now and not too_short
+                           and not nights_say_no and not am_check.get("demoted"))
             ax.set_title(f"Folded  P = {p:.5f} d" if significant else f"Best peak (not significant)  P = {p:.5f} d")
             ax.grid(True, alpha=0.3)
             period_lines = []
@@ -10655,6 +10821,11 @@ class App(Tk):
                 elif carried_now and not (math.isfinite(fap) and fap > 0.01):
                     period_lines.append(f"No reliable period: the peak depends on {', '.join(carried_now)} alone "
                                         "(often an offset between nights, not the star).")
+                elif am_check.get("demoted") and not (math.isfinite(fap) and fap > 0.01):
+                    period_lines.append("No reliable period: the peak follows the nights' airmass, not the star.")
+                elif nights_say_no and not (math.isfinite(fap) and fap > 0.01):
+                    period_lines.append(f"No significant period: counting nights, the peak's false-alarm "
+                                        f"probability is {night_fap:.1e} (a night's points share offsets).")
                 else:
                     in_night = [float(np.std(corrected[np.array([o.night == n for o in usable])]))
                                 for n in nights if sum(o.night == n for o in usable) >= 3]
@@ -10669,7 +10840,10 @@ class App(Tk):
                 ("Best    " if significant else "Peak    ")
                 + f"{p:.5f} d ({p * 24:.2f} h)" + ("" if significant else "   (not significant)")
                 + ("   (one short night: not reliable)" if too_short else ""),
-                f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else ""),
+                f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else "")
+                + (f" (points), {night_fap:.1e} counting nights (N_eff "
+                   f"{(self.period.get('night_fap') or {}).get('n_eff', float('nan')):.0f})"
+                   if math.isfinite(night_fap) and math.isfinite(fap) else ""),   # 2.2.17 (item 10)
                 f"Basis   {getattr(self, '_period_note', '') or 'every point'}",
                 f"Alias   {alias:.5f} d (one-day)",
                 f"Epoch   JD {epoch:.5f}",
@@ -10686,6 +10860,14 @@ class App(Tk):
                 period_lines.append("Check   ⚠ depends on " + ", ".join(carried) + " alone")
                 cautions.append(f"Leave {', '.join(carried)} out and this period disappears: one night carries it "
                                 "(often an offset between nights, not the star). Check that night before trusting it.")
+            # 2.2.17 (item 10): nightly means that follow airmass, and what that does to the period.
+            am_text = core.airmass_trend_text(am_trend)
+            if am_text:
+                period_lines.append(f"Airmass ⚠ nightly means follow airmass ({am_trend['slope']:+.3f} mag per "
+                                    "airmass)" + ("; period demoted" if am_check.get("demoted") else ""))
+                cautions.append(am_text + (" " + am_check["why"] if am_check.get("why") else
+                                           " The period survives with the trend taken out and without the "
+                                           "high-airmass nights."))
             edge_text = core.period_edge_text(self.period)
             if edge_text:
                 period_lines[head] += "   ⚠ at the edge"
