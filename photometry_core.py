@@ -102,6 +102,88 @@ def list_fits(folder: str) -> list[str]:
     return out
 
 
+# ---- 2.2.17 (item 6): each frame's own number, from its file name ------------------------------------------------
+def frame_number(path: str):
+    """The frame's own number from its file name: the trailing digits before the extension (Light_…_0222.fit -> 222;
+    NINA's 2026-09-01_23-17-28_i'_-50.04_120.00s_0000.fits -> 0). Up to 5 digits, so a trailing time such as
+    _205345 is not taken for a counter. None when the name ends in no number."""
+    import re
+    name = os.path.basename(str(path))
+    low = name.lower()
+    for ext in sorted(IMAGE_EXTS, key=len, reverse=True):
+        if low.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    else:
+        name = os.path.splitext(name)[0]
+    m = re.search(r"(?<!\d)(\d{1,5})$", name)
+    return int(m.group(1)) if m else None
+
+
+def frame_labels(paths: list[str]) -> dict:
+    """{path: label} for a list of frames: the file's own number ("222"); "#k" (position in the list, from 1) when the
+    name has no number; two files with the same number (two sequences in one folder, or two folders) get a, b, … in
+    list order ("12a", "12b"), so every frame has its own label."""
+    nums = [frame_number(p) for p in paths]
+    count = {}
+    for n in nums:
+        if n is not None:
+            count[n] = count.get(n, 0) + 1
+    seen, out = {}, {}
+    for k, (p, n) in enumerate(zip(paths, nums)):
+        if n is None:
+            out[p] = f"#{k + 1}"
+        elif count[n] > 1:
+            i = seen.get(n, 0)
+            seen[n] = i + 1
+            suffix = ""
+            while True:   # a, b, … z, aa, ab …
+                suffix = chr(ord("a") + i % 26) + suffix
+                i = i // 26 - 1
+                if i < 0:
+                    break
+            out[p] = f"{n}{suffix}"
+        else:
+            out[p] = str(n)
+    return out
+
+
+_FRAME_LABEL_CACHE = {}
+
+
+def frame_label(path: str, siblings: list[str] | None = None) -> str:
+    """One frame's label (see frame_labels), worked out from every image file in its folder so it is the same on the
+    Blink page, in the log and in the CSV whatever is rejected; from `siblings` (or the frame alone) when the folder
+    is gone (a series made on another PC)."""
+    folder = os.path.dirname(str(path))
+    try:
+        key = (folder, os.path.getmtime(folder))
+    except OSError:
+        key = None
+    if key is not None:
+        labels = _FRAME_LABEL_CACHE.get(key)
+        if labels is None:
+            labels = frame_labels(list_fits(folder))
+            if len(_FRAME_LABEL_CACHE) > 20:
+                _FRAME_LABEL_CACHE.clear()
+            _FRAME_LABEL_CACHE[key] = labels
+        if path in labels:
+            return labels[path]
+    labels = frame_labels(list(siblings) if siblings and path in siblings else [path])
+    return labels.get(path, "")
+
+
+def frame_list_text(labels: list[str], limit: int = 40) -> str:
+    """'63, 64, 65' (sorted by number; long lists end with ' … (+n more)')."""
+    def key(t):
+        import re
+        m = re.match(r"#?(\d+)(.*)$", t)
+        return (t.startswith("#"), int(m.group(1)) if m else 10 ** 9, m.group(2) if m else t)
+    labels = sorted(labels, key=key)
+    text = ", ".join(labels[:limit])
+    return text + (f" … (+{len(labels) - limit} more)" if len(labels) > limit else "")
+
+
 def unreadable_files(folder: str) -> list[str]:
     """Files in a folder that are not images SHOBS-P reads (raw camera files, TIFF, JPEG …), ignoring
     hidden files and the usual side files."""
@@ -4532,8 +4614,12 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
             "target_x,target_y,comp1_x,comp1_y,comp2_x,comp2_y,check_x,check_y,night_note,file,scint_mag,err_total"
             # 2.2.14 (item 9): every comp's position, comps 3 and up appended at the end (old columns keep their place).
             + "".join(f",comp{k + 1}_x,comp{k + 1}_y" for k in range(2, n_comps))
+            + ",frame"   # 2.2.17 (item 6): the frame's own number from its file name (as on the Blink page), last
             + "\n"
         )
+        by_night = {}
+        for obs in observations:
+            by_night.setdefault(obs.night, []).append(obs.path)
         normalized = normalize_segments(observations) if observations else []
         seg_words = segment_words(observations)
         for k, (obs, zp, nm) in enumerate(zip(observations, corrected, normalized)):
@@ -4571,6 +4657,7 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
                     num(scint_mag(obs, scint)),
                     num(point_err(obs, scint)),
                     *_extra_comp_pos_fields(obs, n_comps),
+                    frame_label(obs.path, by_night.get(obs.night)).replace(",", "_"),
                 ])
                 + "\n"
             )

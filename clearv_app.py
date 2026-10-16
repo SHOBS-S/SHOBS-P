@@ -176,6 +176,10 @@ PERIOD_BIN_CHOICES = ("Every point", "5 min bins", "10 min bins", "30 min bins")
 BIN_CHOICES = ("None", "Night", "60 min", "30 min", "15 min", "10 min")
 STEPS = ("Input", "Blink", "Calibrate", "Photometry", "Output")
 BLINK_SPEEDS = ("0.25 s/frame", "0.5 s/frame", "1 s/frame", "2 s/frame")  # 2.2.3; 0.25 in 2.2.11 (John)
+# 2.2.17 (item 3): N/E compass sizes in points (scale with the figure's dpi, i.e. with Windows display scaling).
+COMPASS_ARROW_PT = 24.0
+COMPASS_FONT_PT = 8.0
+COMPASS_MARGIN_PT = 5.0
 # 2.2.15 (GitHub #1): display stretch. The sliders step through these black / white points (percentiles).
 STRETCH_PAGES = ("blink", "photo")
 STRETCH_BLACK_STEPS = (0.0, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0)
@@ -604,6 +608,7 @@ class App(Tk):
         self.period = None
         self.rejected = set()
         self.blink_paths = []
+        self._blink_times = {}   # 2.2.17 (item 6): {path: local clock time of the exposure}
         self.blink_index = 0
         self.blink_playing = False
         self._blink_loaded_from = None
@@ -1061,6 +1066,8 @@ class App(Tk):
             self.page_frames[index].lift()
         if index == STEP_BLINK and self._blink_folder() != self._blink_loaded_from:
             self.load_blink_list()
+        elif index == STEP_BLINK:
+            self._update_rejected_list()   # 2.2.17 (item 6): frames set aside elsewhere (two fields, a series)
         # 2.2.3: once the page is on screen and laid out, make its plot fill its area (the first draw could land
         # small in the top-left corner until something else redrew it, e.g. the mouse wheel).
         self.after_idle(self._fit_visible_canvases)
@@ -2354,6 +2361,8 @@ class App(Tk):
         self._try_auto_target("lookup")
 
     def scan_folders(self):
+        if getattr(self, "photo_popout", None) is not None:
+            self.photo_bring_back()   # 2.2.17 (item 2): new lights: the image (and its buttons) back on the page
         for key, var in (
             ("Bias", self.bias_dir),
             ("Dark", self.dark_dir),
@@ -2721,10 +2730,29 @@ class App(Tk):
         ttk.Button(tools, text="Stop", command=self.stop_blink).pack(side=LEFT)
         ttk.Label(tools, text="Speed", style="Card.TLabel").pack(side=LEFT, padx=(10, 2))
         ttk.Combobox(tools, textvariable=self.blink_speed, values=BLINK_SPEEDS, width=12, state="readonly").pack(side=LEFT)
-        ttk.Button(tools, text="Reject / restore", command=self.toggle_reject).pack(side=LEFT, padx=6)
+        # 2.2.17 (item 6): Reject only rejects and Keep only brings a frame back (the old "Reject / restore" button
+        # toggled, so pressing it on a frame already rejected silently restored it).
+        ttk.Button(tools, text="Reject", command=self.reject_frame).pack(side=LEFT, padx=(6, 2))
+        ttk.Button(tools, text="Keep", command=self.keep_frame).pack(side=LEFT)
         self._stretch_controls(card, "blink").pack(anchor=W, pady=(0, 4))   # 2.2.15 (GitHub #1)
         self.blink_label = StringVar(value="No lights loaded.")
         ttk.Label(card, textvariable=self.blink_label, style="Hint.TLabel").pack(anchor=W)
+        # 2.2.17 (item 6): the rejected frames by their own (file) numbers, and a way to bring one back from the list.
+        rej = ttk.Frame(card, style="Card.TFrame")
+        rej.pack(anchor=W, fill=X, pady=(2, 0))
+        self.blink_rejected_text = StringVar(value="Rejected: none")
+        self.blink_rejected_label = ttk.Label(rej, textvariable=self.blink_rejected_text, style="Card.TLabel",
+                                              justify=LEFT)
+        self.blink_rejected_label.pack(side=LEFT, anchor=W)
+        self.blink_rejected_pick = StringVar(value="")
+        self.blink_rejected_box = ttk.Combobox(rej, textvariable=self.blink_rejected_pick, values=[], width=8,
+                                               state="readonly")
+        ttk.Button(rej, text="Keep this one", command=self.keep_listed_frame).pack(side=RIGHT)
+        ttk.Button(rej, text="Show", command=self.show_listed_frame).pack(side=RIGHT, padx=(4, 4))
+        self.blink_rejected_box.pack(side=RIGHT)
+        ttk.Label(rej, text="Rejected frame", style="Card.TLabel").pack(side=RIGHT, padx=(12, 4))
+        rej.bind("<Configure>", lambda e: self.blink_rejected_label.configure(
+            wraplength=max(int(e.width) - 360, 200)), add="+")
         host = ttk.Frame(card, style="Card.TFrame")
         host.pack(fill=BOTH, expand=True, pady=6)
         if Figure is None:
@@ -2804,6 +2832,7 @@ class App(Tk):
         (picture, exposure, small float16 copy, stretch); the copy (offset and scaled so float16 holds it) lets a new
         stretch be drawn without reading the file again."""
         data, header = core.read_fits(path)
+        self._blink_times[path] = self._header_clock(header)   # 2.2.17 (item 6): shown with the frame number
         data = core.bin_image(data, binning)
         if data.shape[1] > 1000:
             step = int(math.ceil(data.shape[1] / 1000))
@@ -2939,7 +2968,7 @@ class App(Tk):
             self._blink_wait = getattr(self, "_blink_wait", 0) + 1
             if worker is not None and worker.is_alive() and self._blink_wait < 10:
                 # Still being read in the background: wait a moment instead of stalling the window.
-                self.blink_label.set(f"Reading frame {nxt + 1}/{len(self.blink_paths)} …")
+                self.blink_label.set(f"Reading frame {self.frame_label(self.blink_paths[nxt])} …")
                 self._blink_job = self.after(100, self._blink_tick)
                 return
             # Waited a second, or the reader has finished (an unreadable frame, or one dropped from memory):
@@ -2953,19 +2982,130 @@ class App(Tk):
         self.show_blink()
         self._blink_job = self.after(int(self._blink_seconds() * 1000), self._blink_tick)
 
-    def toggle_reject(self):
+    # ---- 2.2.17 (item 6): frame numbers from the file names; explicit reject / keep; the rejected list ----------
+    def frame_label(self, path) -> str:
+        """The frame's own number from its file name (core.frame_label): the same on Blink, in the log and the CSV."""
+        return core.frame_label(path, self.blink_paths if path in (self.blink_paths or []) else None)
+
+    def _frame_time(self, path) -> str:
+        """Local clock time of the exposure start (from DATE-OBS / JD in the header), '' when the header has none."""
+        times = self._blink_times
+        if path in times:
+            return times[path]
+        try:
+            header = core.read_header(path)
+        except Exception:
+            header = {}
+        times[path] = self._header_clock(header)
+        return times[path]
+
+    @staticmethod
+    def _header_clock(header) -> str:
+        try:
+            text = str(header.get("DATE-OBS") or header.get("DATE_OBS") or "").strip()
+            if "T" in text:   # exposure start in UTC (the usual case)
+                return f"{core._parse_iso(text).astimezone():%H:%M:%S}"
+        except Exception:
+            pass
+        try:   # JD keywords, a local time with an offset, DATE-OBS + TIME-OBS
+            jd = core.mid_jd(header) - core.header_exptime(header) / 2.0 / 86400.0
+            return f"{core.jd_to_datetime_utc(float(jd)).astimezone():%H:%M:%S}"
+        except Exception:
+            return ""
+
+    def _frame_words(self, path) -> str:
+        """'frame 222 (21:53:12)': the frame's number and local time, as Blink shows it."""
+        t = self._frame_time(path)
+        return f"frame {self.frame_label(path)}" + (f" ({t})" if t else "")
+
+    def reject_frame(self):
+        """Reject the frame on screen. A frame already rejected stays rejected (and the status line says so)."""
         if not self.blink_paths:
             return
         path = self.blink_paths[self.blink_index]
         if path in self.rejected:
-            self.rejected.remove(path)
+            self.status.set(f"{self._frame_words(path).capitalize()} is already rejected (Keep brings it back).")
         else:
             self.rejected.add(path)
+            self.status.set(f"Rejected {self._frame_words(path)}: {os.path.basename(path)}.")
         self.show_blink()
+
+    def keep_frame(self):
+        """Bring the frame on screen back (un-reject): only this button, or Keep this one under the list, does that."""
+        if not self.blink_paths:
+            return
+        path = self.blink_paths[self.blink_index]
+        self._keep_path(path)
+        self.show_blink()
+
+    def _keep_path(self, path):
+        if path in self.rejected:
+            self.rejected.discard(path)
+            self.status.set(f"Kept {self._frame_words(path)}: {os.path.basename(path)} is used again.")
+        else:
+            self.status.set(f"{self._frame_words(path).capitalize()} is not rejected.")
+
+    def toggle_reject(self):
+        """Older name: rejects only (never silently restores; Keep does that)."""
+        self.reject_frame()
+
+    def _rejected_in_list(self) -> list:
+        """The rejected frames among the frames Blink lists (lights or flats), in list order."""
+        return [p for p in (self.blink_paths or []) if p in self.rejected]
+
+    def _update_rejected_list(self):
+        if not hasattr(self, "blink_rejected_text"):
+            return
+        paths = self._rejected_in_list()
+        sig = (tuple(paths), self.blink_source.get())
+        if sig == getattr(self, "_rejected_list_sig", None):
+            return   # nothing changed (Blink playing): no file-system work per frame
+        self._rejected_list_sig = sig
+        what = "flats" if self.blink_source.get() == "flats" else "frames"
+        labels = [self.frame_label(p) for p in paths]
+        if paths:
+            self.blink_rejected_text.set(f"Rejected {what} ({len(paths)}): {core.frame_list_text(labels)}")
+        else:
+            self.blink_rejected_text.set(f"Rejected {what}: none")
+        self._rejected_choices = {lab: p for lab, p in zip(labels, paths)}
+        values = core.frame_list_text(labels, limit=len(labels)).split(", ") if labels else []   # by number
+        try:
+            self.blink_rejected_box.configure(values=values)
+        except Exception:
+            pass
+        if self.blink_rejected_pick.get() not in self._rejected_choices:
+            self.blink_rejected_pick.set(values[0] if values else "")
+
+    def _listed_path(self):
+        label = self.blink_rejected_pick.get().strip()
+        path = getattr(self, "_rejected_choices", {}).get(label)
+        if path is None:
+            self.status.set("Pick a rejected frame in the list first." if self._rejected_in_list()
+                            else "No rejected frames.")
+        return path
+
+    def show_listed_frame(self):
+        """Blink shows the frame picked in the rejected list."""
+        path = self._listed_path()
+        if path is None or path not in self.blink_paths:
+            return
+        self.blink_playing = False
+        self._cancel_blink_timer()
+        self.blink_index = self.blink_paths.index(path)
+        self.show_blink()
+
+    def keep_listed_frame(self):
+        """Un-reject the frame picked in the rejected list (it need not be the one on screen)."""
+        path = self._listed_path()
+        if path is None:
+            return
+        self._keep_path(path)
+        self.show_blink() if self.blink_paths else self._update_rejected_list()
 
     def show_blink(self):
         if not self.blink_paths:
             self.blink_label.set("No lights in the lights folder.")
+            self._update_rejected_list()
             return
         path = self.blink_paths[self.blink_index]
         rejected = path in self.rejected
@@ -2983,10 +3123,15 @@ class App(Tk):
             self._blink_cache[key] = cached
         pic, exptime = cached[0], cached[1]
         mark = "REJECTED" if rejected else "keep"
+        # 2.2.17 (item 6): the frame's own number from its file name and its local time first; the list position
+        # (n of N) after them.
+        label, clock = self.frame_label(path), self._frame_time(path)
         self.blink_label.set(
-            f"{self.blink_index + 1}/{len(self.blink_paths)}  {mark}  rejected {len(self.rejected)}  {os.path.basename(path)}  "
-            f"exp {exptime:.1f}s"
+            f"Frame {label}" + (f"  {clock}" if clock else "") + f"   {mark}   ({self.blink_index + 1} of "
+            f"{len(self.blink_paths)} in the list, {len(self._rejected_in_list())} rejected)   "
+            f"{os.path.basename(path)}  exp {exptime:.1f}s"
         )
+        self._update_rejected_list()
         if self.blink_canvas is None:
             return
         artist = self._blink_artist
@@ -3001,7 +3146,8 @@ class App(Tk):
         # 2.2.5: a fixed band in pixels above the image for the title, worked out for the figure's size right now, so
         # the title is never clipped (tight_layout ran only on the first frame, before the window had its real size).
         self._blink_layout()
-        self.blink_ax.set_title("REJECTED" if rejected else os.path.basename(path),
+        head = f"Frame {label}" + (f"  {clock}" if clock else "")
+        self.blink_ax.set_title(f"REJECTED — {head}" if rejected else f"{head}   {os.path.basename(path)}",
                                 color="#c62828" if rejected else "#1a1a1a",
                                 fontweight="bold" if rejected else "normal", fontsize=13 if rejected else 10)
         self.blink_canvas.draw_idle()
@@ -3286,7 +3432,8 @@ class App(Tk):
                 if flip and pier is not None and prev_pier is not None and pier == prev_pier:
                     # Same side of the pier: the camera itself turned 180°, it was not a meridian flip.
                     flip = False
-                (flips if flip else moves).append(f"before frame {k} ({prev:g}° to {rot:g}°)")
+                # 2.2.17 (item 6): the frame's own number from its file name (as on Blink), not its list position
+                (flips if flip else moves).append(f"before frame {core.frame_label(path)} ({prev:g}° to {rot:g}°)")
             prev, prev_pier = rot, pier
         return "; ".join(flips), "; ".join(moves)
 
@@ -3594,12 +3741,20 @@ class App(Tk):
         # View box does not get wider.
         zoom = ttk.Frame(view_box, style="Card.TFrame")
         zoom.pack(side="top", anchor=W, pady=(4, 0))
-        ttk.Label(zoom, text="Zoom", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
-        ttk.Button(zoom, text="−", width=3, command=lambda: self.photo_zoom_step(1.5)).pack(side=LEFT)
-        ttk.Button(zoom, text="+", width=3, command=lambda: self.photo_zoom_step(1 / 1.5)).pack(side=LEFT, padx=(2, 0))
+        zoom_label = ttk.Label(zoom, text="Zoom", style="Card.TLabel")
+        zoom_label.pack(side=LEFT, padx=(0, 4))
+        zoom_out = ttk.Button(zoom, text="−", width=3, command=lambda: self.photo_zoom_step(1.5))
+        zoom_out.pack(side=LEFT)
+        zoom_in = ttk.Button(zoom, text="+", width=3, command=lambda: self.photo_zoom_step(1 / 1.5))
+        zoom_in.pack(side=LEFT, padx=(2, 0))
         self.view_fit_button = ttk.Button(zoom, text="Fit", command=self.reset_photo_view)
         self.view_fit_button.pack(side=LEFT, padx=(2, 0))
-        self.popout_button = ttk.Button(zoom, text="Pop out", command=self.photo_pop_out)
+        # 2.2.17 (item 2): the label and − + Fit move into the pop-out while the image is out (hidden here); this
+        # button then reads "Bring back".
+        self._page_zoom_widgets = [(zoom_label, (0, 4)), (zoom_out, 0), (zoom_in, (2, 0)),
+                                   (self.view_fit_button, (2, 0))]
+        self._page_zoom_shown = True
+        self.popout_button = ttk.Button(zoom, text="Pop out", command=self.photo_pop_toggle)
         self.popout_button.pack(side=LEFT, padx=(10, 0))
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
@@ -3721,6 +3876,9 @@ class App(Tk):
         if not hasattr(self, "run_button"):
             return
         mode = self.mode_key
+        pop = getattr(self, "photo_popout", None)
+        if pop is not None and pop.get("bar") is not None and getattr(self, "_popout_bar_mode", None) != mode:
+            self._build_popout_bar(pop["bar"])   # 2.2.17 (item 2): the pop-out mirrors the page's star buttons
         self.run_button.pack_forget()
         self.scan_button.pack_forget()
         self.pick_tools.pack_forget()
@@ -4895,14 +5053,56 @@ class App(Tk):
                     ha="left" if cx < 0.5 else "right", va="bottom" if cy < 0.5 else "top", fontsize=7,
                     color="#cfcfcf", alpha=0.85)
             return
-        L = 0.06
-        aspect = ax.bbox.width / max(ax.bbox.height, 1.0)
+        # 2.2.17 (item 3): laid out in points from the corner (not axes fractions), so the arrows keep their true
+        # directions whatever the axes' shape, and both letters stay inside the image: the whole compass (both arrows
+        # and both letters, wherever the solution points them) is measured and tucked into the corner with a margin.
+        # (2.2.16 put each letter 1.35 × the arrow length out, centred, which clipped "N" at the image edge.)
+        from matplotlib.transforms import ScaledTranslation
+        try:
+            from matplotlib import patheffects
+            halo = [patheffects.withStroke(linewidth=2.0, foreground="#000000", alpha=0.7)]   # readable on stars
+        except Exception:
+            halo = None
+        for (px, py), _ha, _va, tag, (tx, ty) in self._compass_layout(vec, cx, cy):
+            def at(x, y):
+                return ax.transAxes + ScaledTranslation(x / 72.0, y / 72.0, self.photo_fig.dpi_scale_trans)
+            corner = (0.0 if cx < 0.5 else 1.0, 0.0 if cy < 0.5 else 1.0)
+            ax.annotate("", xy=corner, xycoords=at(tx, ty), xytext=corner, textcoords=at(px, py),
+                        arrowprops=dict(arrowstyle="-|>", color="#ffd24a", lw=1.3, mutation_scale=9,
+                                        shrinkA=0, shrinkB=0))
+            _box, label_xy = self._compass_label_xy
+            ax.text(corner[0], corner[1], tag, transform=at(*label_xy[tag]), ha="center", va="center",
+                    fontsize=COMPASS_FONT_PT, fontweight="bold", color="#ffd24a", path_effects=halo)
+
+    def _compass_layout(self, vec, cx, cy):
+        """2.2.17 (item 3): the compass in points relative to the image corner it sits in (cx, cy are the corner as
+        axes fractions from _compass_corner). Returns [((base x, y), ha, va, tag, (tip x, y))] per arrow and sets
+        self._compass_label_xy = (box, {tag: (x, y)}): each letter's centre just past its arrow tip, and the box
+        (x0, y0, x1, y1) all of it covers, which lies inside the image with a margin from both edges."""
+        L, gap = COMPASS_ARROW_PT, COMPASS_FONT_PT * 0.95
+        hw, hh = COMPASS_FONT_PT * 0.5, COMPASS_FONT_PT * 0.62   # half width / height of one bold capital
+        parts = []
+        xs, ys = [0.0], [0.0]
         for v, tag in ((vec[0], "N"), (vec[1], "E")):
-            dx, dy = v[0] * L, -v[1] * L * aspect      # image y points down; axes fractions point up
-            ax.annotate("", xy=(cx + dx, cy + dy), xytext=(cx, cy), xycoords="axes fraction",
-                        arrowprops=dict(arrowstyle="-|>", color="#ffd24a", lw=1.3, mutation_scale=9))
-            ax.text(cx + dx * 1.35, cy + dy * 1.35, tag, transform=ax.transAxes, ha="center", va="center",
-                    fontsize=8, fontweight="bold", color="#ffd24a")
+            ux, uy = float(v[0]), -float(v[1])                     # image y points down; points point up
+            norm = math.hypot(ux, uy) or 1.0
+            ux, uy = ux / norm, uy / norm
+            tip = (L * ux, L * uy)
+            lab = ((L + gap) * ux, (L + gap) * uy)
+            parts.append((tag, tip, lab))
+            xs += [tip[0], lab[0] - hw, lab[0] + hw]
+            ys += [tip[1], lab[1] - hh, lab[1] + hh]
+        margin = COMPASS_MARGIN_PT
+        # The base point so that the whole box sits `margin` in from the corner's two edges.
+        bx = (margin - min(xs)) if cx < 0.5 else (-margin - max(xs))
+        by = (margin - min(ys)) if cy < 0.5 else (-margin - max(ys))
+        labels, out = {}, []
+        for tag, tip, lab in parts:
+            labels[tag] = (bx + lab[0], by + lab[1])
+            out.append(((bx, by), "center", "center", tag, (bx + tip[0], by + tip[1])))
+        box = (bx + min(xs), by + min(ys), bx + max(xs), by + max(ys))
+        self._compass_label_xy = (box, labels)
+        return out
 
     def _update_legend(self):
         """The legend strip under the Photometry image: one entry per kind of marker on the image now."""
@@ -5122,6 +5322,20 @@ class App(Tk):
             pass
         self._legend_home = self.legend_row
         self.legend_row = legend   # the symbol legend goes with the image
+        # 2.2.17 (item 2): the star buttons (same pick_mode variable as the page, so either place sets both), the
+        # zoom buttons (moved from the page) and Go back, in a row above the image.
+        bar = ttk.Frame(win, style="Card.TFrame", padding=(6, 4))
+        bar.pack(side="top", fill=X, before=canvas.get_tk_widget())
+        self.photo_popout["bar"] = bar
+        self._build_popout_bar(bar)
+        self._set_page_zoom(False)
+        try:
+            self.popout_button.configure(text="Bring back")
+        except Exception:
+            pass
+        for seq, factor in (("<plus>", 1 / 1.5), ("<equal>", 1 / 1.5), ("<KP_Add>", 1 / 1.5),
+                            ("<minus>", 1.5), ("<KP_Subtract>", 1.5)):
+            win.bind(seq, lambda _e, f=factor: self.photo_zoom_step(f), add="+")   # keyboard zoom in the window
         win.protocol("WM_DELETE_WINDOW", self.photo_bring_back)
         # Remembered as it is moved or resized (shortly after), so quitting the app with the window open keeps it too.
         win.bind("<Configure>", lambda e, w=win: self._popout_moved(w) if e.widget is w else None, add="+")
@@ -5129,6 +5343,57 @@ class App(Tk):
         self.refresh_preview()
         self.status.set("The image is in its own window: resize it as you like. Close it (or Bring back) to put it "
                         "back on the page.")
+
+    def photo_pop_toggle(self):
+        """2.2.17 (item 2): the page's Pop out button; while the image is out it reads Bring back and does that."""
+        if self.photo_popout is not None:
+            self.photo_bring_back()
+        else:
+            self.photo_pop_out()
+
+    def _set_page_zoom(self, shown: bool):
+        """2.2.17 (item 2): show or hide the page's Zoom label and − + Fit buttons (they live in the pop-out while
+        the image is out)."""
+        if shown == getattr(self, "_page_zoom_shown", True):
+            return
+        self._page_zoom_shown = shown
+        for widget, padx in getattr(self, "_page_zoom_widgets", []):
+            try:
+                if shown:
+                    widget.pack(side=LEFT, padx=padx, before=self.popout_button)
+                else:
+                    widget.pack_forget()
+            except Exception:
+                pass
+
+    def _build_popout_bar(self, bar):
+        """2.2.17 (item 2): the pop-out's button row, mirroring the page for the current mode: Target / Comps / Check
+        / Watch (Variables, Transits) or Watch it / Exclude it (Discovery) on the same pick_mode variable, Clear
+        selected; − + Fit; Go back at the right."""
+        for child in list(bar.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        # Go back and the zoom buttons are packed first, so a narrow window squeezes the star buttons, not these.
+        ttk.Button(bar, text="Go back", command=self.photo_bring_back).pack(side=RIGHT)
+        ttk.Button(bar, text="Fit", command=self.reset_photo_view).pack(side=RIGHT, padx=(2, 12))
+        ttk.Button(bar, text="+", width=3, command=lambda: self.photo_zoom_step(1 / 1.5)).pack(side=RIGHT, padx=(2, 0))
+        ttk.Button(bar, text="−", width=3, command=lambda: self.photo_zoom_step(1.5)).pack(side=RIGHT)
+        ttk.Label(bar, text="Zoom", style="Card.TLabel").pack(side=RIGHT, padx=(12, 4))
+        if self.mode_key == "discovery":
+            ttk.Label(bar, text="Click a star to", style="Card.TLabel").pack(side=LEFT, padx=(4, 6))
+            choices = (("●  Watch it", "watch", "watch"), ("✕  Exclude it", "exclude", "check"))
+        else:
+            choices = tuple(("●  " + label, value, value) for label, value in (
+                ("Target", "target"), ("Comps (C1–C10)", "comp"), ("Check", "check"), ("Watch", "watch")))
+        for text, value, style in choices:
+            ttk.Radiobutton(bar, text=text, value=value, variable=self.pick_mode,
+                            style=f"Pick{style}.TRadiobutton").pack(side=LEFT, padx=6)
+        if self.mode_key != "discovery":
+            ttk.Button(bar, text="Clear selected", command=self.clear_selected_mark).pack(side=LEFT, padx=(2, 6))
+        self._popout_bar_mode = self.mode_key
+        self._popout_bar_choices = [value for _t, value, _s in choices]
 
     def _popout_fit_after(self, win, canvas):
         try:
@@ -5144,6 +5409,12 @@ class App(Tk):
             return
         self.photo_popout = None
         self._save_popout_geometry(pop["win"])
+        # 2.2.17 (item 2): the zoom buttons back on the page, the page's button reads Pop out again.
+        self._set_page_zoom(True)
+        try:
+            self.popout_button.configure(text="Pop out")
+        except Exception:
+            pass
         home = self._photo_canvas_home
         self._photo_press = None
         self.photo_canvas = home
@@ -8094,6 +8365,10 @@ class App(Tk):
         self.check_used = check.name if check is not None else ""
         self.comp_catalog_mags.update({comp.name: float(comp.catalog_mag) for comp in comps})
         self.log(f"Photometry on {len(lights)} lights, {len(self.rejected)} rejected, aperture {radius:.1f} px, {mode} channel")
+        rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
+        if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
+            self.log(f"Rejected frames ({len(rej_lights)}): "
+                     + core.frame_list_text([core.frame_label(p) for p in rej_lights]))
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
