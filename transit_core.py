@@ -2150,7 +2150,7 @@ def parse_exoplanet_report(text: str) -> dict:
             body = line[1:]
             if "=" in body and not body.startswith(" "):
                 key, value = body.split("=", 1)
-                header[key.strip()] = value.strip()
+                header[key.strip().upper()] = value.strip()   # 2.2.17 review: "#Date_Type=" from other writers
             elif body.upper().startswith("DATE,"):
                 cols = [c.strip().upper() for c in body.split(",")]
             continue
