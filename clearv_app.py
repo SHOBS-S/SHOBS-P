@@ -866,7 +866,9 @@ class App(Tk):
             source = None
         self._mono_filter_source = source
         if found != self.mono_filter:
+            old_band = self._band()
             self.mono_filter = found
+            self._comp_band_changed(old_band)   # 2.2.17 (review M2)
             if found and source == "header" and self.pattern.get() == core.MONO:
                 self.log(f"Filter from the FITS header: {raw} → AAVSO filter {found[0]}, comps in "
                          f"{core.band_label(found[1])}.")   # 2.2.17 (item 1): "i′", not "SI"
@@ -2470,13 +2472,53 @@ class App(Tk):
         pair = core.MONO_FILTER_CHOICES.get(label)
         if not pair:
             return
+        old_band = self._band()
         self.mono_filter = pair
         self._mono_filter_manual = True
         self._mono_filter_source = "hand"
         self.settings["mono_filter_choice"] = label
         self._save_settings()
-        self.log(f"Filter set by hand: {label} → AAVSO filter {pair[0]}, comps in {pair[1]}.")
+        self.log(f"Filter set by hand: {label} → AAVSO filter {pair[0]}, comps in {core.band_label(pair[1])}.")
         self._update_filter_hint()
+        self._comp_band_changed(old_band, resolve=True)   # 2.2.17 (review M2)
+
+    def _wrong_band_star(self, xy) -> bool:
+        """2.2.17 (review M2): the labeled star under a marker carries another band than the comps', with a Sloan band
+        on either side (V/B/R and OSC channel changes behave as before)."""
+        band = (self._chart_star_at(xy) or {}).get("band") if xy is not None else None
+        return bool(band) and band != self._band() and (core.is_sloan(band) or core.is_sloan(self._band()))
+
+    def _comp_band_changed(self, old_band: str, resolve: bool = False):
+        """2.2.17 (item 1, review M2): the comps' band changed to or from a Sloan band after a solve. The labeled
+        chart holds the old band's magnitudes, so it is dropped, with the magnitudes filled from it (names filled from
+        it too, so a new solve fills both again; names typed by hand stay, without a magnitude). resolve=True (a
+        filter picked by hand on a calibrated image) solves again at once; otherwise the log says to."""
+        new_band = self._band()
+        if new_band == old_band or not (core.is_sloan(new_band) or core.is_sloan(old_band)):
+            return
+        chart_band = next((st.get("band") for _x, _y, st in self.chart_placed or [] if st.get("band")), None)
+        if not self.chart_placed or chart_band == new_band:
+            return
+        for role in list(COMP_ROLES) + ["check"]:
+            if getattr(self, f"{role}_xy", None) is None:
+                continue
+            if role in self.star_bands:
+                getattr(self, f"{role}_name").set("")
+                self.star_bands.pop(role, None)
+            getattr(self, f"{role}_mag").set("")
+        self.chart_placed = []
+        label = core.band_label(new_band)
+        can = (resolve and self.preview is not None and self.preview_is_debayered and not getattr(self, "busy", False))
+        self.log(f"Comps are now taken in {label}: the labeled catalog stars (in {core.band_label(chart_band)}) were "
+                 f"dropped with the magnitudes filled from them. "
+                 + (f"Solving again to fetch {label} comps." if can else f"Solve again to fetch {label} comps."))
+        try:
+            self.refresh_preview()
+            self.update_star_panel()
+        except Exception:
+            pass
+        if can:
+            self.label_aavso(auto=True)
 
     def _detect_sensor(self):
         """2.2.11: no Bayer keyword in the lights: look at the raw flats (up to five, flats before flat-darks). No
@@ -7887,6 +7929,14 @@ class App(Tk):
             comp_roles = self._comp_roles_marked()
             if not comp_roles:
                 raise ValueError("Mark at least one comparison star (Comps, then click the star)")
+            # 2.2.17 (item 1, review M2): a comp labeled from a chart in another band (V comps under a Sloan filter
+            # picked after the solve) would zero-point the night on the wrong band.
+            wrong = [role_label(r) for r in comp_roles + (["check"] if self.check_xy is not None else [])
+                     if self._wrong_band_star(getattr(self, f"{r}_xy"))]
+            if wrong:
+                raise ValueError(f"{', '.join(wrong)}: the labeled catalog is in another band than the comps' "
+                                 f"{core.band_label(self._band())}. Solve again so the comps get "
+                                 f"{core.band_label(self._band())} magnitudes")
             missing = [role_label(r) for r in comp_roles if not getattr(self, f"{r}_mag").get().strip()]
             if missing and self.chart_placed:
                 # 2.2.14 (item 4): the image is solved already, so "click it once solved" was wrong: say why.
@@ -8453,7 +8503,8 @@ class App(Tk):
             if plan:
                 # 2.2.14 (item 11): names AND catalog magnitudes, watch stars and spares too.
                 warning += ("\n\nOne star, one name: " + "; ".join(self._same_star_words(plan))
-                            + ". Yes uses the series' names and catalog magnitudes for this night.")
+                            + (". Yes uses the series' names for this night." if plan.get("band_mismatch") else
+                               ". Yes uses the series' names and catalog magnitudes for this night."))
                 if plan.get("remag") or plan.get("check_mag"):
                     # review S4: say that the series' magnitude wins, and where to change it for every night.
                     warning += (" The series' catalog magnitude wins, so every night stays on one zero point; Use "
@@ -11270,9 +11321,19 @@ class App(Tk):
             tm = (self.spare_catalog.get(name) or {}).get("mag")
             if sm is not None and tm is not None and abs(float(sm) - float(tm)) > 0.0005:
                 spare_remag[final] = (float(tm), float(sm))
+        # 2.2.17 (item 1, review M1): the series' catalog magnitudes are only valid in the series' band. An i′ night
+        # added to a V (or g′) series keeps tonight's own magnitudes (only the names follow the series); a remag
+        # across bands would zero-point the night on the wrong band (0.3-1 mag off, reported as SI).
+        band_mismatch = None
+        series_bands = {core.filter_band(o.filt) for o in self.observations if getattr(o, "filt", "")}
+        tonight_band = core.filter_band(self._filter_code())
+        if series_bands and series_bands != {tonight_band}:
+            band_mismatch = ("/".join(sorted(core.band_label(b) for b in series_bands)), core.band_label(tonight_band))
+            remag, check_mag, spare_remag = {}, None, {}
         if not (renamed or remag or check_mag or watch or spares or spare_remag):
             return None
         return {"band_word": self._band_word(),   # 2.2.17 (item 1): "V", or "i′" on a Sloan run
+                "band_mismatch": band_mismatch,
                 "comps": new_comps, "check": new_check, "renamed": renamed, "remag": remag, "check_mag": check_mag,
                 "watch": watch, "spares": spares, "spare_remag": spare_remag}
 
@@ -11283,6 +11344,10 @@ class App(Tk):
         out += [f"watch star {a} is {b}" for a, b in (plan.get("watch") or {}).items()]
         out += [f"spare {a} is {b}" for a, b in (plan.get("spares") or {}).items()]
         bw = plan.get("band_word") or "V"   # 2.2.17 (item 1)
+        if plan.get("band_mismatch"):
+            sb, tb = plan["band_mismatch"]
+            out.append(f"the series' catalog magnitudes are in {sb}, this night's in {tb}, so this night keeps its "
+                       f"own {tb} magnitudes (only the names follow the series)")
         out += [f"{n}: the series' {bw} {s:.3f}, not tonight's {t:.3f}" for n, (t, s) in (plan.get("remag") or {}).items()]
         if plan.get("check_mag"):
             t, s = plan["check_mag"]
@@ -11296,11 +11361,17 @@ class App(Tk):
         and watch stars and spares measured under another name are moved to the series' name (one star, one name);
         every change is logged."""
         bw = plan.get("band_word") or "V"   # 2.2.17 (item 1)
+        if plan.get("band_mismatch"):
+            self.log(f"Same-star names: the series' catalog magnitudes are in {plan['band_mismatch'][0]}, this "
+                     f"night's in {plan['band_mismatch'][1]}: names follow the series, magnitudes stay this night's.")
         catalog = self._comp_catalog()
         before = getattr(self, "_series_catalog_before", None) or {}
         for name, (_t, s) in (plan.get("remag") or {}).items():
             catalog[name] = s
         for old, new in plan["renamed"].items():
+            if plan.get("band_mismatch") and catalog.get(old) is not None:
+                catalog[new] = catalog[old]   # 2.2.17 (review M1): tonight's own band, under the series' name
+                continue
             if new not in catalog:
                 for src in (before.get("comps") or {}, before.get("spares") or {}):
                     if src.get(new) is not None:
@@ -11316,7 +11387,8 @@ class App(Tk):
                         getattr(self, f"{r}_mag").set(f"{catalog[new]:.3f}")
             if self.check_name.get().strip() == old:
                 self.check_name.set(new)
-                if series_check[0] == new and str(series_check[1]).strip():
+                if (series_check[0] == new and str(series_check[1]).strip()
+                        and not plan.get("band_mismatch")):   # 2.2.17 (review M1): not across bands
                     self.check_mag.set(str(series_check[1]).strip())
             for _role, entry in list(self.star_bands.items()):
                 if isinstance(entry, dict) and entry.get("name") == old:
@@ -11331,6 +11403,8 @@ class App(Tk):
                 if getattr(self, f"{r}_name").get().strip() == name:
                     getattr(self, f"{r}_mag").set(f"{s:.3f}")
         for name in plan["comps"]:
+            if plan.get("band_mismatch"):
+                break   # 2.2.17 (review M1): never overwrite the series' magnitudes with another band's
             if catalog.get(name) is not None and (name in (plan.get("remag") or {}) or name in plan["renamed"].values()):
                 self.comp_catalog_mags[name] = float(catalog[name])
         if plan.get("check_mag"):
@@ -11346,7 +11420,8 @@ class App(Tk):
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
             self.log(f"{old} is {new} (same star): series name"
-                     + (f" and {bw} {mag:.3f}" if mag is not None and new in self.comps_used else "") + " used.")
+                     + (f" and {bw} {mag:.3f}" if mag is not None and new in self.comps_used
+                        and not plan.get("band_mismatch") else "") + " used.")
         for name, (t, s) in (plan.get("remag") or {}).items():
             if name not in plan["renamed"].values():
                 self.log(f"{name}: the series' catalog {bw} {s:.3f} used for this night, not tonight's {t:.3f} "
@@ -11708,11 +11783,24 @@ class App(Tk):
         """2.2.15 (item 1, review): report points without the frames flagged in a planet transit (always)."""
         return [o for o in points if core.TRANSIT_FLAG not in o.flag.split()]
 
-    def _sloan_report_note(self) -> str:
+    def _sloan_report_note(self, points=None) -> str:
         """2.2.17 (item 1): for a Sloan run, the AAVSO report notes say where the comp/check magnitudes came from
         ("; comp/check mags SI from APASS DR9 2; Gaia DR3 G/BP-RP (+/-0.04) 1"), ASCII. '' otherwise."""
         info = self.comp_band_sources if isinstance(getattr(self, "comp_band_sources", None), dict) else {}
         if not info or not core.is_sloan(info.get("band")) or info.get("band") != self._band():
+            return ""
+        # 2.2.17 (review S6): only when every reported point is this run's: one filter and this run's comps (a
+        # series report spanning other filters or comp sets is not described by tonight's sources).
+        pts = list(points or [])
+        if not pts or any(getattr(o, "filt", "") != self._filter_code() for o in pts):
+            return ""
+        comps_now = set((info.get("sources") or {}))
+        used = set(self.active_comps or self.comps_used or [])
+        if not used or not used <= comps_now:
+            return ""
+        nights = {o.night for o in pts}
+        if len(nights) > 1 and any(set(self.night_bin.get(n, {}).get("comps") or used) != used for n in nights
+                                   if isinstance(self.night_bin.get(n), dict)):
             return ""
         counts: dict = {}
         for text in (info.get("sources") or {}).values():
@@ -11743,15 +11831,16 @@ class App(Tk):
                  if any(o.kmag is not None for o in self.observations) else None)
         # 2.2.15 (item 1, review): frames in a planet transit never go in a report (campaign rule), even with
         # "Leave flagged points out" unticked.
+        points = self._report_points(self._usable() if observations is None else observations)
         return core.aavso_report(
-            self._report_points(self._usable() if observations is None else observations),
+            points,
             self.observer.get(),
             self.star_id.get() or "target",
             comps,
             check,
             self.chart.get(),
             software=f"{APP_TITLE} {APP_VERSION}",
-            notes=self.notes.get() + self._sloan_report_note(),   # 2.2.17 (item 1): '' unless Sloan
+            notes=self.notes.get() + self._sloan_report_note(points),   # 2.2.17 (item 1): '' unless Sloan
             filt=self._filter_code(),
             scint=self._scint_setup(),
         )

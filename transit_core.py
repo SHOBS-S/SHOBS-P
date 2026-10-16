@@ -2253,6 +2253,18 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _is_sloan_code(filt) -> bool:
+    import photometry_core as core
+    return core.is_sloan(filt)
+
+
+def _mentions_sloan(filt) -> bool:
+    """2.2.17 (review S7): a filter string with a Sloan code in it (SU, or "SG/SI" from a mixed series) that the
+    Sloan limb-darkening table did not cover."""
+    import photometry_core as core
+    return any(core.is_sloan(p) or core.sloan_band_code(p) for p in str(filt or "").split("/"))
+
+
 def core_band_label(band) -> str:
     """2.2.17 (item 1): "i′" for SI (photometry_core.band_label)."""
     import photometry_core as core
@@ -2330,8 +2342,8 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
     return ("\nFor ExoFOP (time-series upload)\n"
             f"  Telescope/camera: {meta.get('telescope') or 'not recorded'}\n"
             f"  Filter: {meta.get('filter', 'CV')} ("
-            + (f"Sloan {core_band_label(limb_darkening_band(meta.get('filter')))}, "
-               if limb_darkening_band(meta.get("filter")) else "")   # 2.2.17 (item 1): "SI (Sloan i′, …)"
+            + (f"Sloan {core_band_label(str(meta.get('filter')).strip().upper())}, "
+               if _is_sloan_code(meta.get("filter")) else "")   # 2.2.17 (item 1): "SI (Sloan i′, …)"
             + ("monochrome camera" if mono else "one-shot color camera") + ", untransformed)\n"
             f"  Pixel scale: {scale_text}\n"
             f"  Photometric aperture: {ap_text}\n"
@@ -2375,7 +2387,9 @@ def fit_text(result: dict, meta: dict) -> str:
                      f"± {result['tc_pred_err'] * 1440:.2f} min)")
     lines += ["", "Priors           " + ", ".join(f"{k} {m:.4g} ± {sd:.2g}" for k, (m, sd) in result["priors"].items())
               + f"; limb darkening u1 {result['ld_prior'][0]:.2f}, u2 {result['ld_prior'][1]:.2f} ± {result['ld_prior'][2]:.2f}"
-              + (f" (Claret 2004, Sloan {core_band_label(result['ld_band'])})" if result.get("ld_band") else ""),
+              + (f" (Claret 2004, Sloan {core_band_label(result['ld_band'])})" if result.get("ld_band") else
+                 f" (V-band table used: no Sloan table for {meta.get('filter')})" if _mentions_sloan(meta.get("filter"))
+                 else ""),
               f"Noise            rms {result['rms'] * 100:.3f}% per point"
               + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
               + f", reduced chi-square {result['rchi2']:.2f}, "
