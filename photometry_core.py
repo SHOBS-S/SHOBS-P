@@ -4495,35 +4495,50 @@ NIGHT_PERM_EXACT = 5040   # all orderings of the nightly means up to 7 nights; r
 NIGHT_PERM_RANDOM = 3000
 
 
+NIGHT_PERM_MAX_FREQS = 400   # review: frequency grid cap for the nightly means (k means have about k independent peaks)
+NIGHT_PERM_CHUNK = 250       # review: orderings per block, so memory stays small
+
+
 def _night_perm_fap(t_mean: np.ndarray, y_mean: np.ndarray, f_lo: float, f_hi: float, seed: int = 0) -> float:
     """2.2.17 (review): permutation false-alarm probability of the highest Lomb-Scargle power among the nightly means
     (floating mean, frequencies f_lo..f_hi): the means are shuffled among the nights' times and the search repeated.
     With no period, night offsets are exchangeable, so this is calibrated whatever their size; with k nights the
-    smallest possible FAP is 1/k! (5 nights 0.008, 6 nights 0.0014)."""
+    smallest possible FAP is 1/k! (5 nights 0.008, 6 nights 0.0014). NaN under 4 nights (not judged).
+    The grid is 8x oversampled on the means' span but capped at NIGHT_PERM_MAX_FREQS frequencies: the observed and
+    the shuffled means are searched on the same grid, so the calibration holds; orderings run in blocks of
+    NIGHT_PERM_CHUNK (60 nights over 700 d: a fraction of a second, a few MB)."""
     import itertools
     k = t_mean.size
     if k < 4:
-        return 1.0
+        return float("nan")
     span = float(t_mean.max() - t_mean.min())
     if not (span > 0 and f_hi > f_lo > 0):
         return float("nan")
-    freqs = np.arange(f_lo, f_hi, 1.0 / (8.0 * span))
+    step = max(1.0 / (8.0 * span), (f_hi - f_lo) / NIGHT_PERM_MAX_FREQS)
+    freqs = np.arange(f_lo, f_hi, step)
     if freqs.size < 2:
         freqs = np.array([f_lo, f_hi])
     tt = t_mean - t_mean.mean()
-    basis = []
-    for f in freqs:
-        x = np.column_stack([np.ones(k), np.sin(2 * math.pi * f * tt), np.cos(2 * math.pi * f * tt)])
-        q, _r = np.linalg.qr(x)
-        basis.append(q[:, 1:3] - np.outer(np.ones(k) / k, q[:, 1:3].sum(axis=0)) * 0.0)
-    q_all = np.array(basis)                                   # (F, k, 2): the sine/cosine part orthogonal to the mean
+    # sine and cosine at every frequency, each made orthogonal to the mean, then to each other (Gram-Schmidt): the
+    # power of centred values is their squared projection on the two (the floating-mean Lomb-Scargle power).
+    ph = 2 * math.pi * np.outer(tt, freqs)                    # (k, F)
+    sn, cs = np.sin(ph), np.cos(ph)
+    sn -= sn.mean(axis=0)
+    cs -= cs.mean(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        sn /= np.sqrt((sn ** 2).sum(axis=0))
+        cs -= sn * (cs * sn).sum(axis=0)
+        cs /= np.sqrt((cs ** 2).sum(axis=0))
 
     def max_power(ys: np.ndarray) -> np.ndarray:              # ys: (m, k)
-        yc = ys - ys.mean(axis=1, keepdims=True)
-        tot = (yc ** 2).sum(axis=1)
-        proj = np.einsum("fkj,mk->mfj", q_all, yc)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            return np.nanmax((proj ** 2).sum(axis=2), axis=1) / tot
+        out = np.empty(ys.shape[0])
+        for a in range(0, ys.shape[0], NIGHT_PERM_CHUNK):
+            yc = ys[a:a + NIGHT_PERM_CHUNK]
+            yc = yc - yc.mean(axis=1, keepdims=True)
+            tot = (yc ** 2).sum(axis=1)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                out[a:a + NIGHT_PERM_CHUNK] = np.nanmax((yc @ sn) ** 2 + (yc @ cs) ** 2, axis=1) / tot
+        return out
     observed = float(max_power(y_mean[None, :])[0])
     if not math.isfinite(observed):
         return float("nan")
@@ -4542,8 +4557,9 @@ def period_night_fap(jd, values, nights, best: dict, min_period: float, max_peri
     the point FAP (points of a night share offsets from clouds, extinction and calibration, so ten nights cannot give
     a FAP of 1e-14).
     - Best period longer than twice the median night's span (a night shows only part of a cycle): the evidence is
-      the nightly means, so the FAP is a permutation test on them (_night_perm_fap; 4 nights at least, and with 5-7
-      nights only a strong signal can pass, since 1/k! is the smallest FAP possible).
+      the nightly means, so the FAP is a permutation test on them (_night_perm_fap; with 5-7 nights only a strong
+      signal can pass, since 1/k! is the smallest FAP possible; under 4 nights NaN: not judged, and the 2.2.3
+      leave-one-night-out / one-short-night rules decide as before).
     - Shorter periods (a night shows a cycle or more): each night's own mean is taken out, so night offsets cannot
       make the peak, and the sine's share of the remaining scatter at the best period gives a Baluev FAP with
       N - k + 1 points (k nights).
@@ -4589,6 +4605,8 @@ def period_night_fap(jd, values, nights, best: dict, min_period: float, max_peri
     except np.linalg.LinAlgError:
         power = float("nan")
     n_use = float(t.size - k + 1)
+    # Deliberately conservative: the Baluev bandwidth is the whole search range (1 / min_period) over the whole
+    # baseline, though the peak was picked from the raw points and only this one frequency is tested here.
     out.update(method="within nights", n_eff=n_use, fap=fap_baluev(power, n_use, t, min_period, max_period))
     return out
 
