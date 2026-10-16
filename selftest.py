@@ -319,6 +319,38 @@ def main() -> None:
     except Exception as exc:
         check("2.2.16 checks", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
+    section("2j 2.2.17: Sloan filter from a real FITS header, electrons per unit, frame numbers, airmass trend")
+    try:
+        import tempfile
+        from astropy.io import fits as _fits
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "2026-09-01_23-17-28_i'_-50.04_120.00s_0007.fits")
+            hdu = _fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16))
+            hdu.header["FILTER"] = "i'"
+            hdu.header["EGAIN"] = 0.243
+            hdu.header["GAIN"] = 100
+            hdu.writeto(path)
+            hdr = core.read_header(path)
+            found = core.filter_from_header(hdr)
+            check("FILTER i' (real FITS) is Sloan i' (SI)", bool(found) and found[0] == "SI", str(found))
+            check("EGAIN is the gain, GAIN (a setting) is not", abs((core.header_e_per_adu(hdr) or 0) - 0.243) < 1e-9)
+            check("frame number from a NINA file name", core.frame_number(path) == 7)
+        check("bare R and I are never Sloan", core.sloan_band_code("R") is None and core.sloan_band_code("I") is None
+              and core.sloan_band_code("Astrodon Sloan g'") == "SG")
+        k = core.electrons_per_unit(0.243, 2, "RGGB", "green")
+        check("TG Bin 2: 8 x EGAIN electrons per unit (no flat)", abs(k - 8 * 0.243) < 1e-9, f"{k:.4f}")
+        s = core.sloan_from_gaia_g(12.0, 1.0)
+        check("Gaia G, BP-RP 1.0 gives g' > r' > i'", all(b in s for b in ("SG", "SR", "SI"))
+              and s["SG"][0] > s["SR"][0] > s["SI"][0], str({b: round(v[0], 3) for b, v in s.items()}))
+        means = [{"night": f"N{i}", "mean": 5.5 - 0.08 * (am - 1.0), "airmass": am, "n": 30}
+                 for i, am in enumerate([1.05, 1.1, 1.2, 1.35, 1.5, 1.1, 1.25, 1.45])]
+        means = [dict(m, mean=m["mean"] + 0.002 * ((-1) ** i)) for i, m in enumerate(means)]
+        tr = core.airmass_trend(means)
+        check("nightly means that follow airmass are flagged", bool(tr.get("follows")),
+              f"slope {tr.get('slope', float('nan')):+.3f} ({tr.get('sigma', 0):.1f} sigma)")
+    except Exception as exc:
+        check("2.2.17 checks", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):

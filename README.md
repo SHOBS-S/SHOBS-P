@@ -23,9 +23,10 @@ SHOBS-P looks up its position in SIMBAD and VSX, along with its catalogued perio
 the image **solves itself**, and every catalog (the AAVSO comparison sequence, Gaia DR3, APASS and Tycho-2) is merged into one star list: click any star and its name and magnitude fill in. The best comparison stars, AAVSO sequence stars first, close to the target in brightness and colour, are ringed in green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
 frames up across meridian flips, and flags saturated frames, cloud and drift.
 
-The result is a **light curve with honest error bars**: they include atmospheric scintillation as well as photon
-noise, so they match the real scatter. A **period search** (Lomb-Scargle) reports how significant its best period
-is, warns about one-day aliases, and checks that no single night is driving the answer. Nights build up into a
+The result is a **light curve with honest error bars**: photon and sky noise in electrons (from the camera gain,
+binning, debayer and flat) plus atmospheric scintillation, so they match the real scatter. A **period search**
+(Lomb-Scargle) reports how significant its best period is, warns about one-day aliases, and checks that no single
+night, and no night-to-night airmass trend, is driving the answer. Nights build up into a
 **series**, with a comparison-star health check along the way. When you're happy, it writes an **AAVSO Extended
 report** ready to submit.
 
@@ -56,8 +57,8 @@ Interesting stars can be put on a **watch list**. Every later night you add to t
 watched stars automatically, building up their light curves over time.
 
 Highlights: bias/dark/flat calibration with superpixel debayering, frame alignment through meridian flips,
-comparison-star ensembles, catalog comps from the AAVSO sequence, Gaia DR3, APASS and Tycho-2, and error bars that
-include scintillation (Osborn et al. 2015).
+comparison-star ensembles, catalog comps from the AAVSO sequence, Gaia DR3, APASS and Tycho-2 (Johnson V/B/R and
+Sloan g′r′i′), and error bars from the CCD equation plus scintillation (Merline & Howell 1995; Osborn et al. 2015).
 
 ## Requirements
 
@@ -109,8 +110,8 @@ Every page and button is described in **[README.txt](README.txt)** (also in the 
 
 - **Made for Windows** (10 or 11). It is plain Python and also runs on a Mac (python.org Python, which includes Tk; start it with `python clearv_app.py`); the Mac is lightly tested so far.
 - **Colour (OSC) cameras are the most tested.** Monochrome cameras are supported (V, B, R, clear and LRGB imaging
-  filters); that path is newer, so reports from mono users are especially welcome.
-- **I and Sloan filters are not supported yet**: the comparison-star catalogs used carry B, V and R only.
+  filters, and Sloan g′ r′ i′ z′ u′ since 2.2.17); that path is newer, so reports from mono users are especially welcome.
+- **Johnson/Cousins I is not supported yet**: the comparison-star catalogs used carry B, V, R and Sloan only.
 - **An internet connection is needed** for target, planet and catalog lookups (SIMBAD, VSX, NASA Exoplanet
   Archive, AAVSO VSP, Gaia, APASS, Tycho-2). Calibration and photometry themselves run offline.
 - Magnitudes are **untransformed** (no transformation coefficients yet).

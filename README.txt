@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.16
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.17
 ======================================================
 
 Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -53,6 +53,44 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.17 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  Sloan g', r', i' filters (GitHub #6), for monochrome cameras: FILTER spellings like g', gp, sdss g, Sloan g,
+     "Astrodon Sloan g'" are read as SG / SR / SI (z' and u' too); the Filter box offers them. Comp and check
+     magnitudes come in that band: the AAVSO sequence when it has it, then APASS DR9 g'r'i', then Gaia DR3
+     (synthetic SDSS photometry, else the Gaia DR3 relations from G and BP-RP, put on the primed system), each with
+     its source. Reports say FILT SI (exoplanet reports #FILTER=SI, as EXOTIC does); transit fits use Sloan limb
+     darkening (Claret 2004). B-V / V-R color calibration is skipped (one band). Changing the filter by hand after a
+     solve fetches comps in the new band; a night in another band added to a series keeps its own magnitudes.
+     Field solves on narrow fields retry with stars inside the frame (stricter acceptance on the retry).
+- S  Error bars in electrons: each point's photon and sky noise now uses the camera gain (EGAIN in the header),
+     binning, the superpixel debayer and the flat (the CCD equation). Before 2.2.17 one image unit was treated as
+     one electron and 0.005 mag was added to every point, so long exposures had error bars about 1.9x too big
+     (transit fits with chi-squared 0.27-0.44; now about 1). Without EGAIN the gain is estimated from the sky; the
+     log shows both and warns when they disagree. Nights reduced before 2.2.17 keep their old error bars (a caution
+     says which; run photometry on them again for consistent errors).
+- S  Pop-out image window: Target / Comps / Check / Watch buttons in the pop-out too (kept in step with the page),
+     the zoom buttons move into it, and "Go back"; the page button reads "Bring back" while the image is out.
+- S  Compass: both N and E stay inside the image for every rotation and flip.
+- S  Blink shows each frame's own number from its file name (Frame 222) and its time; Reject and Keep are separate
+     buttons (Reject on a rejected frame no longer restores it); a "Rejected frames" list with Show and Keep this
+     one. The same frame numbers are used in the log and in a new last "frame" column of the light-curve CSV.
+- V  Periods and airmass: before a period is called significant, the nightly means are checked against each night's
+     airmass, and a second false-alarm probability counts nights (for periods longer than about two nights it
+     tests the nightly means alone). A peak that follows the airmass, or that a few nights carry, is shown as
+     "not significant". A long period now needs about 8-10 nights to be called significant. "Airmass-corrected
+     night means" shows the trend on the plot (plot only, never in reports).
+- T  Comp health... and Use comps... on the Transit fit page; after Use comps the transit is refitted by itself.
+     The comp cautions in the notes link to Comp health.
+- T  Trim and refit: From/To times (or drag across the plot) leave out a stretch without reducing again; several
+     spans; Clear trim brings the points back. Trimmed spans are greyed on the plot and named in the notes, the
+     AAVSO exoplanet report NOTES, the ExoFOP fit file and the PNG.
+- T  An opened report names the program that wrote it ("Fitting a SHOBS-P 2.2.16 report", "an EXOTIC 4.3.2
+     report"); JD_UTC and HJD reports are converted to BJD_TDB (or warned when they cannot be).
+- T  ExoFOP package folder named ExoFOP_<planet>_<tag>, with only the light-curve CSV, fit file and plot inside (no
+     AAVSO report copy). The transit report, PNG and CSV of one save share one number.
+- T  The chi-squared warning now says what it means: much below 1 = error bars too big (gain), much above 1 = noise
+     the model leaves out.
 
 New in 2.2.16 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Bigger Photometry image (GitHub #2): zoom buttons (- + Fit) in the View box, and "Pop out" moves the image into
@@ -794,6 +832,10 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.17 Sloan g' r' i' filters (#6); error bars in electrons (camera gain, binning, debayer, flat; no 0.005 floor);
+       airmass check and night-counting FAP before a period is called significant; pop-out image controls; compass
+       labels inside the image; Blink frame numbers, Reject/Keep and rejected list; Comp health and Use comps on the
+       Transit fit page; trim and refit; report program named; ExoFOP_<planet> package; chi-squared wording.
 2.2.16 Pop-out and zoom for the Photometry image (#2); catalog cache and per-catalog progress; three-state
        solve step; a new target clears the old field; Suggest apertures headline; telescope name; color-fit guard;
        leave-one-comp-out check on transit fits; ExoFOP package as a folder; light-curve y from used points; check
@@ -928,7 +970,7 @@ Gaia DR3 (ESA)
   https://www.cosmos.esa.int/gaia
 
 APASS (AAVSO)
-  Used for: Comparison stars, Johnson B and V, field stars for B-V calibration.
+  Used for: Comparison stars, Johnson B and V and Sloan g', r', i' (2.2.17), field stars for B-V calibration.
   "This research was made possible through the use of the AAVSO Photometric All-Sky Survey (APASS), funded by the Robert Martin Ayers Sciences Fund and NSF AST-1412587." Henden, A. A. et al. 2016, VizieR II/336.
   https://www.aavso.org/apass
 
@@ -977,6 +1019,23 @@ Gaia G, BP-RP to Johnson V
   Used for: V for Gaia stars when the ESA archive is unavailable.
   Riello, M. et al. 2021, A&A 649, A3.
 
+Gaia G, BP-RP to SDSS g, r, i, z
+  Used for: Sloan magnitudes for Gaia stars without synthetic SDSS photometry (no value outside each relation's color range).
+  Gaia DR3 documentation, section 5.5.1 (Carrasco, J. M. & Bellazzini, M.), Tables 5.8 and 5.10; Riello, M. et al. 2021, A&A 649, A3.
+  https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html
+
+Gaia DR3 synthetic SDSS photometry
+  Used for: Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).
+  Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.
+
+SDSS to primed Sloan system
+  Used for: Puts SDSS-system magnitudes on the primed g', r', i', z' system of APASS and AAVSO sequences.
+  Tucker, D. L. et al. 2006, Astron. Nachr. 327, 821.
+
+Sloan limb darkening
+  Used for: Quadratic limb-darkening coefficients for transit fits in Sloan filters.
+  Claret, A. 2004, A&A 428, 1001 (VizieR J/A+A/428/1001, table 4).
+
 Tycho BT, VT to Johnson B, V
   Used for: Johnson magnitudes for Tycho-2 stars.
   ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.
@@ -1023,7 +1082,7 @@ Swarthmore Transit Finder (Tapir)
   https://astro.swarthmore.edu/transits/
 
 EXOTIC and Exoplanet Watch
-  Used for: SHOBS-P reads EXOTIC's AAVSO exoplanet reports to compare fits, and writes the same report format. No EXOTIC code is used.
+  Used for: SHOBS-P reads EXOTIC's AAVSO exoplanet reports to compare fits, and writes the same report format (and uses its filter names, e.g. SI for Sloan i'). No EXOTIC code is used.
   Zellem, R. T. et al. 2020, PASP 132, 054401. EXOTIC is developed by Exoplanet Watch, a citizen science project managed by NASA's Jet Propulsion Laboratory.
   https://exoplanets.nasa.gov/exoplanet-watch/
 
@@ -1039,6 +1098,14 @@ SIP distortion convention
 Scintillation noise
   Used for: The atmospheric twinkling term added to each point's error bar (2.2.2), from the telescope aperture, airmass, exposure time and site elevation.
   Young, A. T. 1967, AJ 72, 747; Osborn, J. et al. 2015, MNRAS 452, 1707 (modified Young approximation).
+
+CCD equation
+  Used for: Each point's photon and sky noise in electrons (camera gain EGAIN, binning, debayer and flat accounted for), including the sky-level error term.
+  Merline, W. J. & Howell, S. B. 1995, Experimental Astronomy 6, 163.
+
+False-alarm probability
+  Used for: Periodogram FAP; for long periods a night-counting check (permutation test on the nightly means) so a few nights cannot look significant.
+  Baluev, R. V. 2008, MNRAS 385, 1279.
 
 Bootstrap resampling
   Used for: Uncertainties and the 'clear winner' test in the aperture test (frames resampled with replacement, the same frames for every aperture).
