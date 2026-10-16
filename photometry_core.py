@@ -1508,6 +1508,10 @@ class Obs:
     # 2.2.14 (item 18, review): extra error (mag) for a kept transmission-loss point: the star-to-star scatter measured
     # in its stretch beyond photon noise. Set by apply_cloud_flags each time; not saved with the series.
     haze_err: float = 0.0
+    # 2.2.17 (item 8, review): which photon-noise model made merr / target_var / comp_vars. 0 = before 2.2.17 (image
+    # units taken as electrons, plus a fixed 0.005 mag); 1 = 2.2.17 (electrons via EGAIN / binning / superpixel /
+    # flat, no fixed term). Series saved before 2.2.17 read as 0, so a comps change keeps their model.
+    e_model: int = 0
 
 
 def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
@@ -1981,6 +1985,24 @@ def _mag_variance(flux: float, variance: float) -> float:
 # measured sky scatter, plus the error of the sky level itself (the CCD equation of Merline & Howell 1995).
 # The old fixed 0.005 mag added to every point is gone: the real 60 s nights scatter LESS than 0.005 per point.
 E_PER_ADU_RANGE = (0.01, 100.0)   # plausible camera gains in e-/ADU; anything else is not a gain
+SKY_CHECK_E = 100.0               # sky electrons per image pixel above which read noise cannot hide a gain mismatch
+OLD_ERR_FLOOR = 0.005             # the fixed term of the pre-2.2.17 model (kept only for points measured with it)
+
+
+def error_model_text(observations, name=None) -> str:
+    """2.2.17 (item 8, review): a caution when a series mixes nights reduced before 2.2.17 (image units as electrons
+    plus 0.005 mag: larger error bars on long exposures) with nights reduced after; '' when all nights share one."""
+    by_night = {}
+    for o in observations:
+        by_night.setdefault(o.night, set()).add(int(getattr(o, "e_model", 0) or 0))
+    old = [n for n, m in by_night.items() if m == {0}]
+    if not old or len(old) == len(by_night):
+        return ""
+    label = name or (lambda n: str(n))
+    shown = ", ".join(label(n) for n in old[:4]) + (" …" if len(old) > 4 else "")
+    return (f"{len(old)} night{'s' if len(old) > 1 else ''} ({shown}) reduced before 2.2.17 keep the old, larger "
+            "error bars (image units taken as electrons, plus 0.005 mag); run photometry on them again for error bars "
+            "that match the other nights.")
 
 
 def header_e_per_adu(header: dict | None) -> float | None:
@@ -2018,7 +2040,10 @@ def electrons_per_unit(e_per_adu: float, binning: int, pattern: str, mode: str, 
 
     A final pixel is sum_j w_j * raw_j / f_j over camera pixels j (b x b binning averages, then the superpixel
     weights w_j), so its photon variance in image units is value * sum_j (w_j^2 / (b^2 f_j)) / EGAIN when the colors
-    carry similar signal. k = EGAIN / that sum. Mono, Bin 1, no flat: k = EGAIN. TG at Bin 2: 8 x EGAIN / f_green."""
+    carry similar signal. k = EGAIN / that sum. Mono, Bin 1, no flat: k = EGAIN. TG at Bin 2: 8 * EGAIN * f_green.
+    EGAIN is taken as the gain of the pixels in the file: with camera binning (XBINNING > 1) NINA and ASIAIR write the
+    camera's value for its binned pixels, which is what is used; the sky cross-check (photon_noise_setup) catches a
+    gain that does not fit the stored values (12/14-bit data scaled to 16 bits, or a binned frame summed in software)."""
     b = max(int(binning or 1), 1)
     weights = debayer_weights(pattern, mode)
     if flat is None:
@@ -2058,24 +2083,26 @@ def electrons_at(electrons, x: float, y: float, radius: float) -> float:
 def star_variance(measured: dict, electrons, radius: float, sky_inner: float, sky_outer: float) -> float:
     """2.2.17 (item 8): a star's flux variance in image units squared: photon noise flux / k (k electrons per unit
     at the star) plus the sky, n_pix * sky_sd^2 * (1 + n_pix / n_sky) (Merline & Howell 1995: the second part is the
-    error of the sky level taken from n_sky annulus pixels). electrons None: the pre-2.2.17 variance as measured."""
+    error of the sky level taken from n_sky annulus pixels). The sky level is a median, whose variance is pi/2 times
+    a mean's, so n_sky counts 2/pi of the annulus pixels. electrons None: the pre-2.2.17 variance as measured."""
     if electrons is None:
         return float(measured["variance"])
     k = electrons_at(electrons, measured.get("x", 0.0), measured.get("y", 0.0), radius)
     if not (math.isfinite(k) and k > 0):
         return float(measured["variance"])
     n_pix = float(measured.get("n") or math.pi * radius ** 2)
-    n_sky = max(math.pi * (sky_outer ** 2 - sky_inner ** 2), 1.0)
+    n_sky = max(2.0 * (sky_outer ** 2 - sky_inner ** 2), 1.0)   # pi (r_out^2 - r_in^2) x 2/pi (median)
     sd = float(measured.get("sky_std") or 0.0)
     return max(float(measured["flux"]), 0.0) / k + n_pix * sd * sd * (1.0 + n_pix / n_sky)
 
 
-def sky_electrons_estimate(img: np.ndarray, stars, radius: float, sky_inner: float, sky_outer: float) -> float:
+def sky_electrons_estimate(img: np.ndarray, stars, radius: float, sky_inner: float, sky_outer: float,
+                           with_level: bool = False):
     """2.2.17 (item 8): electrons per image unit from the sky itself, sky level / sky variance (a Poisson sky has
     variance = level in electrons), the median over the given stars' annuli. Read noise, dark noise and faint stars
     only add variance, so this is a LOWER limit on k (photon error bars from it are on the large side). Only valid
     on a frame with the bias taken out (sky level = sky signal). NaN when it cannot be measured."""
-    vals = []
+    vals, levels = [], []
     for s in stars:
         try:
             m = measure_aperture(img, s.x, s.y, radius, sky_inner, sky_outer)
@@ -2084,35 +2111,67 @@ def sky_electrons_estimate(img: np.ndarray, stars, radius: float, sky_inner: flo
         sd, sky = float(m.get("sky_std") or 0.0), float(m.get("sky") or 0.0)
         if sd > 0 and sky > 0 and math.isfinite(sd * sky):
             vals.append(sky / (sd * sd))
-    return float(np.median(vals)) if vals else float("nan")
+            levels.append(sky)
+    k = float(np.median(vals)) if vals else float("nan")
+    if with_level:   # 2.2.17 (review): also the sky level, for the EGAIN cross-check
+        return k, (float(np.median(levels)) if levels else float("nan"))
+    return k
 
 
 def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: str, flat=None,
-                       bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan")) -> dict:
+                       bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan"),
+                       sky_level: float = float("nan")) -> dict:
     """2.2.17 (item 8): how the photon noise is converted to electrons for a run. Returns {"electrons": number or map,
-    "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": one plain log line}.
+    "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": the log line(s), "warning": '' or a
+    caution, "k_median", "sky_k"}.
     1. EGAIN in the header (not for pre-calibrated frames, whose values may have been rescaled by other software).
-    2. Else the sky's own level / variance (sky_k, measured on the run's reference frame), a lower limit on k, when
-       the bias is out of the frame.
-    3. Else 1 e-/ADU, with the averaging and flat still counted."""
+    2. Else the sky's own level / variance (sky_k, measured on the run's reference frame), a lower limit on k when
+       the bias is out of the frame and no pedestal was added.
+    3. Else 1 e-/ADU, with the averaging and flat still counted.
+    Review: with EGAIN the sky estimate is a cross-check. sky_k is a lower limit, so sky_k > 2 k says EGAIN is too
+    small for the stored values or the frames carry a pedestal; sky_k < k / 2 on a bright sky (over SKY_CHECK_E
+    electrons per pixel, where read noise cannot explain it) says EGAIN is too large for the stored values (12/14-bit
+    data scaled to 16 bits with EGAIN per native ADU, or a software-summed binned frame)."""
+    b = max(int(binning or 1), 1)
+    pedestal = _header_float(header or {}, "PEDESTAL")
+    ped_note = (f" The header gives a pedestal ({pedestal:g}): if it is still in the values, the sky estimate is too "
+                "high and these error bars may be too small." if pedestal else
+                (" If the other software added a pedestal, the sky estimate is too high and the error bars may be too "
+                 "small." if precalibrated else ""))
     gain = None if precalibrated else header_e_per_adu(header)
     if gain is not None:
-        k = electrons_per_unit(gain, binning, pattern, mode, flat)
+        k = electrons_per_unit(gain, b, pattern, mode, flat)
         at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
         note = (f"Photon noise: camera gain {gain:.3g} e-/ADU (EGAIN) = about {at:.3g} electrons per image unit "
-                f"after Bin {max(int(binning or 1), 1)}"
-                + ("" if (pattern or "").upper() == MONO else ", the superpixel") + (" and the flat" if flat is not None else "")
-                + ".")
-        return {"electrons": k, "e_per_adu": gain, "source": "EGAIN", "note": note, "k_median": at}
+                f"after Bin {b}" + ("" if (pattern or "").upper() == MONO else ", the superpixel")
+                + (" and the flat" if flat is not None else "") + ".")
+        warning = ""
+        if bias_removed and math.isfinite(sky_k) and sky_k > 0:
+            note += f" The sky's own noise gives {sky_k:.3g} (a lower limit)."
+            sky_e = sky_level * at if math.isfinite(sky_level) else float("nan")
+            if sky_k > 2.0 * at:
+                warning = (f"The sky's noise says at least {sky_k:.3g} electrons per image unit, over twice what "
+                           f"EGAIN {gain:.3g} e-/ADU gives ({at:.3g}): EGAIN may be too small for the stored values, "
+                           "or the frames carry a pedestal. Error bars may be too large.")
+            elif sky_k < 0.5 * at and math.isfinite(sky_e) and sky_e > SKY_CHECK_E:
+                warning = (f"The sky's noise says about {sky_k:.3g} electrons per image unit, under half what EGAIN "
+                           f"{gain:.3g} e-/ADU gives ({at:.3g}), on a sky too bright for read noise to explain: "
+                           "EGAIN may be per native ADU of 12/14-bit data stored as 16-bit, or for unsummed binning. "
+                           "Error bars may be too small; check the Transit fit's reduced chi-square.")
+        return {"electrons": k, "e_per_adu": gain, "source": "EGAIN", "note": note, "k_median": at,
+                "sky_k": sky_k, "warning": warning}
     why = ("the frames are pre-calibrated (their values may not be camera ADU)" if precalibrated
            else "the headers give no EGAIN (camera gain in e-/ADU)")
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:
+        safe = ("a lower limit: error bars on the safe side" if not (precalibrated or pedestal)
+                else "a lower limit unless a pedestal is in the values")
         return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
+                "sky_k": sky_k, "warning": "",
                 "note": f"Photon noise: {why}, so the gain comes from the sky's own noise ({sky_k:.3g} electrons per "
-                        "image unit, a lower limit: error bars on the safe side)."}
-    k = electrons_per_unit(1.0, binning, pattern, mode, flat)
+                        f"image unit, {safe}).{ped_note}"}
+    k = electrons_per_unit(1.0, b, pattern, mode, flat)
     at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
-    return {"electrons": k, "e_per_adu": None, "source": "assumed", "k_median": at,
+    return {"electrons": k, "e_per_adu": None, "source": "assumed", "k_median": at, "sky_k": sky_k, "warning": "",
             "note": f"Photon noise: {why}, so 1 e-/ADU is assumed. Error bars scale as 1/sqrt(true gain); "
                     "the Transit fit's reduced chi-square shows whether they fit the scatter."}
 
@@ -2195,9 +2254,10 @@ def reduce_frame(
 
     v_inst = inst_mag(var["flux"], exp)
     mag = c_cat + (v_inst - c_inst)
-    # 2.2.17 (item 8): photon noise in electrons; no fixed 0.005 mag floor (the real scatter is below it on 60 s nights)
+    # 2.2.17 (item 8): photon noise in electrons; no fixed 0.005 mag floor (the real scatter is below it on 60 s nights).
+    # electrons None (no gain worked out) keeps the whole pre-2.2.17 model, floor included, marked e_model 0.
     t_var = _mag_variance(var["flux"], star_variance(var, electrons, radius, sky_inner, sky_outer))
-    merr = math.sqrt(t_var + c_var)
+    merr = math.sqrt(t_var + c_var + (OLD_ERR_FLOOR ** 2 if electrons is None else 0.0))
 
     kmag = inst_mag(chk["flux"], exp) if chk is not None else None
     if kmag is not None and not math.isfinite(kmag):
@@ -2256,6 +2316,7 @@ def reduce_frame(
         target_var=float(t_var),
         comp_vars=[float(v) for v in comp_mag_var],
         n_comps=len(comps),
+        e_model=0 if electrons is None else 1,   # 2.2.17 (item 8)
         target_inst=float(v_inst),
         comp_cat=c_cat,
         pos={"t": [round(float(use_x), 2), round(float(use_y), 2)], "c": comp_pos, "k": k_pos},
@@ -4296,7 +4357,8 @@ def period_leave_one_out(jd: np.ndarray, values: np.ndarray, nights: list[str], 
 
 # ---- 2.2.17 (item 10): airmass / color check before a period is called significant -----------------------------
 AIRMASS_TREND_MIN_NIGHTS = 5     # nights with a mean and an airmass before the trend is judged
-AIRMASS_TREND_SIGMA = 3.0        # |slope| / its standard error above this: the nightly means follow airmass
+AIRMASS_TREND_P = 0.01           # review: two-sided p of the slope's t statistic (n - 2 dof) below this: follows
+AIRMASS_TREND_SIGMA = 3.0        # (the t threshold for many nights; few nights need more, see airmass_t_limit)
 AIRMASS_TREND_MIN_SPREAD = 0.05  # nights' median airmasses must spread at least this much
 NIGHT_MIN_POINTS = 3
 
@@ -4319,12 +4381,30 @@ def nightly_means(values, nights, airmass=None) -> list[dict]:
     return out
 
 
+def airmass_t_limit(dof: int, p: float = AIRMASS_TREND_P) -> float:
+    """2.2.17 (review): |t| above which a slope fitted with `dof` degrees of freedom is significant at two-sided p
+    (Student's t; 3 dof: 5.84, 8 dof: 3.36). A fixed 3 sigma let 5-6-night series of real 1-3 d variables trip."""
+    if dof < 1:
+        return float("inf")
+    try:
+        from scipy.stats import t as student_t
+        return float(student_t.ppf(1.0 - p / 2.0, dof))
+    except Exception:   # scipy missing: the p = 0.01 table
+        table = {1: 63.66, 2: 9.925, 3: 5.841, 4: 4.604, 5: 4.032, 6: 3.707, 7: 3.499, 8: 3.355, 9: 3.250,
+                 10: 3.169, 12: 3.055, 15: 2.947, 20: 2.845, 30: 2.750}
+        for d in sorted(table, reverse=True):
+            if dof >= d:
+                return table[d]
+        return table[1]
+
+
 def airmass_trend(means: list[dict]) -> dict:
     """2.2.17 (item 10): a straight-line fit of the nightly means against each night's median airmass (ordinary
     least squares; the slope's error from the scatter about the line, since night-to-night offsets are not photon
     noise). Returns {"n", "slope" (mag per airmass), "slope_err", "sigma" (|slope| / error), "sd_before",
-    "sd_after", "intercept", "ref_airmass", "follows" (True when >= AIRMASS_TREND_MIN_NIGHTS nights and sigma >
-    AIRMASS_TREND_SIGMA), "skip" (why not judged, or '')}."""
+    "sd_after", "intercept", "ref_airmass", "follows" (True when >= AIRMASS_TREND_MIN_NIGHTS nights and sigma above
+    the Student-t limit for n - 2 dof at p = AIRMASS_TREND_P, airmass_t_limit), "t_limit", "skip" (why not judged,
+    or '')}."""
     rows = [m for m in means if math.isfinite(m.get("airmass", float("nan"))) and math.isfinite(m["mean"])]
     out = {"n": len(rows), "slope": float("nan"), "slope_err": float("nan"), "sigma": 0.0, "follows": False,
            "sd_before": float("nan"), "sd_after": float("nan"), "intercept": float("nan"),
@@ -4352,7 +4432,7 @@ def airmass_trend(means: list[dict]) -> dict:
     sigma = abs(slope) / err if (math.isfinite(err) and err > 0) else (float("inf") if abs(slope) > 0 else 0.0)
     out.update(slope=slope, slope_err=err, sigma=float(sigma), intercept=float(coef[0]),
                ref_airmass=float(np.median(a)), sd_before=float(np.std(y)), sd_after=float(np.std(resid)),
-               follows=bool(sigma > AIRMASS_TREND_SIGMA))
+               t_limit=airmass_t_limit(dof), follows=bool(sigma > airmass_t_limit(dof)))
     return out
 
 
@@ -4365,41 +4445,10 @@ def airmass_trend_text(trend: dict) -> str:
             f"spread {trend['sd_before']:.3f} mag, {trend['sd_after']:.3f} after taking the trend out.")
 
 
-def effective_points(values, nights) -> dict:
-    """2.2.17 (item 10): how many independent points the period search really has when the points of a night share
-    an offset (clouds, extinction, calibration): the design effect of clustered samples (Kish 1965), N_eff =
-    N / (1 + (m - 1) rho), m the size-weighted mean points per night and rho the share of the variance that is
-    night to night (one-way analysis of variance). Between the number of nights and N.
-    Returns {"n", "n_eff", "rho", "nights"}."""
-    v = np.asarray(values, dtype=float)
-    labels = np.asarray(list(nights))
-    ok = np.isfinite(v)
-    v, labels = v[ok], labels[ok]
-    groups = [v[labels == n] for n in dict.fromkeys(labels.tolist())]
-    groups = [g for g in groups if g.size >= 1]
-    n = int(v.size)
-    k = len(groups)
-    out = {"n": n, "n_eff": float(n), "rho": 0.0, "nights": k}
-    if k < 2 or n <= k:
-        return out
-    sizes = np.array([g.size for g in groups], dtype=float)
-    ss_within = float(sum(((g - g.mean()) ** 2).sum() for g in groups))
-    ms_within = ss_within / (n - k)
-    grand = float(v.mean())
-    ms_between = float(sum(g.size * (g.mean() - grand) ** 2 for g in groups)) / (k - 1)
-    n0 = (n - float((sizes ** 2).sum()) / n) / (k - 1)          # ANOVA mean group size for unequal groups
-    var_between = max((ms_between - ms_within) / n0, 0.0) if n0 > 0 else 0.0
-    rho = var_between / (var_between + ms_within) if (var_between + ms_within) > 0 else 0.0
-    m = float((sizes ** 2).sum()) / n                           # size-weighted mean cluster size
-    n_eff = n / (1.0 + (m - 1.0) * rho)
-    out.update(n_eff=float(min(max(n_eff, k), n)), rho=float(rho))
-    return out
-
-
 def fap_baluev(power: float, n_points: float, t, min_period: float, max_period: float) -> float:
     """2.2.17 (item 10): the false-alarm probability of a Lomb-Scargle peak (standard normalization), Baluev (2008)
-    as in astropy (VanderPlas 2018), with the number of points given (N_eff from effective_points instead of every
-    frame). NaN when it cannot be worked out."""
+    as in astropy (VanderPlas 2018), with the number of points given (period_night_fap counts N - k + 1 after the
+    nights' own means are taken out). NaN when it cannot be worked out."""
     try:
         z = float(power)
         n = float(n_points)
@@ -4419,12 +4468,66 @@ def fap_baluev(power: float, n_points: float, t, min_period: float, max_period: 
         return float("nan")
 
 
+NIGHT_PERM_EXACT = 5040   # all orderings of the nightly means up to 7 nights; random orderings above
+NIGHT_PERM_RANDOM = 3000
+
+
+def _night_perm_fap(t_mean: np.ndarray, y_mean: np.ndarray, f_lo: float, f_hi: float, seed: int = 0) -> float:
+    """2.2.17 (review): permutation false-alarm probability of the highest Lomb-Scargle power among the nightly means
+    (floating mean, frequencies f_lo..f_hi): the means are shuffled among the nights' times and the search repeated.
+    With no period, night offsets are exchangeable, so this is calibrated whatever their size; with k nights the
+    smallest possible FAP is 1/k! (5 nights 0.008, 6 nights 0.0014)."""
+    import itertools
+    k = t_mean.size
+    if k < 4:
+        return 1.0
+    span = float(t_mean.max() - t_mean.min())
+    if not (span > 0 and f_hi > f_lo > 0):
+        return float("nan")
+    freqs = np.arange(f_lo, f_hi, 1.0 / (8.0 * span))
+    if freqs.size < 2:
+        freqs = np.array([f_lo, f_hi])
+    tt = t_mean - t_mean.mean()
+    basis = []
+    for f in freqs:
+        x = np.column_stack([np.ones(k), np.sin(2 * math.pi * f * tt), np.cos(2 * math.pi * f * tt)])
+        q, _r = np.linalg.qr(x)
+        basis.append(q[:, 1:3] - np.outer(np.ones(k) / k, q[:, 1:3].sum(axis=0)) * 0.0)
+    q_all = np.array(basis)                                   # (F, k, 2): the sine/cosine part orthogonal to the mean
+
+    def max_power(ys: np.ndarray) -> np.ndarray:              # ys: (m, k)
+        yc = ys - ys.mean(axis=1, keepdims=True)
+        tot = (yc ** 2).sum(axis=1)
+        proj = np.einsum("fkj,mk->mfj", q_all, yc)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.nanmax((proj ** 2).sum(axis=2), axis=1) / tot
+    observed = float(max_power(y_mean[None, :])[0])
+    if not math.isfinite(observed):
+        return float("nan")
+    if math.factorial(k) <= NIGHT_PERM_EXACT:
+        perms = np.array(list(itertools.permutations(range(k))))
+        powers = max_power(y_mean[perms])
+        return float(np.mean(powers >= observed - 1e-12))
+    rng = np.random.default_rng(seed)
+    perms = np.array([rng.permutation(k) for _ in range(NIGHT_PERM_RANDOM)])
+    powers = max_power(y_mean[perms])
+    return float((np.sum(powers >= observed - 1e-12) + 1) / (NIGHT_PERM_RANDOM + 1))
+
+
 def period_night_fap(jd, values, nights, best: dict, min_period: float, max_period: float) -> dict:
-    """2.2.17 (item 10): a false-alarm probability that counts nights. The best-period sine is taken out, the share
-    of the remaining scatter that is night to night (rho) gives N_eff (effective_points), and the peak's FAP is
-    worked out again with N_eff points (fap_baluev). Points of a night that share an offset are not independent, so
-    ten nights cannot give a FAP of 1e-14. Returns {"fap", "n_eff", "rho", "n"}."""
-    out = {"fap": float("nan"), "n_eff": float("nan"), "rho": float("nan"), "n": 0}
+    """2.2.17 (item 10; review): a false-alarm probability that counts nights, as a conservative heuristic next to
+    the point FAP (points of a night share offsets from clouds, extinction and calibration, so ten nights cannot give
+    a FAP of 1e-14).
+    - Best period longer than twice the median night's span (a night shows only part of a cycle): the evidence is
+      the nightly means, so the FAP is a permutation test on them (_night_perm_fap; 4 nights at least, and with 5-7
+      nights only a strong signal can pass, since 1/k! is the smallest FAP possible).
+    - Shorter periods (a night shows a cycle or more): each night's own mean is taken out, so night offsets cannot
+      make the peak, and the sine's share of the remaining scatter at the best period gives a Baluev FAP with
+      N - k + 1 points (k nights).
+    An earlier version (Kish N_eff of the points after the fitted sine) let 16-51% of constant stars with night
+    offsets through in simulations, and failed real short periods on 3 nights. Returns {"fap", "n_eff" (the number
+    of points the FAP counts: nights, or N - k + 1), "n", "method": "nightly means" / "within nights", "nights"}."""
+    out = {"fap": float("nan"), "n_eff": float("nan"), "n": 0, "method": "", "nights": 0}
     if not best:
         return out
     t = np.asarray(jd, dtype=float)
@@ -4434,16 +4537,36 @@ def period_night_fap(jd, values, nights, best: dict, min_period: float, max_peri
     t, y, labels = t[ok], y[ok], labels[ok]
     if t.size < 8:
         return out
-    try:   # the best-period sine by least squares (what the Lomb-Scargle peak fits)
-        w = 2.0 * math.pi / float(best["period_days"])
-        design = np.column_stack([np.ones_like(t), np.sin(w * (t - t[0])), np.cos(w * (t - t[0]))])
-        coef, *_ = np.linalg.lstsq(design, y, rcond=None)
-        resid = y - design @ coef
-    except Exception:
-        resid = y - np.mean(y)
-    eff = effective_points(resid, labels.tolist())
-    out.update(n_eff=eff["n_eff"], rho=eff["rho"], n=eff["n"],
-               fap=fap_baluev(best.get("power", float("nan")), eff["n_eff"], t, min_period, max_period))
+    p0 = float(best["period_days"])
+    names = [n for n in dict.fromkeys(labels.tolist()) if int(np.sum(labels == n)) >= NIGHT_MIN_POINTS]
+    keep = np.isin(labels, names)
+    t, y, labels = t[keep], y[keep], labels[keep]
+    k = len(names)
+    out.update(nights=k, n=int(t.size))
+    if k == 0 or t.size < 8:
+        return out
+    spans = [float(np.ptp(t[labels == n])) for n in names]
+    night_span = float(np.median(spans))
+    if p0 > 2.0 * night_span:
+        t_mean = np.array([float(np.mean(t[labels == n])) for n in names])
+        y_mean = np.array([float(np.mean(y[labels == n])) for n in names])
+        f_hi = min(1.0 / min_period, 1.0 / max(2.0 * night_span, 1e-6))
+        out.update(method="nightly means", n_eff=float(k), fap=_night_perm_fap(t_mean, y_mean, 1.0 / max_period, f_hi))
+        return out
+    yc = y.copy()
+    for n in names:
+        sel = labels == n
+        yc[sel] -= np.mean(y[sel])
+    w = 2.0 * math.pi / p0
+    design = np.column_stack([np.sin(w * (t - t[0])), np.cos(w * (t - t[0]))])
+    try:
+        coef, *_ = np.linalg.lstsq(design, yc, rcond=None)
+        tot = float(np.sum(yc ** 2))
+        power = 1.0 - float(np.sum((yc - design @ coef) ** 2)) / tot if tot > 0 else float("nan")
+    except np.linalg.LinAlgError:
+        power = float("nan")
+    n_use = float(t.size - k + 1)
+    out.update(method="within nights", n_eff=n_use, fap=fap_baluev(power, n_use, t, min_period, max_period))
     return out
 
 
@@ -4453,7 +4576,9 @@ def period_airmass_check(jd, values, nights, night_airmass: dict, best: dict, mi
     follow airmass (trend["follows"]). Two tests, each with the leave-one-night-out rule of 2.2.3 (the best peak
     moves more than 5% AND the power at the period falls under half):
     1. each night's points shifted by the trend (slope x (night airmass - median)), the search run again;
-    2. the high-airmass nights (the top third by median airmass, at least one) left out, the search run again.
+    2. the high-airmass nights (the top third by median airmass, at least one) left out, the search run again
+       (only when at least AIRMASS_TREND_MIN_NIGHTS nights remain).
+    A search that fails counts as "not gone": an optional check never demotes on its own failure.
     jd/values/nights: the series the period search used (points or bins); night_airmass: {night: median airmass};
     name: night key -> the name shown (optional).
     Returns {"demoted": bool, "why": plain text or '', "detrended_period", "without_high_period", "high_nights"}."""
@@ -4470,7 +4595,7 @@ def period_airmass_check(jd, values, nights, night_airmass: dict, best: dict, mi
 
     def gone(res) -> bool:
         if not res:
-            return True
+            return False   # review: a failed optional search never changes the verdict
         freqs = np.asarray(res["freqs"])
         power = np.asarray(res["power_spectrum"])
         order = np.argsort(freqs)
@@ -4489,7 +4614,8 @@ def period_airmass_check(jd, values, nights, night_airmass: dict, best: dict, mi
     out["high_nights"] = high
     keep = ~np.isin(labels, high)
     res2 = None
-    if keep.sum() >= 8 and len(set(labels[keep].tolist())) >= 3:
+    # review: at least AIRMASS_TREND_MIN_NIGHTS nights must remain, or this test is skipped (never demotes)
+    if keep.sum() >= 8 and len(set(labels[keep].tolist())) >= AIRMASS_TREND_MIN_NIGHTS:
         try:
             res2 = lomb_scargle(t[keep], y[keep], min_period, max_period)
         except Exception:
@@ -4504,7 +4630,8 @@ def period_airmass_check(jd, values, nights, night_airmass: dict, best: dict, mi
                    f"({', '.join(label(n) for n in high)})")
     if why:
         out["demoted"] = True
-        out["why"] = "The period disappears " + " and ".join(why) + ": it comes from the airmass, not the star."
+        out["why"] = ("The period disappears " + " and ".join(why) + ": it is consistent with the airmass, not "
+                      "shown to be the star.")
     return out
 
 
@@ -4765,7 +4892,10 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
         if not math.isfinite(v):
             return float("nan")
         total += v
-    return math.sqrt(obs.target_var + total / len(selection) ** 2)   # 2.2.17 (item 8): no 0.005 floor
+    # 2.2.17 (item 8, review): a point keeps the model it was measured with: the fixed 0.005 mag only for points
+    # reduced before 2.2.17 (e_model 0), so a comps change never invents a third error model.
+    floor = OLD_ERR_FLOOR ** 2 if not getattr(obs, "e_model", 0) else 0.0
+    return math.sqrt(obs.target_var + total / len(selection) ** 2 + floor)
 
 
 def recompute_with_comps(observations: list[Obs], selection: list[str], comp_names: list[str],
@@ -5341,6 +5471,7 @@ def obs_to_dict(obs: Obs) -> dict:
         "target_var": obs.target_var,
         "comp_vars": list(obs.comp_vars),
         "n_comps": int(obs.n_comps or 0),
+        "e_model": int(obs.e_model or 0),   # 2.2.17 (item 8)
     }
 
 
@@ -5383,6 +5514,7 @@ def obs_from_dict(raw: dict) -> Obs:
         target_var=_float_or_nan(raw.get("target_var")),
         comp_vars=[_float_or_nan(v) for v in (raw.get("comp_vars") or [])],
         n_comps=int(raw.get("n_comps") or 0),
+        e_model=int(raw.get("e_model") or 0),   # 2.2.17 (item 8): missing = before 2.2.17
     )
 
 
@@ -8183,7 +8315,8 @@ def night_setup_differences(new: dict, others: dict) -> list[str]:
 
     for key, label in (("binning", "binning"), ("radius", "aperture radius"), ("sky_in", "inner sky radius"),
                        ("sky_out", "outer sky radius"), ("comps", "comparison star(s)"), ("check", "check star"),
-                       ("instrument", "telescope / camera"), ("observer", "observer")):
+                       ("instrument", "telescope / camera"), ("observer", "observer"),
+                       ("photon_noise", "photon noise")):   # 2.2.17 (item 8, review)
         mine = new.get(key)
         if mine in (None, "", []):
             continue
@@ -8193,6 +8326,13 @@ def night_setup_differences(new: dict, others: dict) -> list[str]:
         if different:
             parts = "; ".join(f"{t} on {', '.join(n[:3])}{' …' if len(n) > 3 else ''}" for t, n in different.items())
             out.append(f"{label}: {mine_t} on this night, {parts}")
+    # 2.2.17 (item 8, review): nights reduced before 2.2.17 have no photon_noise entry: say so when this one has it.
+    if isinstance(new.get("photon_noise"), dict):
+        older = sorted(n for n, info in others.items() if isinstance(info, dict) and not info.get("photon_noise"))
+        if older:
+            out.append(f"photon noise: {_setup_text('photon_noise', new['photon_noise'])} on this night; the "
+                       f"pre-2.2.17 model (image units as electrons + 0.005 mag, larger error bars) on "
+                       f"{', '.join(older[:3])}{' …' if len(older) > 3 else ''}")
     return out
 
 
@@ -8206,6 +8346,11 @@ def _setup_text(key: str, value) -> str:
             return str(value)
     if key == "binning":
         return f"Bin {value}"
+    if key == "photon_noise" and isinstance(value, dict):   # 2.2.17 (item 8)
+        if value.get("source") == "EGAIN" and value.get("e_per_adu"):
+            return f"electrons via EGAIN {float(value['e_per_adu']):.3g} e-/ADU"
+        return {"sky": "electrons from the sky's noise", "assumed": "1 e-/ADU assumed",
+                "old": "pre-2.2.17 model"}.get(value.get("source"), str(value.get("source")))
     return str(value)
 
 

@@ -932,9 +932,11 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     return result
 
 
-# 2.2.16 (item 6): leave-one-comp-out check. A comp is named in a caution only when (1) leaving it out moves the
 RCHI2_LOW = 0.5    # 2.2.17 (item 8): reduced chi-square below this: error bars too large (error model)
 RCHI2_HIGH = 2.0   # 2.2.17 (item 8): above this: noise the error model leaves out
+
+
+# 2.2.16 (item 6): leave-one-comp-out check. A comp is named in a caution only when (1) leaving it out moves the
 # depth or Tc by more than COMP_LOO_SIGMA sigma of the main fit, (2) that move is more than COMP_LOO_NOISE times what
 # the comp's own frame-to-frame noise would cause, and (3) it is the odd one out: its move is opposite in sign to every
 # other comp's and at least COMP_LOO_ODD times the largest of them. Shifts are measured against the full ensemble, so
@@ -1475,8 +1477,10 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         ratio = math.sqrt(r["rchi2"])
         flags.append(("info", f"The scatter is about {ratio:.1f}x the per-point error bars (reduced χ² "
                               f"{r['rchi2']:.2f}): noise the error model leaves out, such as thin cloud or dew, "
-                              "tracking or seeing changes (red noise), calibration, or a noisy comp. The fit scales "
-                              "its error bars up to match, so its uncertainties include it."))
+                              "tracking or seeing changes (red noise), calibration, or a noisy comp; or a camera gain "
+                              "(EGAIN) too large for the stored values (12/14-bit data scaled to 16 bits; see the "
+                              "photometry log's Photon noise line). The fit scales its error bars up to match, so its "
+                              "uncertainties include it."))
     if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
         oc = (best["tc"] - r["tc_pred"]) * 1440
         sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if "tc" in s else float("nan")
