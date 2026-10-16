@@ -686,6 +686,7 @@ class TransitPage:
             else:
                 messagebox.showerror("SHOBS-P", str(exc))
             return
+        planet = dict(planet, ld_band=meta.get("filter"))   # 2.2.17 (item 1): Sloan limb darkening for SG/SR/SI/SZ
         # 2.2.9: no predicted transit during these data -> say so instead of fitting (Tessa's 10-minute run was
         # fitted 27 h from any transit). "Fit anyway" stays possible.
         tf = np.asarray(t, dtype=float)
