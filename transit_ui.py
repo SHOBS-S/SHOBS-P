@@ -1517,6 +1517,7 @@ class TransitPage:
         t = np.asarray(rep["t"], dtype=float)
         if dt.startswith("HJD"):
             rep["t"] = t + 69.184 / 86400.0
+            _shift_report_times(rep, t)   # round 2: the report's own Tc and ephemeris move with the points
             rep["time_note"] = ("The report's times are HJD_UTC; SHOBS-P moved them to BJD_TDB (+69.184 s; good to a "
                                 "few seconds).")
             return
@@ -1524,11 +1525,17 @@ class TransitPage:
             radec = self._report_radec(rep)
             if radec is not None:
                 h = rep.get("header") or {}
-                try:
-                    rep["t"] = core.convert_times(t, "BJD_TDB", radec[0], radec[1], float(h.get("OBSLAT")),
-                                                  float(h.get("OBSLON")))
-                except Exception:
-                    rep["t"] = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
+                lat, lon = _float_or_none(h.get("OBSLAT")), _float_or_none(h.get("OBSLON"))
+                converted = None
+                if lat is not None and lon is not None:     # round 2 nit: the site only when the header gives it
+                    try:
+                        converted = core.convert_times(t, "BJD_TDB", radec[0], radec[1], lat, lon)
+                    except Exception:
+                        converted = None
+                if converted is None:
+                    converted = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
+                rep["t"] = np.asarray(converted, dtype=float)
+                _shift_report_times(rep, t)   # round 2: the report's own Tc and ephemeris too
                 rep["time_note"] = "The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB."
             else:
                 rep["date_type"] = "JD_UTC"
@@ -2344,10 +2351,39 @@ _FIT_SERIAL = __import__("itertools").count(1)   # 2.2.17 review: one number per
 
 
 def fit_serial(result) -> int:
-    """2.2.17 review: the fit's serial for App._results_key (given one when a fit was set without _finish_fit)."""
-    if "_serial" not in result:
-        result["_serial"] = next(_FIT_SERIAL)
-    return result["_serial"]
+    """2.2.17 review: the fit's serial for App._results_key, stamped by _finish_fit (a result set any other way, as
+    in tests, falls back to its id)."""
+    return result.get("_serial") or id(result)
+
+
+def _float_or_none(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _shift_report_times(rep, t_old):
+    """2.2.17 review round 2: after a report's points moved to BJD_TDB (rep["t"] from t_old), move its own JD-valued
+    results (Tc, and any other value that is a full JD) and the ephemeris read from it (t0) by the same offset there."""
+    t_old = np.asarray(t_old, dtype=float)
+    t_new = np.asarray(rep["t"], dtype=float)
+    ok = np.isfinite(t_old) & np.isfinite(t_new)
+    if not ok.any():
+        return
+    order = np.argsort(t_old[ok])
+    xs, offs = t_old[ok][order], (t_new[ok] - t_old[ok])[order]
+
+    def moved(v):
+        return float(v) + float(np.interp(float(v), xs, offs))
+    res = rep.get("results") or {}
+    for name, val in list(res.items()):
+        if val and isinstance(val[0], (int, float)) and math.isfinite(val[0]) and val[0] > 2.4e6:
+            res[name] = (moved(val[0]),) + tuple(val[1:])
+    pl = rep.get("planet") or {}
+    if isinstance(pl.get("t0"), (int, float)) and pl["t0"] > 2.4e6:
+        pl["t0"] = moved(pl["t0"])
 
 
 def report_software(header) -> str:
