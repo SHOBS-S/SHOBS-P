@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use SHOBS-P in your work, please cite it as below."
+title: "SHOBS-P: Shiloh Hill Observatory Photometry"
+type: software
+authors:
+  - name: "Shiloh Hill Observatory"
+version: "2.2.16"
+date-released: "2026-10-15"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/SHOBS-S/SHOBS-P"
+abstract: >-
+  A desktop application for differential aperture photometry with one-shot-color
+  and monochrome astronomical cameras. Variables mode builds multi-night light
+  curves with scintillation-aware error bars, period searches and AAVSO Extended
+  reports; Transits mode fits exoplanet transits (Mandel and Agol model, MCMC)
+  with a detected / inconclusive / none verdict and writes AAVSO exoplanet
+  reports and ExoFOP packages; Discovery mode scans a whole field for variable
+  stars.
+keywords:
+  - astronomy
+  - photometry
+  - differential photometry
+  - variable stars
+  - exoplanets
+  - transit photometry
+  - AAVSO
+  - citizen science

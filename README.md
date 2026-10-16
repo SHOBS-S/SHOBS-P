@@ -131,6 +131,12 @@ manual is planned.
 SHOBS-P is under active development and in regular use for variable-star and exoplanet-transit observing.
 Bug reports and suggestions are welcome in [Issues](../../issues).
 
+## Citing SHOBS-P
+
+If you use SHOBS-P in published work, please cite it. GitHub's **Cite this repository** button (right-hand
+sidebar) gives the reference in APA and BibTeX from [CITATION.cff](CITATION.cff). Each release is archived on
+Zenodo with its own DOI, so you can cite the exact version you used.
+
 ## How it was made
 
 SHOBS-P was designed, tested and validated against real observations at Shiloh Hill Observatory. Most of the code
