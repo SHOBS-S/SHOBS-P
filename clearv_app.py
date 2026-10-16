@@ -8804,20 +8804,22 @@ class App(Tk):
         flat = getattr(masters, "flat", None) if masters is not None else None
         bias_removed = bool(precalibrated or getattr(masters, "bias", None) is not None
                             or getattr(masters, "dark", None) is not None)
-        sky_k = float("nan")
-        if core.header_e_per_adu(header) is None or precalibrated:
-            try:
-                sky_k = core.sky_electrons_estimate(self.preview, stars, radius, sky_in, sky_out)
-            except Exception:
-                sky_k = float("nan")
+        sky_k, sky_level = float("nan"), float("nan")
+        try:   # review: always measured, as the fallback or as a cross-check of EGAIN
+            sky_k, sky_level = core.sky_electrons_estimate(self.preview, stars, radius, sky_in, sky_out, with_level=True)
+        except Exception:
+            pass
         try:
-            setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k)
+            setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
+                                            sky_level)
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
-                                                                  "image units taken as electrons."}
+                                                                  "the pre-2.2.17 error model is used."}
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
         self.log(setup.get("note", ""))
+        if setup.get("warning"):
+            self.log("⚠ " + setup["warning"])
         return setup
 
     def _night_setup(self) -> dict:
@@ -9104,7 +9106,13 @@ class App(Tk):
                     pass
             self.period["carried_by"] = loo["carried_by"]
             # 2.2.17 (item 10): a FAP that counts nights, and the airmass / color check of the nightly means.
-            self._period_airmass_checks(usable, corrected, jd, values, point_nights)
+            # review: any failure there leaves the period as it was without the check, with one log line.
+            try:
+                self._period_airmass_checks(usable, corrected, jd, values, point_nights)
+            except Exception as exc:
+                for key in ("night_fap", "airmass_trend", "night_means", "airmass_check"):
+                    self.period.pop(key, None)
+                self.log(f"Airmass check of the period not done ({exc}).")
 
     def _period_airmass_checks(self, usable, corrected, jd, values, point_nights):
         """2.2.17 (item 10): before a best period is shown as significant. (b) its FAP counting nights
@@ -9810,9 +9818,6 @@ class App(Tk):
             row, text="Line up segments (nights, meridian flip)",
             variable=self.norm_segments, command=self.refit_period,
         ).pack(side=LEFT, padx=(14, 4))
-        # 2.2.17 (item 10): each night's mean with the airmass trend taken out, on the plot only.
-        ttk.Checkbutton(row, text="Airmass-corrected night means", variable=self.airmass_view,
-                        command=self.draw_output).pack(side=LEFT, padx=(14, 4))
         ttk.Label(row, text="Time axis", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
         axis_box = ttk.Combobox(row, textvariable=self.time_axis, values=("JD", "UTC", "Local time"), width=10, state="readonly")
         axis_box.pack(side=LEFT)
@@ -9859,6 +9864,12 @@ class App(Tk):
         pbin_box = ttk.Combobox(tools, textvariable=self.period_bins, values=PERIOD_BIN_CHOICES, width=12, state="readonly")
         pbin_box.pack(side=LEFT)
         pbin_box.bind("<<ComboboxSelected>>", lambda _e: self.refit_period())
+        # 2.2.17 (item 10; review: its own line, so the period-search row keeps its width on a high-DPI screen):
+        # each night's mean with the airmass trend taken out, on the plot only.
+        view = ttk.Frame(card, style="Card.TFrame")
+        view.pack(fill=X, pady=(2, 0))
+        ttk.Checkbutton(view, text="Airmass-corrected night means (plot only, never in reports)",
+                        variable=self.airmass_view, command=self.draw_output).pack(side=LEFT)
         host = ttk.Frame(card, style="Card.TFrame")
         host.pack(fill=BOTH, expand=True, pady=6)
         if Figure is None:
@@ -10365,6 +10376,9 @@ class App(Tk):
         self._draw_airmass_corrected(self.out_ax1, usable, zoom)   # 2.2.17 (item 10): display only
         ax = self.out_ax2
         cautions = []
+        old_model = core.error_model_text(obs_list, lambda n: self.night_label(n, short=True))   # 2.2.17 (item 8)
+        if old_model:
+            cautions.append(old_model)
         period_lines = []
         # 2.2: one short night cannot pin a period down; show the fold and periodogram greyed, with a note.
         span_used = (max(o.jd for o in usable) - min(o.jd for o in usable)) if usable else 0.0
@@ -10424,7 +10438,8 @@ class App(Tk):
                     period_lines.append(f"No reliable period: the peak depends on {', '.join(carried_now)} alone "
                                         "(often an offset between nights, not the star).")
                 elif am_check.get("demoted") and not (math.isfinite(fap) and fap > 0.01):
-                    period_lines.append("No reliable period: the peak follows the nights' airmass, not the star.")
+                    period_lines.append("No reliable period: the peak follows the nights' airmass; it is not shown "
+                                        "to be the star.")
                 elif nights_say_no and not (math.isfinite(fap) and fap > 0.01):
                     period_lines.append(f"No significant period: counting nights, the peak's false-alarm "
                                         f"probability is {night_fap:.1e} (a night's points share offsets).")
@@ -10443,8 +10458,9 @@ class App(Tk):
                 + f"{p:.5f} d ({p * 24:.2f} h)" + ("" if significant else "   (not significant)")
                 + ("   (one short night: not reliable)" if too_short else ""),
                 f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else "")
-                + (f" (points), {night_fap:.1e} counting nights (N_eff "
-                   f"{(self.period.get('night_fap') or {}).get('n_eff', float('nan')):.0f})"
+                + (f" (points), {night_fap:.1e} counting nights ("
+                   + ("from the nightly means" if (self.period.get("night_fap") or {}).get("method") == "nightly means"
+                      else "night offsets taken out") + ")"
                    if math.isfinite(night_fap) and math.isfinite(fap) else ""),   # 2.2.17 (item 10)
                 f"Basis   {getattr(self, '_period_note', '') or 'every point'}",
                 f"Alias   {alias:.5f} d (one-day)",
