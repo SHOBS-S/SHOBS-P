@@ -151,21 +151,40 @@ def frame_labels(paths: list[str]) -> dict:
 
 
 _FRAME_LABEL_CACHE = {}
+_CAL_VERDICTS = {}   # 2.2.17 (round 2): {(path, size): is_calibration_frame reason}; a file's header is read once
 
 
 def _folder_frame_labels(folder: str):
-    """({lights: label}, {every image but SHOBS-P masters: label}) for a folder, cached by the folder's modification
-    time. The lights set is the list Blink shows for lights (masters out, then split_lights), so numbers, letters and
-    #k positions match the page; the second set is the Flats list (masters out)."""
+    """({lights: label}, {every image but SHOBS-P masters: label}) for a folder. The lights set is the list Blink shows
+    for lights (masters out, then split_lights), so numbers, letters and #k positions match the page; the second set is
+    the Flats list (masters out).
+
+    2.2.17 (round 2): cached on the folder's file list (names and sizes, from one directory scan), not its modification
+    time, so a report or CSV written into the folder costs nothing; each file's calibration verdict (a header read) is
+    kept per (path, size), so a frame NINA has just saved costs one header and unchanged files none."""
     try:
-        key = (folder, os.path.getmtime(folder))
+        with os.scandir(folder) as it:
+            entries = sorted((e.name, e.stat().st_size) for e in it
+                             if e.name.lower().endswith(IMAGE_EXTS) and not e.name.startswith("."))
     except OSError:
         return None
+    images_named = [(n, size) for n, size in entries if not is_shobsp_master_name(n)]
+    key = (folder, tuple(images_named))
     hit = _FRAME_LABEL_CACHE.get(key)
     if hit is None:
-        images = [p for p in list_fits(folder) if not is_shobsp_master_name(p)]
+        images = [os.path.join(folder, n) for n, _size in images_named]
+        sizes = dict(zip(images, (size for _n, size in images_named)))
+
+        def verdict(path):
+            vkey = (path, sizes.get(path))
+            if vkey not in _CAL_VERDICTS:
+                if len(_CAL_VERDICTS) > 50000:
+                    _CAL_VERDICTS.clear()
+                _CAL_VERDICTS[vkey] = is_calibration_frame(path)
+            return _CAL_VERDICTS[vkey]
+
         try:
-            lights = split_lights(images)[0]
+            lights = split_lights(images, verdict)[0]
         except Exception:
             lights = images
         hit = (frame_labels(lights), frame_labels(images))
@@ -5384,8 +5403,11 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
         def frame_of(obs):
             # The folder's labels; a night whose folder is gone gets frame_labels of its files once (not per point).
             folder = os.path.dirname(obs.path)
-            if dir_ok.setdefault(folder, os.path.isdir(folder)):
-                return frame_label(obs.path)
+            if folder not in dir_ok:   # one directory scan per folder for the whole CSV
+                dir_ok[folder] = _folder_frame_labels(folder) if os.path.isdir(folder) else None
+            for labels in (dir_ok[folder] or ()):
+                if obs.path in labels:
+                    return labels[obs.path]
             if obs.night not in night_labels:
                 night_labels[obs.night] = frame_labels(by_night[obs.night])
             return frame_label(obs.path, night_labels[obs.night])
@@ -6913,17 +6935,17 @@ def is_calibration_frame(path: str, header: dict | None = None) -> str:
     return ""
 
 
-def split_lights(paths: list[str]) -> tuple[list[str], list[tuple[str, str]], str]:
+def split_lights(paths: list[str], verdict=None) -> tuple[list[str], list[tuple[str, str]], str]:
     """(lights to use, [(skipped path, reason)], note for the log).
 
     Master frames are always skipped. Individual bias/dark/flat files mixed in with lights are
     skipped too. But when most of the folder is labelled bias/dark/flat, the night's lights were
     almost certainly saved with the wrong image type by the capture software, so they are all
-    kept and the note says so.
+    kept and the note says so. 2.2.17 (round 2): `verdict` (path -> reason) lets a caller cache the header reads.
     """
     keep, skipped, labelled = [], [], []
     for path in paths:
-        reason = is_calibration_frame(path)
+        reason = (verdict or is_calibration_frame)(path)
         if not reason:
             keep.append(path)
         elif "master" in reason or os.path.basename(path).lower().startswith("master"):

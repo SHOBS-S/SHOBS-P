@@ -611,6 +611,7 @@ class App(Tk):
         # 2.2.17 (item 6): {path: local clock time of the exposure}; also written by the Blink preload thread (single
         # dict stores, atomic under the GIL; Tk is never touched from there).
         self._blink_times = {}
+        self._blink_labels = {}   # 2.2.17 (round 2): {path: frame label} for the Blink list, set when it is loaded
         self.blink_index = 0
         self.blink_playing = False
         self._blink_loaded_from = None
@@ -2891,6 +2892,7 @@ class App(Tk):
         if self.blink_source.get() == "lights":
             self.blink_paths = core.split_lights(self.blink_paths)[0]
         self.blink_index = min(self.blink_index, max(0, len(self.blink_paths) - 1))
+        self._blink_labels = dict(zip(self.blink_paths, core.frame_labels_for(self.blink_paths)))   # 2.2.17 (round 2)
         self._start_blink_preload()
         self.show_blink()
 
@@ -3081,7 +3083,10 @@ class App(Tk):
     # ---- 2.2.17 (item 6): frame numbers from the file names; explicit reject / keep; the rejected list ----------
     def frame_label(self, path) -> str:
         """The frame's own number from its file name (core.frame_label): the same on Blink, in the log and the CSV."""
-        return core.frame_label(path)
+        # 2.2.17 (round 2): the Blink list's labels are worked out once when the list is loaded, so a Blink tick
+        # never scans the folder; other paths (log, flats folder changes) ask core.
+        label = self._blink_labels.get(path)
+        return label if label is not None else core.frame_label(path)
 
     def _frame_time(self, path) -> str:
         """Local clock time of the exposure start (from DATE-OBS / JD in the header), '' when the header has none."""
@@ -3169,7 +3174,7 @@ class App(Tk):
             return
         paths = self._rejected_in_list()
         what = "flats" if self.blink_source.get() == "flats" else "frames"
-        labels = core.frame_labels_for(paths)   # one folder look-up (cached by the folder's modification time)
+        labels = [self.frame_label(p) for p in paths]   # from the list's labels (no folder scan per Blink tick)
         sig = (tuple(paths), tuple(labels), self.blink_source.get())
         if sig == getattr(self, "_rejected_list_sig", None):
             return   # nothing changed (Blink playing)
