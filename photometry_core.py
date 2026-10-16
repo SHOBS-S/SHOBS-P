@@ -4102,6 +4102,7 @@ def _fit_placement(e: np.ndarray, n: np.ndarray, x: np.ndarray, y: np.ndarray, m
 
 SOLVE_RETRY_HITS = 8         # 2.2.17 (item 1): the app accepts a field solve from 8 matched stars
 SOLVE_POINTING_SLACK_ARCMIN = 3.0
+SOLVE_STRONG_HITS = 20      # 2.2.17 (round 2): a retry with this many matches needs rms < tolerance only
 SOLVE_RETRY_FRACTION = 0.15  # 2.2.17 (review S3): a retry needs 15% of the catalog stars it tried matched
 
 
@@ -4145,7 +4146,10 @@ def solve_field(sources: list, stars: list[dict], ra_deg: float, dec_deg: float,
         if again is None:
             continue
         need = max(SOLVE_RETRY_HITS, math.ceil(SOLVE_RETRY_FRACTION * min(nc, len(cat_k))))
-        if again.get("hits", 0) < need or not again.get("rms", float("inf")) < 0.5 * tolerance_px:
+        # Round 2: the right TOI-4028 solution has rms 2.2-2.4 px against tol 4.9, so a strong match (20+ stars, which
+        # a chance match never reaches) only needs rms under the tolerance; marginal counts keep the tight limit.
+        hits, rms = again.get("hits", 0), again.get("rms", float("inf"))
+        if hits < need or not (rms < 0.5 * tolerance_px or (hits >= max(need, SOLVE_STRONG_HITS) and rms < tolerance_px)):
             continue
         if best is None or again.get("hits", 0) > best.get("hits", 0):
             best = again
