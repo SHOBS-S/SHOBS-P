@@ -1,5 +1,7 @@
 # SHOBS-P — Shiloh Hill Observatory Photometry
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23417064.svg)](https://doi.org/10.5281/zenodo.23417064)
+
 A Windows desktop app for differential aperture photometry with one-shot-color (OSC) and monochrome
 astronomical cameras. It takes you from raw FITS frames to a calibrated light curve and an AAVSO-ready report in
 one window.
@@ -135,7 +137,7 @@ Bug reports and suggestions are welcome in [Issues](../../issues).
 
 If you use SHOBS-P in published work, please cite it. GitHub's **Cite this repository** button (right-hand
 sidebar) gives the reference in APA and BibTeX from [CITATION.cff](CITATION.cff). Each release is archived on
-Zenodo with its own DOI, so you can cite the exact version you used.
+Zenodo with its own DOI, so you can cite the exact version you used; [10.5281/zenodo.23417064](https://doi.org/10.5281/zenodo.23417064) always points to the latest version.
 
 ## How it was made
 

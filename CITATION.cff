@@ -6,6 +6,7 @@ authors:
   - name: "Shiloh Hill Observatory"
 version: "2.2.16"
 date-released: "2026-10-16"
+doi: "10.5281/zenodo.23417064"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/SHOBS-S/SHOBS-P"
 abstract: >-
