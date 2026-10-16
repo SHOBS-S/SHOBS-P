@@ -1225,10 +1225,48 @@ _FILTER_NAMES = {
     "clear": ("CV", "V"), "cv": ("CV", "V"), "l": ("CV", "V"), "lum": ("CV", "V"), "luminance": ("CV", "V"),
     "none": ("CV", "V"), "c": ("CV", "V"), "open": ("CV", "V"), "empty": ("CV", "V"),
 }
-# I, U, and Sloan filters are not mapped: the comp catalogs here carry only B, V, and R magnitudes.
+# I and U are not mapped: the comp catalogs here carry no I or U magnitudes for most stars.
+# 2.2.17 (item 1): Sloan g' r' i' (z', u') are recognised by sloan_band_code below (GitHub #6).
+
+# 2.2.17 (item 1): Sloan bands. The AAVSO filter code (SG, SR, SI, SZ, SU) is also the catalog band key in a star's
+# "mags", so a Sloan run asks the catalogs for that band and zero-points on it. Labels for the screen and the log.
+SLOAN_BANDS = ("SG", "SR", "SI", "SZ", "SU")
+BAND_LABELS = {"SG": "g\u2032", "SR": "r\u2032", "SI": "i\u2032", "SZ": "z\u2032", "SU": "u\u2032"}
+_PRIME_CHARS = "\u2032\u2019\u00b4`\u02b9\""
+
+
+def is_sloan(band) -> bool:
+    """2.2.17 (item 1): True for a Sloan band key / AAVSO code (SG, SR, SI, SZ, SU)."""
+    return str(band or "").strip().upper() in SLOAN_BANDS
+
+
+def band_label(band) -> str:
+    """2.2.17 (item 1): a band as people write it: "i\u2032" for SI, "g\u2032" for SG; V, B, R unchanged."""
+    text = str(band or "")
+    return BAND_LABELS.get(text.strip().upper(), text)
+
+
+def sloan_band_code(value) -> str | None:
+    """2.2.17 (item 1): the AAVSO Sloan code (SG, SR, SI, SZ, SU) for a FITS FILTER value, or None.
+    Accepted, case-, space-, underscore- and hyphen-insensitive: g' (any prime or apostrophe), gp, g_prime,
+    sdss g, Sloan g, sloan_g', g-sdss, SG; the same for r, i, z, u. A Sloan filter must SAY it is Sloan (a prime,
+    "p"/"prime", "sdss"/"sloan", or the AAVSO code SG/SR/SI/SZ/SU): a bare G or R (either case) stays the imaging
+    filter it always was (TG / TR, see _FILTER_NAMES), and a bare I, Z or U is not recognised (Johnson-Cousins I is
+    not calibrated here), so Johnson/Cousins R and I are never taken for Sloan r and i."""
+    text = str(value or "").strip().lower()
+    for ch in _PRIME_CHARS:
+        text = text.replace(ch, "'")
+    text = _re.sub(r"[\s_\-.]+", "", text).replace("filter", "")
+    m = _re.fullmatch(r"(sloan|sdss)?([ugriz])('|p|prime)?(sloan|sdss)?", text)
+    if m and (m.group(1) or m.group(3) or m.group(4)):
+        return "S" + m.group(2).upper()
+    m = _re.fullmatch(r"s([ugriz])", text)
+    if m:
+        return "S" + m.group(1).upper()
+    return None
 
 # 2.2.11: the filters a monochrome camera can be set to by hand (Calibrate page) when the header does not say:
-# label -> (AAVSO filter code, comp band). Only bands the comp catalogs carry (B, V, R).
+# label -> (AAVSO filter code, comp band). Only bands the comp catalogs carry (B, V, R; 2.2.17: Sloan g' r' i' z').
 MONO_FILTER_CHOICES = {
     "V (Johnson V)": ("V", "V"),
     "B (Johnson B)": ("B", "B"),
@@ -1237,6 +1275,12 @@ MONO_FILTER_CHOICES = {
     "Green imaging (TG)": ("TG", "V"),
     "Red imaging (TR)": ("TR", "R"),
     "Blue imaging (TB)": ("TB", "B"),
+    # 2.2.17 (item 1): Sloan filters; comps in the same Sloan band (AAVSO sequence, APASS DR9, Gaia DR3).
+    "Sloan g\u2032 (SG)": ("SG", "SG"),
+    "Sloan r\u2032 (SR)": ("SR", "SR"),
+    "Sloan i\u2032 (SI)": ("SI", "SI"),
+    "Sloan z\u2032 (SZ)": ("SZ", "SZ"),
+    "Sloan u\u2032 (SU)": ("SU", "SU"),   # comps only from Gaia's synthetic SDSS u (GSPC): few stars
 }
 
 
@@ -1308,6 +1352,9 @@ def filter_from_header(header: dict):
         value = header.get(key)
         if value is None or str(value).strip() == "":
             continue
+        sloan = sloan_band_code(value)   # 2.2.17 (item 1): before the table, so "g'" is Sloan, not imaging G
+        if sloan:
+            return (sloan, sloan)
         text = str(value).strip().lower()
         compact = text.replace(" ", "").replace("-", "").replace("_", "")
         for cand in (text, compact, compact.replace("filter", "")):
@@ -2245,13 +2292,21 @@ def _hms_to_deg(text: str) -> float:
 
 
 def _vsp_band(name: str) -> str | None:
-    name = str(name or "").strip().upper()
+    raw = str(name or "").strip()
+    # 2.2.17 (item 1): Sloan bands in a VSP sequence (SG/SR/SI, "g'", "Sloan g"…; a lowercase single letter is Sloan
+    # in VSP, which lists Johnson-Cousins bands in capitals).
+    if raw in ("u", "g", "r", "i", "z"):
+        return "S" + raw.upper()
+    sloan = sloan_band_code(raw)
+    if sloan:
+        return sloan
+    name = raw.upper()
     return {"V": "V", "B": "B", "R": "R", "RC": "R", "I": "I", "IC": "I"}.get(name)
 
 
 def chart_stars(payload: dict, band: str = "V") -> list[dict]:
     """Comparison stars from an AAVSO VSP payload. 'mag' is in the requested band;
-    'mags' keeps every band the chart lists (V, B, R from Rc, I from Ic)."""
+    'mags' keeps every band the chart lists (V, B, R from Rc, I from Ic; 2.2.17: Sloan as SG, SR, SI, SZ, SU)."""
     band = band.upper()
     stars = []
     for item in payload.get("photometry") or []:
@@ -2435,7 +2490,10 @@ CATALOGS = ("AAVSO sequence", "Gaia DR3", "APASS DR9", "Tycho-2")
 
 
 def _band_for(band: str) -> str:
-    return {"V": "V", "R": "R", "B": "B"}.get(band.upper(), "V")
+    b = str(band or "V").upper()
+    if b in SLOAN_BANDS:
+        return b   # 2.2.17 (item 1)
+    return {"V": "V", "R": "R", "B": "B"}.get(b, "V")
 
 
 def _pm_to_now(ra_deg: float, dec_deg: float, pm_ra, pm_dec, epoch: float) -> tuple[float, float]:
@@ -2613,13 +2671,16 @@ def fetch_tycho2(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
 
 def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "V", max_rows: int = 3000,
                  box_deg=None) -> list[dict]:
-    """APASS DR9 (VizieR II/336/apass9). Johnson B and V, about V 10 to 17. No R band.
+    """APASS DR9 (VizieR II/336/apass9). Johnson B and V, about V 10 to 17. No R band. 2.2.17: Sloan g' r' i' too
+    when the band asked is Sloan.
     2.2.14 (item 5): max_rows and the frame's box (box_deg) follow the field (a Milky Way field passes 3000)."""
+    band = _band_for(band)
+    # 2.2.17 (item 1): a Sloan run also asks for APASS's Sloan g' r' i' (columns g'mag, r'mag, i'mag; no z' or u').
+    sloan_cols = [f"{b}'mag" for b in "gri"] + [f"e_{b}'mag" for b in "gri"] if is_sloan(band) else []
     rows = _vizier_query(
         "II/336/apass9", ra_deg, dec_deg, radius_deg,
-        ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag"], "Vmag", max_rows, box_deg=box_deg,
+        ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag"] + sloan_cols, "Vmag", max_rows, box_deg=box_deg,
     )
-    band = _band_for(band)
     stars = []
     for row in rows:
         try:
@@ -2633,6 +2694,11 @@ def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
         mags = {"V": v}
         if _num(row.get("Bmag")) is not None:
             mags["B"] = _num(row.get("Bmag"))
+        if sloan_cols:
+            for b in "gri":
+                m = _num(row.get(f"{b}'mag"))
+                if m is not None:
+                    mags["S" + b.upper()] = m   # 2.2.17 (item 1)
         mag = mags.get(band)
         stars.append({"auid": _position_name("APASS", ra, dec), "label": f"{mag:.1f}" if mag is not None else "",
                       "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "APASS DR9", "bright": v,
@@ -2738,12 +2804,15 @@ def footprint_box(corners, ra0: float, dec0: float) -> tuple[float, float]:
     return 2.0 * half_w, 2.0 * half_h
 
 
-def gaia_adql(ra_deg: float, dec_deg: float, radius_deg: float, glimit: float = 17.0, max_rows: int = 3000) -> str:
+def gaia_adql(ra_deg: float, dec_deg: float, radius_deg: float, glimit: float = 17.0, max_rows: int = 3000,
+              sloan: bool = False) -> str:
     """The ESA archive query (2.2.13's, built here for testing): a circle, G < glimit, the brightest `max_rows` stars
-    with their GSPC Johnson B, V, R; 2.2.14 also asks BP-RP, for V from G where there is no GSPC."""
+    with their GSPC Johnson B, V, R; 2.2.14 also asks BP-RP, for V from G where there is no GSPC.
+    2.2.17 (item 1): sloan=True also asks GSPC's standardised SDSS u g r i z."""
     return (
         f"SELECT TOP {int(max_rows)} g.source_id, g.ra, g.dec, g.pmra, g.pmdec, g.phot_g_mean_mag, g.bp_rp, "
         "s.v_jkc_mag, s.b_jkc_mag, s.r_jkc_mag "
+        + (", s.u_sdss_mag, s.g_sdss_mag, s.r_sdss_mag, s.i_sdss_mag, s.z_sdss_mag " if sloan else "") +
         "FROM gaiadr3.gaia_source AS g "
         "LEFT OUTER JOIN gaiadr3.synthetic_photometry_gspc AS s ON s.source_id = g.source_id "
         f"WHERE 1 = CONTAINS(POINT('ICRS', g.ra, g.dec), CIRCLE('ICRS', {ra_deg:.6f}, {dec_deg:.6f}, {radius_deg:.4f})) "
@@ -2759,6 +2828,73 @@ def v_from_gaia_g(g: float | None, bp_rp: float | None) -> float | None:
         return None
     c = bp_rp
     return g + 0.02704 - 0.01424 * c + 0.2156 * c ** 2 - 0.01426 * c ** 3
+
+
+# 2.2.17 (item 1): Sloan magnitudes from Gaia DR3 G and BP-RP, for stars without GSPC (fainter than G 17.65, or no
+# XP spectrum). Gaia DR3 documentation, section 5.5.1 (Carrasco & Bellazzini), Table 5.8 "SDSS12 relationships"
+# (G - x as a polynomial in C = BP-RP, coefficients c0..c3/c4, and the fit's scatter sigma) and Table 5.10 (range of
+# applicability). Above BP-RP 2.0 the G-g and G-r fits follow M giants only (Table 5.10 notes f, g), so for the
+# dwarfs that make most comps they stop at 2.0. Outside the range: no magnitude.
+#   band: (coefficients c0, c1, ..., sigma, (C min, C max))
+GAIA_SDSS_POLY = {
+    "SG": ((0.2199, -0.6365, -0.1548, 0.0064), 0.0745, (0.3, 2.0)),
+    "SR": ((-0.09837, 0.08592, 0.1907, -0.1701, 0.02263), 0.03776, (0.0, 2.0)),
+    "SI": ((-0.293, 0.6404, -0.09609, -0.002104), 0.04092, (0.5, 2.0)),
+    "SZ": ((-0.4619, 0.8992, -0.08271, 0.005029), 0.041161, (-0.5, 4.5)),
+}
+GSPC_SDSS_COLUMNS = {"SU": "u_sdss_mag", "SG": "g_sdss_mag", "SR": "r_sdss_mag", "SI": "i_sdss_mag", "SZ": "z_sdss_mag"}
+
+
+def sdss_to_prime(mags: dict) -> dict:
+    """2.2.17 (item 1): SDSS 2.5 m ugriz (what Gaia's GSPC and the Gaia DR3 relations give) to the u'g'r'i'z' standard
+    system (APASS, AAVSO SG/SR/SI), inverting the SDSS transformation (Tucker et al. 2006, AN 327, 821; SDSS DR7
+    "jeg_photometric_eq_dr1"): g' = g - 0.060 ((g-r) - 0.53), r' = r - 0.035 ((r-i) - 0.21), i' = i - 0.041 ((r-i) - 0.21),
+    z' = z + 0.030 ((i-z) - 0.09), u' = u. A band whose partner color is missing is left as it is (the change is a
+    few hundredths, below the G and BP-RP relations' scatter). Keys SU/SG/SR/SI/SZ."""
+    g, r, i, z = (mags.get(k) for k in ("SG", "SR", "SI", "SZ"))
+    out = dict(mags)
+    if g is not None and r is not None:
+        out["SG"] = g - 0.060 * ((g - r) - 0.53)
+    if r is not None and i is not None:
+        out["SR"] = r - 0.035 * ((r - i) - 0.21)
+        out["SI"] = i - 0.041 * ((r - i) - 0.21)
+    if i is not None and z is not None:
+        out["SZ"] = z + 0.030 * ((i - z) - 0.09)
+    return out
+
+
+def sloan_from_gaia_g(g: float | None, bp_rp: float | None) -> dict:
+    """2.2.17 (item 1): {band: (magnitude on the primed system, sigma)} from Gaia G and BP-RP with the Gaia DR3
+    relations (GAIA_SDSS_POLY); bands outside their BP-RP range are left out."""
+    if g is None or bp_rp is None or not (math.isfinite(g) and math.isfinite(bp_rp)):
+        return {}
+    raw, sig = {}, {}
+    for band, (coef, sigma, (lo, hi)) in GAIA_SDSS_POLY.items():
+        if lo < bp_rp < hi:
+            raw[band] = g - sum(c * bp_rp ** k for k, c in enumerate(coef))
+            sig[band] = sigma
+    prime = sdss_to_prime(raw)
+    return {b: (prime[b], sig[b]) for b in raw}
+
+
+def gaia_sloan_note(sigma: float) -> str:
+    """2.2.17 (item 1): the note a Sloan magnitude from G and BP-RP carries (screen, log, report notes)."""
+    return f"from Gaia G and BP-RP, \u00b1{sigma:.2f}"
+
+
+def _add_gaia_sloan(mags: dict, notes: dict, row_get, g, bp_rp) -> None:
+    """2.2.17 (item 1): a Gaia star's Sloan magnitudes into mags (and their notes): GSPC's standardised SDSS where the
+    archive gave it (converted to the primed system), else the G and BP-RP relations."""
+    gspc = {b: _num(row_get(c)) for b, c in GSPC_SDSS_COLUMNS.items()} if row_get is not None else {}
+    gspc = {b: v for b, v in gspc.items() if v is not None}
+    if gspc:
+        for b, v in sdss_to_prime(gspc).items():
+            mags[b] = v
+            notes[b] = "Gaia synthetic SDSS (GSPC)"
+    for b, (v, sigma) in sloan_from_gaia_g(g, bp_rp).items():
+        if b not in mags:
+            mags[b] = v
+            notes[b] = gaia_sloan_note(sigma)
 
 
 def cap_brightest(stars: list[dict], max_rows: int) -> list[dict]:
@@ -2788,7 +2924,7 @@ def _gaia_esa(ra_deg: float, dec_deg: float, radius_deg: float, band: str, glimi
               timeout: float) -> list[dict]:
     import urllib.parse
 
-    adql = gaia_adql(ra_deg, dec_deg, radius_deg, glimit, max_rows)
+    adql = gaia_adql(ra_deg, dec_deg, radius_deg, glimit, max_rows, sloan=is_sloan(band))   # 2.2.17 (item 1)
     query = urllib.parse.urlencode({"REQUEST": "doQuery", "LANG": "ADQL", "FORMAT": "csv", "QUERY": adql})
     text = _http_get("https://gea.esac.esa.int/tap-server/tap/sync?" + query, timeout=timeout).decode("utf-8",
                                                                                                      errors="replace")
@@ -2929,7 +3065,8 @@ def parse_gaia_csv(text: str, band: str = "V") -> list[dict]:
     import io
 
     band = _band_for(band)
-    column = {"V": "v_jkc_mag", "B": "b_jkc_mag", "R": "r_jkc_mag"}[band]
+    column = {"V": "v_jkc_mag", "B": "b_jkc_mag", "R": "r_jkc_mag"}.get(band)
+    sloan = is_sloan(band)   # 2.2.17 (item 1)
     stars = []
     for row in csv.DictReader(io.StringIO(text)):
         ra = _num(row.get("ra"))
@@ -2948,11 +3085,17 @@ def parse_gaia_csv(text: str, band: str = "V") -> list[dict]:
             if v_g is not None:
                 mags = {"V": v_g}
                 v_note = " (V from G)"
-        mag = mags.get(band) if band == "V" else _num(row.get(column))
-        stars.append({"auid": f"Gaia DR3 {row.get('source_id', '')}", "label": f"{mag:.1f}" if mag is not None else "",
-                      "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": "ESA Gaia archive" + v_note, "pm": (_num(row.get("pmra")), _num(row.get("pmdec"))),
-                      "pos0": pos0})
+        notes: dict = {}
+        if sloan:
+            _add_gaia_sloan(mags, notes, row.get, g, _num(row.get("bp_rp")))   # 2.2.17 (item 1)
+        mag = mags.get(band) if band == "V" or sloan else _num(row.get(column))
+        star = {"auid": f"Gaia DR3 {row.get('source_id', '')}", "label": f"{mag:.1f}" if mag is not None else "",
+                "ra": ra, "dec": dec, "mag": mag, "mags": mags, "band": band, "catalog": "Gaia DR3", "bright": g,
+                "service": "ESA Gaia archive" + v_note, "pm": (_num(row.get("pmra")), _num(row.get("pmdec"))),
+                "pos0": pos0}
+        if notes:
+            star["mag_notes"] = notes
+        stars.append(star)
     if not stars and "error" in text.lower():
         raise ValueError("Gaia archive: " + text.strip()[:300])
     return stars
@@ -2990,12 +3133,19 @@ def parse_gaia_vizier_rows(rows: list[dict], band: str = "V", glimit: float = 17
         pos0 = (ra, dec, 2016.0)   # 2.2.16 (item 2)
         ra, dec = _pm_to_now(ra, dec, row.get("pmRA"), row.get("pmDE"), 2016.0)
         v_from_g = v_from_gaia_g(g, _num(row.get("BP-RP")))
-        mag = v_from_g if band == "V" else None
-        stars.append({"auid": f"Gaia DR3 {row.get('Source', '')}", "label": f"{mag:.1f}" if mag is not None else "",
-                      "ra": ra, "dec": dec, "mag": mag, "mags": ({"V": v_from_g} if v_from_g is not None else {}),
-                      "band": band, "catalog": "Gaia DR3", "bright": g,
-                      "service": service,
-                      "pm": (_num(row.get("pmRA")), _num(row.get("pmDE"))), "pos0": pos0})
+        mags = {"V": v_from_g} if v_from_g is not None else {}
+        notes: dict = {}
+        if is_sloan(band):
+            _add_gaia_sloan(mags, notes, None, g, _num(row.get("BP-RP")))   # 2.2.17 (item 1)
+        mag = v_from_g if band == "V" else mags.get(band) if is_sloan(band) else None
+        star = {"auid": f"Gaia DR3 {row.get('Source', '')}", "label": f"{mag:.1f}" if mag is not None else "",
+                "ra": ra, "dec": dec, "mag": mag, "mags": mags,
+                "band": band, "catalog": "Gaia DR3", "bright": g,
+                "service": service,
+                "pm": (_num(row.get("pmRA")), _num(row.get("pmDE"))), "pos0": pos0}
+        if notes:
+            star["mag_notes"] = notes
+        stars.append(star)
     return cap_brightest(stars, max_rows)
 
 
@@ -3139,11 +3289,15 @@ def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_
         src = entry["sources"]
         names = [str(src[c].get("auid") or "") for c in NAME_ORDER if c in src and src[c].get("auid")]
         mags, mag_src = {}, {}
-        for b in ("V", "B", "R", "I"):
+        mag_notes = {}
+        for b in ("V", "B", "R", "I") + (SLOAN_BANDS if is_sloan(band) else ()):   # 2.2.17 (item 1)
             for c in MAG_ORDER:
                 m = (src.get(c, {}).get("mags") or {}).get(b)
                 if m is not None and math.isfinite(float(m)):
                     mags[b], mag_src[b] = float(m), c
+                    note = (src[c].get("mag_notes") or {}).get(b)
+                    if note:
+                        mag_notes[b] = note
                     break
         seq = None
         if "AAVSO sequence" in src:
@@ -3161,6 +3315,8 @@ def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_
                 "label": (seq["label"] if seq and seq["label"] else (f"{mag:.1f}" if mag is not None else ""))}
         if entry.get("pm"):
             star["pm"] = entry["pm"]
+        if mag_notes:
+            star["mag_notes"] = mag_notes   # 2.2.17 (item 1): e.g. a Sloan magnitude from Gaia G and BP-RP
         # 2.2.14 (item 1): every catalog's own magnitudes, and the colors taken from ONE catalog each
         # ({"bv": [B-V, catalog], "vr": [V-R, catalog]}); "mags" stays the best magnitude per band (MAG_ORDER).
         star["cat_mags"] = {c: dict(src[c].get("mags") or {}) for c in src}
@@ -3707,8 +3863,52 @@ def _fit_placement(e: np.ndarray, n: np.ndarray, x: np.ndarray, y: np.ndarray, m
             "mirrored": mirrored}, float(np.sqrt(np.mean(resid ** 2)))
 
 
+SOLVE_RETRY_HITS = 8         # 2.2.17 (item 1): the app accepts a field solve from 8 matched stars
+SOLVE_POINTING_SLACK_ARCMIN = 3.0
+
+
 def solve_field(sources: list, stars: list[dict], ra_deg: float, dec_deg: float, scale_arcsec: float,
-                tolerance_px: float = 3.0, scale_range: float = 0.3, n_src: int = 30, n_cat: int = 45) -> dict | None:
+                tolerance_px: float = 3.0, scale_range: float = 0.3, n_src: int = 30, n_cat: int = 45,
+                frame_shape=None) -> dict | None:
+    """Field solve without a target (_solve_field_once). 2.2.17 (item 1, Moeller's 22' frames): the catalog is
+    fetched for a circle well beyond the frame, so on a small field many of the brightest catalog stars fall off the
+    image and too few triangles agree (7 of the 8 needed on TOI-4028, 3 on the dense TOI-5933 field). When that
+    happens and the frame's size is known (frame_shape, h x w px), the solve is tried again on the same footprint on
+    both sides: the image stars inside the frame's inscribed circle and the catalog stars inside that circle around
+    the pointing, first with the usual numbers of stars, then with twice as many; last, twice as many on the frame's
+    whole circle (half-diagonal x 1.1 plus SOLVE_POINTING_SLACK_ARCMIN). The best answer is kept, so a field that
+    solved before is unchanged (the retries run only below SOLVE_RETRY_HITS)."""
+    best = _solve_field_once(sources, stars, ra_deg, dec_deg, scale_arcsec, tolerance_px, scale_range, n_src, n_cat)
+    if frame_shape is None or (best is not None and best.get("hits", 0) >= SOLVE_RETRY_HITS):
+        return best
+    try:
+        h, w = float(frame_shape[0]), float(frame_shape[1])
+        r_in = min(h, w) / 2.0
+        reach = math.hypot(w, h) / 2.0 * float(scale_arcsec) * 1.1 + SOLVE_POINTING_SLACK_ARCMIN * 60.0
+    except (TypeError, ValueError, IndexError):
+        return best
+    sep = {id(st): sky_separation_arcsec(ra_deg, dec_deg, st["ra"], st["dec"]) for st in stars
+           if st.get("ra") is not None and st.get("dec") is not None}
+    cat_in = [st for st in stars if sep.get(id(st), 1e9) < r_in * float(scale_arcsec)]
+    cat_frame = [st for st in stars if sep.get(id(st), 1e9) < reach]
+    cx, cy = (w - 1.0) / 2.0, (h - 1.0) / 2.0
+    src_in = [p for p in sources if math.hypot(p[0] - cx, p[1] - cy) < r_in]
+    tries = ((src_in, cat_in, n_src, n_cat), (src_in, cat_in, 2 * n_src, 2 * n_cat),
+             (sources, cat_frame, 2 * n_src, 2 * n_cat))
+    for src_k, cat_k, ns, nc in tries:
+        if len(src_k) < 6 or len(cat_k) < 6:
+            continue
+        again = _solve_field_once(src_k, cat_k, ra_deg, dec_deg, scale_arcsec, tolerance_px, scale_range, ns, nc)
+        if again is not None and (best is None or again.get("hits", 0) > best.get("hits", 0)):
+            best = again
+        if best is not None and best.get("hits", 0) >= SOLVE_RETRY_HITS:
+            break
+    return best
+
+
+def _solve_field_once(sources: list, stars: list[dict], ra_deg: float, dec_deg: float, scale_arcsec: float,
+                      tolerance_px: float = 3.0, scale_range: float = 0.3, n_src: int = 30,
+                      n_cat: int = 45) -> dict | None:
     """Find the field without a target: match triangles of bright stars between the image and the catalog
     (shape is unchanged by shift, rotation, mirror, and scale), then fit the placement and count all matches.
 

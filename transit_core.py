@@ -90,13 +90,51 @@ def total_duration(period: float, a_rs: float, b: float, k: float) -> float:
     return period / math.pi * math.asin(min(arg, 1.0))
 
 
-def limb_darkening_guess(teff: float | None) -> tuple[float, float]:
+# 2.2.17 (item 1): quadratic limb darkening for the Sloan filters, Claret (2004, A&A 428, 1001; VizieR J/A+A/428/1001
+# table4: ATLAS models, log g 4.5, [M/H] 0, microturbulence 2 km/s), (Teff, a, b) with I(mu)/I(1) = 1 - a(1-mu) - b(1-mu)^2.
+LD_SLOAN = {
+    "SG": ((3500, 0.4072, 0.4068), (3750, 0.4589, 0.3366), (4000, 0.6912, 0.1203), (4250, 0.9147, -0.0774),
+           (4500, 0.9288, -0.0827), (4750, 0.8586, -0.0163), (5000, 0.7787, 0.0549), (5250, 0.6983, 0.1225),
+           (5500, 0.6225, 0.1831), (5750, 0.5537, 0.2357), (6000, 0.4911, 0.2813), (6250, 0.4398, 0.3163),
+           (6500, 0.3993, 0.3414), (6750, 0.3664, 0.3619), (7000, 0.3384, 0.3798), (7250, 0.3114, 0.3983),
+           (7500, 0.2858, 0.4172), (7750, 0.2631, 0.4344), (8000, 0.2542, 0.4401)),
+    "SR": ((3500, 0.4397, 0.3376), (3750, 0.4102, 0.3593), (4000, 0.5223, 0.2549), (4250, 0.6519, 0.1332),
+           (4500, 0.6485, 0.1242), (4750, 0.5933, 0.1630), (5000, 0.5328, 0.2079), (5250, 0.4706, 0.2523),
+           (5500, 0.4128, 0.2904), (5750, 0.3616, 0.3220), (6000, 0.3138, 0.3502), (6250, 0.2762, 0.3696),
+           (6500, 0.2467, 0.3821), (6750, 0.2233, 0.3919), (7000, 0.2030, 0.4011), (7250, 0.1832, 0.4110),
+           (7500, 0.1665, 0.4196), (7750, 0.1531, 0.4256), (8000, 0.1507, 0.4219)),
+    "SI": ((3500, 0.2879, 0.3868), (3750, 0.2965, 0.3780), (4000, 0.3797, 0.3091), (4250, 0.4733, 0.2237),
+           (4500, 0.4765, 0.2048), (4750, 0.4434, 0.2205), (5000, 0.4033, 0.2468), (5250, 0.3583, 0.2765),
+           (5500, 0.3144, 0.3029), (5750, 0.2743, 0.3249), (6000, 0.2356, 0.3456), (6250, 0.2040, 0.3600),
+           (6500, 0.1782, 0.3696), (6750, 0.1562, 0.3780), (7000, 0.1372, 0.3852), (7250, 0.1191, 0.3927),
+           (7500, 0.1052, 0.3971), (7750, 0.0958, 0.3977), (8000, 0.0954, 0.3900)),
+    "SZ": ((3500, 0.1288, 0.4930), (3750, 0.1518, 0.4516), (4000, 0.2543, 0.3574), (4250, 0.3652, 0.2577),
+           (4500, 0.3803, 0.2339), (4750, 0.3535, 0.2469), (5000, 0.3201, 0.2670), (5250, 0.2835, 0.2887),
+           (5500, 0.2476, 0.3076), (5750, 0.2140, 0.3242), (6000, 0.1803, 0.3409), (6250, 0.1517, 0.3530),
+           (6500, 0.1276, 0.3612), (6750, 0.1066, 0.3684), (7000, 0.0879, 0.3746), (7250, 0.0703, 0.3804),
+           (7500, 0.0564, 0.3833), (7750, 0.0469, 0.3820), (8000, 0.0448, 0.3734)),
+}
+
+
+def limb_darkening_band(band) -> str:
+    """2.2.17 (item 1): the LD_SLOAN key for a filter code ("SI", "i'", "Sloan i"…), or '' (the V/clear table)."""
+    import photometry_core as core
+    text = str(band or "").strip()
+    key = text.upper() if text.upper() in LD_SLOAN else (core.sloan_band_code(text) or "")
+    return key if key in LD_SLOAN else ""
+
+
+def limb_darkening_guess(teff: float | None, band=None) -> tuple[float, float]:
     """Approximate quadratic limb darkening for a broad green / V / clear band, by temperature.
 
     Rough values in the range of the Claret (2000) V-band tables for dwarfs (log g about 4.5). They are
-    used only as the centers of broad priors (0.1 wide), so the light curve, not this table, decides."""
+    used only as the centers of broad priors (0.1 wide), so the light curve, not this table, decides.
+    2.2.17 (item 1): band SG/SR/SI/SZ (a Sloan filter) uses Claret (2004)'s Sloan values (LD_SLOAN) instead."""
     table = ((3500, 0.75, 0.05), (4500, 0.70, 0.08), (5000, 0.60, 0.15), (5500, 0.50, 0.22),
              (6000, 0.43, 0.27), (6500, 0.36, 0.30), (7000, 0.30, 0.33), (8000, 0.25, 0.33))
+    sloan = limb_darkening_band(band)
+    if sloan:
+        table = LD_SLOAN[sloan]
     if teff is None or not math.isfinite(teff):
         teff = 5800.0
     ts = [row[0] for row in table]
@@ -624,7 +662,7 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
     t = t_abs - t_ref
     med = np.median(flux)
     flux, err = flux / med, err / med
-    u1g, u2g = limb_darkening_guess(planet.get("teff"))
+    u1g, u2g = limb_darkening_guess(planet.get("teff"), planet.get("ld_band"))   # 2.2.17 (item 1): band-aware
     q1, q2 = u_to_kipping(u1g, u2g)
     # Predicted mid-transit nearest the data.
     # 2.2.12: without an ephemeris the start guess (the lowest point) is only a start; it is never reported as a
@@ -840,6 +878,7 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         "t": t_abs, "t_ref": t_ref, "flux": flux, "err": err, "err_scaled": err * scale, "airmass": am, "model": model,
         "baseline": base, "detrended": flux / base, "residuals": resid, "best": best, "summary": summary,
         "free_params": list(prob_s.free), "priors": priors, "ld_prior": ld, "rchi2": rchi, "beta": beta,
+        "ld_band": limb_darkening_band(planet.get("ld_band")),   # 2.2.17 (item 1): '' = the V / clear table
         "error_scale": scale, "rms": float(np.std(resid)), "cadence_days": cadence, "chain": chain,
         # 2.2.14 (GitHub #5): rms of 10-minute bins, as AstroImageJ shows it.
         "rms_bin10": binned_rms(t_abs, resid, 10.0),
@@ -1246,7 +1285,7 @@ def ld_center_depth(planet: dict | None) -> float | None:
     p = planet or {}
     if not p.get("k"):
         return None
-    u1, u2 = limb_darkening_guess(p.get("teff"))
+    u1, u2 = limb_darkening_guess(p.get("teff"), p.get("ld_band"))   # 2.2.17 (item 1)
     b = p.get("b") if p.get("b") is not None else 0.0
     return float(1.0 - occultation(np.array([min(b, 1.0 + p["k"] - 1e-6)]), p["k"], u1, u2)[0])
 
@@ -2214,6 +2253,12 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def core_band_label(band) -> str:
+    """2.2.17 (item 1): "i′" for SI (photometry_core.band_label)."""
+    import photometry_core as core
+    return core.band_label(band)
+
+
 def _dtg() -> str:
     import photometry_core as core
     return core.dtg()
@@ -2285,6 +2330,8 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
     return ("\nFor ExoFOP (time-series upload)\n"
             f"  Telescope/camera: {meta.get('telescope') or 'not recorded'}\n"
             f"  Filter: {meta.get('filter', 'CV')} ("
+            + (f"Sloan {core_band_label(limb_darkening_band(meta.get('filter')))}, "
+               if limb_darkening_band(meta.get("filter")) else "")   # 2.2.17 (item 1): "SI (Sloan i′, …)"
             + ("monochrome camera" if mono else "one-shot color camera") + ", untransformed)\n"
             f"  Pixel scale: {scale_text}\n"
             f"  Photometric aperture: {ap_text}\n"
@@ -2327,7 +2374,8 @@ def fit_text(result: dict, meta: dict) -> str:
         lines.append(f"  O − C           {oc:+.2f} min (epoch {result['epoch']}, predicted {result['tc_pred']:.6f} "
                      f"± {result['tc_pred_err'] * 1440:.2f} min)")
     lines += ["", "Priors           " + ", ".join(f"{k} {m:.4g} ± {sd:.2g}" for k, (m, sd) in result["priors"].items())
-              + f"; limb darkening u1 {result['ld_prior'][0]:.2f}, u2 {result['ld_prior'][1]:.2f} ± {result['ld_prior'][2]:.2f}",
+              + f"; limb darkening u1 {result['ld_prior'][0]:.2f}, u2 {result['ld_prior'][1]:.2f} ± {result['ld_prior'][2]:.2f}"
+              + (f" (Claret 2004, Sloan {core_band_label(result['ld_band'])})" if result.get("ld_band") else ""),
               f"Noise            rms {result['rms'] * 100:.3f}% per point"
               + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
               + f", reduced chi-square {result['rchi2']:.2f}, "
