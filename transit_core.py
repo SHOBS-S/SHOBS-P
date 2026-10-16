@@ -894,6 +894,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
 
 
 # 2.2.16 (item 6): leave-one-comp-out check. A comp is named in a caution only when (1) leaving it out moves the
+RCHI2_LOW = 0.5    # 2.2.17 (item 8): reduced chi-square below this: error bars too large (error model)
+RCHI2_HIGH = 2.0   # 2.2.17 (item 8): above this: noise the error model leaves out
 # depth or Tc by more than COMP_LOO_SIGMA sigma of the main fit, (2) that move is more than COMP_LOO_NOISE times what
 # the comp's own frame-to-frame noise would cause, and (3) it is the odd one out: its move is opposite in sign to every
 # other comp's and at least COMP_LOO_ODD times the largest of them. Shifts are measured against the full ensemble, so
@@ -1418,12 +1420,24 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     if step and not step["explains"]:
         flags.append(("info", f"Step check: a {abs(step['step']) * 100:.1f}% jump at the {step['gap_min']:.0f}-minute "
                               f"gap fits worse than the transit (ΔBIC {-step['dbic']:.1f} in favour of the transit)."))
-    if r.get("rchi2") is not None and r["rchi2"] < 0.3:
+    # 2.2.17 (item 8): what a reduced chi-square far from 1 means. Below 1 the error bars are larger than the scatter:
+    # the error model is off (camera gain, values that are not camera units); bad darks, bias or flats would ADD
+    # scatter, not shrink it. Above 1 there is noise the error model leaves out.
+    if r.get("rchi2") is not None and r["rchi2"] < RCHI2_LOW:
         ratio = 1.0 / math.sqrt(max(r["rchi2"], 1e-6))
         flags.append(("warn", f"The per-point error bars are about {ratio:.1f}x larger than the real scatter (reduced "
-                              f"χ² {r['rchi2']:.2f}). The photometry's noise estimate is too pessimistic, which usually "
-                              "points at calibration: darks scaled far from their exposure, a mismatched bias, or a "
-                              "noisy flat. The fit keeps the larger error bars, so its uncertainties are on the safe side."))
+                              f"χ² {r['rchi2']:.2f}). That is the error model, not the data: most often the camera "
+                              "gain (EGAIN missing or wrong in the headers; the photometry log's Photon noise line says what "
+                              "was used), or frames "
+                              "calibrated elsewhere whose values are not camera units. Bad darks, bias or flats would "
+                              "make the scatter larger, not the error bars. The fit keeps the larger error bars, so "
+                              "its uncertainties are on the safe side (too wide)."))
+    elif r.get("rchi2") is not None and r["rchi2"] > RCHI2_HIGH:
+        ratio = math.sqrt(r["rchi2"])
+        flags.append(("info", f"The scatter is about {ratio:.1f}x the per-point error bars (reduced χ² "
+                              f"{r['rchi2']:.2f}): noise the error model leaves out, such as thin cloud or dew, "
+                              "tracking or seeing changes (red noise), calibration, or a noisy comp. The fit scales "
+                              "its error bars up to match, so its uncertainties include it."))
     if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
         oc = (best["tc"] - r["tc_pred"]) * 1440
         sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if "tc" in s else float("nan")

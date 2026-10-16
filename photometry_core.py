@@ -1796,6 +1796,152 @@ def _mag_variance(flux: float, variance: float) -> float:
     return (1.085736 / flux) ** 2 * variance
 
 
+# ---- 2.2.17 (item 8): photon noise in electrons ------------------------------------------------------------------
+# Before 2.2.17 a star's photon variance was its net flux in image units, as if one image unit were one electron.
+# SHOBS-P's image unit is not: the software binning and the superpixel debayer AVERAGE camera pixels (TG: 8 green
+# pixels per final pixel at Bin 2), the flat divides by its value (green ~1.5 on an OSC flat normalized at the
+# mosaic median), and the camera gives EGAIN e-/ADU (ASI2600 at gain 100: 0.243). The photon variance is now
+# flux / k, with k = electrons per image unit = EGAIN / sum(w_j^2 / (b^2 f_j)) over the camera pixels j averaged
+# into a final pixel (weights w_j of the debayer, b = software binning, f_j = master flat). The sky term stays the
+# measured sky scatter, plus the error of the sky level itself (the CCD equation of Merline & Howell 1995).
+# The old fixed 0.005 mag added to every point is gone: the real 60 s nights scatter LESS than 0.005 per point.
+E_PER_ADU_RANGE = (0.01, 100.0)   # plausible camera gains in e-/ADU; anything else is not a gain
+
+
+def header_e_per_adu(header: dict | None) -> float | None:
+    """2.2.17 (item 8): the camera gain in electrons per ADU from EGAIN (NINA, ASIAIR, SharpCap, MaxIm, ...), or None.
+    GAIN is not read as e-/ADU: ZWO, QHY, NINA and ASIAIR write the gain SETTING there (100), Andor an index (1)."""
+    v = _header_float(header or {}, "EGAIN")
+    if v is None or not (E_PER_ADU_RANGE[0] <= v <= E_PER_ADU_RANGE[1]):
+        return None
+    return float(v)
+
+
+def debayer_weights(pattern: str, mode: str) -> dict:
+    """2.2.17 (item 8): the weight of each 2x2 Bayer position (iy, ix) in one superpixel of debayer(pattern, mode);
+    {(0, 0): 1.0} for a monochrome camera."""
+    pattern = (pattern or "RGGB").upper()
+    if pattern == MONO:
+        return {(0, 0): 1.0}
+    positions = {
+        "RGGB": {(0, 0): "R", (0, 1): "G", (1, 0): "G", (1, 1): "B"},
+        "BGGR": {(0, 0): "B", (0, 1): "G", (1, 0): "G", (1, 1): "R"},
+        "GRBG": {(0, 0): "G", (0, 1): "R", (1, 0): "B", (1, 1): "G"},
+        "GBRG": {(0, 0): "G", (0, 1): "B", (1, 0): "R", (1, 1): "G"},
+    }.get(pattern)
+    if positions is None:
+        raise ValueError(f"Unsupported Bayer pattern {pattern}")
+    per_color = {"luminance": {"R": 0.299, "G": 0.587 / 2, "B": 0.114}, "green": {"R": 0.0, "G": 0.5, "B": 0.0},
+                 "red": {"R": 1.0, "G": 0.0, "B": 0.0}, "blue": {"R": 0.0, "G": 0.0, "B": 1.0}}
+    w = per_color.get(mode, per_color["luminance"])
+    return {pos: w[color] for pos, color in positions.items() if w[color] > 0}
+
+
+def electrons_per_unit(e_per_adu: float, binning: int, pattern: str, mode: str, flat: np.ndarray | None = None):
+    """2.2.17 (item 8): electrons per unit of the measured (binned, calibrated, debayered) image: a number, or with a
+    master flat a map the shape of the debayered image (the flat changes it across the field and per color).
+
+    A final pixel is sum_j w_j * raw_j / f_j over camera pixels j (b x b binning averages, then the superpixel
+    weights w_j), so its photon variance in image units is value * sum_j (w_j^2 / (b^2 f_j)) / EGAIN when the colors
+    carry similar signal. k = EGAIN / that sum. Mono, Bin 1, no flat: k = EGAIN. TG at Bin 2: 8 x EGAIN / f_green."""
+    b = max(int(binning or 1), 1)
+    weights = debayer_weights(pattern, mode)
+    if flat is None:
+        q = sum(w * w for w in weights.values()) / (b * b)
+        return float(e_per_adu) / q
+    flat = np.asarray(flat, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv = np.where(np.isfinite(flat) & (flat > 0), 1.0 / flat, np.nan)
+    if (pattern or "").upper() == MONO:
+        q = inv / (b * b)
+    else:
+        h, w = inv.shape[0] // 2 * 2, inv.shape[1] // 2 * 2
+        q = np.zeros((h // 2, w // 2))
+        for (iy, ix), wt in weights.items():
+            q = q + (wt * wt) * inv[iy:h:2, ix:w:2]
+        q = q / (b * b)
+    fill = np.nanmedian(q) if np.isfinite(q).any() else sum(x * x for x in weights.values()) / (b * b)
+    q = np.where(np.isfinite(q) & (q > 0), q, fill)
+    return (float(e_per_adu) / q).astype(np.float32)
+
+
+def electrons_at(electrons, x: float, y: float, radius: float) -> float:
+    """2.2.17 (item 8): electrons per image unit at a star (the mean of the map over the aperture's box)."""
+    if electrons is None:
+        return float("nan")
+    if np.ndim(electrons) == 0:
+        return float(electrons)
+    h, w = electrons.shape
+    r = max(int(math.ceil(radius)), 1)
+    x0, x1 = max(0, int(round(x)) - r), min(w, int(round(x)) + r + 1)
+    y0, y1 = max(0, int(round(y)) - r), min(h, int(round(y)) + r + 1)
+    if x1 <= x0 or y1 <= y0:
+        return float(np.nanmedian(electrons))
+    return float(np.nanmean(electrons[y0:y1, x0:x1]))
+
+
+def star_variance(measured: dict, electrons, radius: float, sky_inner: float, sky_outer: float) -> float:
+    """2.2.17 (item 8): a star's flux variance in image units squared: photon noise flux / k (k electrons per unit
+    at the star) plus the sky, n_pix * sky_sd^2 * (1 + n_pix / n_sky) (Merline & Howell 1995: the second part is the
+    error of the sky level taken from n_sky annulus pixels). electrons None: the pre-2.2.17 variance as measured."""
+    if electrons is None:
+        return float(measured["variance"])
+    k = electrons_at(electrons, measured.get("x", 0.0), measured.get("y", 0.0), radius)
+    if not (math.isfinite(k) and k > 0):
+        return float(measured["variance"])
+    n_pix = float(measured.get("n") or math.pi * radius ** 2)
+    n_sky = max(math.pi * (sky_outer ** 2 - sky_inner ** 2), 1.0)
+    sd = float(measured.get("sky_std") or 0.0)
+    return max(float(measured["flux"]), 0.0) / k + n_pix * sd * sd * (1.0 + n_pix / n_sky)
+
+
+def sky_electrons_estimate(img: np.ndarray, stars, radius: float, sky_inner: float, sky_outer: float) -> float:
+    """2.2.17 (item 8): electrons per image unit from the sky itself, sky level / sky variance (a Poisson sky has
+    variance = level in electrons), the median over the given stars' annuli. Read noise, dark noise and faint stars
+    only add variance, so this is a LOWER limit on k (photon error bars from it are on the large side). Only valid
+    on a frame with the bias taken out (sky level = sky signal). NaN when it cannot be measured."""
+    vals = []
+    for s in stars:
+        try:
+            m = measure_aperture(img, s.x, s.y, radius, sky_inner, sky_outer)
+        except Exception:
+            continue
+        sd, sky = float(m.get("sky_std") or 0.0), float(m.get("sky") or 0.0)
+        if sd > 0 and sky > 0 and math.isfinite(sd * sky):
+            vals.append(sky / (sd * sd))
+    return float(np.median(vals)) if vals else float("nan")
+
+
+def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: str, flat=None,
+                       bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan")) -> dict:
+    """2.2.17 (item 8): how the photon noise is converted to electrons for a run. Returns {"electrons": number or map,
+    "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": one plain log line}.
+    1. EGAIN in the header (not for pre-calibrated frames, whose values may have been rescaled by other software).
+    2. Else the sky's own level / variance (sky_k, measured on the run's reference frame), a lower limit on k, when
+       the bias is out of the frame.
+    3. Else 1 e-/ADU, with the averaging and flat still counted."""
+    gain = None if precalibrated else header_e_per_adu(header)
+    if gain is not None:
+        k = electrons_per_unit(gain, binning, pattern, mode, flat)
+        at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
+        note = (f"Photon noise: camera gain {gain:.3g} e-/ADU (EGAIN) = about {at:.3g} electrons per image unit "
+                f"after Bin {max(int(binning or 1), 1)}"
+                + ("" if (pattern or "").upper() == MONO else ", the superpixel") + (" and the flat" if flat is not None else "")
+                + ".")
+        return {"electrons": k, "e_per_adu": gain, "source": "EGAIN", "note": note, "k_median": at}
+    why = ("the frames are pre-calibrated (their values may not be camera ADU)" if precalibrated
+           else "the headers give no EGAIN (camera gain in e-/ADU)")
+    if bias_removed and math.isfinite(sky_k) and sky_k > 0:
+        return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
+                "note": f"Photon noise: {why}, so the gain comes from the sky's own noise ({sky_k:.3g} electrons per "
+                        "image unit, a lower limit: error bars on the safe side)."}
+    k = electrons_per_unit(1.0, binning, pattern, mode, flat)
+    at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
+    return {"electrons": k, "e_per_adu": None, "source": "assumed", "k_median": at,
+            "note": f"Photon noise: {why}, so 1 e-/ADU is assumed. Error bars scale as 1/sqrt(true gain); "
+                    "the Transit fit's reduced chi-square shows whether they fit the scatter."}
+
+
 def reduce_frame(
     img: np.ndarray,
     header: dict,
@@ -1811,11 +1957,14 @@ def reduce_frame(
     dec_deg: float | None = None,
     sat_limit: float = 60000,
     aligned: bool = True,
+    electrons=None,
 ) -> Obs:
     """One calibrated, debayered frame -> one differential magnitude.
 
     With more than one comparison star this is a simple ensemble: the mean instrumental
     magnitude of the comps against the mean of their catalog magnitudes.
+    2.2.17 (item 8): electrons = electrons per image unit (a number or a map, see photon_noise_setup) for the photon
+    noise; None keeps the measured "variance" (flux in image units as electrons, the pre-2.2.17 model).
     """
     exp = header_exptime(header)
     jd = mid_jd(header)
@@ -1849,7 +1998,9 @@ def reduce_frame(
             raise ValueError(f"{comp.name} has no flux above sky in this frame")
         comp_inst.append(inst_mag(measured["flux"], exp))
         comp_fluxes.append(measured["flux"])
-        comp_mag_var.append(_mag_variance(measured["flux"], measured["variance"]))
+        # 2.2.17 (item 8): photon noise in electrons
+        comp_mag_var.append(_mag_variance(measured["flux"], star_variance(measured, electrons, radius, sky_inner,
+                                                                          sky_outer)))
         _, _, cpeak = shape_metrics(img, cx, cy, radius, measured["sky"])
         if math.isfinite(cpeak):
             comp_peak = max(comp_peak, cpeak)
@@ -1869,7 +2020,9 @@ def reduce_frame(
 
     v_inst = inst_mag(var["flux"], exp)
     mag = c_cat + (v_inst - c_inst)
-    merr = math.sqrt(_mag_variance(var["flux"], var["variance"]) + c_var + 0.005 ** 2)
+    # 2.2.17 (item 8): photon noise in electrons; no fixed 0.005 mag floor (the real scatter is below it on 60 s nights)
+    t_var = _mag_variance(var["flux"], star_variance(var, electrons, radius, sky_inner, sky_outer))
+    merr = math.sqrt(t_var + c_var)
 
     kmag = inst_mag(chk["flux"], exp) if chk is not None else None
     if kmag is not None and not math.isfinite(kmag):
@@ -1925,7 +2078,7 @@ def reduce_frame(
         check_std=check_std,
         flag=" ".join(flags),
         comp_insts=[float(v) for v in comp_inst],
-        target_var=float(_mag_variance(var["flux"], var["variance"])),
+        target_var=float(t_var),
         comp_vars=[float(v) for v in comp_mag_var],
         n_comps=len(comps),
         target_inst=float(v_inst),
@@ -3796,6 +3949,220 @@ def period_leave_one_out(jd: np.ndarray, values: np.ndarray, nights: list[str], 
     return out
 
 
+# ---- 2.2.17 (item 10): airmass / color check before a period is called significant -----------------------------
+AIRMASS_TREND_MIN_NIGHTS = 5     # nights with a mean and an airmass before the trend is judged
+AIRMASS_TREND_SIGMA = 3.0        # |slope| / its standard error above this: the nightly means follow airmass
+AIRMASS_TREND_MIN_SPREAD = 0.05  # nights' median airmasses must spread at least this much
+NIGHT_MIN_POINTS = 3
+
+
+def nightly_means(values, nights, airmass=None) -> list[dict]:
+    """2.2.17 (item 10): each night's mean value and median airmass (NaN when the night has none), in night order:
+    [{"night", "mean", "airmass", "n"}]. Nights with fewer than NIGHT_MIN_POINTS finite values are left out."""
+    v = np.asarray(values, dtype=float)
+    labels = list(nights)
+    am = np.full(len(v), np.nan) if airmass is None else np.asarray(
+        [np.nan if a is None else float(a) for a in airmass], dtype=float)
+    out = []
+    for night in dict.fromkeys(labels):
+        k = np.array([n == night for n in labels], dtype=bool) & np.isfinite(v)
+        if k.sum() < NIGHT_MIN_POINTS:
+            continue
+        a = am[k][np.isfinite(am[k])]
+        out.append({"night": night, "mean": float(np.mean(v[k])), "airmass": float(np.median(a)) if a.size else
+                    float("nan"), "n": int(k.sum())})
+    return out
+
+
+def airmass_trend(means: list[dict]) -> dict:
+    """2.2.17 (item 10): a straight-line fit of the nightly means against each night's median airmass (ordinary
+    least squares; the slope's error from the scatter about the line, since night-to-night offsets are not photon
+    noise). Returns {"n", "slope" (mag per airmass), "slope_err", "sigma" (|slope| / error), "sd_before",
+    "sd_after", "intercept", "ref_airmass", "follows" (True when >= AIRMASS_TREND_MIN_NIGHTS nights and sigma >
+    AIRMASS_TREND_SIGMA), "skip" (why not judged, or '')}."""
+    rows = [m for m in means if math.isfinite(m.get("airmass", float("nan"))) and math.isfinite(m["mean"])]
+    out = {"n": len(rows), "slope": float("nan"), "slope_err": float("nan"), "sigma": 0.0, "follows": False,
+           "sd_before": float("nan"), "sd_after": float("nan"), "intercept": float("nan"),
+           "ref_airmass": float("nan"), "skip": ""}
+    if len(rows) < AIRMASS_TREND_MIN_NIGHTS:
+        out["skip"] = (f"{len(rows)} night(s) with an airmass" if any(math.isfinite(m.get("airmass", float("nan")))
+                                                                      for m in means) else "no airmass")
+        return out
+    a = np.array([m["airmass"] for m in rows])
+    y = np.array([m["mean"] for m in rows])
+    if float(a.max() - a.min()) < AIRMASS_TREND_MIN_SPREAD:
+        out["skip"] = f"the nights' airmasses spread only {a.max() - a.min():.2f}"
+        return out
+    design = np.vstack([np.ones_like(a), a]).T
+    coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+    resid = y - design @ coef
+    dof = len(y) - 2
+    s2 = float(np.sum(resid ** 2) / dof) if dof > 0 else float("nan")
+    try:
+        cov = s2 * np.linalg.inv(design.T @ design)
+        err = math.sqrt(cov[1, 1]) if cov[1, 1] > 0 else float("nan")
+    except np.linalg.LinAlgError:
+        err = float("nan")
+    slope = float(coef[1])
+    sigma = abs(slope) / err if (math.isfinite(err) and err > 0) else (float("inf") if abs(slope) > 0 else 0.0)
+    out.update(slope=slope, slope_err=err, sigma=float(sigma), intercept=float(coef[0]),
+               ref_airmass=float(np.median(a)), sd_before=float(np.std(y)), sd_after=float(np.std(resid)),
+               follows=bool(sigma > AIRMASS_TREND_SIGMA))
+    return out
+
+
+def airmass_trend_text(trend: dict) -> str:
+    """2.2.17 (item 10): the warning when the nightly means follow airmass; '' otherwise."""
+    if not trend or not trend.get("follows"):
+        return ""
+    return (f"Nightly means follow airmass ({trend['slope']:+.3f} ± {trend['slope_err']:.3f} mag per airmass, "
+            f"{trend['n']} nights): a period may come from which nights ran low, not from the star. Night-to-night "
+            f"spread {trend['sd_before']:.3f} mag, {trend['sd_after']:.3f} after taking the trend out.")
+
+
+def effective_points(values, nights) -> dict:
+    """2.2.17 (item 10): how many independent points the period search really has when the points of a night share
+    an offset (clouds, extinction, calibration): the design effect of clustered samples (Kish 1965), N_eff =
+    N / (1 + (m - 1) rho), m the size-weighted mean points per night and rho the share of the variance that is
+    night to night (one-way analysis of variance). Between the number of nights and N.
+    Returns {"n", "n_eff", "rho", "nights"}."""
+    v = np.asarray(values, dtype=float)
+    labels = np.asarray(list(nights))
+    ok = np.isfinite(v)
+    v, labels = v[ok], labels[ok]
+    groups = [v[labels == n] for n in dict.fromkeys(labels.tolist())]
+    groups = [g for g in groups if g.size >= 1]
+    n = int(v.size)
+    k = len(groups)
+    out = {"n": n, "n_eff": float(n), "rho": 0.0, "nights": k}
+    if k < 2 or n <= k:
+        return out
+    sizes = np.array([g.size for g in groups], dtype=float)
+    ss_within = float(sum(((g - g.mean()) ** 2).sum() for g in groups))
+    ms_within = ss_within / (n - k)
+    grand = float(v.mean())
+    ms_between = float(sum(g.size * (g.mean() - grand) ** 2 for g in groups)) / (k - 1)
+    n0 = (n - float((sizes ** 2).sum()) / n) / (k - 1)          # ANOVA mean group size for unequal groups
+    var_between = max((ms_between - ms_within) / n0, 0.0) if n0 > 0 else 0.0
+    rho = var_between / (var_between + ms_within) if (var_between + ms_within) > 0 else 0.0
+    m = float((sizes ** 2).sum()) / n                           # size-weighted mean cluster size
+    n_eff = n / (1.0 + (m - 1.0) * rho)
+    out.update(n_eff=float(min(max(n_eff, k), n)), rho=float(rho))
+    return out
+
+
+def fap_baluev(power: float, n_points: float, t, min_period: float, max_period: float) -> float:
+    """2.2.17 (item 10): the false-alarm probability of a Lomb-Scargle peak (standard normalization), Baluev (2008)
+    as in astropy (VanderPlas 2018), with the number of points given (N_eff from effective_points instead of every
+    frame). NaN when it cannot be worked out."""
+    try:
+        z = float(power)
+        n = float(n_points)
+        t = np.asarray(t, dtype=float)
+        t = t[np.isfinite(t)]
+        if not (0.0 < z < 1.0) or n <= 4 or t.size < 2 or not (0 < min_period < max_period):
+            return float("nan")
+        nh, nk = n - 1.0, n - 3.0
+        fmax = 1.0 / min_period
+        w = fmax * math.sqrt(4.0 * math.pi * float(np.var(t)))
+        gamma = math.sqrt(2.0 / nh) * math.exp(math.lgamma(nh / 2.0) - math.lgamma((nh - 1.0) / 2.0))
+        tau = gamma * w * (1.0 - z) ** (0.5 * (nk - 1.0)) * math.sqrt(0.5 * nh * z)
+        single = (1.0 - z) ** (0.5 * nk)                           # P(power > z) at one frequency
+        fap = 1.0 - (1.0 - single) * math.exp(-tau)
+        return float(min(max(fap, 0.0), 1.0))
+    except (ValueError, OverflowError, ZeroDivisionError):
+        return float("nan")
+
+
+def period_night_fap(jd, values, nights, best: dict, min_period: float, max_period: float) -> dict:
+    """2.2.17 (item 10): a false-alarm probability that counts nights. The best-period sine is taken out, the share
+    of the remaining scatter that is night to night (rho) gives N_eff (effective_points), and the peak's FAP is
+    worked out again with N_eff points (fap_baluev). Points of a night that share an offset are not independent, so
+    ten nights cannot give a FAP of 1e-14. Returns {"fap", "n_eff", "rho", "n"}."""
+    out = {"fap": float("nan"), "n_eff": float("nan"), "rho": float("nan"), "n": 0}
+    if not best:
+        return out
+    t = np.asarray(jd, dtype=float)
+    y = np.asarray(values, dtype=float)
+    labels = np.asarray(list(nights))
+    ok = np.isfinite(t) & np.isfinite(y)
+    t, y, labels = t[ok], y[ok], labels[ok]
+    if t.size < 8:
+        return out
+    try:   # the best-period sine by least squares (what the Lomb-Scargle peak fits)
+        w = 2.0 * math.pi / float(best["period_days"])
+        design = np.column_stack([np.ones_like(t), np.sin(w * (t - t[0])), np.cos(w * (t - t[0]))])
+        coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+        resid = y - design @ coef
+    except Exception:
+        resid = y - np.mean(y)
+    eff = effective_points(resid, labels.tolist())
+    out.update(n_eff=eff["n_eff"], rho=eff["rho"], n=eff["n"],
+               fap=fap_baluev(best.get("power", float("nan")), eff["n_eff"], t, min_period, max_period))
+    return out
+
+
+def period_airmass_check(jd, values, nights, night_airmass: dict, best: dict, min_period: float, max_period: float,
+                         trend: dict, name=None) -> dict:
+    """2.2.17 (item 10): does the best period come from the airmass of the nights? Only asked when the nightly means
+    follow airmass (trend["follows"]). Two tests, each with the leave-one-night-out rule of 2.2.3 (the best peak
+    moves more than 5% AND the power at the period falls under half):
+    1. each night's points shifted by the trend (slope x (night airmass - median)), the search run again;
+    2. the high-airmass nights (the top third by median airmass, at least one) left out, the search run again.
+    jd/values/nights: the series the period search used (points or bins); night_airmass: {night: median airmass};
+    name: night key -> the name shown (optional).
+    Returns {"demoted": bool, "why": plain text or '', "detrended_period", "without_high_period", "high_nights"}."""
+    out = {"demoted": False, "why": "", "detrended_period": None, "without_high_period": None, "high_nights": []}
+    if not best or not trend or not trend.get("follows"):
+        return out
+    t = np.asarray(jd, dtype=float)
+    y = np.asarray(values, dtype=float)
+    labels = np.asarray(list(nights))
+    night_am = {n: float(a) for n, a in (night_airmass or {}).items() if a is not None and math.isfinite(a)}
+    p0 = float(best["period_days"])
+    f0 = 1.0 / p0
+    power0 = float(best["power"])
+
+    def gone(res) -> bool:
+        if not res:
+            return True
+        freqs = np.asarray(res["freqs"])
+        power = np.asarray(res["power_spectrum"])
+        order = np.argsort(freqs)
+        at_p = float(np.interp(f0, freqs[order], power[order]))
+        return abs(res["period_days"] - p0) / p0 > 0.05 and at_p < 0.5 * power0
+
+    shift = np.array([trend["slope"] * (night_am[n] - trend["ref_airmass"]) if n in night_am else 0.0
+                      for n in labels.tolist()])
+    try:
+        res1 = lomb_scargle(t, y - shift, min_period, max_period)
+    except Exception:
+        res1 = None
+    out["detrended_period"] = res1["period_days"] if res1 else None
+    ranked = sorted(night_am, key=lambda n: night_am[n], reverse=True)
+    high = ranked[:max(1, len(ranked) // 3)]
+    out["high_nights"] = high
+    keep = ~np.isin(labels, high)
+    res2 = None
+    if keep.sum() >= 8 and len(set(labels[keep].tolist())) >= 3:
+        try:
+            res2 = lomb_scargle(t[keep], y[keep], min_period, max_period)
+        except Exception:
+            res2 = None
+        out["without_high_period"] = res2["period_days"] if res2 else None
+    why = []
+    if gone(res1):
+        why.append("with the airmass trend taken out of the nightly means")
+    if res2 is not None and gone(res2):
+        label = name or (lambda n: str(n))
+        why.append(f"without the {len(high)} highest-airmass night{'s' if len(high) > 1 else ''} "
+                   f"({', '.join(label(n) for n in high)})")
+    if why:
+        out["demoted"] = True
+        out["why"] = "The period disappears " + " and ".join(why) + ": it comes from the airmass, not the star."
+    return out
+
+
 def lomb_scargle(jd: np.ndarray, mag: np.ndarray, min_period: float, max_period: float, nfreq: int = 2000):
     """Astropy LombScargle. Power is the standard normalization."""
     t = np.asarray(jd, dtype=float)
@@ -4053,7 +4420,7 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
         if not math.isfinite(v):
             return float("nan")
         total += v
-    return math.sqrt(obs.target_var + total / len(selection) ** 2 + 0.005 ** 2)
+    return math.sqrt(obs.target_var + total / len(selection) ** 2)   # 2.2.17 (item 8): no 0.005 floor
 
 
 def recompute_with_comps(observations: list[Obs], selection: list[str], comp_names: list[str],
