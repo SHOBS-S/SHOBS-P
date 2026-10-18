@@ -8,7 +8,10 @@ published methods. When you publish results made with it, please credit those so
 To see every source SHOBS-P uses:
 
 1. Click **Credits and sources** at the bottom of the sidebar.
-2. Read the list. It has three parts:
+2. At the top, **How to cite SHOBS-P** shows the suggested citation for the version you are running. Click **Copy**
+   to put it on the clipboard (the status bar says **Citation copied to the clipboard.**). See "How to cite SHOBS-P"
+   below.
+3. Read the list under it. It has three parts:
    - **SOFTWARE**: Astropy, photutils, ccdproc, NumPy, SciPy and Matplotlib.
    - **CATALOGS AND SERVICES**: Gaia DR3, APASS, Tycho-2, AAVSO VSX, the AAVSO Variable Star Plotter, SIMBAD,
      the NASA Exoplanet Archive, ExoFOP and VizieR.
@@ -17,9 +20,9 @@ To see every source SHOBS-P uses:
 
    For each source the page says what SHOBS-P uses it for and gives the reference. Sentences in quotes are the
    acknowledgements each source asks for, in its own words.
-3. To keep a copy, click **Save credits as text…**. It writes `SHOBS-P_credits.txt` (into the Output folder if one is
-   set).
-4. Click **Back** to return to the step you came from.
+4. To keep a copy, click **Save credits as text…**. It writes `SHOBS-P_credits.txt` (into the Output folder if one is
+   set), with the citation at the top.
+5. Click **Back** to return to the step you came from.
 
 ![The Credits and sources page](img/26-credits-page.png)
 
@@ -47,18 +50,20 @@ always points to the latest version:
 
 **DOI: [10.5281/zenodo.23417064](https://doi.org/10.5281/zenodo.23417064)**
 
-A reference in the usual software style:
+The suggested citation, exactly as the Credits page shows it (and copies with **Copy**):
 
-> Shiloh Hill Observatory (2026). *SHOBS-P: Shiloh Hill Observatory Photometry* (Version 2.2.17) [Computer software].
-> Zenodo. https://doi.org/10.5281/zenodo.23417064
+> Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.2.18, Zenodo,
+> doi:10.5281/zenodo.23417064
+
+The version in it is always the one you are running.
 
 In BibTeX:
 
 ```bibtex
 @software{shobs_p,
-  author    = {{Shiloh Hill Observatory}},
+  author    = {Armbrust, John W. and {Shiloh Hill Observatory}},
   title     = {{SHOBS-P: Shiloh Hill Observatory Photometry}},
-  version   = {2.2.17},
+  version   = {2.2.18},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.23417064},
@@ -66,8 +71,8 @@ In BibTeX:
 }
 ```
 
-Always give the version you used. It is at the bottom of the sidebar (**Version 2.2.17**), and in the
-`#SOFTWARE=SHOBS-P 2.2.17` line of every report SHOBS-P writes.
+Always give the version you used. It is at the bottom of the sidebar (**Version 2.2.18**), in the citation on the
+Credits page, and in the `#SOFTWARE=SHOBS-P 2.2.18` line of every AAVSO report SHOBS-P writes.
 
 To cite one specific release rather than the latest, open the DOI above. The Zenodo page lists every version with
 its own DOI; use the one for your version.
@@ -75,7 +80,7 @@ its own DOI; use the one for your version.
 ### CITATION.cff
 
 The program's GitHub repository contains a file **CITATION.cff** with the same information in a standard,
-machine-readable form: title, author (Shiloh Hill Observatory), version, release date, DOI, license and a short
+machine-readable form: title, authors (John W. Armbrust and Shiloh Hill Observatory), version, release date, DOI, license and a short
 description. On the repository's GitHub page, the **Cite this repository** button (in the right-hand sidebar) turns
 it into an APA or BibTeX reference you can copy. Reference managers such as Zotero can read it too.
 

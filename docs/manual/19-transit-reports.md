@@ -15,7 +15,7 @@ asks you to save when it is done, so the files carry its result.
 
 If the Input page has an **Output** folder, every save goes there without a dialog, and the status bar says what
 was saved. A file already there is never overwritten: a new copy gets `_2`, `_3` and so on. The AAVSO report,
-light-curve CSV and plot PNG of one fit share one number, so they sort together. Without an Output folder, each save
+light-curve CSV, fit CSV and plot PNG of one fit share one number, so they sort together. Without an Output folder, each save
 asks where to put the file.
 
 See [22. Files SHOBS-P writes](22-files-shobs-p-writes.md) for the full list of names.
@@ -32,6 +32,10 @@ To save and upload it:
    a button **Open AAVSO Exoplanet Database…** at its right end. Click it (or the button of the same name in the
    Results row) to open the submit page in your browser.
 5. Upload the file there.
+
+When the page opens, SHOBS-P marks the report's night as sent (the night table's **Sent** column). If that night was
+already sent in another report, it asks first whether to open the page anyway, because the AAVSO would hold
+duplicates. See "The duplicate warning" in [15. Submit to AAVSO](15-submit-to-aavso.md).
 
 The report uses the same format as EXOTIC's (`#TYPE=EXOPLANET`): a header with your site, filter, exposure,
 binning, the priors and the fitted results, then one line per frame with the BJD_TDB time, the relative flux, its
@@ -80,6 +84,9 @@ To upload it:
 3. The data tag has the form `YYYYMMDD_username_description_n`, for example `20261015_jsmith_SHOBS-P-transit_1`.
    The description may use only letters, numbers and hyphens.
 
+As with the AAVSO pages, opening ExoFOP marks the night of the package you saved last as sent, and warns first if
+it was already sent in another package.
+
 
 ## The plot PNG and the light-curve CSV
 
@@ -88,8 +95,13 @@ To upload it:
   report fits too. It is the best single picture of a result to share or keep.
 - **Save light-curve CSV…** writes the general light-curve CSV, the same as in Variables mode: one row per frame with
   magnitudes, errors, airmass, flags and much more (see [9. Reduce a variable-star night](09-reduce-a-variable-night.md)).
-  It is in magnitudes, not the transit fit's relative flux. For the detrended flux and the model, use the CSV in
-  the ExoFOP package.
+  It is in magnitudes, not the transit fit's relative flux.
+- With a fit shown, the same button also writes the **fit CSV** beside it:
+  `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`, with the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`,
+  `residual` and `flag`. Trimmed points are included and flagged `trimmed`. Without an Output folder it is named after
+  the light-curve CSV you chose (for example `mine.csv` and `mine_transit_fit.csv`). For a report fit only the fit CSV
+  is written; if the report's times stayed in JD_UTC, the first column is `JD_UTC`. For the detrended flux, use the
+  CSV in the ExoFOP package.
 
 ## Compare with an EXOTIC report
 
@@ -120,7 +132,7 @@ Things to know:
   need your own photometry, so they are off for a report.
 - **Going back.** Click **Close report**, or pick one of your nights in **Night**. Your own photometry was kept.
 
-You can save the AAVSO report, ExoFOP package and plot of a report fit like any other.
+You can save the AAVSO report, ExoFOP package, fit CSV and plot of a report fit like any other.
 
 ---
 

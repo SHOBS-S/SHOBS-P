@@ -4,7 +4,7 @@ Most variable-star questions need more than one night: a period, a time of minim
 
 ## What a series keeps
 
-A series file keeps every point of every night, with its flags, plus the settings you used: the Star ID, comps and check star with their names and catalog magnitudes, the aperture sizes, the period search range, your night notes, which comps you chose with **Use comps…**, your answers about dew/haze and planet transits, and which nights you have already reported to AAVSO.
+A series file keeps every point of every night, with its flags, plus the settings you used: the Star ID, comps and check star with their names and catalog magnitudes, the aperture sizes, the period search range, your night notes, which comps you chose with **Use comps…**, your answers about dew/haze and planet transits, and which nights you have already sent in a report (the **Sent** column, chapter 15). Each night also keeps its mount (alt-az nights have no pier sides) and, for color images that were already debayered, the channel measured.
 
 It does **not** keep star positions on the image. On every new night you mark the target, comps and check star again (the solve and the Target lookup usually make this quick).
 
@@ -52,7 +52,7 @@ The same star appears under another catalog's name tonight (for example a Gaia n
 Untransformed nights from different instruments can sit tenths of a magnitude apart. A separate series is usually better: answer **No**.
 
 **Careful: this night was reduced differently from the series.**
-It lists what changed, for example the binning or aperture. Nights reduced differently can sit on different zero points. Consider reducing again with the series' settings.
+It lists what changed, for example the binning, the aperture, or the channel of already-debayered color images (for example `channel of the color images: green (TG) on this night, red (TR) on …`). Nights reduced differently can sit on different zero points. Consider reducing again with the series' settings.
 
 **The night of … is already in the series.**
 **Yes** replaces that night's points with this run. The other nights stay.
@@ -73,7 +73,7 @@ All of these are in the **Series** row on the Output page. When the series has a
 - **Remove night…** removes one night. Type its number from the list and confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
-If you load another series, close this one, or switch modes while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open.
+If you load another series, close this one, switch modes, or close the SHOBS-P window while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open. When you close the window, it asks only if a series file has unsaved changes or a series of two or more nights has never been saved.
 
 When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another. If it cannot tell from the positions whether the two names are the same star, it asks; **No** (the default) keeps what is marked.
 
@@ -89,7 +89,7 @@ So `_prev` is always the series as it was *before this session*. To go back to i
 
 There is only one `_prev`. The next session replaces it. For a long campaign, it is worth keeping your own dated copies now and then.
 
-> **Caution:** SHOBS-P does not ask before you close the program. Points that are not in a saved series are lost. If your series has a file, adding a night saves it for you; a new series must be saved with **Save series**.
+> **Caution:** A single night that was never saved as a series closes without a question, and its points are lost. If your series has a file, adding a night saves it for you; a new series must be saved with **Save series**.
 
 ![The Output page with an eight-night series and one night highlighted](img/10-series-output.png)
 

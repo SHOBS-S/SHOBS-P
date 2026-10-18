@@ -154,6 +154,10 @@ clicking the star on the image.
 If the Input page knows your target's position, SHOBS-P puts the **Target** marker on it after the solve, and the log
 says "Target: marker placed on … Click with Target to move it if it is not your star." Check it is the right star.
 
+In Variables and Transits mode, the click choice then moves on to **● Comps (C1–C10)** by itself, and the log adds
+"Next: click the comparison stars (Comps is picked)." If you already picked a choice yourself on this image, SHOBS-P
+leaves it alone.
+
 To place or move it by hand: choose **● Target** and click the star.
 
 The target's name in the **Stars** panel is the **Star ID** from the Input page. Clicking does not change it.
@@ -165,8 +169,9 @@ The target's name in the **Stars** panel is the **Star ID** from the Input page.
 2. Choose **● Check** and click a check star: a steady star that is not one of the comps. It tests whether the comps
    are behaving.
 
-Each click snaps the marker onto the star nearest to where you clicked. The status bar says, for example,
-" Centered on the star (2.3 px from the click)." If there is no star there, it says
+Each click snaps the marker onto the star nearest to where you clicked. For comps and the check star, SHOBS-P also
+finds the star from a little further out, so a click that is a few pixels off still lands on the star's center. The
+status bar says, for example, " Centered on the star (2.3 px from the click)." If there is no star there, it says
 " No star found right at the click; the marker is where you clicked." Watch for that one.
 
 **How names and magnitudes fill in.** On a solved image, clicking a comp or the check star fills its row in the
@@ -201,7 +206,9 @@ The image must be solved for this to work.
 
 - **Right-click** a marker on the image to clear it.
 - Or press **✕** at the end of its row in the **Stars** panel (it clears the marker, the name and the magnitude).
-- Or press **Clear selected**: it clears the marker of the current choice (for Comps, the last one you placed).
+- Or press **Clear selected**: it clears the marker of the current choice (for Comps, the last one you placed). With
+  **● Watch** chosen, it stops watching the star selected in the **Watch stars** list (or, with none selected, the
+  watch star you added last on this frame).
 
 To replace a comparison star, remove it first and then click the new one; clicks in Comps mode always add.
 
@@ -257,7 +264,10 @@ work out color terms. It makes the run slower; leave it off unless you need colo
    frame with the target's magnitude, the star size and how far the frame moved.
 
 Every frame is calibrated, lined up with the first one (through shifts, small rotations and meridian flips), and
-measured. Frames that cannot be lined up (cloud, trailing) are skipped and listed in the log. When the run is done,
+measured. On an alt-az mount (the **Mount** box on the Input page, or clear evidence in the headers) there are no
+flips: the alignment follows the field rotation instead, and the log says how far the field turned, for example
+"Field rotation: the field turned by 12.4° on the sensor through the night (alt-az mount); the apertures followed it."
+If the field turns by more than 5° on a German equatorial mount, the log suggests setting **Mount** to **Alt-az**. Frames that cannot be lined up (cloud, trailing) are skipped and listed in the log. When the run is done,
 SHOBS-P switches to the Output page.
 
 To stop, press **Cancel run**. Nothing is added: the progress line says "Canceled; nothing was added."
@@ -273,14 +283,20 @@ You will not see most of these on most nights. Each window explains its choices.
   **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.
 - **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P
   offers to **Run in Variables mode instead?**. In Variables mode, when the **Planet (Transits)** box holds a planet of
-  this star (looked up earlier in Transits mode) and a transit is predicted during your frames, it offers **Run in
-  Transits mode instead?** (not asked while a Variables series is open). Answer the question rather than canceling: the series and
+  this star, or the target is a known planet host (SHOBS-P looks its planets up in the NASA Exoplanet Archive after the
+  Star ID lookup), and a transit is predicted during your frames, it offers **Run in Transits mode instead?** (not
+  asked while a Variables series is open). **Yes** fills in the planet and runs in Transits mode. Answer the question rather than canceling: the series and
   reports are kept per mode.
 - **An ensemble without a check star** (Variables mode, two or more comps, no check): AAVSO requires a check star for
   ensemble reports. **Continue without one?**
 - **Color can't be calibrated.** **Also measure R and B** is ticked but too few catalog stars have colors. **Run anyway
   with uncalibrated color?**
 - **The open series is in another mode.** SHOBS-P offers to switch modes so the night can be added to it.
+
+**A marker off its star.** Before the run, SHOBS-P checks that each marker sits on its star's center. If one would be
+measured beside the star (so it would read faint), the log says, for example, "⚠ Check marker at (512.0, 340.5) is
+6.2 px from the center of the star there (…)", and the status bar says **Check the Log: Check is marked off the center
+of the star.** The run goes on; if that is not what you meant, clear the marker, zoom in and click the star again.
 
 Some problems stop the run with a message instead, for example **Mark at least one comparison star (Comps, then click
 the star)**, **Need aperture r < sky in < sky out**, or two markers on the same star. Fix what it says and press **Run

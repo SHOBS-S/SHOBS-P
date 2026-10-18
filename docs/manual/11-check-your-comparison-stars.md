@@ -49,7 +49,7 @@ Click a row in the table to highlight that star's curve.
 
 When a star is clearly SUSPECT, SHOBS-P leaves it out of the reference for the others and says so (**Left out of the reference so their drift does not echo in the steady stars: …**). Otherwise one bad star makes all the good ones look as if they drift the other way.
 
-The pier-side line under the table names the stars that read the same on both sides of the pier (good comps for a campaign with meridian flips) and those that step at the flip. If the target steps at the flip while steady comps do not, look at the field position (flat, a ghost, a bright star's halo) rather than the comps.
+On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both pier sides** have nothing to show. The pier-side line under the table names the stars that read the same on both sides of the pier (good comps for a campaign with meridian flips) and those that step at the flip. If the target steps at the flip while steady comps do not, look at the field position (flat, a ghost, a bright star's halo) rather than the comps.
 
 ### Watch a spare
 
@@ -73,10 +73,25 @@ To return to the comps the nights were reduced with, open **Use comps…** again
 Things to know:
 
 - Pick stars measured on **every** night. If a chosen star is missing on some frames, SHOBS-P tells you how many points that affects; they are flagged `nocomp` and left out.
-- Every chosen star needs a catalog magnitude. If one has none, you get **No catalog magnitude for …**.
+- Every chosen star needs a catalog magnitude. If one has none, you get **No catalog magnitude for …**. You can type
+  one in its **Catalog mag** box (below).
 - The check star cannot be a comp.
 - Colors (B−V) stay tied to the comps each night was reduced with.
 - Spares from a widened window are marked in the **Role** column with how much fainter than the target they are. Their noise can dominate the ensemble. Prefer comps within about a magnitude of the target.
+
+### Correct a catalog magnitude
+
+The **Catalog mag** column is editable, for every comp, every spare, and the check star (its row says **check (not a
+comp)**). Use it when a star's catalog value is wrong, or when you want the value from another catalog than the
+campaign's:
+
+1. Type the new magnitude in the star's **Catalog mag** box.
+2. Press **Apply**.
+
+Every point that used that comp shifts by the change in its comps' catalog mean; nothing is measured again. The new
+value is used for the whole series, the Photometry page's boxes for the same star follow, and an open series file is
+saved. The log lists each change, for example "Catalog magnitudes changed for the whole series: … 8.711 → 8.728. 412
+points re-derived (shift +0.0042 mag)." A box that does not hold a number gives **"…" is not a catalog magnitude**.
 
 > **Tip:** Changing comps changes your magnitudes. Do it before you report, and report the whole series with one comp set. The AAVSO report names the comps actually in use.
 

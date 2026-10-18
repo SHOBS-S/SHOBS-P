@@ -76,11 +76,16 @@ The **Scan settings** box on the right holds:
 | **Detection threshold (σ)** | 5.0 | How far above the sky noise a star must be to be measured. Lower finds fainter stars, and more noise. |
 | **Candidate at (× normal)** | 3.0 | How many times more than normal a star must scatter to be a candidate. |
 | **Most stars to measure** | 800 | The brightest stars first, up to this number. The log says when the limit is reached; raise it to go fainter. |
+| **Period search (days)** | 0.05 to 20 | The period range of the candidates' periodograms. Remembered between sessions. |
 | **Leave out crowded stars (neighbor in the sky ring)** | on | Skip stars with another detected star inside their sky ring. |
 
 "Normal" means the typical scatter of stars of the same brightness in this field. A star at **× normal** 3 scatters
 three times as much as its neighbors in magnitude. Saturated stars and stars at the edge of the frame are measured
 but never listed as candidates.
+
+The **Period search (days)** range is Discovery's own; it does not change the Variables Output page's range. After a
+scan, change a box and press **Enter** (or click into another box): the candidates' periods are searched again over
+the new range, without scanning again. Before a scan, the range is kept for the next one.
 
 ## Run the scan
 
@@ -91,7 +96,8 @@ but never listed as candidates.
    *"Field scan: N candidate variable(s)."*
 
 Before measuring each star's scatter, SHOBS-P lines its light curve up across any meridian flip or rotator move,
-so a flip cannot pass for a variable star.
+so a flip cannot pass for a variable star. On an alt-az mount there are no flips: the frames are aligned following
+the field rotation.
 
 ## Read the Field scan page
 
@@ -127,9 +133,8 @@ reached the candidate level. If none did, the ten nearest misses are listed as *
 
 Click a row to draw that star. You can select several rows.
 
-> **Tip:** The period search range comes from the **Period search (days)** boxes on the Variables Output page
-> (0.05 to 20 days by default). To change it for a scan, switch to Variables mode, change the range on the Output
-> page, and switch back.
+> **Tip:** The period search range comes from the **Period search (days)** boxes in **Scan settings** (0.05 to 20
+> days by default). See "The scan settings" above.
 
 ### Check first
 

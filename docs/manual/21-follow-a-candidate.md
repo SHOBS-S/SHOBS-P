@@ -40,7 +40,7 @@ not a labeled catalog star, so click it again on later nights."*
 
 ## Measure another night
 
-### In the same session (Discovery mode)
+### Night after night in Discovery mode
 
 1. On the Input page, change the **Lights** folder (and the calibration folders, if they differ) to the next night's
    frames and press **Scan folders**.
@@ -51,8 +51,13 @@ not a labeled catalog star, so click it again on later nights."*
 
 Compare the two nights. A star that is a candidate again, with similar behavior, is a much stronger lead.
 
-> **Caution:** In Discovery mode the watch list lives only in this session. It is not saved when you close
-> SHOBS-P. To keep a candidate's history across sessions, follow it in Variables mode with a series, as below.
+Discovery watch stars are remembered between sessions, with their sky positions. After the next solve, the ones
+that fall on the new frame are watched again, and the log says, for example, *"Watch stars remembered for this field
+(2): …"*. A star clicked on an unsolved frame has no sky position, so it cannot be found again and is not remembered.
+Right-click a watch star (or **Remove selected**) to stop watching it.
+
+> **Tip:** Discovery keeps the watch list, but not each night's measurements. To keep a candidate's history across
+> nights, follow it in Variables mode with a series, as below.
 
 ### Over many nights (Variables mode)
 

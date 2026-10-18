@@ -13,6 +13,11 @@ V 9.1.
 **Airmass** — How much atmosphere the light passes through: 1 at the zenith, about 2 at 30° altitude. Stars dim and
 redden with airmass. SHOBS-P works it out from the frame time, the target's position and your site.
 
+**Alt-az mount** — A mount that moves in altitude and azimuth, unlike a German equatorial mount. It never makes a
+**meridian flip**, but the field slowly turns on the sensor through the night (field rotation), unless a
+**derotator** turns the camera to follow it. Set **Mount** to **Alt-az** in the Optics box (Input page). See also
+**zenith keyhole**.
+
 **Alias (one-day alias)** — A false period in a period search, caused by observing only at night, once a day. A
 period near 1 day, or one whose frequency differs from the true one by 1 per day, is suspect. SHOBS-P warns about it.
 
@@ -53,6 +58,10 @@ reports and the transit fit.
 
 **Comp (comparison star)** — A steady star of known magnitude in the same frame. The target's magnitude is measured
 against it, so changes in the sky affect both and cancel. SHOBS-P takes up to ten, **C1** to **C10**.
+
+**Derotator** — A rotator on an **alt-az mount** that turns the camera through the night to follow the field
+rotation, so the stars stay put on the sensor. SHOBS-P recognizes one from a rotator reading that drifts smoothly in
+the headers.
 
 **Detrending** — Removing a slow trend from a light curve, for example with **airmass**, while fitting. In the
 transit fit the trend is fitted together with the transit.
@@ -147,6 +156,10 @@ target. See [21. Follow a candidate](21-follow-a-candidate.md).
 
 **× normal** — In a field scan: a star's scatter divided by the typical scatter of stars of the same brightness. 3 or
 more makes a candidate by default.
+
+**Zenith keyhole** — The small patch of sky around the zenith (above 85° in SHOBS-P) where an **alt-az mount** must
+turn very fast in azimuth and the field rotation gets extreme, so frames there can trail or smear. Tonight's transits
+and the Transit planner mark transits that pass through it when **Mount** is **Alt-az**.
 
 **Zero point** — The offset that turns instrumental magnitudes into catalog magnitudes, measured from comparison
 stars or, in a field scan, from all the catalog stars in the field.
