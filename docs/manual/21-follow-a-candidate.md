@@ -37,8 +37,6 @@ A watch star is remembered by its catalog name and sky position when the field i
 labeled catalog star on an unsolved image is remembered only by its pixel position; the status bar warns *"It is
 not a labeled catalog star, so click it again on later nights."*
 
-![Watch stars in a later field scan](img/21-watch-rows.png)
-<!-- SCREENSHOT 21-watch-rows: Discovery mode, Field scan page after a second night's scan in the same session, with two watch stars shown as "W" rows (Star / position starting "W …") below the ranked candidates, one W row selected with its light curve drawn; crop to the table and plots. -->
 
 ## Measure another night
 
@@ -86,7 +84,6 @@ check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night
    against the comparison stars in use.
 
 ![The Watch stars window](img/21-watch-stars-window.png)
-<!-- SCREENSHOT 21-watch-stars-window: Variables mode, Output page, "SHOBS-P — watch stars" window for a series of several nights with two or three watch stars; one star selected with its curve and night means drawn, table columns visible; whole window. -->
 
 ## Export the light curves
 

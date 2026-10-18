@@ -4,7 +4,6 @@ SHOBS-P has one main window. A sidebar on the left chooses the mode and the step
 work; a status bar along the bottom tells you what just happened.
 
 ![The SHOBS-P window, with the sidebar, banner, page area and status bar labeled](img/03-window-parts.png)
-<!-- SCREENSHOT 03-window-parts: Variables mode, Calibrate page after a successful calibration of sample data (log box filled). Whole window, with four callouts added afterwards: 1 sidebar (mode buttons, step buttons, Credits and sources, Version), 2 banner, 3 page area, 4 status bar. -->
 
 ## The sidebar
 
@@ -101,7 +100,7 @@ SHOBS-P tells you about problems in a few ways, from mild to serious:
   each choice does.
 - **Errors** open a window with only **OK**. Nothing was done; the message says what to fix.
 
-![A caution in a message window, with the same text in the log and status line](img/caution_dialog.png)
+![A caution in a message window, with the same text in the log and status line](img/23-edge-caution.png)
 
 While a job runs (calibration, photometry, a solve), the cursor shows that the program is busy, but the window stays
 live. Starting a second job meanwhile gives **Another step is still running. Wait for it to finish.**

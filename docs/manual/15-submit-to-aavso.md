@@ -102,7 +102,6 @@ After saving (and, without an Output folder, a **Saved** dialog), the status bar
 Before uploading, check three things in the file: your observer code, the chart ID, and the comparison magnitudes.
 
 ![The Output page status bar after saving a report, with the Open AAVSO WebObs button](img/15-webobs-offer.png)
-<!-- SCREENSHOT 15-webobs-offer: Variables mode, Output – Variability page just after Save AAVSO report with an Output folder set: status bar "Saved AAVSO_… — upload to AAVSO WebObs:" with the Open AAVSO WebObs… button at its right end. Crop: bottom of the window (Results/Series rows and status bar). -->
 
 ---
 

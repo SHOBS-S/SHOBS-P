@@ -57,6 +57,8 @@ When a night has such a stretch, SHOBS-P asks after photometry:
 >
 > Keep these points (errors scaled for the lost light)?
 
+![The Keep question after a run with dew at the end of the night](img/12-transmission-keep.png)
+
 - **Yes** keeps the points. Their error bars grow with the light lost, and each kept point also gets the extra star-to-star scatter measured in that stretch, so the errors stay honest.
 - **No** (the default) leaves them flagged, like cloud.
 
@@ -120,7 +122,6 @@ When the series has nights on both pier sides and none of these is ticked, a cau
 After a run, SHOBS-P may warn that a comp, spare or check star sat **near the frame edge or a weak part of the flat**. Such stars can drift out of the good part of the image as the night goes on. Choose other stars next time if you can.
 
 ![The Output page light curve with cloud-flagged points shown as grey crosses](img/12-flagged-points.png)
-<!-- SCREENSHOT 12-flagged-points: Variables mode, Output – Variability page, a night with a cloud episode; grey × flagged points in the light curve and check-star plot, Flags column showing e.g. "14 cloud, 2 cloud edge", the cloud-flag row visible. Crop: summary boxes, night table, QC row and top-left plot. -->
 
 ---
 

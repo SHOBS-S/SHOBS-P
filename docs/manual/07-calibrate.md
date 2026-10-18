@@ -5,7 +5,6 @@ illumination and dust shadows that the flat records. SHOBS-P builds a master bia
 light so you can see it, and then moves on to the Photometry page by itself.
 
 ![The Calibrate page after a successful calibration, with the log filled](img/07-calibrate-done.png)
-<!-- SCREENSHOT 07-calibrate-done: Variables mode, Calibrate page right after Build masters and calibrate on a real OSC night (then click back to Calibrate): Camera and channel showing RGGB / green / "AAVSO filter code TG", the Preview line ("Preview: green from RGGB → … (superpixel)"), and the log showing "Using saved master …" / "Masters ready: …" / "Preview debayered …". Whole window. -->
 
 ## Calibrate a night
 

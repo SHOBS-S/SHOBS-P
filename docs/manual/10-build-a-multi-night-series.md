@@ -92,7 +92,6 @@ There is only one `_prev`. The next session replaces it. For a long campaign, it
 > **Caution:** SHOBS-P does not ask before you close the program. Points that are not in a saved series are lost. If your series has a file, adding a night saves it for you; a new series must be saved with **Save series**.
 
 ![The Output page with an eight-night series and one night highlighted](img/10-series-output.png)
-<!-- SCREENSHOT 10-series-output: Variables mode, Output – Variability page with a series of 6–8 nights loaded (e.g. HD 219134 or SZ Lyn), one night clicked in the night table so the light curve is zoomed to it; Note column shows a night note. Whole window. -->
 
 ---
 

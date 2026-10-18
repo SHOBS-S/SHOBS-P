@@ -22,7 +22,6 @@ With two or more nights, the plot shows each star's nightly median, relative to 
 Click a row in the table to highlight that star's curve.
 
 ![The Comparison star health window for a multi-night series, one SUSPECT comp](img/11-comp-health.png)
-<!-- SCREENSHOT 11-comp-health: Variables mode, Comp health… window for a series of 5+ nights with 3–4 comps and several spares, one comp marked "SUSPECT: drifts night to night" and its row selected so its curve is highlighted. Whole dialog. -->
 
 ### The table
 
@@ -64,6 +63,8 @@ SHOBS-P stores each comp's and spare's measurement in every frame. **Use comps�
 2. The **Comparison stars in use** window lists every comp and spare with its **Catalog mag**, **Nights measured** (for example `7 of 8`), **Night offset**, **Scatter in night** and **Comp health** verdict (SUSPECT in red).
 3. Tick the stars you want in the comparison. Untick a SUSPECT comp; tick a steady spare measured on every night.
 4. Press **Apply**.
+
+![The Comparison stars in use window for a ten-night series](img/11-use-comps.png)
 
 The light curve, period and summary update. If the series has a file, it is saved with the new choice. The log lists the comps now in use, and nights you add later use the same choice.
 

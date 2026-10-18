@@ -7,7 +7,7 @@ skips them.
 Blink is optional. SHOBS-P also flags cloud and saturation by itself during photometry. But a minute here catches
 trails and bad guiding, which the flags may not.
 
-![The Blink page showing a frame of the sample data](img/blink_page.png)
+![The Blink page showing a frame of the sample data](img/06-blink-page.jpg)
 
 ## The page at a glance
 
@@ -69,8 +69,7 @@ There are two ways:
   - **Show** jumps to that frame so you can look at it again;
   - **Keep this one** brings it back without showing it.
 
-![The rejected-frames row with three frames rejected and one picked in the list](img/06-rejected-list.png)
-<!-- SCREENSHOT 06-rejected-list: any mode, Blink page, real night with three frames rejected (63, 64, 65), frame 64 picked in the Rejected frame box, REJECTED title in red over the picture. Crop: the tool row, the frame line, the rejected row and the top of the picture. -->
+![The rejected-frames row with three frames rejected and one picked in the list](img/06-rejected-list.jpg)
 
 Frames set aside on the Input page (frames of another field) appear in the same list and can be brought back the same
 way.

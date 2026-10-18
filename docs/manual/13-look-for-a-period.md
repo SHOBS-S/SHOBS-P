@@ -11,7 +11,6 @@ On the **Output – Variability** page:
 - The **bottom-right plot** is the periodogram: power against period, on a log scale. The red line marks the best period.
 
 ![The Period box, phase plot and periodogram for a multi-night series with a significant period](img/13-period.png)
-<!-- SCREENSHOT 13-period: Variables mode, Output – Variability page, a multi-night series (e.g. SZ Lyn, 4+ nights) with a significant period: Period box showing "Best", fold titled "Folded  P = …", periodogram with the red line and green dashed VSX line. Crop: Period box plus the two right-hand plots. -->
 
 ## Set the search
 

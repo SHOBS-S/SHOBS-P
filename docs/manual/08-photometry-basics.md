@@ -5,7 +5,7 @@ covers what works the same in every mode: the automatic solve, the image view, m
 photometry. Choosing good comparison stars for a variable is in chapter 9; transits are in chapter 16; Discovery's
 **Scan field** is in chapter 20.
 
-![The Photometry page, with the target, one comparison star and the check star marked](img/photometry_page.png)
+![The Photometry page, with the target, one comparison star and the check star marked](img/08-photometry-solved.jpg)
 
 ## The page at a glance
 
@@ -97,8 +97,7 @@ While the image is out, the page shows **Image is in its own window (Bring back 
 button reads **Bring back**. The image comes back when you press **Go back** or **Bring back**, close the window,
 start a run, switch modes or leave the Photometry page. SHOBS-P remembers where you put the window.
 
-![The popped-out image window on its own](img/08-popout-window.png)
-<!-- SCREENSHOT 08-popout-window: Transits mode, popped-out image window ("… — Photometry image") of a solved real field (for example TOI-2046 b), zoomed so target, comps and check are visible, legend at the bottom. Crop: the pop-out window only. -->
+![The popped-out image window on its own](img/08-popout-window.jpg)
 
 ### What you can show
 
@@ -149,7 +148,6 @@ You mark stars by choosing what a click means (**● Target**, **● Comps (C1�
 clicking the star on the image.
 
 ![The Stars panel with a target, three comparison stars and a check star filled in](img/08-stars-panel.png)
-<!-- SCREENSHOT 08-stars-panel: Variables mode, Photometry page of a solved real field of SZ Lyn: Stars panel with Target, Comp 1–3 (AAVSO sequence stars, V magnitudes, green "✓ B−V …" lines and "not a known or suspected variable") and Check filled, one empty Comp row with "type a name or RA/Dec and press Enter, or click the star". Crop: the Stars panel only. -->
 
 ### The target
 
@@ -236,7 +234,6 @@ The rings are drawn on the image as you type, so you can see whether a neighbor 
 4. Press **Use these aperture sizes**. The boxes are filled and the window closes.
 
 ![The Suggested apertures window after a 30-frame test](img/08-suggest-apertures.png)
-<!-- SCREENSHOT 08-suggest-apertures: any mode, the "… — suggest apertures" window after "Test 4 apertures on 30 frames" on a real night with a check star: FWHM line, bold headline, results table and a "Clear winner" verdict, the "Before the test" grey line. Crop: that window only. -->
 
 > **Tip:** Use the same aperture sizes for every night of a series. SHOBS-P reminds you of this when you set them.
 

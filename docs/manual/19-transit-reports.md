@@ -80,8 +80,6 @@ To upload it:
 3. The data tag has the form `YYYYMMDD_username_description_n`, for example `20261015_jsmith_SHOBS-P-transit_1`.
    The description may use only letters, numbers and hyphens.
 
-![The first-time ExoFOP upload hint](img/19-exofop-hint.png)
-<!-- SCREENSHOT 19-exofop-hint: Transits mode, Transit fit page, the info box shown on the first click of "Open ExoFOP…" for a TOI target (the version without the "No TOI or TIC number" first paragraph); crop to the dialog. -->
 
 ## The plot PNG and the light-curve CSV
 
@@ -109,7 +107,6 @@ To open a report:
    example **EXOTIC 4.3.2 report**), and the plot shows the report's model as a pink dashed line.
 
 ![SHOBS-P refitting an EXOTIC report](img/19-exotic-side-by-side.png)
-<!-- SCREENSHOT 19-exotic-side-by-side: Transits mode, Transit fit page after opening an EXOTIC AAVSO exoplanet report (e.g. TrES-3 b); brown banner, verdict, plot with green SHOBS-P model, blue dotted published shape and pink dashed report model, and the table with the "EXOTIC … report" column; whole window. -->
 
 Things to know:
 

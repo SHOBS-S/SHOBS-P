@@ -59,8 +59,7 @@ The check star is a steady star measured exactly like the target. It does not go
 1. Pick **●  Check**.
 2. Click a steady star, ideally another sequence star of similar brightness. Its name and magnitude fill in like a comp's.
 
-![The Photometry page with target, three comps and a check star marked on a solved image](img/09-marked-stars.png)
-<!-- SCREENSHOT 09-marked-stars: Variables mode, Photometry page, solved image of a variable with an AAVSO sequence; T, C1–C3 and K marked, cyan sequence circles and green suggested rings visible, Stars panel filled in (names, magnitudes, green ✓ lines). Whole window. -->
+![The Photometry page with target, three comps and a check star marked on a solved image](img/09-marked-stars.jpg)
 
 ## Run photometry
 
@@ -86,7 +85,7 @@ Then the **Output – Variability** page opens.
 
 ## Read the Output page
 
-![The Output – Variability page after one night](img/output_variability.png)
+![The Output – Variability page after one night](img/09-output-page.png)
 
 The page has, from top to bottom:
 
@@ -122,6 +121,8 @@ The page has, from top to bottom:
 | **Note** | Your night note (chapter 10) |
 
 Click a row to zoom the light curve and check-star plot to that night. Click it again to show all nights.
+
+![One night of a ten-night series, clicked in the night table](img/10-night-zoom.png)
 
 > **Caution:** While a night is highlighted, **Save AAVSO report** and **Save light-curve CSV** ask whether to save that night only or the whole series, and **Save plot PNG** saves what is on screen. Click the row again when you want the whole series.
 

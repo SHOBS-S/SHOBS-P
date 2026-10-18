@@ -40,8 +40,7 @@ variables.
 The **Field** box on the right sums up the solve: the plate scale and center, how many catalog stars were placed,
 how many stars were detected, how many are saturated, and how many known or suspected variables lie in the frame.
 
-![The Photometry page in Discovery mode after the solve](img/20-discovery-photometry.png)
-<!-- SCREENSHOT 20-discovery-photometry: Discovery mode, Photometry page after a successful solve, before scanning; image with catalog circles and red variable marks, the "Click a star to ● Watch it / ✕ Exclude it" tools, the Field and Scan settings boxes on the right visible; whole window. -->
+![The Photometry page in Discovery mode after the solve](img/20-discovery-photometry.jpg)
 
 If the solve fails, the step strip says **1 Not solved**. Check the field center on the Input page and the Optics
 box, then press **Solve again** (top right). You can scan an unsolved field, but then:
@@ -101,7 +100,6 @@ example *"on the catalog V … scale (zero point from n field stars, ± 0.012; u
 reached the candidate level. If none did, the ten nearest misses are listed as **~1**, **~2** and so on.
 
 ![The Field scan page after a scan](img/20-field-scan-output.png)
-<!-- SCREENSHOT 20-field-scan-output: Discovery mode, Output step, Field scan page after a scan with 3–5 candidates (at least one possible new variable and one known); scatter-vs-brightness plot, selected candidate's light curve and periodogram, and the table visible; whole window. -->
 
 ### The plots
 
@@ -156,8 +154,6 @@ hover over it for the reason:
 Tick **Candidates only** in the **View** box to hide everything else on the image. Press the button again (now
 **Clear candidate marks**) to remove the marks.
 
-![Candidate marks on the image](img/20-candidate-marks.png)
-<!-- SCREENSHOT 20-candidate-marks: Discovery mode, Photometry page after "Mark candidates on image" with "Candidates only" ticked; numbered squares of at least two kinds, the legend row under the image, and a hover tooltip on one candidate; crop to the image and legend. -->
 
 ### Known variables
 

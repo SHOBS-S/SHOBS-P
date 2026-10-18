@@ -42,7 +42,6 @@ To enter a planet:
 The lookup also fills the Star ID and RA/Dec of the host star when they are empty.
 
 ![The Planet (Transits) box after a lookup](img/16-planet-box.png)
-<!-- SCREENSHOT 16-planet-box: Transits mode, Input page, after looking up a planet such as TrES-3 b; the Planet (Transits) box with every field filled and the source line under it visible; crop to the Planet box and the Target box. -->
 
 Things worth knowing about the lookup:
 
@@ -87,7 +86,6 @@ To find tonight's transits:
 The limits (not **After** and **End by**) are remembered for next time.
 
 ![The Tonight's transits window](img/16-tonights-transits.png)
-<!-- SCREENSHOT 16-tonights-transits: Transits mode, the "SHOBS-P — tonight's transits" window after Search on a clear night with several matches; all search fields, the summary line and at least five table rows visible, ideally one with "flip" in the Meridian column; whole window. -->
 
 Each row is one transit. The columns are **Planet**, **V**, **Depth (%)**, **T14 (h)**, **Start (with baseline)**,
 **Ingress**, **Mid**, **Egress**, **End (with baseline)**, **Altitude min–max**, **Moon (lit, distance)** and
@@ -131,7 +129,6 @@ To plan the coming transits:
 > against 30° and −18°). Set them to the same values if you want the two windows to agree.
 
 ![The Transit planner window](img/16-transit-planner.png)
-<!-- SCREENSHOT 16-transit-planner: Transits mode, "SHOBS-P — transit planner: <planet>" window after Update, 30 days ahead, with a mix of full (green), transit only and partial (orange) rows; whole window. -->
 
 The table shows **Night of**, **Ingress**, **Mid**, **Egress**, **Altitude in / mid / out**, **Sun at mid**,
 **Moon (lit, distance)**, **± ephemeris** and **Coverage**:

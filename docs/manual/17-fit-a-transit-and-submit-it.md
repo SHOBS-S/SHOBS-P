@@ -27,7 +27,6 @@ depends on the number of frames and comps.
 > *"Enter your site's latitude and longitude on the Input page first (they are needed for BJD times)."*
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
-<!-- SCREENSHOT 17-transit-fit-page: Transits mode, Output step, Transit fit page after a successful fit of a clear night (verdict "✓ Transit detected"), plot with points, bins, green model and blue dotted published shape, table and notes visible; whole window. -->
 
 ## The page, top to bottom
 
@@ -146,8 +145,7 @@ The trimmed points show as faint × in a grey band labelled *trimmed (not fitted
 verdict, the rms, the comp check and every saved file, and the report's NOTES record the trimmed span. Each **Trim
 and refit** adds another span; **Clear trim** puts every point back and refits.
 
-![Dragging a trim span across the transit plot](img/17-trim-drag.png)
-<!-- SCREENSHOT 17-trim-drag: Transits mode, Transit fit page, a fitted night with one grey "trimmed (not fitted)" band from a drag, the Trim row's from/to boxes filled and the "Trimmed: …" hint visible; crop to the Trim row and the plot. -->
+![Dragging a trim span across the transit plot](img/17-trim.png)
 
 A trim needs at least 20 points left. It belongs to the night it was made on: choosing another night, opening a
 report or running photometry again clears it.

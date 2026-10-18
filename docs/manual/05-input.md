@@ -5,7 +5,6 @@ observed, and where reports should go. When you press **Scan folders**, SHOBS-P 
 that everything fits together.
 
 ![The Input page in Variables mode with folders chosen and a target looked up](img/05-input-page.png)
-<!-- SCREENSHOT 05-input-page: Variables mode, Input page after Scan folders on a real night of SZ Lyn: all four frame folders filled with counts ("51 files + master" etc.), Output folder set ("in use"), Star ID looked up with RA/Dec and the sexagesimal labels, Site boxes filled with made-up coordinates, Optics filled with a generic telescope name. Whole window. No real observer's site or rig name. -->
 
 ## The page at a glance
 

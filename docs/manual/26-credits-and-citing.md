@@ -22,7 +22,6 @@ To see every source SHOBS-P uses:
 4. Click **Back** to return to the step you came from.
 
 ![The Credits and sources page](img/26-credits-page.png)
-<!-- SCREENSHOT 26-credits-page: any mode, the Credits and sources page, scrolled to show the end of the Software part and the start of Catalogs and services, with the Save credits as text… and Back buttons visible; whole window. -->
 
 The status bar's second line is a short version of the same credits, always on screen.
 

@@ -23,7 +23,6 @@ With "No transit measured" the table rows turn grey and the plot title says *NO 
 reference)*.
 
 ![An inconclusive verdict above the plot](img/18-inconclusive-verdict.png)
-<!-- SCREENSHOT 18-inconclusive-verdict: Transits mode, Transit fit page with an "⚠ Inconclusive …" verdict caused by a jump after a gap; the verdict line, quality line, plot with the gap visible, and the orange notes; crop to the heads area, plot and notes. -->
 
 ## The reasons, and what to do
 
@@ -124,8 +123,6 @@ To try it:
 > **Caution:** Thin cloud dims the target and the comps by slightly different amounts. Report a fit that includes
 > flagged frames only when it agrees with the fit without them, and say so. The report's NOTES record it.
 
-![Refit with flagged frames put back](img/18-refit-flagged.png)
-<!-- SCREENSHOT 18-refit-flagged: Transits mode, Transit fit page after "Refit with flagged frames (errors ×2)" on a night with cloud in the baseline; the button, the "[Includes N cloud-flagged frames …]" verdict and the hollow orange circles on the plot visible; crop to the fit-settings row, verdict and plot. -->
 
 You can also remove a short bad stretch by hand with **Trim** (see [17. Fit a transit and submit it](17-fit-a-transit-and-submit-it.md)).
 

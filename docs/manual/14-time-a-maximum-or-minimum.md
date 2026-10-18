@@ -20,7 +20,6 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 6. Press **Measure**.
 
 ![The Time of maximum / minimum window with a measured minimum and an O − C diagram](img/14-extremum.png)
-<!-- SCREENSHOT 14-extremum: Variables mode, Time of max/min… window for an eclipsing binary night (or SZ Lyn maximum), after Measure: result text with Tmin/Tmax, polynomial, Kwee-van Woerden, Fourier and O−C lines; left plot with red polynomial and lines; right plot O−C diagram with a few saved points plus the open red unsaved one. Whole dialog. -->
 
 ## Read the result
 

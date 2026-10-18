@@ -10,7 +10,7 @@ SHOBS-P talks to you in four places:
   problem, an error when it cannot go on.
 - **Notes and cautions on the Output pages**: lines starting with **⚠** are cautions about the result.
 
-![A warning box after photometry](img/caution_dialog_box.png)
+![A warning box after photometry](img/23-edge-caution.png)
 
 Most questions have a default that is the safe choice; just read the whole message before you answer. The messages
 below are the ones new users meet most often, grouped by step. "…" stands for the names and numbers filled in.

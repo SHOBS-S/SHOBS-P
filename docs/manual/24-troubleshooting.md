@@ -19,8 +19,6 @@ To run it:
 3. Wait a minute or two. The transit fits are the slow part.
 4. Read the last line. It should be `RESULT: ALL PASSED`.
 
-![The self-test console after a successful run](img/24-selftest-result.png)
-<!-- SCREENSHOT 24-selftest-result: Windows console window opened by Run self-test.bat, at the end of a run; the last sections with "ok" lines, "RESULT: ALL PASSED" and the "Done. The log is selftest_log.txt…" line visible; crop to the console window. -->
 
 The full log is written to `selftest_log.txt` in the program folder, with a copy, `SHOBS-P_selftest_log.txt`, in
 your Downloads folder.

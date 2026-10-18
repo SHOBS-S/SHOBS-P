@@ -36,8 +36,6 @@ It takes about ten minutes, most of it waiting for downloads.
 
 You now have a SHOBS-P icon on the Desktop and in the Start menu.
 
-![The black Create shortcuts window after a successful run](img/02-create-shortcuts-done.png)
-<!-- SCREENSHOT 02-create-shortcuts-done: Windows console window of "Create shortcuts.bat" after it finished, showing the "Created ... SHOBS-P.lnk" lines and "Done. Start SHOBS-P from the Desktop icon or the Start menu." Crop: the console window only. -->
 
 If the window instead says `The shortcuts could not be made. Leave this window open and copy the message above.`,
 the lines above it say why. The usual cause is Python not being on the PATH: run the Python installer again, choose
@@ -79,7 +77,6 @@ The first time, SHOBS-P opens:
 The window fills most of the screen. You can resize it or maximize it like any other window.
 
 ![SHOBS-P on first start: Variables mode, Input page, empty boxes](img/02-first-start.png)
-<!-- SCREENSHOT 02-first-start: Variables mode, Input page, fresh settings (all boxes empty except the default Focal length and Pixel size), status bar showing "Choose the calibration and light folders to begin." Crop: whole window. Telescope box must be empty (no real rig name). -->
 
 ## Try it with sample data
 
