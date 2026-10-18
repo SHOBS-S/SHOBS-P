@@ -1426,25 +1426,43 @@ def detect_sensor_from_flat(path: str):
     return None, contrast
 
 
-def detect_sensor_from_light(path: str):
+SENSOR_SKY_FLOOR_RAW = 1000.0   # 2.2.18 (review M1): a raw light with no known pedestal: as for the flat test
+SENSOR_SKY_FLOOR = 20.0         # 2.2.18 (review M1): the sky above a known pedestal (or zero, pre-calibrated)
+
+
+def detect_sensor_from_light(path: str, pedestal: float | None = None):
     """2.2.18 (item 2): 'mono', 'cfa', or None (cannot tell) from one light's sky background, with the contrast
     found, for runs without raw flats (pre-calibrated lights, empty calibration folders). The four 2x2 pixel planes
     of the central half are compared on the sky only: stars (over 3 sigma of their plane, and their neighbors) are
     masked. A colour mask leaves the planes apart by the sky's colour (planes 3% or more apart: 'cfa'); a monochrome
-    sensor's planes agree (under 0.5%, measured to better than 0.1%: 'mono'). A bias pedestal in raw lights dilutes
-    the contrast, so a faint sky can stay undecided (None). A colour image (three channels) gives None."""
+    sensor's planes agree (under 0.5%, measured to better than 0.1%: 'mono').
+    Review M1: a bias pedestal dilutes the contrast (a faint sky over 500 ADU of bias looked monochrome), so the
+    planes are compared above `pedestal` (the bias level the app measured in the Bias or Dark folder), else above the
+    header's PEDESTAL or zero for a pre-calibrated light. A raw light with no known pedestal is called 'mono' only
+    when its sky is at least SENSOR_SKY_FLOOR_RAW (1000 ADU, the flat test's rule); otherwise None (the app asks).
+    A colour image (three channels) gives None."""
     try:
         data, header = read_fits(path)
     except Exception:
         return None, None
     header = header or {}
+    if is_rgb_header(header):   # review S7: before the Bayer keyword (a debayered image can keep BAYERPAT)
+        return None, None
     if header_bayer(header):
         return "cfa", None
-    if is_rgb_header(header):
-        return None, None
     a = np.asarray(data)
     if a.ndim != 2 or min(a.shape) < 64:
         return None, None
+    floor = SENSOR_SKY_FLOOR
+    if pedestal is None or not math.isfinite(float(pedestal)):
+        hp = _header_float(header, "PEDESTAL")
+        if hp is not None:
+            pedestal = hp
+        elif precalibration_signs(path, header):
+            pedestal = 0.0
+        else:
+            pedestal, floor = 0.0, SENSOR_SKY_FLOOR_RAW
+    pedestal = float(pedestal)
     h, w = a.shape
     y0, x0 = (h // 4) // 2 * 2, (w // 4) // 2 * 2
     c = a[y0:y0 + (h // 2) // 2 * 2, x0:x0 + (w // 2) // 2 * 2].astype(np.float64)
@@ -1466,7 +1484,7 @@ def detect_sensor_from_light(path: str):
         v = p[~stars & (np.abs(p - med) < 3.0 * sig)]
         if v.size < 1000:
             return None, None
-        means.append(float(np.mean(v)))
+        means.append(float(np.mean(v)) - pedestal)
         sigs.append(float(np.std(v)))
         counts.append(v.size)
     lo, hi = min(means), max(means)
@@ -1476,7 +1494,7 @@ def detect_sensor_from_light(path: str):
     precision = max(s / math.sqrt(n) for s, n in zip(sigs, counts)) / lo
     if contrast >= 0.03:
         return "cfa", contrast
-    if contrast < 0.005 and precision < 0.001:
+    if contrast < 0.005 and precision < 0.001 and lo >= floor:
         return "mono", contrast
     return None, contrast
 
@@ -8764,7 +8782,8 @@ def night_setup_differences(new: dict, others: dict) -> list[str]:
     for key, label in (("binning", "binning"), ("radius", "aperture radius"), ("sky_in", "inner sky radius"),
                        ("sky_out", "outer sky radius"), ("comps", "comparison star(s)"), ("check", "check star"),
                        ("instrument", "telescope / camera"), ("observer", "observer"),
-                       ("photon_noise", "photon noise")):   # 2.2.17 (item 8, review)
+                       ("photon_noise", "photon noise"),   # 2.2.17 (item 8, review)
+                       ("rgb_channel", "channel of the color images")):   # 2.2.18 (review S4)
         mine = new.get(key)
         if mine in (None, "", []):
             continue
@@ -8794,6 +8813,8 @@ def _setup_text(key: str, value) -> str:
             return str(value)
     if key == "binning":
         return f"Bin {value}"
+    if key == "rgb_channel":   # 2.2.18 (review S4)
+        return RGB_CHANNEL_WORDS.get(value, str(value))
     if key == "photon_noise" and isinstance(value, dict):   # 2.2.17 (item 8)
         if value.get("source") == "EGAIN" and value.get("e_per_adu"):
             return f"electrons via EGAIN {float(value['e_per_adu']):.3g} e-/ADU"
