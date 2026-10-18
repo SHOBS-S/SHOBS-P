@@ -37,6 +37,10 @@ The report uses the same format as EXOTIC's (`#TYPE=EXOPLANET`): a header with y
 binning, the priors and the fitted results, then one line per frame with the BJD_TDB time, the relative flux, its
 error and the airmass. Times are always BJD_TDB.
 
+> **Note:** the header carries your site latitude and longitude (`#OBSLAT`, `#OBSLON`), as the format requires,
+> so they are uploaded with your data. Round them in the Site box before saving if you
+> prefer not to publish your exact location; a few kilometers makes no difference to the BJD times.
+
 SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 
 - the verdict, when it is not "detected" (for example `SHOBS-P verdict INCONCLUSIVE: …`),

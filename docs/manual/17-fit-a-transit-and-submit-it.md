@@ -20,8 +20,8 @@ This chapter covers:
    points and a planet is known. Press **Cancel** if you want to change a setting first.
 
 The fit has three stages, shown in the progress line under the plot: a least-squares fit, then an MCMC run
-(*"MCMC step 1,200 of 3,000"*), then a comparison-star check (*"Checking comps (1 of 3)…"*). A standard fit takes
-well under a minute.
+(*"MCMC step 1,200 of 3,000"*), then a comparison-star check (*"Checking comps (1 of 3)…"*). How long it takes
+depends on the number of frames and comps.
 
 > **Caution:** The fit needs your site's latitude and longitude for BJD times. Without them it stops with
 > *"Enter your site's latitude and longitude on the Input page first (they are needed for BJD times)."*
