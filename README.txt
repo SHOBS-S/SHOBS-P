@@ -1053,7 +1053,7 @@ ExoFOP (TESS)
 
 VizieR (CDS)
   Used for: Access to APASS, Tycho-2, Gaia DR3, and VSX.
-  "This research has made use of the VizieR catalog access tool, CDS, Strasbourg Astronomical Observatory, France (DOI : 10.26093/cds/vizier)." Ochsenbein, F. et al. 2000, A&AS 143, 23.
+  "This research has made use of the VizieR catalogue access tool, CDS, Strasbourg Astronomical Observatory, France (DOI : 10.26093/cds/vizier)." Ochsenbein, F. et al. 2000, A&AS 143, 23.
   https://vizier.cds.unistra.fr
 
 METHODS
@@ -1072,7 +1072,7 @@ Gaia G, BP-RP to SDSS g, r, i, z
   https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html
 
 Gaia DR3 synthetic SDSS photometry
-  Used for: Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalog).
+  Used for: Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).
   Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.
 
 SDSS to primed Sloan system
@@ -1085,7 +1085,7 @@ Sloan limb darkening
 
 Tycho BT, VT to Johnson B, V
   Used for: Johnson magnitudes for Tycho-2 stars.
-  ESA 1997, The Hipparcos and Tycho Catalogs, ESA SP-1200.
+  ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.
 
 HJD and BJD_TDB
   Used for: Heliocentric and barycentric times in exports (computed with Astropy).

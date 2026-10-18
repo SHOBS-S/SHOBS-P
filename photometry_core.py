@@ -1662,7 +1662,7 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
     With no significant peak (a faint star lost in the noise), the start point is kept and found = False.
     2.2.18 (item 5): blend_check=False never keeps the start point for a blended neighbor, and search widens the
     search radius (both for the pre-run marker check, marker_offset). wing="dip" (comp and check clicks, review): a
-    start point on a bright star's own wing is centerd on that star unless the light between peak and start point dips
+    start point on a bright star's own wing is centered on that star unless the light between peak and start point dips
     and rises again. The default "gauss" keeps the 2.2.8 test (target clicks and every frame's centring), which keeps a
     faint target in a brighter neighbor's wing even when it shows only as a shoulder (CoRoT-1 b, 2.2.7).
     Returns {"x", "y", "shift", "found"}."""
@@ -1863,7 +1863,7 @@ def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
                   wing: str = "gauss") -> dict:
     """2.2.18 (item 5, review): the check before a run, from what reduce_frame will actually do with this marker.
     True center: the nearest real star (real_star: >= 10 sigma, brighter than the marker spot) within
-    max(2.5 FWHM, 1.5 x aperture radius), centerd without the "blended neighbor" exception. Measured: reduce_frame's
+    max(2.5 FWHM, 1.5 x aperture radius), centered without the "blended neighbor" exception. Measured: reduce_frame's
     own recenter (no seeing given), refused beyond recenter_jump_limit (then the marker position is used). off is True
     when the measured position is more than about 1.5 px from the true center. blended: the click test says the marker
     sits on a faint star in a brighter one's wing (then the nearest star is only reported, not called a mistake);
@@ -4790,7 +4790,7 @@ def _night_perm_fap(t_mean: np.ndarray, y_mean: np.ndarray, f_lo: float, f_hi: f
         freqs = np.array([f_lo, f_hi])
     tt = t_mean - t_mean.mean()
     # sine and cosine at every frequency, each made orthogonal to the mean, then to each other (Gram-Schmidt): the
-    # power of centerd values is their squared projection on the two (the floating-mean Lomb-Scargle power).
+    # power of centered values is their squared projection on the two (the floating-mean Lomb-Scargle power).
     ph = 2 * math.pi * np.outer(tt, freqs)                    # (k, F)
     sn, cs = np.sin(ph), np.cos(ph)
     sn -= sn.mean(axis=0)
@@ -7152,7 +7152,7 @@ CREDITS = [
          "Aeronautics and Space Administration under the Exoplanet Exploration Program.\"",
          "https://exofop.ipac.caltech.edu/tess/"),
         ("VizieR (CDS)", "Access to APASS, Tycho-2, Gaia DR3, and VSX.",
-         "\"This research has made use of the VizieR catalog access tool, CDS, Strasbourg Astronomical Observatory, "
+         "\"This research has made use of the VizieR catalogue access tool, CDS, Strasbourg Astronomical Observatory, "
          "France (DOI : 10.26093/cds/vizier).\" Ochsenbein, F. et al. 2000, A&AS 143, 23.",
          "https://vizier.cds.unistra.fr"),
     ]),
@@ -7167,14 +7167,14 @@ CREDITS = [
          "Gaia DR3 documentation, section 5.5.1 (Carrasco, J. M. & Bellazzini, M.), Tables 5.8 and 5.10; Riello, M. et "
          "al. 2021, A&A 649, A3.",
          "https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html"),
-        ("Gaia DR3 synthetic SDSS photometry", "Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalog).",
+        ("Gaia DR3 synthetic SDSS photometry", "Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).",
          "Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.", ""),
         ("SDSS to primed Sloan system", "Puts SDSS-system magnitudes on the primed g', r', i', z' system of APASS "
          "and AAVSO sequences.", "Tucker, D. L. et al. 2006, Astron. Nachr. 327, 821.", ""),
         ("Sloan limb darkening", "Quadratic limb-darkening coefficients for transit fits in Sloan filters.",
          "Claret, A. 2004, A&A 428, 1001 (VizieR J/A+A/428/1001, table 4).", ""),
         ("Tycho BT, VT to Johnson B, V", "Johnson magnitudes for Tycho-2 stars.",
-         "ESA 1997, The Hipparcos and Tycho Catalogs, ESA SP-1200.", ""),
+         "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.", ""),
         ("HJD and BJD_TDB", "Heliocentric and barycentric times in exports (computed with Astropy).",
          "Eastman, J., Siverd, R. & Gaudi, B. S. 2010, PASP 122, 935.", ""),
         ("B-V to temperature", "Approximate temperature from color.", "Ballesteros, F. J. 2012, EPL 97, 34008.", ""),
@@ -7712,7 +7712,7 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
         except (ValueError, np.linalg.LinAlgError):
             noise = None
     poly = poly_extremum(t, m, win["t0"], hw, kind, n_boot=max(50, n_boot // 5), seed=seed, noise=noise)
-    # Second pass centerd on the first answer, so the window is symmetric about the extremum itself.
+    # Second pass centered on the first answer, so the window is symmetric about the extremum itself.
     poly = poly_extremum(t, m, poly["t"], hw, kind, n_boot=n_boot, seed=seed, noise=noise)
     try:
         kvw = kwee_van_woerden(t, m, poly["t"], hw)

@@ -1525,7 +1525,7 @@ class App(Tk):
             return
         problem = core.check_master_file(path, key.lower())
         if problem:
-            messagebox.showerror(APP_TITLE, problem)
+            self._calibration_failed(problem)   # 2.2.18 (item 22): logged, same wording as at Build masters
             return
         variable.set(path)
         self._counts[key].set("master file")
@@ -1969,7 +1969,7 @@ class App(Tk):
     def _report_id(entry: dict) -> str:
         """A saved report's identity: its full path (normalized), or its file name for entries saved before 2.2.18."""
         path = entry.get("path")
-        if path:
+        if path and os.path.isabs(str(path)):   # 2.2.18 round 2: a legacy entry's id is its bare file name
             return os.path.normcase(os.path.abspath(str(path)))
         return str(entry.get("file") or "")
 
@@ -1995,6 +1995,8 @@ class App(Tk):
         best = None
         have = {o.night for o in self.observations}
         for night, entries in self.reports_saved.items():
+            if night not in have:   # round 2: a removed night's report is not "the last report"
+                continue
             for e in entries:
                 if not isinstance(e, dict) or e.get("to", "webobs") != page:
                     continue
@@ -2069,6 +2071,9 @@ class App(Tk):
                 self._write_series(self.series_path)
             except OSError:
                 pass
+        else:   # round 2: no series file yet, so the mark lasts only for this session
+            self.log("The sent mark is kept in the series file: save the series (Output page) to keep it after "
+                     "SHOBS-P closes.")
         try:
             self.draw_output()
         except Exception:
@@ -3357,7 +3362,7 @@ class App(Tk):
             return
         self._pattern_user_set = True
 
-    def _choose_one(self, heading: str, message: str, choices, cancel=None):
+    def _choose_one(self, heading: str, message: str, choices, cancel=None, default=None):
         """2.2.18 (items 1, 2): a question with one labeled button per answer; returns the chosen value, or `cancel`
         when the window is closed. Sizes itself to its text (no fixed widths)."""
         result = {"value": cancel}
@@ -3378,10 +3383,10 @@ class App(Tk):
         for label, value in choices:
             ttk.Button(row, text=label, command=lambda v=value: pick(v)).pack(side=LEFT, padx=(6, 0))
         win.protocol("WM_DELETE_WINDOW", win.destroy)
-        if choices:   # review S3: Return = the first answer, Escape = closed
-            win.bind("<Return>", lambda _e: pick(choices[0][1]))
+        if default is not None:   # round 2: Return only when a default answer is given; Escape = closed
+            win.bind("<Return>", lambda _e: pick(default))
         win.bind("<Escape>", lambda _e: win.destroy())
-        win.after_idle(lambda: fit_to_content(win))
+        win.after_idle(lambda: fit_to_content(win, min_w=0, min_h=0))   # round 2: sized to its text
         try:
             win.grab_set()
         except Exception:
@@ -3427,7 +3432,7 @@ class App(Tk):
             "  Red (TR) / Blue (TB): that channel only\n"
             "  Luminance (CV): all three combined, as a clear filter",
             [("Green (TG)", "green"), ("Red (TR)", "red"), ("Blue (TB)", "blue"), ("Luminance (CV)", "luminance")],
-            cancel=None)
+            cancel=None, default="green")
         channel = answer or before
         if self._rgb_channel is None:
             self._pattern_before_rgb = self.pattern.get()
@@ -5237,7 +5242,7 @@ class App(Tk):
 
     def _auto_target_marker(self, why: str = "solve") -> bool:
         """2.2.15 (GitHub #3): once the image is solved and the target's RA/Dec are known, put the Target marker on the
-        target (centerd on the star like a click) unless one is placed already. Returns True when it placed one."""
+        target (centered on the star like a click) unless one is placed already. Returns True when it placed one."""
         if (self.mode_key == "discovery" or self.target_xy is not None or not self.chart_solution
                 or self.preview is None or not self.preview_is_debayered or self._radec_is_fill()):
             return False
@@ -5278,7 +5283,7 @@ class App(Tk):
             self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
                      f"{xy[1]:.0f})); no marker placed.")
             return False
-        # Centerd on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
+        # Centered on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
         # (review): no marker, rather than one on blank sky.
         try:
             radius = float(self.radius.get())
@@ -6285,7 +6290,7 @@ class App(Tk):
         # 2.2.17 (item 3): laid out in points from the corner (not axes fractions), so the arrows keep their true
         # directions whatever the axes' shape, and both letters stay inside the image: the whole compass (both arrows
         # and both letters, wherever the solution points them) is measured and tucked into the corner with a margin.
-        # (2.2.16 put each letter 1.35 × the arrow length out, centerd, which clipped "N" at the image edge.)
+        # (2.2.16 put each letter 1.35 × the arrow length out, centered, which clipped "N" at the image edge.)
         from matplotlib.transforms import ScaledTranslation
         try:
             from matplotlib import patheffects
@@ -6459,7 +6464,7 @@ class App(Tk):
     def _popout_geometry(self) -> str:
         """Where the pop-out opens: the size and place it had last time (settings), on whichever monitor that was;
         moved back to the main screen only when its title bar would be out of reach (review: a window kept on a second
-        monitor stays there). The first time about 60% × 75% of the main screen, centerd."""
+        monitor stays there). The first time about 60% × 75% of the main screen, centered."""
         try:
             sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
         except Exception:
@@ -7051,7 +7056,7 @@ class App(Tk):
             seeing = self._seeing()
             pick = self.pick_mode.get()
             # 2.2.18 (item 5, review): comps and checks are bright, isolated stars: a click on a star's own wing is
-            # centerd on it (wing="dip"); the target keeps the 2.2.8 test (a faint target beside a bright star).
+            # centered on it (wing="dip"); the target keeps the 2.2.8 test (a faint target beside a bright star).
             star_pick = pick in ("comp", "check") or bool(comp_number(pick))
             wing = "dip" if star_pick else "gauss"
             info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None,
@@ -7077,7 +7082,7 @@ class App(Tk):
             if not info["found"]:
                 snap_note = " No star found right at the click; the marker is where you clicked."
             elif info["shift"] >= 1.0:
-                snap_note = f" Centerd on the star ({info['shift']:.1f} px from the click)."
+                snap_note = f" Centered on the star ({info['shift']:.1f} px from the click)."
         except Exception:
             pass
         mode = self.pick_mode.get()
@@ -7272,7 +7277,7 @@ class App(Tk):
         return xy
 
     def _set_slot(self, role: str, xy, text: str):
-        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centerd on its star like a click
+        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centered on its star like a click
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
@@ -8127,7 +8132,7 @@ class App(Tk):
             wcs_factor = max(int(self._image_binning()), 1) * superpixel
         except (TypeError, ValueError):
             wcs_factor = superpixel
-        # Where the catalog query and the chart solution are centerd. Kept local: the Input page's RA/Dec are the
+        # Where the catalog query and the chart solution are centered. Kept local: the Input page's RA/Dec are the
         # target's and are only filled in when empty (2.2).
         query = None
         if wcs is not None:
@@ -10892,7 +10897,7 @@ class App(Tk):
         keep = ask_choice(self, APP_TITLE, message, [(True, self.KEEP_USE), (False, self.KEEP_LEAVE)], safe=False)
         keep = keep is True
         self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} question ({where}) answered "
-                 f"\u201c{self.KEEP_USE if keep else self.KEEP_LEAVE}\u201d at {time.strftime('%Y-%m-%d %H:%M:%S')}.")
+                 f"\u201c{self.KEEP_USE if keep else self.KEEP_LEAVE}\u201d.")
         return keep
 
     def _offer_keep_transmission(self, night: str) -> None:

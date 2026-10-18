@@ -1272,7 +1272,7 @@ def published_depth(planet: dict | None) -> tuple:
     """2.2.13: the depth a fit is compared with, and its label: (Rp/R*)² whenever Rp/R* is known, else the listed
     depth. The fit's "Depth" is its (Rp/R*)², so this compares like with like. A catalog's listed depth (the NASA
     Exoplanet Archive's pl_trandep) is a different quantity, or from another paper: the limb-darkened dip at
-    mid-transit is deeper than (Rp/R*)² (by 10–30% in a green band), and some listed depths come from other analyzes
+    mid-transit is deeper than (Rp/R*)² (by 10–30% in a green band), and some listed depths come from other analyses
     (HAT-P-23 b: listed 1.05%, while its Rp/R* 0.1169 gives 1.37%). complete_planet already sets planet["depth"] to
     (Rp/R*)² when both are known; this also covers dicts made before 2.2.13."""
     p = planet or {}
