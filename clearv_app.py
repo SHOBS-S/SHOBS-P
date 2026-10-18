@@ -58,6 +58,20 @@ APP_VERSION = "2.2.17"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
+# 2.2.18 (item 15): how to cite SHOBS-P (Credits page). The concept DOI resolves to the newest Zenodo release; the
+# authors follow CITATION.cff. ASCL_ID: the Astrophysics Source Code Library ID once it is assigned (e.g. "2610.012");
+# when filled it is added to the citation as "ascl:<ID>".
+CITATION_DOI = "10.5281/zenodo.23417064"
+ASCL_ID = ""
+
+
+def citation_text(version: str = None) -> str:
+    """2.2.18 (item 15): the suggested citation, with this build's version (CITATION.cff: authors, title, DOI)."""
+    text = (f"Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, "
+            f"version {version or APP_VERSION}, Zenodo, doi:{CITATION_DOI}")
+    if ASCL_ID.strip():
+        text += f", ascl:{ASCL_ID.strip()}"
+    return text
 # Marker colours on the image, shared by the pick buttons so each button matches its marker.
 PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
 # 2.2.5: up to ten comparison stars. "comp" is C1 and "comp2" C2 (the names older series files use); C3-C10 follow.
@@ -370,6 +384,39 @@ def ui_scale(widget) -> float:
         return 1.0
 
 
+def _pad_total(pad) -> int:
+    """2.2.18 (item 23): a pack/grid padx as Tk reports it (14, "14", (6, 2), "6 2") -> both sides in px."""
+    import re
+    try:
+        if isinstance(pad, (int, float)):
+            vals = [float(pad)]
+        elif isinstance(pad, (tuple, list)):
+            vals = [float(v) for v in pad]
+        else:
+            vals = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", str(pad))]
+    except (TypeError, ValueError):
+        return 0
+    if not vals:
+        return 0
+    return int(round(2 * vals[0] if len(vals) == 1 else vals[0] + vals[1]))
+
+
+def flow_rows(widths, avail) -> list:
+    """2.2.18 (item 23): lay widgets of these widths (px, padding included) out in rows no wider than avail (px),
+    left to right, the way text wraps; each row holds at least one widget. Returns [[index, ...], ...]."""
+    rows, cur, used = [], [], 0.0
+    for i, w in enumerate(widths):
+        w = max(0.0, float(w))
+        if cur and avail is not None and used + w > avail:
+            rows.append(cur)
+            cur, used = [], 0.0
+        cur.append(i)
+        used += w
+    if cur:
+        rows.append(cur)
+    return rows
+
+
 def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
     """2.2.14 (item 12): a wrap width in screen pixels for about `chars` characters of the UI font, so it scales with
     the display (a fixed 780 px is a narrow column on a high-DPI screen); at most 60% of the screen."""
@@ -645,6 +692,8 @@ class App(Tk):
         self.preview_header = None
         self.preview_path = None
         self.pick_mode = StringVar(value="target")
+        self._pick_user_chosen = False   # 2.2.18 (item 7): the user picked a step (page or pop-out) on this image
+        self._pick_auto_advanced = False   # 2.2.18 (item 7): the solve's Target marker moved the pick to Comps
         self.target_xy = None
         self.comp_xy = None
         self.comp2_xy = None
@@ -852,6 +901,8 @@ class App(Tk):
         self.watch_xy = {}
         self.variable_marks = []
         self.pick_mode.set("watch" if self.mode_key == "discovery" else "target")
+        self._pick_user_chosen = False   # 2.2.18 (item 7)
+        self._pick_auto_advanced = False
         if hasattr(self, "pick_label"):
             self._update_pick_label()
         self._refresh_watch_box()   # 2.2.14 (item 15): the box said "on this frame" for the old frame's positions
@@ -1084,6 +1135,7 @@ class App(Tk):
         ]
         for frame in self.page_frames:
             frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._responsive_input_boxes(self.page_frames[0])   # 2.2.18 (item 23)
         self.discovery_page = self._page_discovery_output()
         self.discovery_page.place(relx=0, rely=0, relwidth=1, relheight=1)
         import transit_ui
@@ -1126,6 +1178,21 @@ class App(Tk):
                  "acknowledgements each source asks for; please include them when you publish results made with it.",
             style="Hint.TLabel", wraplength=1200, justify=LEFT,
         ).pack(anchor=W, pady=(2, 8))
+        # 2.2.18 (item 15): how to cite SHOBS-P itself, with a Copy button.
+        cite = ttk.Frame(card, style="Card.TFrame")
+        cite.pack(fill=X, pady=(0, 8))
+        ttk.Label(cite, text="How to cite SHOBS-P", font=(core.UI_FONT, 11, "bold"), style="Card.TLabel").pack(anchor=W)
+        cite_row = ttk.Frame(cite, style="Card.TFrame")
+        cite_row.pack(fill=X, pady=(2, 0))
+        ttk.Button(cite_row, text="Copy", command=self.copy_citation).pack(side=RIGHT, anchor="n", padx=(8, 0))
+        self.citation_label = ttk.Label(cite_row, text=citation_text(), style="Card.TLabel", wraplength=900,
+                                        justify=LEFT)
+        self.citation_label.pack(side=LEFT, fill=X, expand=True, anchor=W)
+        cite_row.bind("<Configure>", lambda e: self.citation_label.configure(wraplength=max(e.width - 120, 200)),
+                      add="+")
+        ttk.Label(cite, text="The DOI always leads to the newest release on Zenodo; each release also has its own DOI "
+                             "there. Please cite the version you used.", style="Hint.TLabel", wraplength=900,
+                  justify=LEFT).pack(anchor=W, pady=(2, 0))
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(8, 0))
         ttk.Button(nav, text="Save credits as text…", command=self.save_credits).pack(side=LEFT)
@@ -1135,6 +1202,19 @@ class App(Tk):
         box.insert(END, core.credits_text())
         box.configure(state="disabled")
         return page
+
+    def copy_citation(self):
+        """2.2.18 (item 15): the suggested citation onto the clipboard (Tk's clipboard; it stays after SHOBS-P closes
+        on Windows)."""
+        text = citation_text()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update_idletasks()
+        except Exception as exc:
+            self.status.set(f"Could not copy to the clipboard ({exc}). The citation: {text}")
+            return
+        self.status.set("Citation copied to the clipboard.")
 
     def show_credits(self):
         if not getattr(self, "_on_credits", False):
@@ -1149,7 +1229,8 @@ class App(Tk):
                                 filetypes=[("Text", "*.txt")])
         if path:
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(f"{APP_TITLE} {APP_VERSION}\n\n" + core.credits_text())
+                fh.write(f"{APP_TITLE} {APP_VERSION}\n\nHow to cite SHOBS-P:\n  {citation_text()}\n\n"
+                         + core.credits_text())   # 2.2.18 (item 15)
             self.status.set(f"Wrote {path}")
 
     def show_step(self, index: int):
@@ -1703,6 +1784,89 @@ class App(Tk):
     def _group(self, parent, title):
         box = ttk.LabelFrame(parent, text=title, style="Group.TLabelframe", padding=(12, 6, 12, 10))
         return box
+
+    # ---- 2.2.18 (item 23): boxes that keep their entry boxes at half-screen width ---------------------------------
+    RESPONSIVE_BOXES = ("AAVSO report", "Site", "Optics")
+
+    def _responsive_input_boxes(self, page):
+        """2.2.18 (item 23): the Input page's right-hand boxes (label | entry | hint grids). Before, only the entry
+        column had a weight, so when the window was narrower than the boxes asked for (snapped to half a 4K screen) Tk
+        took all the missing width from that column and the entry boxes vanished, while the labels and hints kept
+        their full width. Now the entry column keeps a minimum width (about 8 digits), the hint column shares the
+        shrinking and its hints wrap onto more lines, and the full-width rows (checkbox, red hint) wrap to the box."""
+        found = []
+
+        def walk(widget, depth=0):
+            if depth > 6:
+                return
+            try:
+                kids = list(widget.winfo_children())
+            except Exception:
+                return
+            for kid in kids:
+                try:
+                    title = str(kid.cget("text"))
+                except Exception:
+                    title = ""
+                if title in self.RESPONSIVE_BOXES and isinstance(kid, ttk.LabelFrame):
+                    found.append(kid)
+                else:
+                    walk(kid, depth + 1)
+        walk(page)
+        for box in found:
+            self._responsive_grid_box(box)
+        return found
+
+    def _responsive_grid_box(self, box, entry_col: int = 1, hint_col: int = 2, min_chars: int = 8):
+        scale = ui_scale(self)
+        try:
+            from tkinter import font as tkfont
+            px = int(tkfont.Font(root=self, family=core.UI_FONT, size=10).measure("0" * min_chars))
+        except Exception:
+            px = 8 * min_chars
+        box.columnconfigure(entry_col, weight=1, minsize=int(px + 12 * scale))
+        box.columnconfigure(hint_col, weight=1)
+        hints, spans = [], []
+        for kid in list(box.winfo_children()):
+            try:
+                info = kid.grid_info()
+                col, span = int(info.get("column", -1)), int(info.get("columnspan", 1))
+            except Exception:
+                continue
+            if col == hint_col and span == 1 and isinstance(kid, ttk.Label):
+                kid.grid_configure(sticky="ew")   # fills its column, so it can wrap to it and unwrap again
+                hints.append(kid)
+            elif col == 0 and span > 1 and isinstance(kid, (ttk.Label, ttk.Checkbutton)):
+                spans.append(kid)
+        pad = int(4 * scale)
+        for lab in hints:
+            lab.bind("<Configure>", lambda e, w=lab: w.configure(wraplength=max(int(e.width) - pad, 40)), add="+")
+        style = ttk.Style(self)
+        for k, kid in enumerate(spans):
+            if isinstance(kid, ttk.Checkbutton):
+                # ttk checkbuttons take their wrap length from their style (the label element's -wraplength).
+                name = f"Wrap{id(box) % 100000}_{k}.TCheckbutton"
+                try:
+                    style.configure(name, wraplength=0)
+                    kid.configure(style=name)
+                except Exception:
+                    continue
+                spans[k] = (kid, name)
+            else:
+                spans[k] = (kid, None)
+
+        def wrap_spans(event):
+            width = max(int(event.width) - int(30 * scale), 120)
+            for kid, name in spans:
+                try:
+                    if name:
+                        style.configure(name, wraplength=width)
+                    else:
+                        kid.configure(wraplength=width)
+                except Exception:
+                    pass
+        if spans:
+            box.bind("<Configure>", wrap_spans, add="+")
 
     def _field(self, parent, row, label, var, width=24, hint=""):
         ttk.Label(parent, text=label, style="Card.TLabel").grid(row=row, column=0, sticky=W, padx=(0, 10), pady=3)
@@ -3581,6 +3745,78 @@ class App(Tk):
     def _pct_text(value) -> str:
         return f"{float(value):g}%"
 
+    def _layout_view_box(self, force: bool = False):
+        """2.2.18 (item 23): the Photometry page's View box at any window width. Wide: beside the measurement
+        settings, switches on one line. Narrower: still beside them, the switches wrapped onto two (or more) rows.
+        Narrower still: the View box moves to its own line under the settings (and wraps there if it must). Before, the
+        row was packed in one line and the View box, packed last, was cut off at half-screen width."""
+        switches = [b for b in getattr(self, "_view_switches", [])
+                    if b is not self.candidates_only_box or self.mode_key == "discovery"]
+        options, box, line2 = getattr(self, "_view_options", None), getattr(self, "_view_box", None), \
+            getattr(self, "_view_line2", None)
+        if options is None or box is None:
+            return
+        scale = ui_scale(self)
+        gap = int(10 * scale)
+        def px(value, default=0):
+            try:
+                return int(value)
+            except Exception:
+                return default
+        width = px(options.winfo_width())
+        sw = [px(b.winfo_reqwidth(), 100) + gap for b in switches]
+        try:
+            others = [px(c.winfo_reqwidth()) for c in box.winfo_children() if c is not self._view_grid]
+        except Exception:
+            others = []
+        box_pad = px(box.winfo_reqwidth()) - max([px(self._view_grid.winfo_reqwidth())] + others)
+        left = 0
+        try:
+            for w in options.pack_slaves():
+                if w is box or w is line2:
+                    continue
+                left += px(w.winfo_reqwidth()) + _pad_total(w.pack_info().get("padx", 0))
+        except Exception:
+            left = 0
+        box_pad = max(box_pad, int(20 * scale))
+        if width <= 1:
+            avail, own = None, False   # not laid out yet: one line, beside the settings
+        else:
+            one_line = max([sum(sw)] + others) + box_pad
+            least = max([max(sw or [0])] + others) + box_pad
+            room = width - left - gap
+            own = room < least
+            avail = (width - box_pad - gap if own else room - box_pad) if (own or room < one_line) else None
+        rows = flow_rows(sw, avail)
+        key = (own, tuple(tuple(r) for r in rows), len(switches))
+        if key == self._view_layout_key and not force:
+            return
+        self._view_layout_key = key
+        for b in getattr(self, "_view_switches", []):
+            try:
+                b.grid_forget()
+            except Exception:
+                pass
+        for r, row in enumerate(rows):
+            for c, i in enumerate(row):
+                switches[i].grid(row=r, column=c, sticky=W, padx=(0, gap))
+        if own != self._view_own_line or force:
+            self._view_own_line = own
+            try:
+                box.pack_forget()
+                line2.pack_forget()
+                if own:
+                    first = next(iter(w for w in options.pack_slaves() if w is not box and w is not line2), None)
+                    if first is not None:
+                        line2.pack(side="bottom", fill=X, pady=(4, 0), before=first)
+                    else:
+                        line2.pack(side="bottom", fill=X, pady=(4, 0))
+                    box.pack(in_=line2, side=RIGHT)
+                else:
+                    box.pack(in_=options, side=RIGHT, padx=(10, 0))
+            except Exception:
+                pass
+
     def _stretch_controls(self, parent, page: str):
         """A compact 'Stretch' row: linear / log / asinh, black and white points (percentiles of the image), Reset.
         Display only: the measurements never see it."""
@@ -4086,6 +4322,8 @@ class App(Tk):
             self._rescale_marks(old_shape, mono.shape)
         self._marks_shape = tuple(mono.shape[:2])
         self.pick_mode.set("watch" if self.mode_key == "discovery" else "target")
+        self._pick_user_chosen = False   # 2.2.18 (item 7): a new image; the user has not picked a step on it yet
+        self._pick_auto_advanced = False
         self.chart_placed = []
         self.chart_solution = None
         self.suggested_comps = []
@@ -4122,7 +4360,8 @@ class App(Tk):
         self.pick_tools = ttk.Frame(tools, style="Card.TFrame")
         for label, value in (("Target", "target"), ("Comps (C1–C10)", "comp"), ("Check", "check"), ("Watch", "watch")):
             ttk.Radiobutton(self.pick_tools, text="●  " + label, value=value, variable=self.pick_mode,
-                            style=f"Pick{value}.TRadiobutton").pack(side=LEFT, padx=6)
+                            style=f"Pick{value}.TRadiobutton",
+                            command=self._pick_chosen_by_user).pack(side=LEFT, padx=6)   # 2.2.18 (item 7)
         ttk.Button(self.pick_tools, text="Clear selected", command=self.clear_selected_mark).pack(side=LEFT, padx=(2, 6))
         # Discovery: no target; a click watches a star or leaves it out of the scan.
         self.disc_tools = ttk.Frame(tools, style="Card.TFrame")
@@ -4162,17 +4401,24 @@ class App(Tk):
         # 2.2.15 (review): the switches on one line, the display stretch (GitHub #1) on a second line under them.
         view_box, view = view, ttk.Frame(view, style="Card.TFrame")
         view.pack(side="top", anchor=W)
-        ttk.Checkbutton(view, text="Show variables (red ○ ×)", variable=self.show_variables,
-                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
-        ttk.Checkbutton(view, text="Show apertures", variable=self.show_apertures,
-                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
-        ttk.Checkbutton(view, text="Show catalog stars", variable=self.show_catalog,
-                        command=self.refresh_preview).pack(side=LEFT, padx=(0, 10))
-        ttk.Checkbutton(view, text="Show labels", variable=self.show_labels, command=self.refresh_preview).pack(
-            side=LEFT, padx=(0, 10))
+        # 2.2.18 (item 23): the switches are laid out by _layout_view_box (grid, wrapping onto a second row when the
+        # window is narrow), not packed in one line that was cut off at half-screen width.
+        self._view_switches = [
+            ttk.Checkbutton(view, text="Show variables (red ○ ×)", variable=self.show_variables,
+                            command=self.refresh_preview),
+            ttk.Checkbutton(view, text="Show apertures", variable=self.show_apertures, command=self.refresh_preview),
+            ttk.Checkbutton(view, text="Show catalog stars", variable=self.show_catalog, command=self.refresh_preview),
+            ttk.Checkbutton(view, text="Show labels", variable=self.show_labels, command=self.refresh_preview)]
         # 2.2.5: Discovery's switch to see only the scan candidates and watch stars (shown in Discovery only).
         self.candidates_only_box = ttk.Checkbutton(view, text="Candidates only", variable=self.candidates_only,
                                                    command=self.refresh_preview)
+        self._view_switches.append(self.candidates_only_box)
+        self._view_options, self._view_box, self._view_grid = options, view_box, view
+        self._view_line2 = ttk.Frame(options, style="Card.TFrame")   # the View box's own line when the row is narrow
+        self._view_own_line = False
+        self._view_layout_key = None
+        options.bind("<Configure>", lambda _e: self._layout_view_box(), add="+")
+        self._layout_view_box(force=True)
         self._stretch_controls(view_box, "photo").pack(side="top", anchor=W, pady=(4, 0))
         # 2.2.16 (item 16, GitHub #2): zoom buttons for a trackpad (no wheel to find), Fit (the old "Fit view", one
         # control), and Pop out: the image in its own resizable window. On their own line under the stretch, so the
@@ -4333,9 +4579,8 @@ class App(Tk):
         self.pick_label_widget.pack_forget()
         if mode != "discovery":
             self.pick_label_widget.pack(anchor=W, before=getattr(self, "step_row", self.photo_body))
-        self.candidates_only_box.pack_forget()
+        self._layout_view_box(force=True)   # 2.2.18 (item 23): Candidates only shows in Discovery only
         if mode == "discovery":
-            self.candidates_only_box.pack(side=LEFT, padx=(0, 10))   # 2.2.16 (item 16): Fit is on the zoom line
             self.disc_tools.pack(side=LEFT)
             self.disc_panel.pack(fill=BOTH, expand=True)
             self.scan_button.pack(side=RIGHT, before=self.label_button)
@@ -4571,9 +4816,27 @@ class App(Tk):
         xy = (float(info["x"]), float(info["y"]))
         self.target_xy = xy
         self._auto_target_xy = xy
+        advanced = self._advance_pick_to_comps()   # 2.2.18 (item 7)
         self.log(f"Target: marker placed on {name} at ({xy[0]:.0f}, {xy[1]:.0f}) from its RA/Dec and the plate solution"
                  + (" (after the lookup)" if why == "lookup" else "") + ". Click with Target to move it if it is not "
-                 "your star.")
+                 "your star." + (" Next: click the comparison stars (Comps is picked)." if advanced else ""))
+        return True
+
+    def _pick_chosen_by_user(self):
+        """2.2.18 (item 7): a pick button (page or pop-out) clicked by the user: the automatic step change leaves the
+        choice alone from now on, for this image."""
+        self._pick_user_chosen = True
+
+    def _advance_pick_to_comps(self) -> bool:
+        """2.2.18 (item 7): once the solve has put the Target marker on the target, pick Comps, the next step
+        (Variables and Transits; Discovery has no comps). Never when the user has picked a step on this image, and
+        only from Target. The page and pop-out buttons share pick_mode, so both follow. Returns True when it moved."""
+        if self.mode_key not in ("variables", "transits") or getattr(self, "_pick_user_chosen", False):
+            return False
+        if self.target_xy is None or self.pick_mode.get() != "target":
+            return False
+        self.pick_mode.set("comp")
+        self._pick_auto_advanced = True
         return True
 
     # ---- Discovery panel (2.2) ------------------------------------------------------------
@@ -5829,7 +6092,8 @@ class App(Tk):
                 ("Target", "target"), ("Comps (C1–C10)", "comp"), ("Check", "check"), ("Watch", "watch")))
         for text, value, style in choices:
             ttk.Radiobutton(bar, text=text, value=value, variable=self.pick_mode,
-                            style=f"Pick{style}.TRadiobutton").pack(side=LEFT, padx=6)
+                            style=f"Pick{style}.TRadiobutton",
+                            command=self._pick_chosen_by_user).pack(side=LEFT, padx=6)   # 2.2.18 (item 7)
         if self.mode_key != "discovery":
             ttk.Button(bar, text="Clear selected", command=self.clear_selected_mark).pack(side=LEFT, padx=(2, 6))
         self._popout_bar_mode = self.mode_key
@@ -6086,7 +6350,40 @@ class App(Tk):
             if used:
                 self.clear_mark(used[-1])
             return
+        if mode == "watch":
+            self._clear_selected_watch()   # 2.2.18 (item 19)
+            return
+        if mode == "exclude":
+            return
         self.clear_mark(mode)
+
+    def _clear_selected_watch(self):
+        """2.2.18 (item 19): Clear selected with Watch picked stops watching the star selected in the Watch stars list
+        (Discovery: its row in Watched and excluded stars); with no row selected, the watch star added last that is on
+        this frame (as Comps clears the last comp marked). remove_watch updates the lists, the image and the pop-out."""
+        name = None
+        try:
+            sel = self.watch_box.curselection() if hasattr(self, "watch_box") else ()
+            if sel and sel[0] < len(self.watch_list):
+                name = self.watch_list[sel[0]]["name"]
+        except Exception:
+            name = None
+        if name is None and hasattr(self, "disc_box"):
+            try:
+                sel = self.disc_box.curselection()
+                rows = getattr(self, "_disc_rows", [])
+                if sel and sel[0] < len(rows) and rows[sel[0]][0] == "watch":
+                    name = rows[sel[0]][1]
+            except Exception:
+                name = None
+        if name is None:
+            on_frame = [w["name"] for w in self.watch_list if w["name"] in self.watch_xy]
+            name = on_frame[-1] if on_frame else None
+        if name is None:
+            self.status.set("No watch star on this frame to clear.")
+            return
+        self.remove_watch(name)
+        self._update_pick_label()
 
     # ---- comparison stars C1-C10 (2.2.5) -------------------------------------------------
     def _comp_roles_used(self) -> list:
@@ -6218,6 +6515,12 @@ class App(Tk):
             # 2.2.8: snap to the star nearest the click (not the brightest one nearby), sized by the seeing.
             seeing = self._seeing()
             info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None)
+            pick = self.pick_mode.get()
+            if not info["found"] and (pick in ("comp", "check") or comp_number(pick)):
+                # 2.2.18 (item 5): a comp or check is a star you can see; a click a little further out than 2.5 FWHM
+                # (sharp stars, the whole frame in view) still finds it: 1.5 x the aperture radius, as the pre-run check.
+                info = core.recenter_info(self.preview, xy[0], xy[1], radius,
+                                          seeing if math.isfinite(seeing) else None, search=1.5 * radius)
             xy = (info["x"], info["y"])
             if not info["found"]:
                 snap_note = " No star found right at the click; the marker is where you clicked."
@@ -6389,12 +6692,31 @@ class App(Tk):
             return
         self._set_slot(role, xy, text)
 
+    def _snap_to_star(self, xy):
+        """2.2.18 (item 5): a marker placed from a name or sky position sits where the plate solution puts the star,
+        which for a star the solve did not match can be a few px off. Centre it on the star there (as a click is) when
+        one is within about 1.5 FWHM; otherwise keep the position."""
+        if xy is None or self.preview is None or not self.preview_is_debayered:
+            return xy
+        try:
+            radius = float(self.radius.get())
+            seeing = self._seeing()
+            fwhm = seeing if math.isfinite(seeing) else None
+            info = core.recenter_info(self.preview, float(xy[0]), float(xy[1]), radius, fwhm)
+            reach = max(2.0, 1.5 * fwhm) if fwhm else max(2.0, 0.5 * radius)
+            if info.get("found") and not info.get("blended") and info["shift"] <= reach:
+                return (float(info["x"]), float(info["y"]))
+        except Exception:
+            pass
+        return xy
+
     def _set_slot(self, role: str, xy, text: str):
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
                 self._slot_say(role, f"⚠ {text} is already marked as {role_label(other)}.", bad=True)   # 2.2.14 (14)
                 return
+        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centred on its star like a click
         setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
         filled = self._fill_from_chart(role, xy)
         if not filled or "=" not in filled:
@@ -6727,6 +7049,7 @@ class App(Tk):
             self.watch_xy[name] = xy
             self.status.set(f"Watching {name}." + ("" if star is not None or "ra" in entry else
                             " It is not a labeled catalog star, so click it again on later nights."))
+            self._remember_discovery_watch(entry)   # 2.2.18 (item 12)
         self.refresh_preview()
         self._refresh_watch_box()
         return name
@@ -6750,7 +7073,78 @@ class App(Tk):
         self.refresh_preview()
         self.status.set(f"Watching {name}. Its spare-comp measurements already in the series form its light curve.")
 
+    # ---- 2.2.18 (item 12): Discovery watch stars remembered across restarts --------------------------------------
+    # Kept in the settings file (no Discovery series to hold them), each with its sky position. After a Discovery
+    # solve, the remembered stars that fall on the new frame are watched again, so the list is per field without a
+    # field key: a star off this frame (another field, a stale entry) simply does not come back. A star without a sky
+    # position (clicked on an unsolved frame) cannot be found again and is not remembered.
+    DISCOVERY_WATCH_MAX = 200
+
+    def _discovery_watch_saved(self) -> list:
+        saved = self.settings.get("discovery_watch")
+        return [w for w in saved if isinstance(w, dict) and w.get("name")] if isinstance(saved, list) else []
+
+    def _remember_discovery_watch(self, entry: dict) -> None:
+        if self.mode_key != "discovery" or not isinstance(entry, dict) or not entry.get("name"):
+            return
+        try:
+            ra, dec = float(entry["ra"]), float(entry["dec"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return
+        keep = {k: entry[k] for k in ("name", "mag", "mags", "catalog", "variable", "colors") if k in entry}
+        keep.update({"ra": ra, "dec": dec, "saved": time.strftime("%Y-%m-%d")})
+        saved = [w for w in self._discovery_watch_saved() if w.get("name") != keep["name"] and not (
+            w.get("ra") is not None and w.get("dec") is not None
+            and core.sky_separation_arcsec(ra, dec, float(w["ra"]), float(w["dec"])) < WATCH_SAME_ARCSEC)]
+        saved.append(keep)
+        self.settings["discovery_watch"] = saved[-self.DISCOVERY_WATCH_MAX:]
+        self._save_settings()
+
+    def _forget_discovery_watch(self, name: str, entry: dict | None = None) -> None:
+        if self.mode_key != "discovery":
+            return
+        saved = self._discovery_watch_saved()
+        rd = None
+        try:
+            rd = (float(entry["ra"]), float(entry["dec"])) if entry else None
+        except (KeyError, TypeError, ValueError):
+            rd = None
+        left = [w for w in saved if w.get("name") != name and not (
+            rd is not None and w.get("ra") is not None and w.get("dec") is not None
+            and core.sky_separation_arcsec(rd[0], rd[1], float(w["ra"]), float(w["dec"])) < WATCH_SAME_ARCSEC)]
+        if len(left) != len(saved):
+            self.settings["discovery_watch"] = left
+            self._save_settings()
+
+    def _restore_discovery_watch(self) -> int:
+        """After a Discovery solve: watch again the remembered stars that are on this frame. Returns how many."""
+        if self.mode_key != "discovery" or not self.chart_solution or self.preview is None:
+            return 0
+        added = []
+        for w in self._discovery_watch_saved():
+            try:
+                ra, dec = float(w["ra"]), float(w["dec"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if any(o.get("name") == w["name"] or (o.get("ra") is not None and o.get("dec") is not None
+                   and core.sky_separation_arcsec(ra, dec, float(o["ra"]), float(o["dec"])) < WATCH_SAME_ARCSEC)
+                   for o in self.watch_list):
+                continue
+            if self._project_to_frame(ra, dec) is None:
+                continue   # another field, or off this frame: harmless, it stays remembered
+            entry = {k: v for k, v in w.items() if k != "saved"}
+            self.watch_list.append(entry)
+            added.append(entry["name"])
+        if added:
+            self.log(f"Watch stars remembered for this field ({len(added)}): " + ", ".join(added)
+                     + ". Right-click one (or Remove selected) to stop watching it.")
+        return len(added)
+
     def remove_watch(self, name: str):
+        gone = next((w for w in self.watch_list if w["name"] == name), None)
+        self._forget_discovery_watch(name, gone)   # 2.2.18 (item 12)
         self.watch_list = [w for w in self.watch_list if w["name"] != name]
         self.watch_xy.pop(name, None)
         self._refresh_watch_box()
@@ -6943,6 +7337,7 @@ class App(Tk):
         elif note:
             entry["variable"] = note
         self.watch_list.append(entry)
+        self._remember_discovery_watch(entry)   # 2.2.18 (item 12)
         if xy is not None:
             self.watch_xy[name] = xy
             self.status.set(f"Watching {name} at pixel ({xy[0]:.0f}, {xy[1]:.0f}).")
@@ -7657,6 +8052,7 @@ class App(Tk):
                            if st.get("seq")} if self.mode_key != "discovery" else set()
         self._seq_note_for = None
         self._apply_field_check(vet, solved, diag)
+        self._restore_discovery_watch()   # 2.2.18 (item 12): this field's remembered Discovery watch stars
         self._locate_watch_stars()
         self._fill_marked_from_chart()
         self._suggest_comps()
@@ -7684,6 +8080,9 @@ class App(Tk):
                 if auto_target and self.target_xy == getattr(self, "_auto_target_xy", None):
                     # 2.2.15 (review): the Target marker this solve placed goes with it.
                     self.target_xy = None
+                    if getattr(self, "_pick_auto_advanced", False) and self.pick_mode.get() == "comp" \
+                            and not getattr(self, "_pick_user_chosen", False):
+                        self.pick_mode.set("target")   # 2.2.18 (item 7): no marker, so back to the Target step
                     self._update_pick_label()
                     self.update_star_panel()
                     self.log("Target: the marker placed from that solve was removed with it; click the target.")
@@ -8497,6 +8896,38 @@ class App(Tk):
         self.refresh_preview()
         self.status.set("Candidate marks cleared.")
 
+    def _warn_marker_offsets(self, radius: float) -> list:
+        """2.2.18 (item 5): before photometry, say in the Log when a marked star's marker is off the centre of its
+        star by more than about 1.5 FWHM (or more than the frames' centring may move it): every frame is then measured
+        at the marker, beside the star, and the star reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off read
+        2.2 mag faint). Returns [(label, offset px)] of the markers it warned about. Never blocks the run."""
+        if self.preview is None or not self.preview_is_debayered:
+            return []
+        seeing = self._seeing()
+        fwhm = seeing if math.isfinite(seeing) else None
+        rows = [("Target", self.target_xy)] + [(role_label(r), getattr(self, f"{r}_xy")) for r in COMP_ROLES] \
+            + [("Check", self.check_xy)]
+        warned = []
+        for label, xy in rows:
+            if xy is None:
+                continue
+            try:
+                info = core.marker_offset(self.preview, xy[0], xy[1], radius, fwhm)
+            except Exception:
+                continue
+            if not info["off"]:
+                continue
+            warned.append((label, info["offset"]))
+            self.log(f"⚠ {label} marker at ({xy[0]:.1f}, {xy[1]:.1f}) is {info['offset']:.1f} px from the center of "
+                     f"the star there ({info['x']:.1f}, {info['y']:.1f})"
+                     + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
+                     + ". The frames are measured at the marker, so this star would read faint. Clear it and click "
+                       "the star again (zoom in first) if that is not intended.")
+        if warned:
+            self.status.set("Check the Log: " + ", ".join(label for label, _o in warned)
+                            + (" is" if len(warned) == 1 else " are") + " marked off the center of the star.")
+        return warned
+
     def _markers_in_order(self) -> bool:
         """2.2.3: before photometry, every marked star must be on the image and on a star, and no star may have a
         name in the Stars panel without a marker (a leftover from an earlier run). Returns False to stop."""
@@ -8523,6 +8954,7 @@ class App(Tk):
                 if not messagebox.askyesno(APP_TITLE, f"There is no star under the {label} marker at ({x:.0f}, {y:.0f}). "
                                                       "Measure blank sky there anyway?"):
                     return False
+        self._warn_marker_offsets(radius)   # 2.2.18 (item 5)
         ghosts = [(role, label, var.get().strip()) for role, (label, var) in names.items()
                   if role != "target" and var.get().strip() and getattr(self, f"{role}_xy") is None]
         if ghosts:
