@@ -8,7 +8,7 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 
 - The night must cover the maximum or minimum, with points well before and after it. SHOBS-P needs at least 12 usable points.
 - For the O − C, you need the star's elements. SHOBS-P can fetch them from VSX.
-- For heliocentric or barycentric times (HJD, BJD_TDB), the target's RA/Dec must be on the Input page. They are filled in when the Star ID is looked up. Without them, times stay in JD.
+- For heliocentric or barycentric times (HJD, BJD_TDB), the target's RA/Dec must be on the Input page. They are filled in when the Star ID is looked up. Without them, times stay in JD, and the O−C is taken in JD (up to 8 minutes off).
 
 ## Measure a time
 
@@ -28,14 +28,14 @@ The result text gives, for each extremum found that night:
 
 - **Tmin** or **Tmax**: the adopted time in HJD with its error in days and minutes, plus the same moment in **BJD_TDB** and **JD**.
 - **polynomial deg N**: the time from a local polynomial fit, with how many points and what window it used. This is the adopted method.
-- **Kwee-van Woerden**: for minima only, the classic method for eclipse timings, shown for comparison.
+- **Kwee-van Woerden**: the classic method for eclipse timings, shown for comparison (it assumes mirror-image branches, so on a lopsided maximum it can read a minute off).
 - **Fourier**: the time from a Fourier series fitted at the period, also for comparison.
-- **O−C**: in days and minutes, with the cycle number E and the calculated time C it was compared against.
+- **O−C**: in days and minutes, with the cycle number E and the calculated time C it was compared against. For a minimum, E can be a half cycle (a secondary eclipse).
 - Any notes and ⚠ warnings.
 
 On the left plot, the red curve is the polynomial fit and the red line the adopted time. The blue dashed line is Kwee-van Woerden, the green dotted line Fourier, and the purple dash-dot line the predicted time C.
 
-Where does the error come from? SHOBS-P refits the polynomial 500 times with stretches of the night's own noise added, and allows for noise that lasts minutes (red noise). The error is never smaller than half the difference between the methods. So if the methods disagree, the error says so. (The details are for the methods document, planned.)
+Where does the error come from? SHOBS-P refits the polynomial 500 times with stretches of the night's own noise added, and allows for noise that lasts minutes (red noise). The error is never smaller than half the difference from the Fourier time (and, for a minimum, from Kwee-van Woerden). So if the methods disagree, the error says so. Without elements there is no Fourier check and the error can be low by a factor of 2–3; the result says so. (The details are for the methods document, planned.)
 
 If no elements are given, the result says **No elements: type the period and epoch (or Elements from VSX) for the O−C.** You still get the time.
 

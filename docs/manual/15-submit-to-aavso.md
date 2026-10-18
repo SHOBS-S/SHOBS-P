@@ -17,7 +17,7 @@ In the Output page's **Notes** box, the default note is **OSC reduced; not trans
 2. Answer any questions (below).
 3. Choose where to save, unless an **Output** folder is set on the Input page; then the file goes there directly.
 
-The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the filter code, and the UTC date (or a date range such as `16-SEP-2026_to_06-OCT-2026` for several nights). An existing file is never overwritten; a new copy gets `_2`, `_3` and so on.
+The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the filter code, and the UTC date (or a date range such as `16-SEP-2026_to_06-OCT-2026` for several nights). With an Output folder, an existing file is never overwritten; a new copy gets `_2`, `_3` and so on.
 
 ### Questions before saving
 
@@ -86,13 +86,13 @@ The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE
 | AMASS | The airmass, or `na` without a site and pointing |
 | GROUP | `na` |
 | CHART | The Chart ID |
-| NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`) |
+| NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep |
 
 Stars from the AAVSO sequence appear under their **AUID**. Other stars appear under their catalog name. The comps named are the ones actually in use, including a choice made with **Use comps…** (chapter 11). For a Sloan filter, the notes also say which catalogs the comp and check magnitudes came from.
 
 ## Upload with WebObs
 
-After saving, the status bar names the file and shows a button **Open AAVSO WebObs…**. The same button is in the **Results** row of the Output page.
+After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…**. The same button is in the **Results** row of the Output page.
 
 1. Press **Open AAVSO WebObs…**. AAVSO's photometry submission page opens in your browser.
 2. Log in with your AAVSO account.

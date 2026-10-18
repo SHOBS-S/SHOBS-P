@@ -173,7 +173,8 @@ Tick **Candidates only** in the **View** box to hide everything else on the imag
 
 The **Results** row holds:
 
-- **Save plot PNG…**: the three plots with a one-line summary, `<field>_<filter>_<date>_SHOBS-P_scan.png`.
+- **Save plot PNG…**: the three plots with a one-line summary, `<field>_<filter>_<date>_SHOBS-P_scan.png`
+  (`<field>` is the Input page's Star ID if one is left from another mode, otherwise `field`).
 - **Save CSV…**: one row per measured star (position, magnitude, scatter, expected scatter, excess, candidate rank
   and kind, period, VSX name).
 - **Export candidates CSV…**: one row per candidate, with color and VSX period, `field_scan_candidates.csv`.

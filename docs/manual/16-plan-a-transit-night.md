@@ -142,7 +142,7 @@ The table shows **Night of**, **Ingress**, **Mid**, **Egress**, **Altitude in / 
 
 **± ephemeris** is how uncertain the predicted time is on that date. If it is large (tens of minutes), take more
 baseline on both sides so the transit cannot slip out of your window. **Export CSV…** saves the list as
-`<planet>_transits.csv`.
+`<planet>_transits.csv` (the planet's name without spaces, e.g. `TrES-3b_transits.csv`). With no observable transit in the range the table says *"No observable transits in this range."*
 
 ## How much baseline
 
