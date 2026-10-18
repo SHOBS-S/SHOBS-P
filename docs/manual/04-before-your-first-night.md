@@ -159,24 +159,30 @@ C:\Astro\
     Bias_gain100\
     Darks_gain100_-10C_120s\
     Darks_gain100_-10C_60s\
-    Flats_2026-10-12_rot30\
   SZ Lyn\
     2026-10-14\
       Lights\
+      Flats\
     2026-10-21\
       Lights\
+      Flats\
     Reports\
   TrES-3 b\
     2026-09-04\
       Lights\
+      Flats\
     Reports\
 ```
 
 Why this works:
 
-- **Calibration frames in their own folders**, named by what makes them match (gain, temperature, exposure, date,
-  rotator angle). One set of darks can serve many nights, and its saved master is reused.
-- **One flat folder per camera angle.** Then the angle check never has to ask.
+- **Bias and darks in a shared Calibration folder**, named by what makes them match (gain, temperature, exposure).
+  They don't change from night to night, so one set serves many nights and its saved master is reused.
+- **Flats go with the night they were taken.** Flats record that night's focus, dust and camera angle, so each
+  night's flats sit in a **Flats** folder next to its **Lights**. The master flat SHOBS-P builds is saved in that
+  folder's `SHOBS-P masters` subfolder, so it stays with the night too. If a night has no usable flats of its own,
+  point the Flats box at another night's Flats folder taken at the same camera angle (SHOBS-P checks the angle and
+  the flats' age and tells you if they don't match).
 - **One night, one field, one Lights folder.** Keep each night's lights of one target in their own folder. SHOBS-P can
   sort out a folder that holds two fields (it asks), but it is quicker not to need that.
 - **Calibration frames that end up in a Lights folder are skipped** automatically, so a capture program that saves
