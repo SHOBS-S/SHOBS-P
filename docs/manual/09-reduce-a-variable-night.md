@@ -26,7 +26,7 @@ When the Photometry page opens, the image is solved on its own (chapter 8). The 
 
 ### Target
 
-If the Star ID lookup found RA/Dec, SHOBS-P usually places the Target marker (orange **T**) for you after the solve. The log says which star it used. Check that the marker is on your star. If it is not, or if no marker appeared:
+If the Star ID lookup found RA/Dec, SHOBS-P usually places the Target marker (orange **T**) for you after the solve. The log says which star it used, and the click choice moves on to **●  Comps (C1–C10)** by itself (unless you already picked a choice on this image). Check that the marker is on your star. If it is not, or if no marker appeared:
 
 1. Pick **●  Target** in the tools row.
 2. Click the target on the image. The marker snaps to the nearest star.
@@ -71,7 +71,8 @@ SHOBS-P may ask a few questions before it starts. The ones you will meet most in
 - **With N comps the AAVSO report is an ensemble, and AAVSO requires a check star…** You have no check star marked. Answer **No** and mark one, unless you will never report this night.
 - **These have a name in the Stars panel but no marker on this image…** A name is left over from an earlier night. **Yes** clears those names, **Cancel** lets you mark the stars.
 - **… is a known or suspected variable …** about a comp or the check. See above.
-- A question about Transits mode, if the **Planet (Transits)** box holds a planet of your target (from an earlier Transits-mode lookup) and a transit is predicted during your frames. For variable-star work, answer **No** (run in Variables mode anyway).
+- **Run in Transits mode instead?**, if your target hosts a known transiting planet (from the **Planet (Transits)** box, or looked up in the NASA Exoplanet Archive after the Star ID lookup) and a transit is predicted during your frames. You do not need to have used Transits mode first. For variable-star work, answer **No** (run in Variables mode anyway).
+- A ⚠ line in the log saying a marker is some pixels **from the center of the star**. See chapter 8.
 
 Chapter 8 lists the other checks. The progress bar shows each frame as it is measured, and you can stop with **Cancel run**. Nothing is added to a series if you cancel.
 
@@ -114,10 +115,11 @@ The page has, from top to bottom:
 | **Mean mag ± err** | The night's mean magnitude |
 | **Target σ** | The target's scatter that night |
 | **Check σ** | The check star's scatter that night |
-| **Side** | Pier side(s), when known |
+| **Side** | Pier side(s), when known; **—** when unknown, and always on an alt-az mount |
 | **Flip step** | The jump at a meridian flip; ⚠ when it is large |
 | **B−V** | The night's color, if you measured it |
 | **Flags** | Counts of flagged points, e.g. `12 cloud, 3 sat` |
+| **Sent** | Where and when the night's report was sent, e.g. `✓ WebObs 2026-10-18`, or **—** (chapter 15) |
 | **Note** | Your night note (chapter 10) |
 
 Click a row to zoom the light curve and check-star plot to that night. Click it again to show all nights.
@@ -155,7 +157,7 @@ If you set an **Output** folder on the Input page, these files go there without 
 
 To keep this night for later, press **Save series** (chapter 10). Nothing is written to disk until you save.
 
-> **Caution:** SHOBS-P does not ask before you close the program. If you close it with an unsaved series, those points are lost. Save the series first.
+> **Caution:** A single night that was never saved as a series closes without a question. If you want to keep it, press **Save series** before you close SHOBS-P. (A series file with unsaved changes, or an unsaved series of two or more nights, is offered a save when you close the window.)
 
 ---
 

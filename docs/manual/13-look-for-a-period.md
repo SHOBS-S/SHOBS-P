@@ -15,7 +15,8 @@ On the **Output – Variability** page:
 ## Set the search
 
 1. In **Period search (days)**, type the shortest and longest period to try. The defaults are 0.05 to 20 days.
-2. Press **Refit period**. (The search does not rerun when you only type in the boxes.)
+2. Press **Enter**, or click into another box. The search runs again with the new range. (It does not rerun while you
+   are still typing, or when you leave a box without changing it.) **Refit period** also runs it again.
 
 Choose a range that fits your star and your data:
 

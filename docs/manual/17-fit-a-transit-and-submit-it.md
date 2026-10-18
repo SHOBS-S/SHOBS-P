@@ -44,7 +44,9 @@ depends on the number of frames and comps.
 - **Comp health…** and **Use comps…** (below).
 - **Trim** row (below).
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
-- The **Results** row with the save buttons, and **Variable View  ▶** at the right.
+- The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
+  package…**, **Open ExoFOP…**, **Save light-curve CSV…** and **Save plot PNG…**, with **Variable View  ▶** at the
+  right.
 
 ## Read the verdict
 
@@ -190,6 +192,18 @@ When the verdict is "detected" and you are happy with the fit:
    instructions.
 4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**.
 5. Click **Save plot PNG…** for your own records.
+6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
+   (the same as on the Variables Output page) and a fit CSV beside it, named like
+   `TrES-3b_TG_05-OCT-2026_SHOBS-P_transit_fit.csv`. The fit CSV has the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`,
+   `model`, `residual` and `flag`, one row per point in time order. Trimmed points are rows too, flagged `trimmed`,
+   with no error, model or residual. With an **Output** folder set, both files get the same number as the report and
+   plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved.
+
+**Uploading twice.** **Open AAVSO Exoplanet Database…** and **Open ExoFOP…** work like **Open AAVSO WebObs…** in
+chapter 15: when the page opens, the night of the report (or package) you saved last is marked sent, and the night
+table's **Sent** column shows it (for example `✓ AAVSO exo 2026-10-06` or `✓ ExoFOP 2026-10-06`). If that night was
+already sent in another report, SHOBS-P asks before opening the page. Double-click the night in the night table to
+unmark it.
 
 If the verdict is "inconclusive" or "none", SHOBS-P asks before saving a report and writes the verdict into its
 notes. Chapter 19 describes every file and both upload sites.

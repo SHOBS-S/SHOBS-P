@@ -101,16 +101,17 @@ where the frames point; a few arcminutes off is fine.
 
 ## The AAVSO report box
 
-- **Observer code**: your AAVSO observer code. It goes into every AAVSO report. It is not remembered between
-  sessions, but it is saved with a series.
+- **Observer code**: your AAVSO observer code. It goes into every AAVSO report. It is remembered between sessions,
+  and saved with a series too.
 - **Chart ID**: the AAVSO chart (sequence) your comparison stars come from. You usually don't need to type it: when
   you pick an AAVSO sequence star as a comparison or check star, SHOBS-P fills it in. When none of your comparison
   or check stars are AAVSO sequence stars, it is `na`.
 
 ## Site and Optics
 
-These boxes are described in chapter 4. They are usually filled already: the site and telescope are remembered, and
-**Scan folders** fills empty boxes from your FITS headers.
+These boxes are described in chapter 4, including the **Mount** choice. They are usually filled already: the site,
+telescope, focal length, pixel size and mount are remembered, and **Scan folders** fills empty boxes from your FITS
+headers.
 
 ## Press Scan folders
 
@@ -118,7 +119,9 @@ These boxes are described in chapter 4. They are usually filled already: the sit
 It is what:
 
 - counts the frames and skips calibration frames found among the lights;
-- reads the Bayer pattern (or detects a monochrome camera from the flats) and the filter;
+- reads the Bayer pattern (or detects a monochrome camera from the flats or the lights' sky) and the filter;
+- finds color images that are already debayered and asks which channel to measure;
+- reads the mount from the headers when they make it clear;
 - fills empty Site and Optics boxes from the header;
 - runs the checks below.
 
@@ -157,8 +160,20 @@ yours, and SHOBS-P will not ask again about those same values.
 **Yes** saves it as yours; **No** uses it for these frames only.
 
 **Monochrome camera.** If there is no Bayer keyword and the raw flats show no color mask, the status bar says
-**Monochrome camera found (no color mask in the flat): Bayer pattern MONO.** If your camera really is a color camera,
-choose the pattern on the Calibrate page.
+**Monochrome camera found (no color mask in the flat): Bayer pattern MONO.** Without flats, SHOBS-P tests the lights'
+sky background instead (it needs bias or dark frames, or a bright sky); then the status bar says **Monochrome camera
+found (no color mask in the lights' sky background): Bayer pattern MONO.** If neither can tell, SHOBS-P asks once
+for these lights: **Color or monochrome camera?** If your camera really is a color camera, choose the pattern on the
+Calibrate page.
+
+**Color images, already debayered.** If the lights have three color channels, SHOBS-P asks which channel to measure:
+**Green (TG)**, **Red (TR)**, **Blue (TB)** or **Luminance (CV)**. It asks once per lights folder; the status bar then
+says, for example, **40 lights: color images, green (TG) channel measured.** These lights are not debayered or
+calibrated again (chapter 4).
+
+**The mount.** If the headers clearly show the mount (for example a meridian flip, or a derotator), that mount is
+used for these lights, and the hint under **Mount** says so. If it differs from your **Mount** box, the hint suggests
+changing the box when this is your own telescope.
 
 **MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them.
 
@@ -175,6 +190,9 @@ The line under the page title says which series the night will join:
 
 **Load series…** opens a series file you saved before. **Close series** puts the open series aside (the file on disk is
 not changed; you are offered a save first if it has unsaved changes). Chapter 10 covers series in full.
+
+Closing the SHOBS-P window asks the same way, but only when a series file has unsaved changes or a series of two or
+more nights has never been saved: **Yes** saves first, **No** closes without saving, **Cancel** keeps SHOBS-P open.
 
 > **Tip:** To add tonight to an existing series, load the series **before** you run photometry. After the run,
 > SHOBS-P asks whether to add the night.

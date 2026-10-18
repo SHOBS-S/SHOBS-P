@@ -24,7 +24,7 @@ It takes about ten minutes, most of it waiting for downloads.
 
 1. Open the SHOBS-P releases page at
    [github.com/SHOBS-S/SHOBS-P/releases](https://github.com/SHOBS-S/SHOBS-P/releases).
-2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.17.zip`).
+2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.18.zip`).
 3. Unzip it somewhere permanent, for example `C:\Astro`. Avoid your Downloads folder: the shortcuts point at this
    folder, so it should not move.
 4. Open the folder the zip made. It holds files such as `clearv_app.py`, `Create shortcuts.bat`,
@@ -57,8 +57,12 @@ place.
 The test writes its log to `selftest_log.txt` in the SHOBS-P folder, and a copy to `SHOBS-P_selftest_log.txt` in your
 Downloads folder. If you ever report a problem, attach this file.
 
-A line such as `(reports not found on W:, skipped)` or `(NASA Exoplanet Archive not reachable: skipped)` is normal:
-that part of the test is simply skipped.
+A line such as `(no sample transit reports to run on: skipped)` or `(NASA Exoplanet Archive not reachable: skipped)`
+is normal: that part of the test is simply skipped.
+
+> **Tip:** The transit part of the test runs on sample AAVSO exoplanet reports, and none come with SHOBS-P. To run
+> it, make a folder named `selftest_reports` next to `selftest.py` and put reports named `AAVSO_TrES-3b_*.txt`,
+> `AAVSO_KOI-217b_*.txt` or `AAVSO_WASP-12b_*.txt` in it.
 
 If the result says `FAILED`, the lines marked `FAIL` say which part. See chapter 24, Troubleshooting.
 
@@ -116,7 +120,9 @@ update does not lose them. Chapter 3 lists what is remembered.
 
 - If something fails inside the program, a box says **Something went wrong:** with the error, and the details go to
   `.shobs_p.log` in your user folder (`C:\Users\<you>`).
-- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.17**).
+- `.shobs_p.log` also holds every line of the Log window, each with the date and time in front. When it grows past
+  5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts.
+- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.18**).
 - To report a problem, open an Issue on the SHOBS-P GitHub page and attach `selftest_log.txt` and `.shobs_p.log`,
   with a screenshot.
 

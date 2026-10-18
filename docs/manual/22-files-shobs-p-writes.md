@@ -34,7 +34,7 @@ Every text file SHOBS-P writes (reports, CSVs, fit notes) carries a line such as
 
 `# Created 121153Z OCT 26 by SHOBS-P`
 
-The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.17*
+The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.18*
 in the picture. The line tells you, and anyone you send the file to, when it was made and with which program.
 
 ## Result files by mode
@@ -59,7 +59,7 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 |---|---|
 | **Save AAVSO exoplanet report…** | `AAVSO_<planet>_<date>_SHOBS-P.txt` (for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`) |
 | **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png` |
-| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry. |
+| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag` (trimmed points flagged `trimmed`). It gets the same number as the report and plot. |
 | **Save ExoFOP package…** | A folder `ExoFOP_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` holding `…_lightcurve.csv`, `…_fit.txt` and `…_plot.png`. |
 | **Tonight's transits…** → **Export CSV…** | `transits_<date>.csv` |
 | **Transit planner…** → **Export CSV…** | `<planet>_transits.csv` |
@@ -91,7 +91,8 @@ night notes, the watch list and the settings of each night. It is a text file (J
 
 - **Save series** always asks where to save it, suggesting `<star>.cvseries`.
 - After that, many actions save it again by themselves: adding or removing a night, night notes, **Use comps…**,
-  planet-transit flags, and AAVSO report bookkeeping. The status bar says so (*"Auto-saved to …"*).
+  planet-transit flags, catalog magnitudes typed in **Use comps…**, and report bookkeeping (saved reports and the
+  nights marked sent). The status bar says so (*"Auto-saved to …"*).
 - **The backup copy.** The first time SHOBS-P writes to a series file in a session, it keeps the previous version as
   `<name>_prev.cvseries`. Later writes in that session leave the `_prev` file alone, so it always holds the series
   as it was before this session. If something goes wrong, close the series and load the `_prev` file.
@@ -121,8 +122,8 @@ hide them; type the name into the address bar, or turn on hidden items.
 
 | File | What it holds |
 |---|---|
-| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, scintillation choice, stretch, Blink speed, window places, Tonight's transits limits, and similar. Not the folders. |
-| `.shobs_p.log` | Error details. When something goes wrong in the window, the full error is appended here. |
+| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, focal length, pixel size, mount, observer code, scintillation choice, stretch, Blink speed, window places, Tonight's transits limits, Discovery's period range and watch stars, and similar. Not the folders. |
+| `.shobs_p.log` | Every line of the Log window, each with the date and time in front, and the full details of any error. Past 5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts. |
 | `.shobs_p_transit_catalog.csv` | The list of transiting planets for Tonight's transits, refreshed weekly. |
 | `.shobs_p_cache\catalogs\` | Star catalogs fetched for your fields, kept for 30 days so solving the same field again is faster. |
 | `.shiloh_photometry_exports.json` | Named setups from the **Export…** window. |

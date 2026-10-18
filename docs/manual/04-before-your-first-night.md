@@ -29,17 +29,19 @@ In the **Optics** box on the Input page:
 |---|---|---|
 | **Telescope** | Your telescope's name, for example "0.25 m Newtonian". | Goes into reports. Leave it blank to use the FITS header's name (often the mount's name, so typing your own is better). Remembered. |
 | **Telescope aperture (mm)** | The clear aperture in millimeters. | Used for the scintillation error. Remembered. |
-| **Focal length (mm)** | The effective focal length, with any reducer. | With the pixel size, gives the plate scale the solve needs. |
-| **Pixel size (µm)** | Your camera's pixel size. | As above. |
+| **Focal length (mm)** | The effective focal length, with any reducer. | With the pixel size, gives the plate scale the solve needs. Remembered. |
+| **Pixel size (µm)** | Your camera's pixel size. | As above. Remembered. |
 | **Binning** | 1, 2 or 4. | SHOBS-P's own binning (see below). Usually 1. |
+| **Mount** | **German equatorial** or **Alt-az**. | Meridian flips, pier sides and the flats-angle check depend on it (see below). Remembered. |
 
 Leave **Include scintillation (atmospheric twinkling) in the error bars** ticked. It makes the error bars match the
 real scatter, especially for bright stars and short exposures.
 
-> **Caution:** **Focal length (mm)** and **Pixel size (µm)** are not remembered between sessions. They start at
-> 2900 mm and 3.76 µm each time. If your capture program writes `FOCALLEN` and `XPIXSZ` into the headers,
-> **Scan folders** fills them in (or asks if they differ); otherwise, check both boxes before every session. Wrong
-> values are the most common reason a solve fails.
+> **Tip:** Until you type your own, **Focal length (mm)** and **Pixel size (µm)** start at 2900 mm and 3.76 µm. If
+> your capture program writes `FOCALLEN` and `XPIXSZ` into the headers, **Scan folders** fills them in while the
+> boxes still hold those starting values, and asks if your own values differ from the header's. Once set, both are
+> remembered. Wrong values are the most common reason a solve fails, so check them once. Optics read from a loaded
+> series or from another telescope's frames are never saved as yours.
 
 **About Binning.** Leave your camera unbinned (bin 1) when you capture, and use this box if you want bigger pixels.
 SHOBS-P bins only pixels of the same color, so the colors of an OSC camera stay separate. Some capture programs mix
@@ -48,8 +50,7 @@ red, green and blue when they bin a color sensor; SHOBS-P notes this in the log 
 ## Your observer code
 
 If you report to the AAVSO, type your observer code in **Observer code** (the **AAVSO report** box on the Input
-page). It is not remembered between sessions, but it is saved in every series file, so you normally type it once per
-target.
+page). SHOBS-P remembers it between sessions, and it is also saved in every series file.
 
 ## Color (OSC) or monochrome camera
 
@@ -74,7 +75,10 @@ You then choose which color to measure with **Channel** on the Calibrate page:
 ### Monochrome cameras
 
 Set **Bayer pattern** to **MONO** on the Calibrate page. SHOBS-P does this by itself when it finds no color mask in
-your raw flats; without flats or a header keyword it cannot tell, and you must choose **MONO** yourself.
+your raw flats. Without flats, it looks at the sky background of the lights instead. That test needs either bias or
+dark frames on the Input page (they tell it the camera's pedestal) or a fairly bright sky. If it still cannot tell,
+SHOBS-P asks once for those lights: **Color or monochrome camera?**, with the buttons **Color camera** and
+**Monochrome camera**. Your answer counts as a pattern you picked by hand.
 
 With **MONO**, the **Channel** box becomes **Filter**. SHOBS-P reads the filter from the FITS `FILTER` keyword, so
 with a filter wheel each night is labeled correctly by itself. If your headers have no filter, choose it in the
@@ -89,6 +93,24 @@ with a filter wheel each night is labeled correctly by itself. If your headers h
 `g'`, `gp`, `sdss g`, `Sloan g` or `Astrodon Sloan g'`. The comparison stars then get magnitudes in the same band:
 from the AAVSO sequence when it has that band, otherwise APASS or Gaia. Sloan u′ has few catalog stars, so expect fewer
 comparison stars to choose from.
+
+### Color images that are already debayered
+
+Some programs save lights that are already debayered and calibrated: color images with three channels (red, green and
+blue). SHOBS-P finds these when you press **Scan folders** and asks once per lights folder which channel to measure:
+**Green (TG)** (closest to V; the usual choice), **Red (TR)**, **Blue (TB)** or **Luminance (CV)** (all three combined,
+as a clear filter).
+
+For these lights SHOBS-P:
+
+- sets **Bayer pattern** to **MONO** and does not debayer them again;
+- treats them as pre-calibrated: the bias, dark and flat entries are not used for them;
+- shows the channel in the **Filter** box on the Calibrate page. To measure another channel, pick **Green imaging
+  (TG)**, **Red imaging (TR)**, **Blue imaging (TB)** or **Clear / L (CV)** there. This cannot be changed while a step
+  is running.
+
+Each night of a series remembers its channel, and SHOBS-P tells you when you add a night measured in another channel.
+Color (B−V) is not measured on these images, because one channel is measured per run.
 
 **Filters SHOBS-P cannot use.** Johnson/Cousins I, H-alpha and other narrowband filters have no catalog magnitudes
 here. Frames taken through them are reported as clear (CV) with V comparison magnitudes, and the log says so.
@@ -136,6 +158,20 @@ camera or rotator is actually turned to a new angle on the telescope.
 
 > **Caution:** If your rotator really turns the camera 180° during the night (rather than the mount flipping), the
 > flats fit only one side. SHOBS-P tells a flip from a turn using the `PIERSIDE` keyword when your headers have it.
+
+### Alt-az mounts and derotators
+
+An alt-az mount never flips, so set **Mount** to **Alt-az** in the Optics box. SHOBS-P then shows no flip segments,
+lets the frame alignment follow the field rotation, and uses the alt-az rules for flats:
+
+- **Without a derotator**, the rotator reading is the camera's angle on the telescope. Readings 180° apart are a real
+  turn, not a flip. If the flats and lights are more than 5° apart, SHOBS-P asks before calibrating.
+- **With a derotator**, the camera turns against the optics all night anyway. Flats then fully correct dust on the
+  filter, window and sensor whatever their angle, so SHOBS-P writes one caution in the log and never asks.
+
+SHOBS-P also reads the mount from the lights' headers. It trusts them only with clear evidence (for example a
+`PIERSIDE` that changes sides, a mount-type keyword, or a derotator's smooth drift); otherwise the **Mount** box
+decides. The hint under the box says what the headers show, and the log says which mount was used.
 
 ### Saved masters
 

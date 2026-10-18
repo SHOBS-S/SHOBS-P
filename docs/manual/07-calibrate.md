@@ -14,6 +14,8 @@ light so you can see it, and then moves on to the Photometry page by itself.
      usually **green**.
    - **Monochrome camera**: **Bayer pattern** shows **MONO**, and **Filter** shows the filter (from the FITS header,
      or the one you chose).
+   - **Color images that are already debayered** (three channels): **Bayer pattern** shows **MONO**, and **Filter**
+     shows the channel you chose when you scanned the folders (see "Already-debayered color images" below).
 
    The two gray lines to the right say what will be reported, for example "AAVSO filter code TG" and "Green
    channel, V comps". Chapter 4 explains the choices.
@@ -73,6 +75,18 @@ To measure another color of a color camera, choose it in **Channel** and press *
 image is split again with the new color and you go back to the Photometry page. Nothing is recalibrated, so this is
 quick. The image is solved again, because it is a new picture.
 
+## Already-debayered color images
+
+When the lights are color images that another program already debayered and calibrated, SHOBS-P skips the debayer and
+the calibration for them. The log says **These lights are color images (already debayered and calibrated): the bias,
+dark and flat entries are not used for them.** No question is asked.
+
+The **Filter** box chooses the channel: **Green imaging (TG)**, **Red imaging (TR)**, **Blue imaging (TB)** or
+**Clear / L (CV)** (luminance). Pick another one and press **Build masters and calibrate** again to see it in the
+preview. While a step is running the channel cannot change; the log says **The channel of the color images cannot
+change while a step is running; choose it again when it has finished.** A Bayer pattern picked for these lights is
+put back to **MONO**, because it would debayer them a second time.
+
 ## Questions you may be asked
 
 These questions appear before the masters are built. Each one explains what **Yes** and **No** do.
@@ -87,7 +101,12 @@ SHOBS-P asks:
 
 **The flats were taken at another camera angle.** If your headers record the rotator angle and the flats differ from
 the lights by more than 2°, SHOBS-P asks whether to calibrate with them anyway. **No** stops, so you can pick flats
-taken at the lights' angle or clear the **Flat** row. A meridian flip does not count as a different angle (chapter 4).
+taken at the lights' angle or clear the **Flat** row. On a German equatorial mount a meridian flip does not count as a
+different angle (chapter 4).
+
+On an **alt-az** mount without a derotator there is no flip, so readings 180° apart are a real turn; SHOBS-P asks when
+the flats and lights are more than 5° apart. With a derotator it never asks: the log says **Caution: flats taken with
+the derotator at sky angle …** and explains that this is fine.
 
 **The Flat folder mixes camera angles.** One master built from flats at several angles matches none of them exactly.
 **No** stops so you can keep only the flats taken at the lights' angle.
@@ -109,7 +128,12 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
 - **"Meridian flip before frame 222 (30° to 210°) …"**: the rotator reading changed by 180° at a flip. The same flats
   fit both sides. Each star may show a small step at the flip; SHOBS-P lines this up later.
 - **"Note: the camera rotator moved during these lights …"**: the camera really turned during the night. One set of
-  flats can only match one angle, so expect steps in the light curve there.
+  flats can only match one angle, so expect steps in the light curve there. On an alt-az mount every change over 2°
+  counts as a move, never as a flip.
+- **"Mount: Alt-az …"** (written when you scan the folders): which mount is used for these lights, and whether it came
+  from the headers or the **Mount** box.
+- **"Zenith keyhole: the field reached altitude …"** (also written at the scan): on an alt-az mount the field went above 85°, where the mount's
+  azimuth speed and the field rotation get extreme. Check those frames on the Blink page.
 - **"Note: the camera binned these frames (XBINNING=2) …"**: your camera did the binning. Some capture programs mix
   red, green and blue when they bin a color sensor; capture unbinned and set **Binning** in SHOBS-P instead.
 - **"The lights carry a plate solution in their FITS headers: Solve uses it directly."**: good news; the solve will
@@ -119,19 +143,22 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
 
 ## When calibration fails
 
-A window says what went wrong (during the run it starts **Calibration failed:**). The most common messages:
+A window says what went wrong. It starts **Calibration failed:**, and the same line goes into the log. The most
+common messages:
 
 | Message | What to do |
 |---|---|
 | **No light frames found.** | Check the **Lights** row on the Input page, and that the frames are FITS or XISF. |
 | **The masters do not fit these lights: …** | A master of another size or binning. Pick the matching calibration frames, set **Binning** back, or tick **Rebuild masters (ignore saved ones)**. |
-| **… is not a master SHOBS-P built.** | You chose another program's master with **Master file…**. Choose the folder of raw frames instead. |
+| **… is not a master SHOBS-P built.** | A row points at another program's master. Choose the folder of raw frames instead. |
+| **… is a master dark, not a master flat.** (or similar) | A row points at the wrong kind of master. Pick the right one with **Master file…**. |
 
 The full details are always in the log on this page.
 
-> **Caution:** A monochrome camera that writes no Bayer keyword, with no flats in the **Flat** row, cannot be detected.
-> The pattern then stays at **RGGB** and every frame is split as if it had a color mask. Set **Bayer pattern** to
-> **MONO** before calibrating.
+> **Caution:** A monochrome camera that writes no Bayer keyword and has no flats is detected from the lights' sky
+> background, which needs bias or dark frames (or a bright sky). If SHOBS-P still cannot tell, it asks **Color or
+> monochrome camera?** when you press **Scan folders**. If you skipped the scan, check that **Bayer pattern** says
+> **MONO** before calibrating; otherwise every frame is split as if it had a color mask.
 
 ---
 

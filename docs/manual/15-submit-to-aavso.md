@@ -22,7 +22,9 @@ The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the 
 ### Questions before saving
 
 **The Star ID is “hd219134”. AAVSO spells it “HD 219134” … Use “HD 219134” in the report?**
-Answer **Yes**. WebObs may not match another spelling to the star.
+Answer **Yes**. WebObs may not match another spelling to the star. The report and its file name use the AAVSO
+spelling, but the **Star ID** box changes to it only once the report is saved. If you cancel anywhere afterwards, the
+old name stays. The log then says **Star ID set to “HD 219134” (AAVSO's spelling), as used in the saved report.**
 
 **Before you upload:** followed by a list. Each item is something AAVSO may reject or misfile:
 
@@ -52,14 +54,26 @@ With no night highlighted, the whole series is saved.
 
 ### The duplicate warning
 
-SHOBS-P records in the series file every night that has gone into a report. If you save a report that includes a night already saved the *other* way (in its own report when you now save the whole series, or the other way round), it warns:
+Saving a report never warns: many reports are saved and never uploaded. The warning comes when you upload, that is
+when you press **Open AAVSO WebObs…** (on the Output page or on the status line).
 
-> These nights are already in another AAVSO report:
->   • … : already saved in its own report, AAVSO_… (2026-10-06 21:40)
->
-> If that report was uploaded, uploading this one too puts the same observations into the AAVSO database twice. Upload only one of them for each night.
+- When the upload page opens, SHOBS-P marks the nights of the last report you saved as **sent**. The night table's
+  **Sent** column then shows where and when, for example `✓ WebObs 2026-10-18`, and the log says **Marked sent to
+  AAVSO WebObs: …**.
+- If the last saved report holds a night that was already sent in another report, SHOBS-P asks before the page opens:
 
-> **Caution:** There is no warning when you save a *whole-series* report again after adding nights. That new report repeats every earlier night. If you uploaded the earlier whole-series report, upload only the new nights (one night at a time, as above).
+  > Night 5–6 Oct 2026 was already sent on 2026-10-06 (in AAVSO_…); AAVSO will hold duplicates. Open anyway?
+  >
+  > … holds it again. Upload only the nights not sent yet (save a report of just one night: highlight it first), or
+  > delete the earlier upload at AAVSO. A night that was never really sent can be unmarked: double-click it in the
+  > night table.
+
+  **No** does not open the page.
+- **Unmark a night.** If an upload never went through, or you deleted it at the AAVSO, double-click the night in the
+  night table. SHOBS-P asks **Mark it as not sent?**; **Yes** clears the mark, and the next upload of a report with that
+  night will not warn.
+
+The marks are saved in the series file. The same marks and warning apply to the transit uploads (chapter 17).
 
 ## Which points go in
 
@@ -71,7 +85,7 @@ If nothing is left, you see **No usable points to report for that choice.**
 
 ## What is in the file
 
-The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=SHOBS-P 2.2.17`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
+The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=SHOBS-P 2.2.18`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
 
 | Field | What SHOBS-P writes |
 |---|---|
@@ -92,7 +106,7 @@ Stars from the AAVSO sequence appear under their **AUID**. Other stars appear un
 
 ## Upload with WebObs
 
-After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…**. The same button is in the **Results** row of the Output page.
+After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…**. The same button is in the **Results** row of the Output page. Either one checks for nights already sent and marks the report's nights as sent (see "The duplicate warning" above).
 
 1. Press **Open AAVSO WebObs…**. AAVSO's photometry submission page opens in your browser.
 2. Log in with your AAVSO account.

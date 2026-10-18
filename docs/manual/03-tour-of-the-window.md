@@ -13,7 +13,7 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.17**).
+4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.18**).
 
 ## The three modes and their colors
 
@@ -123,19 +123,20 @@ in the program folder, so updates do not touch it.
 
 - the mode you used last;
 - your site: **Latitude**, **Longitude** and **Elevation**, once you type them;
-- your **Telescope** name and **Telescope aperture (mm)**, and the **Include scintillation** checkbox;
+- your **Telescope** name, **Telescope aperture (mm)**, **Focal length (mm)**, **Pixel size (µm)** and **Mount**, and
+  the **Include scintillation** checkbox;
+- your **Observer code**;
 - the Blink **Speed** and the display **Stretch** on the Blink and Photometry pages;
 - whether the Photometry tips are shown, and where you last put the popped-out image window;
 - a monochrome **Filter** you picked by hand on the Calibrate page;
+- the Discovery period range and watch list (chapters 20 and 21);
 - header values you said **No** to (so SHOBS-P does not ask again);
 - the folder you last used for series files.
 
 **Not remembered between sessions** (they start empty or at their defaults each time):
 
 - all five folders on the Input page, including **Output**;
-- the target, **Observer code** and **Chart ID**;
-- **Focal length (mm)** and **Pixel size (µm)** (unless your FITS headers give them, they start at 2900 mm and
-  3.76 µm: check them every session);
+- the target and **Chart ID**;
 - **Binning**, the **Bayer pattern** and the **Channel**;
 - the aperture sizes, marked stars and rejected frames.
 
@@ -143,8 +144,12 @@ All of these except the folders are saved in a **series file** when you save a s
 it (chapter 10). That is why the Input page says "Settings are saved with the series". The folders you must choose
 again each night.
 
+Until you type your own, **Focal length (mm)** and **Pixel size (µm)** start at 2900 mm and 3.76 µm. If the boxes
+still hold these starting values (or are empty), the lights' FITS headers fill them in.
+
 **Never stored anywhere unless you type it:** your site. SHOBS-P ships with the Site boxes empty, and it never saves
-a site read from somebody else's frames as yours without asking you first.
+a site read from somebody else's frames as yours without asking you first. In the same way, the optics of a loaded
+series or of another telescope's frames are never saved as yours.
 
 ---
 

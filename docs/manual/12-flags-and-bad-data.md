@@ -55,14 +55,14 @@ When a night has such a stretch, SHOBS-P asks after photometry:
 
 > N frames of … lost light (…, down to 0.94 mag), but every measured star (comps, check, spares) faded by the same amount, smoothly, with a flat sky: transmission loss (dew/haze?), not cloud.
 >
-> Keep these points (errors scaled for the lost light)?
+> Use these points in the light curve (errors scaled for the lost light), or leave them out?
 
 ![The Keep question after a run with dew at the end of the night](img/12-transmission-keep.png)
 
-- **Yes** keeps the points. Their error bars grow with the light lost, and each kept point also gets the extra star-to-star scatter measured in that stretch, so the errors stay honest.
-- **No** (the default) leaves them flagged, like cloud.
+- **Use these points** keeps the points. Their error bars grow with the light lost, and each kept point also gets the extra star-to-star scatter measured in that stretch, so the errors stay honest.
+- **Leave them out** (the default; also Escape or closing the window) leaves them flagged, like cloud.
 
-If you are unsure, answer **No**. You can change it later.
+If you are unsure, choose **Leave them out**. You can change it later. Each answer is written to the log with the night and the time, for example "… transmission loss (dew/haze?) question (after photometry) answered “Leave them out” at 2026-10-16 23:41:07."
 
 If only one star was measured, SHOBS-P cannot tell dew from cloud, so it does not ask: the points are left out, and the log says so.
 
@@ -70,7 +70,7 @@ If only one star was measured, SHOBS-P cannot tell dew from cloud, so it does no
 
 1. If the series has more than one night, click the night in the night table first.
 2. Press **Transmission loss…**.
-3. The message says how many frames, when, how deep, and whether they are now kept or left out. Answer the Keep question again.
+3. The message says how many frames, when, how deep, and whether they are now used in the light curve or left out. Answer the question again with **Use these points** or **Leave them out**.
 
 Your answer is saved with the series. If no night has transmission loss at the current cloud limit, SHOBS-P says so.
 
@@ -112,6 +112,8 @@ You have three ways to take steps out. Each is a checkbox on the Output page. Th
 - **Line up segments (nights, meridian flip)** sets every night and every flip segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
 
 If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip only**.
+
+An alt-az mount has no meridian flips and no pier sides, so there is nothing to line up: the **Side** column shows **—**, and **Pier side as segments** says **the mount is alt-az (no pier sides).**
 
 When the series has nights on both pier sides and none of these is ticked, a caution tells you how much each side reads against the other and suggests **Pier side as segments**.
 

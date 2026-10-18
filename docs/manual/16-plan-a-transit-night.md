@@ -11,7 +11,7 @@ This chapter covers:
 - finding tonight's transits,
 - planning the coming transits of one planet,
 - how much baseline to take,
-- what to do about a meridian flip.
+- what to do about a meridian flip (or, on an alt-az mount, the zenith keyhole).
 
 ## Before you start
 
@@ -80,7 +80,9 @@ To find tonight's transits:
    - **V from** … **to**: the brightness range your telescope handles (default 9 to 13.5).
    - **Min depth (%)**: the shallowest transit worth trying (default 0.5).
    - **Moon ≥ (°)**: the smallest distance from the Moon you accept (default 0, no limit).
-   - **no meridian flip**: tick it to list only transits during which the star does not cross the meridian.
+   - **no meridian flip**: tick it to list only transits during which the star does not cross the meridian. With
+     **Mount** set to **Alt-az** on the Input page, this box is **no zenith keyhole (above 85°)** instead: tick it to
+     hide transits during which the star climbs above 85°.
 3. Click **Search**.
 
 The limits (not **After** and **End by**) are remembered for next time.
@@ -89,7 +91,9 @@ The limits (not **After** and **End by**) are remembered for next time.
 
 Each row is one transit. The columns are **Planet**, **V**, **Depth (%)**, **T14 (h)**, **Start (with baseline)**,
 **Ingress**, **Mid**, **Egress**, **End (with baseline)**, **Altitude min–max**, **Moon (lit, distance)** and
-**Meridian** (it says **flip** when the star crosses the meridian during the run).
+**Meridian** (it says **flip** when the star crosses the meridian during the run). On an alt-az mount the last column
+is **Zenith** instead, and says **keyhole** when the star passes above 85° (see "Alt-az mounts: the zenith keyhole"
+below).
 
 The summary line next to the buttons says how many transits matched, when it is dark, how many planets were in
 your magnitude and depth range, and how old the planet list is. The planet list is downloaded from the NASA
@@ -121,12 +125,13 @@ To plan the coming transits:
 
 1. Enter the planet on the Input page (see above). The planner needs its period, T0 and RA/Dec.
 2. Go to the Output step (the Transit fit page) and click **Transit planner…**.
-3. Set **Days ahead** (default 30), **Min altitude (°)** (25), **Sun below (°)** (−12) and **Baseline each side
+3. Set **Days ahead** (default 30), **Min altitude (°)** (30), **Sun below (°)** (−18) and **Baseline each side
    (min)** (60). Tick **full only** to hide nights that cannot give a full baseline.
 4. Click **Update**.
 
-> **Tip:** The planner's default altitude and Sun limits are looser than those of Tonight's transits (25° and −12°
-> against 30° and −18°). Set them to the same values if you want the two windows to agree.
+> **Tip:** The planner and Tonight's transits share their limits. The planner starts from the altitude, Sun and
+> baseline limits you last used in Tonight's transits (30°, −18° and 60 minutes until you change them), so the two
+> windows agree.
 
 ![The Transit planner window](img/16-transit-planner.png)
 
@@ -136,6 +141,9 @@ The table shows **Night of**, **Ingress**, **Mid**, **Egress**, **Altitude in / 
 - **full** (green): the transit and the baseline on both sides fit in a dark sky above the altitude limit.
 - **transit only**: the transit fits, but not the whole baseline.
 - **partial** (orange): only part of the transit is observable.
+
+On an alt-az mount the table has one more column, **Zenith keyhole**, which says, for example, **KEYHOLE: up to 87°**
+when the star passes above 85° during the transit.
 
 **± ephemeris** is how uncertain the predicted time is on that date. If it is large (tens of minutes), take more
 baseline on both sides so the transit cannot slip out of your window. **Export CSV…** saves the list as
@@ -180,6 +188,14 @@ telescope; only the whole tube has turned. The dust shadows and vignetting the f
 knows this: rotator readings 180° apart count as the same camera position, so flats from either side of the pier
 match lights from both sides. A *real* rotator move (the camera turned on the telescope) is different, and the
 Calibrate page warns about it. See [7. Calibrate](07-calibrate.md).
+
+### Alt-az mounts: the zenith keyhole
+
+An alt-az mount never flips, so none of the above applies to it. Its trouble spot is the zenith: above about 85° the
+mount's azimuth speed and the field rotation get extreme, and frames there can trail or smear. With **Mount** set to
+**Alt-az** in the Optics box (Input page), Tonight's transits shows a **Zenith** column instead of **Meridian** (and
+can hide such transits), and the Transit planner adds a **Zenith keyhole** column. Their CSV exports get a
+`zenith_keyhole` column too. The planning windows always use the **Mount** box, not the headers of any lights you have loaded.
 
 ## Checklist for the night
 
