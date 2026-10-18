@@ -191,7 +191,7 @@ Calibrate page warns about it. See [7. Calibrate](07-calibrate.md).
 - Flats for the camera angle you will use (one set covers both sides of a flip).
 - Bias and darks that match the lights' exposure.
 - Comparison stars of similar brightness and color in the field (the Photometry page suggests them; see
-  [8. Photometry page basics](08-photometry-page-basics.md)).
+  [8. Photometry page basics](08-photometry-basics.md)).
 
 If you later run photometry on frames that do not cover a predicted transit, SHOBS-P says so before it runs, and
 offers Variables mode if the run looks like variability work instead.

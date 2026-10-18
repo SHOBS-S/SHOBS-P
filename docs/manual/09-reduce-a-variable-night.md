@@ -158,4 +158,4 @@ To keep this night for later, press **Save series** (chapter 10). Nothing is wri
 
 ---
 
-Previous: [8. Photometry page basics](08-photometry-page-basics.md) · Next: [10. Build a multi-night series](10-build-a-multi-night-series.md)
+Previous: [8. Photometry page basics](08-photometry-basics.md) · Next: [10. Build a multi-night series](10-build-a-multi-night-series.md)

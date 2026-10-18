@@ -53,7 +53,7 @@ box, then press **Solve again** (top right). You can scan an unsolved field, but
 ### Apertures
 
 The scan uses the **Aperture r**, **sky in** and **sky out** boxes, like photometry. Press **Suggest…** and then
-**Use these aperture sizes** to set them from the field's seeing (see [8. Photometry page basics](08-photometry-page-basics.md)).
+**Use these aperture sizes** to set them from the field's seeing (see [8. Photometry page basics](08-photometry-basics.md)).
 Also check **raw sat ADU**: stars near that level are measured but never listed as candidates.
 
 ### Watch or leave out stars

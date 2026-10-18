@@ -50,7 +50,7 @@ Something in the light curve made the dip: a jump, a trend, a bad comp, or a cal
 - A much **deeper** dip almost always comes from the light curve itself. Check the comps (**Comp health…**), the
   flats, and the residuals panel for steps.
 - A much **shallower** dip can come from a neighbor star's light inside the aperture. Look at the image, and
-  consider a smaller aperture (see [8. Photometry page basics](08-photometry-page-basics.md)).
+  consider a smaller aperture (see [8. Photometry page basics](08-photometry-basics.md)).
 
 ### "a plain …% jump after the …-minute gap at … h fits as well as the transit … so the dip may be the jump, not the planet"
 

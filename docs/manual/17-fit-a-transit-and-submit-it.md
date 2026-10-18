@@ -15,7 +15,7 @@ This chapter covers:
 
 1. In Transits mode, enter the planet on the Input page (see [16. Plan a transit night](16-plan-a-transit-night.md)).
 2. Work through Input, Blink and Calibrate, then mark the target and comparison stars and press **Run photometry**
-   (see [8. Photometry page basics](08-photometry-page-basics.md)). A check star is optional for a transit.
+   (see [8. Photometry page basics](08-photometry-basics.md)). A check star is optional for a transit.
 3. When photometry ends, SHOBS-P opens the Output step. The fit starts by itself when there are at least 20 usable
    points and a planet is known. Press **Cancel** if you want to change a setting first.
 
