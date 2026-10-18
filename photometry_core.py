@@ -4980,6 +4980,48 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
     return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights)}
 
 
+def apply_catalog_mags(observations: list[Obs], selection: list[str], comp_names: list[str],
+                       catalog: dict[str, float], aliases: dict | None = None) -> dict:
+    """2.2.18 (item 3): give every point the comps' catalog magnitudes in `catalog` (a value typed in Use comps…).
+
+    Each point's comparison is the catalog mean of the selected comps it has measured (all of them for the comps the
+    night was reduced with), so its magnitude is that mean + target_inst - cmag: only the catalog part moves. The
+    point's mag, comp_cat and check_std shift by (new mean - old comp_cat); errors, flags and the instrumental values
+    stay as they are. Points without a finite comp_cat (nothing to shift from) are left alone; a point with no
+    comp measurements stored (series saved before 1.8) uses the selected comps of the run.
+    Returns {"changed": points moved, "shift": {night: median shift (mag)}}."""
+    def cat(n):
+        try:
+            v = float(catalog.get(n))
+        except (TypeError, ValueError):
+            return float("nan")
+        return v
+
+    changed = 0
+    shifts: dict = {}
+    for obs in observations:
+        if not math.isfinite(obs.comp_cat):
+            continue
+        used = [n for n in selection if math.isfinite(cat(n))
+                and math.isfinite(star_inst(obs, n, comp_names, aliases))]
+        if not used and not obs.comp_insts and not obs.spare_insts:
+            used = [n for n in selection if n in comp_names and math.isfinite(cat(n))]
+        if not used:
+            continue
+        new = float(np.mean([cat(n) for n in used]))
+        d = new - float(obs.comp_cat)
+        if abs(d) < 1e-12:
+            continue
+        obs.comp_cat = new
+        if math.isfinite(obs.mag):
+            obs.mag = float(obs.mag) + d
+        if obs.check_std is not None and math.isfinite(obs.check_std):
+            obs.check_std = float(obs.check_std) + d
+        changed += 1
+        shifts.setdefault(obs.night, []).append(d)
+    return {"changed": changed, "shift": {n: float(np.median(v)) for n, v in shifts.items()}}
+
+
 # ---- Vetting comparison stars against known and suspected variables (2.0) ---------------
 
 RED_LIMIT_BV = 1.5

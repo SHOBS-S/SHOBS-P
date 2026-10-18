@@ -210,7 +210,8 @@ class TransitPage:
             side=LEFT, padx=(6, 0))
         ttk.Button(results, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT, padx=(6, 0))
         ttk.Button(results, text="Open ExoFOP…", command=self.open_exofop).pack(side=LEFT, padx=6)
-        ttk.Button(results, text="Save light-curve CSV…", command=app.save_csv).pack(side=LEFT)
+        # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
+        ttk.Button(results, text="Save light-curve CSV…", command=self.save_csv).pack(side=LEFT)
         # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
         ttk.Button(results, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
@@ -1735,10 +1736,10 @@ class TransitPage:
             if not fk.all():
                 ex["flagged"] = ({k: (np.asarray(v)[fk] if isinstance(v, np.ndarray) and len(v) == len(fk) else v)
                                   for k, v in fl.items()} if fk.any() else None)
-        info = self._trim_info(t, flux, ~keep, n_flagged, (fl or {}).get("label") or "flagged")
+        info = self._trim_info(t, flux, ~keep, n_flagged, (fl or {}).get("label") or "flagged", err)
         return t[keep], flux[keep], err[keep], am[keep], info
 
-    def _trim_info(self, t, flux, cut, n_flagged=0, flag_label="flagged"):
+    def _trim_info(self, t, flux, cut, n_flagged=0, flag_label="flagged", err=None):
         spans = []
         for lo, hi in self._trims:
             m = cut & (t >= lo) & (t <= hi)
@@ -1760,7 +1761,8 @@ class TransitPage:
             f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local, {s_['n']} points)"
             for s_ in spans))
         return {"spans": spans, "n": n, "n_flagged": n_flagged, "text": text, "report_note": note, "exact": exact,
-                "t": t[cut], "flux": np.asarray(flux, dtype=float)[cut]}
+                "t": t[cut], "flux": np.asarray(flux, dtype=float)[cut],
+                "err": (np.asarray(err, dtype=float)[cut] if err is not None else None)}   # 2.2.18 (item 18)
 
     def _trim_source_check(self):
         """Review: a trim belongs to its data; a loaded, closed or new series (same night key or not) drops it."""
@@ -1937,7 +1939,7 @@ class TransitPage:
         filt = str(meta.get("filter") or "CV").strip() or "CV"
         date = str(meta.get("obsdate") or "").strip()
         png = f"{name}_{filt}_{date}_SHOBS-P_transit.png" if date else f"{name}_{filt}_SHOBS-P_transit.png"
-        names = [f"AAVSO_{name}_{date}_SHOBS-P.txt", png]
+        names = [f"AAVSO_{name}_{date}_SHOBS-P.txt", png, png[:-len(".png")] + "_fit.csv"]   # 2.2.18 (item 18)
         return ["".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in n) for n in names]
 
     # ---- files -----------------------------------------------------------------------------
@@ -1998,6 +2000,43 @@ class TransitPage:
             return
         self.app.status.set(f"Wrote {path}")
         self.app.log(f"Transit plot PNG: {path}")
+
+    def save_csv(self):
+        """2.2.18 (item 18): Save light-curve CSV on the Transit page: the magnitude CSV (the Output page's), and with a
+        fit shown also the fit CSV next to it, numbered with the report, plot and CSV of this fit (one save, one
+        suffix). A fit of an opened report (no photometry) saves the fit CSV alone."""
+        app = self.app
+        path = ""
+        if app.observations:
+            path = app.save_csv()
+            if not path:
+                return
+        if not self.result:
+            if not app.observations:
+                messagebox.showinfo("SHOBS-P", "Run photometry or open an exoplanet report, and fit a transit first.")
+            return
+        name = self.family_names()[2]
+        if app._out_folder():
+            app._save_one_night = getattr(app, "_last_csv_scope", "") == "night" if path else False
+            try:
+                fit_path = app.output_path(name, title="Save transit fit CSV", defaultextension=".csv",
+                                           filetypes=[("CSV", "*.csv")], parent=app, family=True)
+            finally:
+                app._save_one_night = False
+        elif path:
+            fit_path = app._unique_path(os.path.join(os.path.dirname(os.path.abspath(path)), name))
+        else:
+            fit_path = app.output_path(name, title="Save transit fit CSV", defaultextension=".csv",
+                                       filetypes=[("CSV", "*.csv")], parent=app)
+        if not fit_path:
+            return
+        try:
+            n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC")
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}")
+            return
+        app.log(f"Transit fit CSV: {fit_path} ({n} rows)")
+        app.status.set(f"Wrote {os.path.basename(path) + ' and ' if path else ''}{os.path.basename(fit_path)}")
 
     def _write_png(self, path: str):
         import io
@@ -2095,12 +2134,22 @@ class TransitPage:
         with core.AsciiWriter(path, newline="\n") as fh:
             fh.write(tc.aavso_exoplanet_report(self.result, meta))
         self.app.log(f"AAVSO exoplanet report: {path}")
+        self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
                               "the AAVSO Exoplanet Database (check its current instructions)")
 
+    def _fit_nights(self) -> list:
+        """2.2.18 (item 10): the series night the shown fit is of ([] for a fit of an opened report)."""
+        if self.report is not None or not self.result:
+            return []
+        night = self.night.get()
+        return [night] if night else []
+
     def open_aavso_exoplanet(self):
         """2.2.15 (item 8): AAVSO Exoplanet Database's submit page."""
+        if not self.app._upload_check("exoplanet"):   # 2.2.18 (item 10)
+            return
         self.app.open_link(core.AAVSO_EXOPLANET_URL, "the AAVSO Exoplanet Database's submit page")
 
     def exofop_page(self) -> tuple[str, str]:
@@ -2125,6 +2174,8 @@ class TransitPage:
         """2.2.15 (item 9): open the target's ExoFOP-TESS page (TOI or TIC), else ExoFOP-TESS's home. The first time,
         a hint on how ExoFOP uploads work."""
         app = self.app
+        if not app._upload_check("exofop"):   # 2.2.18 (item 10)
+            return
         url, what = self.exofop_page()
         home = url == core.EXOFOP_TESS_URL
         # The hint once on the first click, and once more the first time ExoFOP's home has to stand in.
@@ -2211,6 +2262,7 @@ class TransitPage:
                 if not _remove_tree(out):
                     self._stale_parts = getattr(self, "_stale_parts", set()) | {os.path.normcase(os.path.abspath(out))}
                 self.app.log(f"ExoFOP package unchanged: {last['folder']} (same fit and files; nothing new written)")
+                self.app._remember_report("exofop", self._fit_nights(), last["folder"])   # 2.2.18 (item 10)
                 self.app.status.set(f"ExoFOP package unchanged: {os.path.basename(last['folder'])}")
                 return
         except Exception:
@@ -2236,6 +2288,7 @@ class TransitPage:
             return
         self._last_package = {"print": fingerprint, "folder": final}
         out = final
+        self.app._remember_report("exofop", self._fit_nights(), out)   # 2.2.18 (item 10)
         self.app.log(f"ExoFOP package folder: {out}")
         # 2.2.17 (item 9): no AAVSO report copy inside (John); Save AAVSO exoplanet report writes that one.
         self.app.saved_notice(out, "Package folder: light curve (CSV), fit and ExoFOP notes (text), and the plot.")
@@ -2268,6 +2321,42 @@ class TransitPage:
             self._save_fig(buf, stamp=False, dpi=150, format="png")
             png_print = buf.getvalue()
         return files, png_print
+
+
+def write_fit_csv(path: str, r: dict, jd_utc: bool = False) -> int:
+    """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
+    the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
+    flagged "trimmed", with no model or residual (they were left out of the fit); frames put back from a flag (Fit
+    with flagged) carry that flag. Returns the number of data rows."""
+    t = np.asarray(r["t"], dtype=float)
+    flux = np.asarray(r["flux"], dtype=float)
+    err = np.asarray(r.get("err_scaled", r.get("err")), dtype=float)
+    model = np.asarray(r["model"], dtype=float)
+    resid = np.asarray(r["residuals"], dtype=float)
+    fmask = r.get("flagged")
+    fmask = np.asarray(fmask, dtype=bool) if fmask is not None and len(fmask) == len(t) else np.zeros(len(t), bool)
+    label = str((r.get("with_flagged") or {}).get("label") or "flagged")
+    rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "") for k in range(len(t))]
+    trim = r.get("trim") or {}
+    tt = np.asarray(trim.get("t", []), dtype=float)
+    if tt.size:
+        med = float(r.get("flux_median") or 1.0)
+        ft = np.asarray(trim.get("flux", []), dtype=float) / med
+        et = trim.get("err")
+        et = (np.asarray(et, dtype=float) / med * float(r.get("error_scale") or 1.0)
+              if et is not None and len(et) == tt.size else np.full(tt.size, np.nan))
+        rows += [(tt[k], ft[k], et[k], float("nan"), float("nan"), "trimmed") for k in range(tt.size)]
+    rows.sort(key=lambda row: row[0])
+
+    def num(v, fmt):
+        return fmt.format(v) if v is not None and math.isfinite(v) else ""
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow([core.created_line()])
+        w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag"])
+        for row in rows:
+            w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5]])
+    return len(rows)
 
 
 # The DTG stamp lines only: "# Created 151200Z OCT 26 by SHOBS-P" (CSV, reports) and "Created        151200Z OCT 26"
