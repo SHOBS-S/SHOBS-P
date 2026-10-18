@@ -1015,7 +1015,8 @@ def find_saved_master(paths: list[str], kind: str, binning: int, depends: dict, 
 
 
 def master_mismatches(master_header: dict, kind: str, light_header: dict, light_shape: tuple, master_shape: tuple,
-                      binning: int, mount: str | None = None) -> tuple[list[str], list[str]]:
+                      binning: int, mount: str | None = None,
+                      derotator: bool = False) -> tuple[list[str], list[str]]:
     """(errors that make the master unusable, warnings) comparing a master with the lights."""
     errors, warns = [], []
     if tuple(master_shape) != tuple(light_shape):
@@ -1041,7 +1042,7 @@ def master_mismatches(master_header: dict, kind: str, light_header: dict, light_
         fr, lr = master_header.get("ROTATOR"), header_rotator(light_header)
         try:
             # 2.2.18 (item 8): alt-az: the derotator's position angle, compared without the flip (flat_angle_difference)
-            if (fr is not None and lr is not None
+            if (fr is not None and lr is not None and not derotator   # derotator: see flat_angle_difference
                     and flat_angle_difference(float(fr), float(lr), mount) > flat_angle_tolerance(mount)):
                 warns.append(f"master flat taken at rotator {float(fr):g}°, lights at {float(lr):g}°")
         except (TypeError, ValueError):
@@ -2082,8 +2083,9 @@ def compose_registration(first: dict, second: dict, shape: tuple[int, int]) -> d
             "votes": min(first["votes"], second["votes"]), "of": second.get("of", 0), "chained": True}
 
 
-ROTATION_NEAR_GUESSES = (0.0, -1.5, 1.5, -4.0, 4.0)   # 2.2.18 (item 8): degrees around the last frame's angle
-ROTATION_SWEEP_STEP = 2.0                             # 2.2.18 (item 8): a frame that lost its track: every 2°
+# 2.2.18 (item 8; review: finer, at most 8 so register_frame refines every guess): degrees around the predicted angle
+ROTATION_NEAR_GUESSES = (0.0, -0.5, 0.5, -1.0, 1.0, -2.0, 2.0, -4.0)
+ROTATION_SWEEP_STEP = 1.0                             # 2.2.18 (item 8): a frame that lost its track: every 1°
 
 
 def register_rotating(ref_sources, sources, shape: tuple[int, int], last_sources=None, last_reg: dict | None = None):
@@ -2092,8 +2094,12 @@ def register_rotating(ref_sources, sources, shape: tuple[int, int], last_sources
     shift only and refuses turns over 10°. Here: (1) against the reference, guessing angles near the last frame's
     (the field turns smoothly), (2) else the step from the last aligned frame, chained onto its registration,
     (3) else a sweep of the whole circle. Never 'flipped' (no meridian flip on an alt-az mount). With a derotator
-    the angle stays near 0 and step (1) finds it at once. Returns a register_frame result or None."""
+    the angle stays near 0 and step (1) finds it at once. Returns a register_frame result or None; it carries "rate"
+    (degrees turned since the last frame), so the next frame's guess is extrapolated (review: sparse fields at
+    0.5°/frame lost a third of their frames without it)."""
     hint = float(last_reg.get("angle", 0.0)) if last_reg else 0.0
+    rate = float(last_reg.get("rate", 0.0) or 0.0) if last_reg else 0.0
+    hint += rate
     kw = {"allow_flip": False, "max_angle": 180.0}
     reg = register_frame(ref_sources, sources, shape, angles=[hint + d for d in ROTATION_NEAR_GUESSES], **kw)
     if reg is None and last_sources is not None and last_reg is not None:
@@ -2103,6 +2109,9 @@ def register_rotating(ref_sources, sources, shape: tuple[int, int], last_sources
     if reg is None:
         reg = register_frame(ref_sources, sources, shape,
                              angles=list(np.arange(-180.0, 180.0, ROTATION_SWEEP_STEP)), **kw)
+    if reg is not None:
+        reg = dict(reg)
+        reg["rate"] = (((reg["angle"] - float(last_reg.get("angle", 0.0)) + 180.0) % 360.0) - 180.0) if last_reg else 0.0
     return reg
 
 
@@ -8342,7 +8351,9 @@ def rotator_difference(a: float, b: float) -> float:
 MOUNT_GEM = "gem"
 MOUNT_ALTAZ = "altaz"
 MOUNT_LABELS = {MOUNT_GEM: "German equatorial", MOUNT_ALTAZ: "Alt-az"}
-ROTATOR_DRIFT_MIN = 0.01      # degrees: a derotator's smooth drift over the night is at least this
+ROTATOR_DRIFT_MIN = 0.01      # degrees: a derotator's smooth drift over the night is at least this ...
+ROTATOR_DRIFT_MAX = 0.5       # ... and at most this (PW1000: 0.04-0.34°); John's ASIAIR solved PA creeps 1-2° on a GEM
+_ROTATOR_DEVICE_KEYS = ("ROTNAME", "ROTSTPSZ")   # a rotator device named in the header (NINA)
 ROTATOR_STEP_MAX = 2.0        # degrees: larger steps between frames are camera moves or flips, not drift
 ALTAZ_FLAT_PA_TOL = 5.0       # degrees: flats and lights at sky position angles further apart = camera turned
 _ALTAZ_NAME = _re.compile(
@@ -8385,10 +8396,13 @@ def detect_mount(headers: list[dict]) -> dict:
     """2.2.18 (item 8): the mount type from a night's light headers (any order; sorted by DATE-OBS when present).
     Returns {"mount": MOUNT_GEM / MOUNT_ALTAZ / None, "sure": bool, "derotator": True / False / None,
     "why": words, "max_alt": highest CENTALT/OBJCTALT or None}. Sure GEM: PIERSIDE takes both sides in the night, or the
-    rotator turns by 180° (a meridian flip). Sure alt-az: a mount-type keyword says so, a Unistellar eVscope, or the
-    rotator drifts smoothly while PIERSIDE never changes (a derotator). Only a hint (sure False): the telescope or
-    rotator name is a usual alt-az system (PlaneWave PWI4, PW1000, CDK700, L-series, which can also sit on a wedge).
-    mount None: the headers cannot tell; the Mount choice decides."""
+    rotator turns by 180° (a meridian flip). Sure alt-az: a mount-type keyword says so, a Unistellar eVscope, or a
+    derotator: the rotator drifts smoothly by ROTATOR_DRIFT_MIN to ROTATOR_DRIFT_MAX while PIERSIDE never changes,
+    a rotator device is named (ROTNAME / ROTSTPSZ) AND the telescope is a usual alt-az system. Drift alone is never
+    enough (review): an ASIAIR on a German mount writes ROTATOR as each frame's solved angle, which creeps 1-2° on a
+    night without a flip. Only a hint (sure False): the telescope or rotator name is a usual alt-az system (PlaneWave
+    PWI4, PW1000, CDK700, L-series, which can also sit on a wedge). mount None: the headers cannot tell; the Mount
+    choice decides."""
     hs = [h for h in (headers or []) if isinstance(h, dict)]
     out = {"mount": None, "sure": False, "derotator": None, "why": "", "max_alt": None}
     if not hs:
@@ -8420,8 +8434,12 @@ def detect_mount(headers: list[dict]) -> dict:
             if _re.search(r"equatorial|\bgem\b|german", text):
                 out.update(mount=MOUNT_GEM, sure=True, why=f"{key} = '{h.get(key)}'")
                 return out
+    names = " / ".join(str(hs[0].get(k) or "") for k in ("TELESCOP", "ROTNAME", "INSTRUME") + _MOUNT_KEYS
+                       if hs[0].get(k))
+    m = _ALTAZ_NAME.search(names)
     drift = rotator_drift(rots)
-    if drift is not None:
+    device = any(hs[0].get(k) not in (None, "") for k in _ROTATOR_DEVICE_KEYS)
+    if drift is not None and m and device and drift["span"] <= ROTATOR_DRIFT_MAX:
         out.update(mount=MOUNT_ALTAZ, sure=True, derotator=True,
                    why=(f"the rotator drifts smoothly ({drift['first']:.3f}° to {drift['last']:.3f}°, a derotator "
                         "holding the sky's angle)" + (f" and PIERSIDE stays '{hs[0].get('PIERSIDE')}'"
@@ -8430,9 +8448,6 @@ def detect_mount(headers: list[dict]) -> dict:
     if is_unistellar(hs[0]):
         out.update(mount=MOUNT_ALTAZ, sure=True, derotator=False, why="a Unistellar eVscope (alt-az, no derotator)")
         return out
-    names = " / ".join(str(hs[0].get(k) or "") for k in ("TELESCOP", "ROTNAME", "INSTRUME") + _MOUNT_KEYS
-                       if hs[0].get(k))
-    m = _ALTAZ_NAME.search(names)
     if m:
         out.update(mount=MOUNT_ALTAZ, sure=False, why=f"the headers name '{m.group(0)}', usually an alt-az system")
     return out
@@ -8448,7 +8463,8 @@ def resolve_mount(detected: dict | None, choice: str | None) -> tuple[str, str]:
             return choice, ("" if choice == MOUNT_GEM else
                             f"Mount: {mount_label(choice)} (the headers agree: {d.get('why')}).")
         return d["mount"], (f"Mount: {mount_label(d['mount'])} from the headers ({d.get('why')}); the Mount box "
-                            f"says {mount_label(choice)} and is kept for other lights.")
+                            f"says {mount_label(choice)} and is kept for other lights. If this is your own "
+                            f"telescope, set Mount to {mount_label(d['mount'])} so the transit planners use it.")
     if d.get("mount") and d["mount"] != choice:
         return choice, (f"Mount: {mount_label(choice)} as chosen in the Optics box, but {d.get('why')}. If this "
                         f"is an {mount_label(d['mount']).lower()} mount, set Mount to {mount_label(d['mount'])}.")
@@ -8459,17 +8475,22 @@ def flat_angle_difference(flat_rot: float, light_rot: float, mount: str | None =
     """2.2.18 (item 8): how far the camera turned between the flats and the lights, from their rotator readings.
     German mount (and unknown): flip-aware (modulo 180°, rotator_difference), as before: after a meridian flip the
     reading changes by 180° but the camera keeps its place on the telescope.
-    Alt-az: there is no flip, so a reading 180° away is a real turn: plain difference (modulo 360°). With a derotator
-    the reading is the sky position angle it holds; its slow drift through the night (0.04-0.3° on the PW1000
-    nights) is the derotator tracking, not a turn, and the camera's angle to the optics sweeps with the field
-    rotation every night anyway, so flats can only ever match on average. But flats and lights at really different
-    position angles (Moeller's PW1000: flats at 199°, lights at 320°) mean the camera sat turned on the telescope by
-    about that much at the same pointing, so dust and vignetting from the optics in front of the derotator (tertiary,
-    port window) land elsewhere: the caller cautions above ALTAZ_FLAT_PA_TOL (loose, since the night's own field
-    rotation already moves the camera against the optics by more than the GEM's 2°)."""
+    Alt-az: there is no flip, so a reading 180° away is a real turn: plain difference (modulo 360°). That is the
+    rule for an alt-az mount WITHOUT a derotator, where the reading is a mechanical camera angle (a fixed rotator):
+    the caller asks above ALTAZ_FLAT_PA_TOL.
+    With a derotator (review) the reading is the sky angle it holds, and the camera turns against the optics all
+    night anyway (it follows the field rotation). Flats then correct dust on the filter, window and sensor fully, and
+    dust/vignetting in front of the derotator only in its symmetric part, whatever the flats' angle; so a derotated
+    night gets one log caution, never a question (DEROTATOR_FLAT_NOTE)."""
     if mount == MOUNT_ALTAZ:
         return angle_difference(flat_rot, light_rot)
     return rotator_difference(flat_rot, light_rot)
+
+
+DEROTATOR_FLAT_NOTE = (
+    "on a derotator the camera turns against the optics during the night anyway; flats correct dust on the "
+    "filter/window/sensor fully, and dust/vignetting in front of the derotator only in its symmetric part, whatever "
+    "the flats' angle")
 
 
 def flat_angle_tolerance(mount: str | None = None) -> float:

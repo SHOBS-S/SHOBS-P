@@ -1633,8 +1633,8 @@ class App(Tk):
 
     def _mount_info(self, lights=None) -> dict:
         """The mount these lights were taken with: {"mount", "note", "detected"}. From the headers when they are sure
-        (core.detect_mount), else the Mount choice. Reads up to 40 headers spread over the night; cached per folder
-        and choice."""
+        (core.detect_mount), else the Mount choice. Reads up to 12 headers spread over the night (review: kept short,
+        this runs on the UI thread); cached per folder and choice."""
         if lights is None:
             try:
                 lights = self._lights()
@@ -1648,7 +1648,7 @@ class App(Tk):
             return cached
         headers = []
         if lights:
-            for k in sorted({int(round(i)) for i in np.linspace(0, len(lights) - 1, min(40, len(lights)))}):
+            for k in sorted({int(round(i)) for i in np.linspace(0, len(lights) - 1, min(12, len(lights)))}):
                 try:
                     headers.append(core.read_header(lights[k]))
                 except Exception:
@@ -1670,14 +1670,20 @@ class App(Tk):
         d = info["detected"]
         if d.get("sure") and (info["mount"] == core.MOUNT_ALTAZ or info["mount"] != self._mount_choice_key()):
             hint = f"These lights: {core.mount_label(info['mount'])} from the headers ({d.get('why')})."
+            if info["mount"] != self._mount_choice_key():
+                hint += f" Set Mount to {core.mount_label(info['mount'])} so the transit planners use it."
         elif d.get("mount") and d["mount"] != info["mount"]:
             hint = f"Headers: {d.get('why')}; set Mount if that is right."
         else:
             hint = ""
         self.mount_hint.set(hint)
         if log:
-            if info["note"]:
+            # review: a note that only hints at the mount (a PWI4 name) is said once per folder
+            folder = os.path.dirname(str((list(lights or []) or [""])[0]))
+            seen = self.__dict__.setdefault("_mount_notes_seen", set())
+            if info["note"] and (d.get("sure") or info["mount"] != core.MOUNT_GEM or (folder, info["note"]) not in seen):
                 self.log(info["note"])
+                seen.add((folder, info["note"]))
             top = d.get("max_alt")
             if info["mount"] == core.MOUNT_ALTAZ and top is not None and top >= tcore.ZENITH_KEYHOLE_ALT:
                 self.log(f"Zenith keyhole: the field reached altitude {top:.1f}° (above {tcore.ZENITH_KEYHOLE_ALT:g}°), "
@@ -2378,13 +2384,14 @@ class App(Tk):
             row=6, column=0, columnspan=3, sticky=W)
         # 2.2.18 (item 8): mount type; the lights' headers can override it for their night (shown in the hint).
         ttk.Label(optics, text="Mount", style="Card.TLabel").grid(row=7, column=0, sticky=W, padx=(0, 10), pady=3)
+        # Spans the entry and hint columns, so its width never pins the entry column (item 23's minimum sizes).
         ttk.Combobox(optics, textvariable=self.mount_choice, values=tuple(core.MOUNT_LABELS.values()),
                      width=max(len(v) for v in core.MOUNT_LABELS.values()) + 2, state="readonly").grid(
-            row=7, column=1, sticky=W, pady=3)
-        ttk.Label(optics, text="alt-az: no meridian flips; field rotation followed", style="Hint.TLabel").grid(
-            row=7, column=2, sticky=W, padx=(8, 0))
+            row=7, column=1, columnspan=2, sticky=W, pady=3)
+        ttk.Label(optics, text="Alt-az: no meridian flips; the field rotation is followed.", style="Hint.TLabel",
+                  wraplength=text_wrap_px(optics, 55), justify=LEFT).grid(row=8, column=0, columnspan=3, sticky=W)
         ttk.Label(optics, textvariable=self.mount_hint, style="Hint.TLabel", wraplength=text_wrap_px(optics, 55),
-                  justify=LEFT).grid(row=8, column=0, columnspan=3, sticky=W)
+                  justify=LEFT).grid(row=9, column=0, columnspan=3, sticky=W)
         optics.columnconfigure(1, weight=1)
         return page
 
@@ -4431,8 +4438,26 @@ class App(Tk):
                     self.log(f"Darks scaled x{light_exp / dark_exp:.3g} ({dark_exp:g} s to {light_exp:g} s), as chosen.")
         light_rot = core.header_rotator(light_header)
         # 2.2.18 (item 8): on an alt-az mount the readings are compared without the flip (core.flat_angle_difference)
-        mount = self._mount_info(lights)["mount"] if flat and light_rot is not None else core.MOUNT_GEM
+        minfo = self._mount_info(lights) if flat and light_rot is not None else {"mount": core.MOUNT_GEM, "detected": {}}
+        mount = minfo["mount"]
         altaz = mount == core.MOUNT_ALTAZ
+        derotated = altaz and bool((minfo.get("detected") or {}).get("derotator"))
+        if flat and light_rot is not None and derotated:
+            # review: a derotated alt-az night: one log caution at most, never a question (core.DEROTATOR_FLAT_NOTE)
+            flat_rots = []
+            for path in flat[::max(1, len(flat) // 12)]:
+                try:
+                    r = core.header_rotator(core.read_header(path))
+                except Exception:
+                    r = None
+                if r is not None:
+                    flat_rots.append(r)
+            flat_rot = core.typical_rotator(flat_rots, mount)
+            if flat_rot is not None and core.flat_angle_difference(flat_rot, light_rot, mount) > \
+                    core.flat_angle_tolerance(mount):
+                self.log(f"Caution: flats taken with the derotator at sky angle {flat_rot:g}°, lights at "
+                         f"{light_rot:g}°. That is fine: {core.DEROTATOR_FLAT_NOTE}.")
+            return dark
         if flat and light_rot is not None:
             # 2.2.3: look at every flat, not just the first: a Flat folder can hold sets from two camera angles.
             flat_rots = []
@@ -4463,13 +4488,12 @@ class App(Tk):
             if flat_rot is not None and core.flat_angle_difference(flat_rot, light_rot, mount) > \
                     core.flat_angle_tolerance(mount):
                 if altaz:
-                    # 2.2.18 (item 8): a derotator holds the sky's position angle (see core.flat_angle_difference).
-                    text = (f"The flats were taken with the derotator at sky angle {flat_rot:g}° and the lights at "
-                            f"{light_rot:g}° (alt-az mount).\n\n"
-                            f"At the same pointing that means the camera sat turned on the telescope by about "
+                    # 2.2.18 (item 8): alt-az without a derotator: a mechanical camera angle, no flip (modulo 360°).
+                    text = (f"The flats were taken at rotator angle {flat_rot:g}° and the lights at {light_rot:g}° "
+                            "(alt-az mount, so no meridian flip explains it).\n\n"
+                            f"The camera sat turned on the telescope by about "
                             f"{core.angle_difference(flat_rot, light_rot):.0f}°, so dust shadows and vignetting from "
-                            "the optics in front of the derotator (tertiary mirror, port window) fall elsewhere on the "
-                            "sensor than in the lights. The derotator's slow drift during the night does not count. "
+                            "the optics in front of the rotator fall elsewhere on the sensor than in the lights. "
                             "Errors of about 1% are possible (enough to fake or hide a shallow transit).\n\n"
                             "Calibrate with these flats anyway? (No: stop, so you can pick flats taken at the lights' "
                             "angle, or clear the Flat folder.)")
@@ -4632,7 +4656,9 @@ class App(Tk):
 
         cancel = self._cancel
         rebuild = bool(self.rebuild_masters.get())
-        mount = self._mount_info(lights)["mount"]   # 2.2.18 (item 8): read on the UI thread, used in the worker
+        _minfo = self._mount_info(lights)   # 2.2.18 (item 8): read on the UI thread, used in the worker
+        mount = _minfo["mount"]
+        derotated = mount == core.MOUNT_ALTAZ and bool(_minfo["detected"].get("derotator"))
 
         def progress_log(text):
             if cancel.is_set():
@@ -4653,7 +4679,8 @@ class App(Tk):
                     if arr is None:
                         continue
                     errs, warns = core.master_mismatches(masters.headers.get(kind) or {}, kind, header, data.shape,
-                                                         arr.shape, binning, mount=mount)
+                                                         arr.shape, binning, mount=mount,
+                                                         derotator=derotated)
                     problems += errs
                     cautions += warns
                 if problems:
@@ -9776,8 +9803,12 @@ class App(Tk):
         mount_info = self._mount_info(lights)
         self._run_mount = mount_info["mount"]
         altaz = self._run_mount == core.MOUNT_ALTAZ
-        if mount_info["note"]:
-            self.log(mount_info["note"])
+        seen = self.__dict__.setdefault("_mount_notes_seen", set())
+        folder = os.path.dirname(str(lights[0])) if lights else ""
+        if mount_info["note"] and (mount_info["detected"].get("sure") or self._run_mount != core.MOUNT_GEM
+                                   or (folder, mount_info["note"]) not in seen):
+            self.log(mount_info["note"])   # review: a mere name hint once per folder
+            seen.add((folder, mount_info["note"]))
         turns = []   # 2.2.18 (item 8): each aligned frame's rotation against the reference (not flipped)
         if len(ref_sources) < 3:
             self.log("Warning: too few stars found on the reference frame to align frames. Positions will not follow drift.")
@@ -9965,7 +9996,8 @@ class App(Tk):
                 return
             if turns:
                 # 2.2.18 (item 8): how far the field turned on the sensor through the night.
-                spread = max(turns) - min(turns)
+                unwrapped = np.degrees(np.unwrap(np.radians(turns)))   # review: a turn across ±180° is not 360°
+                spread = float(unwrapped.max() - unwrapped.min())
                 if altaz and spread > 1.0:
                     self.call_ui(self.log, f"  Field rotation: the field turned by {spread:.1f}° on the sensor "
                                            "through the night (alt-az mount); the apertures followed it.")
