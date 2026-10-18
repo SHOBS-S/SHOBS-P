@@ -1730,13 +1730,19 @@ class TransitPage:
             ex["after_flip"] = None
         fl = ex.get("flagged")
         n_flagged = 0
+        flagged_cut = None
         if fl is not None and len(fl.get("t", [])):
             fk = self._trim_mask(fl["t"])
             n_flagged = int((~fk).sum())
             if not fk.all():
+                # 2.2.18 (item 18, review): flagged frames in a trimmed span, for the fit CSV's trimmed rows
+                flagged_cut = {k: np.asarray(fl[k], dtype=float)[~fk] for k in ("t", "flux", "err")
+                               if fl.get(k) is not None and len(fl[k]) == len(fk)}
                 ex["flagged"] = ({k: (np.asarray(v)[fk] if isinstance(v, np.ndarray) and len(v) == len(fk) else v)
                                   for k, v in fl.items()} if fk.any() else None)
         info = self._trim_info(t, flux, ~keep, n_flagged, (fl or {}).get("label") or "flagged", err)
+        if flagged_cut and len(flagged_cut.get("t", [])) and len(flagged_cut.get("flux", [])):
+            info["flagged_cut"] = dict(flagged_cut, label=(fl or {}).get("label") or "flagged")
         return t[keep], flux[keep], err[keep], am[keep], info
 
     def _trim_info(self, t, flux, cut, n_flagged=0, flag_label="flagged", err=None):
@@ -2024,7 +2030,9 @@ class TransitPage:
             finally:
                 app._save_one_night = False
         elif path:
-            fit_path = app._unique_path(os.path.join(os.path.dirname(os.path.abspath(path)), name))
+            # review: named after the CSV the user chose, so the pair matches (mine.csv -> mine_transit_fit.csv)
+            stem = os.path.splitext(os.path.abspath(path))[0]
+            fit_path = app._unique_path(stem + "_transit_fit.csv")
         else:
             fit_path = app.output_path(name, title="Save transit fit CSV", defaultextension=".csv",
                                        filetypes=[("CSV", "*.csv")], parent=app)
@@ -2148,9 +2156,11 @@ class TransitPage:
 
     def open_aavso_exoplanet(self):
         """2.2.15 (item 8): AAVSO Exoplanet Database's submit page."""
-        if not self.app._upload_check("exoplanet"):   # 2.2.18 (item 10)
+        plan = self.app._upload_check("exoplanet")   # 2.2.18 (item 10)
+        if plan is None:
             return
-        self.app.open_link(core.AAVSO_EXOPLANET_URL, "the AAVSO Exoplanet Database's submit page")
+        if self.app.open_link(core.AAVSO_EXOPLANET_URL, "the AAVSO Exoplanet Database's submit page"):
+            self.app._mark_sent("exoplanet", plan)
 
     def exofop_page(self) -> tuple[str, str]:
         """2.2.15 (item 9): (URL, what) of the target's ExoFOP-TESS page: by TOI, else by TIC, else ExoFOP's home."""
@@ -2174,7 +2184,8 @@ class TransitPage:
         """2.2.15 (item 9): open the target's ExoFOP-TESS page (TOI or TIC), else ExoFOP-TESS's home. The first time,
         a hint on how ExoFOP uploads work."""
         app = self.app
-        if not app._upload_check("exofop"):   # 2.2.18 (item 10)
+        plan = app._upload_check("exofop")   # 2.2.18 (item 10): {} when only browsing (nothing new to mark)
+        if plan is None:
             return
         url, what = self.exofop_page()
         home = url == core.EXOFOP_TESS_URL
@@ -2199,7 +2210,8 @@ class TransitPage:
                   "Data tag: YYYYMMDD_username_description_n (for example 20261015_jsmith_SHOBS-P-transit_1); the "
                   "description may use only letters, numbers and hyphens.",
                 parent=app)
-        app.open_link(url, what)
+        if app.open_link(url, what):
+            app._mark_sent("exofop", plan)
         if home:
             app.status.set("Opened ExoFOP-TESS (no TOI or TIC number known for this target): search for the star there.")
 
@@ -2326,8 +2338,8 @@ class TransitPage:
 def write_fit_csv(path: str, r: dict, jd_utc: bool = False) -> int:
     """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
     the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
-    flagged "trimmed", with no model or residual (they were left out of the fit); frames put back from a flag (Fit
-    with flagged) carry that flag. Returns the number of data rows."""
+    flagged "trimmed", with no error, model or residual (they were left out of the fit); frames put back from a flag
+    (Fit with flagged) carry that flag ("trimmed cloud" when also trimmed). Returns the number of data rows."""
     t = np.asarray(r["t"], dtype=float)
     flux = np.asarray(r["flux"], dtype=float)
     err = np.asarray(r.get("err_scaled", r.get("err")), dtype=float)
@@ -2338,14 +2350,18 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False) -> int:
     label = str((r.get("with_flagged") or {}).get("label") or "flagged")
     rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "") for k in range(len(t))]
     trim = r.get("trim") or {}
+    med = float(r.get("flux_median") or 1.0)
     tt = np.asarray(trim.get("t", []), dtype=float)
     if tt.size:
-        med = float(r.get("flux_median") or 1.0)
+        # review: trimmed rows have no error either (the fit never weighted them)
         ft = np.asarray(trim.get("flux", []), dtype=float) / med
-        et = trim.get("err")
-        et = (np.asarray(et, dtype=float) / med * float(r.get("error_scale") or 1.0)
-              if et is not None and len(et) == tt.size else np.full(tt.size, np.nan))
-        rows += [(tt[k], ft[k], et[k], float("nan"), float("nan"), "trimmed") for k in range(tt.size)]
+        rows += [(tt[k], ft[k], float("nan"), float("nan"), float("nan"), "trimmed") for k in range(tt.size)]
+    fc = trim.get("flagged_cut") or {}
+    if r.get("with_flagged") and len(fc.get("t", [])):
+        # review: frames both flagged (put back with Fit with flagged) and trimmed: "trimmed" first, then the flag
+        ff = np.asarray(fc["flux"], dtype=float) / med
+        rows += [(float(fc["t"][k]), ff[k], float("nan"), float("nan"), float("nan"), f"trimmed {fc.get('label')}")
+                 for k in range(len(fc["t"]))]
     rows.sort(key=lambda row: row[0])
 
     def num(v, fmt):
