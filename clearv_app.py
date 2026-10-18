@@ -159,6 +159,49 @@ def designation_coords(text):
 MARKED_LABELS = ("Target", "Check", "Comp", "Comp 2") + tuple(f"Comp {i}" for i in range(1, MAX_COMPS + 1))
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".shobs_p_settings.json")
 LOG_FILE = os.path.join(os.path.expanduser("~"), ".shobs_p.log")
+LOG_MAX_BYTES = 5 * 1024 * 1024   # 2.2.18 (item 24): past this the log moves to .shobs_p.log.1 (one old file kept)
+_LOG_LOCK = threading.Lock()
+
+
+def log_to_file(text, stamp: bool = True) -> None:
+    """2.2.18 (item 24): append to LOG_FILE. stamp=True puts the date and time before every line (the Log window's
+    lines); stamp=False writes the text as it is (tracebacks, Python warnings). Safe from any thread (one lock), never
+    touches Tk, never raises. The file is opened for each write and never held open, so it can be rotated on Windows."""
+    try:
+        text = str(text)
+        if stamp:
+            when = time.strftime("%Y-%m-%d %H:%M:%S")
+            text = "".join(f"{when}  {line}\n" for line in (text.splitlines() or [""]))
+        if not text:
+            return
+        with _LOG_LOCK:
+            try:
+                if os.path.getsize(LOG_FILE) > LOG_MAX_BYTES:
+                    os.replace(LOG_FILE, LOG_FILE + ".1")
+            except OSError:
+                pass
+            with open(LOG_FILE, "a", encoding="utf-8") as fh:
+                fh.write(text)
+    except Exception:
+        pass
+
+
+class _LogFileStream:
+    """2.2.18 (item 24): sys.stdout / sys.stderr under pythonw (a desktop shortcut has no console): tracebacks and
+    Python warnings go into the log file as they are, through log_to_file (same lock and rotation)."""
+    encoding = "utf-8"
+
+    def write(self, text):
+        log_to_file(text, stamp=False)
+        return len(text) if isinstance(text, str) else 0
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # The three modes. Each recolors the whole frame (sidebar, mode banner, status bar).
 MODES = {
@@ -505,7 +548,7 @@ class App(Tk):
         self.flat_dir = StringVar()
         self.light_dir = StringVar()
         self.output_dir = StringVar()
-        self.observer = StringVar()
+        self.observer = StringVar(value=str(self.settings.get("observer_code", "") or ""))   # 2.2.18 (item 11)
         self.star_id = StringVar()
         self.chart = StringVar()
         self.comp_name = StringVar()
@@ -532,8 +575,10 @@ class App(Tk):
             setattr(self, f"{_role}_mag", StringVar())
         self.ra_hours = StringVar()
         self.dec_deg = StringVar()
-        self.focal_mm = DoubleVar(value=2900)
-        self.pixel_um = DoubleVar(value=3.76)
+        # 2.2.18 (item 11): focal length and pixel size are remembered (settings file) like the site; the built-in
+        # values below are used until your own are typed or read from your lights' headers.
+        self.focal_mm = DoubleVar(value=self._saved_optics("focal_mm"))
+        self.pixel_um = DoubleVar(value=self._saved_optics("pixel_um"))
         self.blink_source = StringVar(value="lights")
         self.notes = StringVar(value=OSC_NOTE)
         # 2.2.8: the default report note follows the camera (a mono camera is not "OSC reduced"); a note the user
@@ -564,6 +609,9 @@ class App(Tk):
         self.elevation = StringVar(value=str(self.settings.get("site_elevation", "")))
         for _key, _var in (("site_lat", self.lat), ("site_lon", self.lon), ("site_elevation", self.elevation)):
             _var.trace_add("write", lambda *_a, k=_key, v=_var: self._remember_site(k, v))
+        # 2.2.18 (item 11): the same guards as the site (a series' or a borrowed setup is never saved as yours).
+        for _key, _var in (("focal_mm", self.focal_mm), ("pixel_um", self.pixel_um), ("observer_code", self.observer)):
+            _var.trace_add("write", lambda *_a, k=_key, v=_var: self._remember_own_value(k, v))
         # 2.2.2: telescope aperture for the scintillation term in the error bars (typed once, remembered).
         # 2.2.3: in millimetres; an aperture saved by 2.2.2 (in cm) is converted once on start.
         self.aperture_mm = StringVar(value=core.aperture_mm_from_settings(self.settings))
@@ -706,6 +754,13 @@ class App(Tk):
             self.mono_filter = core.MONO_FILTER_CHOICES[self.mono_filter_choice.get()]
         self._mono_filter_source = "hand" if self._mono_filter_manual else None   # header / hand / unknown / mobs
         self._pattern_user_set = False     # the Bayer pattern was picked by hand (cleared when the folders change)
+        # 2.2.18 (item 1): lights that are colour images already debayered elsewhere (three channels): the channel
+        # measured, the lights folder it was chosen for, and the Bayer pattern to go back to after them.
+        self._rgb_channel = None
+        self._rgb_lights_dir = None
+        self._pattern_before_rgb = None
+        core.set_rgb_channel(None)
+        self._sensor_asked_for = None      # 2.2.18 (item 2): the lights folder "Color or monochrome camera?" was asked for
         self._debayer_before_mono = None   # the colour channel to go back to when leaving MONO
         self._catalog_before_discovery = None
         self._closest_dm = None
@@ -852,7 +907,14 @@ class App(Tk):
         raw = core.header_filter_value(header)
         found = core.filter_from_header(header)
         hand = self._mono_filter_hand()
-        if found is not None:
+        rgb = getattr(self, "_rgb_channel", None)
+        if rgb:
+            # 2.2.18 (item 1): colour images: the chosen channel's code (TG/TR/TB/CV), never the hand-set filter of a
+            # monochrome camera or a FILTER keyword.
+            found, source = core.RGB_CHANNELS[rgb], "rgb"
+            if hasattr(self, "mono_filter_choice"):
+                self.mono_filter_choice.set(core.mono_filter_label(found) or self.mono_filter_choice.get())
+        elif found is not None:
             source = "header"
             if hasattr(self, "mono_filter_choice"):
                 self.mono_filter_choice.set(core.mono_filter_label(found) or self.mono_filter_choice.get())
@@ -895,7 +957,8 @@ class App(Tk):
         code, band = self._filter_code(), core.band_label(self._band())   # 2.2.17 (item 1): i′, g′ for Sloan
         if self.pattern.get() == core.MONO and self.mono_filter:
             where = {"hand": "filter set here", "header": "filter wheel (FITS FILTER)",
-                     "mobs": "MicroObservatory, clear"}.get(getattr(self, "_mono_filter_source", None),
+                     "mobs": "MicroObservatory, clear",
+                     "rgb": "color image, one channel"}.get(getattr(self, "_mono_filter_source", None),
                                                            "filter wheel (FITS FILTER)")
             self.filter_hint.set(f"AAVSO filter code {code}\n{where}, {band} comps")
         elif self.pattern.get() == core.MONO:
@@ -1227,11 +1290,8 @@ class App(Tk):
     def report_callback_exception(self, exc, val, tb):
         """Errors inside the window: log them and say so, since a desktop shortcut has no console to show them."""
         text = "".join(traceback.format_exception(exc, val, tb))
-        try:
-            with open(LOG_FILE, "a", encoding="utf-8") as fh:
-                fh.write(text + "\n")
-        except OSError:
-            pass
+        log_to_file("Error in the window; traceback follows.")   # 2.2.18 (item 24): when it happened
+        log_to_file(text + "\n", stamp=False)
         try:
             self.log("Error: " + str(val))
         except Exception:
@@ -1240,6 +1300,7 @@ class App(Tk):
 
     def log(self, text: str):
         """Main thread only. Worker threads use self.call_ui(self.log, text)."""
+        log_to_file(text)   # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
         for box in (self.log_box, getattr(self, "photo_log", None)):
             if box is None:
                 continue
@@ -1316,6 +1377,57 @@ class App(Tk):
         if self.settings.get(key, "") != value:
             self.settings[key] = value
             self._save_settings()
+
+    OPTICS_DEFAULTS = {"focal_mm": 2900.0, "pixel_um": 3.76}   # 2.2.18 (item 11): until your own are known
+
+    def _saved_optics(self, key: str) -> float:
+        """2.2.18 (item 11): the saved focal length / pixel size, else the built-in starting value."""
+        try:
+            v = float(self.settings.get(key))
+            if math.isfinite(v) and v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
+        return self.OPTICS_DEFAULTS[key]
+
+    def _optics_unset(self, key: str) -> bool:
+        """2.2.18 (item 11): the box still holds the built-in starting value, never saved as yours: the lights' header
+        fills it like an empty box (before 2.2.18 it asked whether to replace "your" 2900 mm)."""
+        if key not in self.OPTICS_DEFAULTS or key in self.settings:
+            return False
+        try:
+            return abs(float(getattr(self, key).get()) - self.OPTICS_DEFAULTS[key]) < 1e-9
+        except Exception:
+            return True
+
+    def _remember_own_value(self, key: str, var):
+        """2.2.18 (item 11): focal length, pixel size and observer code are remembered between sessions (settings
+        file only). Not while a series is being loaded or another telescope's setup is in use (MicroObservatory,
+        frames from another site), and never the demo set's."""
+        if (getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False)
+                or not hasattr(self, "settings")):
+            return
+        try:
+            value = var.get()
+        except Exception:
+            return   # an empty or half-typed number box (real Tk raises TclError)
+        if key == "observer_code":
+            value = str(value or "").strip()
+            if self.settings.get(key, "") == value:
+                return
+        else:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return
+            if not (math.isfinite(value) and value > 0):
+                return
+            if key not in self.settings and abs(value - self.OPTICS_DEFAULTS[key]) < 1e-9:
+                return   # the starting value put back is not a value of yours
+            if self.settings.get(key) == value:
+                return
+        self.settings[key] = value
+        self._save_settings()
 
     def _remember_telescope(self):
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
@@ -2438,6 +2550,12 @@ class App(Tk):
         if lights:
             try:
                 _, header = core.read_fits(lights[0])
+                # 2.2.18 (item 1): colour images already debayered (three channels): a channel is chosen, no debayer.
+                rgb = core.is_rgb_header(header)
+                if rgb:
+                    self._setup_rgb_lights(header, len(lights))
+                elif self._rgb_channel:
+                    self._leave_rgb_lights()
                 self._check_lights_pointing(header)
                 self._read_mono_filter(header)
                 # 2.2.13: frames pointing at two places first; the field check then uses a frame that is kept.
@@ -2446,6 +2564,10 @@ class App(Tk):
                 if not core.is_microobservatory(lights[0], header):
                     self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
                 pat = core.header_bayer(header)
+                if rgb:
+                    self.status.set(f"{len(lights)} lights: color images, "
+                                    f"{core.RGB_CHANNEL_WORDS.get(self._rgb_channel, '')} channel measured.")
+                    return
                 if not pat and not core.is_microobservatory(lights[0], header):
                     was_mono = self.pattern.get() == core.MONO
                     self._detect_sensor()        # 2.2.11: mono or colour from a raw flat
@@ -2464,6 +2586,18 @@ class App(Tk):
         self.status.set("Folders scanned.")
 
     def _pattern_changed(self):
+        if (getattr(self, "_rgb_channel", None) and self.pattern.get() != core.MONO
+                and not getattr(self, "_rgb_reverting", False)):
+            # 2.2.18 (item 1): colour images are already debayered; a Bayer pattern would debayer them again.
+            picked = self.pattern.get()
+            self._rgb_reverting = True
+            try:
+                self.pattern.set(core.MONO)   # (real Tk does not run this trace again for a write made inside it)
+            finally:
+                self._rgb_reverting = False
+            self.log(f"Caution: these lights are color images (three channels, already debayered); Bayer pattern "
+                     f"{picked} would debayer them a second time, so it stays MONO. Choose the channel in the Filter "
+                     "box instead.")
         mono = self.pattern.get() == core.MONO
         core.set_mono(mono)
         if mono and self.debayer_mode.get() != "luminance":
@@ -2503,6 +2637,9 @@ class App(Tk):
         pair = core.MONO_FILTER_CHOICES.get(label)
         if not pair:
             return
+        if getattr(self, "_rgb_channel", None):
+            self._rgb_channel_picked(pair)   # 2.2.18 (item 1): colour images: the box picks the channel
+            return
         old_band = self._band()
         self.mono_filter = pair
         self._mono_filter_manual = True
@@ -2512,6 +2649,28 @@ class App(Tk):
         self.log(f"Filter set by hand: {label} → AAVSO filter {pair[0]}, comps in {core.band_label(pair[1])}.")
         self._update_filter_hint()
         self._comp_band_changed(old_band, resolve=True)   # 2.2.17 (review M2)
+
+    def _rgb_channel_picked(self, pair):
+        """2.2.18 (item 1): on colour images the Filter box chooses the channel measured (Green / Red / Blue imaging,
+        Clear = luminance). Other filters are not a channel of the image. Not saved as a monochrome camera's filter."""
+        channel = next((ch for ch, p in core.RGB_CHANNELS.items() if p[0] == pair[0]), None)
+        if channel is None:
+            now = core.RGB_CHANNELS[self._rgb_channel]
+            self.mono_filter_choice.set(core.mono_filter_label(now) or "")
+            self.log(f"These lights are color images: measure one of their channels (Green imaging TG, Red imaging TR, "
+                     f"Blue imaging TB, or Clear CV for luminance). Still {core.RGB_CHANNEL_WORDS[self._rgb_channel]}.")
+            return
+        if channel == self._rgb_channel:
+            return
+        old_band = self._band()
+        self._rgb_channel = channel
+        core.set_rgb_channel(channel)
+        self.mono_filter = core.RGB_CHANNELS[channel]
+        self._mono_filter_source = "rgb"
+        self._update_filter_hint()
+        self._comp_band_changed(old_band)
+        self.log(f"Color images: the {core.RGB_CHANNEL_WORDS[channel]} channel is measured from now on (AAVSO filter "
+                 f"{pair[0]}, comps in {core.band_label(pair[1])}). Run Calibrate again to see it in the preview.")
 
     def _wrong_band_star(self, xy) -> bool:
         """2.2.17 (review M2): the labeled star under a marker carries another band than the comps', with a Sloan band
@@ -2553,45 +2712,178 @@ class App(Tk):
 
     def _detect_sensor(self):
         """2.2.11: no Bayer keyword in the lights: look at the raw flats (up to five, flats before flat-darks). No
-        colour mask -> MONO (unless the pattern was picked by hand); a colour mask while MONO is set -> a caution."""
+        colour mask -> MONO (unless the pattern was picked by hand); a colour mask while MONO is set -> a caution.
+        2.2.18 (item 2): no flats, or flats that cannot tell (calibrated, too faint): the lights' sky background is
+        tested the same way (stars masked); still unsure: "Color or monochrome camera?" is asked once for these lights,
+        instead of keeping whatever pattern was set last."""
         try:
             frames, _master = core.calibration_source(self.flat_dir.get())
-            if not frames:
-                return
             frames = sorted(frames, key=lambda f: ("dark" in os.path.basename(f).lower(), f))[:5]
             kind = contrast = None
+            source = "flat"
             for path in frames:
                 kind, contrast = core.detect_sensor_from_flat(path)
                 if kind is not None:
                     break
+            check = frames[:1]
+            if kind is None:
+                # 2.2.18 (item 2): the lights' sky (up to three frames that are not rejected).
+                lights = [p for p in core.split_lights(core.list_fits(self.light_dir.get()))[0]
+                          if p not in self.rejected][:3]
+                for path in lights:
+                    kind, contrast = core.detect_sensor_from_light(path)
+                    if kind is not None:
+                        source = "lights"
+                        break
+                check = check or lights[:1]
+            if not check:
+                return
             binned = ""
             try:
-                hdr = core.read_header(frames[0])
+                hdr = core.read_header(check[0])
                 if int((hdr or {}).get("XBINNING", 1) or 1) > 1:
                     binned = " (binned in the camera: a colour sensor binned 2x2 also looks like this)"
             except Exception:
                 pass
+            what = "the flat" if source == "flat" else "the lights' sky background"
             if kind == "mono" and self.pattern.get() != core.MONO:
                 if self._pattern_user_set:
-                    self.log(f"The flat shows no colour mask (its 2x2 pixel planes agree to {contrast * 100:.1f}%), so "
-                             f"the camera looks monochrome{binned}, but the Bayer pattern was set by hand; left as it is.")
+                    self.log(f"{what[0].upper() + what[1:]} shows no colour mask (its 2x2 pixel planes agree to "
+                             f"{contrast * 100:.1f}%), so the camera looks monochrome{binned}, but the Bayer pattern "
+                             "was set by hand; left as it is.")
                     return
                 self.pattern.set(core.MONO)
-                self.log(f"No Bayer pattern in the headers and the flat shows no colour mask (its 2x2 pixel planes agree "
+                self.log(f"No Bayer pattern in the headers and {what} shows no colour mask (its 2x2 pixel planes agree "
                          f"to {contrast * 100:.1f}%){binned}: monochrome, Bayer pattern set to MONO. Pick the camera's "
                          "pattern on the Calibrate page if this is a colour camera.")
-                self.status.set("Monochrome camera found (no colour mask in the flat): Bayer pattern MONO.")
+                self.status.set(f"Monochrome camera found (no colour mask in {what}): Bayer pattern MONO.")
             elif kind == "cfa" and self.pattern.get() == core.MONO:
-                what = f" (its 2x2 pixel planes differ by {contrast * 100:.0f}%)" if contrast else ""
-                self.log(f"Caution: the flat shows a colour mask{what}, but the Bayer pattern is MONO. For a colour "
+                more = f" (its 2x2 pixel planes differ by {contrast * 100:.0f}%)" if contrast else ""
+                self.log(f"Caution: {what} shows a colour mask{more}, but the Bayer pattern is MONO. For a colour "
                          "camera, pick its pattern (often RGGB) on the Calibrate page.")
+            elif kind is None and not self._pattern_user_set:
+                self._ask_sensor(contrast)
         except Exception as exc:
-            self.log(f"Could not check the flat for a colour mask ({exc}).")
+            self.log(f"Could not check the flat or lights for a colour mask ({exc}).")
+
+    def _ask_sensor(self, contrast=None):
+        """2.2.18 (item 2): neither the flats nor the lights tell a colour camera from a monochrome one: ask, once for
+        these lights. The answer counts as a pattern picked by hand."""
+        folder = self.light_dir.get().strip()
+        if not folder or self._sensor_asked_for == folder:
+            return
+        self._sensor_asked_for = folder
+        planes = (f" (the lights' 2x2 pixel planes differ by {contrast * 100:.1f}%)"
+                  if contrast is not None and math.isfinite(contrast) else "")
+        answer = self._choose_one(
+            "Color or monochrome camera?",
+            "The headers name no Bayer pattern, and SHOBS-P cannot tell from the flats or the lights whether these "
+            f"frames come from a color camera or a monochrome one{planes}.\n\nColor or monochrome camera?",
+            [("Color camera", "color"), ("Monochrome camera", "mono")], cancel=None)
+        if answer == "mono":
+            self.pattern.set(core.MONO)
+            self.log("Camera: monochrome (your answer). Bayer pattern set to MONO.")
+        elif answer == "color":
+            if self.pattern.get() == core.MONO:
+                self.pattern.set("RGGB")
+            self.log(f"Camera: color (your answer). Bayer pattern {self.pattern.get()}: check that it is your "
+                     "camera's pattern on the Calibrate page.")
+        else:
+            self.log(f"Camera type not answered: Bayer pattern left at {self.pattern.get()}. Check it on the "
+                     "Calibrate page (MONO for a monochrome camera).")
+            return
+        self._pattern_user_set = True
+
+    def _choose_one(self, heading: str, message: str, choices, cancel=None):
+        """2.2.18 (items 1, 2): a question with one labeled button per answer; returns the chosen value, or `cancel`
+        when the window is closed. Sizes itself to its text (no fixed widths)."""
+        result = {"value": cancel}
+        win = Toplevel(self)
+        win.title(f"{APP_TITLE} — {heading}")
+        win.transient(self)
+        frame = ttk.Frame(win, style="Card.TFrame", padding=14)
+        frame.pack(fill=BOTH, expand=True)
+        ttk.Label(frame, text=heading, style="Card.TLabel", font=(core.UI_FONT, 11, "bold")).pack(anchor=W, pady=(0, 6))
+        ttk.Label(frame, text=message, style="Card.TLabel", justify=LEFT).pack(anchor=W, pady=(0, 10))
+        row = ttk.Frame(frame, style="Card.TFrame")
+        row.pack(anchor=E)
+
+        def pick(value):
+            result["value"] = value
+            win.destroy()
+        for label, value in choices:
+            ttk.Button(row, text=label, command=lambda v=value: pick(v)).pack(side=LEFT, padx=(6, 0))
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        win.after_idle(lambda: fit_to_content(win))
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        try:
+            self.wait_window(win)
+        except Exception:
+            pass
+        return result["value"]
+
+    def _setup_rgb_lights(self, header: dict, n_lights: int = 0):
+        """2.2.18 (item 1): the lights are colour images other software already debayered (three channels). Before
+        2.2.18 the first channel (red) was read and, with a Bayer pattern set, debayered a second time. Now the user
+        picks the channel (green TG, red TR, blue TB, or luminance CV), the pattern is MONO for these lights (no
+        debayer, no superpixel weights) and they count as pre-calibrated (the photon noise comes from the sky).
+        Asked once per lights folder."""
+        folder = self.light_dir.get().strip()
+        if self._rgb_channel and self._rgb_lights_dir == folder:
+            core.set_rgb_channel(self._rgb_channel)
+            return
+        pat = core.header_bayer(header or {})
+        before = self._rgb_channel or "green"
+        answer = self._choose_one(
+            "Color images",
+            (f"These {n_lights} lights" if n_lights else "These lights")
+            + " are color images that other software has already debayered (three channels: red, green and blue)."
+            + (f"\n\nTheir header still names a Bayer pattern ({pat}); it is not used: debayering them again "
+               "would mix pixels of the finished image." if pat else "")
+            + "\n\nWhich channel should be measured?\n"
+            "  Green (TG): closest to V; the usual choice\n"
+            "  Red (TR) / Blue (TB): that channel only\n"
+            "  Luminance (CV): all three combined, as a clear filter",
+            [("Green (TG)", "green"), ("Red (TR)", "red"), ("Blue (TB)", "blue"), ("Luminance (CV)", "luminance")],
+            cancel=None)
+        channel = answer or before
+        if self._rgb_channel is None:
+            self._pattern_before_rgb = self.pattern.get()
+        self._rgb_channel = channel
+        self._rgb_lights_dir = folder
+        core.set_rgb_channel(channel)
+        self.pattern.set(core.MONO)
+        self._sync_camera_note()
+        if pat:
+            self.log(f"Caution: these lights are color images (three channels, already debayered), but the header "
+                     f"names a Bayer pattern ({pat}). It is not used: the {core.RGB_CHANNEL_WORDS[channel]} channel is "
+                     "measured as it is, with no second debayer.")
+        self.log(f"Color images (three channels, already debayered): the {core.RGB_CHANNEL_WORDS[channel]} channel "
+                 + ("is measured" if answer else "is measured (no answer given)")
+                 + f", AAVSO filter {core.RGB_CHANNELS[channel][0]}, comps in "
+                 f"{core.band_label(core.RGB_CHANNELS[channel][1])}. No debayer; treated as pre-calibrated (no bias, "
+                 "dark or flat; photon noise from the sky). Pick another channel in the Filter box on the Calibrate "
+                 "page (Green, Red, Blue imaging or Clear).")
+
+    def _leave_rgb_lights(self):
+        """2.2.18 (item 1): lights that are not colour images after colour images: the Bayer pattern from before."""
+        before = self._pattern_before_rgb
+        self._rgb_channel = None
+        self._rgb_lights_dir = None
+        self._pattern_before_rgb = None
+        core.set_rgb_channel(None)
+        if before and before != self.pattern.get():
+            self.pattern.set(before)
+        self._sync_camera_note()
 
     def _sync_camera_note(self):
         try:
             note = self.notes.get().strip()
-            want = MONO_NOTE if self.pattern.get() == core.MONO else OSC_NOTE
+            # 2.2.18 (item 1): colour images run as MONO (no debayer) but are not from a monochrome camera
+            want = MONO_NOTE if self.pattern.get() == core.MONO and not getattr(self, "_rgb_channel", None) else OSC_NOTE
             if note in (OSC_NOTE, MONO_NOTE, "") and note != want:
                 self.notes.set(want)
         except Exception:
@@ -2763,7 +3055,7 @@ class App(Tk):
         filled, differ = [], []
         for key, label, value, src, tol in wanted:
             cur = fnum(self._setup_value(key))
-            if cur is None or (key in ("focal_mm", "pixel_um") and cur <= 0):
+            if cur is None or (key in ("focal_mm", "pixel_um") and (cur <= 0 or self._optics_unset(key))):
                 getattr(self, key).set(value if key not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
                 filled.append(f"{label} {value:g} ({src})")
             elif abs(cur - value) > tol:
@@ -3564,7 +3856,7 @@ class App(Tk):
             if path:
                 problem = core.check_master_file(path, kind)
                 if problem:
-                    messagebox.showerror(APP_TITLE, problem)
+                    self._calibration_failed(problem)   # 2.2.18 (item 22): the normal failure path, into the log
                     return
         lights = self._lights(log_skips=True)
         unreadable = []
@@ -3605,11 +3897,32 @@ class App(Tk):
             binning = 1
         # Already-calibrated lights must not be calibrated a second time.
         try:
+            first_header = core.read_header(lights[0])
+        except Exception:
+            first_header = {}
+        # 2.2.18 (item 1): colour images (three channels) found here too, when the folder was typed, not scanned.
+        rgb = core.is_rgb_header(first_header)
+        if rgb and not (self._rgb_channel and self._rgb_lights_dir == self.light_dir.get().strip()):
+            self._setup_rgb_lights(first_header, len(lights))
+            self._read_mono_filter(first_header)
+        elif not rgb and self._rgb_channel:
+            self._leave_rgb_lights()
+            self._read_mono_filter(first_header)
+        try:
             signs = core.precalibration_signs(lights[0], core.read_fits(lights[0])[1])
         except Exception:
             signs = []
+        if rgb:
+            signs = signs + ["three color channels: already debayered by other software"]
         self.precalibrated = bool(signs)
-        if signs:
+        if signs and rgb:
+            # 2.2.18 (item 1): a debayered image cannot take a raw bias, dark or flat: always skipped, no question.
+            if bias or dark or flat or any(files.values()):
+                self.log("These lights are color images (already debayered and calibrated): the bias, dark and flat "
+                         "entries are not used for them.")
+            bias, dark, flat = [], [], []
+            files = {"bias": None, "dark": None, "flat": None}
+        elif signs:
             reasons = "\n  • ".join(signs)
             if bias or dark or flat or any(files.values()):
                 skip = messagebox.askyesno(
@@ -3703,8 +4016,7 @@ class App(Tk):
             return
         if error is not None:
             message, detail = error
-            self.log(detail)
-            messagebox.showerror(APP_TITLE, f"Calibration failed:\n{message}")
+            self._calibration_failed(message, detail)
             return
         self.masters = masters
         self.masters_binning = binning
@@ -3724,7 +4036,7 @@ class App(Tk):
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         )
         pat = core.header_bayer(header or {})
-        if pat:
+        if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on colour images (said at Scan/Calibrate)
             self.pattern.set(pat)
         elif core.is_microobservatory(path, header or {}) and self.pattern.get() != core.MONO:
             self._setup_microobservatory(header or {}, len(self._lights()))
@@ -3743,6 +4055,14 @@ class App(Tk):
             self.log("The lights carry a plate solution in their FITS headers: Solve uses it directly.")
         # 2.2: no separate Debayer step. Debayer the preview now and go straight to Photometry.
         self.apply_debayer(auto=True)
+
+    def _calibration_failed(self, message: str, detail: str = ""):
+        """2.2.18 (item 22): every calibration failure (a worker error, or a bad Master file… choice found before the
+        run) is logged and shown the same way."""
+        self.log(f"Calibration failed: {message}")
+        if detail:
+            self.log(detail)
+        messagebox.showerror(APP_TITLE, f"Calibration failed:\n{message}")
 
     def apply_debayer(self, auto: bool = False):
         if self.calibrated is None:
@@ -3773,6 +4093,8 @@ class App(Tk):
         self._photo_view = None
         self._photo_drawn_shape = None
         channel = "monochrome" if self.pattern.get() == core.MONO else f"{self.debayer_mode.get()} from {self.pattern.get()}"
+        if self._rgb_channel and self.pattern.get() == core.MONO:   # 2.2.18 (item 1)
+            channel = f"{core.RGB_CHANNEL_WORDS[self._rgb_channel]} channel of the color images"
         self.debayer_info.set(f"Preview: {channel}  →  {mono.shape[1]}×{mono.shape[0]}"
                               + ("" if self.pattern.get() == core.MONO else " (superpixel)"))
         self.log(f"Preview debayered: {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
@@ -7768,6 +8090,9 @@ class App(Tk):
         if color and self._sloan_run():
             color = False   # 2.2.17 (item 1): no B-V / V-R from one Sloan filter
             self.log(f"Field scan: color not measured on a Sloan {core.band_label(self._band())} run.")
+        if color and self._rgb_channel:
+            color = False   # 2.2.18 (item 1): one channel of the colour images per run
+            self.log("Field scan: color not measured on color images (one channel per run).")
         comp_name = self.comp_name.get().strip()
         comp_mag = None
         try:
@@ -8317,6 +8642,9 @@ class App(Tk):
             measure_color = False
             self.log(f"Color: not measured on a Sloan {core.band_label(self._band())} run (the B-V / V-R color index "
                      "needs B, V and R; one Sloan filter gives one band).")
+        if measure_color and self._rgb_channel:
+            measure_color = False   # 2.2.18 (item 1): one channel of the colour images is read per run
+            self.log("Color: not measured on color images (already debayered; one channel is measured per run).")
         # 2.2.14 (item 1): each comp's catalog color from ONE catalog (not B from Gaia against V from APASS).
         comp_colors = [self._colors_for(role, star.name) for role, star in zip(comp_roles, comps)]
         cat_bv, cat_bv_src = core.ensemble_catalog_color(comp_colors, "B", "V")
@@ -12734,7 +13062,11 @@ class App(Tk):
             getattr(self, f"{r}_name").set("")
             getattr(self, f"{r}_mag").set("")
         self.chart.set("DEMO")
-        self.observer.set("TST")
+        self._loading_meta = True   # 2.2.18 (item 11): the demo's observer code is not saved as yours
+        try:
+            self.observer.set("TST")
+        finally:
+            self._loading_meta = False
         self.ra_hours.set("0.75")
         self.dec_deg.set("40.0")
         self.binning.set(1)
@@ -14529,13 +14861,12 @@ class ScanView:
 
 def main():
     # A desktop shortcut runs the app with pythonw, which has no console; keep messages in a log file instead.
+    # 2.2.18 (item 24): through log_to_file (rotation, one lock), not a file held open.
     if sys.stdout is None or sys.stderr is None:
-        try:
-            log = open(LOG_FILE, "a", encoding="utf-8")
-            sys.stdout = sys.stdout or log
-            sys.stderr = sys.stderr or log
-        except OSError:
-            pass
+        stream = _LogFileStream()
+        sys.stdout = sys.stdout or stream
+        sys.stderr = sys.stderr or stream
+    log_to_file(f"{APP_TITLE} {APP_VERSION} started (Python {sys.version.split()[0]}).")
     enable_windows_dpi()
     app = App()
     app.mainloop()

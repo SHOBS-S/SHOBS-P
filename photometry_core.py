@@ -288,8 +288,9 @@ def _xisf_header(raw_head: bytes):
 
 
 def read_xisf(path: str, header_only: bool = False):
-    """A PixInsight XISF monolithic file: (2-D float32 image, header dict). The first channel of a color
-    image is returned; Bayer (CFA) frames come back as the mosaic, like a FITS from the camera."""
+    """A PixInsight XISF monolithic file: (2-D float32 image, header dict). A color image gives the channel set with
+    set_rgb_channel (2.2.18; the first channel when none is set); Bayer (CFA) frames come back as the mosaic, like a
+    FITS from the camera."""
     import zlib
 
     with open(path, "rb") as fh:
@@ -304,7 +305,7 @@ def read_xisf(path: str, header_only: bool = False):
         header.setdefault("NAXIS1", width)
         header.setdefault("NAXIS2", height)
         if channels > 1:
-            header.setdefault("NAXIS3", channels)   # 2.2.11: a colour image (only its first channel is returned)
+            header.setdefault("NAXIS3", channels)   # 2.2.11: a colour image (2.2.18: see set_rgb_channel)
         fmt0 = image.get("sampleFormat") or "UInt16"
         header.setdefault("BITPIX", -32 if fmt0.startswith("Float") else 8 * np.dtype(_XISF_TYPES.get(fmt0, np.uint16)).itemsize)
         if header_only:
@@ -331,10 +332,12 @@ def read_xisf(path: str, header_only: bool = False):
             blob = np.frombuffer(blob[:n * item], dtype=np.uint8).reshape(item, n).T.tobytes()
     data = np.frombuffer(blob, dtype=dtype, count=width * height * channels)
     if (image.get("pixelStorage") or "Planar").lower() == "normal" and channels > 1:
-        data = data.reshape(height, width, channels)[:, :, 0]
+        data = np.moveaxis(data.reshape(height, width, channels), 2, 0)
     else:
-        data = data.reshape(channels, height, width)[0]
+        data = data.reshape(channels, height, width)
     data = data.astype(np.float32)
+    # 2.2.18 (item 1): a colour image gives the chosen channel (or luminance); before, always the first (red).
+    data = rgb_plane(data) if channels == 3 else data[0]
     if fmt.startswith("Float"):
         # PixInsight keeps floating-point pixels in a 0..1 range (the bounds attribute): put them back on the
         # 16-bit ADU scale the rest of the app (saturation, noise, masters in ADU) works in.
@@ -361,7 +364,9 @@ def read_fits(path: str) -> tuple[np.ndarray, dict]:
                     break
         data = np.asarray(hdu.data, dtype=np.float32)
         header = dict(hdu.header)
-    if data.ndim == 3 and data.shape[0] in (1, 3, 4):
+    if data.ndim == 3 and data.shape[0] == 3:
+        data = rgb_plane(data)   # 2.2.18 (item 1): the chosen channel of a colour image, not always red
+    elif data.ndim == 3 and data.shape[0] in (1, 4):
         data = data[0]
     if data.ndim != 2:
         raise ValueError(f"{os.path.basename(path)} is not a 2-D image (shape {data.shape})")
@@ -458,11 +463,46 @@ def mid_jd(header: dict) -> float:
 # Monochrome sensors (MicroObservatory and other mono cameras): no Bayer mosaic, so binning is plain and the
 # "debayer" passes the frame through. Set by the app when the Bayer pattern is MONO.
 MONO = "MONO"
-_SENSOR = {"mono": False}
+_SENSOR = {"mono": False, "rgb_channel": None}
+
+# 2.2.18 (item 1): a colour image that other software already debayered (three channels, NAXIS3 = 3): the channel
+# measured, with its AAVSO filter code and the comps' band (as an OSC camera's channel), set by the app for a run.
+RGB_CHANNELS = {"green": ("TG", "V"), "red": ("TR", "R"), "blue": ("TB", "B"), "luminance": ("CV", "V")}
+RGB_CHANNEL_WORDS = {"green": "green (TG)", "red": "red (TR)", "blue": "blue (TB)", "luminance": "luminance (CV)"}
 
 
 def set_mono(flag: bool) -> None:
     _SENSOR["mono"] = bool(flag)
+
+
+def set_rgb_channel(channel: str | None) -> None:
+    """2.2.18 (item 1): the channel read from a three-channel (already debayered) image; None = the first channel,
+    as before 2.2.18."""
+    _SENSOR["rgb_channel"] = channel if channel in RGB_CHANNELS else None
+
+
+def rgb_channel() -> str | None:
+    return _SENSOR.get("rgb_channel")
+
+
+def is_rgb_header(header: dict | None) -> bool:
+    """2.2.18 (item 1): a colour image already debayered by other software: three channels (NAXIS3 = 3)."""
+    header = header or {}
+    try:
+        if int(header.get("NAXIS", 3) or 3) < 3:
+            return False
+        return int(header.get("NAXIS3", 1) or 1) == 3
+    except (TypeError, ValueError):
+        return False
+
+
+def rgb_plane(planes: np.ndarray, channel: str | None = None) -> np.ndarray:
+    """2.2.18 (item 1): one 2-D image from an (3, h, w) red/green/blue stack: the chosen channel, or luminance (the
+    same Rec. 601 weights as debayer's luminance). channel None: the set one (set_rgb_channel), else the first."""
+    channel = channel or rgb_channel()
+    if channel == "luminance":
+        return (0.299 * planes[0] + 0.587 * planes[1] + 0.114 * planes[2]).astype(np.float32)
+    return np.asarray(planes[{"red": 0, "green": 1, "blue": 2}.get(channel, 0)], dtype=np.float32)
 
 
 def is_microobservatory(path: str, header: dict) -> bool:
@@ -1381,6 +1421,61 @@ def detect_sensor_from_flat(path: str):
         return "mono", contrast
     if contrast >= 0.04:
         return "cfa", contrast
+    return None, contrast
+
+
+def detect_sensor_from_light(path: str):
+    """2.2.18 (item 2): 'mono', 'cfa', or None (cannot tell) from one light's sky background, with the contrast
+    found, for runs without raw flats (pre-calibrated lights, empty calibration folders). The four 2x2 pixel planes
+    of the central half are compared on the sky only: stars (over 3 sigma of their plane, and their neighbors) are
+    masked. A colour mask leaves the planes apart by the sky's colour (planes 3% or more apart: 'cfa'); a monochrome
+    sensor's planes agree (under 0.5%, measured to better than 0.1%: 'mono'). A bias pedestal in raw lights dilutes
+    the contrast, so a faint sky can stay undecided (None). A colour image (three channels) gives None."""
+    try:
+        data, header = read_fits(path)
+    except Exception:
+        return None, None
+    header = header or {}
+    if header_bayer(header):
+        return "cfa", None
+    if is_rgb_header(header):
+        return None, None
+    a = np.asarray(data)
+    if a.ndim != 2 or min(a.shape) < 64:
+        return None, None
+    h, w = a.shape
+    y0, x0 = (h // 4) // 2 * 2, (w // 4) // 2 * 2
+    c = a[y0:y0 + (h // 2) // 2 * 2, x0:x0 + (w // 2) // 2 * 2].astype(np.float64)
+    planes = [c[i::2, j::2] for i in (0, 1) for j in (0, 1)]
+    stats = []
+    for p in planes:
+        med = float(np.nanmedian(p))
+        sig = 1.4826 * float(np.nanmedian(np.abs(p - med)))
+        if not (math.isfinite(med) and math.isfinite(sig) and sig > 0):
+            return None, None
+        stats.append((med, sig))
+    stars = np.zeros(planes[0].shape, dtype=bool)
+    for p, (med, sig) in zip(planes, stats):
+        stars |= ~np.isfinite(p) | (p > med + 3.0 * sig)
+    from scipy import ndimage
+    stars = ndimage.binary_dilation(stars, iterations=2)
+    means, sigs, counts = [], [], []
+    for p, (med, sig) in zip(planes, stats):
+        v = p[~stars & (np.abs(p - med) < 3.0 * sig)]
+        if v.size < 1000:
+            return None, None
+        means.append(float(np.mean(v)))
+        sigs.append(float(np.std(v)))
+        counts.append(v.size)
+    lo, hi = min(means), max(means)
+    if not (math.isfinite(lo) and lo > 0):
+        return None, None
+    contrast = hi / lo - 1.0
+    precision = max(s / math.sqrt(n) for s, n in zip(sigs, counts)) / lo
+    if contrast >= 0.03:
+        return "cfa", contrast
+    if contrast < 0.005 and precision < 0.001:
+        return "mono", contrast
     return None, contrast
 
 

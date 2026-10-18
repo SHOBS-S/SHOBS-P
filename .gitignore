@@ -3,3 +3,4 @@ __pycache__/
 selftest_log.txt
 *.log
 .shobs_p_settings.json
+selftest_reports/

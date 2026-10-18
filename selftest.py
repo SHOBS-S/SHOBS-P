@@ -5,8 +5,10 @@ Runs with your own Python (the one SHOBS-P uses), so it checks the real Astropy,
   2. the 2.2.3 helpers (aperture in mm, flat angles, flat-topped cores, comp errors, same-star names, period
      checks, series setting checks, edge warnings);
   3. a real Lomb-Scargle period search with the leave-one-night-out check;
-  4. the transit regression on your AAVSO exoplanet reports, if it can find them
-     (W:\\Exoplanet\\TrES-3 b, KOI-217 b, Wasp-12 b), expecting detected / detected / none;
+  4. the transit regression on AAVSO exoplanet reports, when there are any to use: put reports named
+     AAVSO_TrES-3b_*.txt, AAVSO_KOI-217b_*.txt or AAVSO_WASP-12b_*.txt in a "selftest_reports" folder next to
+     this file (or name a folder in the SHOBS_P_SELFTEST_REPORTS environment variable); expects detected /
+     detected / none. Without them this part is skipped;
   5. the window opens and closes (Tkinter), with nothing clicked.
 It changes nothing: no settings, no data. The log is written next to this file (selftest_log.txt) and to your
 Downloads folder (SHOBS-P_selftest_log.txt).
@@ -365,15 +367,19 @@ def main() -> None:
     check("one offset night is caught (leave-one-night-out)", loo["carried_by"] == ["JD2461300"])
 
     section("4  transit regression")
+    # 2.2.18 (item 13): no drive paths of anyone's PC. The reports are looked for in a selftest_reports folder next
+    # to this file, or a folder named in SHOBS_P_SELFTEST_REPORTS (none ship with SHOBS-P: they carry a site).
     found = []
-    for pattern in (r"W:\Exoplanet\TrES-3 b\**\AAVSO_TrES-3b_04-SEP-2026.txt",
-                    r"W:\Exoplanet\KOI-217 b\**\AAVSO_KOI-217b_09-SEP-2026.txt",
-                    r"W:\Exoplanet\Wasp-12 b\**\AAVSO_WASP-12b_25-JAN-2015.txt"):
-        hits = [h for h in glob.glob(pattern, recursive=True) if "working" not in h.lower()]
+    folders = [os.path.join(HERE, "selftest_reports")] + [
+        f for f in os.environ.get("SHOBS_P_SELFTEST_REPORTS", "").split(os.pathsep) if f.strip()]
+    for stem in ("AAVSO_TrES-3b_", "AAVSO_KOI-217b_", "AAVSO_WASP-12b_"):
+        hits = sorted(h for folder in folders if os.path.isdir(folder)
+                      for h in glob.glob(os.path.join(folder, "**", stem + "*.txt"), recursive=True)
+                      if "working" not in h.lower())
         if hits:
             found.append(hits[0])
     if not found:
-        out("  (reports not found on W:, skipped)")
+        out("  (no sample transit reports to run on: skipped)")
     expect = {"TrES-3": "detected", "KOI-217": "detected", "WASP-12": "none"}
     for path in found:
         rep = tc.parse_exoplanet_report(open(path, encoding="utf-8", errors="replace").read())
