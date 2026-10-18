@@ -2456,6 +2456,30 @@ def _bin(x, y, width):
     return out
 
 
+def _altaz(app) -> bool:
+    """2.2.18 (item 8): is the user's mount alt-az (the Optics box's Mount choice)? Planning is for the user's own
+    telescope, so the choice counts here, not the headers of whatever lights are loaded."""
+    try:
+        return app._mount_choice_key() == core.MOUNT_ALTAZ
+    except Exception:
+        return False
+
+
+def _plan_limits(app) -> dict:
+    """2.2.18 (item 17): the limits both planners start from: the ones remembered from Tonight's transits, else the
+    shared defaults (tc.PLAN_MIN_ALT, PLAN_SUN_ALT, PLAN_BASELINE_MIN)."""
+    out = {"min_alt": tc.PLAN_MIN_ALT, "sun_alt": tc.PLAN_SUN_ALT, "baseline": tc.PLAN_BASELINE_MIN}
+    saved = (getattr(app, "settings", None) or {}).get("finder") or {}
+    for key in out:
+        try:
+            value = float(saved[key])
+            if math.isfinite(value):
+                out[key] = value
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 class PlannerWindow:
     """Upcoming transits seen from the site: times, altitudes, darkness, Moon."""
 
@@ -2492,9 +2516,11 @@ class PlannerWindow:
         opts = ttk.Frame(top, style="Card.TFrame")
         opts.pack(fill=X)
         self.days = DoubleVar(value=30)
-        self.min_alt = DoubleVar(value=25)
-        self.sun_alt = DoubleVar(value=-12)
-        self.baseline = DoubleVar(value=60)
+        lim = _plan_limits(app)   # 2.2.18 (item 17): one set of limits with Tonight's transits
+        self.min_alt = DoubleVar(value=lim["min_alt"])
+        self.sun_alt = DoubleVar(value=lim["sun_alt"])
+        self.baseline = DoubleVar(value=lim["baseline"])
+        self.altaz = _altaz(app)   # 2.2.18 (item 8): alt-az: warn about the zenith keyhole
         self.full_only = BooleanVar(value=False)
         for label, var, width in (("Days ahead", self.days, 6), ("Min altitude (°)", self.min_alt, 6),
                                   ("Sun below (°)", self.sun_alt, 6), ("Baseline each side (min)", self.baseline, 6)):
@@ -2503,12 +2529,12 @@ class PlannerWindow:
         ttk.Checkbutton(opts, text="full only", variable=self.full_only).pack(side=LEFT)
         ttk.Button(opts, text="Update", style="Accent.TButton", command=self.update).pack(side=LEFT, padx=10)
         ttk.Button(opts, text="Export CSV…", command=self.export).pack(side=LEFT)
-        cols = ("date", "t1", "tc", "t4", "alt", "sun", "moon", "sigma", "status")
+        cols = ("date", "t1", "tc", "t4", "alt", "sun", "moon", "sigma", "status") + (("zenith",) if self.altaz else ())
         self.tree = ttk.Treeview(top, columns=cols, show="headings", height=18)
         for col, label, width in (("date", "Night of", 150), ("t1", "Ingress", 80), ("tc", "Mid", 80), ("t4", "Egress", 80),
                                   ("alt", "Altitude in / mid / out", 190), ("sun", "Sun at mid", 100),
                                   ("moon", "Moon (lit, distance)", 170), ("sigma", "± ephemeris", 110),
-                                  ("status", "Coverage", 140)):
+                                  ("status", "Coverage", 140), ("zenith", "Zenith keyhole", 150))[:len(cols)]:
             _col(self.tree, col, label, width, stretch=(col == "status"))
         self.tree.tag_configure("full", foreground="#2e7d32")
         self.tree.tag_configure("transit only", foreground="#1c2b33")
@@ -2538,9 +2564,11 @@ class PlannerWindow:
             self.tree.insert("", END, tags=(e["status"],), values=(
                 evening.strftime("%a %d %b %Y"), t1.strftime("%H:%M"), tm.strftime("%H:%M"), t4.strftime("%H:%M"),
                 f"{e['alt_t1']:.0f}° / {e['alt_tc']:.0f}° / {e['alt_t4']:.0f}°", f"{e['sun_tc']:.0f}°",
-                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°", f"{e['sigma_min']:.1f} min", e["status"]))
+                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°", f"{e['sigma_min']:.1f} min", e["status"])
+                + ((f"KEYHOLE: up to {e['alt_max']:.0f}°" if e.get("keyhole") else "",) if self.altaz else ()))
         if not events:
-            self.tree.insert("", END, values=("No observable transits in this range.", "", "", "", "", "", "", "", ""))
+            self.tree.insert("", END, values=("No observable transits in this range.", "", "", "", "", "", "", "", "")
+                             + (("",) if self.altaz else ()))
 
     def export(self):
         if not self.events:
@@ -2553,12 +2581,14 @@ class PlannerWindow:
             w = csv.writer(fh)
             w.writerow([core.created_line()])
             w.writerow(["epoch", "ingress_local", "mid_local", "egress_local", "tc_bjd_tdb", "alt_in", "alt_mid",
-                        "alt_out", "sun_alt_mid", "moon_illum", "moon_sep_deg", "sigma_min", "coverage"])
+                        "alt_out", "sun_alt_mid", "moon_illum", "moon_sep_deg", "sigma_min", "coverage"]
+                       + (["alt_max", "zenith_keyhole"] if self.altaz else []))   # 2.2.18 (item 8)
             for e in self.events:
                 w.writerow([e["epoch"]] + [tc.jd_to_local(e[k]).strftime("%Y-%m-%d %H:%M") for k in ("t1_jd", "tc_jd", "t4_jd")]
                            + [f"{e['tc_bjd']:.5f}", f"{e['alt_t1']:.1f}", f"{e['alt_tc']:.1f}", f"{e['alt_t4']:.1f}",
                               f"{e['sun_tc']:.1f}", f"{e['moon_illum']:.2f}", f"{e['moon_sep']:.0f}",
-                              f"{e['sigma_min']:.1f}", e["status"]])
+                              f"{e['sigma_min']:.1f}", e["status"]]
+                           + ([f"{e['alt_max']:.1f}", int(bool(e.get("keyhole")))] if self.altaz else []))
 
 
 class NebWindow:
@@ -2719,8 +2749,10 @@ class NebWindow:
 class FinderWindow:
     """Tonight's transits: every known transiting planet that can be observed whole on one night."""
 
-    DEFAULTS = {"min_alt": 30.0, "sun_alt": -18.0, "baseline": 60.0, "vmin": 9.0, "vmax": 13.5, "depth": 0.5,
-                "moon": 0.0, "after": "", "before": "", "avoid_meridian": False}
+    # 2.2.18 (item 17): altitude, Sun and baseline from the shared planner defaults (transit_core)
+    DEFAULTS = {"min_alt": tc.PLAN_MIN_ALT, "sun_alt": tc.PLAN_SUN_ALT, "baseline": tc.PLAN_BASELINE_MIN,
+                "vmin": 9.0, "vmax": 13.5, "depth": 0.5, "moon": 0.0, "after": "", "before": "",
+                "avoid_meridian": False, "avoid_keyhole": False}
 
     def __init__(self, app):
         import datetime as _dt
@@ -2770,7 +2802,13 @@ class FinderWindow:
         field("Min depth (%)", "depth", 5, f"{saved['depth']:g}")
         field("Moon ≥ (°)", "moon", 4, f"{saved['moon']:g}")
         self.avoid_meridian = BooleanVar(value=bool(saved["avoid_meridian"]))
-        ttk.Checkbutton(row, text="no meridian flip", variable=self.avoid_meridian).pack(side=LEFT, padx=(0, 10))
+        self.avoid_keyhole = BooleanVar(value=bool(saved.get("avoid_keyhole")))
+        self.altaz = _altaz(app)   # 2.2.18 (item 8): an alt-az mount never flips; its trouble is the zenith keyhole
+        if self.altaz:
+            ttk.Checkbutton(row, text=f"no zenith keyhole (above {tc.ZENITH_KEYHOLE_ALT:g}°)",
+                            variable=self.avoid_keyhole).pack(side=LEFT, padx=(0, 10))
+        else:
+            ttk.Checkbutton(row, text="no meridian flip", variable=self.avoid_meridian).pack(side=LEFT, padx=(0, 10))
         row2 = ttk.Frame(top, style="Card.TFrame")
         row2.pack(fill=X, pady=(6, 0))
         ttk.Button(row2, text="Search", style="Accent.TButton", command=self.search).pack(side=LEFT)
@@ -2785,7 +2823,8 @@ class FinderWindow:
                                   ("dur", "T14 (h)", 70), ("start", "Start (with baseline)", 150),
                                   ("t1", "Ingress", 75), ("tc", "Mid", 70), ("t4", "Egress", 70),
                                   ("end", "End (with baseline)", 140), ("alt", "Altitude min–max", 130),
-                                  ("moon", "Moon (lit, distance)", 150), ("flip", "Meridian", 90)):
+                                  ("moon", "Moon (lit, distance)", 150),
+                                  ("flip", "Zenith" if self.altaz else "Meridian", 90)):
             _col(self.tree, col, label, width, stretch=(col == "name"))
         scroll = ttk.Scrollbar(top, orient=VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -2816,7 +2855,7 @@ class FinderWindow:
         return {"min_alt": float(v["min_alt"]), "sun_alt": float(v["sun_alt"]), "baseline": float(v["baseline"]),
                 "vmin": float(v["vmin"]), "vmax": float(v["vmax"]), "depth": float(v["depth"]),
                 "moon": float(v["moon"] or 0), "after": v["after"], "before": v["before"],
-                "avoid_meridian": bool(self.avoid_meridian.get())}
+                "avoid_meridian": bool(self.avoid_meridian.get()), "avoid_keyhole": bool(self.avoid_keyhole.get())}
 
     # ---- search ---------------------------------------------------------------------------------
     def search(self, refresh=False):
@@ -2839,7 +2878,9 @@ class FinderWindow:
                 events, counts = tc.find_transits(
                     planets, night, self.lat, self.lon, min_alt=lim["min_alt"], sun_alt=lim["sun_alt"],
                     baseline_min=lim["baseline"], vmin=lim["vmin"], vmax=lim["vmax"], min_depth=lim["depth"] / 100.0,
-                    min_moon_deg=lim["moon"], after_jd=after, before_jd=before, avoid_meridian=lim["avoid_meridian"])
+                    min_moon_deg=lim["moon"], after_jd=after, before_jd=before,
+                    avoid_meridian=lim["avoid_meridian"] and not self.altaz,   # 2.2.18 (item 8)
+                    avoid_keyhole=lim["avoid_keyhole"] and self.altaz)
                 app.call_ui(self._show, events, counts, note, None)
             except Exception as exc:
                 app.call_ui(self._show, [], {}, "", exc)
@@ -2859,7 +2900,8 @@ class FinderWindow:
             item = self.tree.insert("", END, values=(
                 e["name"], f"{e['vmag']:.1f}", f"{e['depth'] * 100:.2f}", f"{e['t14'] * 24:.2f}", fmt(e["start"]),
                 fmt(e["t1"]), fmt(e["tc"]), fmt(e["t4"]), fmt(e["end"]), f"{e['alt_min']:.0f}°–{e['alt_max']:.0f}°",
-                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°", "flip" if e["meridian"] else ""))
+                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°",
+                ("keyhole" if e.get("keyhole") else "") if self.altaz else ("flip" if e["meridian"] else "")))
             self.rows[item] = e
         dark = counts.get("dark")
         dark_text = (f"dark {tc.jd_to_local(dark[0]).strftime('%H:%M')}–{tc.jd_to_local(dark[1]).strftime('%H:%M')}"
@@ -2922,9 +2964,10 @@ class FinderWindow:
             w = csv.writer(fh)
             w.writerow([core.created_line()])
             w.writerow(["planet", "V", "depth_pct", "T14_h", "start_local", "ingress_local", "mid_local", "egress_local",
-                        "end_local", "alt_min", "alt_max", "moon_illum", "moon_sep_deg", "meridian_flip"])
+                        "end_local", "alt_min", "alt_max", "moon_illum", "moon_sep_deg",
+                        "zenith_keyhole" if self.altaz else "meridian_flip"])
             for e in self.events:
                 w.writerow([e["name"], f"{e['vmag']:.2f}", f"{e['depth'] * 100:.3f}", f"{e['t14'] * 24:.3f}",
                             fmt(e["start"]), fmt(e["t1"]), fmt(e["tc"]), fmt(e["t4"]), fmt(e["end"]),
                             f"{e['alt_min']:.1f}", f"{e['alt_max']:.1f}", f"{e['moon_illum']:.2f}",
-                            f"{e['moon_sep']:.0f}", int(e["meridian"])])
+                            f"{e['moon_sep']:.0f}", int(bool(e.get("keyhole"))) if self.altaz else int(e["meridian"])])
