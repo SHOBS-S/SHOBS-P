@@ -1533,7 +1533,8 @@ class Obs:
     e_model: int = 0
 
 
-def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
+def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
+                  blend_check: bool = True, search: float | None = None) -> dict:
     """2.2.8: centre on the star nearest (x, y), not on whatever is brightest nearby.
 
     1. Look for significant peaks (3x3-smoothed, above sky + 4 sigma of the smoothed noise) within a search radius
@@ -1542,15 +1543,20 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
        (CoRoT-1, 10 Oct 2026: a star 2.5x brighter 5.8 px away pulled the old centre-of-mass 3.5 px off the target).
     3. Centre of mass of the sky-subtracted light inside about one FWHM of that peak, iterated three times.
     With no significant peak (a faint star lost in the noise), the start point is kept and found = False.
+    2.2.18 (item 5): blend_check=False never keeps the start point for a blended neighbour, and search widens the
+    search radius (both for the pre-run marker check, marker_offset).
     Returns {"x", "y", "shift", "found"}."""
     from scipy import ndimage
 
+    wide = search
     if fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
         search = max(3.0, 2.5 * float(fwhm))
         window = max(1.5, float(fwhm))
     else:
         search = max(3.0, 1.2 * float(radius))
         window = min(max(1.5, 0.45 * float(radius)), 5.0)
+    if wide is not None and math.isfinite(wide):
+        search = max(search, float(wide))
     half = int(math.ceil(search + window)) + 3
     crop, cx, cy = _crop(img, x, y, half)
     keep = {"x": float(x), "y": float(y), "shift": 0.0, "found": False}
@@ -1618,7 +1624,21 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
             sig = math.sqrt((r_half / 1.1774) ** 2 + 0.67)
             expect = p_val * math.exp(-d_click ** 2 / (2.0 * sig * sig))
             here = float(smooth[int(round(sy)), int(round(sx))] - sky)
-            if here > 3.0 * expect + 8.0 * noise / 3.0 and here < 0.5 * p_val:
+            # 2.2.18 (item 5): a real star's wings are wider than a Gaussian (Moffat-like), so a click 2-3 FWHM out on a
+            # bright star's own wing passed the test above and the marker stayed off the star (HD 219134 6-7 Oct check
+            # 9 px off, 15-16 Oct comp 6 px off). A star is about symmetric about its peak; a blended neighbour puts
+            # light at the click that the far side of the peak lacks. So the click must also hold clearly more light
+            # than the point mirrored through the peak.
+            # The mirrored point in the whole image (it can lie outside the crop), as a 3x3 mean like `smooth`.
+            mx = int(round(float(x) + 2.0 * (peak_x - sx)))
+            my = int(round(float(y) + 2.0 * (peak_y - sy)))
+            lopsided = True
+            if 1 <= my < img.shape[0] - 1 and 1 <= mx < img.shape[1] - 1:
+                patch = np.asarray(img[my - 1:my + 2, mx - 1:mx + 2], dtype=float)
+                if np.isfinite(patch).any():
+                    mirror = max(0.0, float(np.nanmean(patch)) - sky)
+                    lopsided = here > 2.0 * mirror + 8.0 * noise / 3.0
+            if here > 3.0 * expect + 8.0 * noise / 3.0 and here < 0.5 * p_val and lopsided and blend_check:
                 return {"x": float(x), "y": float(y), "shift": 0.0, "found": True, "blended": True}
     except Exception:
         pass
@@ -1682,6 +1702,30 @@ def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | N
     """Centre on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found."""
     r = recenter_info(img, x, y, radius, fwhm)
     return r["x"], r["y"], r["shift"]
+
+
+def recenter_jump_limit(radius: float) -> float:
+    """2.2.18 (item 5): how far reduce_frame lets a frame's centring move a star from its aligned position (further
+    and the centring is taken to have found another star, so the star is measured where it was marked)."""
+    return max(3.0, 0.5 * float(radius))
+
+
+def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
+    """2.2.18 (item 5): how far a marker sits from the centre of the star it is on, for the check before a run.
+    The nearest significant star within max(2.5 FWHM, 1.5 x aperture radius) of the marker, centred without the
+    "blended neighbour" exception (which keeps a click where it is). Returns {"found", "x", "y", "offset", "limit",
+    "off"}: off is True when the marker is further from that centre than about 1.5 FWHM or than reduce_frame's jump
+    limit (then every frame is measured at the marker, not on the star)."""
+    try:
+        info = recenter_info(img, x, y, radius, fwhm, blend_check=False, search=1.5 * float(radius))
+    except Exception:
+        info = {"found": False, "x": float(x), "y": float(y), "shift": 0.0}
+    limit = recenter_jump_limit(radius)
+    if fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
+        limit = min(limit, max(1.5, 1.5 * float(fwhm)))
+    off = bool(info.get("found")) and float(info.get("shift", 0.0)) > limit
+    return {"found": bool(info.get("found")), "x": float(info["x"]), "y": float(info["y"]),
+            "offset": float(info.get("shift", 0.0)), "limit": float(limit), "off": off}
 
 
 def star_fwhm(img: np.ndarray, x: float, y: float) -> dict:
@@ -2231,7 +2275,7 @@ def reduce_frame(
     drifted = shift > radius
     # 2.2.8: frames are aligned to well under a pixel, so a big jump means the centring found another star: measure
     # at the aligned position instead.
-    jump_limit = max(3.0, 0.5 * radius) if aligned else float("inf")   # unaligned frames follow drift by centring
+    jump_limit = recenter_jump_limit(radius) if aligned else float("inf")   # unaligned frames follow drift by centring
     use_x, use_y = (target.x, target.y) if shift > jump_limit else (tx, ty)
     var = measure_aperture(img, use_x, use_y, radius, sky_inner, sky_outer)
     fwhm, elong, peak = shape_metrics(img, use_x, use_y, radius, var["sky"])
