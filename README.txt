@@ -1,7 +1,7 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.17
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.18
 ======================================================
 
-Windows desktop app for photometry with colour (OSC) and monochrome cameras: variable-star light curves and AAVSO
+Windows desktop app for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
 reports, exoplanet transit fits and AAVSO exoplanet reports, and a field scan that finds stars that vary.
 
 Quick start
@@ -54,6 +54,48 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.2.18 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
+- S  Alt-az mounts and derotators, not only German equatorial mounts: a Mount box (German equatorial / Alt-az) in
+     the Optics box, remembered; the headers decide only when they are clear (a flip or both pier sides = German;
+     a mount keyword, or a derotator named in the headers with an alt-az telescope = alt-az). On alt-az nights
+     there are no flip segments, the pier side shows "-", alignment follows the field's rotation, and the
+     planners warn about the zenith keyhole (above 85 degrees) instead of a meridian flip. Flats: a German mount
+     compares rotator angles modulo 180 degrees as before; an alt-az camera turned between flats and lights is
+     asked about; on a derotator one caution line explains what flats can and cannot correct.
+- S  Markers a few px off a star: comp and check clicks out on a star's wing now center on the star, and before
+     every run the Log warns when a marker would be measured off its star (the cause of the faint check and comp
+     on two HD 219134 nights).
+- S  Color images that were already debayered (3-channel RGB FITS/XISF): SHOBS-P asks which channel to measure
+     (green TG, red TR, blue TB or luminance CV), skips the debayer and calibration for them, and records the
+     channel per night (a series flags nights in different channels).
+- S  Monochrome cameras without flats: the lights' sky is checked for a color mask; when it cannot tell, SHOBS-P
+     asks "Color or monochrome camera?" instead of keeping the last Bayer pattern.
+- S  Focal length, pixel size and observer code are remembered between sessions (like the site); your FITS header
+     still fills empty boxes, and a series' or another telescope's values are never saved as yours.
+- S  The Catalog mag column in Use comps is editable (comps, spares and check): every point that used that comp
+     shifts by the change, without reducing again.
+- S  Keep questions after transmission loss have clear buttons, "Use these points" / "Leave them out"; each answer
+     goes to the Log with the night and time.
+- S  Every Log line is also written to .shobs_p.log with the date and time (rotated past 5 MB); tracebacks kept.
+- S  Closing the window with unsaved series work asks to save it first.
+- S  Credits page: "How to cite SHOBS-P" with a Copy button.
+- S  Clear selected in Watch mode removes the selected watch star.
+- S  The Input boxes and the Photometry View box wrap instead of hiding their boxes in a narrow window.
+- S  A bad Master file choice says "Calibration failed:" and is logged. Self-test: no drive paths (sample transit
+     reports go in a selftest_reports folder next to selftest.py). US spelling throughout; messages no longer
+     name old version numbers.
+- V  The duplicate-report warning moved from saving to the upload buttons (Open AAVSO WebObs..., Open AAVSO
+     Exoplanet Database..., Open ExoFOP...): opening the upload page marks the report's nights "sent" (a Sent column
+     in the night table; double-click a night to unmark it) and warns before a night goes twice. Transits too.
+- V  Period search boxes refit on Enter or when a changed box is left. "Run in Transits mode instead?" now asks
+     Variables-only users too (the target's planets are looked up). AAVSO's spelling of the Star ID is applied only
+     after the report is saved.
+- V  After the automatic target marker the pick moves to Comps (Variables and Transits), unless you picked a step.
+- T  The Transit page also saves a fit CSV (time, flux, error, model, residual, flag; trimmed points flagged) with the
+     same number as the other files of that save. The planner and Tonight's transits share their defaults
+     (altitude 30 degrees, Sun -18 degrees).
+- D  Discovery has its own period range in Scan settings (remembered), and the watch list survives a restart.
+
 New in 2.2.17 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Sloan g', r', i' filters (GitHub #6), for monochrome cameras: FILTER spellings like g', gp, sdss g, Sloan g,
      "Astrodon Sloan g'" are read as SG / SR / SI (z' and u' too); the Filter box offers them. Comp and check
@@ -83,7 +125,7 @@ New in 2.2.17 (S = shared by every mode, M = one mode only, T = Transits, D = Di
 - T  Comp health... and Use comps... on the Transit fit page; after Use comps the transit is refitted by itself.
      The comp cautions in the notes link to Comp health.
 - T  Trim and refit: From/To times (or drag across the plot) leave out a stretch without reducing again; several
-     spans; Clear trim brings the points back. Trimmed spans are greyed on the plot and named in the notes, the
+     spans; Clear trim brings the points back. Trimmed spans are grayed on the plot and named in the notes, the
      AAVSO exoplanet report NOTES, the ExoFOP fit file and the PNG.
 - T  An opened report names the program that wrote it ("Fitting a SHOBS-P 2.2.16 report", "an EXOTIC 4.3.2
      report"); JD_UTC and HJD reports are converted to BJD_TDB (or warned when they cannot be).
@@ -128,8 +170,8 @@ New in 2.2.16 (S = shared by every mode, M = one mode only, T = Transits, D = Di
 New in 2.2.15 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Photometry page tips (GitHub #3): a step strip "1 Solve -> 2 Target -> 3 Comps -> 4 Check -> Run" shows where you
      are; Hide tips / Show tips. Once the image is solved and the target's RA/Dec are known, the Target marker is put
-     on the target by itself (centred like a click; never moves a marker you placed; not placed when no star is there
-     or the RA/Dec are only the field centre). Without a solve the tip says "click the target".
+     on the target by itself (centerd like a click; never moves a marker you placed; not placed when no star is there
+     or the RA/Dec are only the field center). Without a solve the tip says "click the target".
 - S  Display stretch on Blink and Photometry (GitHub #1): linear, log or asinh with black and white points (Stretch
      controls; Reset). Display only: the measured data never change. Remembered per page.
 - S  Series line at the top of the Input page: "Series: X.cvseries - 8 nights, last 13-14 Oct" or "No series loaded -
@@ -157,7 +199,7 @@ New in 2.2.14 (S = shared by every mode, M = one mode only, T = Transits, D = Di
 - S  One star, one name per series: a comp, check, watch star or spare that is a series star (by any catalog name,
      a variable's name, within 4", or the same pixel) takes the series' name AND catalog magnitude when a night is
      added, whatever tonight's catalogs call it; the add-night question and the log list each change. Loading a series
-     drops a session watch star that is the same star under another name. Also after a cancelled run.
+     drops a session watch star that is the same star under another name. Also after a canceled run.
 - S  Colors from one catalog per star: B-V from the AAVSO sequence or APASS when it has both bands (Gaia for stars
      brighter than APASS's V 10), else Gaia's synthetic photometry; V-R from Gaia. The panel and the color log name
      the catalog. The magnitude itself still comes from the AAVSO sequence first.
@@ -173,7 +215,7 @@ New in 2.2.14 (S = shared by every mode, M = one mode only, T = Transits, D = Di
 - S  Wrong-mode guard: Transits mode on a known variable with no transit in the lights (or the reverse) asks whether to
      run in the other mode; planet hosts (VSX type EP) do not count as variables.
 - S  Transmission loss vs cloud: when every measured star fades together, smoothly, with a flat sky (dew, haze), the
-     frames are labelled 'transmission loss (dew/haze?)' and can be kept (default: left out) with their error bars
+     frames are labeled 'transmission loss (dew/haze?)' and can be kept (default: left out) with their error bars
      raised by the star-to-star scatter measured in that stretch. Patchy or fast cloud stays 'cloud'. Points that sit
      far off right at the edge of a cloud run are flagged 'cloud edge'.
 - S  Pop-up windows (Suggest apertures, Use comps, Export) open wide enough for their contents at any display scaling.
@@ -226,7 +268,7 @@ New in 2.2.13 (S = shared by every mode, M = one mode only, T = Transits, D = Di
      depth disagrees with it a note says so (HAT-P-23 b: listed 1.05%, (Rp/R*)^2 1.37%). The table, plot and verdict
      use the same value.
 - T  When the cloud flag removes all the baseline before ingress or after egress, the caution says so (how many frames,
-     when), and 'Refit with flagged frames (errors x2)' fits again with them, clearly labelled as including them.
+     when), and 'Refit with flagged frames (errors x2)' fits again with them, clearly labeled as including them.
 - T  Meridian flip in the transit: a fit with a step at the flip, fitted together with the transit, is built and
      validated but switched off in this version (more test nights first). When it is switched on, a flip with no
      out-of-transit baseline on one side gives 'Inconclusive' (the timing is not trusted either).
@@ -238,7 +280,7 @@ New in 2.2.12 (S = shared by every mode, M = one mode only, T = Transits, D = Di
      the archive and ignored on upload). Tools reading the CSVs should skip lines that start with '#'.
 - S  Mac: the side panels scroll with a trackpad (small wheel steps were rounded to nothing), and the fonts fall
      back to Helvetica Neue and Menlo, so the Series and Period boxes still line up. Linux wheels scroll too.
-- V D Periodograms grey out periods longer than about half the data span, labelled 'longer than the data can
+- V D Periodograms gray out periods longer than about half the data span, labeled 'longer than the data can
      test'. The search still runs there (a series of several nights can test them).
 - D  Typical-scatter curve: a running median over stars within half a magnitude, leaving out stars that already
      stand well above it, so the bright end follows the bright stars (they no longer sit under the curve, which
@@ -262,9 +304,9 @@ New in 2.2.12 (S = shared by every mode, M = one mode only, T = Transits, D = Di
      SHOBS-P's own photometry; the report has only its final light curve).
 
 New in 2.2.11 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery)
-- S  Monochrome cameras: when the lights carry no Bayer keyword, SHOBS-P looks at a raw flat. With no colour mask
+- S  Monochrome cameras: when the lights carry no Bayer keyword, SHOBS-P looks at a raw flat. With no color mask
      (its 2x2 pixel planes agree to within 1%) it sets the Bayer pattern to MONO and says so in the log; a pattern
-     you picked by hand is kept. A colour mask while MONO is set gives a caution.
+     you picked by hand is kept. A color mask while MONO is set gives a caution.
 - S  On MONO the Calibrate page's Channel box becomes a Filter box: V, B, R, Clear (CV) and the imaging filters
      (TG, TR, TB). It fills from the FITS FILTER keyword, or set it by hand when the header has none; the AAVSO
      filter code and the comps' band follow it. (I and Sloan filters are not offered: the comp catalogs carry only
@@ -336,10 +378,10 @@ New in 2.2.8 (S = shared by every mode, M = one mode only)
      10.5 px for 2-3 px stars), so Suggest... proposed apertures that swallowed neighbors. The aperture check before
      photometry and the aperture test's seeing column use the same measurement; a faint target gets a note
      suggesting 1.2-1.5 x FWHM.
-- S  Clicking a star centres the marker on the star nearest the click, not on whatever is brightest nearby: a
+- S  Clicking a star centers the marker on the star nearest the click, not on whatever is brightest nearby: a
      brighter neighbor a few pixels away no longer pulls the marker (and the aperture) onto itself. With no star at
      the click the marker stays where you clicked and the status line says so. Every frame of the photometry run
-     centres the same way.
+     centers the same way.
 - S  The Suggest apertures window grows to show the test results when they arrive (it scrolls if the screen is
      too small).
 - S  The Photometry page's right-hand panel (Stars and Watch stars) scrolls when it does not fit, for example with
@@ -427,7 +469,7 @@ New in 2.2.5 (S = shared by every mode, M = one mode only)
 - S  Blink: the "REJECTED" title above the image is no longer cut off (and is bold red).
 - M  Discovery: candidate marks on the image say which candidates matter. Bold magenta: possible new variable (not
      in VSX/SIMBAD, nothing to check first). Dim: known variable, or a candidate with a "Check first" note. Light
-     grey: unchecked (no sky positions, so no catalog check). Hover over a mark for the reason.
+     gray: unchecked (no sky positions, so no catalog check). Hover over a mark for the reason.
 - M  Discovery: "Candidates only" next to Watch/Exclude hides everything but the scan candidates, watch stars and
      excluded stars; turning it off brings back exactly what was shown before.
 - M  Discovery: "Hide known variables" on the field-scan results takes the candidates already in VSX/SIMBAD off the
@@ -541,7 +583,7 @@ Calibration and files
 - S  Rotator angles are compared ignoring a meridian flip (30° and 210° are the same camera position on a German
      mount); flips are logged as flips, real rotator moves as moves.
 - S  PixInsight XISF files are read (uncompressed, zlib, zlib with byte shuffle). Frames PixInsight already
-     calibrated (_c) are recognised: calibrated flats are used as they are, without subtracting bias again. A folder
+     calibrated (_c) are recognized: calibrated flats are used as they are, without subtracting bias again. A folder
      with no readable images (raw camera files, TIFF …) is reported instead of skipped quietly.
 - S  With an output folder, saves no longer open a dialog; the status bar says what was saved where.
 - S  Monochrome cameras with filter wheels: the AAVSO filter (V, B, R, I, Sloan, clear) and the comps' band come
@@ -554,7 +596,7 @@ Transits
 Discovery
 - M  The Target/Comp/Check line is hidden; the scan settings fit their panel; a "Most stars to measure" setting
      (800 by default) replaces the old 400-star limit, and the log says when the limit is reached.
-- M  With no candidates, the ten nearest misses are listed (~1, ~2 …). Saturated stars are grey × in the scatter
+- M  With no candidates, the ten nearest misses are listed (~1, ~2 …). Saturated stars are gray × in the scatter
      plot, marked in their light-curve title, and never the star shown first.
 - M  "Known variables measured…" lists every VSX/SIMBAD variable in the frame with the scatter measured for it.
 - M  (also the Variables field scan) Each star's light curve is lined up across a meridian flip or rotator move
@@ -601,11 +643,11 @@ Transits
 - M  A warning when the per-point error bars are far larger than the real scatter (reduced χ² under 0.3), which
      usually points at calibration.
 Discovery
-- M  No Target block on the Input page; a Field centre box appears only when the lights' headers neither carry a
+- M  No Target block on the Input page; a Field center box appears only when the lights' headers neither carry a
      plate solution nor say where the telescope pointed.
 - M  Photometry page: no Target / Comp / Check buttons. The field is solved as soon as calibration finishes (from the
      header's plate solution when there is one); catalog stars are circled and known variables marked. The panel
-     shows the field (scale, centre, stars, magnitude range, saturated stars, known variables) and the scan settings
+     shows the field (scale, center, stars, magnitude range, saturated stars, known variables) and the scan settings
      (faintest magnitude, detection threshold, candidate level, leave out crowded stars). The catalog defaults to
      APASS DR9 (an AAVSO sequence only covers charted variables).
 - M  Scan magnitudes are put on the catalog's scale automatically: an ensemble zero point from every labeled,
@@ -616,7 +658,7 @@ Variables
 - M  RA and Dec are also shown in hours-minutes-seconds and degrees-arcminutes-arcseconds on the Input page.
 - M  Star ID spelling: "hd219134" suggests "HD 219134" (also TYC, HIP, BD, GCVS names like "rr lyr"), on the Input
      page and again before an AAVSO report is saved.
-- M  On a single night shorter than two cycles of the best period, the fold and the periodogram are greyed out with
+- M  On a single night shorter than two cycles of the best period, the fold and the periodogram are grayed out with
      a note, and the period is marked "not reliable".
 
 New in 2.1 (Transits)
@@ -732,7 +774,7 @@ New in 1.8
 - The solve logs how many stars each catalog gave (and any catalog that did not answer) and how many
   labeled stars have B, V, and R. If "Also measure R and B" is ticked but B-V cannot be calibrated, the app says so
   before the run starts.
-- Cancel buttons for calibration, photometry, and the field scan. A cancelled run adds nothing.
+- Cancel buttons for calibration, photometry, and the field scan. A canceled run adds nothing.
 - Series safety: answering No when adding a night starts a new series and no longer overwrites the loaded file.
   Reducing a night that is already in the series offers to replace it.
 - The light-curve CSV has each star's pixel position per frame (target, comps, check), to see where a star sat on
@@ -778,7 +820,7 @@ New in 1.6
 - Night notes... attaches a note to a night ("pre-calibrated by other software", "thin cirrus after 02:00").
   Notes are saved with the series, marked * in the legend, and written to the CSV and exports.
 - Bias, dark, flat, and master files found in the Lights folder are skipped (by name or IMAGETYP) and listed in
-  the log. Master files are always skipped. If most of the folder is labelled bias/dark/flat, the capture software
+  the log. Master files are always skipped. If most of the folder is labeled bias/dark/flat, the capture software
   saved the night's lights with the wrong image type, so they are all kept as lights and the log says so (1.6.1).
 - The check-star zero point weights every night equally, so one long night no longer sets the level for the
   rest. A checkbox turns the check-star correction off to compare.
@@ -791,7 +833,7 @@ New in 1.5
   saturation check is turned off for those frames, because their values are no longer camera counts.
 - Cloud flag. A frame is flagged "cloud" when the comparison stars' light falls more than the set percentage
   (default 20) below that night's median: dew, cloud, haze, twilight. Set the percentage on the Output page and
-  press Apply; every night in the series is re-flagged at once. Flagged points show as grey x marks and are left
+  press Apply; every night in the series is re-flagged at once. Flagged points show as gray x marks and are left
   out of the period search and the AAVSO report while "Leave flagged points out" is ticked.
 - Time axis. The light-curve and check-star plots can show JD, UTC, or local time (Output page). Data, CSV, and
   reports stay in JD.
@@ -832,6 +874,11 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.18 Alt-az mounts and derotators; markers centered from a star's wing and a pre-run marker check; RGB
+       pre-calibrated frames; mono detection from the lights; remembered optics and observer code; editable
+       comp catalog magnitudes; Keep-question buttons; timestamped log file; save prompt on close; duplicate
+       warning at the upload buttons; transit fit CSV; Discovery period range and watch list kept; How to cite;
+       US spelling.
 2.2.17 Sloan g' r' i' filters (#6); error bars in electrons (camera gain, binning, debayer, flat; no 0.005 floor);
        airmass check and night-counting FAP before a period is called significant; pop-out image controls; compass
        labels inside the image; Blink frame numbers, Reject/Keep and rejected list; Comp health and Use comps on the
@@ -887,14 +934,14 @@ History
        warnings, comp guidance; Transits: automatic fit, stale-fit clearing, depth and step-at-gap checks in the
        verdict, gap wording, most precise ephemeris, error-bar check, page fits the screen; Discovery: target-free
        Photometry page with auto-solve, catalog zero point, watch and exclude; Variables: sexagesimal display,
-       star-name spelling, greyed period panels on short single nights.
+       star-name spelling, grayed period panels on short single nights.
 2.1.8  Tonight's transits: every known transiting planet observable whole on a night (dark, altitude,
        baseline, V range, depth, Moon, meridian, and an After / End by window); double-click to use it. Same search
        on the Swarthmore Transit Finder with one button.
 2.1.7  Field solving: Label chart works without a target, from the FITS header pointing (or a typed field
        center), by matching star triangles; it also rescues a failed target-anchored match. Saturated stars are kept
        out of field-scan candidates. Candidate marks can be cleared; stale variable-check text clears with new folders.
-2.1.6  Transit verdict (no transit measured: flat line about as good, ΔBIC < 10, or Tc unpinned), greyed
+2.1.6  Transit verdict (no transit measured: flat line about as good, ΔBIC < 10, or Tc unpinned), grayed
        numbers and an export guard; resizable results panel, EXOTIC column only with a report; aperture check before
        a photometry run.
 2.1.5  Label chart: match tolerance about 3" of sky at any plate scale, and when the target marker is on a
@@ -1006,7 +1053,7 @@ ExoFOP (TESS)
 
 VizieR (CDS)
   Used for: Access to APASS, Tycho-2, Gaia DR3, and VSX.
-  "This research has made use of the VizieR catalogue access tool, CDS, Strasbourg Astronomical Observatory, France (DOI : 10.26093/cds/vizier)." Ochsenbein, F. et al. 2000, A&AS 143, 23.
+  "This research has made use of the VizieR catalog access tool, CDS, Strasbourg Astronomical Observatory, France (DOI : 10.26093/cds/vizier)." Ochsenbein, F. et al. 2000, A&AS 143, 23.
   https://vizier.cds.unistra.fr
 
 METHODS
@@ -1025,7 +1072,7 @@ Gaia G, BP-RP to SDSS g, r, i, z
   https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html
 
 Gaia DR3 synthetic SDSS photometry
-  Used for: Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).
+  Used for: Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalog).
   Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.
 
 SDSS to primed Sloan system
@@ -1038,7 +1085,7 @@ Sloan limb darkening
 
 Tycho BT, VT to Johnson B, V
   Used for: Johnson magnitudes for Tycho-2 stars.
-  ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.
+  ESA 1997, The Hipparcos and Tycho Catalogs, ESA SP-1200.
 
 HJD and BJD_TDB
   Used for: Heliocentric and barycentric times in exports (computed with Astropy).

@@ -19,8 +19,8 @@ All three share the same steps: **Input → Blink → Calibrate → Photometry �
 ## What each mode does
 
 **Variables mode** is for following a known variable star, one night or many. You type the star's name and
-SHOBS-P looks up its position in SIMBAD and VSX, along with its catalogued period if it has one. After calibration,
-the image **solves itself**, and every catalog (the AAVSO comparison sequence, Gaia DR3, APASS and Tycho-2) is merged into one star list: click any star and its name and magnitude fill in. The best comparison stars, AAVSO sequence stars first, close to the target in brightness and colour, are ringed in green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
+SHOBS-P looks up its position in SIMBAD and VSX, along with its catalogd period if it has one. After calibration,
+the image **solves itself**, and every catalog (the AAVSO comparison sequence, Gaia DR3, APASS and Tycho-2) is merged into one star list: click any star and its name and magnitude fill in. The best comparison stars, AAVSO sequence stars first, close to the target in brightness and color, are ringed in green. You mark the target, up to ten comparison stars and a check star, and SHOBS-P measures every frame. It lines
 frames up across meridian flips, and flags saturated frames, cloud and drift.
 
 The result is a **light curve with honest error bars**: photon and sky noise in electrons (from the camera gain,
@@ -30,7 +30,7 @@ night, and no night-to-night airmass trend, is driving the answer. Nights build 
 **series**, with a comparison-star health check along the way. When you're happy, it writes an **AAVSO Extended
 report** ready to submit.
 
-**Transits mode** is for catching an exoplanet crossing its star. Type the planet's name, in any of its catalogue
+**Transits mode** is for catching an exoplanet crossing its star. Type the planet's name, in any of its catalog
 spellings (KOI, Kepler, TOI, TIC…), or just the host star. SHOBS-P pulls its period, timing, depth and shape from
 the NASA Exoplanet Archive, choosing the most precise published ephemeris. **Tonight's transits** lists every
 transit visible from your site tonight, complete with its baseline before and after, and SHOBS-P warns you if your
@@ -51,7 +51,7 @@ When you run a **field scan**, SHOBS-P performs photometry on every star in the 
 each star's light curve across meridian flips and rotator moves, so a flip can't masquerade as a variable star. It
 then compares each star's scatter with that of other stars of the same brightness. Stars that vary at least **3
 times more than normal** for their brightness (the level is adjustable) are flagged as candidates, and each is
-labelled new, known, or "check first" (for example, near a bright star or at the edge of the frame).
+labeled new, known, or "check first" (for example, near a bright star or at the edge of the frame).
 
 Interesting stars can be put on a **watch list**. Every later night you add to that field's series measures the
 watched stars automatically, building up their light curves over time.
@@ -97,7 +97,7 @@ Then go through the steps on the left: **Blink → Calibrate → Photometry → 
    them from your FITS headers when the camera software writes them. Type the target's name (or the planet's, in
    Transits mode) and press Enter: RA and Dec are looked up for you.
 2. **Blink:** step through the lights and reject anything with trails, clouds or bad guiding.
-3. **Calibrate:** check the camera (Bayer pattern for a colour camera, MONO for a monochrome one; SHOBS-P reads it
+3. **Calibrate:** check the camera (Bayer pattern for a color camera, MONO for a monochrome one; SHOBS-P reads it
    from the headers or the flats when it can) and press **Build masters and calibrate**.
 4. **Photometry:** the image solves itself; click the target, pick one
    or more comparison stars (green rings are good choices; you can also type a name) and a check star, then **Run photometry**.
@@ -109,7 +109,7 @@ Every page and button is described in **[README.txt](README.txt)** (also in the 
 ## Known limitations
 
 - **Made for Windows** (10 or 11). It is plain Python and also runs on a Mac (python.org Python, which includes Tk; start it with `python clearv_app.py`); the Mac is lightly tested so far.
-- **Colour (OSC) cameras are the most tested.** Monochrome cameras are supported (V, B, R, clear and LRGB imaging
+- **Color (OSC) cameras are the most tested.** Monochrome cameras are supported (V, B, R, clear and LRGB imaging
   filters, and Sloan g′ r′ i′ z′ u′ since 2.2.17); that path is newer, so reports from mono users are especially welcome.
 - **Johnson/Cousins I is not supported yet**: the comparison-star catalogs used carry B, V, R and Sloan only.
 - **An internet connection is needed** for target, planet and catalog lookups (SIMBAD, VSX, NASA Exoplanet
@@ -125,7 +125,7 @@ user folder (`C:\Users\<you>`).
 
 ## Documentation
 
-**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, written for 2.2.17) walks you through the program task
+**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, written for 2.2.18) walks you through the program task
 by task: installing, your first night, reducing a variable star, fitting a transit, scanning a field, and what every
 message means.
 
