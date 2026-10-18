@@ -1994,6 +1994,16 @@ def complete_planet(p: dict) -> dict:
 
 # ---- Planner (low-precision astronomy, good to a minute or two) -----------------------------------
 
+# 2.2.18 (item 17): the transit planner and Tonight's transits share one set of default limits (the planner used
+# 25° and -12° before): the star at least PLAN_MIN_ALT high, the Sun below PLAN_SUN_ALT (astronomical dark).
+PLAN_MIN_ALT = 30.0
+PLAN_SUN_ALT = -18.0
+PLAN_BASELINE_MIN = 60.0
+# 2.2.18 (item 8): an alt-az mount cannot follow a star through the zenith smoothly: near it the azimuth speed (and
+# the field rotation) grow without bound, so a star passing above this altitude crosses the "zenith keyhole".
+ZENITH_KEYHOLE_ALT = 85.0
+
+
 def _gmst_deg(jd: np.ndarray) -> np.ndarray:
     d = np.asarray(jd) - 2451545.0
     return (280.46061837 + 360.98564736629 * d) % 360.0
@@ -2043,6 +2053,19 @@ def altitude(ra_deg, dec_deg, lat_deg, lon_deg, jd):
     return np.degrees(np.arcsin(np.clip(s, -1, 1)))
 
 
+def peak_altitude(ra_deg, dec_deg, lat_deg, lon_deg, jd_grid) -> tuple[float, bool]:
+    """2.2.18 (item 8): (highest altitude over the times in jd_grid, does the star cross the meridian there). When it
+    culminates between two grid times, the culmination altitude (90° - |lat - dec|) counts, not the grid's."""
+    grid = np.asarray(jd_grid, dtype=float)
+    alt = altitude(ra_deg, dec_deg, lat_deg, lon_deg, grid)
+    ha = ((_gmst_deg(grid) + lon_deg - ra_deg + 180.0) % 360.0) - 180.0
+    crosses = bool(np.any(np.diff(np.sign(ha)) > 0))
+    top = float(np.max(alt))
+    if crosses:
+        top = max(top, 90.0 - abs(lat_deg - dec_deg))
+    return top, crosses
+
+
 def bjd_minus_jd_days(jd, ra_deg, dec_deg) -> np.ndarray:
     """Approximate BJD_TDB − JD_UTC (days): Roemer delay from the Earth's position plus TDB − UTC.
     Good to a few seconds; used by the planner only (fits use Astropy's exact conversion)."""
@@ -2058,9 +2081,11 @@ def bjd_minus_jd_days(jd, ra_deg, dec_deg) -> np.ndarray:
 
 
 def plan_transits(planet: dict, ra_deg: float, dec_deg: float, lat: float, lon: float, start_jd: float,
-                  days: float = 30.0, min_alt: float = 25.0, sun_alt: float = -12.0,
-                  baseline_min: float = 60.0) -> list[dict]:
+                  days: float = 30.0, min_alt: float = PLAN_MIN_ALT, sun_alt: float = PLAN_SUN_ALT,
+                  baseline_min: float = PLAN_BASELINE_MIN) -> list[dict]:
     """Transits in a date range, with the target's altitude and the sky darkness at ingress, mid, and egress.
+    2.2.18: also the highest altitude over the window ("alt_max"), "meridian" (crosses it: a German mount flips) and
+    "keyhole" (above ZENITH_KEYHOLE_ALT: an alt-az mount's zenith keyhole).
 
     'full' means ingress through egress plus the baseline on both sides are all above min_alt in the dark;
     'transit only' means the transit is but the baseline is not; 'partial' means part of the transit is."""
@@ -2089,6 +2114,7 @@ def plan_transits(planet: dict, ra_deg: float, dec_deg: float, lat: float, lon: 
         else:
             continue
         mra, mdec, illum = moon_radec(tc)
+        top, crosses = peak_altitude(ra_deg, dec_deg, lat, lon, grid)   # 2.2.18 (item 8)
         events.append({
             "epoch": n, "tc_bjd": tc_bjd, "tc_jd": tc, "t1_jd": tc - t14 / 2, "t4_jd": tc + t14 / 2,
             "alt_t1": float(altitude(ra_deg, dec_deg, lat, lon, tc - t14 / 2)),
@@ -2097,6 +2123,7 @@ def plan_transits(planet: dict, ra_deg: float, dec_deg: float, lat: float, lon: 
             "sun_tc": float(altitude(*sun_radec(tc)[:2], lat, lon, tc)),
             "moon_illum": float(illum), "moon_sep": float(_sep_deg(mra, mdec, ra_deg, dec_deg)),
             "status": status, "sigma_min": sig, "t14": t14,
+            "alt_max": top, "meridian": crosses, "keyhole": top >= ZENITH_KEYHOLE_ALT,
         })
     return events
 
@@ -2551,7 +2578,7 @@ def _csv_cell(value) -> str:
     return '"' + text.replace('"', '""') + '"' if ("," in text or '"' in text) else text
 
 
-def night_window(date_local, lat: float, lon: float, sun_alt: float = -18.0):
+def night_window(date_local, lat: float, lon: float, sun_alt: float = PLAN_SUN_ALT):
     """Dark interval (JD UTC) for the night that starts on the local calendar date: from local noon to the next
     local noon, the stretch with the Sun below sun_alt. Returns (start, end) or None (no dark time)."""
     from datetime import datetime, time as dtime
@@ -2566,10 +2593,11 @@ def night_window(date_local, lat: float, lon: float, sun_alt: float = -18.0):
     return float(grid[dark[0]]), float(grid[dark[-1]]), jd0
 
 
-def find_transits(planets: list[dict], date_local, lat: float, lon: float, min_alt: float = 30.0,
-                  sun_alt: float = -18.0, baseline_min: float = 60.0, vmin: float = 9.0, vmax: float = 13.5,
-                  min_depth: float = 0.005, min_moon_deg: float = 0.0, after_jd: float | None = None,
-                  before_jd: float | None = None, avoid_meridian: bool = False) -> tuple[list[dict], dict]:
+def find_transits(planets: list[dict], date_local, lat: float, lon: float, min_alt: float = PLAN_MIN_ALT,
+                  sun_alt: float = PLAN_SUN_ALT, baseline_min: float = PLAN_BASELINE_MIN, vmin: float = 9.0,
+                  vmax: float = 13.5, min_depth: float = 0.005, min_moon_deg: float = 0.0,
+                  after_jd: float | None = None, before_jd: float | None = None, avoid_meridian: bool = False,
+                  avoid_keyhole: bool = False) -> tuple[list[dict], dict]:
     """Transits on one night that can be observed whole: the window (ingress minus baseline to egress plus
     baseline) inside astronomical dark (or the sun_alt chosen), after/before the times asked, with the star
     above min_alt throughout, V in [vmin, vmax], depth at least min_depth. Returns (events, counts)."""
@@ -2613,16 +2641,22 @@ def find_transits(planets: list[dict], date_local, lat: float, lon: float, min_a
             flips = bool(np.any(np.diff(np.sign(ha)) > 0))
             if avoid_meridian and flips:
                 continue
+            # 2.2.18 (item 8): an alt-az mount's zenith keyhole (the culmination between grid times counts too)
+            top = max(float(alt.max()), 90.0 - abs(lat - p["dec"])) if flips else float(alt.max())
+            keyhole = top >= ZENITH_KEYHOLE_ALT
+            if avoid_keyhole and keyhole:
+                continue
             events.append({"name": p["name"], "host": p.get("host", ""), "vmag": v, "depth": p["depth"],
                            "t14": t14, "start": start, "t1": tc - t14 / 2, "tc": tc, "t4": tc + t14 / 2, "end": end,
                            "alt_min": float(alt.min()), "alt_max": float(alt.max()), "moon_sep": sep,
-                           "moon_illum": float(illum), "meridian": flips, "epoch": n})
+                           "moon_illum": float(illum), "meridian": flips, "epoch": n,
+                           "keyhole": keyhole, "alt_peak": top})
     events.sort(key=lambda e: e["start"])
     counts["dark"] = (dark0, dark1)
     return events, counts
 
 
-def swarthmore_url(lat: float, lon: float, min_alt: float = 30.0, baseline_hrs: float = 1.0, min_depth_ppt: float = 5.0,
+def swarthmore_url(lat: float, lon: float, min_alt: float = PLAN_MIN_ALT, baseline_hrs: float = 1.0, min_depth_ppt: float = 5.0,
                    vmax: float = 13.5, twilight: int = -18, days: int = 1, start_date: str = "today") -> str:
     """A link to the Swarthmore Transit Finder (E. Jensen, Tapir) with this site and these limits filled in."""
     import time as _time
