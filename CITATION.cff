@@ -3,7 +3,7 @@ message: "If you use SHOBS-P in your work, please cite it as below."
 title: "SHOBS-P: Shiloh Hill Observatory Photometry"
 type: software
 authors:
-  - given-names: "John"
+  - given-names: "John W."
     family-names: "Armbrust"
     affiliation: "Shiloh Hill Observatory"
   - name: "Shiloh Hill Observatory"
