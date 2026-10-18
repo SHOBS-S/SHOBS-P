@@ -406,7 +406,7 @@ def run_mcmc(problem: TransitProblem, x0, n_walkers: int = 0, n_burn: int = 1000
     half = n_walkers // 2
     for step in range(total):
         if cancel is not None and cancel.is_set():
-            raise RuntimeError("Cancelled")
+            raise RuntimeError("Canceled")
         for first, second in ((slice(0, half), slice(half, n_walkers)), (slice(half, n_walkers), slice(0, half))):
             idx = np.arange(n_walkers)[first]
             others = pos[second]
@@ -990,7 +990,7 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     with the same planet priors, detrending, flip and flagged frames as the main fit; shifts are measured against a
     least-squares fit of the full ensemble and compared with the main fit's (MCMC) uncertainties, with the noise
     each comp's removal adds by itself, and with the other comps' shifts (see COMP_LOO_*). Returns None with fewer
-    than 2 comps or when no refit could be made. cancel: a threading.Event; set, it raises RuntimeError("Cancelled")
+    than 2 comps or when no refit could be made. cancel: a threading.Event; set, it raises RuntimeError("Canceled")
     between refits."""
     say = log or (lambda _m: None)
     cm = np.asarray(comp_mags, dtype=float)
@@ -1027,7 +1027,7 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     fits, skipped = [], []
     for j in range(m):
         if cancel is not None and cancel.is_set():
-            raise RuntimeError("Cancelled")
+            raise RuntimeError("Canceled")
         if progress is not None:
             progress(j + 1, m)
         with np.errstate(invalid="ignore", over="ignore"):
@@ -1241,7 +1241,7 @@ def transit_verdict(r: dict, prob) -> dict:
     step_reason = ""
     if step and step["explains"]:
         step_reason = (f"a plain {abs(step['step']) * 100:.1f}% jump after the {step['gap_min']:.0f}-minute gap at "
-                       f"{step['gap_at_h']:+.1f} h fits as well as the transit (ΔBIC {step['dbic']:+.1f} in favour of "
+                       f"{step['gap_at_h']:+.1f} h fits as well as the transit (ΔBIC {step['dbic']:+.1f} in favor of "
                        "the jump), so the dip may be the jump, not the planet")
     # 2.2.1: three verdicts. A dip that beats a flat line, with Tc pinned and a believable depth, but that a jump
     # at a gap explains as well, is inconclusive: the planet may be there, the night cannot tell.
@@ -1272,7 +1272,7 @@ def published_depth(planet: dict | None) -> tuple:
     """2.2.13: the depth a fit is compared with, and its label: (Rp/R*)² whenever Rp/R* is known, else the listed
     depth. The fit's "Depth" is its (Rp/R*)², so this compares like with like. A catalog's listed depth (the NASA
     Exoplanet Archive's pl_trandep) is a different quantity, or from another paper: the limb-darkened dip at
-    mid-transit is deeper than (Rp/R*)² (by 10–30% in a green band), and some listed depths come from other analyses
+    mid-transit is deeper than (Rp/R*)² (by 10–30% in a green band), and some listed depths come from other analyzes
     (HAT-P-23 b: listed 1.05%, while its Rp/R* 0.1169 gives 1.37%). complete_planet already sets planet["depth"] to
     (Rp/R*)² when both are known; this also covers dicts made before 2.2.13."""
     p = planet or {}
@@ -1460,7 +1460,7 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     step = (r.get("verdict") or {}).get("step")
     if step and not step["explains"]:
         flags.append(("info", f"Step check: a {abs(step['step']) * 100:.1f}% jump at the {step['gap_min']:.0f}-minute "
-                              f"gap fits worse than the transit (ΔBIC {-step['dbic']:.1f} in favour of the transit)."))
+                              f"gap fits worse than the transit (ΔBIC {-step['dbic']:.1f} in favor of the transit)."))
     # 2.2.17 (item 8): what a reduced chi-square far from 1 means. Below 1 the error bars are larger than the scatter:
     # the error model is off (camera gain, values that are not camera units); bad darks, bias or flats would ADD
     # scatter, not shrink it. Above 1 there is noise the error model leaves out.
@@ -1529,7 +1529,7 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         if ns:
             text += (f" Without the step the depth would be {ns['depth'] * 100:.2f} ± {ns['depth_err'] * 100:.2f}% "
                      f"(least squares); ΔBIC {ns['dbic']:+.0f} "
-                     + ("in favour of the step." if ns["dbic"] >= 0 else "against the step."))
+                     + ("in favor of the step." if ns["dbic"] >= 0 else "against the step."))
         flags.append(("info", text))
         c = flip.get("corr")
         if c is not None and math.isfinite(c):
@@ -2476,7 +2476,7 @@ def flip_lines(result: dict) -> list:
     ns = flip.get("nostep")
     if ns:
         out.append(f"without the step: depth {ns['depth'] * 100:.2f} +/- {ns['depth_err'] * 100:.2f}% (least squares), "
-                   f"dBIC {ns['dbic']:+.0f} " + ("in favour of the step" if ns["dbic"] >= 0 else "against the step"))
+                   f"dBIC {ns['dbic']:+.0f} " + ("in favor of the step" if ns["dbic"] >= 0 else "against the step"))
     sd = flip.get("sides") or {}
     if sd:
         out.append(f"out-of-transit baseline {sd['before'][0]:.0f} min ({_frames(sd['before'][1])}) before the flip, "

@@ -266,8 +266,8 @@ class TransitPage:
                                   ("exotic", "EXOTIC report", 150)):
             _col(self.table, col, label, width, stretch=False)
         self.table.tag_configure("warn", foreground="#b35c00")
-        self.table.tag_configure("grey", foreground="#9aa7b0")
-        self.table.tag_configure("greywarn", foreground="#d9b38c")
+        self.table.tag_configure("gray", foreground="#9aa7b0")
+        self.table.tag_configure("graywarn", foreground="#d9b38c")
         yscroll = ttk.Scrollbar(tablebox, orient="vertical", command=self.table.yview)
         # A sideways scroll bar only when the window is too narrow for the columns.
         self.table_xscroll = ttk.Scrollbar(tablebox, orient="horizontal", command=self.table.xview)
@@ -957,7 +957,7 @@ class TransitPage:
                 return   # the page shows another fit (or other data) now: its own text stays
             self.prog_text.set(done_text)
             if error is not None:
-                self.app.log(("Comp check cancelled." if error == "Cancelled" else f"Comp check skipped: {error}"))
+                self.app.log(("Comp check canceled." if error == "Canceled" else f"Comp check skipped: {error}"))
                 return
             if not loo:
                 return
@@ -980,8 +980,8 @@ class TransitPage:
             self._show_progress()
             try:
                 # 2.2.16 (round-2 review): app.log sets the status line; end on a short summary instead.
-                if error == "Cancelled":
-                    self.app.status.set("Transit fit done; comp check cancelled.")
+                if error == "Canceled":
+                    self.app.status.set("Transit fit done; comp check canceled.")
                 elif loo and r is self.result:
                     warned = any(lvl == "warn" for lvl, _x in loo["flags"])
                     self.app.status.set("Transit fit done; comps checked"
@@ -994,10 +994,10 @@ class TransitPage:
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
-            self.prog_text.set("Cancelled." if error[0] == "Cancelled" else "Fit failed.")
+            self.prog_text.set("Canceled." if error[0] == "Canceled" else "Fit failed.")
             self._show_progress()     # before any dialog, so the bar is not left showing behind it
-            self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Cancelled" else "Fit failed.")
-            if error[0] != "Cancelled":
+            self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
+            if error[0] != "Canceled":
                 self.app.log(error[1])
                 messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}")
             return
@@ -1322,7 +1322,7 @@ class TransitPage:
         undetected = bool(r) and _state(r.get("verdict")) == "none"
         for row in rows:
             if undetected:
-                tags = ("greywarn",) if row[0] in warn_names else ("grey",)
+                tags = ("graywarn",) if row[0] in warn_names else ("gray",)
             else:
                 tags = ("warn",) if row[0] in warn_names else ()
             self.table.insert("", END, values=row, tags=tags)
@@ -1381,7 +1381,7 @@ class TransitPage:
             pass
 
     def draw(self, placeholder: str = "", preview=None):
-        """The fit; or, with no fit, a labelled empty frame with the placeholder; or (2.2.11) preview=(t, flux,
+        """The fit; or, with no fit, a labeled empty frame with the placeholder; or (2.2.11) preview=(t, flux,
         note): the night's light curve alone, when no transit is predicted during it."""
         if self.fig is None:
             return
@@ -1398,7 +1398,7 @@ class TransitPage:
             self._draw_preview(*preview)
             return
         if not r:
-            # 2.2.9 (John): an empty frame labelled like the fitted plot, no overlapping default ticks.
+            # 2.2.9 (John): an empty frame labeled like the fitted plot, no overlapping default ticks.
             ax.set_ylabel("Relative flux")
             axr.set_ylabel("Resid. %")
             axr.set_xlabel("Hours from fitted mid-transit")
@@ -1492,7 +1492,7 @@ class TransitPage:
         # 2.2.9: the x range is the data plus the fitted transit, never stretched to a predicted Tc far away.
         xd_lo, xd_hi = float(np.nanmin(x)), float(np.nanmax(x))
         if trim_x:
-            # 2.2.17 (item 5): the greyed trimmed spans stay in view.
+            # 2.2.17 (item 5): the grayed trimmed spans stay in view.
             xd_lo, xd_hi = min(xd_lo, trim_x[0]), max(xd_hi, trim_x[1])
         if t14 / 2 >= xd_lo and -t14 / 2 <= xd_hi:
             x_lo, x_hi = min(xd_lo, -t14 / 2) - 0.25, max(xd_hi, t14 / 2) + 0.25
@@ -1904,7 +1904,7 @@ class TransitPage:
             self._span = None
 
     def _draw_trim(self, r, best, x):
-        """Grey the trimmed spans (both panels) and show their points faintly; returns the x range they need."""
+        """Gray the trimmed spans (both panels) and show their points faintly; returns the x range they need."""
         trim = r.get("trim")
         if not trim or not trim.get("spans"):
             return None

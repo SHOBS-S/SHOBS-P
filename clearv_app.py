@@ -73,7 +73,7 @@ def citation_text(version: str = None) -> str:
     if ASCL_ID.strip():
         text += f", ascl:{ASCL_ID.strip()}"
     return text
-# Marker colours on the image, shared by the pick buttons so each button matches its marker.
+# Marker colors on the image, shared by the pick buttons so each button matches its marker.
 PICK_COLORS = {"target": "#ff7f0e", "comp": "#2ca02c", "comp2": "#2ca02c", "check": "#1f77b4", "watch": "#17becf"}
 # 2.2.5: up to ten comparison stars. "comp" is C1 and "comp2" C2 (the names older series files use); C3-C10 follow.
 MAX_COMPS = 10
@@ -305,7 +305,7 @@ def fit_tree_columns(tree, headings: dict, cap: int = 480, firm: bool = False) -
 
 SEQ_COLOR = "#38d9e8"       # 2.2.13: AAVSO sequence stars on the image
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
-CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labelled on the image (the brightest; hover shows all)
+CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
 
 
@@ -616,7 +616,7 @@ class ScrollBody:
 
 
 def shade_long_periods(ax, span_days: float, periods) -> bool:
-    """2.2.12: grey out the periods longer than about half the data span on a periodogram (log period axis), labelled
+    """2.2.12: gray out the periods longer than about half the data span on a periodogram (log period axis), labeled
     "longer than the data can test". The search still runs there (a multi-night series can test them). Returns True
     when something was shaded."""
     try:
@@ -805,7 +805,7 @@ class App(Tk):
         self._stretch_jobs = {}
         self._blink_restretch_gen = 0
         self._photo_disp = None          # (image, token, stretch, display array) of the last Photometry drawing
-        self._radec_filled = None        # 2.2.15: (RA, Dec) texts a solve filled in from the field centre
+        self._radec_filled = None        # 2.2.15: (RA, Dec) texts a solve filled in from the field center
         self.show_tips = BooleanVar(value=bool(self.settings.get("photo_tips", True)))   # 2.2.15 (GitHub #3)
         self._counts = {}
         self.chart_placed = []
@@ -851,7 +851,7 @@ class App(Tk):
         self._cancel = threading.Event()
         self.align_flip = BooleanVar(value=False)
         self.airmass_view = BooleanVar(value=False)   # 2.2.17 (item 10): airmass-corrected night means (display only)
-        self.pier_segments = BooleanVar(value=False)   # 2.2.14 (item 20): each pier side normalised on its own
+        self.pier_segments = BooleanVar(value=False)   # 2.2.14 (item 20): each pier side normalized on its own
         self.period_bins = StringVar(value="10 min bins")
         self.night_bin = {}
         self.legacy_mixed = set()
@@ -885,14 +885,14 @@ class App(Tk):
             self.mono_filter = core.MONO_FILTER_CHOICES[self.mono_filter_choice.get()]
         self._mono_filter_source = "hand" if self._mono_filter_manual else None   # header / hand / unknown / mobs
         self._pattern_user_set = False     # the Bayer pattern was picked by hand (cleared when the folders change)
-        # 2.2.18 (item 1): lights that are colour images already debayered elsewhere (three channels): the channel
+        # 2.2.18 (item 1): lights that are color images already debayered elsewhere (three channels): the channel
         # measured, the lights folder it was chosen for, and the Bayer pattern to go back to after them.
         self._rgb_channel = None
         self._rgb_lights_dir = None
         self._pattern_before_rgb = None
         core.set_rgb_channel(None)
         self._sensor_asked_for = None      # 2.2.18 (item 2): the lights folder "Color or monochrome camera?" was asked for
-        self._debayer_before_mono = None   # the colour channel to go back to when leaving MONO
+        self._debayer_before_mono = None   # the color channel to go back to when leaving MONO
         self._catalog_before_discovery = None
         self._closest_dm = None
         self._target_bv = None
@@ -1045,7 +1045,7 @@ class App(Tk):
         hand = self._mono_filter_hand()
         rgb = getattr(self, "_rgb_channel", None)
         if rgb:
-            # 2.2.18 (item 1): colour images: the chosen channel's code (TG/TR/TB/CV), never the hand-set filter of a
+            # 2.2.18 (item 1): color images: the chosen channel's code (TG/TR/TB/CV), never the hand-set filter of a
             # monochrome camera or a FILTER keyword.
             found, source = core.RGB_CHANNELS[rgb], "rgb"
             if hasattr(self, "mono_filter_choice"):
@@ -1876,7 +1876,7 @@ class App(Tk):
     def output_path(self, filename: str, title: str = "Save", defaultextension: str = "", filetypes=None, parent=None,
                     family: bool = False):
         """Where a Save button writes: into the Input page's output folder (never over an existing file), or, with no
-        output folder, wherever the save dialog says. '' when the dialog is cancelled.
+        output folder, wherever the save dialog says. '' when the dialog is canceled.
         family: the file is one of the AAVSO report / light-curve CSV / plot PNG set (2.2.3), which share one
         number (_2, _3 ...) for the same results, so the three files of one save always match."""
         folder = self._out_folder()
@@ -2317,8 +2317,8 @@ class App(Tk):
         ttk.Label(target, text="J2000 frame, proper motion to today", style="Hint.TLabel").grid(
             row=4, column=1, columnspan=2, sticky=W)
         target.columnconfigure(1, weight=1)
-        # Discovery has no target: only a field centre, and only when the lights' headers do not say where they point.
-        self.field_group = self._group(left, "Field centre (only needed when the headers do not say)")
+        # Discovery has no target: only a field center, and only when the lights' headers do not say where they point.
+        self.field_group = self._group(left, "Field center (only needed when the headers do not say)")
         fg = self.field_group
         ttk.Label(fg, text="These lights have no plate solution or pointing in their FITS headers. Type roughly where "
                            "the frame points (a few arcminutes off is fine) so the field can be solved.",
@@ -2571,7 +2571,7 @@ class App(Tk):
             self.lookup_planet()
         def cancel():
             win.destroy()
-            self.planet_source.set("Lookup cancelled.")
+            self.planet_source.set("Lookup canceled.")
         for name in planets:
             text = name if (not transiting or name in transiting) else f"{name}   (does not transit)"
             ttk.Button(frame, text=text, command=lambda n=name: pick(n)).pack(fill=X, pady=2)
@@ -2651,7 +2651,7 @@ class App(Tk):
     def _layout_input_for_mode(self):
         if not hasattr(self, "planet_group"):
             return
-        # Forget and re-pack in a fixed order: Target (or Field centre in Discovery), then Planet in Transits.
+        # Forget and re-pack in a fixed order: Target (or Field center in Discovery), then Planet in Transits.
         for group in (self.target_group, self.field_group, self.planet_group):
             group.pack_forget()
         if self.mode_key == "discovery":
@@ -2965,7 +2965,7 @@ class App(Tk):
                      and core.sky_separation_arcsec(target[0], target[1], *pointing) / 3600.0 < 1.0)
         if on_target:
             text = (f"The lights' FITS OBJECT says '{obj}', but they point at the Input target {name}. The OBJECT "
-                    "keyword looks mislabelled (the capture program's plan name); the frames themselves are fine.")
+                    "keyword looks mislabeled (the capture program's plan name); the frames themselves are fine.")
             self.log("Lights: " + text)
             self.status.set(text)
         else:
@@ -2987,7 +2987,7 @@ class App(Tk):
                 self.lookup_star()
 
     def _check_lights_pointing(self, header: dict):
-        """Discovery shows the Field centre box only when the lights cannot say where they point."""
+        """Discovery shows the Field center box only when the lights cannot say where they point."""
         needed = core.header_wcs(header or {}) is None and core.header_pointing(header or {}) is None
         if needed != self.field_centre_needed:
             self.field_centre_needed = needed
@@ -3080,7 +3080,7 @@ class App(Tk):
         if lights:
             try:
                 _, header = core.read_fits(lights[0])
-                # 2.2.18 (item 1): colour images already debayered (three channels): a channel is chosen, no debayer.
+                # 2.2.18 (item 1): color images already debayered (three channels): a channel is chosen, no debayer.
                 rgb = core.is_rgb_header(header)
                 if rgb:
                     self._setup_rgb_lights(header, len(lights))
@@ -3101,7 +3101,7 @@ class App(Tk):
                     return
                 if not pat and not core.is_microobservatory(lights[0], header):
                     was_mono = self.pattern.get() == core.MONO
-                    self._detect_sensor()        # 2.2.11: mono or colour from a raw flat
+                    self._detect_sensor()        # 2.2.11: mono or color from a raw flat
                     if not was_mono and self.pattern.get() == core.MONO:
                         self._read_mono_filter(header)   # now that it is MONO, read the filter again
                 if pat:
@@ -3119,7 +3119,7 @@ class App(Tk):
     def _pattern_changed(self):
         if (getattr(self, "_rgb_channel", None) and self.pattern.get() != core.MONO
                 and not getattr(self, "_rgb_reverting", False)):
-            # 2.2.18 (item 1): colour images are already debayered; a Bayer pattern would debayer them again.
+            # 2.2.18 (item 1): color images are already debayered; a Bayer pattern would debayer them again.
             picked = self.pattern.get()
             self._pattern_before_rgb = picked   # review S5: the pattern you picked comes back after these lights
             self._rgb_reverting = True
@@ -3136,7 +3136,7 @@ class App(Tk):
             self._debayer_before_mono = self.debayer_mode.get()
             self.debayer_mode.set("luminance")
         elif not mono and getattr(self, "_debayer_before_mono", None):
-            # 2.2.11: back to a colour pattern: the channel chosen before MONO (green, usually) comes back.
+            # 2.2.11: back to a color pattern: the channel chosen before MONO (green, usually) comes back.
             self.debayer_mode.set(self._debayer_before_mono)
             self._debayer_before_mono = None
         self._show_channel_or_filter(mono)
@@ -3170,7 +3170,7 @@ class App(Tk):
         if not pair:
             return
         if getattr(self, "_rgb_channel", None):
-            self._rgb_channel_picked(pair)   # 2.2.18 (item 1): colour images: the box picks the channel
+            self._rgb_channel_picked(pair)   # 2.2.18 (item 1): color images: the box picks the channel
             return
         old_band = self._band()
         self.mono_filter = pair
@@ -3183,7 +3183,7 @@ class App(Tk):
         self._comp_band_changed(old_band, resolve=True)   # 2.2.17 (review M2)
 
     def _rgb_channel_picked(self, pair):
-        """2.2.18 (item 1): on colour images the Filter box chooses the channel measured (Green / Red / Blue imaging,
+        """2.2.18 (item 1): on color images the Filter box chooses the channel measured (Green / Red / Blue imaging,
         Clear = luminance). Other filters are not a channel of the image. Not saved as a monochrome camera's filter."""
         channel = next((ch for ch, p in core.RGB_CHANNELS.items() if p[0] == pair[0]), None)
         if channel != self._rgb_channel and getattr(self, "busy", False):
@@ -3252,7 +3252,7 @@ class App(Tk):
 
     def _detect_sensor(self):
         """2.2.11: no Bayer keyword in the lights: look at the raw flats (up to five, flats before flat-darks). No
-        colour mask -> MONO (unless the pattern was picked by hand); a colour mask while MONO is set -> a caution.
+        color mask -> MONO (unless the pattern was picked by hand); a color mask while MONO is set -> a caution.
         2.2.18 (item 2): no flats, or flats that cannot tell (calibrated, too faint): the lights' sky background is
         tested the same way (stars masked); still unsure: "Color or monochrome camera?" is asked once for these lights,
         instead of keeping whatever pattern was set last."""
@@ -3287,29 +3287,29 @@ class App(Tk):
             try:
                 hdr = core.read_header(check[0])
                 if int((hdr or {}).get("XBINNING", 1) or 1) > 1:
-                    binned = " (binned in the camera: a colour sensor binned 2x2 also looks like this)"
+                    binned = " (binned in the camera: a color sensor binned 2x2 also looks like this)"
             except Exception:
                 pass
             what = "the flat" if source == "flat" else "the lights' sky background"
             if kind == "mono" and self.pattern.get() != core.MONO:
                 if self._pattern_user_set:
-                    self.log(f"{what[0].upper() + what[1:]} shows no colour mask (its 2x2 pixel planes agree to "
+                    self.log(f"{what[0].upper() + what[1:]} shows no color mask (its 2x2 pixel planes agree to "
                              f"{contrast * 100:.1f}%), so the camera looks monochrome{binned}, but the Bayer pattern "
                              "was set by hand; left as it is.")
                     return
                 self.pattern.set(core.MONO)
-                self.log(f"No Bayer pattern in the headers and {what} shows no colour mask (its 2x2 pixel planes agree "
+                self.log(f"No Bayer pattern in the headers and {what} shows no color mask (its 2x2 pixel planes agree "
                          f"to {contrast * 100:.1f}%){binned}: monochrome, Bayer pattern set to MONO. Pick the camera's "
-                         "pattern on the Calibrate page if this is a colour camera.")
-                self.status.set(f"Monochrome camera found (no colour mask in {what}): Bayer pattern MONO.")
+                         "pattern on the Calibrate page if this is a color camera.")
+                self.status.set(f"Monochrome camera found (no color mask in {what}): Bayer pattern MONO.")
             elif kind == "cfa" and self.pattern.get() == core.MONO:
                 more = f" (its 2x2 pixel planes differ by {contrast * 100:.0f}%)" if contrast else ""
-                self.log(f"Caution: {what} shows a colour mask{more}, but the Bayer pattern is MONO. For a colour "
+                self.log(f"Caution: {what} shows a color mask{more}, but the Bayer pattern is MONO. For a color "
                          "camera, pick its pattern (often RGGB) on the Calibrate page.")
             elif kind is None and not self._pattern_user_set:
                 self._ask_sensor(contrast)
         except Exception as exc:
-            self.log(f"Could not check the flat or lights for a colour mask ({exc}).")
+            self.log(f"Could not check the flat or lights for a color mask ({exc}).")
 
     def _sensor_pedestal(self):
         """2.2.18 (review M1): the camera's bias level for the lights' sky test: the median of a SHOBS-P master bias or
@@ -3330,7 +3330,7 @@ class App(Tk):
         return None
 
     def _ask_sensor(self, contrast=None):
-        """2.2.18 (item 2): neither the flats nor the lights tell a colour camera from a monochrome one: ask, once for
+        """2.2.18 (item 2): neither the flats nor the lights tell a color camera from a monochrome one: ask, once for
         these lights. The answer counts as a pattern picked by hand."""
         folder = self.light_dir.get().strip()
         if not folder or self._sensor_asked_for == folder:
@@ -3393,7 +3393,7 @@ class App(Tk):
         return result["value"]
 
     def _setup_rgb_lights(self, header: dict, n_lights: int = 0):
-        """2.2.18 (item 1): the lights are colour images other software already debayered (three channels). Before
+        """2.2.18 (item 1): the lights are color images other software already debayered (three channels). Before
         2.2.18 the first channel (red) was read and, with a Bayer pattern set, debayered a second time. Now the user
         picks the channel (green TG, red TR, blue TB, or luminance CV), the pattern is MONO for these lights (no
         debayer, no superpixel weights) and they count as pre-calibrated (the photon noise comes from the sky).
@@ -3449,13 +3449,13 @@ class App(Tk):
                  "page (Green, Red, Blue imaging or Clear).")
 
     def _leave_rgb_lights(self):
-        """2.2.18 (item 1): lights that are not colour images after colour images: the Bayer pattern from before."""
+        """2.2.18 (item 1): lights that are not color images after color images: the Bayer pattern from before."""
         before = self._pattern_before_rgb
         self._rgb_channel = None
         self._rgb_lights_dir = None
         self._pattern_before_rgb = None
         core.set_rgb_channel(None)
-        # review S2: the Filter box no longer shows the colour images' channel; a mono camera's own filter comes back
+        # review S2: the Filter box no longer shows the color images' channel; a mono camera's own filter comes back
         hand = self._mono_filter_hand()
         self.mono_filter = hand
         self._mono_filter_source = "hand" if hand else None
@@ -3471,7 +3471,7 @@ class App(Tk):
     def _sync_camera_note(self):
         try:
             note = self.notes.get().strip()
-            # 2.2.18 (item 1): colour images run as MONO (no debayer) but are not from a monochrome camera
+            # 2.2.18 (item 1): color images run as MONO (no debayer) but are not from a monochrome camera
             want = MONO_NOTE if self.pattern.get() == core.MONO and not getattr(self, "_rgb_channel", None) else OSC_NOTE
             if note in (OSC_NOTE, MONO_NOTE, "") and note != want:
                 self.notes.set(want)
@@ -4373,7 +4373,7 @@ class App(Tk):
                                    width=10, state="readonly")
         pattern_box.pack(side=LEFT, padx=8)
         pattern_box.bind("<<ComboboxSelected>>", lambda _e: setattr(self, "_pattern_user_set", True))
-        # 2.2.11: Channel for a colour camera; on MONO the same place holds Filter (there is nothing to debayer).
+        # 2.2.11: Channel for a color camera; on MONO the same place holds Filter (there is nothing to debayer).
         self.channel_label = ttk.Label(row, text="Channel", style="Card.TLabel")
         self.channel_label.pack(side=LEFT, padx=(12, 0))
         self.channel_box = ttk.Combobox(row, textvariable=self.debayer_mode, values=("green", "red", "blue", "luminance"),
@@ -4391,7 +4391,7 @@ class App(Tk):
             text="Green is the normal choice (AAVSO TG, V comps). Red (TR, R comps) suits a red dwarf; blue is TB; luminance "
                  "is clear, reported as CV. MONO is for monochrome cameras (MicroObservatory and others): no debayer, and "
                  "Channel becomes Filter (from the FITS FILTER keyword, or set it here). The pattern is read from the "
-                 "FITS header when the camera writes it; without one, a raw flat with no colour mask sets MONO.",
+                 "FITS header when the camera writes it; without one, a raw flat with no color mask sets MONO.",
             style="Hint.TLabel", wraplength=1100, justify=LEFT,
         ).pack(anchor=W, pady=(6, 0))
         cal_row = ttk.Frame(card, style="Card.TFrame")
@@ -4610,7 +4610,7 @@ class App(Tk):
             first_header = core.read_header(lights[0])
         except Exception:
             first_header = {}
-        # 2.2.18 (item 1): colour images (three channels) found here too, when the folder was typed, not scanned.
+        # 2.2.18 (item 1): color images (three channels) found here too, when the folder was typed, not scanned.
         rgb = core.is_rgb_header(first_header)
         if rgb and not (self._rgb_channel and self._rgb_lights_dir == self.light_dir.get().strip()):
             self._setup_rgb_lights(first_header, len(lights))
@@ -4679,7 +4679,7 @@ class App(Tk):
 
         def progress_log(text):
             if cancel.is_set():
-                raise RuntimeError("Cancelled")
+                raise RuntimeError("Canceled")
             self.call_ui(self.log, text)
 
         def work():
@@ -4725,8 +4725,8 @@ class App(Tk):
 
     def _calibration_done(self, masters, calibrated, header, path, binning, error):
         self._end_job()
-        if error is not None and error[0] == "Cancelled":
-            self.log("Calibration cancelled. The old masters (if any) are unchanged.")
+        if error is not None and error[0] == "Canceled":
+            self.log("Calibration canceled. The old masters (if any) are unchanged.")
             return
         if error is not None:
             message, detail = error
@@ -4750,7 +4750,7 @@ class App(Tk):
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         )
         pat = core.header_bayer(header or {})
-        if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on colour images (said at Scan/Calibrate)
+        if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on color images (said at Scan/Calibrate)
             self.pattern.set(pat)
         elif core.is_microobservatory(path, header or {}) and self.pattern.get() != core.MONO:
             self._setup_microobservatory(header or {}, len(self._lights()))
@@ -5127,11 +5127,11 @@ class App(Tk):
             if solving:
                 return names, done, 0, "Solving the field…"
             if state == "impossible":
-                return names, done, 0, ("Not solved: these lights do not say where they point. Type the field centre "
+                return names, done, 0, ("Not solved: these lights do not say where they point. Type the field center "
                                         "on the Input page, then press Solve again (top right).")
             if state == "todo":
                 return names, done, 0, "The field is solved on its own when this page opens (or press Solve again)."
-            return names, done, 0, ("Not solved: check the field centre on the Input page and the Optics box, then "
+            return names, done, 0, ("Not solved: check the field center on the Input page and the Optics box, then "
                                     "press Solve again (top right).")
         names = ("1 Solve", "2 Target", "3 Comps", "4 Check", "Run")
         target = self.target_xy is not None
@@ -5223,7 +5223,7 @@ class App(Tk):
         self.step_text.set(text)
 
     def _radec_is_fill(self) -> bool:
-        """2.2.15 (review): the RA/Dec boxes still hold the field centre a solve filled in (not the target's)."""
+        """2.2.15 (review): the RA/Dec boxes still hold the field center a solve filled in (not the target's)."""
         filled = getattr(self, "_radec_filled", None)
         return bool(filled) and (self.ra_hours.get().strip(), self.dec_deg.get().strip()) == tuple(filled)
 
@@ -5237,7 +5237,7 @@ class App(Tk):
 
     def _auto_target_marker(self, why: str = "solve") -> bool:
         """2.2.15 (GitHub #3): once the image is solved and the target's RA/Dec are known, put the Target marker on the
-        target (centred on the star like a click) unless one is placed already. Returns True when it placed one."""
+        target (centerd on the star like a click) unless one is placed already. Returns True when it placed one."""
         if (self.mode_key == "discovery" or self.target_xy is not None or not self.chart_solution
                 or self.preview is None or not self.preview_is_debayered or self._radec_is_fill()):
             return False
@@ -5278,7 +5278,7 @@ class App(Tk):
             self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
                      f"{xy[1]:.0f})); no marker placed.")
             return False
-        # Centred on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
+        # Centerd on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
         # (review): no marker, rather than one on blank sky.
         try:
             radius = float(self.radius.get())
@@ -5423,7 +5423,7 @@ class App(Tk):
             h, w = self.preview.shape
             try:
                 ra, dec = core.pixel_to_sky((w - 1) / 2.0, (h - 1) / 2.0, sol)
-                centre = f"centre {core.sexagesimal_ra(ra / 15.0)}  {core.sexagesimal_dec(dec)}"
+                centre = f"center {core.sexagesimal_ra(ra / 15.0)}  {core.sexagesimal_dec(dec)}"
             except Exception:
                 centre = ""
             lines.append(f"Solved {how}: {scale:.2f}″/px, {centre}.")
@@ -5868,7 +5868,7 @@ class App(Tk):
             return
         img = self.preview
         # 2.2.8: the seeing comes from bright, unsaturated, isolated field stars. Faint or crowded marked stars gave
-        # sizes 3x too big (CoRoT-1: 10.5 px for 2-3 px stars) and so apertures that swallowed neighbours.
+        # sizes 3x too big (CoRoT-1: 10.5 px for 2-3 px stars) and so apertures that swallowed neighbors.
         field = core.field_fwhm(img)
         sizes = []
         for role, xy in self._marked_stars():
@@ -5981,7 +5981,7 @@ class App(Tk):
             try:
                 for i, path in enumerate(picks, 1):
                     if cancel.is_set():
-                        raise RuntimeError("Cancelled")
+                        raise RuntimeError("Canceled")
                     try:
                         raw, header = core.read_fits(path)
                         data = core.debayer(core.calibrate_frame(core.bin_image(raw, binning), header, masters), pattern, mode)
@@ -6041,7 +6041,7 @@ class App(Tk):
 
     def _aperture_test_done(self, window, result, seeing, sky_in, sky_out, ref_label, error):
         self._end_job()
-        self._progress_end("" if not error else ("Cancelled." if error == "Cancelled" else "Failed."))
+        self._progress_end("" if not error else ("Canceled." if error == "Canceled" else "Failed."))
         if error:
             self.log(f"Aperture test: {error}")
             return
@@ -6128,7 +6128,7 @@ class App(Tk):
                 continue
             seq = star.get("seq") if self.mode_key != "discovery" else None
             if seq and self._overlay("catalog"):
-                # 2.2.13 (John): AAVSO sequence stars are always marked, in their own colour with the chart label
+                # 2.2.13 (John): AAVSO sequence stars are always marked, in their own color with the chart label
                 # ("91" = V 9.1), whichever catalog's circles are shown: they are the vetted comps.
                 colour = "#ff5252" if star.get("variable") else SEQ_COLOR
                 self.photo_ax.plot(x, y, marker="o", mfc="none", mec=colour, ms=11, mew=1.4)
@@ -6141,7 +6141,7 @@ class App(Tk):
             if not star.get("variable") and not self._circle_shown(star):
                 continue
             colour = "#ff5252" if star.get("variable") else "#ffd24a"
-            # 2.2.14 (item 5): drawn below in one go per colour (Gaia now brings thousands of stars per frame).
+            # 2.2.14 (item 5): drawn below in one go per color (Gaia now brings thousands of stars per frame).
             circles.setdefault(colour, []).append((star.get("mag") if star.get("mag") is not None else 99.0, x, y))
             if self.show_labels.get():
                 labels.append((star.get("mag") if star.get("mag") is not None else 99.0, x, y, star, colour))
@@ -6236,7 +6236,7 @@ class App(Tk):
         return str((own or star).get("label", ""))
 
     def compass_vectors(self, shape):
-        """2.2.13: unit vectors (in image pixels, y down) pointing north and east at the image centre, from the
+        """2.2.13: unit vectors (in image pixels, y down) pointing north and east at the image center, from the
         image's sky solution (header plate solution or SHOBS-P's own); None when the image is not solved. Follows
         the rotator and meridian flips because it comes from this image's solution."""
         sol = self.chart_solution
@@ -6285,7 +6285,7 @@ class App(Tk):
         # 2.2.17 (item 3): laid out in points from the corner (not axes fractions), so the arrows keep their true
         # directions whatever the axes' shape, and both letters stay inside the image: the whole compass (both arrows
         # and both letters, wherever the solution points them) is measured and tucked into the corner with a margin.
-        # (2.2.16 put each letter 1.35 × the arrow length out, centred, which clipped "N" at the image edge.)
+        # (2.2.16 put each letter 1.35 × the arrow length out, centerd, which clipped "N" at the image edge.)
         from matplotlib.transforms import ScaledTranslation
         try:
             from matplotlib import patheffects
@@ -6306,7 +6306,7 @@ class App(Tk):
     def _compass_layout(self, vec, cx, cy):
         """2.2.17 (item 3): the compass in points relative to the image corner it sits in (cx, cy are the corner as
         axes fractions from _compass_corner). Returns [((base x, y), ha, va, tag, (tip x, y))] per arrow and sets
-        self._compass_label_xy = (box, {tag: (x, y)}): each letter's centre just past its arrow tip, and the box
+        self._compass_label_xy = (box, {tag: (x, y)}): each letter's center just past its arrow tip, and the box
         (x0, y0, x1, y1) all of it covers, which lies inside the image with a margin from both edges."""
         L, gap = COMPASS_ARROW_PT, COMPASS_FONT_PT * 0.95
         hw, hh = COMPASS_FONT_PT * 0.5, COMPASS_FONT_PT * 0.62   # half width / height of one bold capital
@@ -6459,7 +6459,7 @@ class App(Tk):
     def _popout_geometry(self) -> str:
         """Where the pop-out opens: the size and place it had last time (settings), on whichever monitor that was;
         moved back to the main screen only when its title bar would be out of reach (review: a window kept on a second
-        monitor stays there). The first time about 60% × 75% of the main screen, centred."""
+        monitor stays there). The first time about 60% × 75% of the main screen, centerd."""
         try:
             sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
         except Exception:
@@ -7051,13 +7051,13 @@ class App(Tk):
             seeing = self._seeing()
             pick = self.pick_mode.get()
             # 2.2.18 (item 5, review): comps and checks are bright, isolated stars: a click on a star's own wing is
-            # centred on it (wing="dip"); the target keeps the 2.2.8 test (a faint target beside a bright star).
+            # centerd on it (wing="dip"); the target keeps the 2.2.8 test (a faint target beside a bright star).
             star_pick = pick in ("comp", "check") or bool(comp_number(pick))
             wing = "dip" if star_pick else "gauss"
             info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None,
                                       wing=wing)
             if star_pick and self.chart_placed and info.get("found") and info["shift"] > 1.5:
-                # A catalog star right at the click that the centring left for a brighter neighbour: the user meant it
+                # A catalog star right at the click that the centring left for a brighter neighbor: the user meant it
                 # (a faint comp beside a bright star), so keep the 2.2.8 answer (the click).
                 tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
                 here_star = self._chart_star_at(xy, reach=tight)
@@ -7077,7 +7077,7 @@ class App(Tk):
             if not info["found"]:
                 snap_note = " No star found right at the click; the marker is where you clicked."
             elif info["shift"] >= 1.0:
-                snap_note = f" Centred on the star ({info['shift']:.1f} px from the click)."
+                snap_note = f" Centerd on the star ({info['shift']:.1f} px from the click)."
         except Exception:
             pass
         mode = self.pick_mode.get()
@@ -7161,7 +7161,7 @@ class App(Tk):
     def _slot_lookup(self, role: str):
         """2.2.13 (John): a name or RA/Dec typed into a comp or check slot + Enter puts the marker on that star: the
         solved image's catalog stars first (any catalog's name), then coordinates, then SIMBAD/VSX. A slot that
-        already has a marker is only relabelled (typing changes the name; nothing moves)."""
+        already has a marker is only relabeled (typing changes the name; nothing moves)."""
         name_var = getattr(self, f"{role}_name")
         text = name_var.get().strip()
         if not text or self.mode_key == "discovery":
@@ -7246,7 +7246,7 @@ class App(Tk):
 
     def _snap_to_star(self, xy):
         """2.2.18 (item 5): a marker placed from a name or sky position sits where the plate solution puts the star,
-        which for a star the solve did not match can be a few px off. Centre it on the star there (as a click is) when
+        which for a star the solve did not match can be a few px off. Center it on the star there (as a click is) when
         one is within about 1.5 FWHM; otherwise keep the position."""
         if xy is None or self.preview is None or not self.preview_is_debayered:
             return xy
@@ -7258,7 +7258,7 @@ class App(Tk):
             reach = max(2.0, 1.5 * fwhm) if fwhm else max(2.0, 0.5 * radius)
             if info.get("found") and not info.get("blended") and info["shift"] <= reach:
                 snapped = (float(info["x"]), float(info["y"]))
-                # Review: only when the star there is the one placed (not a neighbour the centring found).
+                # Review: only when the star there is the one placed (not a neighbor the centring found).
                 want, got = self._chart_star_at(xy), self._chart_star_at(snapped)
                 if got is want:
                     return snapped
@@ -7272,7 +7272,7 @@ class App(Tk):
         return xy
 
     def _set_slot(self, role: str, xy, text: str):
-        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centred on its star like a click
+        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centerd on its star like a click
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
@@ -7981,7 +7981,7 @@ class App(Tk):
             d_click = math.hypot(x - click_xy[0], y - click_xy[1])
             d_snap = math.hypot(x - snapped_xy[0], y - snapped_xy[1])
             # The snapped star is the spare, or the click is on the diamond and nearer to it than to the star the
-            # click snapped to (a neighbour).
+            # click snapped to (a neighbor).
             if d_snap <= tight or (d_click <= 8.0 and d_click <= d_snap_click):
                 if best is None or d_snap < best[0]:
                     best = (d_snap, name, (float(x), float(y)))
@@ -8127,7 +8127,7 @@ class App(Tk):
             wcs_factor = max(int(self._image_binning()), 1) * superpixel
         except (TypeError, ValueError):
             wcs_factor = superpixel
-        # Where the catalog query and the chart solution are centred. Kept local: the Input page's RA/Dec are the
+        # Where the catalog query and the chart solution are centerd. Kept local: the Input page's RA/Dec are the
         # target's and are only filled in when empty (2.2).
         query = None
         if wcs is not None:
@@ -8159,7 +8159,7 @@ class App(Tk):
                 self._layout_input_for_mode()
                 if auto:
                     self.status.set("Field not solved: these lights do not say where they point. Type the field "
-                                    "centre on the Input page, then Solve again.")
+                                    "center on the Input page, then Solve again.")
                     return
                 messagebox.showinfo(
                     APP_TITLE,
@@ -8170,7 +8170,7 @@ class App(Tk):
             query = (pointing[0] / 15.0, pointing[1])
             self.log(f"Solve: field center from the FITS header, RA {pointing[0] / 15.0:.5f} h, Dec "
                      f"{pointing[1]:+.4f}°.")
-        # 2.2.15 (GitHub #3): the target's own RA/Dec (looked up or typed), not a field centre filled in below or by an
+        # 2.2.15 (GitHub #3): the target's own RA/Dec (looked up or typed), not a field center filled in below or by an
         # earlier solve.
         radec_given = bool(self.ra_hours.get().strip() and self.dec_deg.get().strip()) and not self._radec_is_fill()
         if (not self.ra_hours.get().strip() or not self.dec_deg.get().strip()) and \
@@ -8204,7 +8204,7 @@ class App(Tk):
                          "Update the target on the Input page.")
                 field_solve = True
         # The reference point the chart solution is built around: the target when one is marked (its marker is the
-        # anchor), else the catalog query's centre.
+        # anchor), else the catalog query's center.
         if not field_solve and target_radec is not None:
             query = (target_radec[0] / 15.0, target_radec[1])
         try:
@@ -8328,7 +8328,7 @@ class App(Tk):
                 finally:
                     core.PM_EPOCH_YEAR = None
                 if cancel.is_set():
-                    raise ValueError("cancelled")
+                    raise ValueError("canceled")
                 self._chart_diag["catalogs"] = {c: len(v) for c, v in found.items()}
                 self._chart_diag["catalog_errors"] = failed
                 if not stars:
@@ -9068,7 +9068,7 @@ class App(Tk):
             color = False   # 2.2.17 (item 1): no B-V / V-R from one Sloan filter
             self.log(f"Field scan: color not measured on a Sloan {core.band_label(self._band())} run.")
         if color and self._rgb_channel:
-            color = False   # 2.2.18 (item 1): one channel of the colour images per run
+            color = False   # 2.2.18 (item 1): one channel of the color images per run
             self.log("Field scan: color not measured on color images (one channel per run).")
         comp_name = self.comp_name.get().strip()
         comp_mag = None
@@ -9100,7 +9100,7 @@ class App(Tk):
         cat_name = [""] * n_xy
         if self.chart_placed and n_xy:
             # 2.2.13 (review): each scan star takes its CLOSEST labeled star (the brighter one on a tie); with Gaia
-            # always merged in, a faint neighbour later in the list used to overwrite a bright star's name and mag.
+            # always merged in, a faint neighbor later in the list used to overwrite a bright star's name and mag.
             tol = max(2.0, 0.5 * radius)
             xy_arr = np.asarray(xy, dtype=float)
             best_d = np.full(n_xy, np.inf)
@@ -9139,7 +9139,7 @@ class App(Tk):
                 chans = {"green": [], "red": [], "blue": []} if color else None
                 for i, path in enumerate(lights, 1):
                     if cancel.is_set():
-                        raise RuntimeError("Cancelled")
+                        raise RuntimeError("Canceled")
                     try:
                         raw, header = core.read_fits(path)
                         cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
@@ -9370,9 +9370,9 @@ class App(Tk):
 
     def _scan_done(self, result, error):
         self._end_job()
-        if error is not None and error[0] == "Cancelled":
-            self._progress_end("Cancelled.")
-            self.log("Field scan cancelled.")
+        if error is not None and error[0] == "Canceled":
+            self._progress_end("Canceled.")
+            self.log("Field scan canceled.")
             return
         self._progress_end("" if error is None else "Failed.")
         if error is not None:
@@ -9481,7 +9481,7 @@ class App(Tk):
 
     def _warn_marker_offsets(self, radius: float) -> list:
         """2.2.18 (item 5): before photometry, say in the Log when the frames would be measured off a marked star's
-        centre (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit).
+        center (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit).
         Every frame is then measured beside the star and it reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off
         read 2.2 mag faint). Returns [(label, offset px)] of the markers it warned about. Never blocks the run."""
         if self.preview is None or not self.preview_is_debayered:
@@ -9665,7 +9665,7 @@ class App(Tk):
             self.log(f"Color: not measured on a Sloan {core.band_label(self._band())} run (the B-V / V-R color index "
                      "needs B, V and R; one Sloan filter gives one band).")
         if measure_color and self._rgb_channel:
-            measure_color = False   # 2.2.18 (item 1): one channel of the colour images is read per run
+            measure_color = False   # 2.2.18 (item 1): one channel of the color images is read per run
             self.log("Color: not measured on color images (already debayered; one channel is measured per run).")
         # 2.2.14 (item 1): each comp's catalog color from ONE catalog (not B from Gaia against V from APASS).
         comp_colors = [self._colors_for(role, star.name) for role, star in zip(comp_roles, comps)]
@@ -9712,7 +9712,7 @@ class App(Tk):
         # 2.2.14 (item 11): the series' catalog magnitudes as they are BEFORE tonight's picks overwrite them, so a star
         # the series already has keeps the series' magnitude when the night is added (13-14 Oct: TYC 4006-1008-1 came
         # in with Gaia's V 8.704 over the series' 8.728). Taken when a series is loaded or a night added; here only
-        # when there is none yet (review: a cancelled run must not make tonight's values "the series'").
+        # when there is none yet (review: a canceled run must not make tonight's values "the series'").
         if getattr(self, "_series_catalog_before", None) is None:
             self._take_series_snapshot()
         # Spare comps: labeled stars near the comps' brightness, measured every frame so a comp
@@ -9735,7 +9735,7 @@ class App(Tk):
             faint_edge = max(comp_mags) + 2.5
             # 2.2.14 (item 3): a spare is kept only when the image's star is where the catalog puts it (within ~2 px,
             # or the seeing): 2.2.13 kept any peak within the aperture radius, so a diamond could sit on a
-            # neighbour, and clicking it named nothing (C4/C5 on HD 219134).
+            # neighbor, and clicking it named nothing (C4/C5 on HD 219134).
             seeing_now = self._seeing()
             spare_tol = min(max(2.0, seeing_now if math.isfinite(seeing_now) else 2.0), radius)
             t_inst_now = self._inst_at(self.target_xy)
@@ -10161,8 +10161,8 @@ class App(Tk):
                 self.log(f"Photometry stopped by an error ({error}). Nothing was added to the series.")
                 self._restore_series_catalog(stars=True)
                 return
-            self._progress_end("Cancelled; nothing was added.")
-            self.log("Photometry cancelled. Nothing was added to the series.")
+            self._progress_end("Canceled; nothing was added.")
+            self.log("Photometry canceled. Nothing was added to the series.")
             self._restore_series_catalog(stars=True)   # 2.2.14 (item 11, review)
             return
         self._progress_end(f"{len(night_points)} points.")
@@ -10455,7 +10455,7 @@ class App(Tk):
 
     def _frame_bjd_offsets(self, pts):
         """2.2.15 (item 1, review): BJD_TDB minus JD (days) per frame when the target's RA/Dec are known (the site
-        if known, else the geocentre: a few milliseconds), else None (the windows are then padded 15 minutes)."""
+        if known, else the geocenter: a few milliseconds), else None (the windows are then padded 15 minutes)."""
         try:
             ra = float(self.ra_hours.get()) * 15.0
             dec = float(self.dec_deg.get())
@@ -10733,7 +10733,7 @@ class App(Tk):
         if getattr(self, "_own_setup", None) is not None:
             out["borrowed"] = True   # this night used another telescope's site and optics
         if getattr(self, "_rgb_channel", None):
-            out["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): colour images, the channel measured
+            out["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): color images, the channel measured
         used = getattr(self.masters, "used", None) if self.masters is not None else None
         if used:
             out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
@@ -11213,7 +11213,7 @@ class App(Tk):
     def _take_series_snapshot(self):
         """2.2.14 (item 11): remember the series' catalog magnitudes (comps, spares) and spare positions as they are
         now, so tonight's catalog values never pass for the series'. Taken when a series is loaded or added to, a
-        night is added or a new series starts; restored after a cancelled or empty run."""
+        night is added or a new series starts; restored after a canceled or empty run."""
         self._series_catalog_before = {
             "comps": dict(self.comp_catalog_mags),
             "spares": {n: float(i["mag"]) for n, i in self.spare_catalog.items() if i.get("mag") is not None},
@@ -11514,7 +11514,7 @@ class App(Tk):
         if answer:
             self.save_series()
             if self.series_unsaved():
-                return False   # the save dialog was cancelled or failed: keep it open
+                return False   # the save dialog was canceled or failed: keep it open
         return True
 
     def _clear_series_state(self, keep_night: str = ""):
@@ -11584,7 +11584,7 @@ class App(Tk):
                 traceback.print_exc()
                 go = True   # never trap the user in the app because the question failed
             if not go:
-                self.log("Close cancelled: SHOBS-P stays open with the series.")
+                self.log("Close canceled: SHOBS-P stays open with the series.")
                 return
         finally:
             self._closing = False
@@ -11793,7 +11793,7 @@ class App(Tk):
         ttk.Checkbutton(
             tools, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period,
         ).pack(side=LEFT, padx=(14, 0))
-        # 2.2.14 (item 20): each pier side (camera angle) normalised on its own across the campaign.
+        # 2.2.14 (item 20): each pier side (camera angle) normalized on its own across the campaign.
         ttk.Checkbutton(
             tools, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period,
         ).pack(side=LEFT, padx=(14, 0))
@@ -12017,10 +12017,10 @@ class App(Tk):
             return
         messagebox.showwarning(
             APP_TITLE,
-            f"{source} has night(s) reduced with app binning before version 1.7:\n  {', '.join(sorted(nights))}\n\n"
+            f"{source} has night(s) reduced by an early version of SHOBS-P that binned before the debayer:\n  {', '.join(sorted(nights))}\n\n"
             "Those versions binned the raw color frame before the debayer, which averaged red, green, and blue "
             "pixels together. Their TG/TR/TB points are really a clear-like blend, and their colors (B-V, V-R) are "
-            "not real. The light-curve shape is still usable for a look, but re-reduce those nights in 1.7 "
+            "not real. The light-curve shape is still usable for a look, but run photometry on those nights again "
             "(and use Remove night...) before reporting them.",
         )
 
@@ -12333,7 +12333,7 @@ class App(Tk):
         if old_model:
             cautions.append(old_model)
         period_lines = []
-        # 2.2: one short night cannot pin a period down; show the fold and periodogram greyed, with a note.
+        # 2.2: one short night cannot pin a period down; show the fold and periodogram grayed, with a note.
         span_used = (max(o.jd for o in usable) - min(o.jd for o in usable)) if usable else 0.0
         too_short = bool(self.period) and len(nights) == 1 and span_used < 2.0 * self.period["period_days"]
         self._period_too_short = too_short
@@ -12347,7 +12347,7 @@ class App(Tk):
                 mask = np.array([o.night == night for o in usable])
                 a_main = alpha_for(night, 0.25 if too_short else 1.0)
                 colour = "#9aa7b0" if too_short else colors[i % len(colors)]
-                # 2.2.14 (item 16): with a night clicked, it keeps its colour on top; the others fade to grey.
+                # 2.2.14 (item 16): with a night clicked, it keeps its color on top; the others fade to gray.
                 faded = highlight is not None and night != highlight
                 if faded:
                     colour, a_main = "#b9c2c9", 0.35
@@ -12462,7 +12462,7 @@ class App(Tk):
             period_lines = ["Needs at least 8 usable points."]
         legacy = [n for n in nights if n in self.legacy_mixed]
         if legacy:
-            cautions.append(f"Re-reduce {', '.join(legacy)}: binned before 1.7, so the channels were mixed "
+            cautions.append(f"Re-reduce {', '.join(legacy)}: reduced by an early version that binned before the debayer, so the channels were mixed "
                             "(the filter and colors are not real).")
         if len(nights) == 1:
             cautions.append("One night: the night-to-night spread needs more nights.")
@@ -12734,7 +12734,7 @@ class App(Tk):
                            "its light curve means little. Comp health shows each comp's step at the flip.")
             else:
                 out.append(head + "; ".join(parts)
-                           + ". Tick 'Pier side as segments' to normalise each side on its own.")
+                           + ". Tick 'Pier side as segments' to normalize each side on its own.")
         unknown = [n for n in nights if not (pier_by_night.get(n) or {}).get("source")]
         if unknown and len(unknown) < len(nights) and (self.pier_segments.get() or len(sides) > 1):
             out.append(f"Pier side unknown on {len(unknown)} night(s) (no ROTATOR, no PIERSIDE, no flip): left as "
@@ -13192,7 +13192,7 @@ class App(Tk):
         self.status.set(f"Note for {night} " + ("saved." if text else "removed."))
 
     def _name_index(self) -> dict:
-        """2.2.14 (item 11): {normalised name: labeled star} for every name a labeled star answers to (its catalogs'
+        """2.2.14 (item 11): {normalized name: labeled star} for every name a labeled star answers to (its catalogs'
         IDs, AAVSO AUID and label) and the known variables on it (VSX/SIMBAD: V1441 Cas is TYC 4006-670-1)."""
         index, var_best = {}, {}
         for _x, _y, star in self.chart_placed:
@@ -13201,7 +13201,7 @@ class App(Tk):
             for v in star.get("variable") or []:
                 if not (isinstance(v, dict) and v.get("name")):
                     continue
-                # review nit: a variable flagged on two neighbours goes to the one nearest its own position.
+                # review nit: a variable flagged on two neighbors goes to the one nearest its own position.
                 try:
                     d = core.sky_separation_arcsec(float(star["ra"]), float(star["dec"]), float(v["ra"]), float(v["dec"]))
                 except (KeyError, TypeError, ValueError):
@@ -13601,7 +13601,7 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "There is no series loaded.")
             return
         if not self.comps_used:
-            messagebox.showinfo(APP_TITLE, "This series does not record which comps it used; reduce it again in 1.8.")
+            messagebox.showinfo(APP_TITLE, "This series does not record which comps it used; run photometry on its nights again.")
             return
         UseCompsWindow(self)
 
@@ -13711,7 +13711,7 @@ class App(Tk):
             lines.append(f"check {used or 'star'} {was or '—'} → {check}")
         if not lines:
             return False
-        self._take_series_snapshot()   # a cancelled run later puts back these values, not the old ones
+        self._take_series_snapshot()   # a canceled run later puts back these values, not the old ones
         self._zp_caution_cache = None
         shifts = sorted({round(v, 4) for v in result["shift"].values()})
         self.log("Catalog magnitudes changed for the whole series: " + "; ".join(lines)
@@ -13802,7 +13802,7 @@ class App(Tk):
         if result is None:
             messagebox.showinfo(
                 APP_TITLE,
-                "This series has no per-comp measurements yet. They are saved from version 1.6 on, "
+                "This series has no per-comp measurements yet. Older versions of SHOBS-P did not save them, "
                 "so reduce the nights again to use the comp health check.",
             )
             return
@@ -14193,7 +14193,7 @@ class App(Tk):
 
     # ---- 2.2.3: save just the highlighted night, and duplicate-upload warnings --------------
     def _save_scope(self, what: str) -> str | None:
-        """'night' or 'series' for a Save, or None when cancelled. Asks only when a night is highlighted in a
+        """'night' or 'series' for a Save, or None when canceled. Asks only when a night is highlighted in a
         series of more than one night."""
         nights = {o.night for o in self.observations}
         if not self.highlight_night or self.highlight_night not in nights or len(nights) < 2:
@@ -14470,7 +14470,7 @@ class CompHealthWindow:
             top,
             text="Each star is measured against the average of the others in the same frame, so clouds and airmass "
                  "cancel. A steady star stays flat from night to night. A star that drifts or jumps is quietly "
-                 "variable or affected by something local (a neighbour, a flat-field defect) and should be replaced."
+                 "variable or affected by something local (a neighbor, a flat-field defect) and should be replaced."
                  + ("\nOnly one night is loaded, so this shows each star through the night instead; the night-to-night "
                     "check needs two or more nights." if one_night else ""),
             style="Hint.TLabel", wraplength=1050, justify=LEFT,
@@ -14561,7 +14561,7 @@ class CompHealthWindow:
                                rotation=20, fontsize=8, ha="right")
             ax.invert_yaxis()
             ax.set_ylabel("Night median minus\nits own median (mag)")
-            ax.set_title("Night-to-night behaviour of each star (should be flat)")
+            ax.set_title("Night-to-night behavior of each star (should be flat)")
             ax.grid(True, alpha=0.3)
         self._legend()
         # Remember each artist's look, so a highlight can be undone exactly.
@@ -14644,7 +14644,7 @@ class CompHealthWindow:
 
     @staticmethod
     def _draw_one_night(ax, result, kinds):
-        """Within-night behaviour (2.2.2): each star minus the others, raw points faint, binned medians as lines,
+        """Within-night behavior (2.2.2): each star minus the others, raw points faint, binned medians as lines,
         offset so the stars do not sit on top of each other, with the meridian flip marked."""
         jd = np.asarray(result["jd"], dtype=float)
         t0 = math.floor(float(np.nanmin(jd)) - 0.5) + 0.5 if jd.size else 0.0
@@ -14686,7 +14686,7 @@ class CompHealthWindow:
         ax.invert_yaxis()
         ax.set_xlabel(f"Hours from JD {t0:.1f}")
         ax.set_ylabel("Star minus the others\n(mag, offset for clarity)")
-        ax.set_title("Within-night behaviour of each star\n(one night: should be flat and not jump at the flip)", fontsize=10)
+        ax.set_title("Within-night behavior of each star\n(one night: should be flat and not jump at the flip)", fontsize=10)
         ax.grid(True, alpha=0.3)
         return artists
 
@@ -14726,8 +14726,8 @@ class UseCompsWindow:
         intro = ttk.Label(
             inner,
             text="Tick the stars to average as the comparison. Every point is re-derived from the measurements already "
-                 "stored, so nothing is reduced again, and you can switch back at any time. Spares were measured on the "
-                 "nights reduced in 1.8 or later. The check star cannot be a comp. Colors (B-V) stay tied to the comps "
+                 "stored, so nothing is reduced again, and you can switch back at any time. Spares are measured on nights "
+                 "reduced after a Solve. The check star cannot be a comp. Colors (B-V) stay tied to the comps "
                  "the nights were reduced with.",
             style="Hint.TLabel", wraplength=wrap, justify=LEFT,
         )
@@ -14811,11 +14811,11 @@ class UseCompsWindow:
                                  style="Hint.TLabel", wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(8, 0))
         if len(names) == len(app.comps_used):
-            ttk.Label(inner, text="No spare comps in this series yet. Nights reduced in 1.8 or later after Solve "
+            ttk.Label(inner, text="No spare comps in this series yet. Nights reduced after a Solve "
                                   "carry spares.", style="Hint.TLabel").pack(anchor=W, pady=(8, 0))
         elif len(names) < 3:
             wrapped.append(ttk.Label(inner, text="Only two stars to choose from. With three or more, a noisy or drifting "
-                                                 "star stands out and the ensemble averages down the noise; 2.2.2 "
+                                                 "star stands out and the ensemble averages down the noise. SHOBS-P "
                                                  "measures extra spares when the field is thin, on nights reduced "
                                                  "again.", style="Hint.TLabel", wraplength=wrap, justify=LEFT))
             wrapped[-1].pack(anchor=W, pady=(8, 0))
@@ -14929,7 +14929,7 @@ class SuggestWindow:
         ttk.Label(top, text="This window sets the aperture and sky ring, not which stars are used.",
                   style="Hint.TLabel").pack(anchor=W)
         # 2.2.16 (item 1): the bold line always shows what "Use these aperture sizes" sets (self.prop): the seeing-only
-        # suggestion first, the tested sizes after a test (the seeing-only one then moves to a grey "Before the test").
+        # suggestion first, the tested sizes after a test (the seeing-only one then moves to a gray "Before the test").
         self.headline = StringVar(value=self._sizes_text(self.prop))
         wrapped.append(ttk.Label(top, textvariable=self.headline,
                                  style="Card.TLabel", font=(core.UI_FONT, 11, "bold"), wraplength=wrap, justify=LEFT))
@@ -15036,7 +15036,7 @@ class SuggestWindow:
             # 2.2.16 (item 1): say it plainly when the winner sits at either end of what was tried.
             if abs(pick - max(tried)) < 0.05:
                 lines.append(f"Best at the edge of the tried range (r = {pick:g}, the largest tried); a larger aperture "
-                             "may be better. A close neighbour, trailing or defocus can do this; check the image.")
+                             "may be better. A close neighbor, trailing or defocus can do this; check the image.")
             elif abs(pick - min(tried)) < 0.05:
                 lines.append(f"Best at the edge of the tried range (r = {pick:g}, the smallest tried); a smaller "
                              "aperture may be better (faint stars often prefer 1–1.2 × FWHM).")

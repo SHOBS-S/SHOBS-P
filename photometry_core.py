@@ -305,7 +305,7 @@ def read_xisf(path: str, header_only: bool = False):
         header.setdefault("NAXIS1", width)
         header.setdefault("NAXIS2", height)
         if channels > 1:
-            header.setdefault("NAXIS3", channels)   # 2.2.11: a colour image (2.2.18: see set_rgb_channel)
+            header.setdefault("NAXIS3", channels)   # 2.2.11: a color image (2.2.18: see set_rgb_channel)
         fmt0 = image.get("sampleFormat") or "UInt16"
         header.setdefault("BITPIX", -32 if fmt0.startswith("Float") else 8 * np.dtype(_XISF_TYPES.get(fmt0, np.uint16)).itemsize)
         if header_only:
@@ -336,7 +336,7 @@ def read_xisf(path: str, header_only: bool = False):
     else:
         data = data.reshape(channels, height, width)
     data = data.astype(np.float32)
-    # 2.2.18 (item 1): a colour image gives the chosen channel (or luminance); before, always the first (red).
+    # 2.2.18 (item 1): a color image gives the chosen channel (or luminance); before, always the first (red).
     data = rgb_plane(data) if channels == 3 else data[0]
     if fmt.startswith("Float"):
         # PixInsight keeps floating-point pixels in a 0..1 range (the bounds attribute): put them back on the
@@ -365,7 +365,7 @@ def read_fits(path: str) -> tuple[np.ndarray, dict]:
         data = np.asarray(hdu.data, dtype=np.float32)
         header = dict(hdu.header)
     if data.ndim == 3 and data.shape[0] == 3:
-        data = rgb_plane(data)   # 2.2.18 (item 1): the chosen channel of a colour image, not always red
+        data = rgb_plane(data)   # 2.2.18 (item 1): the chosen channel of a color image, not always red
     elif data.ndim == 3 and data.shape[0] in (1, 4):
         data = data[0]
     if data.ndim != 2:
@@ -465,7 +465,7 @@ def mid_jd(header: dict) -> float:
 MONO = "MONO"
 _SENSOR = {"mono": False, "rgb_channel": None}
 
-# 2.2.18 (item 1): a colour image that other software already debayered (three channels, NAXIS3 = 3): the channel
+# 2.2.18 (item 1): a color image that other software already debayered (three channels, NAXIS3 = 3): the channel
 # measured, with its AAVSO filter code and the comps' band (as an OSC camera's channel), set by the app for a run.
 RGB_CHANNELS = {"green": ("TG", "V"), "red": ("TR", "R"), "blue": ("TB", "B"), "luminance": ("CV", "V")}
 RGB_CHANNEL_WORDS = {"green": "green (TG)", "red": "red (TR)", "blue": "blue (TB)", "luminance": "luminance (CV)"}
@@ -486,7 +486,7 @@ def rgb_channel() -> str | None:
 
 
 def is_rgb_header(header: dict | None) -> bool:
-    """2.2.18 (item 1): a colour image already debayered by other software: three channels (NAXIS3 = 3)."""
+    """2.2.18 (item 1): a color image already debayered by other software: three channels (NAXIS3 = 3)."""
     header = header or {}
     try:
         if int(header.get("NAXIS", 3) or 3) < 3:
@@ -1288,7 +1288,7 @@ _FILTER_NAMES = {
     "none": ("CV", "V"), "c": ("CV", "V"), "open": ("CV", "V"), "empty": ("CV", "V"),
 }
 # I and U are not mapped: the comp catalogs here carry no I or U magnitudes for most stars.
-# 2.2.17 (item 1): Sloan g' r' i' (z', u') are recognised by sloan_band_code below (GitHub #6).
+# 2.2.17 (item 1): Sloan g' r' i' (z', u') are recognized by sloan_band_code below (GitHub #6).
 
 # 2.2.17 (item 1): Sloan bands. The AAVSO filter code (SG, SR, SI, SZ, SU) is also the catalog band key in a star's
 # "mags", so a Sloan run asks the catalogs for that band and zero-points on it. Labels for the screen and the log.
@@ -1324,7 +1324,7 @@ def sloan_band_code(value) -> str | None:
     around ONE band letter when the value says Sloan/SDSS anywhere or primes the letter ("g' (Sloan)", "r (sdss)",
     "Baader Sloan r'", "Astrodon Sloan g'"). A Sloan filter must SAY it is Sloan (a prime, "p"/"prime",
     "sdss"/"sloan", or the AAVSO code SG/SR/SI/SZ/SU): a bare G or R (either case) stays the imaging filter it
-    always was (TG / TR, see _FILTER_NAMES), and a bare I, Z or U is not recognised (Johnson-Cousins I is not
+    always was (TG / TR, see _FILTER_NAMES), and a bare I, Z or U is not recognized (Johnson-Cousins I is not
     calibrated here), so Johnson/Cousins R and I are never taken for Sloan r and i."""
     text = str(value or "").strip().lower()
     for ch in _PRIME_CHARS:
@@ -1384,7 +1384,7 @@ def mono_filter_label(found) -> str:
 
 def cfa_contrast(img: np.ndarray):
     """2.2.11: how different the four 2x2 sub-planes of a raw frame are, from the central half of the frame:
-    (max/min - 1 of the four plane medians, mean level). A colour (Bayer) sensor's flat has red, green and blue
+    (max/min - 1 of the four plane medians, mean level). A color (Bayer) sensor's flat has red, green and blue
     pixels at clearly different levels (often 20-60%); a monochrome sensor's planes agree to well under 1%."""
     a = np.asarray(img)
     if a.ndim != 2 or min(a.shape) < 16:
@@ -1401,8 +1401,8 @@ def cfa_contrast(img: np.ndarray):
 
 def detect_sensor_from_flat(path: str):
     """'mono', 'cfa', or None (cannot tell) from one raw flat frame, with the contrast found. A flat bright enough
-    (mean > 1000 ADU) with planes within 1% is monochrome; planes 4% or more apart are a colour mask. A colour image
-    (three channels, already debayered) or a calibrated/normalised frame cannot be judged and gives None."""
+    (mean > 1000 ADU) with planes within 1% is monochrome; planes 4% or more apart are a color mask. A color image
+    (three channels, already debayered) or a calibrated/normalized frame cannot be judged and gives None."""
     try:
         data, header = read_fits(path)
     except Exception:
@@ -1435,13 +1435,13 @@ def detect_sensor_from_light(path: str, pedestal: float | None = None):
     """2.2.18 (item 2): 'mono', 'cfa', or None (cannot tell) from one light's sky background, with the contrast
     found, for runs without raw flats (pre-calibrated lights, empty calibration folders). The four 2x2 pixel planes
     of the central half are compared on the sky only: stars (over 3 sigma of their plane, and their neighbors) are
-    masked. A colour mask leaves the planes apart by the sky's colour (planes 3% or more apart: 'cfa'); a monochrome
+    masked. A color mask leaves the planes apart by the sky's color (planes 3% or more apart: 'cfa'); a monochrome
     sensor's planes agree (under 0.5%, measured to better than 0.1%: 'mono').
     Review M1: a bias pedestal dilutes the contrast (a faint sky over 500 ADU of bias looked monochrome), so the
     planes are compared above `pedestal` (the bias level the app measured in the Bias or Dark folder), else above the
     header's PEDESTAL or zero for a pre-calibrated light. A raw light with no known pedestal is called 'mono' only
     when its sky is at least SENSOR_SKY_FLOOR_RAW (1000 ADU, the flat test's rule); otherwise None (the app asks).
-    A colour image (three channels) gives None."""
+    A color image (three channels) gives None."""
     try:
         data, header = read_fits(path)
     except Exception:
@@ -1652,19 +1652,19 @@ class Obs:
 def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
                   blend_check: bool = True, search: float | None = None, wing: str = "gauss",
                   min_sigma: float | None = None) -> dict:
-    """2.2.8: centre on the star nearest (x, y), not on whatever is brightest nearby.
+    """2.2.8: center on the star nearest (x, y), not on whatever is brightest nearby.
 
     1. Look for significant peaks (3x3-smoothed, above sky + 4 sigma of the smoothed noise) within a search radius
        (max(3, 1.2 x aperture radius), or 2.5 x FWHM when the FWHM is known).
-    2. Take the peak NEAREST the start point, so a brighter neighbour a few pixels away cannot capture it
-       (CoRoT-1, 10 Oct 2026: a star 2.5x brighter 5.8 px away pulled the old centre-of-mass 3.5 px off the target).
-    3. Centre of mass of the sky-subtracted light inside about one FWHM of that peak, iterated three times.
+    2. Take the peak NEAREST the start point, so a brighter neighbor a few pixels away cannot capture it
+       (CoRoT-1, 10 Oct 2026: a star 2.5x brighter 5.8 px away pulled the old center-of-mass 3.5 px off the target).
+    3. Center of mass of the sky-subtracted light inside about one FWHM of that peak, iterated three times.
     With no significant peak (a faint star lost in the noise), the start point is kept and found = False.
-    2.2.18 (item 5): blend_check=False never keeps the start point for a blended neighbour, and search widens the
+    2.2.18 (item 5): blend_check=False never keeps the start point for a blended neighbor, and search widens the
     search radius (both for the pre-run marker check, marker_offset). wing="dip" (comp and check clicks, review): a
-    start point on a bright star's own wing is centred on that star unless the light between peak and start point dips
+    start point on a bright star's own wing is centerd on that star unless the light between peak and start point dips
     and rises again. The default "gauss" keeps the 2.2.8 test (target clicks and every frame's centring), which keeps a
-    faint target in a brighter neighbour's wing even when it shows only as a shoulder (CoRoT-1 b, 2.2.7).
+    faint target in a brighter neighbor's wing even when it shows only as a shoulder (CoRoT-1 b, 2.2.7).
     Returns {"x", "y", "shift", "found"}."""
     from scipy import ndimage
 
@@ -1725,11 +1725,11 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
         area = int(np.count_nonzero(lab == own)) if own else 0
         window = max(window, 1.5 * math.sqrt(area / math.pi))
         # A flat (saturated) top is one star with many equal "peaks": move to the middle of that top. Only the
-        # top's own connected patch counts, so a brighter neighbour whose half-maximum region touches this star's
+        # top's own connected patch counts, so a brighter neighbor whose half-maximum region touches this star's
         # is never taken for part of it (review, 2.2.8).
         raw_peak = float(data[py0, px0])
         tol = 1e-6 * max(1.0, abs(raw_peak))
-        # Pixels EQUAL to the peak (a clipped, saturated top), not merely as bright: a brighter neighbour's core is
+        # Pixels EQUAL to the peak (a clipped, saturated top), not merely as bright: a brighter neighbor's core is
         # brighter than this star's peak and must not join it.
         tl, _m = ndimage.label(np.abs(data - raw_peak) <= tol)
         if tl[py0, px0]:
@@ -1739,9 +1739,9 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
                 ux, uy = peak_x, peak_y
     except Exception:
         top = None
-    # A star blended into a brighter neighbour's wing (closer than about 1.5 FWHM) has no peak of its own, so the
-    # nearest peak can be the neighbour. When the click holds clearly more light than that peak's own profile
-    # would put there, the click is on another star: keep it rather than jump to the neighbour.
+    # A star blended into a brighter neighbor's wing (closer than about 1.5 FWHM) has no peak of its own, so the
+    # nearest peak can be the neighbor. When the click holds clearly more light than that peak's own profile
+    # would put there, the click is on another star: keep it rather than jump to the neighbor.
     try:
         d_click = math.hypot(peak_x - sx, peak_y - sy)
         if d_click > 1.5:
@@ -1769,7 +1769,7 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
                 return {"x": float(x), "y": float(y), "shift": 0.0, "found": True, "blended": True}
     except Exception:
         pass
-    # Other stars: peaks outside this star's half-maximum region, and much brighter peaks inside it (a neighbour
+    # Other stars: peaks outside this star's half-maximum region, and much brighter peaks inside it (a neighbor
     # whose light reaches this star). Peaks of about the same height inside the region belong to this star (the
     # ring of a defocused "donut", noise on a broad top).
     p_here = float(smooth[int(round(peak_y)), int(round(peak_x))])
@@ -1791,7 +1791,7 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
                 continue
         other_pts.append((float(ox), float(oy)))
     others = [math.hypot(ox - peak_x, oy - peak_y) for ox, oy in other_pts]
-    # Pixels nearer another star's peak than this one's never count for this star's centre.
+    # Pixels nearer another star's peak than this one's never count for this star's center.
     mine = np.ones(data.shape, dtype=bool)
     for ox, oy in other_pts:
         mine &= np.hypot(xx - peak_x, yy - peak_y) <= np.hypot(xx - ox, yy - oy)
@@ -1811,7 +1811,7 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
         ux, uy = nx, ny
         if done:
             break
-    # A centre that wandered far from its own peak was pulled by a neighbour's wings: use the peak's 3x3 centroid.
+    # A center that wandered far from its own peak was pulled by a neighbor's wings: use the peak's 3x3 centroid.
     if others and min(others) < 2.0 * window and math.hypot(ux - peak_x, uy - peak_y) > max(1.0, 0.5 * window):
         m = (np.abs(xx - peak_x) <= 1) & (np.abs(yy - peak_y) <= 1)
         wsum = float(work[m].sum())
@@ -1848,7 +1848,7 @@ def real_star(info: dict, min_sigma: float = 10.0) -> bool:
 
 
 def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> tuple[float, float, float]:
-    """Centre on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found."""
+    """Center on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found."""
     r = recenter_info(img, x, y, radius, fwhm)
     return r["x"], r["y"], r["shift"]
 
@@ -1862,10 +1862,10 @@ def recenter_jump_limit(radius: float) -> float:
 def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
                   wing: str = "gauss") -> dict:
     """2.2.18 (item 5, review): the check before a run, from what reduce_frame will actually do with this marker.
-    True centre: the nearest real star (real_star: >= 10 sigma, brighter than the marker spot) within
-    max(2.5 FWHM, 1.5 x aperture radius), centred without the "blended neighbour" exception. Measured: reduce_frame's
+    True center: the nearest real star (real_star: >= 10 sigma, brighter than the marker spot) within
+    max(2.5 FWHM, 1.5 x aperture radius), centerd without the "blended neighbor" exception. Measured: reduce_frame's
     own recenter (no seeing given), refused beyond recenter_jump_limit (then the marker position is used). off is True
-    when the measured position is more than about 1.5 px from the true centre. blended: the click test says the marker
+    when the measured position is more than about 1.5 px from the true center. blended: the click test says the marker
     sits on a faint star in a brighter one's wing (then the nearest star is only reported, not called a mistake);
     wing as in recenter_info ("dip" for comps and checks, as their clicks are tested).
     Returns {"found", "x", "y", "offset", "measured", "error", "limit", "off", "blended"}."""
@@ -1891,9 +1891,9 @@ def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
 
 
 def star_fwhm(img: np.ndarray, x: float, y: float) -> dict:
-    """2.2.8: FWHM of one star from a circular 2-D Gaussian fit (amplitude, centre, sigma, sky) to a box that grows
+    """2.2.8: FWHM of one star from a circular 2-D Gaussian fit (amplitude, center, sigma, sky) to a box that grows
     with the star. Replaces moments in a fixed 12 px radius, which on a faint or crowded star measured the noise and
-    the neighbours (CoRoT-1 MicroObservatory frames: real stars 2.7-3.3 px, old method 10.5 px).
+    the neighbors (CoRoT-1 MicroObservatory frames: real stars 2.7-3.3 px, old method 10.5 px).
     Returns {"fwhm", "peak", "snr", "ok"}."""
     from scipy.optimize import least_squares
 
@@ -1956,7 +1956,7 @@ def field_fwhm(img: np.ndarray, n: int = 12, sat_level: float | None = None) -> 
         d = np.hypot(pts[:, 0] - sx, pts[:, 1] - sy)
         d[i] = np.inf
         if d.size and float(np.min(d)) < 10.0:
-            continue  # a neighbour close enough to disturb the fit
+            continue  # a neighbor close enough to disturb the fit
         h, w = data.shape
         if not (12 <= sx < w - 12 and 12 <= sy < h - 12):
             continue
@@ -2054,7 +2054,7 @@ def register_frame(
             near = diff[np.hypot(diff[:, 0] - guess[0], diff[:, 1] - guess[1]) < bin_px * 1.5]
             if near.size:
                 guess = np.median(near, axis=0)
-            # Model: cur = R(angle) (base - centre) + centre + shift
+            # Model: cur = R(angle) (base - center) + center + shift
             angle, shift = math.radians(hint), guess
             matched = 0
             for tol in (bin_px * 1.5, 6.0, 4.0, 3.0):
@@ -2289,7 +2289,7 @@ def error_model_text(observations, name=None) -> str:
         return ""
     label = name or (lambda n: str(n))
     shown = ", ".join(label(n) for n in old[:4]) + (" …" if len(old) > 4 else "")
-    return (f"{len(old)} night{'s' if len(old) > 1 else ''} ({shown}) reduced before 2.2.17 keep the old, larger "
+    return (f"{len(old)} night{'s' if len(old) > 1 else ''} ({shown}) reduced by an older version of SHOBS-P keep the old, larger "
             "error bars (image units taken as electrons, plus 0.005 mag); run photometry on them again for error bars "
             "that match the other nights.")
 
@@ -2897,7 +2897,7 @@ def detect_sources(img: np.ndarray, max_sources: int = 80, nsigma: float = 5.0, 
                 ok = False
                 break
             # Points on a bright star's diffraction spikes or halo: much fainter and close by.
-            # The exclusion radius grows with how much brighter the neighbour is.
+            # The exclusion radius grows with how much brighter the neighbor is.
             ratio = pv / max(value, 1e-6)
             if ratio > 10 and d2 < min(80.0, 5.0 * math.sqrt(ratio)) ** 2:
                 ok = False
@@ -3256,7 +3256,7 @@ GAIA_VIZIER_LATE_TIMEOUT_S = 60.0   # 2.2.16 (item 2): the deep half when it may
 
 def count_star_peaks(img: np.ndarray, nsigma: float = 5.0) -> int:
     """2.2.14 (item 5): how many star-like peaks the image shows (local maxima of the lightly smoothed image above
-    nsigma; as detect_sources, without its slow neighbour test). A rough count of the stars one could click."""
+    nsigma; as detect_sources, without its slow neighbor test). A rough count of the stars one could click."""
     from scipy import ndimage
 
     data = np.array(img, dtype=np.float32, copy=True)
@@ -3487,7 +3487,7 @@ def fetch_gaia_dr3(ra_deg: float, dec_deg: float, radius_deg: float, band: str =
                 return fetch_gaia_dr3_vizier(ra_deg, dec_deg, radius_deg, band, glimit, max_rows)
             except Exception as exc2:
                 raise ConnectionError(f"Gaia archive: {exc}\nVizieR Gaia DR3: {exc2}") from exc2
-    # The archive part on the circle through the frame's corners (from the frame's centre) when they are known.
+    # The archive part on the circle through the frame's corners (from the frame's center) when they are known.
     esa_radius = (max(sky_separation_arcsec(ra_deg, dec_deg, r, d) for r, d in polygon) / 3600.0
                   if polygon else radius_deg)
     box = footprint_box(polygon, ra_deg, dec_deg) if polygon else None
@@ -3735,7 +3735,7 @@ def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_
     Gaia (complete, with proper motions) is the backbone; Tycho is already moved to the epoch; AAVSO and APASS
     positions are J2000-ish without proper motion, so they are matched against each star's position now AND at
     J2000 (HD 219134 has moved ~55" since 2000). A match also needs the V magnitudes to agree within 1 mag when both
-    are known, so a faint Gaia neighbour never takes a bright star's name. Each entry keeps the keys the rest of
+    are known, so a faint Gaia neighbor never takes a bright star's name. Each entry keeps the keys the rest of
     SHOBS-P reads (auid, label, ra, dec, mag, mags, band, catalog, bright, service) plus: sources {catalog: that
     catalog's own entry}, aka (every other name), seq (AAVSO sequence label, AUID, chart) and mag_source per band."""
     band = _band_for(band)
@@ -3749,7 +3749,7 @@ def merge_catalogs(by_catalog: dict, band: str = "V", tol_arcsec: float = MERGE_
         return []
     # The search grid uses ONE reference RA and cos(Dec) for the whole field (review 2.2.13: a per-star cos(Dec)
     # at RA ~350 deg moved a star a cell or two for a few arcsec of Dec, so true pairs were never compared), with RA
-    # unwrapped around the field centre (fields across 0h). The match itself uses the exact separation.
+    # unwrapped around the field center (fields across 0h). The match itself uses the exact separation.
     ra0 = float(every[0]["ra"])
     dec0 = float(np.median([float(st["dec"]) for st in every]))
     cos0 = max(math.cos(math.radians(dec0)), 0.05)
@@ -3893,7 +3893,7 @@ def field_depth(n_peaks: int | None, frame_shape, scale_arcsec: float | None, fo
 # CATALOG_CACHE_DAYS. Each entry is ONE catalog's answer to ONE request, stored with every star's own catalog
 # position and epoch ("pos0") and proper motion, so the night's epoch (PM_EPOCH_YEAR) is applied again on reading:
 # a hit gives the same star list as asking the server again. To make tonight's request the same as last night's, the
-# request is put on a grid while the cache is in use: the centre on a CATALOG_CACHE_GRID_DEG grid (the field and box
+# request is put on a grid while the cache is in use: the center on a CATALOG_CACHE_GRID_DEG grid (the field and box
 # widened by the shift, so the frame is still covered), sizes rounded up, Gaia's row cap up to the next CACHE_ROWS
 # step. A larger or deeper request is another key, so it is fetched. Only real network fetches are cached (not the
 # test fakes); SHOBS_P_NO_CATALOG_CACHE=1 turns it off.
@@ -3921,7 +3921,7 @@ def _ceil_step(v: float, step: float) -> float:
 
 
 def canonical_field_request(ra_hours: float, dec_deg: float, fov_arcmin: float, depth: dict | None = None):
-    """2.2.16 (item 2): the request on the cache grid: (ra_hours, dec_deg, fov_arcmin, depth). The centre moves to
+    """2.2.16 (item 2): the request on the cache grid: (ra_hours, dec_deg, fov_arcmin, depth). The center moves to
     the nearest grid point; the field (and the footprint box) grows by twice the largest such shift, so it still
     holds the frame; Gaia/APASS row caps go up to the next CACHE_ROWS step. The footprint becomes the RA/Dec box's corners."""
     step = CATALOG_CACHE_GRID_DEG
@@ -3941,7 +3941,7 @@ def canonical_field_request(ra_hours: float, dec_deg: float, fov_arcmin: float, 
         # as the request before widening would have given it.
         area_ratio = (fov_c / max(float(fov_arcmin), 1e-6)) ** 2
         if depth.get("polygon"):
-            # The frame's own box (around tonight's centre), widened by the largest shift, rounded up.
+            # The frame's own box (around tonight's center), widened by the largest shift, rounded up.
             bw0, bh0 = footprint_box(depth["polygon"], float(ra_hours) * 15.0, float(dec_deg))
             bw, bh = _ceil_step(bw0 + 2.0 * shift_deg, step), _ceil_step(bh0 + 2.0 * shift_deg, step)
             area_ratio = (bw * bh) / max(bw0 * bh0, 1e-9)
@@ -4239,7 +4239,7 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
     for cat in catalogs:
         state = results.get(cat)
         if state is None:
-            errors[cat] = "cancelled" if cancel is not None and cancel.is_set() else f"no answer within {timeout:.0f} s"
+            errors[cat] = "canceled" if cancel is not None and cancel.is_set() else f"no answer within {timeout:.0f} s"
         elif state[0] == "ok":
             found[cat] = state[1]
         else:
@@ -4248,7 +4248,7 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
 
 
 def frame_pointing(header: dict):
-    """2.2.13: where one frame points: the centre of its plate solution, else its RA/Dec keywords, else None."""
+    """2.2.13: where one frame points: the center of its plate solution, else its RA/Dec keywords, else None."""
     wcs = header_wcs(header or {})
     if wcs is not None:
         try:
@@ -4340,7 +4340,7 @@ def header_pointing(header: dict):
 
 
 def _triangles(pts: np.ndarray, k: int = 6):
-    """Triangles from each point and pairs of its k nearest neighbours: vertex indices ordered so that vertex 0 is
+    """Triangles from each point and pairs of its k nearest neighbors: vertex indices ordered so that vertex 0 is
     opposite the shortest side and vertex 2 opposite the longest, plus the scale-free shape (L1/L3, L2/L3)
     and the longest side."""
     n = len(pts)
@@ -4790,7 +4790,7 @@ def _night_perm_fap(t_mean: np.ndarray, y_mean: np.ndarray, f_lo: float, f_hi: f
         freqs = np.array([f_lo, f_hi])
     tt = t_mean - t_mean.mean()
     # sine and cosine at every frequency, each made orthogonal to the mean, then to each other (Gram-Schmidt): the
-    # power of centred values is their squared projection on the two (the floating-mean Lomb-Scargle power).
+    # power of centerd values is their squared projection on the two (the floating-mean Lomb-Scargle power).
     ph = 2 * math.pi * np.outer(tt, freqs)                    # (k, F)
     sn, cs = np.sin(ph), np.cos(ph)
     sn -= sn.mean(axis=0)
@@ -5074,7 +5074,7 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
     """2.2.14 (item 10): does the chosen comp ensemble move the night's level compared with the comps nearest the
     target's brightness?
 
-    Faint comps can carry a colour term, a non-linearity or a sky-subtraction bias that bright comps do not, and
+    Faint comps can carry a color term, a non-linearity or a sky-subtraction bias that bright comps do not, and
     in an ensemble that shifts the whole night (13 Oct, HD 219134: 6 comps incl. 11-13 mag stars gave 5.383, the
     8.7 mag comp alone 5.501). The reference set is the chosen comps within `near` mag of the target's median;
     when no comp is that close (a bright target), within `near` mag of the comp nearest the target in brightness.
@@ -5144,7 +5144,7 @@ def ensemble_zero_point_check(observations: list[Obs], selection: list[str], com
         out["text"].append(
             f"{night}: the {len(sel)} chosen comps put the target at {r['level_sel']:.3f} (σ {r['sigma_sel']:.3f}); "
             f"the comp(s) nearest its brightness, {ref_text}, at {r['level_ref']:.3f} (σ {r['sigma_ref']:.3f}): "
-            f"{r['shift']:+.3f} mag apart. Comps much fainter than the target can shift the zero point (colour, "
+            f"{r['shift']:+.3f} mag apart. Comps much fainter than the target can shift the zero point (color, "
             "linearity, sky); compare both sets in Use comps… before reporting.")
     return out
 
@@ -5605,7 +5605,7 @@ def pick_spare_comps(placed: list, avoid_xy: list, shape: tuple[int, int], radiu
             turned_away("too close to the target, comps or check")
             continue
         if crowded_all[k]:
-            turned_away("crowded (a neighbour in the sky ring)")
+            turned_away("crowded (a neighbor in the sky ring)")
             continue
         out.append((x, y, star))
     out.sort(key=lambda item: item[2]["mag"])
@@ -6775,8 +6775,8 @@ def relative_colors(first: np.ndarray, second: np.ndarray) -> tuple[np.ndarray, 
 
 
 COLOR_FIT_MAX_SCATTER = 0.15   # mag; a weighted fit looser than this is not used
-COLOR_FIT_MAX_STAR_ERR = 0.08  # mag; stars whose own colour is noisier than this are left out
-COLOR_FIT_FLOOR = 0.03         # mag; catalogue colour errors and transformation mismatch
+COLOR_FIT_MAX_STAR_ERR = 0.08  # mag; stars whose own color is noisier than this are left out
+COLOR_FIT_FLOOR = 0.03         # mag; catalog color errors and transformation mismatch
 
 
 def robust_mean_err(values: np.ndarray, axis: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -6797,14 +6797,14 @@ def fit_color_term(inst: np.ndarray, catalog: np.ndarray, min_stars: int = 5, cl
                    max_scatter: float = COLOR_FIT_MAX_SCATTER) -> dict | None:
     """Weighted, outlier-resistant straight line catalog = a + k * inst.
 
-    Each star is weighted by 1 / (its colour error), where the error combines its own
+    Each star is weighted by 1 / (its color error), where the error combines its own
     measured noise (inst_err, from frame-to-frame scatter) scaled by the slope, and a floor
-    for catalogue errors. Faint, noisy stars therefore count little, and stars noisier than
-    COLOR_FIT_MAX_STAR_ERR are left out. Outliers (variables, blends, bad catalogue colours)
-    beyond clip x the normalised scatter are rejected. None if too few stars survive.
+    for catalog errors. Faint, noisy stars therefore count little, and stars noisier than
+    COLOR_FIT_MAX_STAR_ERR are left out. Outliers (variables, blends, bad catalog colors)
+    beyond clip x the normalized scatter are rejected. None if too few stars survive.
 
     Returns k, a, scatter (weighted rms about the line), k_err, n, n_rejected, range, and
-    'problem' when the fit should not be trusted (narrow colour range, slope far from 1, a
+    'problem' when the fit should not be trusted (narrow color range, slope far from 1, a
     poorly determined slope, or scatter above max_scatter).
     """
     # 2.2.16 (item 3): never raise. np.polyfit can fail ("SVD did not converge") on bad input; that killed the
@@ -7152,7 +7152,7 @@ CREDITS = [
          "Aeronautics and Space Administration under the Exoplanet Exploration Program.\"",
          "https://exofop.ipac.caltech.edu/tess/"),
         ("VizieR (CDS)", "Access to APASS, Tycho-2, Gaia DR3, and VSX.",
-         "\"This research has made use of the VizieR catalogue access tool, CDS, Strasbourg Astronomical Observatory, "
+         "\"This research has made use of the VizieR catalog access tool, CDS, Strasbourg Astronomical Observatory, "
          "France (DOI : 10.26093/cds/vizier).\" Ochsenbein, F. et al. 2000, A&AS 143, 23.",
          "https://vizier.cds.unistra.fr"),
     ]),
@@ -7167,14 +7167,14 @@ CREDITS = [
          "Gaia DR3 documentation, section 5.5.1 (Carrasco, J. M. & Bellazzini, M.), Tables 5.8 and 5.10; Riello, M. et "
          "al. 2021, A&A 649, A3.",
          "https://gea.esac.esa.int/archive/documentation/GDR3/Data_processing/chap_cu5pho/cu5pho_sec_photSystem/cu5pho_ssec_photRelations.html"),
-        ("Gaia DR3 synthetic SDSS photometry", "Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalogue).",
+        ("Gaia DR3 synthetic SDSS photometry", "Sloan magnitudes of Gaia stars (Gaia Synthetic Photometry Catalog).",
          "Gaia Collaboration, Montegriffo, P. et al. 2023, A&A 674, A33.", ""),
         ("SDSS to primed Sloan system", "Puts SDSS-system magnitudes on the primed g', r', i', z' system of APASS "
          "and AAVSO sequences.", "Tucker, D. L. et al. 2006, Astron. Nachr. 327, 821.", ""),
         ("Sloan limb darkening", "Quadratic limb-darkening coefficients for transit fits in Sloan filters.",
          "Claret, A. 2004, A&A 428, 1001 (VizieR J/A+A/428/1001, table 4).", ""),
         ("Tycho BT, VT to Johnson B, V", "Johnson magnitudes for Tycho-2 stars.",
-         "ESA 1997, The Hipparcos and Tycho Catalogues, ESA SP-1200.", ""),
+         "ESA 1997, The Hipparcos and Tycho Catalogs, ESA SP-1200.", ""),
         ("HJD and BJD_TDB", "Heliocentric and barycentric times in exports (computed with Astropy).",
          "Eastman, J., Siverd, R. & Gaudi, B. S. 2010, PASP 122, 935.", ""),
         ("B-V to temperature", "Approximate temperature from color.", "Ballesteros, F. J. 2012, EPL 97, 34008.", ""),
@@ -7279,7 +7279,7 @@ def split_lights(paths: list[str], verdict=None) -> tuple[list[str], list[tuple[
     """(lights to use, [(skipped path, reason)], note for the log).
 
     Master frames are always skipped. Individual bias/dark/flat files mixed in with lights are
-    skipped too. But when most of the folder is labelled bias/dark/flat, the night's lights were
+    skipped too. But when most of the folder is labeled bias/dark/flat, the night's lights were
     almost certainly saved with the wrong image type by the capture software, so they are all
     kept and the note says so. 2.2.17 (round 2): `verdict` (path -> reason) lets a caller cache the header reads.
     """
@@ -7296,7 +7296,7 @@ def split_lights(paths: list[str], verdict=None) -> tuple[list[str], list[tuple[
     candidates = len(keep) + len(labelled)
     if labelled and len(labelled) > 0.5 * candidates:
         keep = sorted(keep + [p for p, _ in labelled])
-        note = (f"{len(labelled)} of {candidates} files in the Lights folder are labelled as calibration frames "
+        note = (f"{len(labelled)} of {candidates} files in the Lights folder are labeled as calibration frames "
                 f"({labelled[0][1]}). That is most of the folder, so they are treated as lights; the capture "
                 "software probably saved this night with the wrong image type.")
     else:
@@ -7712,7 +7712,7 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
         except (ValueError, np.linalg.LinAlgError):
             noise = None
     poly = poly_extremum(t, m, win["t0"], hw, kind, n_boot=max(50, n_boot // 5), seed=seed, noise=noise)
-    # Second pass centred on the first answer, so the window is symmetric about the extremum itself.
+    # Second pass centerd on the first answer, so the window is symmetric about the extremum itself.
     poly = poly_extremum(t, m, poly["t"], hw, kind, n_boot=n_boot, seed=seed, noise=noise)
     try:
         kvw = kwee_van_woerden(t, m, poly["t"], hw)
@@ -8289,7 +8289,7 @@ def image_to_wcs(x, y, factor: float):
 
 
 def wcs_center(wcs: dict, shape_saved: tuple[int, int]) -> tuple[float, float]:
-    """RA, Dec (degrees) at the centre of a frame of shape (rows, cols) as saved."""
+    """RA, Dec (degrees) at the center of a frame of shape (rows, cols) as saved."""
     h, w = shape_saved
     ra, dec = wcs_pixel_to_sky(wcs, (w - 1) / 2.0, (h - 1) / 2.0)
     return float(ra), float(dec)
@@ -8547,7 +8547,7 @@ def flat_angle_tolerance(mount: str | None = None) -> float:
 # ---- Pier side across a campaign (2.2.14 item 20) ---------------------------------------
 # 2.2.14 (item 20): HD 219134, 25 Sep–14 Oct: the 210° (after-meridian) side read 0.02–0.06 brighter than the 30°
 # side on 3 of 5 nights, the check star moving the same way. Each night records which side (camera angle) each of its
-# segments was on, so a campaign can be normalised side by side and comps that step at the flip can be found.
+# segments was on, so a campaign can be normalized side by side and comps that step at the flip can be found.
 
 FLIP_STEP_MARK = 0.02   # a night's flip step above this is marked in the night table
 PIER_ANGLE_TOL = 5.0    # 2.2.15 (item 10): camera angles within this many degrees are one pier side
