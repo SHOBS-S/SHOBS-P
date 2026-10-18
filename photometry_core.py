@@ -5195,39 +5195,45 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
     return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights)}
 
 
-def apply_catalog_mags(observations: list[Obs], selection: list[str], comp_names: list[str],
-                       catalog: dict[str, float], aliases: dict | None = None) -> dict:
-    """2.2.18 (item 3): give every point the comps' catalog magnitudes in `catalog` (a value typed in Use comps…).
+def apply_catalog_mags(observations: list[Obs], changes: dict, comp_sets: dict | None = None,
+                       default_set: list[str] | None = None, aliases: dict | None = None) -> dict:
+    """2.2.18 (item 3): shift the points for catalog magnitudes typed in Use comps… (whole series).
 
-    Each point's comparison is the catalog mean of the selected comps it has measured (all of them for the comps the
-    night was reduced with), so its magnitude is that mean + target_inst - cmag: only the catalog part moves. The
-    point's mag, comp_cat and check_std shift by (new mean - old comp_cat); errors, flags and the instrumental values
-    stay as they are. Points without a finite comp_cat (nothing to shift from) are left alone; a point with no
-    comp measurements stored (series saved before 1.8) uses the selected comps of the run.
+    changes: {star: (old catalog mag, new catalog mag)}. A point's comparison is the mean of its comp set: comp_sets
+    {night: [names]} (the comps that night was reduced with), else default_set. Its mag, comp_cat and check_std move
+    by sum over the changed stars in that set of (new - old) / len(set): only the catalog deltas, never a mean
+    rebuilt from positional comp_insts (a night reduced with other comps than the series' last run). Errors, flags
+    and instrumental values stay as they are; points flagged nocomp or without a finite comp_cat are left alone.
     Returns {"changed": points moved, "shift": {night: median shift (mag)}}."""
-    def cat(n):
+    deltas = {}
+    for name, pair in (changes or {}).items():
         try:
-            v = float(catalog.get(n))
-        except (TypeError, ValueError):
-            return float("nan")
-        return v
+            d = float(pair[1]) - float(pair[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if math.isfinite(d) and d != 0.0:
+            deltas[name] = d
+
+    def delta_of(name):
+        if name in deltas:
+            return deltas[name]
+        for other in (aliases or {}).get(name, ()):
+            if other in deltas:
+                return deltas[other]
+        return 0.0
 
     changed = 0
     shifts: dict = {}
     for obs in observations:
-        if not math.isfinite(obs.comp_cat):
+        if not math.isfinite(obs.comp_cat) or "nocomp" in obs.flag.split():
             continue
-        used = [n for n in selection if math.isfinite(cat(n))
-                and math.isfinite(star_inst(obs, n, comp_names, aliases))]
-        if not used and not obs.comp_insts and not obs.spare_insts:
-            used = [n for n in selection if n in comp_names and math.isfinite(cat(n))]
-        if not used:
+        names = list((comp_sets or {}).get(obs.night) or default_set or [])
+        if not names:
             continue
-        new = float(np.mean([cat(n) for n in used]))
-        d = new - float(obs.comp_cat)
+        d = sum(delta_of(n) for n in names) / len(names)
         if abs(d) < 1e-12:
             continue
-        obs.comp_cat = new
+        obs.comp_cat = float(obs.comp_cat) + d
         if math.isfinite(obs.mag):
             obs.mag = float(obs.mag) + d
         if obs.check_std is not None and math.isfinite(obs.check_std):

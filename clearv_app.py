@@ -436,8 +436,8 @@ def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
 
 def ask_choice(parent, title: str, message: str, choices, safe):
     """2.2.18 (item 4): a small modal question whose buttons say what they do (a Yes/No could be read either way).
-    choices: [(value, button text)], left to right. Escape, Enter and closing the window answer `safe` (its button
-    has the focus). The window is sized from its contents and centered on the parent. Returns the value chosen."""
+    choices: [(value, button text)], left to right. Escape and closing the window answer `safe`; Enter presses the
+    button that has the focus (the safe one at first). The window is sized from its contents and centered on the parent. Returns the value chosen."""
     result = {"value": safe}
     win = Toplevel(parent)
     win.title(title)
@@ -460,15 +460,23 @@ def ask_choice(parent, title: str, message: str, choices, safe):
             pass
         win.destroy()
     safe_button = None
+    by_widget = {}
     for value, text in reversed(list(choices)):
         button = ttk.Button(row, text=text, command=lambda v=value: pick(v),
                             style="Accent.TButton" if value == safe else "TButton")
         button.pack(side=RIGHT, padx=(6, 0))
+        by_widget[str(button)] = value
         if value == safe:
             safe_button = button
+
+    def enter(event):
+        # review: Enter presses the focused button (Tab moves the focus), else the safe one.
+        widget = getattr(event, "widget", None)
+        pick(by_widget.get(str(widget), safe) if widget is not None else safe)
     win.protocol("WM_DELETE_WINDOW", lambda: pick(safe))
-    for key in ("<Escape>", "<Return>", "<KP_Enter>"):
-        win.bind(key, lambda _e: pick(safe))
+    win.bind("<Escape>", lambda _e: pick(safe))
+    for key in ("<Return>", "<KP_Enter>"):
+        win.bind(key, enter)
     try:
         win.update_idletasks()
         w, h = int(win.winfo_reqwidth()), int(win.winfo_reqheight())
@@ -828,7 +836,6 @@ class App(Tk):
         # 2.2.18 (item 10): {night: [{"to": "webobs"|"exoplanet"|"exofop", "file":..., "date":...}]}: nights marked
         # "sent" when an upload page was opened for the report that held them (kept in the series).
         self.reports_sent = {}
-        self._last_reports = {}          # 2.2.18 (item 10): {upload page: the last report saved for it}
         self._night_by_item = {}
         self.comp_catalog_mags = {}
         self.comp_band_sources = {}   # 2.2.17 (item 1): a Sloan run's comp/check magnitude sources (report notes)
@@ -1898,9 +1905,10 @@ class App(Tk):
         if ok is False:
             self.status.set(f"Could not open a browser: go to {url}")
             self.log(f"Could not open a browser for {url}")
-        else:
-            self.status.set(f"Opened {what or url} in your browser.")
-            self.log(f"Opened {url}")
+            return False
+        self.status.set(f"Opened {what or url} in your browser.")
+        self.log(f"Opened {url}")
+        return True   # 2.2.18 (item 10): the upload buttons mark "sent" only after this
 
     def offer_upload(self, path: str, button: str, url: str, where: str):
         """After a report save: the status line names the saved file and offers the upload page."""
@@ -1919,9 +1927,11 @@ class App(Tk):
         if url:
             # 2.2.18 (item 10): the status line's upload button is an upload button too.
             page = {core.AAVSO_WEBOBS_URL: "webobs", core.AAVSO_EXOPLANET_URL: "exoplanet"}.get(url)
-            if page and not self._upload_check(page):
+            plan = self._upload_check(page) if page else {}
+            if plan is None:
                 return
-            self.open_link(url)
+            if self.open_link(url) and page:
+                self._mark_sent(page, plan)
 
     def _status_changed(self):
         text, url = getattr(self, "_status_offer", ("", ""))
@@ -1933,40 +1943,84 @@ class App(Tk):
                 pass
 
     def open_webobs(self):
-        if not self._upload_check("webobs"):   # 2.2.18 (item 10)
+        plan = self._upload_check("webobs")   # 2.2.18 (item 10)
+        if plan is None:
             return
-        self.open_link(core.AAVSO_WEBOBS_URL, "AAVSO WebObs (upload the report with its file tool)")
+        if self.open_link(core.AAVSO_WEBOBS_URL, "AAVSO WebObs (upload the report with its file tool)"):
+            self._mark_sent("webobs", plan)
 
     # ---- 2.2.18 (item 10): "sent" marks, and the duplicate warning at the upload buttons -----------------------
     UPLOAD_PAGES = {"webobs": ("AAVSO WebObs", "AAVSO", "WebObs"),
                     "exoplanet": ("the AAVSO Exoplanet Database", "AAVSO", "AAVSO exo"),
                     "exofop": ("ExoFOP", "ExoFOP", "ExoFOP")}
 
-    def _remember_report(self, page: str, nights, path: str) -> None:
-        """The report (or ExoFOP package) just saved for an upload page, and the nights in it. Opening that page
-        marks them sent."""
-        nights = sorted({str(n) for n in nights if n})
-        self._last_reports[page] = {"nights": nights, "file": os.path.basename(os.path.normpath(path)),
-                                    "gen": getattr(self, "_series_gen", 0)}
+    @staticmethod
+    def _report_id(entry: dict) -> str:
+        """A saved report's identity: its full path (normalized), or its file name for entries saved before 2.2.18."""
+        path = entry.get("path")
+        if path:
+            return os.path.normcase(os.path.abspath(str(path)))
+        return str(entry.get("file") or "")
 
-    def _upload_check(self, page: str) -> bool:
-        """Before an upload page opens: the nights of the last report saved for it that were already sent in
-        another report get one question (open anyway?); then the report's nights are marked sent to that page
-        (stored in the series). True when the page may open. Nothing saved for it this session: just open."""
-        last = (getattr(self, "_last_reports", None) or {}).get(page)
-        if not last or last.get("gen") != getattr(self, "_series_gen", 0):
-            return True
+    def _remember_report(self, page: str, nights, path: str) -> None:
+        """A report (or ExoFOP package) just saved for an upload page: noted for its nights in reports_saved (kept in
+        the series), so opening that page later, in this session or the next, marks them sent."""
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        entry = {"file": os.path.basename(os.path.normpath(path)), "date": stamp, "scope": "night", "to": page,
+                 "path": os.path.abspath(path), "stamp": time.time()}
+        rid = self._report_id(entry)
+        for night in sorted({str(n) for n in nights if n}):
+            have = self.reports_saved.setdefault(night, [])
+            if not any(e.get("to", "webobs") == page and self._report_id(e) == rid for e in have):
+                have.append(dict(entry))
+        if self.series_path:
+            try:
+                self._write_series(self.series_path)
+            except OSError:
+                pass
+
+    def _last_report(self, page: str) -> dict | None:
+        """The last report saved for an upload page, from reports_saved: {"id", "file", "nights"}; None if none."""
+        best = None
         have = {o.night for o in self.observations}
-        nights = [n for n in last["nights"] if n in have]
-        if not nights:
-            return True
+        for night, entries in self.reports_saved.items():
+            for e in entries:
+                if not isinstance(e, dict) or e.get("to", "webobs") != page:
+                    continue
+                try:
+                    when = float(e["stamp"])
+                except (KeyError, TypeError, ValueError):
+                    try:
+                        when = time.mktime(time.strptime(str(e.get("date") or "")[:16], "%Y-%m-%d %H:%M"))
+                    except ValueError:
+                        when = 0.0
+                if best is None or when > best[0]:
+                    best = (when, self._report_id(e), str(e.get("file") or "?"))
+        if best is None:
+            return None
+        nights = sorted(n for n, entries in self.reports_saved.items() if n in have and any(
+            isinstance(e, dict) and e.get("to", "webobs") == page and self._report_id(e) == best[1] for e in entries))
+        return {"id": best[1], "file": best[2], "nights": nights}
+
+    def _upload_check(self, page: str):
+        """Before an upload page opens: the nights of the last report saved for it that were already sent in
+        another report get one question (open anyway?). Returns None when the page must not open, else a plan for
+        _mark_sent once it has opened ({} when there is nothing to mark: nothing saved for this page, or every
+        night of the last report already marked for it, e.g. Open ExoFOP… used to browse)."""
+        last = self._last_report(page)
+        if not last or not last["nights"]:
+            return {}
         where, who, _short = self.UPLOAD_PAGES[page]
-        before = []
-        for night in nights:
-            entry = next((e for e in self.reports_sent.get(night, [])
-                          if e.get("to") == page and e.get("file") != last["file"]), None)
-            if entry is not None:
-                before.append((night, entry))
+        before, todo = [], []
+        for night in last["nights"]:
+            entries = [e for e in self.reports_sent.get(night, []) if e.get("to") == page]
+            if any(self._report_id(e) == last["id"] for e in entries):
+                continue   # this very report is already marked for this night
+            todo.append(night)
+            if entries:
+                before.append((night, entries[-1]))
+        if not todo:
+            return {}
         if before:
             dates = sorted({str(e.get("date") or "?").split(" ")[0] for _n, e in before})
             files = sorted({str(e.get("file") or "?") for _n, e in before})
@@ -1982,19 +2036,21 @@ class App(Tk):
                     f"at {who}. A night that was never really sent can be unmarked: double-click it in the night "
                     "table."):
                 self.log(f"{where}: not opened ({names} already sent).")
-                return False
+                return None
+        return {"id": last["id"], "file": last["file"], "nights": todo}
+
+    def _mark_sent(self, page: str, plan: dict) -> None:
+        """After the upload page opened: the plan's nights are marked sent to it (stored in the series)."""
+        if not plan or not plan.get("nights"):
+            return
+        where = self.UPLOAD_PAGES[page][0]
         stamp = time.strftime("%Y-%m-%d %H:%M")
-        marked = []
-        for night in nights:
-            entries = self.reports_sent.setdefault(night, [])
-            if not any(e.get("to") == page and e.get("file") == last["file"] for e in entries):
-                entries.append({"to": page, "file": last["file"], "date": stamp})
-                marked.append(night)
-        if marked:
-            self.log(f"Marked sent to {where}: " + ", ".join(self.night_label(n, short=True) for n in marked)
-                     + f" ({last['file']}).")
-            self._sent_changed()
-        return True
+        for night in plan["nights"]:
+            self.reports_sent.setdefault(night, []).append(
+                {"to": page, "file": plan["file"], "path": plan["id"], "date": stamp})
+        self.log(f"Marked sent to {where}: " + ", ".join(self.night_label(n, short=True) for n in plan["nights"])
+                 + f" ({plan['file']}).")
+        self._sent_changed()
 
     def _sent_changed(self) -> None:
         if self.series_path:
@@ -2012,12 +2068,7 @@ class App(Tk):
         parts = []
         for e in self.reports_sent.get(night, []):
             short = self.UPLOAD_PAGES.get(e.get("to"), ("", "", str(e.get("to") or "?")))[2]
-            day = ""
-            try:
-                day = time.strftime("%d %b", time.strptime(str(e.get("date") or "")[:10], "%Y-%m-%d")).lstrip("0")
-            except ValueError:
-                pass
-            part = f"{short} {day}".strip()
+            part = f"{short} {str(e.get('date') or '')[:10]}".strip()   # review: ISO date (2026-10-18)
             if part not in parts:
                 parts.append(part)
         return ("✓ " + ", ".join(parts)) if parts else "—"
@@ -2042,6 +2093,13 @@ class App(Tk):
         return True
 
     def _on_night_double(self, event):
+        job = getattr(self, "_night_click_job", None)   # review: the double-click's single clicks do nothing
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+            self._night_click_job = None
         row = self.night_table.identify_row(event.y)
         night = self._night_by_item.get(row) if row else None
         if night is not None and self.reports_sent.get(night):
@@ -5238,8 +5296,16 @@ class App(Tk):
                                                                                padx=(0, 10), pady=3)
         prow = ttk.Frame(settings, style="Card.TFrame")
         prow.grid(row=4, column=1, columnspan=2, sticky=W, pady=3)
-        self.disc_min_period = DoubleVar(value=0.05)
-        self.disc_max_period = DoubleVar(value=20.0)
+        # review: remembered in the settings (the Variables boxes are kept with each series)
+        saved = self.settings.get("disc_period_range") or [0.05, 20.0]
+        try:
+            lo, hi = float(saved[0]), float(saved[1])
+            if not (0 < lo < hi):
+                raise ValueError
+        except (TypeError, ValueError, IndexError):
+            lo, hi = 0.05, 20.0
+        self.disc_min_period = DoubleVar(value=lo)
+        self.disc_max_period = DoubleVar(value=hi)
         self.disc_period_entries = []
         for k, var in enumerate((self.disc_min_period, self.disc_max_period)):
             if k:
@@ -5647,12 +5713,12 @@ class App(Tk):
             if span is None:
                 return True
             # 2.2.18 (item 20): the Planet box is filled only after a Transits visit, so the target's own transiting
-            # planets (NASA Exoplanet Archive, looked up in the background and kept per star) count too. Not looked
-            # up yet: the lookup starts now and this run is not held up (offline: nothing is asked).
+            # planets count too (NASA Exoplanet Archive, looked up in the background after the Star ID lookup, or by
+            # an earlier planet-transit check; kept per star). Not known yet or offline: nothing is asked.
             planet, chk = None, None
             typed = self.planet_from_fields()
             candidates = [typed] if typed and self._planet_is_target(typed) else []
-            candidates += self._target_planets(start=True)
+            candidates += self._target_planets()
             for p_ in candidates:
                 c_ = tcore.transit_window_check(span[0] - 0.0105, span[1] + 0.0105, p_)
                 if c_ is not None and c_["overlap"]:
@@ -5674,10 +5740,13 @@ class App(Tk):
                 return False
             if answer:
                 if planet is not typed and planet.get("name"):
-                    # 2.2.18 (item 20): the planet came from the lookup: put it in the Planet box for the fit.
-                    self.planet_name.set(planet["name"])
+                    # 2.2.18 (item 20): the planet came from the lookup: its ephemeris goes into the Planet box now
+                    # (the Transits run's own check reads it at once), then the full lookup fills the rest.
+                    self._planet_to_fields(planet)
+                    self.planet_info = {k: v for k, v in planet.items() if k in ("name", "host", "period_err", "t0_err")}
+                    self.planet_info["typed"] = planet["name"]
                     try:
-                        self.lookup_planet()
+                        self.lookup_planet(quiet=True)
                     except Exception:
                         traceback.print_exc()
                 return self._rerun_in_mode("transits")
@@ -8817,6 +8886,7 @@ class App(Tk):
                     raise ValueError(f"Period search: {why}.")
                 min_p, max_p = rng
                 self._disc_range_used = rng
+                self._remember_disc_range(rng)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -10199,10 +10269,9 @@ class App(Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _target_planets(self, start: bool = False) -> list:
+    def _target_planets(self) -> list:
         """2.2.18 (item 20): the Star ID's transiting planets from the per-session cache (the same NASA Exoplanet
-        Archive lookup as the planet-transit check), [] when not known yet. start=True looks them up in a background
-        thread when they are not cached (never blocking; a failed lookup is tried again after PLANET_RETRY_S)."""
+        Archive lookup as the planet-transit check), [] when not known yet."""
         star = self.star_id.get().strip()
         if not star:
             return []
@@ -10210,12 +10279,11 @@ class App(Tk):
         cached = self._planet_eph_cache.get(key)
         if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
             return [dict(p, name=p.get("name") or star, host=star) for p in (cached[1] or [])]
-        if start:
-            self._prefetch_target_planets(star)
         return []
 
     def _prefetch_target_planets(self, star: str) -> None:
-        """2.2.18 (item 20): look the Star ID's transiting planets up in the background (once at a time per star)."""
+        """2.2.18 (item 20): look the Star ID's transiting planets up in the background, at most once per star and
+        session (called after a successful Star ID lookup)."""
         key = name_key(star)
         busy = getattr(self, "_planet_prefetch", None)
         if busy is None:
@@ -10237,7 +10305,6 @@ class App(Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _prefetch_done(self, key: str, planets) -> None:
-        getattr(self, "_planet_prefetch", set()).discard(key)
         if key not in self._planet_eph_cache or self._planet_eph_cache[key][1] is None:
             self._planet_eph_cache[key] = (time.time(), planets)
 
@@ -11369,7 +11436,6 @@ class App(Tk):
         self.active_comps = []
         self.reports_saved = {}
         self.reports_sent = {}       # 2.2.18 (item 10)
-        self._last_reports = {}
         self.night_notes = {n: v for n, v in self.night_notes.items() if n == keep_night} if keep_night else {}
         self.highlight_night = None
         self._loss_report = {}
@@ -11401,15 +11467,20 @@ class App(Tk):
             self.report_names = {}   # 2.2.15 review 2: the closed series' report names stay with it
 
     def on_close(self):
-        """2.2.18 (item 9): the main window's close button. An open series with unsaved points is offered a save first
-        (Yes saves, No closes without saving, Cancel keeps SHOBS-P open); with nothing unsaved it closes at once.
+        """2.2.18 (item 9): the main window's close button. A series file with unsaved changes, or a series of 2+
+        nights never saved, is offered a save first (Yes saves, No closes without saving, Cancel keeps SHOBS-P open);
+        otherwise (nothing unsaved, or one night never saved as a series) it closes at once.
         Asked once: a second close click while the question is up does nothing."""
         if getattr(self, "_closing", False):
             return
         self._closing = True
         try:
             try:
-                go = self._offer_series_save("close SHOBS-P")
+                # review: a single night never saved as a series (a transit run whose reports are saved) closes
+                # without the question; a series file with changes, or an unsaved series of 2+ nights, asks.
+                nights = {o.night for o in self.observations}
+                worth = bool(self.series_path) or len(nights) >= 2
+                go = self._offer_series_save("close SHOBS-P") if worth else True
             except Exception:
                 traceback.print_exc()
                 go = True   # never trap the user in the app because the question failed
@@ -12466,6 +12537,17 @@ class App(Tk):
         night = self._night_by_item.get(row) if row else None
         if night is None:
             return
+        # 2.2.18 (item 10, review): wait a moment, so a double-click (unmark "sent") does not zoom twice first.
+        job = getattr(self, "_night_click_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._night_click_job = self.after(250, lambda: self._night_click_apply(night))
+
+    def _night_click_apply(self, night: str):
+        self._night_click_job = None
         self.highlight_night = None if self.highlight_night == night else night
         if self.highlight_night is None:
             self.night_table.selection_remove(self.night_table.selection())
@@ -13424,9 +13506,20 @@ class App(Tk):
             return
         UseCompsWindow(self)
 
-    def apply_comp_selection(self, selection: list[str]) -> bool:
-        """Re-derive every magnitude from the chosen comps. Returns True when applied."""
+    def apply_comp_selection(self, selection: list[str], confirmed: bool = False) -> bool:
+        """Re-derive every magnitude from the chosen comps. Returns True when applied. confirmed (2.2.18 item 3,
+        review): _comp_selection_ok has already asked."""
+        if not confirmed and not self._comp_selection_ok(selection):
+            return False
         catalog = self._comp_catalog()
+        aliases = self._star_aliases()
+        result = core.recompute_with_comps(self.observations, selection, self.comps_used, catalog, aliases)
+        return self._comp_selection_applied(selection, result)
+
+    def _comp_selection_ok(self, selection: list[str], extra_catalog: dict | None = None) -> bool:
+        """The checks and questions before a comp selection is applied (True: go on). extra_catalog: catalog values
+        typed in Use comps… and not applied yet (2.2.18 item 3, review: asked before anything is changed)."""
+        catalog = {**self._comp_catalog(), **(extra_catalog or {})}
         aliases = self._star_aliases()
         missing = [n for n in selection if catalog.get(n) is None]
         if missing:
@@ -13449,7 +13542,9 @@ class App(Tk):
                 f"{len(trial)} point(s) on {', '.join(nights)} lack one of the chosen stars (it was not measured that "
                 "night, or not in those frames). They will be flagged 'nocomp' and left out. Continue?"):
                 return False
-        result = core.recompute_with_comps(self.observations, selection, self.comps_used, catalog, aliases)
+        return True
+
+    def _comp_selection_applied(self, selection: list[str], result: dict) -> bool:
         self.active_comps = [] if set(selection) == set(self.comps_used) else list(selection)
         self._refresh_period()
         self.draw_output()
@@ -13495,8 +13590,20 @@ class App(Tk):
             lines.append(f"{name} {was:.3f} → {mag:.3f}" if was is not None else f"{name} {mag:.3f}")
         result = {"changed": 0, "shift": {}}
         if changes and self.observations:
-            result = core.apply_catalog_mags(self.observations, list(self.active_comps or self.comps_used),
-                                             list(self.comps_used), self._comp_catalog(), self._star_aliases())
+            # review: each night shifts by the catalog deltas of the comps IT was reduced with (night setup "comps",
+            # stored since 2.2.3); a Use comps… selection applies to every night.
+            pairs = {n: (old_cat[n], m) for n, m in changes.items() if old_cat.get(n) is not None}
+            if self.active_comps:
+                sets, default = {}, list(self.active_comps)
+            else:
+                default = list(self.comps_used)
+                sets = {}
+                for night in {o.night for o in self.observations}:
+                    info = self.night_bin.get(night)
+                    comps = info.get("comps") if isinstance(info, dict) else None
+                    if isinstance(comps, list) and comps:
+                        sets[night] = [str(c) for c in comps]
+            result = core.apply_catalog_mags(self.observations, pairs, sets, default, self._star_aliases())
         if check is not None:
             used = self.check_used or self.check_name.get().strip()
             was = (getattr(self, "_series_check", None) or ("", ""))[1] or self.check_mag.get()
@@ -13521,12 +13628,7 @@ class App(Tk):
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set("Catalog magnitudes changed." + saved)
-        tp = getattr(self, "transit_page", None)
-        if result["changed"] and self.mode_key == "transits" and tp is not None:
-            try:
-                tp.comps_changed()
-            except Exception:
-                traceback.print_exc()
+        # review: a uniform shift of a night cannot change its relative flux, so the transit fit is not redone.
         return True
 
     def _zero_point_check(self):
@@ -13733,12 +13835,13 @@ class App(Tk):
         if rng is None:
             self.status.set(f"Period search: {why}.")
             return
-        if not force and rng == getattr(self, "_disc_range_used", None):
-            return
-        self._disc_range_used = rng
+        self._remember_disc_range(rng)
         r = self.last_scan
         if self.mode_key != "discovery" or not r or r.get("light_curves") is None or r.get("jd") is None:
             return
+        if not force and rng == getattr(self, "_disc_range_used", None):
+            return
+        self._disc_range_used = rng
         keys = list(dict.fromkeys(list(r.get("candidates") or [])[:40] + list((r.get("periods") or {}).keys())))
         self._disc_refit_gen = getattr(self, "_disc_refit_gen", 0) + 1
         gen = self._disc_refit_gen
@@ -13759,6 +13862,14 @@ class App(Tk):
             self.call_ui(self._disc_periods_done, r, gen, rng, periods)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _remember_disc_range(self, rng) -> None:
+        if list(self.settings.get("disc_period_range") or []) != [rng[0], rng[1]]:
+            self.settings["disc_period_range"] = [rng[0], rng[1]]
+            try:
+                self._save_settings()
+            except Exception:
+                pass
 
     def _disc_periods_done(self, r, gen, rng, periods):
         if gen != getattr(self, "_disc_refit_gen", 0) or r is not self.last_scan:
@@ -13944,7 +14055,6 @@ class App(Tk):
         with core.AsciiWriter(path) as fh:
             fh.write(self._report_text(points))
         self._note_report(points, path, scope)
-        self._remember_report("webobs", [o.night for o in points], path)   # 2.2.18 (item 10)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
         self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs")   # 2.2.15 (item 8)
@@ -14054,8 +14164,11 @@ class App(Tk):
     def _note_report(self, points: list, path: str, scope: str):
         stamp = time.strftime("%Y-%m-%d %H:%M")
         for night in sorted({o.night for o in points}):
+            # 2.2.18 (item 10): which upload page it is for, its full path and the save time (the last report saved
+            # for a page is found here, also in a later session).
             self.reports_saved.setdefault(night, []).append(
-                {"file": os.path.basename(path), "date": stamp, "scope": scope})
+                {"file": os.path.basename(path), "date": stamp, "scope": scope, "to": "webobs",
+                 "path": os.path.abspath(path), "stamp": time.time()})
         if self.series_path:
             try:
                 self._write_series(self.series_path)
@@ -14594,7 +14707,8 @@ class UseCompsWindow:
             ttk.Entry(grid, textvariable=self.check_var[0], width=8).grid(row=r, column=3, sticky=W, padx=6, pady=2)
         wrapped.append(ttk.Label(inner, text="Catalog mag: type a star's catalog magnitude to correct it for the whole "
                                              "series (for example a value from another catalog than the campaign's). "
-                                             "Apply re-derives every point from the stored measurements.",
+                                             "Apply shifts every point by the change in its comps' catalog mean; "
+                                             "nothing is measured again.",
                                  style="Hint.TLabel", wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(8, 0))
         if len(names) == len(app.comps_used):
@@ -14656,17 +14770,24 @@ class UseCompsWindow:
         if typed is None:
             return
         changes, check = typed
+        current = list(self.app.active_comps or self.app.comps_used)
+        new_selection = set(selection) != set(current)
+        # review: the comp-selection questions first; a No changes nothing (no catalog edit, no file written).
+        if new_selection and not self.app._comp_selection_ok(selection, changes):
+            return
         if changes or check is not None:
             self.app.set_catalog_mags(changes, check)   # 2.2.18 (item 3)
             for name, (var, _first) in self.mag_vars.items():
                 self.mag_vars[name] = (var, var.get().strip())
             if self.check_var is not None:
                 self.check_var = (self.check_var[0], self.check_var[0].get().strip())
-            current = list(self.app.active_comps or self.app.comps_used)
-            if set(selection) == set(current):
+        if not new_selection:
+            if changes or check is not None:
                 self.win.destroy()
-                return
-        if self.app.apply_comp_selection(selection):
+            elif self.app.apply_comp_selection(selection):
+                self.win.destroy()
+            return
+        if self.app.apply_comp_selection(selection, confirmed=True):
             self.win.destroy()
 
     def reset(self):
@@ -15926,7 +16047,11 @@ class ScanView:
         per = r["periods"].get(i)
         if per is None and good.sum() >= 8:
             try:
-                lo_hi = r.get("period_range") or (float(self.app.min_period.get()), float(self.app.max_period.get()))
+                lo_hi = r.get("period_range")
+                if not lo_hi:   # review: a scan without its range uses Discovery's boxes, not the hidden Variables ones
+                    src = (self.app.disc_min_period, self.app.disc_max_period) if hasattr(self.app, "disc_min_period") \
+                        else (self.app.min_period, self.app.max_period)
+                    lo_hi = (float(src[0].get()), float(src[1].get()))
                 ls = core.lomb_scargle(r["jd"][good], lc[good], float(lo_hi[0]), float(lo_hi[1]))   # 2.2.18 (16)
                 per = {"period": ls["period_days"], "power": ls["power"], "ls": ls} if ls else None
             except Exception:
