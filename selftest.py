@@ -413,6 +413,9 @@ def main() -> None:
 
     section("5  the window opens and closes")
     try:
+        # 2.2.18 (review S8): the test window's Log lines go to a temporary file, not your ~/.shobs_p.log
+        import tempfile
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_selftest.log")
         app = ca.App()
         app.update()
         for i in range(5):

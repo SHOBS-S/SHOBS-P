@@ -6,6 +6,7 @@ and an AAVSO Extended File Format report (filter CV).
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import os
@@ -171,7 +172,8 @@ def log_to_file(text, stamp: bool = True) -> None:
         text = str(text)
         if stamp:
             when = time.strftime("%Y-%m-%d %H:%M:%S")
-            text = "".join(f"{when}  {line}\n" for line in (text.splitlines() or [""]))
+            # review nit: trailing blank lines are not written (one stamped empty line for an empty message)
+            text = "".join(f"{when}  {line}\n" for line in (text.rstrip("\r\n").splitlines() or [""]))
         if not text:
             return
         with _LOG_LOCK:
@@ -186,17 +188,21 @@ def log_to_file(text, stamp: bool = True) -> None:
         pass
 
 
-class _LogFileStream:
+class _LogFileStream(io.TextIOBase):
     """2.2.18 (item 24): sys.stdout / sys.stderr under pythonw (a desktop shortcut has no console): tracebacks and
-    Python warnings go into the log file as they are, through log_to_file (same lock and rotation)."""
-    encoding = "utf-8"
+    Python warnings go into the log file as they are, through log_to_file (same lock and rotation). A TextIOBase, so
+    fileno() raises UnsupportedOperation as callers expect of a stream without a file descriptor (review nit)."""
+
+    @property
+    def encoding(self):
+        return "utf-8"
+
+    def writable(self):
+        return True
 
     def write(self, text):
         log_to_file(text, stamp=False)
         return len(text) if isinstance(text, str) else 0
-
-    def flush(self):
-        pass
 
     def isatty(self):
         return False
@@ -1403,9 +1409,12 @@ class App(Tk):
     def _remember_own_value(self, key: str, var):
         """2.2.18 (item 11): focal length, pixel size and observer code are remembered between sessions (settings
         file only). Not while a series is being loaded or another telescope's setup is in use (MicroObservatory,
-        frames from another site), and never the demo set's."""
-        if (getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False)
-                or not hasattr(self, "settings")):
+        frames from another site), and never the demo set's. Review: the observer code is not part of a borrowed
+        setup, so it is remembered then too; the value is captured now and saved after a short pause (not at every
+        keystroke)."""
+        if getattr(self, "_loading_meta", False) or not hasattr(self, "settings"):
+            return
+        if key != "observer_code" and getattr(self, "_own_setup", None) is not None:
             return
         try:
             value = var.get()
@@ -1424,10 +1433,20 @@ class App(Tk):
                 return
             if key not in self.settings and abs(value - self.OPTICS_DEFAULTS[key]) < 1e-9:
                 return   # the starting value put back is not a value of yours
-            if self.settings.get(key) == value:
-                return
-        self.settings[key] = value
-        self._save_settings()
+        pending = self.__dict__.setdefault("_own_value_after", {})
+        if pending.get(key):
+            try:
+                self.after_cancel(pending[key])
+            except Exception:
+                pass
+        pending[key] = self.after(700, lambda k=key, v=value: self._store_own_value(k, v))
+
+    def _store_own_value(self, key: str, value):
+        """2.2.18 (item 11, review nit): the debounced save of _remember_own_value."""
+        self.__dict__.setdefault("_own_value_after", {}).pop(key, None)
+        if self.settings.get(key) != value:
+            self.settings[key] = value
+            self._save_settings()
 
     def _remember_telescope(self):
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
@@ -2590,6 +2609,7 @@ class App(Tk):
                 and not getattr(self, "_rgb_reverting", False)):
             # 2.2.18 (item 1): colour images are already debayered; a Bayer pattern would debayer them again.
             picked = self.pattern.get()
+            self._pattern_before_rgb = picked   # review S5: the pattern you picked comes back after these lights
             self._rgb_reverting = True
             try:
                 self.pattern.set(core.MONO)   # (real Tk does not run this trace again for a write made inside it)
@@ -2654,6 +2674,13 @@ class App(Tk):
         """2.2.18 (item 1): on colour images the Filter box chooses the channel measured (Green / Red / Blue imaging,
         Clear = luminance). Other filters are not a channel of the image. Not saved as a monochrome camera's filter."""
         channel = next((ch for ch, p in core.RGB_CHANNELS.items() if p[0] == pair[0]), None)
+        if channel != self._rgb_channel and getattr(self, "busy", False):
+            # review S1: the channel is read by the running job's frames (process-wide): never switched mid-run
+            now = core.RGB_CHANNELS[self._rgb_channel]
+            self.mono_filter_choice.set(core.mono_filter_label(now) or "")
+            self.log("The channel of the color images cannot change while a step is running; choose it again when "
+                     "it has finished.")
+            return
         if channel is None:
             now = core.RGB_CHANNELS[self._rgb_channel]
             self.mono_filter_choice.set(core.mono_filter_label(now) or "")
@@ -2665,6 +2692,7 @@ class App(Tk):
         old_band = self._band()
         self._rgb_channel = channel
         core.set_rgb_channel(channel)
+        self.__dict__.setdefault("_rgb_answers", {})[self._rgb_lights_dir or self.light_dir.get().strip()] = channel
         self.mono_filter = core.RGB_CHANNELS[channel]
         self._mono_filter_source = "rgb"
         self._update_filter_hint()
@@ -2730,8 +2758,13 @@ class App(Tk):
                 # 2.2.18 (item 2): the lights' sky (up to three frames that are not rejected).
                 lights = [p for p in core.split_lights(core.list_fits(self.light_dir.get()))[0]
                           if p not in self.rejected][:3]
+                pedestal = self._sensor_pedestal()   # review M1: the bias level, when the Bias/Dark rows have one
+                cache = self.__dict__.setdefault("_light_sensor_cache", {})   # review nit: per frame and pedestal
                 for path in lights:
-                    kind, contrast = core.detect_sensor_from_light(path)
+                    key = (path, pedestal)
+                    if key not in cache:
+                        cache[key] = core.detect_sensor_from_light(path, pedestal)
+                    kind, contrast = cache[key]
                     if kind is not None:
                         source = "lights"
                         break
@@ -2765,6 +2798,24 @@ class App(Tk):
                 self._ask_sensor(contrast)
         except Exception as exc:
             self.log(f"Could not check the flat or lights for a colour mask ({exc}).")
+
+    def _sensor_pedestal(self):
+        """2.2.18 (review M1): the camera's bias level for the lights' sky test: the median of a SHOBS-P master bias or
+        the first raw bias frame, else the first raw dark frame (bias plus a little dark current). None when there is
+        neither (the test then needs a bright sky to call a camera monochrome)."""
+        for var, kind in ((self.bias_dir, "bias"), (self.dark_dir, "dark")):
+            try:
+                frames, master = core.calibration_source(var.get())
+                path = frames[0] if frames else (master if kind == "bias" else None)
+                if not path:
+                    continue
+                data = np.asarray(core.read_fits(path)[0], dtype=np.float64)
+                level = float(np.nanmedian(data))
+                if math.isfinite(level):
+                    return round(level, 1)
+            except Exception:
+                continue
+        return None
 
     def _ask_sensor(self, contrast=None):
         """2.2.18 (item 2): neither the flats nor the lights tell a colour camera from a monochrome one: ask, once for
@@ -2804,7 +2855,8 @@ class App(Tk):
         frame = ttk.Frame(win, style="Card.TFrame", padding=14)
         frame.pack(fill=BOTH, expand=True)
         ttk.Label(frame, text=heading, style="Card.TLabel", font=(core.UI_FONT, 11, "bold")).pack(anchor=W, pady=(0, 6))
-        ttk.Label(frame, text=message, style="Card.TLabel", justify=LEFT).pack(anchor=W, pady=(0, 10))
+        ttk.Label(frame, text=message, style="Card.TLabel", justify=LEFT,
+                  wraplength=text_wrap_px(self)).pack(anchor=W, pady=(0, 10))   # review S3
         row = ttk.Frame(frame, style="Card.TFrame")
         row.pack(anchor=E)
 
@@ -2814,6 +2866,9 @@ class App(Tk):
         for label, value in choices:
             ttk.Button(row, text=label, command=lambda v=value: pick(v)).pack(side=LEFT, padx=(6, 0))
         win.protocol("WM_DELETE_WINDOW", win.destroy)
+        if choices:   # review S3: Return = the first answer, Escape = closed
+            win.bind("<Return>", lambda _e: pick(choices[0][1]))
+        win.bind("<Escape>", lambda _e: win.destroy())
         win.after_idle(lambda: fit_to_content(win))
         try:
             win.grab_set()
@@ -2836,6 +2891,18 @@ class App(Tk):
             core.set_rgb_channel(self._rgb_channel)
             return
         pat = core.header_bayer(header or {})
+        answers = self.__dict__.setdefault("_rgb_answers", {})   # review S4: {lights folder: channel} this session
+        if folder in answers:
+            if self._rgb_channel is None:
+                self._pattern_before_rgb = self.pattern.get()
+            channel = answers[folder]
+            self._rgb_channel, self._rgb_lights_dir = channel, folder
+            core.set_rgb_channel(channel)
+            self.pattern.set(core.MONO)
+            self._sync_camera_note()
+            self.log(f"Color images (three channels, already debayered): the {core.RGB_CHANNEL_WORDS[channel]} channel "
+                     "is measured, as chosen before for this folder (the Filter box on the Calibrate page changes it).")
+            return
         before = self._rgb_channel or "green"
         answer = self._choose_one(
             "Color images",
@@ -2854,6 +2921,7 @@ class App(Tk):
             self._pattern_before_rgb = self.pattern.get()
         self._rgb_channel = channel
         self._rgb_lights_dir = folder
+        answers[folder] = channel
         core.set_rgb_channel(channel)
         self.pattern.set(core.MONO)
         self._sync_camera_note()
@@ -2875,9 +2943,18 @@ class App(Tk):
         self._rgb_lights_dir = None
         self._pattern_before_rgb = None
         core.set_rgb_channel(None)
+        # review S2: the Filter box no longer shows the colour images' channel; a mono camera's own filter comes back
+        hand = self._mono_filter_hand()
+        self.mono_filter = hand
+        self._mono_filter_source = "hand" if hand else None
+        try:
+            self.mono_filter_choice.set(self.settings.get("mono_filter_choice", "") if hand else "")
+        except Exception:
+            pass
         if before and before != self.pattern.get():
             self.pattern.set(before)
         self._sync_camera_note()
+        self._update_filter_hint()
 
     def _sync_camera_note(self):
         try:
@@ -3053,15 +3130,25 @@ class App(Tk):
                 wanted.append((key, label, round(v, 2) if key == "pixel_um" else round(v), opt["source"][key],
                                0.02 * v))
         filled, differ = [], []
+        # 2.2.18 (review S6): values you said No to before are not filled in silently either
+        declined_tokens = {t for d in (self.settings.get("header_declined") or []) for t in str(d).split(";")}
+        unset_filled = False
         for key, label, value, src, tol in wanted:
             cur = fnum(self._setup_value(key))
-            if cur is None or (key in ("focal_mm", "pixel_um") and (cur <= 0 or self._optics_unset(key))):
+            unset = key in ("focal_mm", "pixel_um") and cur is not None and cur > 0 and self._optics_unset(key)
+            if unset and f"{key}={value:g}" in declined_tokens:
+                continue
+            if cur is None or (key in ("focal_mm", "pixel_um") and (cur <= 0 or unset)):
                 getattr(self, key).set(value if key not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
                 filled.append(f"{label} {value:g} ({src})")
+                unset_filled = unset_filled or unset
             elif abs(cur - value) > tol:
                 differ.append((key, label, cur, value, src))
         if filled:
             self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
+            if unset_filled:   # 2.2.18 (item 11, review S6)
+                self.log("Caution: the focal length / pixel size from these lights are now saved as your own optics. "
+                         "If they come from another telescope, type your own in the Optics box (Input page).")
         if not differ:
             return
         key = ";".join(f"{k}={v:g}" for k, _l, _c, v, _s in differ)
@@ -9636,6 +9723,8 @@ class App(Tk):
             out["observer"] = who or self.observer.get().strip()
         if getattr(self, "_own_setup", None) is not None:
             out["borrowed"] = True   # this night used another telescope's site and optics
+        if getattr(self, "_rgb_channel", None):
+            out["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): colour images, the channel measured
         used = getattr(self.masters, "used", None) if self.masters is not None else None
         if used:
             out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
@@ -10068,6 +10157,8 @@ class App(Tk):
         meta["night_binning"] = self.night_bin
         meta["legacy_mixed_nights"] = sorted(self.legacy_mixed)
         meta["elevation"] = self.elevation.get()
+        if getattr(self, "_rgb_channel", None):
+            meta["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): for information (the night setup has it)
         meta["reports_saved"] = self.reports_saved
         meta["comp_coords"] = {k: list(v) for k, v in self.comp_coords.items()}
         planet = self.planet_from_fields()
