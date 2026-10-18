@@ -1273,8 +1273,9 @@ class App(Tk):
         self.citation_label = ttk.Label(cite_row, text=citation_text(), style="Card.TLabel", wraplength=900,
                                         justify=LEFT)
         self.citation_label.pack(side=LEFT, fill=X, expand=True, anchor=W)
-        cite_row.bind("<Configure>", lambda e: self.citation_label.configure(wraplength=max(e.width - 120, 200)),
-                      add="+")
+        cite_room = int(120 * ui_scale(self))   # the Copy button's room
+        cite_row.bind("<Configure>", lambda e: self.citation_label.configure(
+            wraplength=max(e.width - cite_room, int(200 * ui_scale(self)))), add="+")
         ttk.Label(cite, text="The DOI always leads to the newest release on Zenodo; each release also has its own DOI "
                              "there. Please cite the version you used.", style="Hint.TLabel", wraplength=900,
                   justify=LEFT).pack(anchor=W, pady=(2, 0))
@@ -1429,8 +1430,12 @@ class App(Tk):
 
     def _save_settings(self):
         try:
+            text = json.dumps(self.settings, indent=2)   # 2.2.18 (review): a bad value never truncates the file
+        except (TypeError, ValueError):
+            return
+        try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as fh:
-                json.dump(self.settings, fh, indent=2)
+                fh.write(text)
         except OSError:
             pass
 
@@ -2163,7 +2168,8 @@ class App(Tk):
             px = int(tkfont.Font(root=self, family=core.UI_FONT, size=10).measure("0" * min_chars))
         except Exception:
             px = 8 * min_chars
-        box.columnconfigure(entry_col, weight=1, minsize=int(px + 12 * scale))
+        # Review: entries take twice the hints' share of spare width, so they stay reasonably wide when maximized.
+        box.columnconfigure(entry_col, weight=2, minsize=int(px + 12 * scale))
         box.columnconfigure(hint_col, weight=1)
         hints, spans = [], []
         for kid in list(box.winfo_children()):
@@ -2177,9 +2183,6 @@ class App(Tk):
                 hints.append(kid)
             elif col == 0 and span > 1 and isinstance(kid, (ttk.Label, ttk.Checkbutton)):
                 spans.append(kid)
-        pad = int(4 * scale)
-        for lab in hints:
-            lab.bind("<Configure>", lambda e, w=lab: w.configure(wraplength=max(int(e.width) - pad, 40)), add="+")
         style = ttk.Style(self)
         for k, kid in enumerate(spans):
             if isinstance(kid, ttk.Checkbutton):
@@ -2194,18 +2197,30 @@ class App(Tk):
             else:
                 spans[k] = (kid, None)
 
-        def wrap_spans(event):
-            width = max(int(event.width) - int(30 * scale), 120)
+        def wrap_all(event):
+            """Review: one pass from the box's width (no label-by-label settling): hints wrap to what is left beside
+            the label and entry columns, the full-width rows to the box."""
+            inner = int(event.width) - int(30 * scale)
+            try:
+                used = int(box.grid_bbox(0, 0, entry_col, 0)[2])
+            except Exception:
+                used = 0
+            hint_w = max(inner - used - int(8 * scale), int(60 * scale))
+            for lab in hints:
+                try:
+                    lab.configure(wraplength=hint_w)
+                except Exception:
+                    pass
             for kid, name in spans:
                 try:
                     if name:
-                        style.configure(name, wraplength=width)
+                        style.configure(name, wraplength=max(inner, int(120 * scale)))
                     else:
-                        kid.configure(wraplength=width)
+                        kid.configure(wraplength=max(inner, int(120 * scale)))
                 except Exception:
                     pass
-        if spans:
-            box.bind("<Configure>", wrap_spans, add="+")
+        if hints or spans:
+            box.bind("<Configure>", wrap_all, add="+")
 
     def _field(self, parent, row, label, var, width=24, hint=""):
         ttk.Label(parent, text=label, style="Card.TLabel").grid(row=row, column=0, sticky=W, padx=(0, 10), pady=3)
@@ -4186,7 +4201,9 @@ class App(Tk):
         width = px(options.winfo_width())
         sw = [px(b.winfo_reqwidth(), 100) + gap for b in switches]
         try:
-            others = [px(c.winfo_reqwidth()) for c in box.winfo_children() if c is not self._view_grid]
+            # Review: a row with nothing shown (the zoom row while the image is popped out) does not count.
+            others = [px(c.winfo_reqwidth()) for c in box.winfo_children() if c is not self._view_grid
+                      and (not hasattr(c, "winfo_manager") or c.winfo_manager())]
         except Exception:
             others = []
         box_pad = px(box.winfo_reqwidth()) - max([px(self._view_grid.winfo_reqwidth())] + others)
@@ -6858,6 +6875,13 @@ class App(Tk):
             used = self._comp_roles_used()
             if used:
                 self.clear_mark(used[-1])
+            elif self.target_xy is not None and getattr(self, "_pick_auto_advanced", False):
+                # 2.2.18 (item 7, review): Comps was picked for the user after the solve's Target marker; with no comp
+                # yet, Clear selected means the marker just placed.
+                self.clear_mark("target")
+                self.pick_mode.set("target")
+                self.log("Clear selected: no comp marked yet, so the Target marker was cleared (Target is picked "
+                         "again).")
             return
         if mode == "watch":
             self._clear_selected_watch()   # 2.2.18 (item 19)
@@ -6871,18 +6895,20 @@ class App(Tk):
         (Discovery: its row in Watched and excluded stars); with no row selected, the watch star added last that is on
         this frame (as Comps clears the last comp marked). remove_watch updates the lists, the image and the pop-out."""
         name = None
-        try:
-            sel = self.watch_box.curselection() if hasattr(self, "watch_box") else ()
-            if sel and sel[0] < len(self.watch_list):
-                name = self.watch_list[sel[0]]["name"]
-        except Exception:
-            name = None
-        if name is None and hasattr(self, "disc_box"):
+        # Review: only the list of the current mode's page counts (a stale selection in the other is ignored).
+        if self.mode_key == "discovery":
             try:
-                sel = self.disc_box.curselection()
+                sel = self.disc_box.curselection() if hasattr(self, "disc_box") else ()
                 rows = getattr(self, "_disc_rows", [])
                 if sel and sel[0] < len(rows) and rows[sel[0]][0] == "watch":
                     name = rows[sel[0]][1]
+            except Exception:
+                name = None
+        else:
+            try:
+                sel = self.watch_box.curselection() if hasattr(self, "watch_box") else ()
+                if sel and sel[0] < len(self.watch_list):
+                    name = self.watch_list[sel[0]]["name"]
             except Exception:
                 name = None
         if name is None:
@@ -7023,13 +7049,30 @@ class App(Tk):
             radius = float(self.radius.get())
             # 2.2.8: snap to the star nearest the click (not the brightest one nearby), sized by the seeing.
             seeing = self._seeing()
-            info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None)
             pick = self.pick_mode.get()
-            if not info["found"] and (pick in ("comp", "check") or comp_number(pick)):
+            # 2.2.18 (item 5, review): comps and checks are bright, isolated stars: a click on a star's own wing is
+            # centred on it (wing="dip"); the target keeps the 2.2.8 test (a faint target beside a bright star).
+            star_pick = pick in ("comp", "check") or bool(comp_number(pick))
+            wing = "dip" if star_pick else "gauss"
+            info = core.recenter_info(self.preview, xy[0], xy[1], radius, seeing if math.isfinite(seeing) else None,
+                                      wing=wing)
+            if star_pick and self.chart_placed and info.get("found") and info["shift"] > 1.5:
+                # A catalog star right at the click that the centring left for a brighter neighbour: the user meant it
+                # (a faint comp beside a bright star), so keep the 2.2.8 answer (the click).
+                tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
+                here_star = self._chart_star_at(xy, reach=tight)
+                if here_star is not None and self._chart_star_at((info["x"], info["y"]), reach=tight) is not here_star:
+                    info = core.recenter_info(self.preview, xy[0], xy[1], radius,
+                                              seeing if math.isfinite(seeing) else None)
+            if not info["found"] and star_pick:
                 # 2.2.18 (item 5): a comp or check is a star you can see; a click a little further out than 2.5 FWHM
                 # (sharp stars, the whole frame in view) still finds it: 1.5 x the aperture radius, as the pre-run check.
-                info = core.recenter_info(self.preview, xy[0], xy[1], radius,
-                                          seeing if math.isfinite(seeing) else None, search=1.5 * radius)
+                wide = core.recenter_info(self.preview, xy[0], xy[1], radius,
+                                          seeing if math.isfinite(seeing) else None, search=1.5 * radius, wing=wing,
+                                          min_sigma=10.0)
+                # Review: only a real star (not a noise bump on a bright star's wing); else keep the click.
+                if core.real_star(wide):
+                    info = wide
             xy = (info["x"], info["y"])
             if not info["found"]:
                 snap_note = " No star found right at the click; the marker is where you clicked."
@@ -7211,21 +7254,30 @@ class App(Tk):
             radius = float(self.radius.get())
             seeing = self._seeing()
             fwhm = seeing if math.isfinite(seeing) else None
-            info = core.recenter_info(self.preview, float(xy[0]), float(xy[1]), radius, fwhm)
+            info = core.recenter_info(self.preview, float(xy[0]), float(xy[1]), radius, fwhm, wing="dip")
             reach = max(2.0, 1.5 * fwhm) if fwhm else max(2.0, 0.5 * radius)
             if info.get("found") and not info.get("blended") and info["shift"] <= reach:
-                return (float(info["x"]), float(info["y"]))
+                snapped = (float(info["x"]), float(info["y"]))
+                # Review: only when the star there is the one placed (not a neighbour the centring found).
+                want, got = self._chart_star_at(xy), self._chart_star_at(snapped)
+                if got is want:
+                    return snapped
+                if want is not None and got is not None and None not in (want.get("ra"), want.get("dec"),
+                                                                          got.get("ra"), got.get("dec")) and \
+                        core.sky_separation_arcsec(float(want["ra"]), float(want["dec"]), float(got["ra"]),
+                                                   float(got["dec"])) < WATCH_SAME_ARCSEC:
+                    return snapped
         except Exception:
             pass
         return xy
 
     def _set_slot(self, role: str, xy, text: str):
+        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centred on its star like a click
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
                 self._slot_say(role, f"⚠ {text} is already marked as {role_label(other)}.", bad=True)   # 2.2.14 (14)
                 return
-        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centred on its star like a click
         setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
         filled = self._fill_from_chart(role, xy)
         if not filled or "=" not in filled:
@@ -7590,8 +7642,17 @@ class App(Tk):
     DISCOVERY_WATCH_MAX = 200
 
     def _discovery_watch_saved(self) -> list:
+        """The remembered Discovery watch stars; entries without a usable name and sky position are skipped."""
         saved = self.settings.get("discovery_watch")
-        return [w for w in saved if isinstance(w, dict) and w.get("name")] if isinstance(saved, list) else []
+        out = []
+        for w in saved if isinstance(saved, list) else []:
+            try:
+                if isinstance(w, dict) and w.get("name") and math.isfinite(float(w["ra"])) \
+                        and math.isfinite(float(w["dec"])):
+                    out.append(w)
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
 
     def _remember_discovery_watch(self, entry: dict) -> None:
         if self.mode_key != "discovery" or not isinstance(entry, dict) or not entry.get("name"):
@@ -9419,32 +9480,38 @@ class App(Tk):
         self.status.set("Candidate marks cleared.")
 
     def _warn_marker_offsets(self, radius: float) -> list:
-        """2.2.18 (item 5): before photometry, say in the Log when a marked star's marker is off the centre of its
-        star by more than about 1.5 FWHM (or more than the frames' centring may move it): every frame is then measured
-        at the marker, beside the star, and the star reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off read
-        2.2 mag faint). Returns [(label, offset px)] of the markers it warned about. Never blocks the run."""
+        """2.2.18 (item 5): before photometry, say in the Log when the frames would be measured off a marked star's
+        centre (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit).
+        Every frame is then measured beside the star and it reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off
+        read 2.2 mag faint). Returns [(label, offset px)] of the markers it warned about. Never blocks the run."""
         if self.preview is None or not self.preview_is_debayered:
             return []
         seeing = self._seeing()
         fwhm = seeing if math.isfinite(seeing) else None
-        rows = [("Target", self.target_xy)] + [(role_label(r), getattr(self, f"{r}_xy")) for r in COMP_ROLES] \
-            + [("Check", self.check_xy)]
+        rows = [("Target", self.target_xy, "gauss")] + [(role_label(r), getattr(self, f"{r}_xy"), "dip")
+                                                        for r in COMP_ROLES] + [("Check", self.check_xy, "dip")]
         warned = []
-        for label, xy in rows:
+        for label, xy, wing in rows:
             if xy is None:
                 continue
             try:
-                info = core.marker_offset(self.preview, xy[0], xy[1], radius, fwhm)
+                info = core.marker_offset(self.preview, xy[0], xy[1], radius, fwhm, wing=wing)
             except Exception:
                 continue
             if not info["off"]:
                 continue
             warned.append((label, info["offset"]))
-            self.log(f"⚠ {label} marker at ({xy[0]:.1f}, {xy[1]:.1f}) is {info['offset']:.1f} px from the center of "
-                     f"the star there ({info['x']:.1f}, {info['y']:.1f})"
-                     + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
-                     + ". The frames are measured at the marker, so this star would read faint. Clear it and click "
-                       "the star again (zoom in first) if that is not intended.")
+            where = f"⚠ {label} marker at ({xy[0]:.1f}, {xy[1]:.1f})"
+            if info.get("blended"):
+                # Review: a faint star marked in a brighter one's wing on purpose: report, do not call it a mistake.
+                self.log(f"{where}: the nearest star is {info['offset']:.1f} px away, at ({info['x']:.1f}, "
+                         f"{info['y']:.1f}). The marker looks like a faint star beside it, measured where it is marked; "
+                         "if that is not the star you meant, clear it and click again.")
+                continue
+            self.log(f"{where} is {info['offset']:.1f} px from the center of the star there ({info['x']:.1f}, "
+                     f"{info['y']:.1f})" + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
+                     + ". The frames would be measured beside the star, so it would read faint. Clear it and click the "
+                       "star again (zoom in first) if that is not intended.")
         if warned:
             self.status.set("Check the Log: " + ", ".join(label for label, _o in warned)
                             + (" is" if len(warned) == 1 else " are") + " marked off the center of the star.")
