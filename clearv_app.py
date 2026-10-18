@@ -428,6 +428,64 @@ def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
         return 780
 
 
+def ask_choice(parent, title: str, message: str, choices, safe):
+    """2.2.18 (item 4): a small modal question whose buttons say what they do (a Yes/No could be read either way).
+    choices: [(value, button text)], left to right. Escape, Enter and closing the window answer `safe` (its button
+    has the focus). The window is sized from its contents and centered on the parent. Returns the value chosen."""
+    result = {"value": safe}
+    win = Toplevel(parent)
+    win.title(title)
+    try:
+        win.transient(parent.winfo_toplevel())
+    except Exception:
+        pass
+    frame = ttk.Frame(win, style="Card.TFrame", padding=14)
+    frame.pack(fill=BOTH, expand=True)
+    row = ttk.Frame(frame, style="Card.TFrame")
+    row.pack(side="bottom", fill=X, pady=(12, 0))
+    ttk.Label(frame, text=message, style="Card.TLabel", wraplength=text_wrap_px(win, 70), justify=LEFT).pack(
+        anchor=W, fill=X)
+
+    def pick(value):
+        result["value"] = value
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+    safe_button = None
+    for value, text in reversed(list(choices)):
+        button = ttk.Button(row, text=text, command=lambda v=value: pick(v),
+                            style="Accent.TButton" if value == safe else "TButton")
+        button.pack(side=RIGHT, padx=(6, 0))
+        if value == safe:
+            safe_button = button
+    win.protocol("WM_DELETE_WINDOW", lambda: pick(safe))
+    for key in ("<Escape>", "<Return>", "<KP_Enter>"):
+        win.bind(key, lambda _e: pick(safe))
+    try:
+        win.update_idletasks()
+        w, h = int(win.winfo_reqwidth()), int(win.winfo_reqheight())
+        top = parent.winfo_toplevel()
+        x = int(top.winfo_rootx()) + max(0, (int(top.winfo_width()) - w) // 2)
+        y = int(top.winfo_rooty()) + max(0, (int(top.winfo_height()) - h) // 3)
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+        win.resizable(False, False)
+    except Exception:
+        pass
+    try:
+        if safe_button is not None:
+            safe_button.focus_set()
+        win.grab_set()
+    except Exception:
+        pass
+    try:
+        win.wait_window()
+    except Exception:
+        pass
+    return result["value"]
+
+
 def grow_to_content(win) -> None:
     """2.2.8: after a pop-up's contents grow (results arriving later), make the window big enough for them again,
     never smaller than it is now and never more than 90% of the screen; keep it on screen."""
@@ -754,6 +812,10 @@ class App(Tk):
         self.comp_coords = {}            # 2.2.3: {comp/check name: (ra, dec)} to recognize one star under two names
         self._save_one_night = False     # 2.2.3: the current Save is for the highlighted night only
         self.reports_saved = {}          # 2.2.3: {night: [{"file":..., "date":..., "scope": "night"|"series"}]}
+        # 2.2.18 (item 10): {night: [{"to": "webobs"|"exoplanet"|"exofop", "file":..., "date":...}]}: nights marked
+        # "sent" when an upload page was opened for the report that held them (kept in the series).
+        self.reports_sent = {}
+        self._last_reports = {}          # 2.2.18 (item 10): {upload page: the last report saved for it}
         self._night_by_item = {}
         self.comp_catalog_mags = {}
         self.comp_band_sources = {}   # 2.2.17 (item 1): a Sloan run's comp/check magnitude sources (report notes)
@@ -832,6 +894,9 @@ class App(Tk):
         self.set_mode(self.mode_key, initial=True)
         self.show_step(0)
         self.after(50, self._drain_ui_queue)
+        # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
+        self._closing = False
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ---- thread-safe UI calls -------------------------------------------------
     def call_ui(self, func, *args):
@@ -1758,6 +1823,10 @@ class App(Tk):
     def _open_status_link(self):
         text, url = self._status_offer
         if url:
+            # 2.2.18 (item 10): the status line's upload button is an upload button too.
+            page = {core.AAVSO_WEBOBS_URL: "webobs", core.AAVSO_EXOPLANET_URL: "exoplanet"}.get(url)
+            if page and not self._upload_check(page):
+                return
             self.open_link(url)
 
     def _status_changed(self):
@@ -1770,7 +1839,119 @@ class App(Tk):
                 pass
 
     def open_webobs(self):
+        if not self._upload_check("webobs"):   # 2.2.18 (item 10)
+            return
         self.open_link(core.AAVSO_WEBOBS_URL, "AAVSO WebObs (upload the report with its file tool)")
+
+    # ---- 2.2.18 (item 10): "sent" marks, and the duplicate warning at the upload buttons -----------------------
+    UPLOAD_PAGES = {"webobs": ("AAVSO WebObs", "AAVSO", "WebObs"),
+                    "exoplanet": ("the AAVSO Exoplanet Database", "AAVSO", "AAVSO exo"),
+                    "exofop": ("ExoFOP", "ExoFOP", "ExoFOP")}
+
+    def _remember_report(self, page: str, nights, path: str) -> None:
+        """The report (or ExoFOP package) just saved for an upload page, and the nights in it. Opening that page
+        marks them sent."""
+        nights = sorted({str(n) for n in nights if n})
+        self._last_reports[page] = {"nights": nights, "file": os.path.basename(os.path.normpath(path)),
+                                    "gen": getattr(self, "_series_gen", 0)}
+
+    def _upload_check(self, page: str) -> bool:
+        """Before an upload page opens: the nights of the last report saved for it that were already sent in
+        another report get one question (open anyway?); then the report's nights are marked sent to that page
+        (stored in the series). True when the page may open. Nothing saved for it this session: just open."""
+        last = (getattr(self, "_last_reports", None) or {}).get(page)
+        if not last or last.get("gen") != getattr(self, "_series_gen", 0):
+            return True
+        have = {o.night for o in self.observations}
+        nights = [n for n in last["nights"] if n in have]
+        if not nights:
+            return True
+        where, who, _short = self.UPLOAD_PAGES[page]
+        before = []
+        for night in nights:
+            entry = next((e for e in self.reports_sent.get(night, [])
+                          if e.get("to") == page and e.get("file") != last["file"]), None)
+            if entry is not None:
+                before.append((night, entry))
+        if before:
+            dates = sorted({str(e.get("date") or "?").split(" ")[0] for _n, e in before})
+            files = sorted({str(e.get("file") or "?") for _n, e in before})
+            names = ", ".join(self.night_label(n, short=True) for n, _e in before)
+            word = "Nights" if len(before) > 1 else "Night"
+            verb = "were" if len(before) > 1 else "was"
+            if not messagebox.askyesno(
+                    APP_TITLE,
+                    f"{word} {names} {verb} already sent on {' and '.join(dates)} (in {', '.join(files)}); "
+                    f"{who} will hold duplicates. Open anyway?\n\n"
+                    f"{last['file']} holds {'them' if len(before) > 1 else 'it'} again. Upload only the nights not "
+                    "sent yet (save a report of just one night: highlight it first), or delete the earlier upload "
+                    f"at {who}. A night that was never really sent can be unmarked: double-click it in the night "
+                    "table."):
+                self.log(f"{where}: not opened ({names} already sent).")
+                return False
+        stamp = time.strftime("%Y-%m-%d %H:%M")
+        marked = []
+        for night in nights:
+            entries = self.reports_sent.setdefault(night, [])
+            if not any(e.get("to") == page and e.get("file") == last["file"] for e in entries):
+                entries.append({"to": page, "file": last["file"], "date": stamp})
+                marked.append(night)
+        if marked:
+            self.log(f"Marked sent to {where}: " + ", ".join(self.night_label(n, short=True) for n in marked)
+                     + f" ({last['file']}).")
+            self._sent_changed()
+        return True
+
+    def _sent_changed(self) -> None:
+        if self.series_path:
+            try:
+                self._write_series(self.series_path)
+            except OSError:
+                pass
+        try:
+            self.draw_output()
+        except Exception:
+            traceback.print_exc()
+
+    def _sent_text(self, night: str) -> str:
+        """The night table's Sent column: 'WebObs 18 Oct', or '—'."""
+        parts = []
+        for e in self.reports_sent.get(night, []):
+            short = self.UPLOAD_PAGES.get(e.get("to"), ("", "", str(e.get("to") or "?")))[2]
+            day = ""
+            try:
+                day = time.strftime("%d %b", time.strptime(str(e.get("date") or "")[:10], "%Y-%m-%d")).lstrip("0")
+            except ValueError:
+                pass
+            part = f"{short} {day}".strip()
+            if part not in parts:
+                parts.append(part)
+        return ("✓ " + ", ".join(parts)) if parts else "—"
+
+    def unmark_sent(self, night: str, ask: bool = True) -> bool:
+        """A night marked sent by hand back to not sent (the upload never went through, or was deleted)."""
+        entries = self.reports_sent.get(night) or []
+        if not entries:
+            return False
+        if ask:
+            pages = sorted({self.UPLOAD_PAGES.get(e.get("to"), (str(e.get("to")),))[0] for e in entries})
+            if not messagebox.askyesno(
+                    APP_TITLE,
+                    f"{self.night_label(night, short=True)} is marked sent to {' and '.join(pages)} "
+                    f"({', '.join(sorted({str(e.get('file')) for e in entries}))}).\n\nMark it as not sent? Do this "
+                    "only when that upload did not go through or you deleted it there; the next upload of a report "
+                    "with this night will then not warn."):
+                return False
+        self.reports_sent.pop(night, None)
+        self.log(f"{self.night_label(night, short=True)}: marked as not sent.")
+        self._sent_changed()
+        return True
+
+    def _on_night_double(self, event):
+        row = self.night_table.identify_row(event.y)
+        night = self._night_by_item.get(row) if row else None
+        if night is not None and self.reports_sent.get(night):
+            self.unmark_sent(night)
 
     def output_directory(self, title: str, parent=None) -> str:
         folder = self._out_folder()
@@ -2685,6 +2866,8 @@ class App(Tk):
                 extra += f" ({found['var_type']})"
         if self.mode_key == "transits":
             self._planets_for_star(name or found.get("name", ""), found)
+        elif self.mode_key == "variables" and self.star_id.get().strip():
+            self._prefetch_target_planets(self.star_id.get().strip())   # 2.2.18 (item 20): ready before Run
         note = f" ({found['note']})" if found.get("note") else ""
         self.status.set(
             f"{found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
@@ -4857,12 +5040,30 @@ class App(Tk):
         self._field(settings, 2, "Candidate at (× normal)", self.scan_excess, width=8, hint="scatter")
         self.scan_max_stars = IntVar(value=800)
         self._field(settings, 3, "Most stars to measure", self.scan_max_stars, width=8, hint="brightest first")
+        # 2.2.18 (item 16): Discovery's own period range (the scan used the hidden Variables boxes before).
+        ttk.Label(settings, text="Period search (days)", style="Card.TLabel").grid(row=4, column=0, sticky=W,
+                                                                               padx=(0, 10), pady=3)
+        prow = ttk.Frame(settings, style="Card.TFrame")
+        prow.grid(row=4, column=1, columnspan=2, sticky=W, pady=3)
+        self.disc_min_period = DoubleVar(value=0.05)
+        self.disc_max_period = DoubleVar(value=20.0)
+        self.disc_period_entries = []
+        for k, var in enumerate((self.disc_min_period, self.disc_max_period)):
+            if k:
+                ttk.Label(prow, text="to", style="Card.TLabel").pack(side=LEFT, padx=4)
+            entry = ttk.Entry(prow, textvariable=var, width=6)
+            entry.pack(side=LEFT)
+            entry.bind("<Return>", lambda _e: self._disc_period_changed(force=True))
+            entry.bind("<KP_Enter>", lambda _e: self._disc_period_changed(force=True))
+            entry.bind("<FocusOut>", lambda _e: self._disc_period_changed())
+            self.disc_period_entries.append(entry)
         ttk.Checkbutton(settings, text="Leave out crowded stars (neighbor in the sky ring)",
-                        variable=self.scan_skip_crowded).grid(row=4, column=0, columnspan=3, sticky=W, pady=(4, 0))
+                        variable=self.scan_skip_crowded).grid(row=5, column=0, columnspan=3, sticky=W, pady=(4, 0))
         ttk.Label(settings, text="Saturated and edge stars are measured but never listed as candidates. "
-                                 "\"× normal\" compares a star's scatter with stars as bright.",
+                                 "\"× normal\" compares a star's scatter with stars as bright. The period range "
+                                 "applies to the candidates' periodograms (Enter refits a finished scan).",
                   style="Hint.TLabel", wraplength=440, justify=LEFT).grid(
-            row=5, column=0, columnspan=3, sticky=W, pady=(4, 0))
+            row=6, column=0, columnspan=3, sticky=W, pady=(4, 0))
         picks = self._group(panel, "Watched and excluded stars")
         picks.pack(fill=BOTH, expand=True, pady=(10, 0))
         self.disc_box = Listbox(picks, height=7, font=(core.UI_FONT, 9), activestyle="none", exportselection=False)
@@ -5249,14 +5450,22 @@ class App(Tk):
         if self.mode_key == "variables" and lights:
             if self.observations and self.series_mode == "variables":
                 return True   # a Variables campaign on a planet host (HD 219134) is not asked every night
-            planet = self.planet_from_fields()
-            if not planet or not self._planet_is_target(planet):
-                return True
             span = self._lights_span(lights)
             if span is None:
                 return True
-            chk = tcore.transit_window_check(span[0] - 0.0105, span[1] + 0.0105, planet)
-            if chk is None or not chk["overlap"]:
+            # 2.2.18 (item 20): the Planet box is filled only after a Transits visit, so the target's own transiting
+            # planets (NASA Exoplanet Archive, looked up in the background and kept per star) count too. Not looked
+            # up yet: the lookup starts now and this run is not held up (offline: nothing is asked).
+            planet, chk = None, None
+            typed = self.planet_from_fields()
+            candidates = [typed] if typed and self._planet_is_target(typed) else []
+            candidates += self._target_planets(start=True)
+            for p_ in candidates:
+                c_ = tcore.transit_window_check(span[0] - 0.0105, span[1] + 0.0105, p_)
+                if c_ is not None and c_["overlap"]:
+                    planet, chk = p_, c_
+                    break
+            if planet is None:
                 return True
             try:
                 when = f" (mid-transit about {tcore.jd_to_local(chk['tc']).strftime('%H:%M')} local)"
@@ -5271,6 +5480,13 @@ class App(Tk):
             if answer is None:
                 return False
             if answer:
+                if planet is not typed and planet.get("name"):
+                    # 2.2.18 (item 20): the planet came from the lookup: put it in the Planet box for the fit.
+                    self.planet_name.set(planet["name"])
+                    try:
+                        self.lookup_planet()
+                    except Exception:
+                        traceback.print_exc()
                 return self._rerun_in_mode("transits")
             self.log(f"Run in Variables mode as chosen, during a predicted transit of {name}.")
         return True
@@ -8397,6 +8613,13 @@ class App(Tk):
             if not (0 < radius < sky_in < sky_out):
                 raise ValueError("Need aperture r < sky in < sky out")
             min_p, max_p = float(self.min_period.get()), float(self.max_period.get())
+            if self.mode_key == "discovery" and hasattr(self, "disc_min_period"):
+                # 2.2.18 (item 16): Discovery's own period range, on its own page.
+                rng, why = self._read_period_range(self.disc_min_period, self.disc_max_period)
+                if rng is None:
+                    raise ValueError(f"Period search: {why}.")
+                min_p, max_p = rng
+                self._disc_range_used = rng
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -8719,6 +8942,7 @@ class App(Tk):
                     if ls:
                         periods[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls}
                 result["periods"] = periods
+                result["period_range"] = (float(min_p), float(max_p))   # 2.2.18 (item 16)
                 result["bv"] = result["vr"] = None
                 result["color_fits"], result["color_method"] = {}, {}
                 if color:
@@ -9743,6 +9967,48 @@ class App(Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _target_planets(self, start: bool = False) -> list:
+        """2.2.18 (item 20): the Star ID's transiting planets from the per-session cache (the same NASA Exoplanet
+        Archive lookup as the planet-transit check), [] when not known yet. start=True looks them up in a background
+        thread when they are not cached (never blocking; a failed lookup is tried again after PLANET_RETRY_S)."""
+        star = self.star_id.get().strip()
+        if not star:
+            return []
+        key = name_key(star)
+        cached = self._planet_eph_cache.get(key)
+        if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
+            return [dict(p, name=p.get("name") or star, host=star) for p in (cached[1] or [])]
+        if start:
+            self._prefetch_target_planets(star)
+        return []
+
+    def _prefetch_target_planets(self, star: str) -> None:
+        """2.2.18 (item 20): look the Star ID's transiting planets up in the background (once at a time per star)."""
+        key = name_key(star)
+        busy = getattr(self, "_planet_prefetch", None)
+        if busy is None:
+            busy = self._planet_prefetch = set()
+        if not key or key in busy:
+            return
+        cached = self._planet_eph_cache.get(key)
+        if cached is not None and (cached[1] is not None or time.time() - cached[0] < self.PLANET_RETRY_S):
+            return
+        busy.add(key)
+
+        def work():
+            try:
+                planets = tcore.transiting_planet_ephemerides(star)
+            except Exception:
+                planets = None   # offline or an unexpected reply: silent
+            self.call_ui(self._prefetch_done, key, planets)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _prefetch_done(self, key: str, planets) -> None:
+        getattr(self, "_planet_prefetch", set()).discard(key)
+        if key not in self._planet_eph_cache or self._planet_eph_cache[key][1] is None:
+            self._planet_eph_cache[key] = (time.time(), planets)
+
     def _campaign_planets_done(self, key: str, points: dict, planets, user: bool = False, ctx=None) -> None:
         self._planet_eph_cache[key] = (time.time(), planets)
         self._planet_transits_found(points, planets, user, ctx)
@@ -10201,15 +10467,30 @@ class App(Tk):
         eps = [e for e in (self._loss_report or {}).get(night, []) if e["kind"] == "transmission"]
         return max([float(e.get("excess") or 0.0) for e in eps] + [0.0])
 
+    KEEP_USE, KEEP_LEAVE = "Use these points", "Leave them out"   # 2.2.18 (item 4): the Keep question's buttons
+
     def _keep_question(self, night: str) -> str:
+        # 2.2.18 (item 4): labeled buttons instead of Yes/No (16 Oct: "now left out. Keep these points?" was read as
+        # "keep as is", and a Yes put dew points back into the HD 219134 series).
         ex = self._transmission_excess(night)
-        return ("Keep these points (errors scaled for the lost light)?\n\n"
-                "Yes keeps them: each frame's photon error already comes from its own (reduced) fluxes, and "
-                "scintillation is a fraction of the light that arrives, so the error bars grow where the light is lost. "
-                + (f"On top of that, every kept point gets the {ex:.3f} mag star-to-star scatter measured in that "
+        return ("Use these points in the light curve (errors scaled for the lost light), or leave them out?\n\n"
+                f"\u201c{self.KEEP_USE}\u201d: each frame's photon error already comes from its own (reduced) fluxes, "
+                "and scintillation is a fraction of the light that arrives, so the error bars grow where the light is "
+                "lost. "
+                + (f"On top of that, every point used gets the {ex:.3f} mag star-to-star scatter measured in that "
                    "stretch (in quadrature), so the error bars stay honest even if this was a smooth cloud bank. "
                    if ex > 0 else "")
-                + "No (the default) leaves them flagged, like cloud.")
+                + f"\u201c{self.KEEP_LEAVE}\u201d (the default; also Escape or closing this window) leaves them "
+                  "flagged, like cloud.")
+
+    def _ask_keep(self, night: str, message: str, where: str) -> bool:
+        """2.2.18 (item 4): the Keep question with labeled buttons; the answer is logged with the night and the time.
+        True = use the points."""
+        keep = ask_choice(self, APP_TITLE, message, [(True, self.KEEP_USE), (False, self.KEEP_LEAVE)], safe=False)
+        keep = keep is True
+        self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} question ({where}) answered "
+                 f"\u201c{self.KEEP_USE if keep else self.KEEP_LEAVE}\u201d at {time.strftime('%Y-%m-%d %H:%M:%S')}.")
+        return keep
 
     def _offer_keep_transmission(self, night: str) -> None:
         """2.2.14 (item 18): after photometry, a night whose lost light is transmission loss (all stars fading
@@ -10227,12 +10508,12 @@ class App(Tk):
             return
         self.log(f"{self.label_nights(night)}: {n} frames with {core.HAZE_LABEL} ({words}): every measured star "
                  "faded together, smoothly, with a flat sky; the differential magnitudes hold, only the noise grows.")
-        keep = messagebox.askyesno(
-            APP_TITLE,
+        keep = self._ask_keep(
+            night,
             f"{n} frames of {self.night_label(night, short=True)} lost light ({words}), but every measured star "
             "(comps, check, spares) faded by the same amount, smoothly, with a flat sky: "
             f"{core.HAZE_LABEL}, not cloud.\n\n" + self._keep_question(night)
-            + " Transmission loss… on the Output page changes this later.", default="no")
+            + " Transmission loss… on the Output page changes this later.", "after photometry")
         self._set_keep_transmission(night, keep)
 
     def _set_keep_transmission(self, night: str, keep: bool) -> None:
@@ -10262,10 +10543,11 @@ class App(Tk):
             return
         n, words = self._transmission_summary(night)
         kept = bool(self._night_info(night).get("keep_transmission"))
-        keep = messagebox.askyesno(
-            APP_TITLE,
-            f"{self.night_label(night, short=True)}: {n} frames with {core.HAZE_LABEL} ({words}); now "
-            + ("kept" if kept else "left out") + ".\n\n" + self._keep_question(night), default="no")
+        keep = self._ask_keep(
+            night,
+            f"{self.night_label(night, short=True)}: {n} frames with {core.HAZE_LABEL} ({words}). They are now "
+            + ("used in the light curve" if kept else "left out (flagged)") + ".\n\n" + self._keep_question(night),
+            "Transmission loss…")
         if keep != kept:
             self._set_keep_transmission(night, keep)
             self.refit_period()
@@ -10301,6 +10583,10 @@ class App(Tk):
                 values = np.array([b["value"] for b in bins])
                 point_nights = [b["night"] for b in bins]
                 self._period_note = f"{len(bins)} {minutes:g}-min bins"
+        try:
+            self._period_range_used = (float(self.min_period.get()), float(self.max_period.get()))   # 2.2.18 (item 16)
+        except Exception:
+            self._period_range_used = None
         try:
             self.period = core.lomb_scargle(jd, values, float(self.min_period.get()), float(self.max_period.get()))
         except Exception as exc:
@@ -10501,6 +10787,7 @@ class App(Tk):
         meta["legacy_mixed_nights"] = sorted(self.legacy_mixed)
         meta["elevation"] = self.elevation.get()
         meta["reports_saved"] = self.reports_saved
+        meta["reports_sent"] = self.reports_sent   # 2.2.18 (item 10): a new key; older versions ignore it
         meta["comp_coords"] = {k: list(v) for k, v in self.comp_coords.items()}
         planet = self.planet_from_fields()
         if planet:
@@ -10628,6 +10915,10 @@ class App(Tk):
                     self.comp_coords.setdefault(str(k), (float(v[0]), float(v[1])))
         if isinstance(meta.get("reports_saved"), dict):
             self.reports_saved = {str(k): list(v) for k, v in meta["reports_saved"].items() if isinstance(v, list)}
+        self.reports_sent = {}   # 2.2.18 (item 10)
+        if isinstance(meta.get("reports_sent"), dict):
+            self.reports_sent = {str(k): [e for e in v if isinstance(e, dict)]
+                                 for k, v in meta["reports_sent"].items() if isinstance(v, list)}
         if meta.get("elevation"):
             self.elevation.set(str(meta["elevation"]))
         if isinstance(meta.get("planet"), dict) and meta["planet"].get("period"):
@@ -10838,6 +11129,8 @@ class App(Tk):
         self.legacy_mixed = set()
         self.active_comps = []
         self.reports_saved = {}
+        self.reports_sent = {}       # 2.2.18 (item 10)
+        self._last_reports = {}
         self.night_notes = {n: v for n, v in self.night_notes.items() if n == keep_night} if keep_night else {}
         self.highlight_night = None
         self._loss_report = {}
@@ -10867,6 +11160,27 @@ class App(Tk):
         self._series_auid_keys = set()
         if not keep_night:
             self.report_names = {}   # 2.2.15 review 2: the closed series' report names stay with it
+
+    def on_close(self):
+        """2.2.18 (item 9): the main window's close button. An open series with unsaved points is offered a save first
+        (Yes saves, No closes without saving, Cancel keeps SHOBS-P open); with nothing unsaved it closes at once.
+        Asked once: a second close click while the question is up does nothing."""
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            try:
+                go = self._offer_series_save("close SHOBS-P")
+            except Exception:
+                traceback.print_exc()
+                go = True   # never trap the user in the app because the question failed
+            if not go:
+                self.log("Close cancelled: SHOBS-P stays open with the series.")
+                return
+        finally:
+            self._closing = False
+        self._closing = True   # from here on the window goes; nothing asks again
+        self.destroy()
 
     def close_series(self):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
@@ -11024,9 +11338,17 @@ class App(Tk):
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill=X)
         ttk.Label(row, text="Period search (days)", style="Card.TLabel").pack(side=LEFT)
-        ttk.Entry(row, textvariable=self.min_period, width=6).pack(side=LEFT, padx=4)
-        ttk.Label(row, text="to", style="Card.TLabel").pack(side=LEFT)
-        ttk.Entry(row, textvariable=self.max_period, width=6).pack(side=LEFT, padx=4)
+        self.period_entries = []
+        for k, var in enumerate((self.min_period, self.max_period)):
+            if k:
+                ttk.Label(row, text="to", style="Card.TLabel").pack(side=LEFT)
+            entry = ttk.Entry(row, textvariable=var, width=6)
+            entry.pack(side=LEFT, padx=4)
+            # 2.2.18 (item 16): Enter refits; leaving the box refits only when the range changed.
+            entry.bind("<Return>", lambda _e: self._period_box_changed(force=True))
+            entry.bind("<KP_Enter>", lambda _e: self._period_box_changed(force=True))
+            entry.bind("<FocusOut>", lambda _e: self._period_box_changed())
+            self.period_entries.append(entry)
         ttk.Checkbutton(
             row, text="Line up segments (nights, meridian flip)",
             variable=self.norm_segments, command=self.refit_period,
@@ -11864,7 +12186,8 @@ class App(Tk):
     # ---- Output summary (boxes + per-night table) ------------------------------------
     SUMMARY_COLUMNS = (("night_text", "Night", 120), ("night", "JD", 90), ("pts", "Pts", 60), ("used", "used", 60),
                        ("mean", "Mean mag ± err", 145), ("tsig", "Target σ", 85), ("csig", "Check σ", 85),
-                       ("side", "Side", 80), ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170), ("note", "Note", 260))
+                       ("side", "Side", 80), ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170),
+                       ("sent", "Sent", 70), ("note", "Note", 260))   # 2.2.18 (item 10): Sent
 
     def _build_summary(self, card):
         holder = ttk.Frame(card, style="Card.TFrame")
@@ -11891,6 +12214,7 @@ class App(Tk):
         self.night_table.pack(side=LEFT, fill=X, expand=True)
         scroll.pack(side=LEFT, fill=Y)
         self.night_table.bind("<ButtonRelease-1>", self._on_night_click)
+        self.night_table.bind("<Double-1>", self._on_night_double)   # 2.2.18 (item 10): unmark "sent"
         self.spread_text = StringVar(value="")
         ttk.Label(holder, textvariable=self.spread_text, style="Card.TLabel").pack(anchor=W, pady=(4, 0))
         self.caution_text = StringVar(value="")
@@ -12089,6 +12413,7 @@ class App(Tk):
                          if night in flip_steps else "—"),
                 "bv": f"{float(np.median(bv)):.3f}" if bv else "—",
                 "flags": ", ".join(f"{n} {w}" for w, n in flags.most_common()) or "—",
+                "sent": self._sent_text(night),   # 2.2.18 (item 10)
                 "note": ("* " + note) if note else "",
             })
         return rows
@@ -12121,6 +12446,7 @@ class App(Tk):
                 table.selection_set(iid)
         table.configure(height=max(1, min(len(rows), 8)))
         self._fit_night_column("side", [str(r.get("side", "")) for r in rows])
+        self._fit_night_column("sent", [str(r.get("sent", "")) for r in rows])   # 2.2.18 (item 10)
         means = [r["value"] for r in rows if math.isfinite(r["value"])]
         errs = [r["err"] for r in rows if math.isfinite(r["err"])]
         if len(means) > 1:
@@ -12128,6 +12454,9 @@ class App(Tk):
                                  + ("     Click a night to zoom the light curve to it; click it again to show all." if len(rows) > 1 else ""))
         else:
             self.spread_text.set("")
+        if any(str(r.get("sent", "—")) != "—" for r in rows):   # 2.2.18 (item 10)
+            self.spread_text.set((self.spread_text.get() + "     " if self.spread_text.get() else "")
+                                 + "Double-click a night marked sent to unmark it.")
         self.caution_text.set("   ".join("⚠ " + c for c in cautions))
 
     def _color_lines(self, points):
@@ -12369,6 +12698,10 @@ class App(Tk):
         for night, entries in (meta.get("reports_saved") or {}).items():
             if isinstance(entries, list):
                 have = self.reports_saved.setdefault(str(night), [])
+                have.extend(e for e in entries if isinstance(e, dict) and e not in have)
+        for night, entries in (meta.get("reports_sent") or {}).items():   # 2.2.18 (item 10)
+            if isinstance(entries, list):
+                have = self.reports_sent.setdefault(str(night), [])
                 have.extend(e for e in entries if isinstance(e, dict) and e not in have)
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
@@ -12901,6 +13234,60 @@ class App(Tk):
                 traceback.print_exc()
         return True
 
+    def set_catalog_mags(self, changes: dict, check: str | None = None) -> bool:
+        """2.2.18 (item 3): catalog magnitudes typed in Use comps… for the whole series ({star: V}); check: the check
+        star's, or None. The series' values win over the Photometry boxes, so a wrong catalog value (HD 219134's
+        rebuild took Gaia V 8.711 for the campaign's 8.728) is corrected here: every point is re-derived from its
+        stored instrumental magnitudes (core.apply_catalog_mags), the boxes of the same stars follow, and an open
+        series file is written. True when something changed."""
+        changes = {str(k): float(v) for k, v in (changes or {}).items()}
+        old_cat = self._comp_catalog()
+        lines = []
+        for name, mag in changes.items():
+            was = old_cat.get(name)
+            self.comp_catalog_mags[name] = mag
+            if name in self.spare_catalog:
+                self.spare_catalog[name]["mag"] = mag
+            for role in COMP_ROLES:
+                if getattr(self, f"{role}_name").get().strip() == name:
+                    getattr(self, f"{role}_mag").set(f"{mag:.3f}")
+            lines.append(f"{name} {was:.3f} → {mag:.3f}" if was is not None else f"{name} {mag:.3f}")
+        result = {"changed": 0, "shift": {}}
+        if changes and self.observations:
+            result = core.apply_catalog_mags(self.observations, list(self.active_comps or self.comps_used),
+                                             list(self.comps_used), self._comp_catalog(), self._star_aliases())
+        if check is not None:
+            used = self.check_used or self.check_name.get().strip()
+            was = (getattr(self, "_series_check", None) or ("", ""))[1] or self.check_mag.get()
+            self.check_mag.set(check)
+            self._series_check = (used, check)
+            lines.append(f"check {used or 'star'} {was or '—'} → {check}")
+        if not lines:
+            return False
+        self._take_series_snapshot()   # a cancelled run later puts back these values, not the old ones
+        self._zp_caution_cache = None
+        shifts = sorted({round(v, 4) for v in result["shift"].values()})
+        self.log("Catalog magnitudes changed for the whole series: " + "; ".join(lines)
+                 + (f". {result['changed']} points re-derived (shift "
+                    + ", ".join(f"{v:+.4f}" for v in shifts) + " mag)." if result["changed"] else "."))
+        self._refresh_period()
+        self.draw_output()
+        saved = ""
+        if self.series_path:
+            try:
+                self._write_series(self.series_path)
+                saved = f" Saved to {os.path.basename(self.series_path)}."
+            except OSError as exc:
+                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+        self.status.set("Catalog magnitudes changed." + saved)
+        tp = getattr(self, "transit_page", None)
+        if result["changed"] and self.mode_key == "transits" and tp is not None:
+            try:
+                tp.comps_changed()
+            except Exception:
+                traceback.print_exc()
+        return True
+
     def _zero_point_check(self):
         """2.2.14 (item 10): core.ensemble_zero_point_check for the comps in use (None when nothing to compare)."""
         selection = list(self.active_comps or self.comps_used)
@@ -13072,6 +13459,81 @@ class App(Tk):
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Removed the night of {self.night_label(night, short=True)}. {len(self.observations)} points left.{saved}")
 
+    @staticmethod
+    def _read_period_range(lo_var, hi_var):
+        """2.2.18 (item 16): (min, max) days from two period boxes, or (None, reason)."""
+        try:
+            lo, hi = float(lo_var.get()), float(hi_var.get())
+        except Exception:
+            return None, "type the shortest and longest period in days"
+        if not (math.isfinite(lo) and math.isfinite(hi) and 0 < lo < hi):
+            return None, "the shortest period must be above 0 and below the longest"
+        return (lo, hi), ""
+
+    def _period_box_changed(self, force: bool = False):
+        """2.2.18 (item 16): the Output page's Period search boxes refit on Enter, and on leaving a box when the
+        range is not the one the period was last searched over (an unchanged box does nothing)."""
+        rng, why = self._read_period_range(self.min_period, self.max_period)
+        if rng is None:
+            self.status.set(f"Period search: {why}.")
+            return
+        if not force and rng == getattr(self, "_period_range_used", None):
+            return
+        self._period_range_used = rng
+        if not self.observations:
+            return
+        self.refit_period()
+        self.log(f"Period search {rng[0]:g}–{rng[1]:g} d.")
+
+    def _disc_period_changed(self, force: bool = False):
+        """2.2.18 (item 16): Discovery's Period search boxes: Enter (or leaving a changed box) searches the finished
+        scan's candidates again over the new range, in a background thread; no scan yet: kept for the next scan."""
+        rng, why = self._read_period_range(self.disc_min_period, self.disc_max_period)
+        if rng is None:
+            self.status.set(f"Period search: {why}.")
+            return
+        if not force and rng == getattr(self, "_disc_range_used", None):
+            return
+        self._disc_range_used = rng
+        r = self.last_scan
+        if self.mode_key != "discovery" or not r or r.get("light_curves") is None or r.get("jd") is None:
+            return
+        keys = list(dict.fromkeys(list(r.get("candidates") or [])[:40] + list((r.get("periods") or {}).keys())))
+        self._disc_refit_gen = getattr(self, "_disc_refit_gen", 0) + 1
+        gen = self._disc_refit_gen
+        self.status.set(f"Searching the candidates' periods over {rng[0]:g}–{rng[1]:g} d…")
+        jd = np.asarray(r["jd"], dtype=float)
+        curves = np.asarray(r["light_curves"], dtype=float)
+
+        def work():
+            periods = {}
+            for i in keys:
+                try:
+                    good = np.isfinite(curves[:, i])
+                    ls = core.lomb_scargle(jd[good], curves[good, i], rng[0], rng[1])
+                except Exception:
+                    ls = None
+                if ls:
+                    periods[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls}
+            self.call_ui(self._disc_periods_done, r, gen, rng, periods)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _disc_periods_done(self, r, gen, rng, periods):
+        if gen != getattr(self, "_disc_refit_gen", 0) or r is not self.last_scan:
+            return   # a newer range or another scan since
+        r["periods"] = periods
+        r["period_range"] = rng
+        view = getattr(self, "scan_view", None)
+        if view is not None and getattr(view, "r", None) is r:
+            try:
+                view._fill_table()
+                view.draw()
+            except Exception:
+                traceback.print_exc()
+        self.log(f"Field scan: candidates' periods searched again over {rng[0]:g}–{rng[1]:g} d.")
+        self.status.set(f"Period search {rng[0]:g}–{rng[1]:g} d done.")
+
     def refit_period(self):
         if not self.observations:
             return
@@ -13178,11 +13640,28 @@ class App(Tk):
         if not self.star_id.get().strip():
             problems.append("Star ID is empty")
         good = core.suggest_star_name(self.star_id.get())
+        before = self.star_id.get()
+        rename = False
         if good:
             if messagebox.askyesno(APP_TITLE, f"The Star ID is \u201c{self.star_id.get().strip()}\u201d. AAVSO spells it "
                                               f"\u201c{good}\u201d, and WebObs may not match the other spelling to the "
                                               f"star.\n\nUse \u201c{good}\u201d in the report?"):
+                # 2.2.18 (item 21): the report and its file name use AAVSO's spelling, but the Star ID keeps it only
+                # when the report is saved; a cancel anywhere below puts the old name back.
+                rename = True
                 self.star_id.set(good)
+        saved = False
+        try:
+            saved = self._save_aavso_report(problems)
+        finally:
+            if rename and not saved:
+                self.star_id.set(before)
+            elif rename:
+                self.log(f"Star ID set to \u201c{good}\u201d (AAVSO's spelling), as used in the saved report.")
+
+    def _save_aavso_report(self, problems: list) -> bool:
+        """The rest of save_aavso (2.2.18 item 21: split off so a cancel can undo the Star ID spelling). True when
+        the report was written."""
         if len({o.filt for o in self._usable()}) > 1:
             problems.append("the series mixes filters")
         # 2.2.5: two or more comps make an ensemble report, which AAVSO accepts only with a check star.
@@ -13195,12 +13674,12 @@ class App(Tk):
                 problems.append(f"a comp has no star name (the report would call it “{name}”)")
         if problems:
             if not messagebox.askyesno(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
-                return
+                return False
         if not self._name_report_check():
-            return
+            return False
         scope = self._save_scope("AAVSO report")
         if scope is None:
-            return
+            return False
         points = [o for o in self._usable() if scope == "series" or o.night == self.highlight_night]
         in_transit = len(points) - len(self._report_points(points))
         points = self._report_points(points)   # 2.2.15 (item 1, review)
@@ -13209,10 +13688,9 @@ class App(Tk):
                      "of the report.")
         if not points:
             messagebox.showinfo(APP_TITLE, "No usable points to report for that choice.")
-            return
-        repeat = self._already_reported(points, scope)
-        if repeat and not messagebox.askyesno(APP_TITLE, repeat + "\n\nSave this report anyway?"):
-            return
+            return False
+        # 2.2.18 (item 10): saving never warns about duplicates any more; Open AAVSO WebObs… does (an upload is what
+        # duplicates, and many reports are never uploaded: HD 219134's go to Dr. Elliott).
         self._save_one_night = scope == "night"
         try:
             path = self.output_path(
@@ -13221,13 +13699,15 @@ class App(Tk):
         finally:
             self._save_one_night = False
         if not path:
-            return
+            return False
         with core.AsciiWriter(path) as fh:
             fh.write(self._report_text(points))
         self._note_report(points, path, scope)
+        self._remember_report("webobs", [o.night for o in points], path)   # 2.2.18 (item 10)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
         self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs")   # 2.2.15 (item 8)
+        return True
 
     def _name_report_check(self) -> bool:
         """2.2.14 (item 7): an AAVSO report must not go out with KNAME = "check" (13 Oct: the check marker never got
@@ -13330,23 +13810,6 @@ class App(Tk):
         if hasattr(self, "report_note"):
             self.report_note.set(text)
 
-    def _already_reported(self, points: list, scope: str) -> str:
-        """A warning when nights in this report were already saved in an AAVSO report of the other scope
-        (a night's own report, then the whole series, or the other way round): uploading both duplicates them."""
-        lines = []
-        for night in sorted({o.night for o in points}):
-            for entry in self.reports_saved.get(night, []):
-                if entry.get("scope") != scope:
-                    kind = "its own report" if entry.get("scope") == "night" else "a whole-series report"
-                    lines.append(f"  • {self._night_label(night)}: already saved in {kind}, "
-                                 f"{entry.get('file', '?')} ({entry.get('date', '?')})")
-                    break
-        if not lines:
-            return ""
-        return ("These nights are already in another AAVSO report:\n" + "\n".join(lines) +
-                "\n\nIf that report was uploaded, uploading this one too puts the same observations into the AAVSO "
-                "database twice. Upload only one of them for each night.")
-
     def _note_report(self, points: list, path: str, scope: str):
         stamp = time.strftime("%Y-%m-%d %H:%M")
         for night in sorted({o.night for o in points}):
@@ -13361,10 +13824,10 @@ class App(Tk):
     def save_csv(self):
         if not self.observations:
             messagebox.showinfo(APP_TITLE, "Run photometry first.")
-            return
+            return ""
         scope = self._save_scope("light-curve CSV")
         if scope is None:
-            return
+            return ""
         self._save_one_night = scope == "night"
         try:
             path = self.output_path(self._family_names()[1], title="Save light-curve CSV", defaultextension=".csv",
@@ -13375,6 +13838,8 @@ class App(Tk):
             obs = [o for o in self.observations if scope == "series" or o.night == self.highlight_night]
             core.write_curve_csv(path, obs, self.night_notes, self._scint_setup())
             self.status.set(f"Wrote {path}")
+            self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
+        return path or ""
 
     def save_png(self):
         if self.out_canvas is None or not self.observations:
@@ -13423,7 +13888,8 @@ class App(Tk):
         mono = {"family": "monospace", "size": 9}
         box_lines = max(len(snap["series"]), len(snap["period"]), len(snap["color"]) or 1)
         rows = snap["rows"]
-        cols = [(c, label) for c, label, _w in self.SUMMARY_COLUMNS if c != "note" or any(r.get("note") for r in rows)]
+        cols = [(c, label) for c, label, _w in self.SUMMARY_COLUMNS
+                if c != "sent" and (c != "note" or any(r.get("note") for r in rows))]   # 2.2.18 (item 10): not in the PNG
         # 2.2.14 review: the night table counts too (its right-hand columns were clipped), up to 16 in for long notes.
         table_in = min(16.0, (sum(self._col_chars(c, rows, label) + 2 for c, label in cols)) * 0.075 + 0.2)
         width_in = max(pw / dpi, 0.1 + sum(box_w), table_in)
@@ -13826,6 +14292,8 @@ class UseCompsWindow:
             ttk.Label(grid, text=head, style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).grid(
                 row=0, column=c, sticky=W, padx=6, pady=(0, 4))
         self.vars = {}
+        self.mag_vars = {}   # 2.2.18 (item 3): {star: (StringVar, text shown at first)}
+        self.check_var = None
         aliases = app._star_aliases()
         names, listed = [], set()
         for n, role in [(n, "comp") for n in app.comps_used] + [(n, "spare") for n in app._spares_in_series()]:
@@ -13856,13 +14324,38 @@ class UseCompsWindow:
             if faint:
                 role = f"{role} (widened window): {faint}"
                 widened_rows += 1
-            for c, text in enumerate((shown, role, f"{mag:.3f}" if mag is not None else "—",
+            # 2.2.18 (item 3): the catalog magnitude can be typed (the series' value wins over the Photometry box).
+            mag_var = StringVar(value=f"{mag:.3f}" if mag is not None else "")
+            self.mag_vars[name] = (mag_var, mag_var.get())
+            ttk.Entry(grid, textvariable=mag_var, width=8).grid(row=r, column=3, sticky=W, padx=6, pady=2)
+            for c, text in enumerate((shown, role, None,
                                       f"{len(measured)} of {len(nights)}",
                                       f"{sp:.4f}" if isinstance(sp, float) and math.isfinite(sp) else "—",
                                       f"{sc:.4f}" if isinstance(sc, float) and math.isfinite(sc) else "—",
                                       row.get("verdict", "")), 1):
+                if text is None:
+                    continue
                 colour = "#b00020" if c == 7 and text.startswith("SUSPECT") else "#1c2b33"
                 ttk.Label(grid, text=text, style="Card.TLabel", foreground=colour).grid(row=r, column=c, sticky=W, padx=6, pady=2)
+        # 2.2.18 (item 3): the check star's catalog magnitude (its plot and the next nights' check), typed here too.
+        check = app.check_used or ""
+        if check:
+            r = len(names) + 1
+            ttk.Label(grid, text="", style="Card.TLabel").grid(row=r, column=0)
+            ttk.Label(grid, text=check, style="Card.TLabel").grid(row=r, column=1, sticky=W, padx=6, pady=2)
+            ttk.Label(grid, text="check (not a comp)", style="Card.TLabel").grid(row=r, column=2, sticky=W, padx=6)
+            shown_k = (getattr(app, "_series_check", None) or ("", ""))[1] or app.check_mag.get().strip()
+            try:
+                shown_k = f"{float(shown_k):.3f}"
+            except (TypeError, ValueError):
+                shown_k = ""
+            self.check_var = (StringVar(value=shown_k), shown_k)
+            ttk.Entry(grid, textvariable=self.check_var[0], width=8).grid(row=r, column=3, sticky=W, padx=6, pady=2)
+        wrapped.append(ttk.Label(inner, text="Catalog mag: type a star's catalog magnitude to correct it for the whole "
+                                             "series (for example a value from another catalog than the campaign's). "
+                                             "Apply re-derives every point from the stored measurements.",
+                                 style="Hint.TLabel", wraplength=wrap, justify=LEFT))
+        wrapped[-1].pack(anchor=W, pady=(8, 0))
         if len(names) == len(app.comps_used):
             ttk.Label(inner, text="No spare comps in this series yet. Nights reduced in 1.8 or later after Solve "
                                   "carry spares.", style="Hint.TLabel").pack(anchor=W, pady=(8, 0))
@@ -13883,11 +14376,55 @@ class UseCompsWindow:
         fit_to_content(win)
         body.follow_width(wrapped, pad=16)   # 2.2.14 (item 12): the text wraps to the window's width from now on
 
+    def _typed_mags(self):
+        """2.2.18 (item 3): ({star: new catalog mag}, new check mag or None) from the Catalog mag boxes, only where
+        the text was changed; None when a box does not hold a magnitude (the user is told)."""
+        changes, check = {}, None
+        boxes = [(name, var, first) for name, (var, first) in self.mag_vars.items()]
+        if self.check_var is not None:
+            boxes.append((None, *self.check_var))
+        for name, var, first in boxes:
+            text = var.get().strip()
+            if text == first:
+                continue
+            try:
+                mag = float(text)
+                if not (math.isfinite(mag) and -2.0 < mag < 30.0):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(APP_TITLE, f"\u201c{text}\u201d is not a catalog magnitude"
+                                     f" ({name or 'check star'}).", parent=self.win)
+                return None
+            try:
+                if first and abs(float(first) - mag) < 5e-4:
+                    continue   # 8.73 typed over 8.728 shown as 8.728: the same value
+            except ValueError:
+                pass
+            if name is None:
+                check = f"{mag:.3f}"
+            else:
+                changes[name] = mag
+        return changes, check
+
     def apply(self):
         selection = [name for name, var in self.vars.items() if var.get()]
         if not selection:
             messagebox.showinfo(APP_TITLE, "Tick at least one comparison star.", parent=self.win)
             return
+        typed = self._typed_mags()
+        if typed is None:
+            return
+        changes, check = typed
+        if changes or check is not None:
+            self.app.set_catalog_mags(changes, check)   # 2.2.18 (item 3)
+            for name, (var, _first) in self.mag_vars.items():
+                self.mag_vars[name] = (var, var.get().strip())
+            if self.check_var is not None:
+                self.check_var = (self.check_var[0], self.check_var[0].get().strip())
+            current = list(self.app.active_comps or self.app.comps_used)
+            if set(selection) == set(current):
+                self.win.destroy()
+                return
         if self.app.apply_comp_selection(selection):
             self.win.destroy()
 
@@ -15148,7 +15685,8 @@ class ScanView:
         per = r["periods"].get(i)
         if per is None and good.sum() >= 8:
             try:
-                ls = core.lomb_scargle(r["jd"][good], lc[good], float(self.app.min_period.get()), float(self.app.max_period.get()))
+                lo_hi = r.get("period_range") or (float(self.app.min_period.get()), float(self.app.max_period.get()))
+                ls = core.lomb_scargle(r["jd"][good], lc[good], float(lo_hi[0]), float(lo_hi[1]))   # 2.2.18 (16)
                 per = {"period": ls["period_days"], "power": ls["power"], "ls": ls} if ls else None
             except Exception:
                 per = None
