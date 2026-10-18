@@ -120,7 +120,7 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
 
 ## When calibration fails
 
-A window says **Calibration failed:** and the reason. The most common ones:
+A window says what went wrong (during the run it starts **Calibration failed:**). The most common messages:
 
 | Message | What to do |
 |---|---|

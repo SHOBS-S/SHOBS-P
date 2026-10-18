@@ -72,7 +72,7 @@ SHOBS-P may ask a few questions before it starts. The ones you will meet most in
 - **With N comps the AAVSO report is an ensemble, and AAVSO requires a check star…** You have no check star marked. Answer **No** and mark one, unless you will never report this night.
 - **These have a name in the Stars panel but no marker on this image…** A name is left over from an earlier night. **Yes** clears those names, **Cancel** lets you mark the stars.
 - **… is a known or suspected variable …** about a comp or the check. See above.
-- A question about Transits mode, if your target hosts a known planet and a transit is predicted during your frames. For variable-star work, answer **No** (run in Variables mode anyway).
+- A question about Transits mode, if the **Planet (Transits)** box holds a planet of your target (from an earlier Transits-mode lookup) and a transit is predicted during your frames. For variable-star work, answer **No** (run in Variables mode anyway).
 
 Chapter 8 lists the other checks. The progress bar shows each frame as it is measured, and you can stop with **Cancel run**. Nothing is added to a series if you cancel.
 
@@ -95,7 +95,7 @@ The page has, from top to bottom:
 3. **Cautions**, in amber, each starting with ⚠.
 4. **Three rows of settings** (period search, quality control, tools) and one view switch.
 5. **Four plots**.
-6. **Two button rows**: **Results** and **Series**.
+6. **Two button rows**: **Series** and, under it, **Results**.
 
 ### The Series box
 
@@ -144,7 +144,7 @@ On a single night, the fold and periodogram are often greyed with a note that on
 
 The **Results** row has:
 
-- **Save AAVSO report**: see chapter 15.
+- **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page.
 - **Save light-curve CSV**: every point, including flagged ones with their flag word.
 - **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns.
 - **Save plot PNG**: the four plots with the summary boxes and cautions above them.

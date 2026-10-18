@@ -75,7 +75,7 @@ All of these are in the **Series** row on the Output page. When the series has a
 
 If you load another series, close this one, or switch modes while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open.
 
-When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another.
+When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another. If it cannot tell from the positions whether the two names are the same star, it asks; **No** (the default) keeps what is marked.
 
 ## The backup copy (`_prev`)
 

@@ -140,8 +140,9 @@ in the program folder, so updates do not touch it.
 - **Binning**, the **Bayer pattern** and the **Channel**;
 - the aperture sizes, marked stars and rejected frames.
 
-These are saved in a **series file** when you save a series, and come back when you load it (chapter 10). That is
-why the Input page says "Settings are saved with the series".
+All of these except the folders are saved in a **series file** when you save a series, and come back when you load
+it (chapter 10). That is why the Input page says "Settings are saved with the series". The folders you must choose
+again each night.
 
 **Never stored anywhere unless you type it:** your site. SHOBS-P ships with the Site boxes empty, and it never saves
 a site read from somebody else's frames as yours without asking you first.

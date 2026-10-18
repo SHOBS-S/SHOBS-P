@@ -86,7 +86,7 @@ In Variables mode, after each run and after **Load series…**, SHOBS-P looks up
 - **Yes** (the default) flags those frames `transit`. They stay in the series but never go in a report.
 - **No** keeps them.
 
-The message also says what was assumed, for example **T14 not published; 2.5 h assumed**, or **plus 15 min for JD vs BJD** when the target's RA/Dec are not known (the window is widened to be safe).
+The message also says what was assumed, for example **T14 not published; 2.4 h assumed**, or **plus 15 min for JD vs BJD** when the target's RA/Dec are not known (the window is widened to be safe).
 
 Nothing is said if the star has no known transiting planet, if no frame falls in a transit, or if the archive cannot be reached.
 

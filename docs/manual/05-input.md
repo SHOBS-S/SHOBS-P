@@ -105,8 +105,8 @@ where the frames point; a few arcminutes off is fine.
 - **Observer code**: your AAVSO observer code. It goes into every AAVSO report. It is not remembered between
   sessions, but it is saved with a series.
 - **Chart ID**: the AAVSO chart (sequence) your comparison stars come from. You usually don't need to type it: when
-  you pick an AAVSO sequence star as a comparison star, SHOBS-P fills it in. When none of your comparison stars are
-  AAVSO sequence stars, it is `na`.
+  you pick an AAVSO sequence star as a comparison or check star, SHOBS-P fills it in. When none of your comparison
+  or check stars are AAVSO sequence stars, it is `na`.
 
 ## Site and Optics
 

@@ -11,9 +11,9 @@ it, AAVSO reports show the airmass as `na`.
 
 1. Go to the **Input** page (**1 Input** in the sidebar).
 2. In the **Site** box, type:
-   - **Latitude (°, north +)**: decimal degrees, north positive (for example `35.4`).
+   - **Latitude (°, north +)**: decimal degrees, north positive (for example `40.0`).
    - **Longitude (°, east +)**: decimal degrees, **east positive, west negative**. Observers in the Americas type a
-     negative number (for example `-81.9`).
+     negative number (for example `-100.0`).
    - **Elevation (m)**: meters above sea level. It is used in exoplanet reports and for scintillation.
 3. That's all. SHOBS-P remembers these three values on this computer from now on.
 
@@ -27,7 +27,7 @@ In the **Optics** box on the Input page:
 
 | Box | What to type | Why it matters |
 |---|---|---|
-| **Telescope** | Your telescope's name, for example "0.36 m RC". | Goes into reports. Leave it blank to use the FITS header's name (often the mount's name, so typing your own is better). Remembered. |
+| **Telescope** | Your telescope's name, for example "0.25 m Newtonian". | Goes into reports. Leave it blank to use the FITS header's name (often the mount's name, so typing your own is better). Remembered. |
 | **Telescope aperture (mm)** | The clear aperture in millimeters. | Used for the scintillation error. Remembered. |
 | **Focal length (mm)** | The effective focal length, with any reducer. | With the pixel size, gives the plate scale the solve needs. |
 | **Pixel size (µm)** | Your camera's pixel size. | As above. |

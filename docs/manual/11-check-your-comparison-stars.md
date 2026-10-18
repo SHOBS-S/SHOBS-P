@@ -45,7 +45,7 @@ Click a row in the table to highlight that star's curve.
 - **SUSPECT: drifts night to night** — its level moves between nights more than the others'. Replace it.
 - **SUSPECT: jumps … at the flip** — it changes at the meridian flip while the others do not. Often a flat-field problem at its position on one side of the pier.
 - **SUSPECT: noisier than the others tonight** — perhaps a faint star, a close neighbor, or a bad pixel.
-- **pair drifts; add a 3rd star to tell which** — with only two stars, SHOBS-P can see that they disagree but not which one is at fault. Add a spare or a third comp.
+- **pair drifts; add a 3rd star to tell which** — with only two stars, SHOBS-P can see that they disagree but not which one is at fault. Add a spare or a third comp. (On one night the same pair reads **one night; steady pair** or **one night; pair jumps at the flip, add a 3rd star to tell which**.)
 - **too few points** — not enough data to judge.
 
 When a star is clearly SUSPECT, SHOBS-P leaves it out of the reference for the others and says so (**Left out of the reference so their drift does not echo in the steady stars: …**). Otherwise one bad star makes all the good ones look as if they drift the other way.

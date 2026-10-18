@@ -275,8 +275,9 @@ You will not see most of these on most nights. Each window explains its choices.
 - **Names without markers.** A comp or check row has a name but no marker on this image (often left from a series).
   **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.
 - **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P
-  offers to **Run in Variables mode instead?**. In Variables mode with a planet host and a transit predicted during
-  your frames, it offers **Run in Transits mode instead?**. Answer the question rather than cancelling: the series and
+  offers to **Run in Variables mode instead?**. In Variables mode, when the **Planet (Transits)** box holds a planet of
+  this star (looked up earlier in Transits mode) and a transit is predicted during your frames, it offers **Run in
+  Transits mode instead?** (not asked while a Variables series is open). Answer the question rather than cancelling: the series and
   reports are kept per mode.
 - **An ensemble without a check star** (Variables mode, two or more comps, no check): AAVSO requires a check star for
   ensemble reports. **Continue without one?**
