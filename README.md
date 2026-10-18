@@ -125,9 +125,12 @@ user folder (`C:\Users\<you>`).
 
 ## Documentation
 
+**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, written for 2.2.17) walks you through the program task
+by task: installing, your first night, reducing a variable star, fitting a transit, scanning a field, and what every
+message means.
+
 **[README.txt](README.txt)** is the full reference: every page and button, what is new in each version, the version
-history, and the credits for every catalog, service and published method the app uses. A task-based operator's
-manual is planned.
+history, and the credits for every catalog, service and published method the app uses.
 
 ## Status
 
