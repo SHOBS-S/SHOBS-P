@@ -1534,7 +1534,8 @@ class Obs:
 
 
 def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
-                  blend_check: bool = True, search: float | None = None) -> dict:
+                  blend_check: bool = True, search: float | None = None, wing: str = "gauss",
+                  min_sigma: float | None = None) -> dict:
     """2.2.8: centre on the star nearest (x, y), not on whatever is brightest nearby.
 
     1. Look for significant peaks (3x3-smoothed, above sky + 4 sigma of the smoothed noise) within a search radius
@@ -1544,7 +1545,10 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
     3. Centre of mass of the sky-subtracted light inside about one FWHM of that peak, iterated three times.
     With no significant peak (a faint star lost in the noise), the start point is kept and found = False.
     2.2.18 (item 5): blend_check=False never keeps the start point for a blended neighbour, and search widens the
-    search radius (both for the pre-run marker check, marker_offset).
+    search radius (both for the pre-run marker check, marker_offset). wing="dip" (comp and check clicks, review): a
+    start point on a bright star's own wing is centred on that star unless the light between peak and start point dips
+    and rises again. The default "gauss" keeps the 2.2.8 test (target clicks and every frame's centring), which keeps a
+    faint target in a brighter neighbour's wing even when it shows only as a shoulder (CoRoT-1 b, 2.2.7).
     Returns {"x", "y", "shift", "found"}."""
     from scipy import ndimage
 
@@ -1576,10 +1580,16 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
     sx, sy = cx + x_off, cy + y_off  # start point in crop coordinates
     smooth = ndimage.uniform_filter(data, size=3)
     peaks = (smooth == ndimage.maximum_filter(smooth, size=3)) & (smooth > sky + 4.0 * noise / 3.0)
+    if min_sigma is not None:
+        # 2.2.18 (item 5, review): only peaks this far above the sky (raw-pixel noise) can be the star looked for, so a
+        # noise bump on a bright star's wing nearer the start point does not win.
+        cand = peaks & (smooth > sky + float(min_sigma) * noise)
+    else:
+        cand = peaks
     yy, xx = np.mgrid[0 : data.shape[0], 0 : data.shape[1]]
     all_py, all_px = np.nonzero(peaks)
-    peaks &= np.hypot(xx - sx, yy - sy) <= search
-    py, px = np.nonzero(peaks)
+    cand = cand & (np.hypot(xx - sx, yy - sy) <= search)
+    py, px = np.nonzero(cand)
     if px.size == 0:
         return keep
     k = int(np.argmin(np.hypot(px - sx, py - sy)))
@@ -1624,20 +1634,21 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
             sig = math.sqrt((r_half / 1.1774) ** 2 + 0.67)
             expect = p_val * math.exp(-d_click ** 2 / (2.0 * sig * sig))
             here = float(smooth[int(round(sy)), int(round(sx))] - sky)
-            # 2.2.18 (item 5): a real star's wings are wider than a Gaussian (Moffat-like), so a click 2-3 FWHM out on a
-            # bright star's own wing passed the test above and the marker stayed off the star (HD 219134 6-7 Oct check
-            # 9 px off, 15-16 Oct comp 6 px off). A star is about symmetric about its peak; a blended neighbour puts
-            # light at the click that the far side of the peak lacks. So the click must also hold clearly more light
-            # than the point mirrored through the peak.
-            # The mirrored point in the whole image (it can lie outside the crop), as a 3x3 mean like `smooth`.
-            mx = int(round(float(x) + 2.0 * (peak_x - sx)))
-            my = int(round(float(y) + 2.0 * (peak_y - sy)))
+            # 2.2.18 (item 5, review): a real star's wings are wider than a Gaussian (Moffat-like, plus seeing and
+            # tracking asymmetry), so a click 1-3 FWHM out on a bright star's own wing passes the test above and the
+            # marker stays off the star (HD 219134 6-7 Oct check 9 px off, 15-16 Oct comp 6 px off). For comp and
+            # check clicks (wing="dip"): along the line from the peak to the click a wing only falls; a second star
+            # makes the light dip and rise again, so the click must hold clearly more light than the lowest point of
+            # that profile between peak and click.
             lopsided = True
-            if 1 <= my < img.shape[0] - 1 and 1 <= mx < img.shape[1] - 1:
-                patch = np.asarray(img[my - 1:my + 2, mx - 1:mx + 2], dtype=float)
-                if np.isfinite(patch).any():
-                    mirror = max(0.0, float(np.nanmean(patch)) - sky)
-                    lopsided = here > 2.0 * mirror + 8.0 * noise / 3.0
+            if wing == "dip":
+                from scipy.ndimage import map_coordinates
+                n_pts = max(4, int(round(2 * d_click)))
+                ts = np.linspace(0.25, 1.0, n_pts)
+                prof = map_coordinates(smooth, [peak_y + ts * (sy - peak_y), peak_x + ts * (sx - peak_x)], order=1,
+                                       mode="nearest") - sky
+                inner = prof[:-1]
+                lopsided = bool(inner.size) and here > float(inner.min()) + 8.0 * noise / 3.0
             if here > 3.0 * expect + 8.0 * noise / 3.0 and here < 0.5 * p_val and lopsided and blend_check:
                 return {"x": float(x), "y": float(y), "shift": 0.0, "found": True, "blended": True}
     except Exception:
@@ -1695,7 +1706,29 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
             ux, uy = peak_x, peak_y
     x_new = float(x) + (ux - sx)
     y_new = float(y) + (uy - sy)
-    return {"x": x_new, "y": y_new, "shift": float(math.hypot(x_new - x, y_new - y)), "found": True}
+    # 2.2.18 (item 5, review): how significant the star found is (raw-pixel sigma) and the light at the start point,
+    # so a caller can refuse a noise bump on a bright star's wing (the comp/check retry, marker_offset).
+    try:
+        peak_lvl = float(smooth[int(round(peak_y)), int(round(peak_x))] - sky)
+        click_lvl = float(smooth[int(round(min(max(sy, 0), smooth.shape[0] - 1))),
+                                 int(round(min(max(sx, 0), smooth.shape[1] - 1)))] - sky)
+    except Exception:
+        peak_lvl, click_lvl = float("nan"), float("nan")
+    return {"x": x_new, "y": y_new, "shift": float(math.hypot(x_new - x, y_new - y)), "found": True,
+            "peak_sigma": peak_lvl / noise if noise > 0 else float("nan"), "peak_level": peak_lvl,
+            "click_level": click_lvl}
+
+
+def real_star(info: dict, min_sigma: float = 10.0) -> bool:
+    """2.2.18 (item 5, review): a recenter_info result is a real star, not a noise bump on a bright star's wing: its
+    smoothed peak at least min_sigma (raw-pixel noise) above the sky, and brighter than the light at the start point."""
+    if not info.get("found") or info.get("blended"):
+        return False
+    sig, pk, at = info.get("peak_sigma"), info.get("peak_level"), info.get("click_level")
+    try:
+        return float(sig) >= min_sigma and float(pk) >= float(at)
+    except (TypeError, ValueError):
+        return False
 
 
 def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> tuple[float, float, float]:
@@ -1710,22 +1743,35 @@ def recenter_jump_limit(radius: float) -> float:
     return max(3.0, 0.5 * float(radius))
 
 
-def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> dict:
-    """2.2.18 (item 5): how far a marker sits from the centre of the star it is on, for the check before a run.
-    The nearest significant star within max(2.5 FWHM, 1.5 x aperture radius) of the marker, centred without the
-    "blended neighbour" exception (which keeps a click where it is). Returns {"found", "x", "y", "offset", "limit",
-    "off"}: off is True when the marker is further from that centre than about 1.5 FWHM or than reduce_frame's jump
-    limit (then every frame is measured at the marker, not on the star)."""
+def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
+                  wing: str = "gauss") -> dict:
+    """2.2.18 (item 5, review): the check before a run, from what reduce_frame will actually do with this marker.
+    True centre: the nearest real star (real_star: >= 10 sigma, brighter than the marker spot) within
+    max(2.5 FWHM, 1.5 x aperture radius), centred without the "blended neighbour" exception. Measured: reduce_frame's
+    own recenter (no seeing given), refused beyond recenter_jump_limit (then the marker position is used). off is True
+    when the measured position is more than about 1.5 px from the true centre. blended: the click test says the marker
+    sits on a faint star in a brighter one's wing (then the nearest star is only reported, not called a mistake);
+    wing as in recenter_info ("dip" for comps and checks, as their clicks are tested).
+    Returns {"found", "x", "y", "offset", "measured", "error", "limit", "off", "blended"}."""
+    out = {"found": False, "x": float(x), "y": float(y), "offset": 0.0, "measured": (float(x), float(y)),
+           "error": 0.0, "limit": 1.5, "off": False, "blended": False}
     try:
-        info = recenter_info(img, x, y, radius, fwhm, blend_check=False, search=1.5 * float(radius))
+        true = recenter_info(img, x, y, radius, fwhm, blend_check=False, search=1.5 * float(radius), min_sigma=10.0)
     except Exception:
-        info = {"found": False, "x": float(x), "y": float(y), "shift": 0.0}
-    limit = recenter_jump_limit(radius)
-    if fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
-        limit = min(limit, max(1.5, 1.5 * float(fwhm)))
-    off = bool(info.get("found")) and float(info.get("shift", 0.0)) > limit
-    return {"found": bool(info.get("found")), "x": float(info["x"]), "y": float(info["y"]),
-            "offset": float(info.get("shift", 0.0)), "limit": float(limit), "off": off}
+        return out
+    if not real_star(true):
+        return out
+    fx, fy, sh = recenter(img, x, y, radius)
+    if sh > recenter_jump_limit(radius):
+        fx, fy = float(x), float(y)
+    err = math.hypot(fx - true["x"], fy - true["y"])
+    try:
+        blended = bool(recenter_info(img, x, y, radius, fwhm, wing=wing).get("blended"))
+    except Exception:
+        blended = False
+    out.update({"found": True, "x": float(true["x"]), "y": float(true["y"]), "offset": float(true["shift"]),
+                "measured": (float(fx), float(fy)), "error": float(err), "off": err > 1.5, "blended": blended})
+    return out
 
 
 def star_fwhm(img: np.ndarray, x: float, y: float) -> dict:
