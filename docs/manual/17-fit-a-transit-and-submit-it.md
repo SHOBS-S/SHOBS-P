@@ -98,11 +98,11 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 
 ## Read the plot
 
-- Grey dots: each frame, detrended.
+- Gray dots: each frame, detrended.
 - Black points with error bars: 10-minute bins.
-- Green line: the SHOBS-P model, labelled with its Rp/R\* and depth.
+- Green line: the SHOBS-P model, labeled with its Rp/R\* and depth.
 - Blue dotted line: the published transit shape, for comparison.
-- Grey dashed line and band: the predicted mid-transit and its uncertainty.
+- Gray dashed line and band: the predicted mid-transit and its uncertainty.
 - Thin green lines: the fitted start and end of the transit.
 - Lower panel (**Resid. %**): the residuals. They should look like noise, with no dip or step.
 
@@ -125,7 +125,7 @@ through the night. A comp marked **SUSPECT** should go. See [11. Check your comp
 measurements (nothing is reduced again), and the transit is refitted at once with the same settings. The notes say
 *"Comps changed (now C1, C3): refitting with the same settings…"*.
 
-These two buttons work only on this session's photometry. While an EXOTIC report is shown they are greyed out, and
+These two buttons work only on this session's photometry. While an EXOTIC report is shown they are grayed out, and
 the hint beside them says why.
 
 ## Leave out a bad stretch (Trim)
@@ -141,7 +141,7 @@ To trim a stretch:
    from the start, or **to** empty to trim to the end.
 2. Click **Trim and refit** (or press Enter in either box).
 
-The trimmed points show as faint × in a grey band labelled *trimmed (not fitted)*. They are left out of the fit, the
+The trimmed points show as faint × in a gray band labeled *trimmed (not fitted)*. They are left out of the fit, the
 verdict, the rms, the comp check and every saved file, and the report's NOTES record the trimmed span. Each **Trim
 and refit** adds another span; **Clear trim** puts every point back and refits.
 

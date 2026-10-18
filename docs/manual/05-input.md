@@ -12,7 +12,7 @@ From top to bottom:
 
 - **The series line**, with **Load series…** and **Close series** on the right.
 - **Frames**: five rows, **Bias**, **Dark**, **Flat**, **Lights** and **Output**.
-- On the left: **Target** (Variables and Transits), **Planet (Transits)** (Transits only), or **Field centre (only
+- On the left: **Target** (Variables and Transits), **Planet (Transits)** (Transits only), or **Field center (only
   needed when the headers do not say)** (Discovery, only when needed).
 - On the right: **AAVSO report**, **Site** and **Optics**.
 - At the bottom: **Scan folders**, **Try it with sample data…** and **Next: Blink**.
@@ -96,7 +96,7 @@ covers this box and **Tonight's transits…** in detail.
 ### Discovery mode: the field center
 
 Discovery mode has no target. SHOBS-P finds the field from the plate solution or pointing in your FITS headers. Only
-if your lights have neither does a **Field centre (only needed when the headers do not say)** box appear. Type roughly
+if your lights have neither does a **Field center (only needed when the headers do not say)** box appear. Type roughly
 where the frames point; a few arcminutes off is fine.
 
 ## The AAVSO report box
@@ -141,7 +141,7 @@ SHOBS-P asks whether to clear the old target and look up the star named in the f
 that pair.
 
 **A mislabeled OBJECT.** Capture programs often write a plan name or an old target name into `OBJECT`. If the frames
-point at your target anyway, SHOBS-P only notes in the log that "the OBJECT keyword looks mislabelled" and carries
+point at your target anyway, SHOBS-P only notes in the log that "the OBJECT keyword looks mislabeled" and carries
 on. If the `OBJECT` names a different star in another place, it asks whether to switch targets (the default answer is
 **No**).
 
@@ -157,7 +157,7 @@ yours, and SHOBS-P will not ask again about those same values.
 **Yes** saves it as yours; **No** uses it for these frames only.
 
 **Monochrome camera.** If there is no Bayer keyword and the raw flats show no color mask, the status bar says
-**Monochrome camera found (no colour mask in the flat): Bayer pattern MONO.** If your camera really is a color camera,
+**Monochrome camera found (no color mask in the flat): Bayer pattern MONO.** If your camera really is a color camera,
 choose the pattern on the Calibrate page.
 
 **MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them.

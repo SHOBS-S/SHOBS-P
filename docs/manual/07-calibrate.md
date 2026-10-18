@@ -15,7 +15,7 @@ light so you can see it, and then moves on to the Photometry page by itself.
    - **Monochrome camera**: **Bayer pattern** shows **MONO**, and **Filter** shows the filter (from the FITS header,
      or the one you chose).
 
-   The two grey lines to the right say what will be reported, for example "AAVSO filter code TG" and "Green
+   The two gray lines to the right say what will be reported, for example "AAVSO filter code TG" and "Green
    channel, V comps". Chapter 4 explains the choices.
 3. Press **Build masters and calibrate**.
 4. Watch the log. Building masters from scratch can take a few minutes for a hundred full frames; reusing saved

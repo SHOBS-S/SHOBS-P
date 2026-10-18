@@ -14,7 +14,7 @@ Work down the scan table (see [20. Scan a field](20-scan-a-field.md)) and, for e
 
 1. Read **Check first**. A candidate whose change begins at a flip or a gap, or that is near saturation, is most
    likely instrumental. Follow it only if its light curve also changes well away from the flip or gap.
-2. Read **VSX**. **KNOWN (VSX): …** is already catalogued. It may still be worth following if the catalog lacks a
+2. Read **VSX**. **KNOWN (VSX): …** is already cataloged. It may still be worth following if the catalog lacks a
    period or type, but it is not a new variable.
 3. Look at its light curve (click the row). A real variable usually changes smoothly, or repeats; a single-frame
    spike is usually a cosmic ray, a satellite or a hot pixel.
@@ -103,7 +103,7 @@ Every CSV starts with a `# Created …` line.
 - See it vary on at least two nights, ideally with the same period or the same kind of change.
 - Rule out a neighbor: look at the image at full zoom, and try a smaller aperture.
 - Check the comparison stars: a variable comp makes every other star look variable in the opposite sense.
-- Check that the star is not already catalogued under another name (SIMBAD, VSX search by position).
+- Check that the star is not already cataloged under another name (SIMBAD, VSX search by position).
 - Follow the VSX submission guidelines. The candidates CSV gives position, magnitude, scatter, period and color as a
   starting point.
 

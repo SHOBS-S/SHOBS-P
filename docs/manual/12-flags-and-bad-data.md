@@ -1,6 +1,6 @@
 # 12. Flags and bad data
 
-Not every frame deserves to be in your light curve. A passing cloud, a saturated star or a dewed-up corrector can each make points that are not the star. SHOBS-P *flags* such points rather than deleting them. Flagged points stay in the series, are drawn as grey **×** on the plots, and are left out of the period search and the AAVSO report. You can always change your mind.
+Not every frame deserves to be in your light curve. A passing cloud, a saturated star or a dewed-up corrector can each make points that are not the star. SHOBS-P *flags* such points rather than deleting them. Flagged points stay in the series, are drawn as gray **×** on the plots, and are left out of the period search and the AAVSO report. You can always change your mind.
 
 This chapter explains each flag, how to change the cloud limit, the dew/haze question, frames taken during a planet transit, and pier-side steps.
 
@@ -121,7 +121,7 @@ When the series has nights on both pier sides and none of these is ticked, a cau
 
 After a run, SHOBS-P may warn that a comp, spare or check star sat **near the frame edge or a weak part of the flat**. Such stars can drift out of the good part of the image as the night goes on. Choose other stars next time if you can.
 
-![The Output page light curve with cloud-flagged points shown as grey crosses](img/12-flagged-points.png)
+![The Output page light curve with cloud-flagged points shown as gray crosses](img/12-flagged-points.png)
 
 ---
 

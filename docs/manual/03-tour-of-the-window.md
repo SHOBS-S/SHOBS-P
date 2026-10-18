@@ -63,8 +63,8 @@ Most pages also have **Back** and **Next: …** buttons at the bottom.
 
 ## Page titles and hints
 
-Each page starts with its title in large type (for example **Calibrate**) and a short grey hint under it saying what
-the page does. Smaller grey hints sit next to many boxes, for example "west is negative" beside the longitude.
+Each page starts with its title in large type (for example **Calibrate**) and a short gray hint under it saying what
+the page does. Smaller gray hints sit next to many boxes, for example "west is negative" beside the longitude.
 Read them the first time; they answer most questions.
 
 ## The status bar

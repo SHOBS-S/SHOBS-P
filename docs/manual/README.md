@@ -8,19 +8,19 @@
 1. **[Welcome](01-welcome.md)** — what SHOBS-P is, who it is for, what it does not do.
 2. **[Installing and starting](02-installing-and-starting.md)** — Python, the release zip, shortcuts, first launch, `Run self-test.bat`.
 3. **[A tour of the window](03-tour-of-the-window.md)**
-   - The three modes and their colours: Variables (navy), Transits (green), Discovery (plum).
+   - The three modes and their colors: Variables (navy), Transits (green), Discovery (plum).
    - The five steps: Input → Blink → Calibrate → Photometry → Output.
    - Page titles, the status bar, warnings and cautions, the Credits page.
    - Where settings are kept, and what is never saved (for example your site, unless you enter it).
 4. **[Before your first night](04-before-your-first-night.md)**
    - Your site and optics (Input page Site and Optics boxes).
-   - Colour (OSC) or monochrome camera; filters, including Sloan g′ r′ i′.
+   - Color (OSC) or monochrome camera; filters, including Sloan g′ r′ i′.
    - Calibration frames: bias, darks, flats; matching flats to the rotator angle; saved masters.
    - Folder layout that works well.
 
 ## Part 2 — Common steps (all modes)
 
-5. **[Input](05-input.md)** — choosing folders, target lookup, the series line (Load / Close series), what the program checks in your headers (pointing, mislabelled frames, mixed binning).
+5. **[Input](05-input.md)** — choosing folders, target lookup, the series line (Load / Close series), what the program checks in your headers (pointing, mislabeled frames, mixed binning).
 6. **[Blink](06-blink.md)** — playing the frames, stretch, rejecting and keeping frames, the rejected list, frame numbers.
 7. **[Calibrate](07-calibrate.md)** — what happens, masters reuse, binning, common warnings.
 8. **[Photometry page basics](08-photometry-basics.md)** — auto-solve, the image view (zoom, pop-out, compass, View box, stretch), the step strip, clicking stars and how names and magnitudes fill in, apertures and Suggest apertures, running photometry and the questions it may ask.

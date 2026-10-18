@@ -47,7 +47,7 @@ below are the ones new users meet most often, grouped by step. "…" stands for 
 | *These lights look already calibrated: … Skip bias, dark, and flat for this run? (Recommended)* | The files show signs of earlier calibration. | **Yes**, or they are calibrated twice. |
 | *Calibration failed: The masters do not fit these lights: …* | Size or binning differs between masters and lights. | Pick matching frames, or tick **Rebuild masters (ignore saved ones)**. |
 | *No light frames found.* | The Lights folder is empty or every frame is rejected. | Check the folder and the Blink page. |
-| Log: *Monochrome camera found (no colour mask in the flat): Bayer pattern MONO.* | Information. | If your camera is in fact a color camera, choose its pattern on the Calibrate page. |
+| Log: *Monochrome camera found (no color mask in the flat): Bayer pattern MONO.* | Information. | If your camera is in fact a color camera, choose its pattern on the Calibrate page. |
 | Log: *Meridian flip before frame … (…° to …°)* | Information: where the flip happened. | Nothing; one set of flats covers both sides. |
 
 ## Photometry

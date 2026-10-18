@@ -20,7 +20,7 @@ On the **Output – Variability** page:
 Choose a range that fits your star and your data:
 
 - The shortest period needs frames closer together than half of it.
-- The longest period your data can really test is about half the span of the data. On the periodogram, longer periods are shaded grey and labeled **longer than the data can test**. The search still runs there, but a peak in the grey zone is not to be trusted.
+- The longest period your data can really test is about half the span of the data. On the periodogram, longer periods are shaded gray and labeled **longer than the data can test**. The search still runs there, but a peak in the gray zone is not to be trusted.
 
 ### Period from
 

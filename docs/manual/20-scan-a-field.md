@@ -20,7 +20,7 @@ This chapter covers:
 1. Click **Discovery** in the sidebar. The window turns plum.
 2. On the Input page, choose the Bias, Dark, Flat and Lights folders and press **Scan folders**, as in any mode (see
    [5. Input](05-input.md)). There is no Target box in Discovery mode.
-3. If the lights carry neither a plate solution nor the telescope's pointing in their headers, a box **Field centre
+3. If the lights carry neither a plate solution nor the telescope's pointing in their headers, a box **Field center
    (only needed when the headers do not say)** appears. Type roughly where the frames point, in **RA (hours)** and
    **Dec (degrees)**. A few arcminutes off is fine. Your planetarium program or mount can tell you.
 4. Make sure the **Optics** box (focal length, pixel size, binning) is right: the solve depends on the plate scale.
@@ -105,11 +105,11 @@ reached the candidate level. If none did, the ten nearest misses are listed as *
 
 - **Scatter vs brightness** (left): every star, scatter against magnitude, on a log scale. The blue line is the
   typical scatter. Candidates are red circles with their rank number; known variables are orange squares; saturated
-  stars are grey ×. Click a point to see that star.
+  stars are gray ×. Click a point to see that star.
 - **The selected star's light curve** (top right): red for a candidate, blue otherwise. Dashed purple lines mark a
   flip, rotator move or gap.
 - **Lomb-Scargle periodogram** (bottom right): the red line is the best period. Periods longer than about half the
-  data span are greyed (*"longer than the data can test"*).
+  data span are grayed (*"longer than the data can test"*).
 
 ### The table
 
@@ -149,7 +149,7 @@ hover over it for the reason:
 - **Possible new variable** (bright magenta): not in VSX or SIMBAD, and nothing to check first.
 - **Known variable (VSX/SIMBAD)** (pale purple).
 - **Candidate to check first** (tan): it has a **Check first** warning.
-- **Unchecked (no sky positions)** (grey): the field was not solved.
+- **Unchecked (no sky positions)** (gray): the field was not solved.
 
 Tick **Candidates only** in the **View** box to hide everything else on the image. Press the button again (now
 **Clear candidate marks**) to remove the marks.

@@ -19,7 +19,7 @@ you can do. Often the honest answer is "this night cannot tell", and that is a u
 | **⚠ Inconclusive** | The dip beats a flat line, but a jump at a gap explains it as well. | Possibly Tc, with that caveat. Not the depth. |
 | **✗ No transit measured** | The dip is not significant, Tc is not pinned, or the depth is impossible. | Nothing for submission. |
 
-With "No transit measured" the table rows turn grey and the plot title says *NO TRANSIT MEASURED (model shown for
+With "No transit measured" the table rows turn gray and the plot title says *NO TRANSIT MEASURED (model shown for
 reference)*.
 
 ![An inconclusive verdict above the plot](img/18-inconclusive-verdict.png)
@@ -32,7 +32,7 @@ The dip is not significant against the noise. Typical causes: the transit is too
 night was noisy, or much of the transit is missing.
 
 - Compare **per 10-min bin** on the quality line with the expected depth. A transit needs bins well below its depth.
-- Check that the transit is actually inside your data (the grey band on the plot is the predicted time).
+- Check that the transit is actually inside your data (the gray band on the plot is the predicted time).
 - Look at **Comp health…**: a noisy comp raises the scatter for every point.
 - Try fewer, better comps with **Use comps…** (the fit reruns at once).
 

@@ -166,7 +166,7 @@ The target's name in the **Stars** panel is the **Star ID** from the Input page.
    are behaving.
 
 Each click snaps the marker onto the star nearest to where you clicked. The status bar says, for example,
-" Centred on the star (2.3 px from the click)." If there is no star there, it says
+" Centered on the star (2.3 px from the click)." If there is no star there, it says
 " No star found right at the click; the marker is where you clicked." Watch for that one.
 
 **How names and magnitudes fill in.** On a solved image, clicking a comp or the check star fills its row in the
@@ -260,7 +260,7 @@ Every frame is calibrated, lined up with the first one (through shifts, small ro
 measured. Frames that cannot be lined up (cloud, trailing) are skipped and listed in the log. When the run is done,
 SHOBS-P switches to the Output page.
 
-To stop, press **Cancel run**. Nothing is added: the progress line says "Cancelled; nothing was added."
+To stop, press **Cancel run**. Nothing is added: the progress line says "Canceled; nothing was added."
 
 ### Questions it may ask
 
@@ -274,7 +274,7 @@ You will not see most of these on most nights. Each window explains its choices.
 - **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P
   offers to **Run in Variables mode instead?**. In Variables mode, when the **Planet (Transits)** box holds a planet of
   this star (looked up earlier in Transits mode) and a transit is predicted during your frames, it offers **Run in
-  Transits mode instead?** (not asked while a Variables series is open). Answer the question rather than cancelling: the series and
+  Transits mode instead?** (not asked while a Variables series is open). Answer the question rather than canceling: the series and
   reports are kept per mode.
 - **An ensemble without a check star** (Variables mode, two or more comps, no check): AAVSO requires a check star for
   ensemble reports. **Continue without one?**
