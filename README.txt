@@ -61,9 +61,10 @@ New in 2.2.18.1 (install fix; no change to the program itself)
      first Python 3.11 or newer whose SSL and Tkinter work. A PC with the py launcher but no Python registered with
      it (for example with Anaconda) used to stop at "No installed Python found!".
 - S  SHOBS-P now keeps its own Python environment in %LOCALAPPDATA%\SHOBS-P\python-env, made from the Python it
-     found, so your own Python (and Anaconda's base environment) is never changed. It is shared by every SHOBS-P
-     version, so an update downloads nothing new unless requirements.txt changes. If a separate environment does
-     not work with that Python, SHOBS-P uses it directly, as before. Run Create shortcuts.bat once after updating.
+     found, so your own Python (and Anaconda's base environment) is left as it is. It is shared by every SHOBS-P
+     version, so later updates download nothing new unless requirements.txt changes (the first run after updating
+     from 2.2.18 sets it up once). If a separate environment does not work with that Python, SHOBS-P uses it
+     directly (with Anaconda, its packages then go to your user folder). Run Create shortcuts.bat once after updating.
 
 New in 2.2.18 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Alt-az mounts and derotators, not only German equatorial mounts: a Mount box (German equatorial / Alt-az) in

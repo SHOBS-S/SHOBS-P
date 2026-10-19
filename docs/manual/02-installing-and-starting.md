@@ -18,7 +18,7 @@ It takes about ten minutes, most of it waiting for downloads.
 
 > **Tip:** If you already have Python 3.11 or newer (from python.org, Anaconda or Miniconda), you can skip this.
 > SHOBS-P checks each Python it finds and uses the first one that has everything it needs, including Tkinter, the
-> window toolkit. Your own Python is never changed: SHOBS-P makes its own environment from it (see below).
+> window toolkit. SHOBS-P makes its own environment from it (see below), so your Python is normally left as it is.
 
 ## Install SHOBS-P
 
@@ -44,7 +44,7 @@ You now have a SHOBS-P icon on the Desktop and in the Start menu.
 If the window instead says `The shortcuts could not be made. Leave this window open and copy the message above.`,
 the lines above it say why. If it says `SHOBS-P could not find a Python it can use.`, every Python it tried is listed
 with the reason it was not usable. Install Python from python.org (tick **Add python.exe to PATH**) and run
-**Create shortcuts.bat** again. With Anaconda, you can also run **Create shortcuts.bat** from the Anaconda Prompt.
+**Create shortcuts.bat** again.
 
 > **Tip:** To pin SHOBS-P to the taskbar, open the Start menu, right-click **SHOBS-P** and choose **Pin to
 > taskbar**. You can also right-click the running program's taskbar button. The pin keeps the SHOBS-P icon.
@@ -117,7 +117,8 @@ That is expected here; the stars are already marked for you.
 1. Download the new zip from the releases page.
 2. Unzip it. You can replace the old folder or unzip beside it.
 3. Run **Create shortcuts.bat** in the new folder. It points the shortcuts at the new version and installs any new
-   packages it needs. SHOBS-P's own Python environment is shared by every version, so this is quick.
+   packages it needs. SHOBS-P's own Python environment is shared by every version, so this is quick. (The first time
+   you run it after updating from 2.2.18 or older, it sets that environment up and downloads the packages once.)
 
 Your settings (site, telescope, and so on) are kept in your Windows user folder, not in the SHOBS-P folder, so an
 update does not lose them. Chapter 3 lists what is remembered.

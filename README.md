@@ -80,7 +80,7 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
 2. Download **`SHOBS-P_v<version>.zip`** from the latest [release](../../releases/latest) and unzip it somewhere
    permanent (for example `C:\Astro`). It makes a `clearv_photometry` folder.
 3. In that folder, double-click **`Create shortcuts.bat`**. It finds a working Python, sets up SHOBS-P's own environment
-   (your Python is left untouched), installs the packages there (a few minutes the first time) and puts a SHOBS-P icon
+   (your own Python is left as it is), installs the packages there (a few minutes the first time) and puts a SHOBS-P icon
    on the Desktop and in the Start menu.
 4. Double-click **`Run self-test.bat`**. It changes nothing, takes a minute, and should end with
    `RESULT: ALL PASSED` in `selftest_log.txt`.

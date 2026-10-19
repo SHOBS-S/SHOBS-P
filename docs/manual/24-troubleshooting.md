@@ -68,7 +68,7 @@ and copy the message above."*). Use it when the desktop shortcut does nothing.
 | Problem | Fix |
 |---|---|
 | Double-clicking the shortcut does nothing. | Start **run_windows.bat** and read the console. If the Python SHOBS-P used was removed or upgraded, run **Create shortcuts.bat** again: it finds a working Python and rebuilds SHOBS-P's own environment. |
-| *"SHOBS-P could not find a Python it can use."* | Each Python it tried is listed above that line with the reason. Install Python 3.11 or newer from python.org (tick **Add python.exe to PATH**), or with Anaconda run **Create shortcuts.bat** from the Anaconda Prompt, then try again. |
+| *"SHOBS-P could not find a Python it can use."* | Each Python it tried is listed above that line with the reason. Install Python 3.11 or newer from python.org (tick **Add python.exe to PATH**), then try again. |
 | The shortcut stopped working after you moved the folder. | Run **Create shortcuts.bat** again from the new place. |
 | *matplotlib is not installed.* where the image should be. | The packages did not install. Run **run_windows.bat**, which installs them, and read any error it shows. |
 | The window runs off the screen, or text is cut. | Maximize the window. On a scaled display (125–150%) the lower rows of the Output pages need the full height. In a narrow window (for example half the screen), the Input page's boxes and the Photometry page's **View** box wrap onto more rows instead of hiding. |
