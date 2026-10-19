@@ -1,15 +1,8 @@
 @echo off
+rem Starts SHOBS-P with this console window beside it (useful when the program will not start from its icon).
+rem Uses the same Python as the shortcuts, and checks the packages first. See setup_python.ps1.
 cd /d "%~dp0"
-where py >nul 2>&1
-if %errorlevel%==0 (
-  set PY=py
-) else (
-  set PY=python
-)
-echo Using %PY%
-%PY% -m pip install -r requirements.txt
-if errorlevel 1 goto fail
-%PY% clearv_app.py
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_python.ps1" -AppDir "%~dp0." -Action run
 if errorlevel 1 goto fail
 echo.
 echo App closed.

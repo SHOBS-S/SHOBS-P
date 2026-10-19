@@ -7,7 +7,7 @@ It takes about ten minutes, most of it waiting for downloads.
 
 - Windows 10 or 11.
 - An internet connection (for the install, and later for star and catalog lookups).
-- **Python 3.11 or newer** from python.org.
+- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works.
 
 ## Install Python
 
@@ -16,9 +16,9 @@ It takes about ten minutes, most of it waiting for downloads.
    find Python this way.
 3. Click **Install Now** and wait for it to finish.
 
-> **Tip:** If you already have Python 3.11 or newer from python.org, you can skip this. Python from other sources
-> (for example a version bundled with another program) may lack parts SHOBS-P needs, such as Tkinter, the window
-> toolkit.
+> **Tip:** If you already have Python 3.11 or newer (from python.org, Anaconda or Miniconda), you can skip this.
+> SHOBS-P checks each Python it finds and uses the first one that has everything it needs, including Tkinter, the
+> window toolkit. Your own Python is never changed: SHOBS-P makes its own environment from it (see below).
 
 ## Install SHOBS-P
 
@@ -29,17 +29,22 @@ It takes about ten minutes, most of it waiting for downloads.
    folder, so it should not move.
 4. Open the folder the zip made. It holds files such as `clearv_app.py`, `Create shortcuts.bat`,
    `Run self-test.bat`, `run_windows.bat` and `README.txt`.
-5. Double-click **Create shortcuts.bat**. A black window opens and says
-   `Checking the Python packages SHOBS-P needs...`. The first time, it downloads the packages SHOBS-P uses (NumPy,
-   SciPy, Matplotlib, Astropy, photutils and ccdproc). This takes a few minutes.
+5. Double-click **Create shortcuts.bat**. A black window opens. The first time it:
+   - says `Looking for a Python that can run SHOBS-P...` and lists each Python it tries, ending with
+     `usable:` and the one it picked;
+   - sets up SHOBS-P's own Python environment in `%LOCALAPPDATA%\SHOBS-P\python-env` (your own Python is left
+     untouched);
+   - says `Checking the Python packages SHOBS-P needs...` and downloads them (NumPy, SciPy, Matplotlib, Astropy,
+     photutils and ccdproc). This takes a few minutes.
 6. When it says `Done. Start SHOBS-P from the Desktop icon or the Start menu.`, press any key to close the window.
 
 You now have a SHOBS-P icon on the Desktop and in the Start menu.
 
 
 If the window instead says `The shortcuts could not be made. Leave this window open and copy the message above.`,
-the lines above it say why. The usual cause is Python not being on the PATH: run the Python installer again, choose
-**Modify**, and tick **Add Python to environment variables**.
+the lines above it say why. If it says `SHOBS-P could not find a Python it can use.`, every Python it tried is listed
+with the reason it was not usable. Install Python from python.org (tick **Add python.exe to PATH**) and run
+**Create shortcuts.bat** again. With Anaconda, you can also run **Create shortcuts.bat** from the Anaconda Prompt.
 
 > **Tip:** To pin SHOBS-P to the taskbar, open the Start menu, right-click **SHOBS-P** and choose **Pin to
 > taskbar**. You can also right-click the running program's taskbar button. The pin keeps the SHOBS-P icon.
@@ -99,7 +104,8 @@ That is expected here; the stars are already marked for you.
 
 ## Other ways to start
 
-- **run_windows.bat** starts SHOBS-P with a black console window beside it. It also checks the Python packages first.
+- **run_windows.bat** starts SHOBS-P with a black console window beside it, using the same Python as the shortcuts.
+  It also checks the Python packages first.
   Use it when the program will not start from the icon: the console shows the error, and the window stays open with
   `The app did not start. Leave this window open and copy the message above.`
 - **On a Mac**, install Python from python.org (it includes Tkinter), install the packages with
@@ -110,8 +116,8 @@ That is expected here; the stars are already marked for you.
 
 1. Download the new zip from the releases page.
 2. Unzip it. You can replace the old folder or unzip beside it.
-3. If the folder's location changed, run **Create shortcuts.bat** again. It also installs any new packages the new
-   version needs.
+3. Run **Create shortcuts.bat** in the new folder. It points the shortcuts at the new version and installs any new
+   packages it needs. SHOBS-P's own Python environment is shared by every version, so this is quick.
 
 Your settings (site, telescope, and so on) are kept in your Windows user folder, not in the SHOBS-P folder, so an
 update does not lose them. Chapter 3 lists what is remembered.

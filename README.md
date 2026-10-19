@@ -63,7 +63,7 @@ Sloan g′r′i′), and error bars from the CCD equation plus scintillation (Me
 ## Requirements
 
 - Windows 10 or 11
-- Python 3.11 or newer from [python.org](https://www.python.org/downloads/) (check "Add python.exe to PATH")
+- Python 3.11 or newer: [python.org](https://www.python.org/downloads/) (check "Add python.exe to PATH") or Anaconda/Miniconda
 - Packages (installed automatically): numpy, scipy, matplotlib, astropy, photutils, ccdproc
 
 ![SHOBS-P transit fit of TrES-3 b](docs/transit_fit.png)
@@ -79,8 +79,9 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
    screen, tick **"Add python.exe to PATH"**.
 2. Download **`SHOBS-P_v<version>.zip`** from the latest [release](../../releases/latest) and unzip it somewhere
    permanent (for example `C:\Astro`). It makes a `clearv_photometry` folder.
-3. In that folder, double-click **`Create shortcuts.bat`**. It installs the Python packages (a few minutes the first
-   time) and puts a SHOBS-P icon on the Desktop and in the Start menu.
+3. In that folder, double-click **`Create shortcuts.bat`**. It finds a working Python, sets up SHOBS-P's own environment
+   (your Python is left untouched), installs the packages there (a few minutes the first time) and puts a SHOBS-P icon
+   on the Desktop and in the Start menu.
 4. Double-click **`Run self-test.bat`**. It changes nothing, takes a minute, and should end with
    `RESULT: ALL PASSED` in `selftest_log.txt`.
 

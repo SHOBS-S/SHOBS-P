@@ -1,11 +1,11 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.18
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.18.1
 ======================================================
 
 Windows desktop app for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
 reports, exoplanet transit fits and AAVSO exoplanet reports, and a field scan that finds stars that vary.
 
 Quick start
-1. Install Python 3.11 or newer from python.org ("Add python.exe to PATH" ticked). Double-click "Create shortcuts.bat"
+1. Install Python 3.11 or newer (python.org, "Add python.exe to PATH" ticked; Anaconda also works). Double-click "Create shortcuts.bat"
    in this folder, then "Run self-test.bat" (it should end with RESULT: ALL PASSED).
 2. Try it first: on the Input page press "Try it with sample data…" and pick an empty folder; every box is filled and
    the stars are marked. Then Blink, Calibrate, Photometry, Output.
@@ -38,8 +38,8 @@ Process flow
 5. Output: light curve, folded curve, check-star plot, Lomb-Scargle periodogram; AAVSO Extended report, CSV, PNG.
 
 Run on Windows 11
-Python 3.11 or newer from python.org, with "Add python.exe to PATH" checked.
-Double-click "Create shortcuts.bat" once: it installs the Python packages and puts a SHOBS-P icon on the Desktop and
+Python 3.11 or newer: python.org (with "Add python.exe to PATH" checked) or Anaconda/Miniconda.
+Double-click "Create shortcuts.bat" once: it finds Python, makes SHOBS-P's own environment, installs the packages and puts a SHOBS-P icon on the Desktop and
 in the Start menu. Pin it by right-clicking the running app's taskbar button (Pin to taskbar); the shortcuts carry the
 app's ID, so the pin keeps the SHOBS-P icon and name. The shortcut starts the app without a console
 window; any error message is shown in the app and written to .shobs_p.log in your user folder. Run it again if you
@@ -53,6 +53,17 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.18.1 (install fix; no change to the program itself)
+- S  The start files find Python by testing it, not by trusting the Windows "py" launcher. Create shortcuts.bat,
+     Run self-test.bat and run_windows.bat now share setup_python.ps1: it tries py -3, python and python3 on the PATH
+     and the usual python.org, Anaconda and Miniconda folders (even when they are not on the PATH), and uses the
+     first Python 3.11 or newer whose SSL and Tkinter work. A PC with the py launcher but no Python registered with
+     it (for example with Anaconda) used to stop at "No installed Python found!".
+- S  SHOBS-P now keeps its own Python environment in %LOCALAPPDATA%\SHOBS-P\python-env, made from the Python it
+     found, so your own Python (and Anaconda's base environment) is never changed. It is shared by every SHOBS-P
+     version, so an update downloads nothing new unless requirements.txt changes. If a separate environment does
+     not work with that Python, SHOBS-P uses it directly, as before. Run Create shortcuts.bat once after updating.
 
 New in 2.2.18 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables)
 - S  Alt-az mounts and derotators, not only German equatorial mounts: a Mount box (German equatorial / Alt-az) in
