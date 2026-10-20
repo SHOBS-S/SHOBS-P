@@ -1,6 +1,7 @@
 # SHOBS-P User's Manual (version 2.2.18)
 
-> Draft, October 2026. Written for SHOBS-P 2.2.18 and checked against the program.
+> Draft, October 2026. Written for SHOBS-P 2.2.18 and checked against the program. Chapters 2 and 24 updated for
+> 2.2.18.1 (new install scripts; the program itself is unchanged).
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
