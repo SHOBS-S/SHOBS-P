@@ -61,6 +61,10 @@ def main() -> None:
     except Exception as exc:
         check("astropy / photutils import", False, str(exc))
     check("version is 2.2.3 or later", tuple(int(x) for x in ca.APP_VERSION.split(".")) >= (2, 2, 3), ca.APP_VERSION)
+    # 2.2.19 (#18): the multi-night module is in the install, and its timing arithmetic works (negative epochs too).
+    import multinight as mn
+    lin = mn.linear_ephemeris([-4, 0, 3], [2460000.0 - 4 * 2.5, 2460000.0, 2460000.0 + 3 * 2.5], [0.001] * 3)
+    check("multi-night linear ephemeris", lin is not None and abs(lin["period"] - 2.5) < 1e-9, lin and lin["period"])
 
     section("2  2.2.3 helpers")
     check("aperture 35.6 cm -> 356 mm", core.aperture_mm_from_settings({"aperture_cm": "35.6"}) == "356")

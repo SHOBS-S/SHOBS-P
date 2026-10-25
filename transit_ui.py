@@ -159,6 +159,8 @@ class TransitPage:
         ttk.Button(row4, text="Tonight's transits…", command=lambda: FinderWindow(app)).pack(side=LEFT)
         ttk.Button(row4, text="Transit planner…", command=lambda: PlannerWindow(app)).pack(side=LEFT, padx=(6, 0))
         ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT, padx=6)
+        # 2.2.19 (#18): several nights of the planet fitted together; timing per epoch and an updated ephemeris.
+        ttk.Button(row4, text="Multi-night…", command=self.open_multinight).pack(side=LEFT)
         # 2.2.17 (item 4): Variable View's comp windows here too; a Use comps change refits the transit.
         self.comp_health_button = ttk.Button(row4, text="Comp health…", command=self.open_comp_health)
         self.comp_health_button.pack(side=LEFT, padx=(12, 0))
@@ -314,6 +316,20 @@ class TransitPage:
         # 2.2.11: no hint here (the plot's placeholder says what to do); the notes column shows only real notes.
         self._notes_text([])
         self._update_comp_buttons()
+
+    def open_multinight(self):
+        """2.2.19 (#18): the multi-night transit window (one at a time; a second click brings it forward)."""
+        win = getattr(self, "_multinight", None)
+        if win is not None:
+            try:
+                win.win.deiconify()
+                win.win.lift()
+                return win
+            except Exception:
+                self._multinight = None
+        import multinight
+        self._multinight = multinight.MultiNightWindow(self.app, self)
+        return self._multinight
 
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
@@ -1275,7 +1291,10 @@ class TransitPage:
 
         rows = [
             ("Tc (BJD_TDB)", val("tc", "{:.5f}"), num(ff.get("tc"), "{:.5f}"),
-             num((r or {}).get("tc_pred"), "{:.5f}"), exo("Tc", "{:.5f}")),
+             num((r or {}).get("tc_pred"), "{:.5f}")
+             # 2.2.19 (#29): the predicted Tc with its propagated ephemeris uncertainty
+             + ((f" ± {r['tc_pred_err']:.5f}" if r["tc_pred_err"] >= 5e-5 else f" ± {r['tc_pred_err']:.1e}")
+                if r and r.get("tc_pred") is not None and r.get("tc_pred_err") is not None else ""), exo("Tc", "{:.5f}")),
             ("Rp/R*", val("k", "{:.4f}"), num(ff.get("k"), "{:.4f}"), num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
             # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
             ("Depth (%)", val("depth", "{:.2f}", 100), num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
@@ -1291,10 +1310,11 @@ class TransitPage:
             ("Airmass slope", val("c_am", "{:.4f}"), "", "", ""),
         ]
         if r:
-            oc = ((r["best"]["tc"] - r["tc_pred"]) * 1440
-                  if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None else None)
-            sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if oc is not None else None
-            rows.insert(1, ("O − C (min)", f"{oc:+.2f} ± {sig:.2f}" if oc is not None else "", "", "0", ""))
+            # 2.2.19 (#29): O − C in minutes and in sigma (fit and ephemeris sigma in quadrature).
+            o = tc.oc_summary(r)
+            rows.insert(1, ("O − C (min)", (f"{o['oc_min']:+.2f} ± {o['sigma_min']:.2f} ({o['nsigma']:+.1f}σ)"
+                                            if math.isfinite(o["nsigma"]) else f"{o['oc_min']:+.2f}") if o else "", "",
+                            f"0 ± {o['pred_err_min']:.2f} (ephemeris)" if o else "0", ""))
             flip = r.get("flip")
             if flip:
                 # 2.2.13: the flip step, the depth without it, and how much the two trade off.
@@ -1971,6 +1991,11 @@ class TransitPage:
         if trim:
             # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(trim["report_note"])
+        o = tc.oc_summary(self.result or {})
+        if o is not None and state != "none" and (self.report or {}).get("date_type") != "JD_UTC":
+            # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
+            meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "") + "SHOBS-P "
+                             + tc.oc_text(o, ascii_only=True))
         fnote = tc.flip_report_note(self.result or {})
         if fnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
@@ -2039,7 +2064,8 @@ class TransitPage:
         if not fit_path:
             return
         try:
-            n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC")
+            n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC",
+                              meta=self.meta_for_files)
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}")
             return
@@ -2335,7 +2361,7 @@ class TransitPage:
         return files, png_print
 
 
-def write_fit_csv(path: str, r: dict, jd_utc: bool = False) -> int:
+def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = None) -> int:
     """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
     the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
     flagged "trimmed", with no error, model or residual (they were left out of the fit); frames put back from a flag
@@ -2369,10 +2395,29 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False) -> int:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow([core.created_line()])
+        for line in fit_csv_comments(r, meta, jd_utc):     # 2.2.19 (#29, #18): unquoted, so each starts with "#"
+            fh.write(line + "\r\n")
         w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag"])
         for row in rows:
             w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5]])
     return len(rows)
+
+
+def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) -> list:
+    """2.2.19 (#29, #18): comment lines under the Created line of the fit CSV: the planet, filter and fitted Tc (so a
+    multi-night analysis can read the night back), and Tc against the ephemeris prediction (O - C). ASCII only."""
+    s = (r or {}).get("summary") or {}
+    pl = (r or {}).get("planet") or {}
+    filt = str((meta or {}).get("filter") or "").strip()
+    out = []
+    if "tc" in s:
+        out.append(core.ascii_safe(f"# Transit fit: planet {pl.get('name') or ''}; filter {filt or 'unknown'}; Tc "
+                                   f"{s['tc'][0]:.6f} +/- {s['tc'][1]:.6f} {'JD_UTC' if jd_utc else 'BJD_TDB'}; "
+                                   f"verdict {_state((r or {}).get('verdict'))}"))
+    o = tc.oc_summary(r or {})
+    if o is not None and not jd_utc:
+        out.append("# " + tc.oc_text(o, ascii_only=True))
+    return out
 
 
 # The DTG stamp lines only: "# Created 151200Z OCT 26 by SHOBS-P" (CSV, reports) and "Created        151200Z OCT 26"

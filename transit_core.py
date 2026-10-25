@@ -1144,6 +1144,58 @@ def ephemeris_source(planet: dict) -> str:
     return base + (f" ({ref})" if ref else "")
 
 
+def predicted_tc(tc_obs: float, t0: float, period: float, t0_err=None, period_err=None) -> dict:
+    """2.2.19 (#29, #18): the ephemeris's predicted mid-transit at the epoch nearest tc_obs, with its uncertainty
+    propagated as sqrt(sigma_T0^2 + (n * sigma_P)^2). n is negative for data before T0; squaring keeps the period
+    term adding to the uncertainty either way (EXOTIC's prior box subtracted it for n < 0). T0 and P are taken as
+    independent (published ephemerides rarely give their covariance). err_known is False when T0 has no stated
+    uncertainty (the error then counts only what is known)."""
+    n = int(round((float(tc_obs) - float(t0)) / float(period)))
+    pred = float(t0) + n * float(period)
+    err = math.hypot(float(t0_err or 0.0), n * float(period_err or 0.0))
+    return {"epoch": n, "tc": pred, "err": err, "err_known": t0_err is not None}
+
+
+def oc_summary(result: dict) -> dict | None:
+    """2.2.19 (#29): the fitted Tc against the ephemeris prediction for its epoch, in one place for the table, notes,
+    fit text, report notes and CSV. sigma = the fit's Tc error and the predicted Tc's error in quadrature.
+    None without an ephemeris."""
+    r = result or {}
+    if r.get("tc_pred") is None or r.get("tc_pred_err") is None:
+        return None
+    s = r.get("summary") or {}
+    tc_fit = (r.get("best") or {}).get("tc", (s.get("tc") or (None,))[0])
+    if tc_fit is None:
+        return None
+    fit_err = float(s["tc"][1]) if "tc" in s else float("nan")
+    pred_err = float(r["tc_pred_err"])
+    oc = (float(tc_fit) - float(r["tc_pred"])) * 1440.0
+    sig = math.hypot(fit_err, pred_err) * 1440.0 if math.isfinite(fit_err) else float("nan")
+    return {"epoch": r.get("epoch"), "pred": float(r["tc_pred"]), "pred_err": pred_err, "pred_err_min": pred_err * 1440,
+            "tc": float(tc_fit), "fit_err_min": fit_err * 1440, "oc_min": oc, "sigma_min": sig,
+            "nsigma": oc / sig if math.isfinite(sig) and sig > 0 else float("nan"),
+            "source": r.get("eph_source") or "the published ephemeris", "err_known": r.get("eph_err_known") is not False}
+
+
+def _pm_minutes(m: float) -> str:
+    """2.2.19 (#29): '±11.10 min', or '±0.41 s' for an uncertainty under 0.1 min (a precise modern ephemeris)."""
+    return f"±{m * 60:.2f} s" if m < 0.1 else f"±{m:.2f} min"
+
+
+def oc_text(o: dict, ascii_only: bool = False) -> str:
+    """2.2.19 (#29): "O − C +5.38 ± 11.15 min (+0.48σ; fit and ephemeris σ in quadrature) vs predicted Tc
+    2461328.625780 ± 0.007706 (±11.10 min) at epoch 2362; ephemeris from <source>". ascii_only for report headers."""
+    ns = f"{o['nsigma']:+.2f}σ" if math.isfinite(o["nsigma"]) else "σ n/a"
+    text = (f"O − C {o['oc_min']:+.2f} ± {o['sigma_min']:.2f} min ({ns}; fit and ephemeris σ in quadrature) vs "
+            f"predicted Tc {o['pred']:.6f} ± {o['pred_err']:.6f} BJD_TDB ({_pm_minutes(o['pred_err_min'])}) at epoch "
+            f"{o['epoch']}; ephemeris from {o['source']}" + ("" if o["err_known"] else " (T0 with no stated uncertainty)"))
+    if ascii_only:
+        text = re.sub(r"(\d)σ", r"\1 sigma", text).replace("σ", "sigma").replace("−", "-").replace("±", "+/-")
+        import photometry_core as core
+        text = core.ascii_safe(text)
+    return text
+
+
 def _norm_planet(name) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
 
@@ -1482,11 +1534,10 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                               "photometry log's Photon noise line). The fit scales its error bars up to match, so its "
                               "uncertainties include it."))
     if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
-        oc = (best["tc"] - r["tc_pred"]) * 1440
-        sig = math.hypot(s["tc"][1], r["tc_pred_err"]) * 1440 if "tc" in s else float("nan")
+        o = oc_summary(r)   # 2.2.19 (#29): predicted Tc with its propagated error, O − C in min and in sigma
+        oc, sig = o["oc_min"], o["sigma_min"]
         level = "warn" if (math.isfinite(sig) and sig > 0 and abs(oc) > 3 * sig) else "info"
-        src = r.get("eph_source") or "the published ephemeris"
-        flags.append((level, f"O − C {oc:+.1f} ± {sig:.1f} min (epoch {r['epoch']}); ephemeris from {src}."))
+        flags.append((level, oc_text(o) + "."))
         # 2.2.12: say when the ephemeris itself is the weak part.
         eph_min = r["tc_pred_err"] * 1440
         fit_min = (s["tc"][1] * 1440) if "tc" in s else float("nan")
@@ -2426,10 +2477,14 @@ def fit_text(result: dict, meta: dict) -> str:
             v, e = s[name]
             fmt = "{:.6f}" if name == "tc" else "{:.5f}"
             lines.append(f"  {label:<16}{fmt.format(v)} ± {fmt.format(e)}")
-    if result.get("tc_pred") is not None and result.get("tc_pred_err") is not None:
-        oc = (result["best"]["tc"] - result["tc_pred"]) * 1440
-        lines.append(f"  O − C           {oc:+.2f} min (epoch {result['epoch']}, predicted {result['tc_pred']:.6f} "
-                     f"± {result['tc_pred_err'] * 1440:.2f} min)")
+    o = oc_summary(result)
+    if o is not None:
+        # 2.2.19 (#29): the predicted Tc with its propagated error, and O − C in minutes and in sigma.
+        lines.append(f"  Predicted Tc    {o['pred']:.6f} ± {o['pred_err']:.6f} ({_pm_minutes(o['pred_err_min'])}; epoch "
+                     f"{o['epoch']}; ephemeris from {o['source']})")
+        lines.append(f"  O − C           {o['oc_min']:+.2f} ± {o['sigma_min']:.2f} min ("
+                     + (f"{o['nsigma']:+.2f}σ" if math.isfinite(o["nsigma"]) else "σ n/a")
+                     + f"; fit ±{o['fit_err_min']:.2f} and ephemeris ±{o['pred_err_min']:.2f} min in quadrature)")
     lines += ["", "Priors           " + ", ".join(f"{k} {m:.4g} ± {sd:.2g}" for k, (m, sd) in result["priors"].items())
               + f"; limb darkening u1 {result['ld_prior'][0]:.2f}, u2 {result['ld_prior'][1]:.2f} ± {result['ld_prior'][2]:.2f}"
               + (f" (Claret 2004, Sloan {core_band_label(result['ld_band'])})" if result.get("ld_band") else
