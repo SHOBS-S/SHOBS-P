@@ -168,6 +168,13 @@ class TransitPage:
         self.use_comps_button.pack(side=LEFT, padx=(6, 0))
         self.comp_hint = StringVar(value="")
         ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        # 2.2.19 (#18 review): the tools row wraps like text when the page is narrow (125 % on a 1366-px screen).
+        self._row4, self._row4_key = row4, None
+        try:
+            row4.bind("<Configure>", lambda e: self._flow_row4(e.width), add="+")
+            self.comp_hint.trace_add("write", lambda *_a: self._flow_row4(self._row4.winfo_width()))
+        except Exception:
+            pass
         self._refit_pending = False
 
         # 2.2.17 (item 5): leave out a stretch of time and refit (no new reduction, same comps).
@@ -316,6 +323,27 @@ class TransitPage:
         # 2.2.11: no hint here (the plot's placeholder says what to do); the notes column shows only real notes.
         self._notes_text([])
         self._update_comp_buttons()
+
+    def _flow_row4(self, width: int):
+        """Lay the Transit tools row out in as many lines as its width needs (clearv_app.flow_rows)."""
+        try:
+            from clearv_app import flow_rows
+            kids = list(self._row4.winfo_children())
+            pads = [12 if w is self.comp_health_button else 8 for w in kids]
+            widths = [int(w.winfo_reqwidth()) + p for w, p in zip(kids, pads)]
+            rows = flow_rows(widths, max(int(width), 1) if width and width > 1 else None)
+            key = tuple(tuple(r) for r in rows)
+            if key == self._row4_key:
+                return
+            self._row4_key = key
+            for w in kids:
+                w.pack_forget()
+                w.grid_forget()
+            for r, row in enumerate(rows):
+                for c, i in enumerate(row):
+                    kids[i].grid(row=r, column=c, sticky=W, padx=(0, pads[i]), pady=(0, 2))
+        except Exception:
+            pass
 
     def open_multinight(self):
         """2.2.19 (#18): the multi-night transit window (one at a time; a second click brings it forward)."""

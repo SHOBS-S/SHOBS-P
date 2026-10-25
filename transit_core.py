@@ -670,7 +670,7 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
     tc0 = planet.get("t0")
     eph_err_known = False
     if tc0:
-        n = round((np.mean(t_abs) - tc0) / period)
+        n = int(round((np.mean(t_abs) - tc0) / period))   # 2.2.19 review: a plain int (NumPy 1.x printed 2362.0)
         tc_pred = tc0 + n * period
         eph_err_known = planet.get("t0_err") is not None
         tc_pred_err = math.hypot(planet.get("t0_err") or 0.0, abs(n) * (planet.get("period_err") or 0.0))
@@ -1171,7 +1171,8 @@ def oc_summary(result: dict) -> dict | None:
     pred_err = float(r["tc_pred_err"])
     oc = (float(tc_fit) - float(r["tc_pred"])) * 1440.0
     sig = math.hypot(fit_err, pred_err) * 1440.0 if math.isfinite(fit_err) else float("nan")
-    return {"epoch": r.get("epoch"), "pred": float(r["tc_pred"]), "pred_err": pred_err, "pred_err_min": pred_err * 1440,
+    ep = r.get("epoch")
+    return {"epoch": int(ep) if ep is not None else None, "pred": float(r["tc_pred"]), "pred_err": pred_err, "pred_err_min": pred_err * 1440,
             "tc": float(tc_fit), "fit_err_min": fit_err * 1440, "oc_min": oc, "sigma_min": sig,
             "nsigma": oc / sig if math.isfinite(sig) and sig > 0 else float("nan"),
             "source": r.get("eph_source") or "the published ephemeris", "err_known": r.get("eph_err_known") is not False}
