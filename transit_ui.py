@@ -174,7 +174,9 @@ class TransitPage:
         ttk.Checkbutton(row4, text="credible bands", variable=self.show_bands,
                         command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(6, 0))
         self.comp_hint = StringVar(value="")
-        ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        self.comp_hint_label = ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel",
+                                         justify=LEFT)   # 2.2.19 (r2: nit): wraps at the row's width (_flow_row4)
+        self.comp_hint_label.pack(side=LEFT, padx=8)
         # 2.2.19 (#18 review): the tools row wraps like text when the page is narrow (125 % on a 1366-px screen).
         self._row4, self._row4_key = row4, None
         try:
@@ -218,23 +220,37 @@ class TransitPage:
         results = ttk.Frame(card, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(6, 0))
         self.results_row = results
-        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
-        ttk.Button(results, text="Save AAVSO exoplanet report…", style="Accent.TButton",
-                   command=self.save_aavso).pack(side=LEFT)
-        # 2.2.15 (items 8, 9): the upload pages, beside the saves they are for.
-        ttk.Button(results, text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet).pack(
-            side=LEFT, padx=(6, 0))
-        ttk.Button(results, text="Save ExoFOP package…", command=self.save_package).pack(side=LEFT, padx=(6, 0))
-        ttk.Button(results, text="Open ExoFOP…", command=self.open_exofop).pack(side=LEFT, padx=6)
-        # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
-        ttk.Button(results, text="Save light-curve CSV…", command=self.save_csv).pack(side=LEFT)
-        # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
-        ttk.Button(results, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT, anchor="n")
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
         ttk.Button(results, text="Variable View  ▶", style="Accent.TButton", command=app.show_variables_view).pack(
-            side=RIGHT)
+            side=RIGHT, anchor="n")
+        # 2.2.19 (r2: S2): the save buttons wrap like text when the page is narrow (125 % on a 1366-px screen), as
+        # the tools row does (_flow_row4).
+        rbox = ttk.Frame(results, style="Card.TFrame")
+        rbox.pack(side=LEFT, fill=X, expand=True)
+        self._results_box, self._results_key, self._results_pads = rbox, None, []
+
+        def _rbutton(text, command, pad=6, **kw):
+            b = ttk.Button(rbox, text=text, command=command, **kw)
+            b.pack(side=LEFT, padx=(0, pad))
+            self._results_pads.append(pad)
+            return b
+
+        _rbutton(text="Save AAVSO exoplanet report…", command=self.save_aavso, style="Accent.TButton")
+        # 2.2.15 (items 8, 9): the upload pages, beside the saves they are for.
+        _rbutton(text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet)
+        _rbutton(text="Save ExoFOP package…", command=self.save_package)
+        _rbutton(text="Open ExoFOP…", command=self.open_exofop)
+        # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
+        _rbutton(text="Save light-curve CSV…", command=self.save_csv)
+        # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
+        _rbutton(text="Save plot PNG…", command=self.save_png)
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
-        ttk.Button(results, text="Save field image…", command=app.save_field_image).pack(side=LEFT)
+        _rbutton(text="Save field image…", command=app.save_field_image)
+        try:
+            rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
+        except Exception:
+            pass
         self.bar = ttk.Progressbar(prog, length=320, mode="determinate", maximum=1)
         self.bar.pack(side=LEFT)
         self.prog_text = StringVar(value="")
@@ -338,6 +354,12 @@ class TransitPage:
         try:
             from clearv_app import flow_rows
             kids = list(self._row4.winfo_children())
+            if width and width > 1:
+                # 2.2.19 (r2: nit): a long hint wraps inside the row instead of widening the page
+                try:
+                    self.comp_hint_label.configure(wraplength=max(120, int(width) - 16))
+                except Exception:
+                    pass
             pads = [12 if w is self.comp_health_button else 8 for w in kids]
             widths = [int(w.winfo_reqwidth()) + p for w, p in zip(kids, pads)]
             rows = flow_rows(widths, max(int(width), 1) if width and width > 1 else None)
@@ -345,6 +367,27 @@ class TransitPage:
             if key == self._row4_key:
                 return
             self._row4_key = key
+            for w in kids:
+                w.pack_forget()
+                w.grid_forget()
+            for r, row in enumerate(rows):
+                for c, i in enumerate(row):
+                    kids[i].grid(row=r, column=c, sticky=W, padx=(0, pads[i]), pady=(0, 2))
+        except Exception:
+            pass
+
+    def _flow_results(self, width: int):
+        """2.2.19 (r2: S2): lay the Results row's save buttons out in as many lines as its width needs."""
+        try:
+            from clearv_app import flow_rows
+            kids = list(self._results_box.winfo_children())
+            pads = list(self._results_pads) + [6] * (len(kids) - len(self._results_pads))
+            widths = [int(w.winfo_reqwidth()) + p for w, p in zip(kids, pads)]
+            rows = flow_rows(widths, max(int(width), 1) if width and width > 1 else None)
+            key = tuple(tuple(r) for r in rows)
+            if key == self._results_key:
+                return
+            self._results_key = key
             for w in kids:
                 w.pack_forget()
                 w.grid_forget()
@@ -912,17 +955,19 @@ class TransitPage:
         rep = meta.get("repro") or {}
         if not rep:
             return ""
+        # 2.2.19 (r2: S6): only aperture/sky (bin), frames left out, detrend and gain; comps, check and calibration
+        # are in <report stem>_settings.txt and the log (the NOTES line had grown to ~1.4 kB).
         parts = [rep.get("aperture", "").replace(" (at processing bin", " (bin")]
-        parts.append("comps " + rep.get("comps", "").split(" (Use comps choice")[0])
-        parts.append("check " + rep.get("check", "none"))
         if rep.get("left_out") and rep["left_out"] != "none":
             parts.append("left out " + rep["left_out"])
         tr = self._trimmed_frames(meta, r)
         if tr:
             parts.append("trimmed " + tr)
         parts.append("detrend " + (", ".join(r.get("detrend") or []) or "none"))
-        parts.append(rep.get("gain", ""))
-        parts.append("cal " + rep.get("calibration", ""))
+        gain = str(rep.get("gain", "") or "")
+        if "(header EGAIN)" not in gain:
+            gain = gain.split(" (")[0]
+        parts.append(gain)
         return "SHOBS-P settings: " + "; ".join(p for p in parts if p)
 
     # ---- fit -------------------------------------------------------------------------------
@@ -1245,7 +1290,11 @@ class TransitPage:
             self.app.log("Transit fit: " + meta["trim"]["text"])
         lines = self.settings_lines(meta, result)
         if lines:   # 2.2.19 (#40): the run's settings, in full, in the log (one line per fit)
-            self.app.log("Transit fit settings: " + " | ".join(lines))
+            text = "Transit fit settings: " + " | ".join(lines)
+            # 2.2.19 (r2: nit): a refit with the same settings (e.g. an automatic one) does not repeat the line
+            if text != getattr(self, "_settings_logged", None):
+                self._settings_logged = text
+                self.app.log(text)
         result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
@@ -3537,6 +3586,10 @@ class FinderWindow:
         if not e:
             return
         app = self.app
+        if getattr(app, "busy", False):
+            # 2.2.19 (r2: S9): a star change waits for the running job (its stars must not be cleared under it)
+            app.status.set(f"{e['name']}: wait for the current step to finish (or cancel it), then choose it again.")
+            return
         if app.mode_key != "transits":
             app.set_mode("transits")
         app.planet_name.set(e["name"])

@@ -1941,9 +1941,17 @@ class App(Tk):
             return
         if value != "" and float(value).is_integer():
             value = int(value)
-        if self.settings.get("linear_limit_adu", "") != value:
-            self.settings["linear_limit_adu"] = value
-            self._save_settings()
+        # 2.2.19 (r2: nit): saved 0.7 s after the last keystroke (as the other remembered boxes), not per keystroke
+        pending = self.__dict__.setdefault("_own_value_after", {})
+        if pending.get("linear_limit_adu"):
+            try:
+                self.after_cancel(pending["linear_limit_adu"])
+            except Exception:
+                pass
+        if self.settings.get("linear_limit_adu", "") == value:
+            pending.pop("linear_limit_adu", None)
+            return
+        pending["linear_limit_adu"] = self.after(700, lambda v=value: self._store_own_value("linear_limit_adu", v))
 
     def _linear_limit(self):
         """2.2.19 (#16): the linear limit in raw ADU when one is set below the saturation level, else None (then the
@@ -2002,27 +2010,69 @@ class App(Tk):
 
     def _raw_peak_at(self, xy) -> float:
         """2.2.19 (#16): the brightest raw pixel around xy (image coordinates) in the reference frame's raw file. Only a
-        small window of the file is read (review S6: not the whole 52 MB frame on the window's thread)."""
-        if not self.preview_path:
+        small window of the file is read (review S6: not the whole 52 MB frame on the window's thread).
+        2.2.19 (r2: S5b): cached per (file, modified time). A file that cannot be read by windows (XISF, odd FITS) is
+        read whole once, in a worker thread, and kept as raw_block_max tiles; until then the note is left out and the
+        star panel is refreshed when the tiles are ready."""
+        path = self.preview_path
+        if not path:
             return float("nan")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
         cache = getattr(self, "_raw_cache", None)
-        if cache is None or cache[0] != self.preview_path:
-            cache = self._raw_cache = (self.preview_path, None, {})
-        peaks = cache[2]
+        if not isinstance(cache, dict) or cache.get("key") != (path, mtime):
+            cache = self._raw_cache = {"key": (path, mtime), "peaks": {}, "window": None, "blocks": None,
+                                       "loading": False}
         try:
             radius = float(self.radius.get())
             binning = self._image_binning()
         except Exception:
             return float("nan")
+        total_bin = binning * (1 if self.pattern.get() == core.MONO else 2)
+        star = core.Star("p", float(xy[0]), float(xy[1]))
+        if cache["window"] is None:
+            cache["window"] = core.raw_window_readable(path)
+        if not cache["window"]:
+            if cache["blocks"] is not None:
+                return core.raw_peak_from_blocks(cache["blocks"], star, radius, total_bin)
+            if not cache["loading"] and not cache.get("failed"):
+                cache["loading"] = True
+                self._load_raw_blocks(cache, path)
+            return float("nan")
+        peaks = cache["peaks"]
         key = (round(float(xy[0]), 1), round(float(xy[1]), 1), radius, binning, self.pattern.get())
         if key not in peaks:
-            total_bin = binning * (1 if self.pattern.get() == core.MONO else 2)
             try:
-                peaks[key] = core.raw_peak_in_file(self.preview_path, core.Star("p", float(xy[0]), float(xy[1])),
-                                                   radius, total_bin)
+                peaks[key] = core.raw_peak_in_file(path, star, radius, total_bin)
             except Exception:
                 peaks[key] = float("nan")
         return peaks[key]
+
+    def _load_raw_blocks(self, cache: dict, path: str):
+        """2.2.19 (r2: S5b): read a raw frame that has no window access whole, in a worker thread, for _raw_peak_at."""
+        def work():
+            try:
+                raw, _h = core.read_fits(path)
+                blocks = core.raw_block_max(raw)
+                del raw
+            except Exception:
+                blocks = None
+            self.call_ui(done, blocks)
+
+        def done(blocks):
+            cache["loading"] = False
+            cache["failed"] = blocks is None   # not read again for this file
+            if blocks is None or getattr(self, "_raw_cache", None) is not cache:
+                return
+            cache["blocks"] = blocks
+            try:
+                self.update_star_panel()
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _remember_telescope(self):
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
@@ -2217,10 +2267,15 @@ class App(Tk):
             k += 1
         return f"{root}_{k}{ext}"
 
-    @staticmethod
-    def _suffixed(path: str, k: int) -> str:
+    @classmethod
+    def _suffixed(cls, path: str, k: int) -> str:
         if k <= 1:
             return path
+        # 2.2.19 (r2: S7): a derived name (<stem>_field.png) takes the set number on its stem, as the file saved beside
+        # a numbered report does (X_2_field.png, not X_field_2.png)
+        for suf in cls.FAMILY_DERIVED:
+            if path.endswith(suf) and len(path) > len(suf):
+                return f"{path[:-len(suf)]}_{k}{suf}"
         root, ext = os.path.splitext(path)
         return f"{root}_{k}{ext}"
 
@@ -2280,20 +2335,33 @@ class App(Tk):
     # <stem>_aavso_chart.png. A number is free only when none of these exists either.
     FAMILY_DERIVED = ("_corner.png", "_settings.txt", "_field.png", "_aavso_chart.png")
 
-    def _set_taken(self, folder: str, names, k: int) -> bool:
-        """2.2.19 (review): is number k taken for any of these names, or for a file derived from one of them?"""
+    def _set_taken(self, folder: str, names, k: int, ignore=()) -> bool:
+        """2.2.19 (review): is number k taken for any of these names, or for a file derived from one of them?
+        ignore: files of the set itself (2.2.19 r2: S7: its own field image does not take the number from its report)."""
+        ignore = {os.path.normcase(os.path.abspath(p)) for p in ignore}
+
+        def exists(p):
+            return os.path.exists(p) and os.path.normcase(os.path.abspath(p)) not in ignore
+
         for n in names:
             path = self._suffixed(os.path.join(folder, n), k)
-            if os.path.exists(path):
+            if exists(path):
                 return True
             stem = os.path.splitext(path)[0]
-            if any(os.path.exists(stem + suf) for suf in self.FAMILY_DERIVED):
+            stems = [stem]
+            base = os.path.basename(stem)
+            if base.startswith("AAVSO_"):
+                # 2.2.19 (r2: S7): a report's field image and chart drop "AAVSO_" (AAVSO_X_2.txt -> X_2_field.png)
+                stems.append(os.path.join(os.path.dirname(stem), base[len("AAVSO_"):]))
+            if any(exists(st + suf) for st in stems for suf in self.FAMILY_DERIVED):
                 return True
         return False
 
-    def _family_path(self, folder: str, filename: str) -> str:
+    def _family_path(self, folder: str, filename: str, peek: bool = False) -> str:
         """2.2.3: one number for one save. The first of the three files saved for these results picks the lowest
-        number free for all three names; the others reuse it. Saving the same kind again starts a new set."""
+        number free for all three names; the others reuse it. Saving the same kind again starts a new set.
+        2.2.19 (r2: S8): peek=True only suggests the name (the set is left as it is), for a dialog that may be
+        canceled."""
         key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
         state = getattr(self, "_save_set", None)
         names = self._family_names()
@@ -2301,13 +2369,16 @@ class App(Tk):
             names = names + [filename]
         if state and state["key"] == key and filename not in state["used"]:
             path = self._suffixed(os.path.join(folder, filename), state["k"])
-            if not self._set_taken(folder, [filename], state["k"]):
-                state["used"].add(filename)
+            own = [self._suffixed(os.path.join(folder, u), state["k"]) for u in state["used"]]
+            if not self._set_taken(folder, [filename], state["k"], ignore=own):
+                if not peek:
+                    state["used"].add(filename)
                 return path
         k = 1
         while self._set_taken(folder, names, k):
             k += 1
-        self._save_set = {"key": key, "k": k, "used": {filename}}
+        if not peek:
+            self._save_set = {"key": key, "k": k, "used": {filename}}
         return self._suffixed(os.path.join(folder, filename), k)
 
     def _out_folder(self) -> str:
@@ -2339,10 +2410,13 @@ class App(Tk):
         # after the extension ("…_SHOBS-P.txt.2", made "…_SHOBS-P.txt.2.txt" by the dialog) is put back in the _2
         # form, and never onto a file that exists (the dialog only asked about the name as typed).
         start = getattr(self, "_result_dir", "")
+        suggest = ""
         kwargs = {"title": title, "initialfile": safe}
         if start and os.path.isdir(start):
             kwargs["initialdir"] = start
-            suggest = self._family_path(start, safe) if family else self._unique_path(os.path.join(start, safe))
+            # 2.2.19 (r2: S8): only a suggestion (peek): a canceled dialog leaves the numbered set as it was
+            suggest = (self._family_path(start, safe, peek=True) if family
+                       else self._unique_path(os.path.join(start, safe)))
             kwargs["initialfile"] = os.path.basename(suggest)
         if defaultextension:
             kwargs["defaultextension"] = defaultextension
@@ -2359,6 +2433,10 @@ class App(Tk):
             path = free
         if path:
             self._result_dir = os.path.dirname(os.path.abspath(path))
+            # 2.2.19 (r2: S8): the suggested name was saved: it now joins (or starts) the numbered set
+            if family and suggest and os.path.normcase(os.path.abspath(path)) == os.path.normcase(
+                    os.path.abspath(suggest)):
+                self._family_path(start, safe)
         return path
 
     def saved_notice(self, path: str, advice: str = ""):
@@ -3102,8 +3180,14 @@ class App(Tk):
         if different and old_star and p.get("host") and not core.same_object_name(old_star, p["host"]):
             # 2.2.16 (item 11): a planet of another star: the old field's comps, check and watch stars go too.
             # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
-            if self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
-                                 keep_planet=True) is None:
+            switched = self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
+                                         keep_planet=True)
+            if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
+                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: wait for the "
+                                       "current step to finish, then press Enter in the planet box again.")
+                self._last_planet_lookup = None
+                return
+            if switched is None:
                 # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
                 self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
                                        "and its series. Check the planet's name, or answer Yes to start a new "
@@ -3329,6 +3413,7 @@ class App(Tk):
         self.dec_deg.set("")
         self._radec_filled = None   # 2.2.15
         self.target_xy = None
+        self._forget_target_search()   # 2.2.19 (r2: M1)
         for role in COMP_ROLES + ("check",):
             self.clear_mark(role, redraw=False)
         self.star_bands = {}
@@ -3386,8 +3471,15 @@ class App(Tk):
         never reach the new field (they marked the new night "nocomp"). keep_planet: the planet just chosen stays.
         If the series save question is canceled, only the old field's stars are cleared (and a run then refuses the
         old Use comps choice, see _photometry_done). True when a new reduction was made; None when the open series'
-        question was answered No (review: a mistyped planet must never close a saved series silently)."""
-        if self.observations and not self.busy:
+        question was answered No (review: a mistyped planet must never close a saved series silently); "busy" when a
+        job is running (nothing changed; 2.2.19 r2: S9)."""
+        if self.busy:
+            # 2.2.19 (r2: S9): never clear the stars a running job is measuring; the user picks the star again after
+            self.log(f"Star change not applied ({why}): wait for the current step to finish (or cancel it), then "
+                     "choose the star again.")
+            self.status.set("Wait for the current step to finish (or cancel it), then choose the new star again.")
+            return "busy"
+        if self.observations:
             name = os.path.basename(self.series_path) if self.series_path else "the open series"
             old = self.star_id.get().strip() or "the old target"
             if not messagebox.askyesno(
@@ -3479,6 +3571,7 @@ class App(Tk):
         self.comp_band_sources = {}
         self.active_comps = []
         self._comps_under = {}            # 2.2.19 (#34)
+        self._forget_target_search()      # 2.2.19 (r2: M1)
         self._series_catalog_before = None
         self._series_check = ("", "")
         self._target_bv = None
@@ -3941,6 +4034,12 @@ class App(Tk):
         self.ra_hours.set(f"{found['ra_hours']:.6f}")
         self.dec_deg.set(f"{found['dec_deg']:.5f}")
         self._radec_filled = None   # 2.2.15: the target's own RA/Dec now
+        # 2.2.19 (r2: M1): a lookup of another star places the Target marker anew: the old target's frame search
+        # (frames without it, hop cap) is forgotten. The same star looked up again keeps it.
+        ident = self._target_identity()
+        if getattr(self, "_target_search_radec", None) is not None and (ident is None
+                                                                         or ident[1:] != self._target_search_radec):
+            self._forget_target_search()
         self.catalog_period = found.get("period_days")
         self.target_auid = str(found.get("auid") or "")   # 2.2.19 (nit): the Series box's Star line
         self.target_auid_name = name or self.star_id.get().strip()
@@ -5113,6 +5212,41 @@ class App(Tk):
     def _pct_text(value) -> str:
         return f"{float(value):g}%"
 
+    def _meas_one_line(self) -> int:
+        """2.2.19 (r2: S2): the Photometry settings row's width on one line (px, padding included)."""
+        total = 0
+        for g, pad in getattr(self, "_meas_groups", []):
+            try:
+                total += int(g.winfo_reqwidth()) + int(round(pad * ui_scale(self)))
+            except Exception:
+                pass
+        return total
+
+    def _flow_meas(self, avail):
+        """2.2.19 (r2: S2): lay the Photometry settings groups (aperture, sky, Suggest, raw sat, linear ADU, Also
+        measure R and B) out in as many lines as avail px needs (None: one line)."""
+        groups = getattr(self, "_meas_groups", [])
+        if not groups:
+            return
+        try:
+            scale = ui_scale(self)
+            pads = [int(round(pad * scale)) for _g, pad in groups]
+            widths = [int(g.winfo_reqwidth()) + p for (g, _pad), p in zip(groups, pads)]
+            rows = flow_rows(widths, avail)
+            key = tuple(tuple(r) for r in rows)
+            if key == self._meas_key:
+                return
+            self._meas_key = key
+            for g, _pad in groups:
+                g.pack_forget()
+                g.grid_forget()
+            for r, row in enumerate(rows):
+                for c, i in enumerate(row):
+                    groups[i][0].grid(row=r, column=c, sticky=W, padx=(0 if c == 0 and r else pads[i], 0),
+                                      pady=(0, 2))
+        except Exception:
+            pass
+
     def _layout_view_box(self, force: bool = False):
         """2.2.18 (item 23): the Photometry page's View box at any window width. Wide: beside the measurement
         settings, switches on one line. Narrower: still beside them, the switches wrapped onto two (or more) rows.
@@ -5145,6 +5279,9 @@ class App(Tk):
             for w in options.pack_slaves():
                 if w is box or w is line2:
                     continue
+                if w is getattr(self, "_meas_box", None):
+                    left += self._meas_one_line()   # 2.2.19 (r2: S2): its one-line width, not its wrapped one
+                    continue
                 left += px(w.winfo_reqwidth()) + _pad_total(w.pack_info().get("padx", 0))
         except Exception:
             left = 0
@@ -5157,6 +5294,9 @@ class App(Tk):
             room = width - left - gap
             own = room < least
             avail = (width - box_pad - gap if own else room - box_pad) if (own or room < one_line) else None
+        # 2.2.19 (r2: S2): the settings wrap only on a line of their own (the View box beside them is moved under
+        # them first, so the two never take turns).
+        self._flow_meas((width - gap) if (width > 1 and own) else None)
         rows = flow_rows(sw, avail)
         key = (own, tuple(tuple(r) for r in rows), len(switches))
         if key == self._view_layout_key and not force:
@@ -5743,8 +5883,7 @@ class App(Tk):
         self.masters = masters
         self.masters_binning = binning
         self.calibrated = calibrated
-        self._target_missing_frames = []   # 2.2.19 (#9): a new reference frame
-        self._target_search_hops = 0
+        self._forget_target_search()   # 2.2.19 (#9): a new reference frame
         self._raw_cache = None   # 2.2.19 (#16)
         self.preview = calibrated
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
@@ -5878,29 +6017,46 @@ class App(Tk):
         self.aperture_state = StringVar(value="")
         self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
                                               justify=LEFT, wraplength=700)
-        self.aperture_state_label.pack(anchor=W, fill=X, padx=6, pady=(0, 4))
+        # 2.2.19 (r2: S3): shown only while it has text (_update_aperture_state), so no empty line is reserved
         card.bind("<Configure>", lambda e: self.aperture_state_label.configure(wraplength=max(e.width - 40, 300)),
                   add="+")   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
-        ttk.Label(options, text="Aperture r", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
-        ttk.Entry(options, textvariable=self.radius, width=6).pack(side=LEFT)
-        ttk.Label(options, text="sky in", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
-        ttk.Entry(options, textvariable=self.sky_in, width=6).pack(side=LEFT)
-        ttk.Label(options, text="sky out", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
-        ttk.Entry(options, textvariable=self.sky_out, width=6).pack(side=LEFT)
-        ttk.Button(options, text="Suggest…", command=self.suggest_apertures).pack(side=LEFT, padx=(6, 0))
-        ttk.Label(options, text="raw sat ADU", style="Card.TLabel").pack(side=LEFT, padx=(14, 2))
-        ttk.Entry(options, textvariable=self.sat_limit, width=8).pack(side=LEFT)
+        # 2.2.19 (r2: S2): the measurement settings in small groups that wrap like text (_flow_meas) when the row is
+        # narrow (125 % on a 1366-px screen cut "Also measure R and B" off after "linear ADU" was added).
+        meas = ttk.Frame(options, style="Card.TFrame")
+        meas.pack(side=LEFT, fill=X)
+        self._meas_box, self._meas_groups, self._meas_key = meas, [], None
+
+        def group(pad):
+            g = ttk.Frame(meas, style="Card.TFrame")
+            g.pack(side=LEFT, padx=(pad, 0))
+            self._meas_groups.append((g, pad))
+            return g
+
+        g = group(6)
+        ttk.Label(g, text="Aperture r", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
+        ttk.Entry(g, textvariable=self.radius, width=6).pack(side=LEFT)
+        g = group(8)
+        ttk.Label(g, text="sky in", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
+        ttk.Entry(g, textvariable=self.sky_in, width=6).pack(side=LEFT)
+        g = group(8)
+        ttk.Label(g, text="sky out", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
+        ttk.Entry(g, textvariable=self.sky_out, width=6).pack(side=LEFT)
+        ttk.Button(group(6), text="Suggest…", command=self.suggest_apertures).pack(side=LEFT)
+        g = group(14)
+        ttk.Label(g, text="raw sat ADU", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
+        ttk.Entry(g, textvariable=self.sat_limit, width=8).pack(side=LEFT)
         # 2.2.19 (#16): the camera's linear limit; empty = the saturation level
-        ttk.Label(options, text="linear ADU", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
-        lin_entry = ttk.Entry(options, textvariable=self.linear_limit, width=8)
+        g = group(8)
+        ttk.Label(g, text="linear ADU", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
+        lin_entry = ttk.Entry(g, textvariable=self.linear_limit, width=8)
         lin_entry.pack(side=LEFT)
         lin_entry.bind("<FocusOut>", lambda _e: self.update_star_panel())
         lin_entry.bind("<Return>", lambda _e: self.update_star_panel())
         ttk.Checkbutton(
-            options, text="Also measure R and B (color index; slower)", variable=self.measure_color,
-        ).pack(side=LEFT, padx=14)
+            group(14), text="Also measure R and B (color index; slower)", variable=self.measure_color,
+        ).pack(side=LEFT, padx=(0, 14))
         # 2.2.9: everything that changes what the image shows sits in one "View" box on the right, under the
         # Catalog / Solve row (John); the row on the left keeps the measurement settings.
         view = ttk.LabelFrame(options, text="View", style="Group.TLabelframe", padding=(8, 2, 8, 4))
@@ -6340,6 +6496,37 @@ class App(Tk):
         return True
 
     # ---- 2.2.19 (#9): the target is not on the first frame --------------------------------------------------------
+    def _target_identity(self, path=None):
+        """2.2.19 (r2: M1): the target a frame search belongs to: (reference frame, RA deg, Dec deg) from the RA/Dec
+        boxes, rounded; None when the boxes hold no target position."""
+        try:
+            ra, dec = float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get())
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if not (math.isfinite(ra) and math.isfinite(dec)) or self._radec_is_fill():
+            return None
+        return (str(path if path is not None else (self.preview_path or "")), round(ra, 5), round(dec, 5))
+
+    def _forget_target_search(self):
+        """2.2.19 (r2: M1): the frames found without the target, and the search hop count, belong to that target only:
+        cleared when the target goes (clear_target, a new reduction) or its marker is placed anew (a new lookup, a
+        hand click on another star)."""
+        self._target_missing_frames = []
+        self._target_missing_for = None
+        self._target_search_hops = 0
+        self._target_search_radec = None
+        self._target_searched_for = None
+
+    def _target_missing_now(self, lights) -> list:
+        """2.2.19 (r2: M1): the frames the search found without the target, only while the target and the reference
+        frame are still the ones it was found for."""
+        missing = getattr(self, "_target_missing_frames", None) or []
+        if not missing:
+            return []
+        if getattr(self, "_target_missing_for", None) != self._target_identity():
+            return []
+        return [p for p in missing if p in lights]
+
     TARGET_SEARCH_MAX = 10   # frames looked at after the first (or half the series, if fewer)
 
     def _start_target_search(self, ra, dec, name, where, xy, edge, tries: int = 0) -> bool:
@@ -6364,6 +6551,7 @@ class App(Tk):
                 return True
             return False
         self._target_searched_for = getattr(self, "_preview_token", 0)
+        self._target_search_radec = (round(ra, 5), round(dec, 5))   # 2.2.19 (r2: M1)
         self._target_search_hops = getattr(self, "_target_search_hops", 0) + 1
         start = lights.index(self.preview_path) if self.preview_path in lights else -1
         cap = min(self.TARGET_SEARCH_MAX, max(1, len(lights) // 2))
@@ -6454,6 +6642,7 @@ class App(Tk):
         idx = lights.index(path)
         missing = lights[max(start, 0):idx]
         self._target_missing_frames = list(missing)
+        self._target_missing_for = self._target_identity(path)   # 2.2.19 (r2: M1): only for this target and frame
         labs = core.frame_labels_for(missing)
         ref_lab = core.frame_label(path)
         share = len(missing) / max(1, len(lights))
@@ -7247,7 +7436,7 @@ class App(Tk):
         except Exception:
             return None
 
-    def _aperture_caution(self, token=None):
+    def _aperture_caution(self, token=None, measured: bool = False):
         """2.2.19 (nit, #30): the aperture carries over from the last target. On a new image, say so when it does
         not fit these stars: in focus, r over ~2.5 × the field's FWHM (sky noise and neighbors); defocused, r too
         small for the donut (it clips the ring). A log line and the status bar, no question (Run asks)."""
@@ -7258,6 +7447,30 @@ class App(Tk):
         try:
             r = float(self.radius.get())
         except (TypeError, ValueError):
+            return
+        if token is not None and not measured:
+            # 2.2.19 (r2: nit): the field's donut test and seeing (~0.4 s on a full frame) are measured in a worker
+            # thread; this runs again with them cached (core.field_defocus per image, _seeing_cache)
+            img = self.preview
+
+            def work():
+                fwhm = None
+                try:
+                    if not core.field_defocus(img).get("donut"):
+                        fwhm = float(core.field_fwhm(img)["fwhm"])
+                except Exception:
+                    fwhm = float("nan")
+                self.call_ui(done, fwhm)
+
+            def done(fwhm):
+                if img is not self.preview or token != getattr(self, "_preview_token", 0):
+                    return
+                key = (id(img), getattr(img, "shape", None))
+                if fwhm is not None and (getattr(self, "_seeing_cache", None) or (None,))[0] != key:
+                    self._seeing_cache = (key, fwhm)
+                self._aperture_caution(token, measured=True)
+
+            threading.Thread(target=work, daemon=True).start()
             return
         donut = self._donut_apertures()
         text = ""
@@ -8813,6 +9026,19 @@ class App(Tk):
                                                "remove it first.")
                 return
         if mode == "target":
+            # 2.2.19 (r2: M1): a hand click on another star (not a nudge of the marker) is a new target: the frames a
+            # search found without the old one no longer apply.
+            old_t = self.target_xy
+            try:
+                near = max(3.0, 2.0 * float(self.radius.get()))
+            except (TypeError, ValueError):
+                near = 6.0
+            if old_t is None or math.hypot(old_t[0] - xy[0], old_t[1] - xy[1]) > near:
+                if getattr(self, "_target_missing_frames", None) and old_t is not None:
+                    self.log("Target: moved to another star; the frames the search found without the old target are "
+                             "no longer skipped.")
+                if old_t is not None or getattr(self, "_target_missing_for", None) != self._target_identity():
+                    self._forget_target_search()
             self.target_xy = xy
             if self.chart_placed:
                 self._suggest_comps()   # 2.2.13: the image is usually solved before the target is clicked
@@ -11862,7 +12088,7 @@ class App(Tk):
         rebase_from = self.preview_path if (self.preview_path and self.preview_path not in lights
                                            and self.preview_path in self.rejected) else None
         # 2.2.19 (#9): frames the reference search found without the target (they are skipped and listed).
-        known_missing = [p for p in (getattr(self, "_target_missing_frames", None) or []) if p in lights]
+        known_missing = self._target_missing_now(lights)   # 2.2.19 (r2: M1): only for the target it was found for
         edge_margin = radius + 1.0   # the target's aperture must be on the frame (a clipped sky ring is measured as before)
         target_off = []
         linear_limit = self._linear_limit()   # 2.2.19 (#16)
@@ -12084,6 +12310,12 @@ class App(Tk):
                         obs.spare_insts = {sp.name: float(v) for sp, v in zip(spares, spare_vals) if math.isfinite(v)}
                         obs.pos["s"] = {sp.name: [round(float(fs.x), 1), round(float(fs.y), 1)]
                                         for sp, fs in zip(spares, f_spares)}
+                        if not precalibrated and getattr(obs, "raw_peaks", None) is not None:
+                            # 2.2.19 (r2: S5a): the spares' raw peaks too (incl. comps moved out by Use comps), so
+                            # Comp health's Over-limit column covers a spare that becomes a comp
+                            for sp, fs in zip(spares, f_spares):
+                                if sp.name not in obs.raw_peaks:
+                                    obs.raw_peaks[sp.name] = core.raw_peak_near(raw, fs, radius, total_bin)
                     if measure_color:
                         exp = core.header_exptime(header)
                         stars_tc = [f_target] + f_comps
@@ -12091,6 +12323,10 @@ class App(Tk):
                         chan_imgs = {}
                         for ch in ("green", "red", "blue"):
                             img = data if ch == mode else core.debayer(cal, pattern, ch)
+                            if img is not data:
+                                # 2.2.19 (r2: S1): the red/blue images follow the run's donut decision too (no
+                                # field_defocus of their own, which cost ~0.5 s each and could decide otherwise)
+                                core.seed_field_defocus(img, defocus if donut else False)
                             chan_imgs[ch] = img
                             chan[ch] = core.channel_inst_mags(img, stars_tc, radius, sky_in, sky_out, exp)
                         if cal_xy is not None and (i - 1) % cal_step == 0:
@@ -12921,6 +13157,18 @@ class App(Tk):
             self.aperture_state.set(text)
             self.aperture_state_label.configure(foreground="#b35c00" if changed else "#5d6d76")
         except Exception:
+            text = None
+        # 2.2.19 (r2: S3): no text, no line (as photo_small_row): packed under the settings row when it has text.
+        try:
+            label = self.aperture_state_label
+            shown = getattr(self, "_aperture_state_shown", False)
+            if text and not shown:
+                label.pack(anchor=W, fill=X, padx=6, pady=(0, 4), after=self._view_options)
+                self._aperture_state_shown = True
+            elif not text and shown:
+                label.pack_forget()
+                self._aperture_state_shown = False
+        except Exception:
             pass
 
     def _night_setup(self) -> dict:
@@ -13493,6 +13741,8 @@ class App(Tk):
         """2.2.19 (#19): a series saved before 2.2.19 that holds the old default shortest period (0.05 d) now
         searches from 0.02 d (the old default hid HADS / SX Phe periods, BL Cam 0.039 d). Once: the series is saved
         with the new version, so a 0.05 typed later stays."""
+        if (meta.get("mode") if meta.get("mode") in MODES else "variables") != "variables":
+            return   # 2.2.19 (r2: nit): the period search belongs to Variables series (not Transits / Discovery)
         try:
             old = float(meta.get("min_period"))
         except (TypeError, ValueError):
@@ -13504,7 +13754,8 @@ class App(Tk):
         if abs(old - 0.05) < 1e-9 and version < (2, 2, 19):
             self.min_period.set(core.DEFAULT_MIN_PERIOD)
             self.log(f"Period search now starts at {core.DEFAULT_MIN_PERIOD:g} d (the old default 0.05 d missed "
-                     "short periods); type another shortest period on the Output page if you want one.")
+                     "short periods); type another shortest period on the Output page if you want one. The series "
+                     "file keeps 0.05 d until its next save.")   # 2.2.19 (r2: nit)
 
     def _apply_meta_values(self, meta: dict):
         for key in self._META_STRINGS:
@@ -16794,8 +17045,9 @@ class App(Tk):
                     self._unique_path(os.path.join(folder, base + "_aavso_chart.png")))
         stem = self._family_names()[1]
         stem = stem[:-len("_lightcurve.csv")] if stem.endswith("_lightcurve.csv") else os.path.splitext(stem)[0]
+        # 2.2.19 (r2: S7): one of the numbered result set (_family_path): <stem>_<k>_field.png with the set's number
         path = self.output_path(stem + "_field.png", title="Save field image", defaultextension=".png",
-                                filetypes=[("PNG", "*.png")])
+                                filetypes=[("PNG", "*.png")], family=True)
         if not path:
             return None, None
         base = os.path.splitext(path)[0]
@@ -16996,6 +17248,10 @@ class App(Tk):
         if path:
             obs = [o for o in self.observations if scope == "series" or o.night == self.highlight_night]
             notes, scint = dict(self.night_notes), self._scint_setup()
+            # 2.2.19 (r2: S4): the worker writes from a snapshot taken here, so Use comps, catalog magnitudes or
+            # Remove night recomputing the observations in place while it writes cannot mix old and new rows.
+            import copy
+            obs, notes, scint = copy.deepcopy(obs), copy.deepcopy(notes), copy.deepcopy(scint)
             # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's frame-label
             # column reads the frame folders' headers); the whole series when no night is highlighted, as before.
             self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint),

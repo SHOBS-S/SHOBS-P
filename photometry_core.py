@@ -2735,6 +2735,56 @@ def raw_peak_in_file(path: str, star: "Star", radius: float, total_bin: int) -> 
     return raw_peak_near(raw, star, radius, total_bin)
 
 
+def raw_window_readable(path: str) -> bool:
+    """2.2.19 (r2: S5b): can raw_peak_in_file read a small window of this file (a FITS image with a 2-D HDU, read
+    through a memory-mapped section) rather than the whole frame? XISF and other files: False."""
+    if fits is None or str(path).lower().endswith(".xisf"):
+        return False
+    try:
+        with fits.open(path, memmap=True) as hdul:
+            hdu = next((h for h in hdul if h.header.get("NAXIS", 0) == 2 and int(h.header.get("NAXIS1", 0) or 0) > 0),
+                       None)
+            if hdu is None:
+                return False
+            _ = np.asarray(hdu.section[0:1, 0:1])
+            return True
+    except Exception:
+        return False
+
+
+RAW_BLOCK = 2   # 2.2.19 (r2: S5b): raw_block_max's block size (raw pixels)
+
+
+def raw_block_max(raw: np.ndarray, block: int = RAW_BLOCK) -> np.ndarray:
+    """2.2.19 (r2: S5b): the brightest pixel of each block x block tile of a raw frame (a quarter of its memory for
+    block 2), so a frame that can only be read whole is read once and kept small for pick-time peak checks."""
+    raw = np.asarray(raw, dtype=np.float32)
+    h, w = raw.shape[:2]
+    hb, wb = -(-h // block), -(-w // block)
+    pad = np.full((hb * block, wb * block), np.nan, dtype=np.float32)
+    pad[:h, :w] = raw
+    with np.errstate(invalid="ignore"), __import__("warnings").catch_warnings():
+        __import__("warnings").simplefilter("ignore", RuntimeWarning)
+        return np.nanmax(pad.reshape(hb, block, wb, block), axis=(1, 3))
+
+
+def raw_peak_from_blocks(blocks: np.ndarray, star: "Star", radius: float, total_bin: int,
+                         block: int = RAW_BLOCK) -> float:
+    """2.2.19 (r2: S5b): raw_peak_near from raw_block_max's tiles (the window grows to whole tiles, at most block-1
+    raw pixels more on each side)."""
+    rx = (star.x + 0.5) * total_bin - 0.5
+    ry = (star.y + 0.5) * total_bin - 0.5
+    r = max(radius * total_bin, total_bin * 2)
+    x0, x1 = max(0, int(rx - r)), int(rx + r) + 1
+    y0, y1 = max(0, int(ry - r)), int(ry + r) + 1
+    bx0, bx1 = x0 // block, min(blocks.shape[1], -(-x1 // block))
+    by0, by1 = y0 // block, min(blocks.shape[0], -(-y1 // block))
+    if bx1 <= bx0 or by1 <= by0:
+        return float("nan")
+    win = blocks[by0:by1, bx0:bx1]
+    return float(np.nanmax(win)) if np.isfinite(win).any() else float("nan")
+
+
 def star_under(img: np.ndarray, x: float, y: float, radius: float, sigma: float = 5.0) -> bool:
     """2.2.3: is there a star under (x, y)? The brightest pixel within the aperture must stand `sigma` noise units
     above the median of the surrounding box."""
