@@ -704,6 +704,9 @@ class App(Tk):
         # typed is left alone.
         self.pattern.trace_add("write", lambda *_a: self._sync_camera_note())
         self.sat_limit = DoubleVar(value=60000)
+        # 2.2.19 (#16): the camera's linear limit (raw ADU); empty = the saturation level (nothing changes). Remembered.
+        self.linear_limit = StringVar(value=str(self.settings.get("linear_limit_adu", "") or ""))
+        self.linear_limit.trace_add("write", lambda *_: self._remember_linear_limit())
         self.cloud_limit = DoubleVar(value=20.0)
         self.use_check_zp = BooleanVar(value=True)
         self.bin_choice = StringVar(value="None")
@@ -1612,6 +1615,100 @@ class App(Tk):
         if self.settings.get(key) != value:
             self.settings[key] = value
             self._save_settings()
+
+    def _remember_linear_limit(self):
+        """2.2.19 (#16): the linear-limit ADU box is remembered between sessions (a number or empty)."""
+        text = self.linear_limit.get().strip()
+        try:
+            value = float(text.replace(",", "")) if text else ""
+        except ValueError:
+            return
+        if value != "" and not (math.isfinite(value) and value > 0):
+            return
+        if self.settings.get("linear_limit_adu", "") != value:
+            self.settings["linear_limit_adu"] = value
+            self._save_settings()
+
+    def _linear_limit(self):
+        """2.2.19 (#16): the linear limit in raw ADU when one is set below the saturation level, else None (then the
+        saturation level is the only limit, as before)."""
+        try:
+            text = self.linear_limit.get().strip().replace(",", "")
+            lin = float(text) if text else float("nan")
+        except Exception:
+            return None
+        try:
+            sat = float(self.sat_limit.get())
+        except Exception:
+            sat = float("inf")
+        if not (math.isfinite(lin) and lin > 0) or lin >= sat:
+            return None
+        return lin
+
+    def _linearity_note(self, role: str, xy) -> str:
+        """2.2.19 (#16): at pick time, the star's brightest raw pixel (unbinned, uncalibrated: per Bayer plane on a
+        color camera, where binning and the debayer cannot hide it) against the linear limit."""
+        lin = self._linear_limit()
+        if lin is None or xy is None or getattr(self, "precalibrated", False) or not self.preview_path:
+            return ""
+        peak = self._raw_peak_at(xy)
+        if not math.isfinite(peak):
+            return ""
+        if peak >= lin:
+            return (f"⚠ raw peak {peak:,.0f} ADU is over the linear limit ({lin:,.0f}): the camera's response bends "
+                    "there, so this star reads too faint" + (" — pick a fainter comp" if role != "target" else
+                                                            " — shorter exposures or more defocus") + ".")
+        if peak >= 0.9 * lin:
+            return (f"⚠ raw peak {peak:,.0f} ADU is near the linear limit ({lin:,.0f}); a frame with better seeing "
+                    "can go over it.")
+        return ""
+
+    def _edge_note(self, role: str, xy) -> str:
+        """2.2.19 (nit): a comp or check marked near the frame edge: say how far in a star must be (the sky ring plus
+        room for drift; the run's edge check wants 3 × the sky-out radius), so the user knows where to click."""
+        if role == "target" or xy is None or self.preview is None:
+            return ""
+        try:
+            sky_out = float(self.sky_out.get())
+        except Exception:
+            return ""
+        h, w = self.preview.shape[:2]
+        dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
+        need = sky_out + 5.0
+        safe = 3.0 * sky_out
+        if dist < need:
+            return (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
+                    f"star at least {need:.0f} px in, with room for drift — pick a star further in")
+        if dist < safe:
+            return (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
+                    "stay clear of the edge and the weakest part of the flat")
+        return ""
+
+    def _raw_peak_at(self, xy) -> float:
+        """2.2.19 (#16): the brightest raw pixel around xy (image coordinates) in the reference frame's raw file."""
+        cache = getattr(self, "_raw_cache", None)
+        if cache is None or cache[0] != self.preview_path:
+            try:
+                raw, _h = core.read_fits(self.preview_path)
+            except Exception:
+                raw = None
+            cache = self._raw_cache = (self.preview_path, raw, {})
+        raw, peaks = cache[1], cache[2]
+        if raw is None:
+            return float("nan")
+        try:
+            radius = float(self.radius.get())
+            binning = self._image_binning()
+        except Exception:
+            return float("nan")
+        key = (round(float(xy[0]), 1), round(float(xy[1]), 1), radius, binning, self.pattern.get())
+        if key not in peaks:
+            total_bin = binning * (1 if self.pattern.get() == core.MONO else 2)
+            try:
+                peaks[key] = core.raw_peak_near(raw, core.Star("p", float(xy[0]), float(xy[1])), radius, total_bin)
+            except Exception:
+                peaks[key] = float("nan")
+        return peaks[key]
 
     def _remember_telescope(self):
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
@@ -4740,6 +4837,8 @@ class App(Tk):
         self.masters = masters
         self.masters_binning = binning
         self.calibrated = calibrated
+        self._target_missing_frames = []   # 2.2.19 (#9): a new reference frame
+        self._raw_cache = None   # 2.2.19 (#16)
         self.preview = calibrated
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self._preview_token = getattr(self, "_preview_token", 0) + 1   # 2.2.13: a new image -> Fit view
@@ -4820,6 +4919,8 @@ class App(Tk):
                               + ("" if self.pattern.get() == core.MONO else " (superpixel)"))
         self.log(f"Preview debayered: {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
         self.refresh_preview()
+        _tok = self._preview_token
+        self.after(400, lambda: self._aperture_caution(_tok))   # 2.2.19 (nit, #30): the aperture kept from before
         self.show_step(STEP_PHOTO)   # in Discovery this starts the field solve (2.2.9: show_step)
         if self.mode_key == "discovery":
             self.status.set("Calibrated and debayered. Solving the field…")
@@ -4874,6 +4975,12 @@ class App(Tk):
         ttk.Button(options, text="Suggest…", command=self.suggest_apertures).pack(side=LEFT, padx=(6, 0))
         ttk.Label(options, text="raw sat ADU", style="Card.TLabel").pack(side=LEFT, padx=(14, 2))
         ttk.Entry(options, textvariable=self.sat_limit, width=8).pack(side=LEFT)
+        # 2.2.19 (#16): the camera's linear limit; empty = the saturation level
+        ttk.Label(options, text="linear ADU", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
+        lin_entry = ttk.Entry(options, textvariable=self.linear_limit, width=8)
+        lin_entry.pack(side=LEFT)
+        lin_entry.bind("<FocusOut>", lambda _e: self.update_star_panel())
+        lin_entry.bind("<Return>", lambda _e: self.update_star_panel())
         ttk.Checkbutton(
             options, text="Also measure R and B (color index; slower)", variable=self.measure_color,
         ).pack(side=LEFT, padx=14)
@@ -5277,6 +5384,9 @@ class App(Tk):
             edge = 4.0
         where = f"{name} ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)})"
         if not (math.isfinite(xy[0]) and math.isfinite(xy[1]) and 0 <= xy[0] < w and 0 <= xy[1] < h):
+            # 2.2.19 (#9): step forward to the first frame that holds the target (a telescope still settling)
+            if self._start_target_search(ra, dec, name, where, xy, edge):
+                return False
             self.log(f"Target: {where} is not on this frame by its plate solution; click the target by hand.")
             return False
         if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
@@ -5304,6 +5414,127 @@ class App(Tk):
                  + (" (after the lookup)" if why == "lookup" else "") + ". Click with Target to move it if it is not "
                  "your star." + (" Next: click the comparison stars (Comps is picked)." if advanced else ""))
         return True
+
+    # ---- 2.2.19 (#9): the target is not on the first frame --------------------------------------------------------
+    TARGET_SEARCH_MAX = 10   # frames looked at after the first (or half the series, if fewer)
+
+    def _start_target_search(self, ra, dec, name, where, xy, edge, tries: int = 0) -> bool:
+        """2.2.19 (#9): the target is off the reference frame by its plate solution. Look at the next frames (at most
+        TARGET_SEARCH_MAX, or half the series) for the first one that holds it, without plate-solving them: their own
+        header solution, the alignment with this frame, or the header pointing (core.target_in_frame). Runs in the
+        background; _target_search_done makes that frame the reference. Returns True when a search was started (or
+        is waiting for the current job to end); False when there is nothing to search (one frame, no masters,
+        already searched for this image), and the caller says to click by hand."""
+        if self.mode_key == "discovery" or self.preview is None:
+            return False
+        lights = self._lights()
+        if len(lights) < 2 or (self.masters is None and not self.precalibrated):
+            return False
+        if getattr(self, "_target_searched_for", None) == getattr(self, "_preview_token", 0):
+            return False
+        if self.busy:
+            if tries < 40:
+                self.after(250, lambda: self._start_target_search(ra, dec, name, where, xy, edge, tries + 1))
+                return True
+            return False
+        self._target_searched_for = getattr(self, "_preview_token", 0)
+        start = lights.index(self.preview_path) if self.preview_path in lights else -1
+        cap = min(self.TARGET_SEARCH_MAX, max(1, len(lights) // 2))
+        todo = lights[start + 1:start + 1 + cap]
+        if not todo:
+            return False
+        if not self._start_job(f"Looking for {name} on the next frames…"):
+            return False
+        self._progress_start(len(todo), f"Looking for {name}")
+        self.log(f"Target: {where} is not on this frame by its plate solution; looking for it on the next "
+                 f"{len(todo)} frame(s)…")
+        binning = max(int(self.binning.get() or 1), 1)
+        pattern, mode, masters = self.pattern.get(), self.debayer_mode.get(), self.masters
+        precal = self.precalibrated
+        ref_src = core.detect_sources(self.preview, max_sources=80)
+        ref_header = dict(self.preview_header or {})
+        solution = dict(self.chart_solution) if self.chart_solution else None
+        factor = binning * (1 if pattern == core.MONO else 2)
+        shape = self.preview.shape
+        cancel = self._cancel
+
+        def work():
+            result = {"found": None, "checked": 0, "unknown": 0, "how": "", "todo": todo, "start": start,
+                      "lights": lights, "name": name, "where": where, "cap": cap}
+            try:
+                prev_src, chain = ref_src, None
+                for k, path in enumerate(todo, 1):
+                    if cancel.is_set():
+                        break
+                    raw, header = core.read_fits(path)
+                    cal = core.bin_image(raw, binning)
+                    if not precal and masters is not None:
+                        cal = core.calibrate_frame(cal, header, masters)
+                    del raw
+                    data = core.debayer(cal, pattern, mode)
+                    reg = None
+                    if data.shape == shape:
+                        src = core.detect_sources(data, max_sources=80)
+                        base = prev_src if prev_src is not None else ref_src   # chained frame to frame
+                        step = core.register_frame(base, src, shape) if base and len(base) >= 3 else None
+                        if step is not None:
+                            reg = step if base is ref_src else core.compose_registration(chain, step, shape)
+                        chain, prev_src = (reg, src) if reg is not None else (None, None)
+                    loc = core.target_in_frame(ra, dec, data.shape, factor, header, ref_xy=xy, reg=reg,
+                                               ref_header=ref_header, solution=solution, margin=edge)
+                    result["checked"] = k
+                    if loc["on"] is None:
+                        result["unknown"] += 1
+                    elif loc["on"]:
+                        result.update(found=(path, cal, header, (loc["x"], loc["y"])), how=loc["how"])
+                        break
+                    self.call_ui(self._progress, k)
+            except Exception as exc:
+                result["error"] = f"{type(exc).__name__}: {exc}"
+            self.call_ui(self._target_search_done, result)
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _target_search_done(self, result: dict):
+        """2.2.19 (#9): make the first frame that holds the target the reference (the image is solved again and the
+        Target marker placed), and remember the frames before it, which the run skips and lists."""
+        self._end_job()
+        self._progress_end()
+        name, where, lights, start = result["name"], result["where"], result["lights"], result["start"]
+        if result.get("error"):
+            self.log(f"Target: the search on the next frames stopped ({result['error']}); click the target by hand.")
+            return
+        found = result.get("found")
+        if found is None:
+            if result["unknown"] and result["unknown"] >= result["checked"]:
+                self.log(f"Target: {where} is not on this frame by its plate solution, and the next frames carry no "
+                         "plate solution or pointing and could not be aligned with this one, so SHOBS-P cannot tell "
+                         "where it is on them. Click the target by hand on a frame that shows it.")
+            else:
+                self.log(f"Target: {name} not found in the first {result['checked'] + 1} frames. Check that the "
+                         "frames match the target, or click the target by hand.")
+            return
+        path, cal, header, at = found
+        idx = lights.index(path)
+        missing = lights[max(start, 0):idx]
+        self._target_missing_frames = list(missing)
+        labs = core.frame_labels_for(missing)
+        ref_lab = core.frame_label(path)
+        share = len(missing) / max(1, len(lights))
+        text = (f"Target: {name} is on frame {ref_lab} (found by {result['how']}), not on frame"
+                f"{'s' if len(missing) > 1 else ''} {self._frame_ranges(labs)}. Frame {ref_lab} is the reference "
+                f"now; the run skips the {len(missing)} frame{'s' if len(missing) > 1 else ''} without {name} and "
+                "lists every frame that misses it.")
+        if share > 0.2:
+            text = ("⚠ " + text + f" That is {share:.0%} of the {len(lights)} frames: check the pointing, or reject "
+                    "those frames in Blink.")
+        self.log(text)
+        self.calibrated = cal
+        self.preview_header = header
+        self.preview_path = path
+        self._raw_cache = None
+        self.apply_debayer(auto=True)   # a new reference image: solved again, the Target marker placed on it
 
     def _pick_chosen_by_user(self):
         """2.2.18 (item 7): a pick button (page or pop-out) clicked by the user: the automatic step change leaves the
@@ -5508,6 +5739,106 @@ class App(Tk):
             return
         self._auto_solved_for = token
         self.label_aavso(auto=True)
+
+    # ---- 2.2.19: notes after a run (#9, #30, #24, #16) ----------------------------------------------------
+    @staticmethod
+    def _frame_ranges(labels) -> str:
+        """2.2.19 (#9): "1–5, 9" for numbered frames (runs joined), else the plain list."""
+        try:
+            nums = sorted({int(str(t).lstrip("#")) for t in labels})
+        except (TypeError, ValueError):
+            return core.frame_list_text(list(labels))
+        parts, start, prev = [], None, None
+        for n in nums + [None]:
+            if start is None:
+                start = prev = n
+            elif n is not None and n == prev + 1:
+                prev = n
+            else:
+                parts.append(f"{start}" if start == prev else f"{start}–{prev}")
+                start = prev = n
+        return ", ".join(parts)
+
+    def _run_star_notes(self, night_points, target, comps, check, target_off, lights, radius, donut,
+                        linear_limit=None, ref_label="") -> list:
+        """2.2.19: log lines after a run (worker thread: no Tk here, plain values only).
+        #9: frames that missed the target (which, how many, the reference). #30: each star's centring against its light
+        centroid (rms), with a caution over 0.5 px. #24: comp and check apertures that jump together at the meridian
+        flip while the target's does not. #16: frames over the linear limit per star."""
+        lines = []
+        n_all = len(lights)
+        if target_off:
+            labs = core.frame_labels_for(list(target_off))
+            share = len(target_off) / max(1, n_all)
+            text = (f"{target.name} not on the frame in {len(target_off)} of {n_all} images (frames "
+                    f"{self._frame_ranges(labs)}); those frames were skipped."
+                    + (f" Reference: frame {ref_label}." if ref_label else ""))
+            if share > 0.2:
+                text = ("⚠ " + text + " That is a large share of the night: frames in a run at the start point to "
+                        "the pointing (the telescope had not reached the target); scattered ones to tracking or clouds.")
+            lines.append(text)
+        pts = [o for o in night_points if o.cen]
+        if pts:
+            names = [("target", target.name, lambda o: o.cen.get("t"))]
+            names += [(f"C{k + 1}", c.name, (lambda k_: lambda o: (o.cen.get("c") or [None] * (k_ + 1))[k_]
+                                             if len(o.cen.get("c") or []) > k_ else None)(k))
+                      for k, c in enumerate(comps)]
+            if check is not None:
+                names.append(("check", check.name, lambda o: o.cen.get("k")))
+            rms = []
+            for label, _name, get in names:
+                vals = [float(get(o)["lc"]) for o in pts if get(o) and math.isfinite(float(get(o).get("lc", "nan")))]
+                rms.append((label, math.sqrt(float(np.mean(np.square(vals)))) if vals else float("nan")))
+            bad = [(lab, v) for lab, v in rms if math.isfinite(v) and v > 0.5]
+            if donut or bad:
+                text = ("Centring: aperture centers against each star's light centroid (rms over the frames): "
+                        + ", ".join(f"{lab} {v:.2f} px" for lab, v in rms if math.isfinite(v)) + ".")
+                if bad:
+                    text = ("⚠ " + text + " " + ", ".join(lab for lab, _v in bad)
+                            + (" sits" if len(bad) == 1 else " sit") + " more than 0.5 px off: the aperture cuts a "
+                            "different part of the star from frame to frame, which adds noise that the comps do not "
+                            "cancel. Try a larger aperture (Suggest…), or check for a close neighbor.")
+                lines.append(text)
+            # #24: at the flip, comp and check moving together while the target does not.
+            flip = [o for o in pts if o.segment == "flip"]
+            if flip:
+                def med(get):
+                    v = [(get(o)["dx"], get(o)["dy"], get(o)["refused"]) for o in flip if get(o)]
+                    if not v:
+                        return None
+                    a = np.asarray(v, dtype=float)
+                    return float(np.median(a[:, 0])), float(np.median(a[:, 1])), float(np.mean(a[:, 2]))
+                t_m = med(names[0][2])
+                others = [(lab, med(get)) for lab, _n, get in names[1:]]
+                others = [(lab, m) for lab, m in others if m is not None]
+                big = max(2.0, 0.3 * float(radius))
+                jumped = [(lab, m) for lab, m in others if math.hypot(m[0], m[1]) > big or m[2] > 0.5]
+                if t_m is not None and len(jumped) >= 2 and len(jumped) >= len(others) - 1:
+                    vx = float(np.median([m[0] for _l, m in jumped]))
+                    vy = float(np.median([m[1] for _l, m in jumped]))
+                    same = all(math.hypot(m[0] - vx, m[1] - vy) < 1.5 for _l, m in jumped)
+                    t_small = math.hypot(t_m[0], t_m[1]) < 0.5 * math.hypot(vx, vy) and t_m[2] <= 0.5
+                    if same and t_small:
+                        lines.append(f"⚠ After the meridian flip the {' and '.join(l for l, _m in jumped)} apertures "
+                                     f"were off their stars by about ({vx:+.1f}, {vy:+.1f}) px together, while the "
+                                     "target's was not: an aperture-placement error at the flip, not a change in "
+                                     "the stars (the check star then looks normal and hides it). Look at "
+                                     "comp1_x/y and check_x/y in the light-curve CSV; if they sit off the stars, "
+                                     "reduce the frames after the flip on their own.")
+        if linear_limit is not None and math.isfinite(linear_limit):
+            over = []
+            stars = [target] + list(comps) + ([check] if check is not None else [])
+            for st in stars:
+                vals = [o.raw_peaks.get(st.name) for o in night_points if o.raw_peaks]
+                vals = [float(v) for v in vals if v is not None and math.isfinite(float(v))]
+                n_over = sum(1 for v in vals if v >= linear_limit)
+                if n_over:
+                    over.append(f"{st.name} {n_over} of {len(vals)}")
+            if over:
+                lines.append(f"⚠ Linear limit {linear_limit:,.0f} ADU: raw peak at or above it in "
+                             + "; ".join(over) + " frames. Above the linear limit the camera's response bends, so "
+                             "those measurements read too faint (Comp health counts them per star).")
+        return lines
 
     # ---- aperture suggestion ------------------------------------------------------------
     def _noise_note(self, night_points):
@@ -5807,6 +6138,24 @@ class App(Tk):
         switching telescopes, for example to MicroObservatory frames with your own aperture still set."""
         if self.preview is None or not self.preview_is_debayered:
             return True
+        # 2.2.19 (#30): defocused stars (donuts) are judged by the donut, not by a Gaussian FWHM.
+        donut = self._donut_apertures()
+        if donut is not None:
+            try:
+                r = float(self.radius.get())
+            except (TypeError, ValueError):
+                return True
+            if r < donut["clip_below"]:
+                self.log(f"Aperture check: defocused stars: the aperture clips the ring — use r ≥ "
+                         f"{donut['clip_below']:g} px (Suggest… gives r = {donut['radius']:g}, sky "
+                         f"{donut['sky_in']:g}-{donut['sky_out']:g} px).")
+                return messagebox.askyesno(
+                    APP_TITLE, f"Defocused stars: the aperture (r = {r:g} px) clips the ring — use r ≥ "
+                               f"{donut['clip_below']:g} px.\n\nA clipped donut loses a different part of its ring "
+                               "in every frame, which adds noise the comps do not cancel. Suggest… would use r = "
+                               f"{donut['radius']:g}, sky {donut['sky_in']:g}–{donut['sky_out']:g} px.\n\n"
+                               "Run with the current aperture anyway?")
+            return True
         first_comp = next((getattr(self, f"{r}_xy") for r in self._comp_roles_marked()), None)
         fwhm = self._seeing()  # 2.2.8: field seeing, not the (possibly faint) marked stars
         if not math.isfinite(fwhm):
@@ -5833,6 +6182,45 @@ class App(Tk):
                 + f"Suggest… would use r = {prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px.\n\n"
                 "Run with the current aperture anyway?")
         return True
+
+    def _donut_apertures(self):
+        """2.2.19 (#30): core.donut_apertures for the image on the Photometry page (None: not a defocused field)."""
+        if self.preview is None or not self.preview_is_debayered:
+            return None
+        try:
+            return core.donut_apertures(core.field_defocus(self.preview))
+        except Exception:
+            return None
+
+    def _aperture_caution(self, token=None):
+        """2.2.19 (nit, #30): the aperture carries over from the last target. On a new image, say so when it does
+        not fit these stars: in focus, r over ~2.5 × the field's FWHM (sky noise and neighbors); defocused, r too
+        small for the donut (it clips the ring). A log line and the status bar, no question (Run asks)."""
+        if token is not None and token != getattr(self, "_preview_token", 0):
+            return
+        if self.preview is None or not self.preview_is_debayered:
+            return
+        try:
+            r = float(self.radius.get())
+        except (TypeError, ValueError):
+            return
+        donut = self._donut_apertures()
+        text = ""
+        if donut is not None:
+            if r < donut["clip_below"]:
+                text = (f"⚠ Defocused stars: the aperture clips the ring — use r ≥ {donut['clip_below']:g} px (now r = "
+                        f"{r:g}; Suggest… gives r = {donut['radius']:g}, sky {donut['sky_in']:g}–"
+                        f"{donut['sky_out']:g}).")
+        else:
+            fwhm = self._seeing()
+            if math.isfinite(fwhm) and fwhm > 0 and r > 2.5 * fwhm:
+                prop = core.suggest_apertures(fwhm)
+                text = (f"⚠ Aperture r = {r:g} px (kept from before) is {r / fwhm:.1f} × the stars' FWHM ({fwhm:.1f} "
+                        f"px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = "
+                        f"{prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px.")
+        if text and text != getattr(self, "_aperture_caution_said", None):
+            self._aperture_caution_said = text
+            self.log(text)
 
     def _marked_stars(self):
         return [(role_label(role), xy) for role, xy in self._marked_roles()]
@@ -5891,6 +6279,18 @@ class App(Tk):
             return
         self._seeing_cache = ((id(img), getattr(img, "shape", None)), fwhm)
         prop = core.suggest_apertures(fwhm)
+        # 2.2.19 (#30): on defocused stars (donuts) the FWHM of a Gaussian fit means little; the aperture is sized to
+        # hold 95 % of the light (and never clips the ring), and the test tries sizes around it.
+        donut = None
+        try:
+            donut = core.donut_apertures(core.field_defocus(img))
+        except Exception:
+            donut = None
+        if donut is not None:
+            prop = {k: donut[k] for k in ("radius", "sky_in", "sky_out")}
+            fwhm = float(donut["radius"]) / 1.5   # the test's sizes: 0.8 to 2 x the suggestion
+            basis = (f"defocused stars (donuts): 95 % of the light within {donut['r95']:.1f} px, donut radius "
+                     f"{donut['donut_radius']:.1f} px; a Gaussian FWHM means little on a donut")
         notes = self._neighbor_notes(img, prop)
         if self.target_xy is not None:
             snr = self._star_snr(img, self.target_xy)
@@ -5898,7 +6298,7 @@ class App(Tk):
                 lo, hi = max(2.0, round(1.2 * fwhm, 1)), max(2.0, round(1.5 * fwhm, 1))
                 notes.insert(0, f"The target is faint (peak about {snr:.0f} × the noise). Faint stars usually do best "
                                 f"with 1.2–1.5 × FWHM (r = {lo:g}–{hi:g} px); the test below will tell.")
-        SuggestWindow(self, fwhm, sizes, prop, notes, basis)
+        SuggestWindow(self, fwhm, sizes, prop, notes, basis, donut=donut)
 
     def _neighbor_notes(self, img, prop):
         """Stars that fall inside a marked star's aperture or sky ring with the proposed sizes."""
@@ -5937,11 +6337,25 @@ class App(Tk):
         marked_comps = [getattr(self, f"{r}_xy") for r in self._comp_roles_marked()]
         test_c1 = marked_comps[0] if marked_comps else None
         test_c2 = marked_comps[1] if len(marked_comps) > 1 else None
+        test_target, test_check = self.target_xy, self.check_xy
+        if self.mode_key == "discovery":
+            # 2.2.19 (nit): Discovery has no comps; bright, isolated, unsaturated field stars stand in (two comps, one
+            # judged, one as the "target").
+            field = self._aperture_test_field_stars(fwhm)
+            if len(field) < 3:
+                messagebox.showinfo(APP_TITLE, "The aperture test needs at least 3 bright, isolated, unsaturated stars "
+                                               "on the frame, and this frame has fewer. Use the suggested sizes, or "
+                                               "set the aperture to about 1.8 × the FWHM by hand.", parent=window.win)
+                return
+            test_c1, test_c2, test_check = field[0], field[1], field[2]
+            test_target = field[3] if len(field) > 3 else field[2]
         if test_c1 is None:
             messagebox.showinfo(APP_TITLE, "Mark at least one comparison star; the test compares stars against it.",
                                 parent=window.win)
             return
-        if self.check_xy is not None:
+        if self.mode_key == "discovery":
+            ref_label = "field star"
+        elif test_check is not None:
             ref_label = "check star"
         elif test_c2 is not None:
             ref_label = "comp 2"
@@ -5965,7 +6379,7 @@ class App(Tk):
             rings.update({r: (x_in, x_out) for r in extra})
         n = min(frames, len(lights))
         picks = [lights[int(round(k))] for k in np.linspace(0, len(lights) - 1, n)]
-        pts = [self.target_xy or test_c1, test_c1, test_c2, self.check_xy]
+        pts = [test_target or test_c1, test_c1, test_c2, test_check]
         xy = np.array([p if p is not None else (np.nan, np.nan) for p in pts], dtype=float)
         binning = max(int(self.binning.get()), 1)
         masters, pattern, mode = self.masters, self.pattern.get(), self.debayer_mode.get()
@@ -6037,12 +6451,49 @@ class App(Tk):
                     result["four_best"] = four.get("ref_best")
                 result["rings"] = rings
                 result["suggested_r"] = min(radii, key=lambda r: abs(r - 1.8 * fwhm))
+                if getattr(window, "donut", None) is not None:   # 2.2.19 (#30): the 95 % light radius
+                    result["suggested_r"] = min(radii, key=lambda r: abs(r - float(window.donut["radius"])))
                 self.call_ui(self._aperture_test_done, window, result, seeing, sky_in, sky_out, ref_label, None)
             except Exception as exc:
                 self.call_ui(self._aperture_test_done, window, None, seeing, sky_in, sky_out, ref_label, str(exc))
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
+
+    def _aperture_test_field_stars(self, fwhm: float, n: int = 4) -> list:
+        """2.2.19 (nit): for the aperture test in Discovery: up to n bright, isolated, unsaturated stars away from the
+        edge (brightest first), as (x, y)."""
+        img = self.preview
+        try:
+            found = core.detect_sources(img, max_sources=120, nsigma=10.0, min_sep=3.0)
+            sat = 0.8 * float(self.sat_limit.get())
+        except Exception:
+            return []
+        h, w = img.shape[:2]
+        reach = max(3.0 * fwhm, 10.0)
+        edge = max(4.0 * fwhm, 12.0) + 3.0 * fwhm
+        merged = []   # a defocused star's two ring lobes are one star (brightest first)
+        for x, y in found:
+            if all(math.hypot(x - mx, y - my) > max(2.0 * fwhm, 10.0) for mx, my in merged):
+                merged.append((x, y))
+        found = merged
+        pts = np.asarray(found, dtype=float)
+        out = []
+        for i, (x, y) in enumerate(found):
+            if len(out) >= n:
+                break
+            if not (edge <= x < w - edge and edge <= y < h - edge):
+                continue
+            d = np.hypot(pts[:, 0] - x, pts[:, 1] - y)
+            d[i] = np.inf
+            if d.size > 1 and float(np.min(d)) < 2.0 * reach:
+                continue
+            r0 = int(math.ceil(reach))
+            box = img[max(0, int(y) - r0):int(y) + r0 + 1, max(0, int(x) - r0):int(x) + r0 + 1]
+            if box.size and np.isfinite(box).any() and float(np.nanmax(box)) >= sat:
+                continue
+            out.append((float(x), float(y)))
+        return out
 
     def _aperture_test_done(self, window, result, seeing, sky_in, sky_out, ref_label, error):
         self._end_job()
@@ -7552,6 +8003,16 @@ class App(Tk):
             if note:
                 parts.append(note)
                 if note.startswith("⚠") and style != "Bad.TLabel":
+                    style = "Warn.TLabel"
+            lin_note = self._linearity_note(role, xy)   # 2.2.19 (#16)
+            if lin_note:
+                parts.insert(0, lin_note)
+                if style != "Bad.TLabel":
+                    style = "Warn.TLabel"
+            edge_note = self._edge_note(role, xy)   # 2.2.19 (nit)
+            if edge_note:
+                parts.insert(0, edge_note)
+                if edge_note.startswith("⚠") and style != "Bad.TLabel":
                     style = "Warn.TLabel"
             if hits:
                 parts.append(("Listed: " if role == "target" else "⚠ ") + core.variable_text({"variable": hits}))
@@ -9870,7 +10331,29 @@ class App(Tk):
             self.log("Spare comps: none (Solve first, so spares can be picked from catalog stars).")
         # The stars were marked on the preview frame; every other frame is aligned to it.
         ref_sources = core.detect_sources(self.preview, max_sources=80)
+        ref_img = self.preview
         last_good = {"sources": None, "reg": None}
+        # 2.2.19 (#30): defocused (donut) stars are centered on their light, every frame the same way.
+        try:
+            defocus = core.field_defocus(self.preview)
+        except Exception:
+            defocus = {"donut": False}
+        donut = bool(defocus.get("donut"))
+        if donut:
+            self.log(f"Defocused stars (donuts, about {2 * defocus.get('radius', float('nan')):.0f} px across on "
+                     f"{defocus.get('rings')} of {defocus.get('n')} test stars): each star is centered on its light "
+                     "centroid, not on the bright side of its ring.")
+        # 2.2.19 (#24): the frame the stars were marked on was rejected in Blink since (e.g. the frames before a
+        # meridian flip): the first kept frame becomes the run's reference, so the kept frames are not all compared
+        # across a flip with a frame that is not used.
+        rebase_from = self.preview_path if (self.preview_path and self.preview_path not in lights
+                                           and self.preview_path in self.rejected) else None
+        # 2.2.19 (#9): frames the reference search found without the target (they are skipped and listed).
+        known_missing = [p for p in (getattr(self, "_target_missing_frames", None) or []) if p in lights]
+        edge_margin = radius + 1.0   # the target's aperture must be on the frame (a clipped sky ring is measured as before)
+        target_off = []
+        linear_limit = self._linear_limit()   # 2.2.19 (#16)
+        ref_label = core.frame_label(self.preview_path) if self.preview_path else ""
         # 2.2.18 (item 8): the mount (headers if sure, else the Mount choice): an alt-az field may rotate.
         mount_info = self._mount_info(lights)
         self._run_mount = mount_info["mount"]
@@ -9932,13 +10415,68 @@ class App(Tk):
         self._progress_start(len(lights), "Photometry")
 
         def work_inner():
+            nonlocal target, comps, check, spares, watch, ref_sources, ref_img, cal_xy, ref_label
             night_points = []
             cal_samples = {"bv": [], "vr": []}   # (obs, relative colors, comps' relative color)
             cancelled = False
+            if rebase_from is not None and lights:
+                # 2.2.19 (#24): carry the markers to the first kept frame and use it as the reference.
+                try:
+                    raw0, head0 = core.read_fits(lights[0])
+                    new_ref = core.debayer(core.calibrate_frame(core.bin_image(raw0, binning), head0, masters),
+                                           pattern, mode)
+                    del raw0
+                    if new_ref.shape != ref_shape:
+                        raise ValueError("it has another size")
+                    new_src = core.detect_sources(new_ref, max_sources=80)
+                    reg0 = core.register_frame(ref_sources, new_src, ref_shape)
+                    if reg0 is None:
+                        raise ValueError("it could not be aligned with the marked frame")
+                    if reg0.get("flipped") or donut:
+                        reg0 = core.refine_registration(new_ref, reg0, core.refine_points(ref_img, ref_sources, radius,
+                                                                                          donut), radius, donut)
+
+                    core.seed_field_defocus(new_ref, defocus if donut else False)
+
+                    def carry(st):
+                        m = core.move_star(st, reg0, ref_shape)
+                        x2, y2, moved = core.recenter(new_ref, m.x, m.y, radius)
+                        if moved <= core.recenter_jump_limit(radius):
+                            m = core.Star(name=m.name, x=x2, y=y2, catalog_mag=m.catalog_mag)
+                        return m
+
+                    target = carry(target)
+                    comps = [carry(c) for c in comps]
+                    check = carry(check) if check is not None else None
+                    spares = [carry(sp) for sp in spares]
+                    watch = [carry(wst) for wst in watch]
+                    if cal_xy is not None:
+                        cal_xy = core.move_points(cal_xy, reg0, ref_shape)
+                    ref_img, ref_sources = new_ref, new_src
+                    ref_label = core.frame_label(lights[0])
+                    old_lab = core.frame_label(rebase_from) or os.path.basename(rebase_from)
+                    new_lab = core.frame_label(lights[0]) or os.path.basename(lights[0])
+                    self.call_ui(self.log, f"Reference: the frame the stars were marked on ({old_lab}) is rejected, so "
+                                           f"the first kept frame ({new_lab}) is the reference; the markers were "
+                                           "carried over to it"
+                                 + (" across the meridian flip" if reg0.get("flipped") else "")
+                                 + (f" (alignment checked on {reg0['refine_n']} stars, corrected by "
+                                    f"({reg0['refined'][0]:+.1f}, {reg0['refined'][1]:+.1f}) px)"
+                                    if reg0.get("refined") else "") + ".")
+                except Exception as exc:
+                    self.call_ui(self.log, f"Reference: the marked frame is rejected, but the first kept frame could "
+                                           f"not take its place ({exc}); the marked frame stays the reference.")
+            ref_pts = core.refine_points(ref_img, ref_sources, radius, donut) if len(ref_sources) >= 3 else []
             for i, path in enumerate(lights, 1):
                 if cancel.is_set():
                     cancelled = True
                     break
+                if path in known_missing:
+                    # 2.2.19 (#9): the reference search found the target off this frame
+                    target_off.append(path)
+                    self.call_ui(self.log, f"  skipped {os.path.basename(path)}: {target.name} is not on this frame")
+                    self.call_ui(self._progress, i)
+                    continue
                 try:
                     raw, header = core.read_fits(path)
                     cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
@@ -9962,11 +10500,20 @@ class App(Tk):
                             raise ValueError(
                                 f"could not align this frame ({len(frame_sources)} stars found; clouds? trailing?)"
                             )
+                        if reg.get("flipped") and ref_pts:
+                            # 2.2.19 (#24): the flip transform checked on the stars' own centers
+                            reg = core.refine_registration(data, reg, ref_pts, radius, donut)
                         last_good["sources"] = frame_sources
                         last_good["reg"] = reg
                         if not reg.get("flipped"):
                             turns.append(float(reg.get("angle", 0.0)))
                     f_target = core.move_star(target, reg, data.shape)
+                    fh, fw = data.shape[:2]
+                    if not (edge_margin <= f_target.x < fw - edge_margin and edge_margin <= f_target.y < fh - edge_margin):
+                        # 2.2.19 (#9): the alignment puts the target off this frame (or too near its edge)
+                        target_off.append(path)
+                        raise ValueError(f"{target.name} is not on this frame (it would be at ({f_target.x:.0f}, "
+                                         f"{f_target.y:.0f}))")
                     f_comps = [core.move_star(c, reg, data.shape) for c in comps]
                     f_check = core.move_star(check, reg, data.shape) if check is not None else None
                     obs = core.reduce_frame(
@@ -9974,11 +10521,19 @@ class App(Tk):
                         lat, lon, ra_hours, dec_deg, float("inf"), aligned=reg is not None,
                         electrons=electrons if (np.ndim(electrons) == 0 or np.shape(electrons) == data.shape) else
                         float(np.nanmedian(electrons)),   # 2.2.17 (item 8)
+                        donut=defocus if donut else False,   # 2.2.19 (#30): the reference frame's decision
                     )
                     # Saturation is judged on the raw frame, where binning cannot hide a clipped core.
                     total_bin = binning * (1 if pattern == core.MONO else 2)
                     obs.raw_peak = core.raw_peak_near(raw, f_target, radius, total_bin)
-                    comp_raw = max(core.raw_peak_near(raw, c, radius, total_bin) for c in f_comps)
+                    comp_raws = [core.raw_peak_near(raw, c, radius, total_bin) for c in f_comps]
+                    comp_raw = max(comp_raws)
+                    if not precalibrated:
+                        # 2.2.19 (#16): each star's raw peak, for the linear-limit count (Comp health, log)
+                        obs.raw_peaks = {target.name: obs.raw_peak}
+                        obs.raw_peaks.update({c.name: v for c, v in zip(comps, comp_raws)})
+                        if f_check is not None:
+                            obs.raw_peaks[check.name] = core.raw_peak_near(raw, f_check, radius, total_bin)
                     flags = [f for f in obs.flag.split() if f not in ("sat", "compsat")]
                     if precalibrated:
                         comp_raw = float("nan")
@@ -10048,6 +10603,8 @@ class App(Tk):
                         shift_text = (
                             f"  shift ({reg['dx']:+.0f}, {reg['dy']:+.0f}) rot {reg.get('angle', 0.0):+.2f}°"
                             f"{' flipped' if reg['flipped'] else ''}{' chained' if reg.get('chained') else ''}"
+                            + (f" (checked on {reg['refine_n']} stars: {reg['refined'][0]:+.1f}, "
+                               f"{reg['refined'][1]:+.1f} px)" if reg.get("refined") else "")   # 2.2.19 (#24)
                         )
                     else:
                         shift_text = ""
@@ -10066,6 +10623,13 @@ class App(Tk):
             if cancelled:
                 self.call_ui(self._photometry_done, [], mode, None, True)
                 return
+            # 2.2.19 (#9, #30, #24, #16): what the run found about the target's frames, centring and peaks
+            try:
+                for line in self._run_star_notes(night_points, target, comps, check, target_off, lights,
+                                                 radius, donut, linear_limit, ref_label):
+                    self.call_ui(self.log, line)
+            except Exception as exc:
+                self.call_ui(self.log, f"  (centring and peak notes skipped: {type(exc).__name__}: {exc})")
             if turns:
                 # 2.2.18 (item 8): how far the field turned on the sensor through the night.
                 unwrapped = np.degrees(np.unwrap(np.radians(turns)))   # review: a turn across ±180° is not 360°
@@ -10320,7 +10884,28 @@ class App(Tk):
         self.show_step(STEP_OUTPUT)
         nights = sorted({obs.night for obs in self.observations})
         self.status.set(f"{len(self.observations)} points across {len(nights)} night(s). Save the series to add more later.")
-        if self.series_path:
+        save_now = bool(self.series_path)
+        if save_now:
+            # 2.2.19 (#24): a night whose meridian-flip step is marked ⚠ is not auto-saved into the series unasked (a
+            # flip step that big is usually an aperture problem; the 21-22 Oct night went in at -0.81 mag).
+            try:
+                steps = core.flip_offsets(night_points, [o.mag for o in night_points],
+                                          use=[not o.flag for o in night_points])
+                step = (steps.get(night) or {}).get("offset")
+            except Exception:
+                step = None
+            if step is not None and math.isfinite(step) and abs(step) > core.FLIP_STEP_MARK:
+                save_now = messagebox.askyesno(
+                    APP_TITLE, f"This night's meridian-flip step is {step:+.3f} mag ⚠ (the frames after the flip "
+                               f"read {abs(step):.3f} mag {'fainter' if step > 0 else 'brighter'} than those before).\n\n"
+                               "A step that big is often an aperture problem at the flip, not the star (see the Log).\n\n"
+                               f"Save {os.path.basename(self.series_path)} with this night now?\n"
+                               "Yes saves it. No keeps the night on screen but leaves the file on disk as it was "
+                               "(Save series keeps it later; Remove night… takes it out).")
+                if not save_now:
+                    self.log(f"Not auto-saved: the night's flip step is {step:+.3f} mag ⚠. "
+                             f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
+        if save_now:
             try:
                 self._write_series(self.series_path)
                 self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
@@ -13803,7 +14388,8 @@ class App(Tk):
         result = core.comp_health([o for o in self.observations
                                    if not (set(o.flag.split()) - {"nocomp", core.TRANSIT_FLAG})]
                                   or self.observations, names, self.check_used, self._spares_in_series(), aliases,
-                                  night_sign=self._pier_night_sign())
+                                  night_sign=self._pier_night_sign(),
+                                  linear_limit=self._linear_limit() or self._num(self.sat_limit, None))   # 2.2.19 (#16)
         if result is None:
             messagebox.showinfo(
                 APP_TITLE,
@@ -14457,6 +15043,14 @@ class CompHealthWindow:
     """Each comparison star (and the check star) measured against the others, night by night; on a single night,
     frame by frame through the night (2.2.2)."""
 
+    @staticmethod
+    def _linear_text(pair) -> str:
+        """2.2.19 (#16): "⚠ 12 of 99 frames", "0 of 99", or "—" (no per-star raw peaks: series before 2.2.19)."""
+        if not pair or not pair[1]:
+            return "—"
+        n_over, n_with = pair
+        return (f"⚠ {n_over} of {n_with} frames" if n_over else f"0 of {n_with}")
+
     def __init__(self, app, result):
         win = Toplevel(app)
         win.title(f"{APP_TITLE} — comparison star health")
@@ -14484,10 +15078,12 @@ class CompHealthWindow:
         positions = result.get("positions") or {}
         table_box = ttk.Frame(top, style="Card.TFrame")
         table_box.pack(fill=X, side="bottom", pady=(6, 0))
-        cols = ("star", "role", "spread", "scatter", "flip", "pier", "nights", "pos", "dist", "verdict")
+        cols = ("star", "role", "spread", "scatter", "flip", "pier", "nights", "linear", "pos", "dist", "verdict")
+        lin = app._linear_limit() if hasattr(app, "_linear_limit") else None
         headings = {"star": "Star", "role": "Role", "spread": "Night offset", "scatter": "Scatter in night",
-                    "flip": "Flip step", "pier": "Both pier sides", "nights": "Nights", "pos": "Pixel (x, y)",
-                    "dist": "From target", "verdict": "Verdict"}
+                    "flip": "Flip step", "pier": "Both pier sides", "nights": "Nights",
+                    "linear": "Over linear limit" if lin else "Over saturation",   # 2.2.19 (#16)
+                    "pos": "Pixel (x, y)", "dist": "From target", "verdict": "Verdict"}
         table = ttk.Treeview(table_box, columns=cols, show="headings", height=min(max(len(rows), 3), 12))
         # 2.2.13 (John): the horizontal scroll bar shows only when the columns do not fit (as on the Transit fit page).
         self.hbar = ttk.Scrollbar(table_box, orient="horizontal", command=table.xview)
@@ -14505,6 +15101,7 @@ class CompHealthWindow:
                                           f"{st:+.3f}" if isinstance(st, float) and math.isfinite(st) else "—",
                                           row.get("pier") or "—",   # 2.2.14 (item 20)
                                           row["nights"],
+                                          self._linear_text(row.get("over_linear")),   # 2.2.19 (#16)
                                           f"({pos[0]:.0f}, {pos[1]:.0f})" if pos else "—",
                                           f"{pos[2]:.0f}" if pos and math.isfinite(pos[2]) else "—",
                                           row["verdict"]))
@@ -14902,9 +15499,10 @@ class UseCompsWindow:
 class SuggestWindow:
     """Aperture and sky ring sizes from the measured star size, with an optional test on real frames."""
 
-    def __init__(self, app, fwhm, sizes, prop, notes, basis=""):
+    def __init__(self, app, fwhm, sizes, prop, notes, basis="", donut=None):
         self.app = app
         self.fwhm = fwhm
+        self.donut = donut   # 2.2.19 (#30): core.donut_apertures on a defocused field, else None
         self.prop = dict(prop)
         self.prop_seeing = dict(prop)   # 2.2.16 (item 1): the seeing-only suggestion, shown as "Before the test" later
         win = Toplevel(app)
@@ -14924,8 +15522,13 @@ class SuggestWindow:
         wrapped = []
         ttk.Label(top, text="Suggested apertures", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         measured = ", ".join(f"{role} {f:.1f}" for role, f, _p in sizes)
-        ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px" + (f"   ({basis})" if basis else ""),
-                  style="Card.TLabel").pack(anchor=W, pady=(6, 0))
+        if donut is not None:   # 2.2.19 (#30)
+            wrapped.append(ttk.Label(top, text=f"Star size on this frame: {basis}.", style="Card.TLabel",
+                                     wraplength=wrap, justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(6, 0))
+        else:
+            ttk.Label(top, text=f"Star size (FWHM) on this frame: {fwhm:.2f} px" + (f"   ({basis})" if basis else ""),
+                      style="Card.TLabel").pack(anchor=W, pady=(6, 0))
         if measured:
             wrapped.append(ttk.Label(top, text=f"Marked stars, for comparison: {measured} px. Faint or crowded stars "
                                                "measure noisier; the aperture follows the field's seeing.",
@@ -14944,9 +15547,13 @@ class SuggestWindow:
         self.before_label = ttk.Label(top, textvariable=self.before_text, style="Hint.TLabel", wraplength=wrap,
                                       justify=LEFT)
         wrapped.append(self.before_label)   # packed under the bold line once a test has run
-        wrapped.append(ttk.Label(top, text="Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The seeing "
-                                           "changes during the night, so the test below measures real frames and lets "
-                                           "the check star decide.",
+        wrapped.append(ttk.Label(top, text=("Defocused stars: the aperture must hold the whole donut, or each frame "
+                                            f"clips a different part of the ring (r ≥ {donut['clip_below']:g} px). "
+                                            "The test below measures real frames and lets the check star decide."
+                                            if donut is not None else
+                                            "Bright stars do best with 1.5–2 × FWHM; faint stars with 1–1.5 ×. The "
+                                            "seeing changes during the night, so the test below measures real frames "
+                                            "and lets the check star decide."),
                                  style="Hint.TLabel", wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(4, 0))
         for note in notes:
@@ -14971,6 +15578,9 @@ class SuggestWindow:
         """2.2.16 (item 1): "Aperture r = 8.4 px (2.2 × FWHM)    sky in = 15    sky out = 23 px (…)" for these sizes."""
         r, s_in, s_out = float(prop["radius"]), float(prop["sky_in"]), float(prop["sky_out"])
         mult = f" ({r / self.fwhm:.1f} × FWHM)" if self.fwhm and math.isfinite(self.fwhm) and self.fwhm > 0 else ""
+        if getattr(self, "donut", None) is not None:   # 2.2.19 (#30)
+            r95 = self.donut.get("r95")
+            mult = (f" ({r / r95:.1f} × the 95 % light radius)" if r95 and math.isfinite(r95) and r95 > 0 else "")
         area = (s_out ** 2 - s_in ** 2) / r ** 2 if r > 0 else float("nan")
         ring = f" (sky ring with {area:.0f}× the aperture's area)" if math.isfinite(area) and area > 0 else ""
         return f"Aperture r = {r:g} px{mult}    sky in = {s_in:g}    sky out = {s_out:g} px{ring}"
@@ -15001,10 +15611,24 @@ class SuggestWindow:
             lines.append(f"Seeing (FWHM) in these frames: {min(seeing):.1f} to {max(seeing):.1f} px, "
                          f"median {np.median(seeing):.1f}.")
         lines.append("")
-        lines.append(f"{'r (px)':>7}  {ref_label + ' scatter':>23}  {'lowest':>7}  {'target scatter':>17}  {'lowest':>7}")
+        # 2.2.19 (nit): with no check star (and no comp 2) the reference IS the target, so one block, not the target
+        # twice; in Discovery the judge is a field star and there is no target.
+        single = ref_label.startswith("target") or ref_label == "field star"
+        if ref_label.startswith("target"):
+            lines.insert(len(lines) - 1, "⚠ No check star: judging on the target, which may truly vary (a transit "
+                                         "night can't pick a winner). Mark a check star for a fair test.")
+        elif ref_label == "field star":
+            lines.insert(len(lines) - 1, "Discovery has no comps, so the test uses bright, isolated, unsaturated field "
+                                         "stars: two as comps, one judged (the field star below).")
+        if single:
+            lines.append(f"{'r (px)':>7}  {ref_label.split(' (')[0] + ' scatter':>23}  {'lowest':>7}")
+        else:
+            lines.append(f"{'r (px)':>7}  {ref_label + ' scatter':>23}  {'lowest':>7}  {'target scatter':>17}  "
+                         f"{'lowest':>7}")
         for row in rows:
             lines.append(f"{row['r']:>7g}  {row['ref_sigma']:>14.4f} ± {row['ref_err']:.4f}  {row['ref_win']:>6.0%}"
-                         f"  {row['target_sigma']:>8.4f} ± {row['target_err']:.4f}  {row['target_win']:>6.0%}"
+                         + ("" if single else
+                            f"  {row['target_sigma']:>8.4f} ± {row['target_err']:.4f}  {row['target_win']:>6.0%}")
                          + (f"  (sky {ring_x[0]:g}–{ring_x[1]:g})" if ring_x and row["r"] in result["extended"]
                             else ""))   # 2.2.16 (item 1, review): their own, wider ring
         lines.append("")
@@ -15031,8 +15655,9 @@ class SuggestWindow:
         else:
             pick = result.get("suggested_r") or (best or rows[0])["r"]
             lines.append(f"No clear winner: the differences are within the noise (no aperture is lowest in 80% of "
-                         f"resamples). Keep the suggested r = {pick:g} (1.8 × FWHM).")
-        if tbest is not None and tbest["target_win"] >= 0.8 and abs(tbest["r"] - pick) > 0.05:
+                         f"resamples). Keep the suggested r = {pick:g} "
+                         + ("(holds 95 % of the donut's light)." if self.donut is not None else "(1.8 × FWHM)."))
+        if not single and tbest is not None and tbest["target_win"] >= 0.8 and abs(tbest["r"] - pick) > 0.05:
             lines.append(f"The target alone prefers r = {tbest['r']:g} ({tbest['target_win']:.0%}). If the target is "
                          "much fainter than the check star, that can be the better choice; if it truly varies, its "
                          "scatter includes the variation.")
@@ -15054,7 +15679,7 @@ class SuggestWindow:
         self.headline.set(self._sizes_text(self.prop))
         s = self.prop_seeing
         mult = (f" ({float(s['radius']) / self.fwhm:.1f} × FWHM)"
-                if self.fwhm and math.isfinite(self.fwhm) and self.fwhm > 0 else "")
+                if self.fwhm and math.isfinite(self.fwhm) and self.fwhm > 0 and self.donut is None else "")
         self.before_text.set(f"Before the test: r = {s['radius']:g} px{mult}, sky {s['sky_in']:g}–{s['sky_out']:g} px "
                              "(from the seeing alone).")
         if not getattr(self, "_before_shown", False):
