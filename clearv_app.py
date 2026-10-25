@@ -307,6 +307,15 @@ def fit_tree_columns(tree, headings: dict, cap: int = 480, firm: bool = False) -
 
 
 SEQ_COLOR = "#38d9e8"       # 2.2.13: AAVSO sequence stars on the image
+PHOTO_TITLE_PT = 9          # 2.2.19 (#10): the Photometry image's title and tick labels (points; scale with the dpi)
+PHOTO_TICK_PT = 7
+# 2.2.19 (#15): suggested comps and AAVSO sequence stars differ in shape and label, not only in color: suggested =
+# thick solid green ring labeled S1, S2 …; sequence = thin dashed cyan ring labeled with its V (91 = 9.1).
+SUGGEST_COLOR = "#2ca02c"
+SUGGEST_RING_MS = 17
+SUGGEST_RING_MEW = 2.6
+SEQ_RING_MS = 11
+SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
@@ -368,6 +377,237 @@ def fit_figure_to_widget(fig, canvas) -> bool:
         pass
     canvas.draw_idle()
     return True
+
+
+# ---- 2.2.19 (#28): annotated field image (beside the AAVSO chart) -------------------------------------------------
+def field_orientation(vec_n, vec_e):
+    """2.2.19 (#28): the flip / quarter turns that bring north closest to up and east closest to left (as on an
+    AAVSO chart oriented for a CCD image), from the unit vectors north and east in image pixels (x right, y down).
+    Returns {"flip": bool, "k": quarter turns (np.rot90 sense), "residual": degrees north is still off up (signed),
+    "mirrored": east is right of north after the turn (a mirror image)}; None without vectors."""
+    if vec_n is None or vec_e is None:
+        return None
+    best = None
+    for flip in (False, True):
+        for k in range(4):
+            n, e = np.array(vec_n, dtype=float), np.array(vec_e, dtype=float)
+            if flip:
+                n[0], e[0] = -n[0], -e[0]
+            for _ in range(k):
+                n = np.array([n[1], -n[0]])
+                e = np.array([e[1], -e[0]])
+            ang_n = math.degrees(math.atan2(n[0], -n[1]))          # 0 = straight up, + = toward the right
+            ang_e = math.degrees(math.atan2(-e[1], -e[0]))          # 0 = straight left, + = toward up
+            cost = abs(ang_n) + abs(ang_e)
+            if best is None or cost < best[0]:
+                best = (cost, flip, k, ang_n, n, e)
+    _c, flip, k, ang_n, n, e = best
+    mirrored = (n[0] * e[1] - n[1] * e[0]) > 0   # cross product: N up with E left is negative
+    return {"flip": flip, "k": k, "residual": float(ang_n), "mirrored": bool(mirrored)}
+
+
+def _turn_vec(v, phi_deg):
+    """A screen vector (x right, y down) turned counterclockwise on the screen by phi degrees."""
+    c, s_ = math.cos(math.radians(phi_deg)), math.sin(math.radians(phi_deg))
+    return np.array([v[0] * c + v[1] * s_, -v[0] * s_ + v[1] * c], dtype=float)
+
+
+def orient_image(img, orient):
+    """2.2.19 (#28): the image turned as field_orientation says (mirror, quarter turns, then the rest of the angle,
+    so north points straight up; the corners the turn opens are black), and a function mapping (x, y) on the
+    original image to the turned one."""
+    h, w = img.shape[:2]
+    if not orient:
+        return img, (lambda x, y: (x, y))
+    out = img[:, ::-1] if orient["flip"] else img
+    out = np.rot90(out, orient["k"])
+    h1, w1 = out.shape[:2]
+    phi = float(orient.get("residual") or 0.0)
+    turn = abs(phi) > 0.5
+    if turn:
+        c, s_ = math.cos(math.radians(phi)), math.sin(math.radians(phi))
+        cx, cy = (w1 - 1) / 2.0, (h1 - 1) / 2.0
+        corners = [(-cx, -cy), (w1 - 1 - cx, -cy), (-cx, h1 - 1 - cy), (w1 - 1 - cx, h1 - 1 - cy)]
+        xs = [x * c + y * s_ for x, y in corners]
+        ys = [-x * s_ + y * c for x, y in corners]
+        w2, h2 = int(math.ceil(max(xs) - min(xs))) + 1, int(math.ceil(max(ys) - min(ys))) + 1
+        ox, oy = (w2 - 1) / 2.0, (h2 - 1) / 2.0
+        from scipy import ndimage
+        # output (row, col) -> input (row, col): the inverse turn about the two centers
+        matrix = np.array([[c, s_], [-s_, c]])   # (Y', X') -> (y, x)
+        offset = np.array([cy, cx]) - matrix @ np.array([oy, ox])
+        out = ndimage.affine_transform(np.ascontiguousarray(out, dtype=np.float32), matrix, offset=offset,
+                                       output_shape=(h2, w2), order=1, cval=0.0)
+
+    def move(x, y, flip=orient["flip"], k=orient["k"]):
+        if flip:
+            x = w - 1 - x
+        ww = w
+        hh = h
+        for _ in range(k):
+            x, y = y, ww - 1 - x
+            hh, ww = ww, hh
+        if turn:
+            dx, dy = x - cx, y - cy
+            x, y = dx * c + dy * s_ + ox, -dx * s_ + dy * c + oy
+        return x, y
+    return out, move
+
+
+def nice_scale_bar(arcsec_per_px: float, width_px: int) -> tuple[float, str] | None:
+    """2.2.19 (#28): a round scale-bar length near a fifth of the image width: (length in px, "2′")."""
+    if not arcsec_per_px or not math.isfinite(arcsec_per_px) or arcsec_per_px <= 0 or width_px <= 0:
+        return None
+    want = width_px * arcsec_per_px / 5.0
+    steps = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600, 7200]
+    sec = min(steps, key=lambda v: abs(math.log(v / want)))
+    text = f"{sec}″" if sec < 60 else (f"{sec // 60}′" if sec < 3600 else f"{sec // 3600}°")
+    return sec / arcsec_per_px, text
+
+
+def draw_field_figure(img, info: dict, stretch=None):
+    """2.2.19 (#28): the annotated field: the frame stretched as on the Photometry page, turned N up / E left when
+    the solution says where north is (else labeled "orientation unknown"), the target, comps (sequence stars with
+    AUID and V) and check marked in the Photometry page's colors with the aperture and sky ring to scale, the AAVSO
+    sequence stars as thin dashed rings with their V label, an N/E compass and a scale bar. Returns a matplotlib
+    Figure (Agg; no window). info: {"title", "subtitle", "radius", "sky_in", "sky_out", "north", "east",
+    "arcsec_px", "marks": [(x, y, tag, color, label)], "seq": [(x, y, label)]}."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.patches import Circle
+    # Review: a full-size frame (26 Mpx) is cut to about 2000 px first: turning it at full size took seconds on the
+    # window's thread, and the PNG is 1100 px wide anyway. Positions, radii and the plate scale follow.
+    f = int(math.ceil(max(img.shape[:2]) / 2000.0))
+    if f > 1:
+        img = img[::f, ::f]
+        info = dict(info)
+        info["marks"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, *rest) for x, y, *rest in info.get("marks") or []]
+        info["seq"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, lab) for x, y, lab in info.get("seq") or []]
+        for k in ("radius", "sky_in", "sky_out"):
+            info[k] = float(info.get(k) or 0) / f
+        if info.get("arcsec_px"):
+            info["arcsec_px"] = float(info["arcsec_px"]) * f
+    orient = field_orientation(info.get("north"), info.get("east"))
+    disp = core.stretch_display(img, stretch)
+    disp, move = orient_image(disp, orient)
+    h, w = disp.shape[:2]
+    aspect = h / max(w, 1)
+    fig_w = 10.0
+    fig = Figure(figsize=(fig_w, fig_w * aspect + 1.0), dpi=110, facecolor="#ffffff")
+    FigureCanvasAgg(fig)
+    top = 1.0 - 0.75 / (fig_w * aspect + 1.0)
+    ax = fig.add_axes([0.01, 0.01, 0.98, top - 0.02])
+    ax.imshow(disp, cmap="gray", origin="upper", vmin=0.0, vmax=1.0, interpolation="nearest")
+    ax.set_xlim(-0.5, w - 0.5)
+    ax.set_ylim(h - 0.5, -0.5)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    fig.text(0.01, 1.0 - 0.12 / (fig_w * aspect + 1.0), info.get("title", ""), fontsize=12, fontweight="bold",
+             va="top", color="#1c2b33")
+    fig.text(0.01, 1.0 - 0.42 / (fig_w * aspect + 1.0), info.get("subtitle", ""), fontsize=8, va="top", color="#5d6d76")
+    r, s_in, s_out = (float(info.get(k) or 0) for k in ("radius", "sky_in", "sky_out"))
+    # A size in screen points that looks the same on a 650 px and a 3000 px frame.
+    pt_per_px = fig_w * 72.0 * 0.98 / max(w, 1)
+    for x, y, label in info.get("seq") or []:
+        x, y = move(x, y)
+        if not (0 <= x < w and 0 <= y < h):
+            continue
+        ax.scatter([x], [y], s=SEQ_RING_MS ** 2, facecolors="none", edgecolors=SEQ_COLOR, linewidths=1.0,
+                   linestyles=SEQ_RING_DASH, zorder=3)
+        ax.annotate(str(label), (x, y), xytext=(6, 5), textcoords="offset points", color=SEQ_COLOR, fontsize=7,
+                    fontweight="bold", zorder=3)
+    for x, y, tag, colour, label in info.get("marks") or []:
+        x, y = move(x, y)
+        if r > 0:
+            ax.add_patch(Circle((x, y), r, fill=False, color=colour, lw=1.3, zorder=5))
+        if 0 < s_in < s_out:
+            ax.add_patch(Circle((x, y), s_in, fill=False, color=colour, lw=0.8, ls="--", zorder=5))
+            ax.add_patch(Circle((x, y), s_out, fill=False, color=colour, lw=0.8, ls=":", zorder=5))
+        # A ring of fixed screen size as well, so a star stays easy to find on a large frame (the apertures are
+        # drawn to scale and can be tiny there).
+        ax.plot([x], [y], marker="o", ms=22, mfc="none", mec=colour, mew=1.0, alpha=0.75, zorder=5)
+        off = max(max(s_out if s_out > r else r, 4.0) * pt_per_px * 0.72, 8.0) + 4
+        ax.annotate(f"{tag}  {label}" if label else tag, (x, y), xytext=(off, off), textcoords="offset points",
+                    color=colour, fontsize=8, fontweight="bold", zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.15", fc="#000000", ec="none", alpha=0.45))
+    # Compass (top right) and scale bar (bottom right).
+    halo = None
+    try:
+        from matplotlib import patheffects
+        halo = [patheffects.withStroke(linewidth=2.0, foreground="#000000", alpha=0.7)]
+    except Exception:
+        pass
+    if orient is not None:
+        n, e = np.array(info["north"], dtype=float), np.array(info["east"], dtype=float)
+        if orient["flip"]:
+            n[0], e[0] = -n[0], -e[0]
+        for _ in range(orient["k"]):
+            n, e = np.array([n[1], -n[0]]), np.array([e[1], -e[0]])
+        if abs(orient.get("residual") or 0.0) > 0.5:
+            n, e = _turn_vec(n, orient["residual"]), _turn_vec(e, orient["residual"])
+        base = (0.93, 0.86)
+        for vec, tag in ((n, "N"), (e, "E")):
+            dx, dy = float(vec[0]), -float(vec[1])
+            norm = math.hypot(dx, dy) or 1.0
+            dx, dy = dx / norm * 0.06, dy / norm * 0.06 / max(aspect, 0.2)
+            ax.annotate("", xy=(base[0] + dx, base[1] + dy), xycoords="axes fraction", xytext=base,
+                        textcoords="axes fraction", arrowprops=dict(arrowstyle="-|>", color="#ffd24a", lw=1.4))
+            ax.text(base[0] + dx * 1.35, base[1] + dy * 1.35, tag, transform=ax.transAxes, ha="center", va="center",
+                    fontsize=10, fontweight="bold", color="#ffd24a", path_effects=halo)
+        done = (["mirrored"] if orient["flip"] else []) \
+            + [f"turned {(90 * orient['k'] + orient['residual'] + 180) % 360 - 180:+.0f}°"
+               if (orient["k"] or abs(orient["residual"]) > 0.5) else ""]
+        done = [d for d in done if d]
+        words = "N up, E left" + (f" (frame {' and '.join(done)})" if done else "")
+    else:
+        words = "Orientation unknown (the image is not solved)"
+    ax.text(0.99, 0.985, words, transform=ax.transAxes, ha="right", va="top", fontsize=7 if orient else 9,
+            color="#e8eef2" if orient else "#ffd24a", fontweight="normal" if orient else "bold", path_effects=halo)
+    bar = nice_scale_bar(info.get("arcsec_px") or 0, w)
+    if bar is not None:
+        length, text = bar
+        x1 = w * 0.97
+        y1 = h * 0.95
+        ax.plot([x1 - length, x1], [y1, y1], color="#ffffff", lw=2.2, solid_capstyle="butt", zorder=7,
+                path_effects=halo)
+        ax.text(x1 - length / 2.0, y1 - h * 0.012, text, color="#ffffff", fontsize=8, ha="center", va="bottom",
+                fontweight="bold", zorder=7, path_effects=halo)
+    else:
+        ax.text(0.99, 0.02, "scale unknown", transform=ax.transAxes, ha="right", va="bottom", fontsize=7,
+                color="#e8eef2", path_effects=halo)
+    for t in ax.texts:
+        t.set_clip_on(True)
+    return fig
+
+
+def image_fit_px(avail_w: float, avail_h: float, img_w: int, img_h: int, title_px: float = 0.0,
+                 margin_px: float = 0.0) -> dict:
+    """2.2.19 (#10): how big an image (img_w x img_h pixels, drawn with equal aspect, upscaled or downscaled to fit)
+    is drawn in a plot area of avail_w x avail_h screen pixels, after a title line and a margin. Returns {"w", "h",
+    "scale" (screen px per image px), "limit" ("width" or "height"), "fill" (share of the area's width the image
+    uses)}. Pure arithmetic, so it can be tested for any display scaling."""
+    aw = max(float(avail_w) - 2.0 * margin_px, 1.0)
+    ah = max(float(avail_h) - 2.0 * margin_px - title_px, 1.0)
+    img_w, img_h = max(int(img_w), 1), max(int(img_h), 1)
+    scale = min(aw / img_w, ah / img_h)
+    w, h = img_w * scale, img_h * scale
+    return {"w": w, "h": h, "scale": scale, "limit": "width" if aw / img_w <= ah / img_h else "height",
+            "fill": w / max(float(avail_w), 1.0)}
+
+
+def photo_log_lines(plot_w: float, plot_h: float, log_lines: int, line_px: float, img_w: int, img_h: int,
+                    title_px: float = 0.0, most: int = 7, least: int = 3) -> int:
+    """2.2.19 (#10): how many lines the Photometry page's log should show so the image gets the room it can use.
+    plot_w x plot_h: the image area now, with the log at log_lines lines of line_px each. While the image is limited
+    by the height (the area is wider than the frame's shape: a 650 x 500 MicroObservatory frame, or 125-150 % display
+    scaling, where every text row is taller), lines move from the log to the image, down to `least`, until the image
+    is limited by the width instead. Never more than `most` (the page's usual 7)."""
+    if line_px <= 0 or plot_w <= 0:
+        return most
+    total_h = plot_h + log_lines * line_px            # the height shared by the image area and the log
+    need_h = plot_w * img_h / max(img_w, 1) + title_px   # image area height at which the width becomes the limit
+    spare_lines = int(math.floor((total_h - need_h) / line_px))
+    return int(max(least, min(most, spare_lines)))
 
 
 def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
@@ -637,14 +877,43 @@ def shade_long_periods(ax, span_days: float, periods) -> bool:
         return False
 
 
+DPI_MODE = ""   # 2.2.19 (#10): how the process became DPI aware (for the log line at start)
+
+
 def enable_windows_dpi():
+    """System DPI aware (SetProcessDpiAwareness(1)): Tk then works in real screen pixels and sets its scaling (fonts
+    in points) from the display scaling at start (125 % -> tk scaling 1.667), and matplotlib's Tk canvas follows it
+    (device pixel ratio 1.25, figure dpi 125), so text and the image stay sharp. Per-monitor awareness is NOT used:
+    Tk 8.6 does not rescale its windows when moved to a monitor with another scaling (Windows bitmap-scales a
+    system-aware window there instead, which keeps sizes right). 2.2.19 (#10): falls back to SetProcessDPIAware()
+    (Windows 7/8) and records which call worked (DPI_MODE)."""
+    global DPI_MODE
     if sys.platform != "win32":
         return
+    import ctypes
     try:
-        import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        hr = ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        DPI_MODE = "system aware" if hr == 0 else f"set before ({hr & 0xFFFFFFFF:#x})"   # E_ACCESSDENIED: a manifest did
+        return
     except Exception:
         pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+        DPI_MODE = "system aware (old API)"
+    except Exception:
+        DPI_MODE = "not DPI aware (Windows scales the window)"
+
+
+def display_scaling_text(widget) -> str:
+    """2.2.19 (#10): one line for the log: the display scaling Tk sees and the screen size, so a tester's report says
+    what their screen does ("Display: scaling 125 % (tk scaling 1.667), screen 1920 x 1080 px, system aware")."""
+    try:
+        tk_scaling = float(widget.tk.call("tk", "scaling"))
+        pct = tk_scaling / (96.0 / 72.0) * 100.0
+        return (f"Display: scaling {pct:.0f} % (tk scaling {tk_scaling:.3f}), screen {widget.winfo_screenwidth()} x "
+                f"{widget.winfo_screenheight()} px" + (f", {DPI_MODE}" if DPI_MODE else "") + ".")
+    except Exception:
+        return ""
 
 
 class App(Tk):
@@ -881,6 +1150,17 @@ class App(Tk):
         self.field_centre_needed = False   # Discovery: lights without a plate solution or pointing in the header
         self.scan_excluded = []            # Discovery: (x, y) of stars left out of field scans
         self.suggested_comps = []          # comps near the target's brightness, from Solve
+        self.suggested_info = {}           # 2.2.19 (#15): {name: catalog V, why suggested} for the S1 … lines
+        self._comps_under = {}             # 2.2.19 (#34): comps moved out of the comp box by Use comps…
+        self._comps_under_token = None
+        self._dark_scale_chosen = None     # 2.2.19 (#20): (dark, lights) folders whose darks you chose to scale
+        self._busy_lookups = {}            # 2.2.19 (nit): the Input page lookups running now
+        self._photo_space_job = None       # 2.2.19 (#10)
+        self._photo_fit = None
+        self._photo_line_px = None
+        self._first_light_path = None      # 2.2.19 (#20, review): the light whose header Browse read
+        self._split_cache = None           # 2.2.19 (review): split_lights of the Lights folder (header reads once)
+        self._lights_cal_answers = {}      # 2.2.19 (#38): calibration frames in the Lights folder: used or not
         self._fit_after_photometry = False
         self._inst_cache = None
         self.mono_filter = None            # (AAVSO code, band) from a monochrome camera's FITS FILTER
@@ -920,6 +1200,8 @@ class App(Tk):
         self.set_mode(self.mode_key, initial=True)
         self.show_step(0)
         self.after(50, self._drain_ui_queue)
+        if sys.platform == "win32" and display_scaling_text(self):
+            log_to_file(display_scaling_text(self))   # 2.2.19 (#10): in the log file, for screen reports
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -955,6 +1237,17 @@ class App(Tk):
         self.busy = False
         self.config(cursor="")
 
+    def _prune_rejected(self) -> int:
+        """2.2.19 (#20): rejected frames belong to the Lights / Flat folder they were set aside in; frames of any other
+        folder are forgotten when the folders change (a new reduction never inherits them)."""
+        def key(path):
+            return os.path.normcase(os.path.abspath(path)) if path else ""
+        keep = {key(self.light_dir.get().strip()), key(self.flat_dir.get().strip())} - {""}
+        stale = {p for p in self.rejected if key(os.path.dirname(p)) not in keep}
+        if stale:
+            self.rejected -= stale
+        return len(stale)
+
     def _folders_changed(self):
         """A new folder means the old masters and preview no longer apply."""
         self.precalibrated = False
@@ -980,6 +1273,8 @@ class App(Tk):
     def _clear_marks(self):
         """New lights mean new star positions; drop the old markers."""
         self.target_xy = self.check_xy = None
+        for rec in (getattr(self, "_comps_under", None) or {}).values():   # 2.2.19 (#34): found again after Solve
+            rec["xy"] = None
         for _role in COMP_ROLES:
             setattr(self, f"{_role}_xy", None)
         self._marks_shape = None
@@ -1152,6 +1447,7 @@ class App(Tk):
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
+        style.configure("Placeholder.TEntry", foreground="#8a979e")   # 2.2.19 (nit): "looking up…" in a box
         style.configure("Box.TLabel", background="#ffffff", foreground="#1c2b33", font=(core.MONO_FONT, 9))
         # 2.2.15 (GitHub #3): the Photometry page's step hint.
         style.configure("StepOn.TLabel", background="#c47a2c", foreground="#ffffff", font=(core.UI_FONT, 9, "bold"),
@@ -1366,6 +1662,10 @@ class App(Tk):
     def _fit_visible_canvases(self):
         """2.2.3: size each plot's figure to its widget and redraw when they disagree (first show, a resize, or
         Windows display scaling reporting the real size late)."""
+        try:
+            self._fit_photo_space()   # 2.2.19 (#10): first give the image the room it can use
+        except Exception:
+            traceback.print_exc()
         for fig_name, canvas_name in (("photo_fig", "photo_canvas"), ("blink_fig", "blink_canvas"),
                                       ("out_fig", "out_canvas")):
             fig = getattr(self, fig_name, None)
@@ -1514,6 +1814,8 @@ class App(Tk):
             return
         self._counts[key].set(self._count_text(key, path))
         self.status.set(f"{key}: {self._counts[key].get()}")
+        if key in ("Lights", "Dark"):
+            self.after(50, lambda k=key: self._frames_folder_picked(k))   # 2.2.19 (#20)
 
     def _count_text(self, key, path) -> str:
         """'51 files', '51 files + master', or 'master file' (2.2.8: saved masters are not counted as frames)."""
@@ -1538,6 +1840,8 @@ class App(Tk):
         variable.set(path)
         self._counts[key].set("master file")
         self.status.set(f"{key}: SHOBS-P master {os.path.basename(path)}")
+        if key == "Dark":
+            self.after(50, lambda: self._frames_folder_picked("Dark"))   # 2.2.19 (#20)
 
     def _clear_folder(self, variable, key):
         variable.set("")
@@ -1547,6 +1851,8 @@ class App(Tk):
         self._counts[key].set("0 files")
         self.status.set(f"{key} folder cleared." + (" Calibration will skip it." if key in ("Bias", "Dark", "Flat")
                                                      else ""))
+        if key in ("Lights", "Dark"):
+            self._update_dark_exposure_note()   # 2.2.19 (#20)
 
     def _remember_site(self, key: str, var):
         """2.2.4: latitude, longitude and elevation are remembered between sessions (settings file only)."""
@@ -1765,6 +2071,27 @@ class App(Tk):
         info = {"mount": mount, "note": note, "detected": detected}
         self._mount_cache = {key: info}
         return info
+
+    def _save_header_mount(self, lights=None) -> str | None:
+        """2.2.19 (nit): the mount your own lights' headers name for sure is saved to the settings file (for
+        SHOBS-SCHED) and set in the Mount box, when no mount of yours is saved yet. Never from a borrowed setup
+        (another site's frames, MicroObservatory) or while a series is loaded; a saved choice is never overwritten."""
+        if "mount" in self.settings or self._own_setup is not None or getattr(self, "_loading_meta", False):
+            return None
+        try:
+            d = self._mount_info(lights)["detected"]
+        except Exception:
+            return None
+        mount = d.get("mount")
+        if not d.get("sure") or mount not in core.MOUNT_LABELS:
+            return None
+        self.settings["mount"] = mount
+        self._save_settings()
+        if self._mount_choice_key() != mount:
+            self.mount_choice.set(core.mount_label(mount))
+        self.log(f"Mount: {core.mount_label(mount)} from the lights' headers ({d.get('why')}), saved as yours (change "
+                 "it in the Optics box if that is wrong).")
+        return mount
 
     def _update_mount_hint(self, lights=None, log: bool = False):
         """The hint under the Mount choice: what the lights' headers say. log=True also writes it to the log, with
@@ -2371,8 +2698,12 @@ class App(Tk):
         self.close_series_button = ttk.Button(srow, text="Close series", command=self.close_series)
         self.close_series_button.pack(side=RIGHT, padx=(6, 0))
         load_in = ttk.Button(srow, text="Load series…", command=self.load_series)
-        load_in.pack(side=RIGHT, padx=(12, 0))
+        load_in.pack(side=RIGHT, padx=(6, 0))
         self._add_tooltip(load_in, self.LOAD_SERIES_TIP)
+        # 2.2.19 (#20): start over for another star without restarting SHOBS-P.
+        new_red = ttk.Button(srow, text="New reduction", command=lambda: self.new_reduction(ask=True))
+        new_red.pack(side=RIGHT, padx=(12, 0))
+        self._add_tooltip(new_red, self.NEW_REDUCTION_TIP)
         status_label = ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel", justify=LEFT)
         status_label.pack(side=LEFT, fill=X, expand=True)
         status_label.bind("<Configure>", lambda e: status_label.configure(
@@ -2396,6 +2727,11 @@ class App(Tk):
         ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, packages). Leave "
                                "it empty to be asked each time. Files already there are never overwritten; a new "
                                "copy gets _2, _3 ….", style="Hint.TLabel", wraplength=1100, justify=LEFT).pack(anchor=W)
+        # 2.2.19 (#20): darks and lights of different exposures, said here before Calibrate.
+        self.dark_exposure_note = StringVar(value="")
+        self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
+                                             wraplength=text_wrap_px(frames, 120), justify=LEFT)
+        self.dark_exposure_label.pack(anchor=W)
 
         grid = ttk.Frame(card, style="Card.TFrame")
         grid.pack(fill=X, pady=(10, 0))
@@ -2437,6 +2773,17 @@ class App(Tk):
                                                                                            padx=(8, 0))
         ttk.Label(target, text="J2000 frame, proper motion to today", style="Hint.TLabel").grid(
             row=4, column=1, columnspan=2, sticky=W)
+        # 2.2.19 (nit): a busy line while the Star ID is looked up (spinner, service, seconds), or why it failed.
+        self.star_busy = StringVar(value="")
+        self._star_busy_row = ttk.Frame(target, style="Card.TFrame")
+        self._star_busy_bar = ttk.Progressbar(self._star_busy_row, mode="indeterminate",
+                                              length=max(40, int(48 * ui_scale(target))))
+        self._star_busy_bar.pack(side=LEFT, padx=(0, 6))
+        self._star_busy_label = ttk.Label(self._star_busy_row, textvariable=self.star_busy, style="Hint.TLabel",
+                                          wraplength=text_wrap_px(target, 70), justify=LEFT)
+        self._star_busy_label.pack(side=LEFT, fill=X)
+        self._star_busy_row.grid(row=5, column=1, columnspan=2, sticky=W)
+        self._star_busy_row.grid_remove()
         target.columnconfigure(1, weight=1)
         # Discovery has no target: only a field center, and only when the lights' headers do not say where they point.
         self.field_group = self._group(left, "Field center (only needed when the headers do not say)")
@@ -2468,6 +2815,9 @@ class App(Tk):
             planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
         ttk.Button(cell, text="Look up again", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
         ttk.Button(cell, text="Tonight's transits…", command=self._open_finder).pack(side=LEFT, padx=(6, 0))
+        # 2.2.19 (nit): spinner while the planet is looked up (shown only then).
+        self._planet_busy_bar = ttk.Progressbar(cell, mode="indeterminate", length=max(40, int(48 * ui_scale(pg))))
+        self._planet_entries = []
         for i, (label, var, hint, label2, var2, hint2) in enumerate((
                 ("Period (d)", self.pl_period, "", "T0 (BJD_TDB)", self.pl_t0, ""),
                 ("Duration T14 (h)", self.pl_t14, "", "Depth (%)", self.pl_depth, ""),
@@ -2475,9 +2825,12 @@ class App(Tk):
                 ("Impact parameter b", self.pl_b, "", "Star Teff (K)", self.pl_teff, "for limb darkening"))):
             r = i + 1
             ttk.Label(pg, text=label, style="Card.TLabel").grid(row=r, column=0, sticky=W, padx=(0, 10), pady=3)
-            ttk.Entry(pg, textvariable=var, width=16).grid(row=r, column=1, sticky="ew", pady=3)
+            e1 = ttk.Entry(pg, textvariable=var, width=16)
+            e1.grid(row=r, column=1, sticky="ew", pady=3)
             ttk.Label(pg, text=label2, style="Card.TLabel").grid(row=r, column=2, sticky=W, padx=(14, 10), pady=3)
-            ttk.Entry(pg, textvariable=var2, width=16).grid(row=r, column=3, sticky="ew", pady=3)
+            e2 = ttk.Entry(pg, textvariable=var2, width=16)
+            e2.grid(row=r, column=3, sticky="ew", pady=3)
+            self._planet_entries += [(e1, var), (e2, var2)]   # 2.2.19 (nit): "looking up…" while looked up
         ttk.Label(pg, textvariable=self.planet_source, style="Hint.TLabel", wraplength=560, justify=LEFT).grid(
             row=5, column=0, columnspan=4, sticky=W, pady=(4, 0))
         self.report_note = StringVar(value="")
@@ -2547,6 +2900,117 @@ class App(Tk):
         except Exception:
             return False
 
+    # ---- 2.2.19 (nit): busy indicator for the Input page's Star ID and planet lookups ------------------------------
+    LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (a late answer is still used)
+    PLANET_PLACEHOLDER = "looking up…"
+
+    @staticmethod
+    def _lookup_no_answer(error) -> bool:
+        """True when a lookup failed because the service did not answer (timeout, no connection, 5xx), not because
+        the name is unknown."""
+        import socket
+        import urllib.error
+        if isinstance(error, (TimeoutError, socket.timeout, ConnectionError)):
+            return True
+        if isinstance(error, urllib.error.HTTPError):
+            return error.code >= 500
+        if isinstance(error, urllib.error.URLError):
+            return True
+        text = str(error).lower()
+        return "timed out" in text or "did not answer" in text
+
+    def _lookup_busy_start(self, kind: str, name: str, service: str):
+        """Spinner and "⟳ Looking up K2-29 b at the NASA Exoplanet Archive… 8 s" (kind "star" or "planet"), ticking
+        every second on its line and the status bar; empty planet boxes show a gray "looking up…"."""
+        import time as _time
+        busy = self.__dict__.setdefault("_busy_lookups", {})
+        token = object()
+        busy[kind] = {"name": name, "service": service, "t0": _time.monotonic(), "token": token}
+        bar = getattr(self, "_planet_busy_bar" if kind == "planet" else "_star_busy_bar", None)
+        try:
+            if kind == "planet" and bar is not None:
+                bar.pack(side=LEFT, padx=(6, 0))
+            elif kind == "star":
+                self._star_busy_row.grid()
+            if bar is not None:
+                bar.start(80)
+        except Exception:
+            pass
+        if kind == "planet":
+            self._planet_placeholders(True)
+        self._lookup_busy_tick(kind, token)
+
+    def _lookup_busy_show(self, kind: str, text: str, bad: bool = False):
+        if kind == "planet":
+            self.planet_source.set(text)
+            return
+        if not hasattr(self, "star_busy"):
+            return
+        self.star_busy.set(text)
+        try:
+            self._star_busy_label.configure(style="Bad.TLabel" if bad else "Hint.TLabel")
+            if text:
+                self._star_busy_row.grid()
+            else:
+                self._star_busy_row.grid_remove()
+        except Exception:
+            pass
+
+    def _lookup_busy_tick(self, kind: str, token):
+        import time as _time
+        info = self.__dict__.get("_busy_lookups", {}).get(kind)
+        if not info or info["token"] is not token:
+            return
+        secs = int(_time.monotonic() - info["t0"])
+        if secs >= self.LOOKUP_GIVE_UP_S:
+            text = (f"✖ {info['name']}: the {info['service']} did not answer within {secs} s — "
+                    + ("type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
+            self._lookup_busy_stop(kind)
+            self._lookup_busy_show(kind, text, bad=True)
+            self.status.set(text)
+            return
+        text = f"⟳ Looking up {info['name']} at the {info['service']}… {secs} s"
+        self._lookup_busy_show(kind, text)
+        self.status.set(text)
+        self.after(1000, lambda: self._lookup_busy_tick(kind, token))
+
+    def _lookup_busy_stop(self, kind: str, name: str | None = None):
+        """End the busy indicator (the caller then says what came of the lookup). name: only when it is still the
+        lookup of that name (an older lookup's answer leaves a newer one's spinner alone)."""
+        busy = self.__dict__.setdefault("_busy_lookups", {})
+        info = busy.get(kind)
+        if info is not None and name is not None and info["name"] != name:
+            return
+        busy.pop(kind, None)
+        bar = getattr(self, "_planet_busy_bar" if kind == "planet" else "_star_busy_bar", None)
+        try:
+            if bar is not None:
+                bar.stop()
+            if kind == "planet" and bar is not None:
+                bar.pack_forget()
+        except Exception:
+            pass
+        if kind == "planet":
+            self._planet_placeholders(False)
+            if info is not None and self.planet_source.get().startswith("⟳"):
+                self.planet_source.set("")   # the caller says what came of it
+        elif info is not None:
+            self._lookup_busy_show("star", "")
+
+    def _planet_placeholders(self, on: bool):
+        """Gray "looking up…" in the empty planet boxes while the planet is looked up (never left behind)."""
+        for entry, var in getattr(self, "_planet_entries", []):
+            try:
+                if on and not str(var.get()).strip():
+                    var.set(self.PLANET_PLACEHOLDER)
+                    entry.configure(style="Placeholder.TEntry")
+                elif not on and str(var.get()) == self.PLANET_PLACEHOLDER:
+                    var.set("")
+                if not on:
+                    entry.configure(style="TEntry")
+            except Exception:
+                pass
+
     def lookup_planet(self, quiet: bool = False):
         name = self.planet_name.get().strip()
         if not name:
@@ -2555,7 +3019,7 @@ class App(Tk):
                                                "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
         self._last_planet_lookup = name   # 2.2.14 (item 2)
-        self.planet_source.set(f"Looking up {name}…")
+        self._lookup_busy_start("planet", name, "NASA Exoplanet Archive")   # 2.2.19 (nit)
 
         def work():
             try:
@@ -2570,15 +3034,23 @@ class App(Tk):
         if name and name != self.planet_name.get().strip():
             # 2.2.14 (item 2): the name changed while this lookup ran: look up the one that is there now instead, but
             # not a half-typed name while the box still has the focus (review): Enter or leaving the box does that.
+            self._lookup_busy_stop("planet", name=name)   # 2.2.19 (nit)
             if not self._planet_box_has_focus():
                 self._auto_planet_lookup()
             return
+        self._lookup_busy_stop("planet", name=name)   # 2.2.19 (nit)
         if isinstance(error, tcore.PlanetChoice):
             # 2.2.6: a star with several planets: ask which one, then look that one up.
             self.planet_source.set(f"{error.system}: choose a planet.")
             self._choose_planet(error.system, error.planets, getattr(error, "transiting", set()))
             return
         if error is not None:
+            if self._lookup_no_answer(error):
+                # 2.2.19 (nit): the service did not answer (a timeout or no connection): say so, no error box.
+                self.planet_source.set(f"✖ {name or 'The planet'}: the NASA Exoplanet Archive did not answer ({error}) "
+                                       "— type the values or Look up again.")
+                self.status.set(self.planet_source.get())
+                return
             if quiet:
                 # 2.2.14 (item 2): an automatic lookup fails quietly, on the line under the box (no error box). The
                 # name still counts as looked up, so leaving the box again does not ask again; Look up again does.
@@ -2605,7 +3077,14 @@ class App(Tk):
                 different = True
         if different and old_star and p.get("host") and not core.same_object_name(old_star, p["host"]):
             # 2.2.16 (item 11): a planet of another star: the old field's comps, check and watch stars go too.
-            self.clear_target(quiet=True, why=f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}")
+            # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
+            if self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
+                                 keep_planet=True) is None:
+                # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
+                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
+                                       "and its series. Check the planet's name, or answer Yes to start a new "
+                                       "reduction.")
+                return
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
             self.dec_deg.set(f"{p['dec']:.5f}")
@@ -2833,6 +3312,7 @@ class App(Tk):
         # 2.2.16 (item 11): the rest of the old field (15 Oct: a stale "✓ Comp 5 … Marker at (747, 169)" showed with
         # no marker, and TOI-2046's comp names went into HD 219134's series).
         self.spare_marks = []
+        self._comps_under = {}   # 2.2.19 (#34)
         if not self.observations:
             self.spare_catalog = {}   # an open series keeps its own spares (they are saved with it)
         if session_watch:
@@ -2870,6 +3350,261 @@ class App(Tk):
         self.refresh_preview()
         if not quiet:
             self.status.set("Target, comps, and check cleared. Type the new Star ID and press Enter to look it up.")
+
+    # ---- 2.2.19 (#20): a new reduction never keeps the previous star's state ---------------------------------------
+    NEW_REDUCTION_TIP = ("New reduction starts over for another star: the open series is closed (you are offered a "
+                         "save first), and the target, planet, comps, check and watch stars, Use comps choice, VSX "
+                         "period and rejected frames are cleared. The frame folders, site and optics stay.")
+
+    def _switch_star(self, why: str, keep_planet: bool = False) -> bool:
+        """2.2.19 (#20; TrES-3 b then WASP-10 b, beta tester): another star chosen on the Input page (a planet of
+        another host, the transit planner): a new reduction, so the old star's series, Use comps choice and comp slots
+        never reach the new field (they marked the new night "nocomp"). keep_planet: the planet just chosen stays.
+        If the series save question is canceled, only the old field's stars are cleared (and a run then refuses the
+        old Use comps choice, see _photometry_done). True when a new reduction was made; None when the open series'
+        question was answered No (review: a mistyped planet must never close a saved series silently)."""
+        if self.observations and not self.busy:
+            name = os.path.basename(self.series_path) if self.series_path else "the open series"
+            old = self.star_id.get().strip() or "the old target"
+            if not messagebox.askyesno(
+                    APP_TITLE, f"{why[:1].upper() + why[1:]}.\n\nStart a new reduction? Yes closes {name} (you are "
+                               "offered a save first if it has unsaved changes) and clears "
+                               f"{old}'s comps, check and watch stars and its Use comps choice.\nNo keeps {old} and "
+                               "its series (check the name you typed).", default="no"):
+                self.log(f"Kept {old} and {name}: {why} (answered No).")
+                return None
+        if self.new_reduction(why=why, keep_planet=keep_planet):
+            return True
+        self.clear_target(quiet=True, why=why)
+        return False
+
+    def new_reduction(self, ask: bool = False, new_star: str = "", why: str = "", keep_planet: bool = False) -> bool:
+        """2.2.19 (#20): forget everything that belongs to the previous star, as if SHOBS-P had just been started (the
+        folders, masters, site, optics and settings stay). The open series is closed, with a save offered first when it
+        has unsaved work. new_star: looked up at once (e.g. the lights' OBJECT). Returns True when done."""
+        if self.busy:
+            messagebox.showinfo(APP_TITLE, "Wait for the current step to finish (or cancel it) before starting a new "
+                                           "reduction.")
+            return False
+        old = self.star_id.get().strip()
+        if ask and not messagebox.askyesno(
+                APP_TITLE, "Start a new reduction?\n\n" + (f"{old}'s " if old else "The ")
+                + "target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are "
+                  "cleared" + (", and the open series is closed (you are offered a save first)" if self.observations
+                               else "") + ". The frame folders, site and optics stay."):
+            return False
+        had_series = bool(self.observations)
+        if had_series:
+            if not self._offer_series_save("start a new reduction"):
+                self.log("New reduction canceled: the series stays open.")
+                return False
+            self.close_series(asked=True)
+            if self.observations:
+                return False
+        cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        reason = why or "New reduction pressed"
+        self.clear_target(quiet=True, why=reason)
+        self.log("New reduction" + (f" (was {old})" if old else "") + ": " + reason
+                 + (f"; also cleared {', '.join(cleared)}" if cleared else "") + ".")
+        if new_star:
+            self.star_id.set(new_star)
+            self.status.set(f"New reduction: looking up {new_star}…")
+            self.lookup_star()
+        else:
+            self.status.set("New reduction: type the Star ID (and the planet in Transits) and press Enter.")
+        tp = getattr(self, "transit_page", None)
+        if tp is not None and not had_series:
+            try:
+                tp.refresh()
+            except Exception:
+                pass
+        try:
+            self.draw_output()
+        except Exception:
+            traceback.print_exc()
+        return True
+
+    def _clear_per_star_state(self, keep_planet: bool = False, all_rejected: bool = True) -> list:
+        """2.2.19 (#20): the per-star state that clear_target and the series close leave alone (audit of App, 25 Oct):
+        the planet and its values, the comp/check names a run or series used and their catalog magnitudes, AUIDs and sky
+        positions, report names, Sloan sources, the comp-follow state (#34), rejected frames, marked periods, a
+        Discovery scan, and the questions already answered for the old star. Returns words for the log."""
+        out = []
+        if not keep_planet:
+            if self.planet_name.get().strip() or getattr(self, "planet_info", None):
+                out.append(f"planet {self.planet_name.get().strip()}" if self.planet_name.get().strip()
+                           else "planet values")
+            for var in (self.planet_name, self.pl_period, self.pl_t0, self.pl_t14, self.pl_depth, self.pl_k,
+                        self.pl_a_rs, self.pl_b, self.pl_teff):
+                var.set("")
+            self.planet_info = {}
+            self._last_planet_lookup = None
+            self.planet_source.set("Type the planet's name and press Enter (NASA Exoplanet Archive; TOIs also from "
+                                   "ExoFOP), or type the values.")
+        self._last_lookup_name = None
+        if hasattr(self, "report_note"):
+            self.report_note.set("")
+        self.comps_used = []
+        self.check_used = ""
+        self._prev_stars = ([], "")
+        self.comp_catalog_mags = {}
+        self.comp_coords = {}
+        self.spare_catalog = {}
+        self.seq_auids = {}
+        self.report_names = {}
+        self.comp_band_sources = {}
+        self.active_comps = []
+        self._comps_under = {}            # 2.2.19 (#34)
+        self._series_catalog_before = None
+        self._series_check = ("", "")
+        self._target_bv = None
+        self._closest_dm = None
+        self._seq_note_for = None
+        self._field_question_declined = None
+        self._object_checked = set()
+        self.mark_periods.set("")
+        # The button forgets every rejected frame; a star change found from the lights or the planet keeps the ones
+        # set aside in the current Lights / Flat folders (they belong to the new star's frames) and forgets the rest.
+        n_rej = len(self.rejected) if all_rejected else self._prune_rejected()
+        if all_rejected:
+            self.rejected = set()
+        if n_rej:
+            out.append(f"{n_rej} rejected frame{'s' if n_rej != 1 else ''}" + ("" if all_rejected else
+                                                                                " of other folders"))
+            try:
+                self._update_rejected_list()
+            except Exception:
+                pass
+        if self.last_scan is not None or self.scan_marks or self.scan_excluded:
+            out.append("the field scan")
+        self.last_scan = None
+        self.scan_marks = []
+        self.scan_excluded = []
+        if self.observations == [] and self.watch_list:
+            # Watch stars of the old field (clear_target removes the ones added this session; these came with it).
+            out.append(f"{len(self.watch_list)} watch star{'s' if len(self.watch_list) != 1 else ''}")
+            self.watch_list = []
+            self.watch_xy = {}
+        return out
+
+    def _first_header(self, folder_var) -> dict | None:
+        """2.2.19 (#20): the FITS header of the first light (or the dark: a master file, else its first frame)."""
+        try:
+            if folder_var is self.light_dir:
+                # Review: one header read on the window's thread, not every file's (split_lights reads them all):
+                # the first file that is neither a master nor a bias/dark/flat.
+                for path in core.list_fits(self.light_dir.get())[:40]:
+                    if core.is_shobsp_master_name(path) or os.path.basename(path).lower().startswith("master"):
+                        continue
+                    header = core.read_header(path)
+                    if not self._cal_kind(path, " ".join(str(header.get(k) or "") for k in ("IMAGETYP", "FRAME"))):
+                        self._first_light_path = path
+                        return header
+                return None
+            frames, master = core.calibration_source(folder_var.get())
+            path = master or (frames[0] if frames else None)
+            return core.read_header(path) if path else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _header_exposure(h):
+        if not h or not any(k in h for k in ("EXPTIME", "EXPOSURE", "EXP_TIME")):
+            return None
+        try:
+            v = float(core.header_exptime(h))
+            return v if math.isfinite(v) and v > 0 else None
+        except Exception:
+            return None
+
+    def _update_dark_exposure_note(self) -> str:
+        """2.2.19 (#20): the Input page says when the darks' exposure differs from the lights' before Calibrate: ✖ when
+        the master dark would be scaled more than 3x (Calibrate then asks), ⚠ for a smaller difference (scaled to the
+        lights' exposure), ✔ once you chose at Calibrate to scale these darks. Empty when they match or are unknown."""
+        if not hasattr(self, "dark_exposure_note"):
+            return ""
+        text, style = "", "Warn.TLabel"
+        light_exp = self._header_exposure(self._first_header(self.light_dir)) if self.light_dir.get().strip() else None
+        dark_exp = self._header_exposure(self._first_header(self.dark_dir)) if self.dark_dir.get().strip() else None
+        if light_exp and dark_exp and abs(dark_exp / light_exp - 1.0) > 0.02:
+            factor = light_exp / dark_exp
+            chosen = getattr(self, "_dark_scale_chosen", None) == (self.dark_dir.get(), self.light_dir.get())
+            if chosen:
+                text = (f"✔ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g}, as "
+                        "you chose at Calibrate.")
+                style = "Hint.TLabel"
+            elif core.dark_scale_problem(dark_exp, light_exp):
+                text = (f"✖ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark would be scaled ×{factor:.3g}, "
+                        f"which stamps its noise on every light. Point Dark at {light_exp:g} s darks (Calibrate asks "
+                        "otherwise).")
+                style = "Bad.TLabel"
+            else:
+                text = (f"⚠ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g} to the "
+                        f"lights' exposure. Fine for a cooled camera; {light_exp:g} s darks are better.")
+        self.dark_exposure_note.set(text)
+        try:
+            self.dark_exposure_label.configure(style=style)
+        except Exception:
+            pass
+        return text
+
+    def _frames_folder_picked(self, key: str):
+        """2.2.19 (#20): a Lights or Dark folder was just chosen: the dark/lights exposure note, and for new lights the
+        question whether they are another star (header pointing far from the Star ID, or OBJECT without pointing)."""
+        self._prune_rejected()   # review: on Browse / Scan / a run, not on every key typed in the folder box
+        self._update_dark_exposure_note()
+        if key != "Lights" or self.mode_key == "discovery" or not self.star_id.get().strip():
+            return
+        header = self._first_header(self.light_dir)
+        if not header:
+            return
+        # Review: the same path as Scan folders: a folder pointing at two places is sorted out first (the two-fields
+        # question, sampled headers), then the field question for the frames kept.
+        first = getattr(self, "_first_light_path", None)
+        lights = [p for p in core.list_fits(self.light_dir.get())
+                  if p != first and not core.is_shobsp_master_name(p)
+                  and not os.path.basename(p).lower().startswith("master")]
+        lights = ([first] if first else []) + lights
+        try:
+            kept = self._check_lights_targets(lights, header) if lights else None
+        except Exception:
+            kept = None
+        self._check_target_field(kept if kept is not None else header)
+
+    def _drop_offframe_slots(self, shape=None) -> list:
+        """2.2.19 (#20): comps and the check kept from an earlier run (names left in their slots) that are not on this
+        frame are dropped, and logged. A slot counts as off the frame when its marker lies outside the image, or, on a
+        solved image, its star's sky position (comp_coords) falls outside it. Names without a known position stay
+        (they still say "not marked on this image")."""
+        img = self.preview
+        if shape is None:
+            if img is None:
+                return []
+            shape = img.shape
+        h, w = shape[:2]
+        sol = self.chart_solution if self.chart_placed or (self.chart_solution or {}).get("auto") else None
+        dropped = []
+        for role in list(COMP_ROLES) + ["check"]:
+            name = getattr(self, f"{role}_name").get().strip()
+            xy = getattr(self, f"{role}_xy")
+            off = False
+            if xy is not None:
+                off = not (0 <= xy[0] < w and 0 <= xy[1] < h)
+            elif name and sol and self.comp_coords.get(name) is not None:
+                try:
+                    px, py = core.sky_to_pixel(float(self.comp_coords[name][0]), float(self.comp_coords[name][1]), sol)
+                    off = not (np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5)
+                except Exception:
+                    off = False
+            if off:
+                dropped.append(f"{role_label(role)} {name or '(unnamed)'}")
+                self.clear_mark(role, redraw=False)
+        if dropped:
+            self.log("Dropped from an earlier run, not on this frame: " + ", ".join(dropped) + ".")
+            if hasattr(self, "pick_label"):
+                self._update_pick_label()
+                self.update_star_panel()
+        return dropped
 
     def _other_target_why(self, star, ra_hours=None, dec_deg=None) -> str:
         """2.2.16 (item 11): why a loaded series' target is another star than the Input page's, or "" (see
@@ -2939,23 +3674,31 @@ class App(Tk):
         obj = str(header.get("OBJECT") or "").strip()
         import re
         obj = re.sub(r"\s+[b-h]$", "", obj)      # "HD 219134 b" (a planet) -> its star, "HD 219134"
-        generic = obj.lower() in ("", "fov", "light", "object", "target", "unknown", "none")
+        generic = obj.lower() in core.GENERIC_OBJECTS
         name = self.star_id.get().strip() or "the target"
-        ask = (f"These lights point at {core.sexagesimal_ra(c_ra / 15.0)}  {core.sexagesimal_dec(c_dec)}"
-               + ("" if generic else f" (FITS OBJECT: {obj})")
-               + f", {sep:.0f}° from the Input page's target, {name} at {core.sexagesimal_ra(t_ra / 15.0)}  "
-               f"{core.sexagesimal_dec(t_dec)}.\n\nClear the old target, comps, and check star"
-               + ("" if generic else f", and look up {obj}") + "?")
+        if not generic and core.same_object_name(obj, name):
+            # Review: the frames are labeled as the Input page's star (its RA/Dec must be off): no new reduction.
+            self.log(f"Lights: OBJECT {obj} is the Star ID, but they point {sep:.0f}° from its RA/Dec: check the RA/Dec "
+                     "on the Input page (Look up again).")
+            return
+        # 2.2.19 (#20): the question is a new reduction (the series, planet, comps, Use comps choice… go too).
+        ask = ((f"These frames are {obj}, not {name}." if not generic else f"These frames are not {name}.")
+               + f"\n\nThey point at {core.sexagesimal_ra(c_ra / 15.0)}  {core.sexagesimal_dec(c_dec)}, {sep:.0f}° from "
+               f"{name} ({core.sexagesimal_ra(t_ra / 15.0)}  {core.sexagesimal_dec(t_dec)}).\n\nStart a new reduction? "
+               + ("Yes closes the open series (you are offered a save first) and clears " if self.observations else
+                  "Yes clears ")
+               + f"{name}'s target, planet, comps, check and watch stars" + ("" if generic else f", then looks up {obj}")
+               + f". No keeps {name}.")
+        if self.busy:
+            return   # review: asked again later (Scan, Calibrate); a skipped question is not a No
         if not messagebox.askyesno(APP_TITLE, ask):
             self._field_question_declined = key
             self.log(f"Kept {name} as the target although the lights point {sep:.0f}° away.")
             return
         # 2.2.16 (item 11): one log line says what was cleared and why.
-        self.clear_target(quiet=True, why=f"these lights are a different field, {sep:.0f}° from {name}"
-                                          + ("" if generic else f"; looking up {obj}"))
-        if not generic:
-            self.star_id.set(obj)
-            self.lookup_star()
+        self.new_reduction(new_star="" if generic else obj,
+                           why=f"these lights are a different field, {sep:.0f}° from {name}"
+                               + ("" if generic else f" (OBJECT {obj})"))
 
     def _check_lights_targets(self, lights: list, first_header: dict):
         """2.2.13 (John: "there are more observers like me out there"): when the lights are scanned,
@@ -3102,11 +3845,14 @@ class App(Tk):
             star = re.sub(r"\s+[b-h]$", "", obj)
             if self.busy:   # review: never offer to wipe the field during a run: a warning, as before 2.2.16
                 messagebox.showwarning(APP_TITLE, text)
-            elif messagebox.askyesno(APP_TITLE, text + f"\n\nClear the old target, comps, and check star, and look "
-                                                       f"up {star}?", default="no"):
-                self.clear_target(quiet=True, why=f"the lights' FITS OBJECT is {obj}, not {name}; looking up {star}")
-                self.star_id.set(star)
-                self.lookup_star()
+            elif messagebox.askyesno(APP_TITLE, f"These frames are {star}, not {name}.\n\n" + text
+                                     + "\n\nStart a new reduction? Yes "
+                                     + ("closes the open series (you are offered a save first), " if self.observations
+                                        else "")
+                                     + f"clears {name}'s target, planet, comps, check and watch stars, and looks up "
+                                       f"{star}. No keeps {name}.", default="no"):
+                # 2.2.19 (#20): a new reduction, as for lights pointing elsewhere.
+                self.new_reduction(new_star=star, why=f"the lights' FITS OBJECT is {obj}, not {name}")
 
     def _check_lights_pointing(self, header: dict):
         """Discovery shows the Field center box only when the lights cannot say where they point."""
@@ -3130,6 +3876,7 @@ class App(Tk):
             return
         self._last_lookup_name = name
         self.status.set(f"Looking up {name} in SIMBAD and VSX…")
+        self._lookup_busy_start("star", name, "SIMBAD and VSX")   # 2.2.19 (nit)
 
         def work():
             try:
@@ -3146,9 +3893,19 @@ class App(Tk):
         if name and name != self.star_id.get().strip():
             # The name changed while this lookup ran (typed again, or "Use it" on the spelling hint): look up the
             # name that is there now instead of reporting the old one.
+            self._lookup_busy_stop("star", name=name)   # 2.2.19 (nit)
             self._auto_lookup()
             return
+        self._lookup_busy_stop("star", name=name)
         if error is not None:
+            if self._lookup_no_answer(error):
+                # 2.2.19 (nit): SIMBAD/VSX did not answer: on the busy line and the status bar, no error box.
+                text = (f"✖ {name or 'The target'}: SIMBAD and VSX did not answer ({error}) — type RA/Dec, or Look up "
+                        "again.")
+                self._lookup_busy_show("star", text, bad=True)
+                self.status.set(text)
+                self._last_lookup_name = None
+                return
             if quiet:
                 # 2.2.5: an automatic lookup that fails says so quietly; RA/Dec can come from the plate solution.
                 self.status.set(f"Could not look up {name or 'the target'} ({error}). Type RA/Dec, or let the plate "
@@ -3198,6 +3955,7 @@ class App(Tk):
             if other and not n:
                 self.log(f"The {key} folder holds {len(other)} file(s) SHOBS-P cannot read (for example "
                          f"{other[0]}). It reads FITS and XISF: save or export them in one of those.")
+        self._prune_rejected()   # 2.2.19 (#20)
         lights, skipped, _note = core.split_lights(core.list_fits(self.light_dir.get()))
         if skipped:
             self._counts["Lights"].set(f"{len(lights)} files (+{len(skipped)} cal skipped)")
@@ -3215,9 +3973,12 @@ class App(Tk):
                 # 2.2.13: frames pointing at two places first; the field check then uses a frame that is kept.
                 kept = self._check_lights_targets(lights, header)
                 self._check_target_field(kept if kept is not None else header)
+                self._update_dark_exposure_note()   # 2.2.19 (#20)
                 if not core.is_microobservatory(lights[0], header):
                     self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
                 self._update_mount_hint(lights, log=True)   # 2.2.18 (item 8)
+                if not core.is_microobservatory(lights[0], header):
+                    self._save_header_mount(lights)   # 2.2.19 (nit)
                 pat = core.header_bayer(header)
                 if rgb:
                     self.status.set(f"{len(lights)} lights: color images, "
@@ -3780,6 +4541,15 @@ class App(Tk):
                 unset_filled = unset_filled or unset
             elif abs(cur - value) > tol:
                 differ.append((key, label, cur, value, src))
+        # 2.2.19 (nit): focal length and pixel size read from your own lights' header are saved to the settings file
+        # (for SHOBS-SCHED) when no value of yours is saved yet; a saved (typed) value is never overwritten here.
+        if self._own_setup is None and not getattr(self, "_loading_meta", False):
+            for key, _label, value, _src, tol in wanted:
+                if key not in ("focal_mm", "pixel_um") or key in self.settings or f"{key}={value:g}" in declined_tokens:
+                    continue
+                cur = fnum(self._setup_value(key))
+                if cur is not None and abs(cur - value) <= tol:
+                    self._store_own_value(key, float(cur))
         if filled:
             self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
             if unset_filled:   # 2.2.18 (item 11, review S6)
@@ -3886,9 +4656,24 @@ class App(Tk):
     def _blink_folder(self):
         return self.light_dir.get() if self.blink_source.get() == "lights" else self.flat_dir.get()
 
+    def _split_lights_cached(self):
+        """2.2.19 (review): core.split_lights of the Lights folder (it reads every file's header), kept while the
+        folder's file list and modification times are the same."""
+        files = core.list_fits(self.light_dir.get())
+        try:
+            key = (self.light_dir.get(), tuple((f, os.path.getmtime(f)) for f in files))
+        except OSError:
+            key = None
+        cache = self._split_cache
+        if key is not None and cache is not None and cache[0] == key:
+            return cache[1]
+        result = core.split_lights(files)
+        self._split_cache = (key, result) if key is not None else None
+        return result
+
     def _lights(self, log_skips: bool = False) -> list[str]:
         """Light frames to use: the Lights folder minus rejected frames and any bias/dark/flat/master files."""
-        paths, skipped, note = core.split_lights(core.list_fits(self.light_dir.get()))
+        paths, skipped, note = self._split_lights_cached()
         if note and log_skips:
             self.log("Note: " + note)
         if skipped and log_skips:
@@ -4538,6 +5323,76 @@ class App(Tk):
         ttk.Button(nav, text="Next: Photometry", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT)
         return page
 
+    @staticmethod
+    def _cal_kind(path: str, reason: str) -> str | None:
+        """2.2.19 (#38): "bias", "dark" or "flat" from why split_lights skipped a file (IMAGETYP or its name)."""
+        text = f"{reason} {os.path.basename(path)}".lower()
+        squashed = text.replace(" ", "").replace("_", "").replace("-", "")
+        if "darkflat" in squashed or "flatdark" in squashed:
+            return "darkflat"   # review: a dark flat is neither a flat nor a dark for the lights
+        for kind, words in (("flat", ("flat",)), ("dark", ("dark",)), ("bias", ("bias", "offset", "zero"))):
+            if any(w in text for w in words):
+                return kind
+        return None
+
+    def _offer_lights_calibration(self, bias, dark, flat, files):
+        """2.2.19 (#38, beta tester's MicroObservatory download): calibration frames saved in the Lights folder were
+        skipped and the run went on uncalibrated with only a note. When the matching Dark / Bias / Flat box is empty,
+        ask "2 dark frames (60 s) are in the Lights folder. Use them as darks?" (Yes: used for this run, the files
+        stay where they are; the answer is kept for this folder). Another program's master (MasterDark.fits) is named
+        as not usable. Returns (bias, dark, flat)."""
+        try:
+            skipped = self._split_lights_cached()[1]
+        except Exception:
+            return bias, dark, flat
+        if not skipped:
+            return bias, dark, flat
+        groups, masters = {}, []
+        for path, reason in skipped:
+            if core.is_shobsp_master_name(path) or "master" in str(reason).lower() \
+                    or os.path.basename(path).lower().startswith("master"):
+                masters.append(path)
+                continue
+            kind = self._cal_kind(path, str(reason))
+            if kind:
+                groups.setdefault(kind, []).append(path)
+        for path in masters:
+            kind = self._cal_kind(path, "") or "calibration"
+            if core.is_shobsp_master_name(path):
+                continue
+            self.log(f"{os.path.basename(path)} in the Lights folder is a master {kind} from another program: not "
+                     "usable (SHOBS-P builds its own masters from raw frames, because how another program scaled and "
+                     "normalized its master is not known).")
+        current = {"bias": bias or files.get("bias"), "dark": dark or files.get("dark"), "flat": flat or files.get("flat")}
+        answers = self.__dict__.setdefault("_lights_cal_answers", {})
+        out = {"bias": bias, "dark": dark, "flat": flat}
+        for kind in ("bias", "dark", "flat"):
+            paths = groups.get(kind) or []
+            if not paths or current[kind]:
+                continue
+            key = (self.light_dir.get(), kind, len(paths))
+            if key not in answers:
+                exp = ""
+                if kind == "dark":
+                    e = self._header_exposure(core.read_header(paths[0])) if paths else None
+                    exp = f" ({e:g} s)" if e else ""
+                word = {"bias": "bias", "dark": "dark", "flat": "flat"}[kind]
+                answers[key] = messagebox.askyesno(
+                    APP_TITLE, f"{len(paths)} {word} frame{'s' if len(paths) != 1 else ''}{exp} "
+                               f"{'are' if len(paths) != 1 else 'is'} in the Lights folder, and the {kind.capitalize()} "
+                               f"box is empty.\n\nUse them as {word}{'s' if kind != 'bias' else ''}? (Yes: used for "
+                               "this run; the files stay where they are. No: the run goes on without them.)")
+            if answers[key]:
+                out[kind] = [p for p in paths if p not in self.rejected]   # review: frames set aside in Blink stay out
+                self.log(f"Using the {len(paths)} {kind} frame{'s' if len(paths) != 1 else ''} found in the Lights "
+                         f"folder as {kind} frames for this run.")
+            else:
+                self.log(f"The {len(paths)} {kind} frame{'s' if len(paths) != 1 else ''} in the Lights folder "
+                         f"{'are' if len(paths) != 1 else 'is'} not used (answered No); this run has no {kind}.")
+        if out["dark"] is not dark:
+            self._update_dark_exposure_note()
+        return out["bias"], out["dark"], out["flat"]
+
     def _calibration_checks(self, bias, dark, flat, lights):
         """Before building masters: darks far from the lights' exposure, and flats taken at another rotator angle.
         Returns the dark list to use (possibly empty), or None to stop."""
@@ -4577,6 +5432,8 @@ class App(Tk):
                                  "removes it in photometry, but the flat is a little less exact.")
                 else:
                     self.log(f"Darks scaled x{light_exp / dark_exp:.3g} ({dark_exp:g} s to {light_exp:g} s), as chosen.")
+                    self._dark_scale_chosen = (self.dark_dir.get(), self.light_dir.get())   # 2.2.19 (#20)
+                    self._update_dark_exposure_note()
         light_rot = core.header_rotator(light_header)
         # 2.2.18 (item 8): on an alt-az mount the readings are compared without the flip (core.flat_angle_difference)
         minfo = self._mount_info(lights) if flat and light_rot is not None else {"mount": core.MOUNT_GEM, "detected": {}}
@@ -4680,6 +5537,7 @@ class App(Tk):
         return "; ".join(flips), "; ".join(moves)
 
     def run_calibration(self):
+        self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())
         dark, dark_file = core.calibration_source(self.dark_dir.get())
@@ -4710,6 +5568,8 @@ class App(Tk):
         if not lights:
             messagebox.showerror(APP_TITLE, "No light frames found.")
             return
+        # 2.2.19 (#38): bias/dark/flat frames found in the Lights folder, with that box empty: offer to use them.
+        bias, dark, flat = self._offer_lights_calibration(bias, dark, flat, files)
         # Flats already calibrated by other software (PixInsight's _c files, floating-point masters) are used as
         # they are: subtracting the bias again would wreck them.
         flats_calibrated = False
@@ -5123,6 +5983,13 @@ class App(Tk):
             # Symbol legend under the image: only the markers drawn right now (2.2.1).
             self.legend_row = ttk.Frame(plot_host, style="Card.TFrame")
             self.legend_row.pack(side="bottom", fill=X, pady=(2, 0))
+            # 2.2.19 (#10): when the image is drawn small, say where Pop out is (shown only then).
+            self.photo_small_row = ttk.Frame(plot_host, style="Card.TFrame")
+            self.photo_small_hint = StringVar(value="")
+            ttk.Label(self.photo_small_row, textvariable=self.photo_small_hint, style="Warn.TLabel").pack(side=LEFT)
+            ttk.Button(self.photo_small_row, text="Pop out", command=self.photo_pop_toggle).pack(side=LEFT,
+                                                                                               padx=(8, 0))
+            plot_host.bind("<Configure>", lambda _e: self._photo_space_soon(), add="+")
             self.photo_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.photo_ax = self.photo_fig.add_subplot(111)
             self.photo_canvas = FigureCanvasTkAgg(self.photo_fig, master=plot_host)
@@ -6617,6 +7484,89 @@ class App(Tk):
             return
         window.show_test(result, seeing, sky_in, sky_out, ref_label)
 
+    def _photo_space_soon(self):
+        """2.2.19 (#10): the image area changed size: refit once things settle (one pending call at a time)."""
+        if getattr(self, "_photo_space_job", None):
+            return
+        def run():
+            self._photo_space_job = None
+            try:
+                self._fit_photo_space()
+            except Exception:
+                traceback.print_exc()
+        self._photo_space_job = self.after(120, run)
+
+    def _photo_log_line_px(self) -> float:
+        if getattr(self, "_photo_line_px", None):
+            return self._photo_line_px   # review nit: measured once
+        try:
+            from tkinter import font as tkfont
+            px = float(tkfont.Font(root=self, family=core.MONO_FONT, size=9).metrics("linespace"))
+            if math.isfinite(px) and px > 0:
+                self._photo_line_px = px
+                return px
+        except Exception:
+            pass
+        return 15.0 * ui_scale(self)
+
+    def _fit_photo_space(self) -> dict | None:
+        """2.2.19 (#10, GitHub): the Photometry image takes the room the page has at any display scaling. The figure
+        always fills its widget (fit_figure_to_widget) and imshow scales the frame up or down to the axes, so a small
+        frame (MicroObservatory 650 x 500) is drawn as large as the area allows; what made it small at 125 % was the
+        area itself: every text row on the page is 25 % taller there, so the image area got short and wide, and a
+        frame limited by the height left most of the width empty. Here (1) while the image is limited by the height,
+        the log gives up lines (7 down to 3; Hide log hides it), and (2) when the image is still drawn small, a line
+        under it says where Pop out is. Returns the fit (image_fit_px) or None."""
+        canvas = getattr(self, "photo_canvas", None)
+        if canvas is None or self.preview is None or getattr(self, "photo_popout", None) is not None:
+            return None
+        widget = canvas.get_tk_widget()
+        try:
+            if not widget.winfo_ismapped():
+                return None
+            w, h = int(widget.winfo_width()), int(widget.winfo_height())
+        except Exception:
+            return None
+        if w < 50 or h < 50:
+            return None
+        img_h, img_w = self.preview.shape[:2]
+        k = ui_scale(widget)
+        title_px = PHOTO_TITLE_PT * 1.6 * k
+        log_shown = bool(self.photo_logf.winfo_ismapped()) if hasattr(self, "photo_logf") else False
+
+        def is_small(f):
+            return f["h"] < 360.0 * k or (f["limit"] == "height" and f["fill"] < 0.6)
+        fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
+        if log_shown:
+            try:
+                cur = int(float(self.photo_log.cget("height") or 7))
+            except (TypeError, ValueError):
+                cur = 7
+            line = self._photo_log_line_px()
+            n = cur
+            if is_small(fit):
+                # Review: only a SMALL image takes lines from the log (a 3:2 frame that fills most of the area keeps
+                # its 7 lines; John's ASI2600 frames are always a little height-limited).
+                n = min(cur, photo_log_lines(w, h, cur, line, img_w, img_h, title_px))
+            elif cur < 7:
+                # Room again (a larger window): the log grows back while the image stays big enough.
+                grow = image_fit_px(w, h - (7 - cur) * line, img_w, img_h, title_px, 6.0 * k)
+                n = 7 if not is_small(grow) else cur
+            if n != cur:
+                self.photo_log.configure(height=n)
+                h += int(round((cur - n) * line))   # what the image area gets
+                fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
+        small = is_small(fit)
+        if small:
+            self.photo_small_hint.set("⚠ Small image? Pop out opens it in its own window (also in the View box, top "
+                                      "right)" + ("; Hide log gives it more room." if log_shown else "."))
+            if not self.photo_small_row.winfo_ismapped():
+                self.photo_small_row.pack(side="bottom", fill=X, pady=(2, 0), before=self.legend_row)
+        elif self.photo_small_row.winfo_ismapped():
+            self.photo_small_row.pack_forget()
+        self._photo_fit = fit
+        return fit
+
     def toggle_photo_log(self):
         if self.photo_logf.winfo_ismapped():
             self.photo_logf.pack_forget()
@@ -6693,6 +7643,7 @@ class App(Tk):
             self._mark(getattr(self, f"{role}_xy"), PICK_COLORS[role], f"C{comp_number(role)}")
         self._mark(self.check_xy, PICK_COLORS["check"], "K")
         circles, labels = {}, []
+        seq_rings = {}
         for x, y, star in self.chart_placed:
             if not (0 <= x < img.shape[1] and 0 <= y < img.shape[0]):
                 continue
@@ -6700,8 +7651,10 @@ class App(Tk):
             if seq and self._overlay("catalog"):
                 # 2.2.13 (John): AAVSO sequence stars are always marked, in their own color with the chart label
                 # ("91" = V 9.1), whichever catalog's circles are shown: they are the vetted comps.
+                # 2.2.19 (#15): a thin DASHED ring (drawn below in one go), so it differs from a suggested comp's
+                # thick solid ring by shape, not only by color.
                 colour = "#ff5252" if star.get("variable") else SEQ_COLOR
-                self.photo_ax.plot(x, y, marker="o", mfc="none", mec=colour, ms=11, mew=1.4)
+                seq_rings.setdefault(colour, []).append((x, y))
                 if self.show_labels.get():
                     self.photo_ax.text(x + 5, y - 5, seq.get("label") or str(star.get("label", "")), color=colour,
                                        fontsize=8, fontweight="bold")
@@ -6725,6 +7678,9 @@ class App(Tk):
                 pts = sorted(pts, key=lambda p: p[0])[:CIRCLES_MAX]
             self.photo_ax.plot([p[1] for p in pts], [p[2] for p in pts], ls="none", marker="o", mfc="none", mec=colour,
                                ms=9)
+        for colour, pts in seq_rings.items():
+            self.photo_ax.scatter([p[0] for p in pts], [p[1] for p in pts], s=SEQ_RING_MS ** 2, facecolors="none",
+                                  edgecolors=colour, linewidths=1.0, linestyles=SEQ_RING_DASH, zorder=3)
         for x, y, v in self._loose_variable_marks():
             if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
                 self.photo_ax.plot(x, y, marker="x", color="#ff5252", ms=7, mew=1.2)
@@ -6744,11 +7700,17 @@ class App(Tk):
         for x, y in self.scan_excluded:
             self.photo_ax.plot(x, y, marker="x", color="#ff9800", ms=12, mew=2.0)
         if self.mode_key != "discovery" and self._overlay("suggested"):
-            taken = {tuple(getattr(self, f"{r}_xy")) for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None}
-            for name, _dm, x, y in self.suggested_comps:
-                if (x, y) not in taken:
-                    self.photo_ax.plot(x, y, marker="o", mfc="none", mec="#2ca02c", ms=16, mew=1.2, ls="none",
-                                       alpha=0.9)
+            # 2.2.19 (#15): a thick solid ring labeled S1, S2 … in suggestion order (the info panel's S lines).
+            taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
+            for k, (name, _dm, x, y) in enumerate(self.suggested_comps):
+                if any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken):
+                    continue
+                self.photo_ax.plot(x, y, marker="o", mfc="none", mec=SUGGEST_COLOR, ms=SUGGEST_RING_MS,
+                                   mew=SUGGEST_RING_MEW, ls="none", alpha=0.95, zorder=4)
+                if self.show_labels.get():
+                    self.photo_ax.annotate(f"S{k + 1}", (x, y), xytext=(SUGGEST_RING_MS * 0.55, -SUGGEST_RING_MS * 0.55),
+                                           textcoords="offset points", color=SUGGEST_COLOR, fontsize=9,
+                                           fontweight="bold", ha="left", va="top", zorder=4)
         self._photo_hover_sets = self._photo_hover_data(img.shape)
         self._photo_hover_annots = {}
         self._photo_hover_key = None
@@ -6761,10 +7723,17 @@ class App(Tk):
         # 2.2.13 (John): labels stay inside the image (they spilled outside the axes); markers placed off the frame
         # (an old position, a star beyond the edge) no longer widen the view: the whole frame is set explicitly.
         self._draw_compass(img.shape)
+        self._draw_marker_key(img.shape)   # 2.2.19 (#15)
         for txt in self.photo_ax.texts:
             txt.set_clip_on(True)
             txt.set_clip_box(self.photo_ax.bbox)
-        self.photo_fig.tight_layout()
+        # 2.2.19 (#10): small tick labels and title, tight margins: the room goes to the image.
+        self.photo_ax.tick_params(labelsize=PHOTO_TICK_PT, length=2, pad=1)
+        self.photo_ax.title.set_fontsize(PHOTO_TITLE_PT)
+        try:
+            self.photo_fig.tight_layout(pad=0.3)
+        except Exception:
+            pass
         self.photo_ax.set_xlim(-0.5, img.shape[1] - 0.5)
         self.photo_ax.set_ylim(img.shape[0] - 0.5, -0.5)
         view = self._photo_view
@@ -6873,6 +7842,62 @@ class App(Tk):
             ax.text(corner[0], corner[1], tag, transform=at(*label_xy[tag]), ha="center", va="center",
                     fontsize=COMPASS_FONT_PT, fontweight="bold", color="#ffd24a", path_effects=halo)
 
+    def _marker_key_items(self) -> list:
+        """2.2.19 (#15): which of the two look-alike kinds are on the image now: "suggested" and/or "sequence"."""
+        items = []
+        if self.mode_key == "discovery":
+            return items
+        if self.suggested_comps and self._overlay("suggested"):
+            taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
+            if any(not any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken) for _n, _d, x, y in self.suggested_comps):
+                items.append("suggested")
+        if self._overlay("catalog") and any(st.get("seq") for _x, _y, st in self.chart_placed):
+            items.append("sequence")
+        return items
+
+    def _draw_marker_key(self, shape, ax=None, corner=None):
+        """2.2.19 (#15): a small key on the image itself for the two marks that were mixed up on a busy field (18-19
+        Oct): the suggested comp (thick solid ring, S1 …) and the AAVSO sequence star (thin dashed ring, V label). In
+        the corner beside the compass, tied to Show labels like the compass."""
+        ax = ax or self.photo_ax
+        items = self._marker_key_items()
+        if not items or not self.show_labels.get():
+            return None
+        from matplotlib.lines import Line2D
+        from matplotlib.legend_handler import HandlerPatch
+        from matplotlib.patches import Circle
+
+        class _Ring(HandlerPatch):
+            def create_artists(self, legend, orig, xd, yd, width, height, fontsize, trans):
+                ring = Circle((width / 2.0 - xd, height / 2.0 - yd), min(width, height) * 0.48, fill=False)
+                self.update_prop(ring, orig, legend)
+                ring.set_transform(trans)
+                return [ring]
+
+        handles, texts, handler_map = [], [], {}
+        if "suggested" in items:
+            handles.append(Line2D([], [], ls="none", marker="o", mfc="none", mec=SUGGEST_COLOR, ms=10,
+                                  mew=SUGGEST_RING_MEW))
+            texts.append("S1, S2 …  suggested comp")
+        if "sequence" in items:
+            ring = Circle((0, 0), 1, fill=False, ec=SEQ_COLOR, lw=1.0, ls=(0, (2.2, 1.6)))
+            handles.append(ring)
+            handler_map[ring] = _Ring()
+            texts.append("91 = V 9.1  AAVSO sequence")
+        if corner is None:
+            cx, cy = self._compass_corner(shape)
+            corner = (1.0 - cx, cy)   # the other corner on the compass's side (top or bottom)
+        loc = ("lower " if corner[1] < 0.5 else "upper ") + ("left" if corner[0] < 0.5 else "right")
+        leg = ax.legend(handles, texts, handler_map=handler_map, loc=loc, fontsize=7, framealpha=0.55,
+                        facecolor="#101418", edgecolor="#5d6d76", labelcolor="#e8eef2", borderpad=0.4,
+                        handletextpad=0.5, handlelength=1.4, markerscale=1.0)
+        try:
+            for text, colour in zip(leg.get_texts(), [SUGGEST_COLOR if i == "suggested" else SEQ_COLOR for i in items]):
+                text.set_color(colour)
+        except Exception:
+            pass
+        return leg
+
     def _compass_layout(self, vec, cx, cy):
         """2.2.17 (item 3): the compass in points relative to the image corner it sits in (cx, cy are the corner as
         axes fractions from _compass_corner). Returns [((base x, y), ha, va, tag, (tip x, y))] per arrow and sets
@@ -6924,7 +7949,7 @@ class App(Tk):
         if (self.target_xy is not None or comps or self.check_xy is not None) and self.show_apertures.get():
             items.append(("◎", "Aperture and sky ring", "#7a7a7a"))
         if self.suggested_comps and self.mode_key != "discovery" and self._overlay("suggested"):
-            items.append(("◯", "Suggested comp", "#2ca02c"))
+            items.append(("◯", "Suggested comp S1… (thick ring)", "#2ca02c"))   # 2.2.19 (#15)
         if self.spare_marks and self._overlay("spares"):
             items.append(("◇", "Spare comp", "#4fb3e0"))
         if self.watch_xy:
@@ -6932,7 +7957,7 @@ class App(Tk):
         if (self._overlay("catalog") and self.mode_key != "discovery"
                 and any(st.get("seq") for _x, _y, st in self.chart_placed)):
             # A darker shade of SEQ_COLOR: the legend strip is white, the image black.
-            items.append(("○", "AAVSO sequence (label = V, e.g. 91 = 9.1)", "#1aa9b8"))
+            items.append(("◌", "AAVSO sequence (dashed ring; label = V, e.g. 91 = 9.1)", "#1aa9b8"))   # 2.2.19 (#15)
         seq_drawn = self.mode_key != "discovery"
         if self._overlay("catalog") and any(not st.get("variable") and self._circle_shown(st)
                                             and not (seq_drawn and st.get("seq"))
@@ -7314,6 +8339,12 @@ class App(Tk):
                          np.array([m[1] for m in self.spare_marks]),
                          [f"Spare comp: {name}\n{self._star_text(self.spare_catalog.get(name, {}))}"
                           f"\npixel ({x:.1f}, {y:.1f})" for x, y, name in self.spare_marks], 1.0))
+        if self.suggested_comps and self.mode_key != "discovery" and self._overlay("suggested"):
+            # 2.2.19 (#15): hovering a thick ring says it is suggested comp S1 …
+            lines = self._suggested_lines()[1:]
+            sets.append((self.photo_ax, np.array([m[2] for m in self.suggested_comps]),
+                         np.array([m[3] for m in self.suggested_comps]),
+                         [f"Suggested comp {line}\npick Comps and click it to use it" for line in lines], 1.5))
         stars = [(x, y, st) for x, y, st in self.chart_placed if 0 <= x < w and 0 <= y < h
                  and self._overlay("variables" if st.get("variable") else "catalog")]
         if stars:
@@ -7572,6 +8603,8 @@ class App(Tk):
                 moved += 1
         self.watch_xy = {k: move(v) for k, v in self.watch_xy.items()}
         self.scan_excluded = [move(v) for v in self.scan_excluded]
+        for rec in (getattr(self, "_comps_under", None) or {}).values():   # 2.2.19 (#34)
+            rec["xy"] = move(rec.get("xy"))
         # The variable-star × marks too: they were placed on the old image.
         self.variable_marks = [(*move((x, y)), v) for x, y, v in self.variable_marks]
         if self.spare_marks:
@@ -7977,6 +9010,11 @@ class App(Tk):
         self.field_check_text = StringVar(value="Variable-star check: Solve to check the field against VSX and SIMBAD.")
         ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=460, justify=LEFT).grid(
             row=1 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
+        # 2.2.19 (#15): one line per suggested comp, labeled as on the image (S1, S2 …).
+        self.suggest_text = StringVar(value="")
+        ttk.Label(stars, textvariable=self.suggest_text, style="Good.TLabel", wraplength=text_wrap_px(stars, 62),
+                  justify=LEFT).grid(
+            row=2 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
 
         watch = self._group(panel, "Watch stars")
         watch.pack(fill=BOTH, expand=True, pady=(10, 0))
@@ -8147,6 +9185,8 @@ class App(Tk):
                 parts.insert(0, slot_note[1])
             var.set("   ".join(parts))
             lab.configure(style=style)
+        if hasattr(self, "suggest_text"):
+            self.suggest_text.set("\n".join(self._suggested_lines()))   # 2.2.19 (#15)
         self._refresh_watch_box()
 
     # ---- watch stars ------------------------------------------------------------------
@@ -8913,6 +9953,7 @@ class App(Tk):
                     raise ValueError("canceled")
                 self._chart_diag["catalogs"] = {c: len(v) for c, v in found.items()}
                 self._chart_diag["catalog_errors"] = failed
+                self._chart_diag["catalog_retrying"] = dict(cat_info.get("retrying") or {})   # 2.2.19 (#11)
                 if not stars:
                     raise ValueError("No catalog returned stars for this field ("
                                      + "; ".join(f"{c}: {e}" for c, e in failed.items()) + ").")
@@ -9034,7 +10075,24 @@ class App(Tk):
         self.status.set("Catalogs: " + " ".join(parts) + (f" {secs} s" if secs else ""))
 
     def _catalog_late(self, cat, d, same_lights):
-        """2.2.16 (item 2; review): Gaia's deep half after the solve, worded by what really happened."""
+        """2.2.16 (item 2; review): Gaia's deep half after the solve, worded by what really happened.
+        2.2.19 (#11): also the AAVSO chart answering a background retry (or after the solve stopped waiting)."""
+        if cat == "AAVSO sequence":
+            secs = f"{d.get('seconds', 0):.0f} s after it was first asked"
+            tries = int(d.get("retry") or 0)
+            if d.get("arrived"):
+                text = (f"AAVSO sequence answered " + (f"on retry {tries}, " if tries else "after the solve, ") + secs
+                        + f": {d.get('n', 0)} sequence stars" + (f" (chart {d['chartid']})" if d.get("chartid") else ""))
+                text += ("; Solve again to use them (at once, no new request)." if same_lights
+                         else " (that solve was for other lights).")
+                if same_lights and not self.busy:
+                    self.status.set("The AAVSO sequence answered after the solve: Solve again to use it.")
+            else:
+                text = (f"AAVSO sequence still did not answer after {tries} retr{'y' if tries == 1 else 'ies'} "
+                        f"({d.get('error') or 'no answer'}); its stars are missing this time."
+                        + (" Solve again later to retry." if same_lights else ""))
+            self.log(text)
+            return
         secs = f"{d.get('seconds', 0):.0f} s after it was asked"
         if d.get("arrived"):
             text = (f"Gaia DR3: the deep part (VizieR, to G {core.GAIA_DEEP_G:g}) arrived after the solve, {secs}: "
@@ -9207,6 +10265,9 @@ class App(Tk):
         self._restore_discovery_watch()   # 2.2.18 (item 12): this field's remembered Discovery watch stars
         self._locate_watch_stars()
         self._fill_marked_from_chart()
+        if self.mode_key != "discovery":
+            self._drop_offframe_slots()   # 2.2.19 (#20): comps/check of an earlier run that are not on this frame
+            self._locate_comps_under()    # 2.2.19 (#34): comps moved out by Use comps are measured as spares
         self._suggest_comps()
         self._update_pick_label()
         self.update_star_panel()
@@ -9219,8 +10280,8 @@ class App(Tk):
             flip += f", scale x{solved['scale_factor']:.3f}"
         title = (f"Solved · AAVSO chart {chart_id}" if chart_id else "Solved")
         self.photo_ax.set_title(
-            f"{title}  {hits}/{n} matched  rotation {solved['angle']:.1f}°{flip}  {len(self.chart_placed)} stars labeled"
-        )
+            f"{title}  {hits}/{n} matched  rotation {solved['angle']:.1f}°{flip}  {len(self.chart_placed)} stars labeled",
+            fontsize=PHOTO_TITLE_PT)   # 2.2.19 (#10)
         self.photo_canvas.draw_idle()
         if n <= 2 and not auto:
             if not messagebox.askyesno(
@@ -9253,7 +10314,9 @@ class App(Tk):
                      f"{core.CATALOG_SHORT.get(c, c)} {k}" for c, k in sorted(self._band_source_counts(band_kind).items(),
                                                                 key=lambda ck: -ck[1]))
                     + ")" if sloan else "") + "."
-                 + (f" AAVSO chart {chart_id}: {n_seq} sequence stars." if n_seq else " No AAVSO sequence stars here."))
+                 + (f" AAVSO chart {chart_id}: {n_seq} sequence stars." if n_seq else
+                    # 2.2.19 (#11): only when AAVSO answered; a failed request is said on its own line below.
+                    "" if "AAVSO sequence" in (diag.get("catalog_errors") or {}) else " No AAVSO sequence stars here."))
         gd = diag.get("gaia_depth") or {}
         if gd.get("n") and gd.get("faintest") is not None:
             # 2.2.14 (item 5): how deep Gaia went, and whether the frame's star count or the G cut set it.
@@ -9286,6 +10349,22 @@ class App(Tk):
             self.log("  Gaia: the ESA archive's GSPC part did not answer (" + str(gst["esa"]) + "); no Gaia colors "
                      "tonight (V from G and BP-RP only). Solve again to retry.")
         for cat, err in (diag.get("catalog_errors") or {}).items():
+            if cat == "AAVSO sequence":
+                # 2.2.19 (#11): the HTTP status, "blocked" for a Cloudflare page, and the background retries.
+                retrying = (diag.get("catalog_retrying") or {}).get(cat)
+                if str(err).startswith("blocked"):
+                    self.log(f"  AAVSO sequence {err}: AAVSO's site refused the request; its stars are missing this "
+                             "time. Solve again later.")
+                elif retrying:
+                    self.log(f"  AAVSO sequence did not answer ({err}); asking again in the background ({retrying} "
+                             "tries over about 20 s), so the solve goes on without it. The log says if it answers.")
+                elif str(err).startswith("no answer within"):
+                    self.log(f"  AAVSO sequence did not answer ({err}); still waiting for it in the background. "
+                             "The log says if it answers.")
+                else:
+                    self.log(f"  AAVSO sequence did not answer ({err}); its stars are missing this time. Solve again "
+                             "to retry.")
+                continue
             self.log(f"  {cat} did not answer ({err}); its stars are missing this time. Solve again to retry.")
         if sloan:
             # 2.2.17 (item 1): one Sloan band on a mono camera: the B-V / V-R color calibration does not apply.
@@ -9393,7 +10472,7 @@ class App(Tk):
             return
         edge = so + 3
         h, w = self.preview.shape
-        cands, where = [], {}
+        cands, where, star_of = [], {}, {}
         stars = [(x, y, st) for x, y, st in self.chart_placed
                  if not st.get("variable") and st.get("mag") is not None and edge <= x < w - edge and edge <= y < h - edge
                  and math.hypot(x - self.target_xy[0], y - self.target_xy[1]) > 2 * r]
@@ -9434,6 +10513,7 @@ class App(Tk):
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
             where[name] = (x, y)
+            star_of[name] = st   # 2.2.19 (#15): for the S1 … lines in the panel
         target_star = self._chart_star_at(self.target_xy)
         t_bv = core.catalog_bv(target_star) if target_star else None
         self._target_bv = t_bv
@@ -9456,11 +10536,20 @@ class App(Tk):
             have = {n for n, _dm in picks}
             picks += [p for p in choose([c for c in cands if c[0] not in have]) if p[0] not in have][:4 - len(picks)]
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
+        # 2.2.19 (#15): what the panel's "S1 = … V 11.2, why suggested" lines say.
+        self.suggested_info = {}
+        for name, dm in picks:
+            st = star_of.get(name) or {}
+            self.suggested_info[name] = {"mag": st.get("mag"), "band": st.get("band", "V"), "seq": name in seq_names,
+                                         "seq_label": (st.get("seq") or {}).get("label"), "dm": dm,
+                                         "bv": core.catalog_bv(st) if st else None, "target_bv": t_bv, "faint": faint,
+                                         "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
+                                         or st.get("catalog", "")}
         if self.suggested_comps:
             self.log(("Suggested comps (the target is faint, so 0.5–2 mag brighter than it"
                       if faint else "Suggested comps (near the target in brightness")
                      + (f" and near its color, target B−V {t_bv:.2f}" if t_bv is not None else "")
-                     + "; green rings): "
+                     + "; green rings S1, S2 …): "
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best.")
@@ -9470,6 +10559,36 @@ class App(Tk):
         elif self._closest_dm is not None:
             self.log(f"No labeled star within 1 mag of the target here (closest: {self._closest_dm:.1f} mag away); "
                      "pick the closest in brightness and color you can.")
+
+    def _suggested_lines(self) -> list:
+        """2.2.19 (#15): the panel's lines for the suggested comps, in suggestion order, labeled as on the image:
+        "S1 = APASS J231144.7+570632  V 11.20 (AAVSO sequence 112): 0.3 mag fainter than the target, B−V 0.62 (target
+        0.60)"; "now C2" once it is marked as a comp."""
+        if self.mode_key == "discovery" or not self.suggested_comps:
+            return []
+        info_all = getattr(self, "suggested_info", None) or {}
+        marked = {getattr(self, f"{r}_name").get().strip(): r for r in COMP_ROLES
+                  if getattr(self, f"{r}_xy") is not None}
+        lines = []
+        for k, (name, dm, _x, _y) in enumerate(self.suggested_comps):
+            info = info_all.get(name, {})
+            band = core.band_label(info.get("band") or "V")
+            mag = info.get("mag")
+            head = f"S{k + 1} = {name}" + (f"  {band} {float(mag):.2f}" if mag is not None else "")
+            src = []
+            if info.get("seq"):
+                src.append("AAVSO sequence" + (f" {info['seq_label']}" if info.get("seq_label") else ""))
+            elif info.get("catalog"):
+                src.append(str(info["catalog"]))
+            if src:
+                head += f" ({src[0]})"
+            why = (f"{abs(dm):.1f} mag {'brighter' if dm < 0 else 'fainter'} than the target"
+                   + (" (a faint target gets brighter comps)" if info.get("faint") else ""))
+            if info.get("bv") is not None and info.get("target_bv") is not None:
+                why += f", B−V {info['bv']:.2f} (target {info['target_bv']:.2f})"
+            role = marked.get(name)
+            lines.append(f"{head}: {why}" + (f" — now {role_label(role)}" if role else ""))
+        return ["Suggested comps (thick green rings on the image):"] + lines
 
     def _comp_brightness_note(self, role: str, xy):
         """How a comp compares with the target in brightness and color (2.2: brightness; 2.2.1: color, and no
@@ -10324,6 +11443,7 @@ class App(Tk):
         return True
 
     def run_photometry(self):
+        self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
         lights = self._lights(log_skips=True)
         if not lights:
@@ -10478,10 +11598,20 @@ class App(Tk):
         # Spare comps: labeled stars near the comps' brightness, measured every frame so a comp
         # can be swapped later ("Use comps..." on the Output page) without reducing again.
         spares = []
+        # 2.2.19 (#34): comps moved out of the comp box by a Use comps… choice are still measured every frame (as
+        # spares), so a later Use comps can bring them back and new nights never flag nocomp for them.
+        for name, rec in list((getattr(self, "_comps_under", None) or {}).items()):
+            xy = rec.get("xy")
+            mag = self.spare_catalog.get(name, {}).get("mag", rec.get("mag_value"))
+            if xy is None or mag is None or name in {c.name for c in comps} or (check is not None and name == check.name):
+                continue
+            cx, cy, moved = core.recenter(self.preview, xy[0], xy[1], radius)
+            spares.append(core.Star(name=name, x=cx if moved <= radius else xy[0], y=cy if moved <= radius else xy[1],
+                                    catalog_mag=float(mag)))
         if self.chart_placed:
             comp_mags = [c.catalog_mag for c in comps]
             avoid = [xy for _r, xy in self._marked_roles()] + list(self.watch_xy.values())
-            taken = {c.name for c in comps} | ({check.name} if check is not None else set())
+            taken = {c.name for c in comps} | ({check.name} if check is not None else set()) | {sp.name for sp in spares}
             # The suggested comps (near the target in brightness and color) first, so Use comps can switch to them
             # later without reducing again (2.2.1).
             preferred = [(x, y, self._chart_star_named(name)) for name, _dm, x, y in self.suggested_comps]
@@ -10681,7 +11811,11 @@ class App(Tk):
                    + f" ({srcs.get(check.name) or 'typed'})" if check is not None else ""))
         else:
             self.comp_band_sources = {}
-        self.log(f"Photometry on {len(lights)} lights, {len(self.rejected)} rejected, aperture {radius:.1f} px, {mode} channel")
+        # 2.2.19 (#20): the rejected frames of THIS Lights folder (the set could hold another folder's: "81 rejected"
+        # beside a 42-frame list)
+        here = os.path.normcase(os.path.abspath(self.light_dir.get().strip() or "."))
+        n_rej = sum(1 for p in self.rejected if os.path.normcase(os.path.abspath(os.path.dirname(p))) == here)
+        self.log(f"Photometry on {len(lights)} lights, {n_rej} rejected, aperture {radius:.1f} px, {mode} channel")
         rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
             self.log(f"Rejected frames ({len(rej_lights)}): "
@@ -11062,7 +12196,10 @@ class App(Tk):
             plan = self._same_star_plan(prev_comps, prev_check)
             cmp_comps = plan["comps"] if plan else list(self.comps_used)
             cmp_check = plan["check"] if plan else self.check_used
-            if prev_comps and (prev_comps != cmp_comps or prev_check != cmp_check):
+            # 2.2.19 (#34): comps that follow the series' Use comps… choice are the series' comps in use, not
+            # "different stars" (the night is put into the series' comp layout below).
+            following = bool(prev_comps and self.active_comps and set(cmp_comps) == set(self.active_comps))
+            if prev_comps and ((prev_comps != cmp_comps and not following) or prev_check != cmp_check):
                 warning += (
                     "\n\nCareful: this night used different stars than the series.\n"
                     f"  Series: comps {', '.join(prev_comps)}; check {prev_check or 'none'}\n"
@@ -11116,10 +12253,25 @@ class App(Tk):
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
             )
         replaced = False
+        tonight_comps = None   # 2.2.19 (#34, review): set when the night is put into the series' comp layout
         self.highlight_night = None   # 2.2.15 review: a night added or replaced shows the whole series, unzoomed
         if append and plan:
             self._apply_same_star_plan(plan, night_points)
         if append:
+            prev_comps = list(getattr(self, "_prev_stars", ([], ""))[0] or [])
+            if prev_comps and list(self.comps_used) != prev_comps:
+                # 2.2.19 (#34; review): measured with other comps than the series' (the Photometry page following a
+                # Use comps choice, or a comp added or changed by hand): the series keeps its comp layout, with this
+                # night's new stars appended, and this night's values go into it by name, so no older night is ever
+                # read against the wrong comp (comp values are stored by position). The night's own magnitudes stay.
+                layout = prev_comps + [n for n in self.comps_used if n not in prev_comps]
+                tonight_comps = list(self.comps_used)
+                core.remap_night_comps(night_points, tonight_comps, layout)
+                if self.active_comps and set(tonight_comps) == set(self.active_comps):
+                    self.log(f"Comps in use ({', '.join(self.active_comps)}) measured tonight; the series' other "
+                             f"comps ({', '.join(n for n in prev_comps if n not in self.active_comps) or 'none'}) as "
+                             "spares.")
+                self.comps_used = layout
             if any(o.night == night for o in self.observations):
                 self.observations = [o for o in self.observations if o.night != night]
                 self.log(f"Replaced the earlier points of {night} with this run.")
@@ -11134,7 +12286,16 @@ class App(Tk):
                 # Never overwrite the file of the series that was just set aside.
                 self.log(f"New series started; {os.path.basename(old_path)} was left unchanged on disk.")
         # Keep a comp selection made with "Use comps..." for the nights added after it.
-        if self.active_comps and set(self.active_comps) != set(self.comps_used):
+        unmeasured = self._comps_not_on_night(night_points) if self.active_comps else []
+        if unmeasured:
+            # 2.2.19 (#20; TrES-3 b's comps applied to WASP-10 b): a Use comps choice with stars this night never
+            # measured (another field's) would mark every frame "nocomp". It is not applied; the night keeps the comps
+            # it was measured with, and the log says why.
+            self.log(f"✖ Use comps choice ({', '.join(self.active_comps)}) not applied to {night}: "
+                     f"{', '.join(unmeasured)} {'was' if len(unmeasured) == 1 else 'were'} not measured on any of its "
+                     f"frames (another field's comps?). The night keeps its own comps ({', '.join(self.comps_used)}); "
+                     "for another star, use New reduction on the Input page.")
+        elif self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
                 result = core.recompute_with_comps(night_points, self.active_comps, self.comps_used, self._comp_catalog(),
                                                    self._star_aliases())
@@ -11148,6 +12309,8 @@ class App(Tk):
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self._take_series_snapshot()   # 2.2.14 (item 11): the series (added to or new) as it now is
         self.night_bin[night] = self._night_setup()
+        if tonight_comps is not None:
+            self.night_bin[night]["comps"] = tonight_comps   # review: the comps this night's magnitudes came from
         # 2.2.18 (item 8): the night's mount goes with it; an alt-az night has no pier sides ("—").
         night_mount = getattr(self, "_run_mount", None) or core.MOUNT_GEM
         if night_mount == core.MOUNT_ALTAZ:
@@ -12578,9 +13741,10 @@ class App(Tk):
         self._finish_saves_on_close()   # 2.2.19 (review)
         self.destroy()
 
-    def close_series(self):
+    def close_series(self, asked: bool = False):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
-        next run is a single night. Unsaved points are offered a save first."""
+        next run is a single night. Unsaved points are offered a save first (asked=True: the caller has offered it;
+        2.2.19 #20, New reduction)."""
         if not self.observations:
             self.update_series_status()
             self.status.set("No series is open.")
@@ -12588,7 +13752,7 @@ class App(Tk):
         if self.busy:
             messagebox.showinfo(APP_TITLE, "Wait for the current run to finish (or cancel it) before closing the series.")
             return
-        if not self._offer_series_save("close it"):
+        if not asked and not self._offer_series_save("close it"):
             return
         had_file = bool(self.series_path)
         name = os.path.basename(self.series_path) if self.series_path else "The series"
@@ -12705,6 +13869,12 @@ class App(Tk):
             self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
         self.legacy_mixed = self._legacy_nights(meta, observations)
         self.series_path = path
+        if self.active_comps:
+            try:
+                self._comps_follow_in_use("as saved in the series")   # 2.2.19 (#34)
+                self._seed_comps_under()   # review: the series' other comps are measured (as spares) next night too
+            except Exception:
+                traceback.print_exc()
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         self._refresh_period()
@@ -12847,6 +14017,7 @@ class App(Tk):
         ttk.Button(nav, text="Save light-curve CSV", command=self.save_csv).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Export…", command=self.open_export).pack(side=LEFT)
         ttk.Button(nav, text="Save plot PNG", command=self.save_png).pack(side=LEFT, padx=6)
+        ttk.Button(nav, text="Save field image", command=self.save_field_image).pack(side=LEFT, padx=(0, 6))   # #28
         ttk.Button(nav, text="Refit period", command=self.refit_period).pack(side=LEFT)
         self.output_back = ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO))
         self.output_back.pack(side=RIGHT)
@@ -14677,6 +15848,10 @@ class App(Tk):
 
     def _comp_selection_applied(self, selection: list[str], result: dict) -> bool:
         self.active_comps = [] if set(selection) == set(self.comps_used) else list(selection)
+        try:
+            self._comps_follow_in_use()   # 2.2.19 (#34): the Photometry page's comps follow the choice
+        except Exception:
+            traceback.print_exc()
         self._refresh_period()
         self.draw_output()
         used = ", ".join(selection)
@@ -14700,6 +15875,145 @@ class App(Tk):
             except Exception:
                 traceback.print_exc()
         return True
+
+    def _comps_not_on_night(self, night_points) -> list:
+        """2.2.19 (#20): the Use comps stars that no frame of this night measured (as a comp or a spare)."""
+        aliases = self._star_aliases()
+        return [n for n in self.active_comps
+                if not any(math.isfinite(core.star_inst(o, n, self.comps_used, aliases)) for o in night_points)]
+
+    def _comps_follow_in_use(self, reason: str = "") -> bool:
+        """2.2.19 (#34): the Photometry page's comp box and comp markers show the comps in use: the series' Use comps…
+        choice (active_comps), or the comps it was run with when that choice is cleared. Comps moved out of the box are
+        remembered (_comps_under: marker, catalog magnitude, bands) and still measured every run as spares (drawn as
+        spare diamonds), so choosing them again puts them back where they were. The check star is not touched.
+        One log line when the box changes. Returns True when it changed."""
+        if self.mode_key == "discovery":
+            return False
+        target = [n for n in (self.active_comps or self.comps_used or []) if str(n).strip()]
+        if not target or len(target) > len(COMP_ROLES):
+            return False
+        box = [(r, getattr(self, f"{r}_name").get().strip()) for r in COMP_ROLES]
+        box_names = [n for _r, n in box if n]
+        if box_names == target:
+            return False
+        under = self.__dict__.setdefault("_comps_under", {})
+        info = {}
+        for r, n in box:
+            if not n:
+                continue
+            mag_text = getattr(self, f"{r}_mag").get().strip()
+            try:
+                mag_value = float(mag_text)
+            except ValueError:
+                mag_value = self.comp_catalog_mags.get(n)
+            info[n] = {"xy": getattr(self, f"{r}_xy"), "mag": mag_text, "mag_value": mag_value,
+                       "bands": dict(self.star_bands[r]) if isinstance(self.star_bands.get(r), dict) else None}
+        for n, rec in under.items():
+            info.setdefault(n, rec)
+        spare_xy = {name: (float(x), float(y)) for x, y, name in self.spare_marks}
+        moved_out = [n for n in box_names if n not in target]
+        for n in moved_out:
+            rec = dict(info[n])
+            under[n] = rec
+            if rec.get("xy") is not None and n not in spare_xy:
+                self.spare_marks.append((float(rec["xy"][0]), float(rec["xy"][1]), n))
+            if rec.get("mag_value") is not None and n not in self.spare_catalog:
+                bands = rec.get("bands") or {}
+                entry = {"mag": float(rec["mag_value"]), "mags": dict(bands.get("mags") or {}),
+                         "catalog": bands.get("source", ""), "seq": bands.get("seq"), "moved_out": True}
+                if isinstance(bands.get("colors"), dict):
+                    entry["colors"] = dict(bands["colors"])
+                rd = self.comp_coords.get(n)
+                if rd is not None:
+                    entry["ra"], entry["dec"] = float(rd[0]), float(rd[1])
+                self.spare_catalog[n] = entry
+        for r in COMP_ROLES:
+            self.clear_mark(r, redraw=False)
+            self._slot_notes.pop(r, None) if hasattr(self, "_slot_notes") else None
+        for r, n in zip(COMP_ROLES, target):
+            rec = info.get(n)
+            if rec is None:
+                # A spare (or a comp never in the box this session): its spare record, else the series' catalog V.
+                if n in self.spare_catalog and self._fill_from_spare(r, n):
+                    setattr(self, f"{r}_xy", spare_xy.get(n))
+                else:
+                    getattr(self, f"{r}_name").set(n)
+                    mag = self.comp_catalog_mags.get(n, (self.spare_catalog.get(n) or {}).get("mag"))
+                    getattr(self, f"{r}_mag").set(f"{float(mag):.3f}" if mag is not None else "")
+                    setattr(self, f"{r}_xy", spare_xy.get(n))
+            else:
+                getattr(self, f"{r}_name").set(n)
+                getattr(self, f"{r}_mag").set(rec.get("mag") or (f"{float(rec['mag_value']):.3f}"
+                                                                 if rec.get("mag_value") is not None else ""))
+                if rec.get("bands"):
+                    self.star_bands[r] = dict(rec["bands"])
+                setattr(self, f"{r}_xy", rec.get("xy") if rec.get("xy") is not None else spare_xy.get(n))
+            under.pop(n, None)
+            seq = (self.star_bands.get(r) or {}).get("seq") or (self.spare_catalog.get(n) or {}).get("seq") or {}
+            if isinstance(seq, dict) and seq.get("auid"):
+                self.seq_auids[n] = seq["auid"]
+        self.spare_marks = [m for m in self.spare_marks if m[2] not in target]
+        self._update_chart_field()
+        words = ", ".join(f"C{k + 1} {n}" for k, n in enumerate(target))
+        self.log(f"Photometry comps now match Use comps: {words}"
+                 + (f"; {', '.join(moved_out)} still measured as spare{'s' if len(moved_out) != 1 else ''}"
+                    if moved_out else "") + (f" ({reason})" if reason else "") + ".")
+        if hasattr(self, "pick_label"):
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
+        return True
+
+    def _seed_comps_under(self) -> list:
+        """2.2.19 (#34, review): after Load series with a Use comps choice, the series' comps that are not in use
+        (comps_used minus active_comps) are remembered as moved out, with their catalog V and sky position, so
+        _locate_comps_under finds them after Solve and every new night measures them (as spares); a later Use comps of
+        the original set then never flags nocomp. Returns the names added."""
+        under = self.__dict__.setdefault("_comps_under", {})
+        added = []
+        for n in self.comps_used or []:
+            if n in (self.active_comps or []) or n in under:
+                continue
+            mag = self.comp_catalog_mags.get(n)
+            under[n] = {"xy": None, "mag": f"{float(mag):.3f}" if mag is not None else "", "mag_value": mag,
+                        "bands": None}
+            if mag is not None and n not in self.spare_catalog:
+                entry = {"mag": float(mag), "mags": {}, "catalog": "", "moved_out": True}
+                rd = self.comp_coords.get(n)
+                if rd is not None:
+                    entry["ra"], entry["dec"] = float(rd[0]), float(rd[1])
+                self.spare_catalog[n] = entry
+            added.append(n)
+        return added
+
+    def _locate_comps_under(self) -> int:
+        """2.2.19 (#34): after a solve, comps moved out of the box (by Use comps…) that have no marker on this frame
+        are found by name or sky position, so they are measured (as spares) on this night too."""
+        under = getattr(self, "_comps_under", None) or {}
+        if not under or not self.chart_placed or self.preview is None:
+            return 0
+        h, w = self.preview.shape[:2]
+        found = 0
+        for name, rec in under.items():
+            if rec.get("xy") is not None and getattr(self, "_comps_under_token", None) == getattr(self, "_preview_token", 0):
+                continue
+            star = self._chart_star_named(name)
+            xy = self._chart_xy_of(star) if star is not None else None
+            if xy is None and self.comp_coords.get(name) is not None and self.chart_solution:
+                try:
+                    xy = core.sky_to_pixel(float(self.comp_coords[name][0]), float(self.comp_coords[name][1]),
+                                           self.chart_solution)
+                except Exception:
+                    xy = None
+            if xy is not None and 0 <= xy[0] < w and 0 <= xy[1] < h:
+                rec["xy"] = (float(xy[0]), float(xy[1]))
+                self.spare_marks = [m for m in self.spare_marks if m[2] != name] + [(rec["xy"][0], rec["xy"][1], name)]
+                found += 1
+            else:
+                rec["xy"] = None
+        self._comps_under_token = getattr(self, "_preview_token", 0)
+        return found
 
     def set_catalog_mags(self, changes: dict, check: str | None = None) -> bool:
         """2.2.18 (item 3): catalog magnitudes typed in Use comps… for the whole series ({star: V}); check: the check
@@ -15209,10 +16523,207 @@ class App(Tk):
         with core.AsciiWriter(path) as fh:
             fh.write(self._report_text(points))
         self._note_report(points, path, scope)
+        self._field_image_with_report(path)   # 2.2.19 (#28)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
         self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs")   # 2.2.15 (item 8)
         return True
+
+    # ---- 2.2.19 (#28): annotated field image beside the AAVSO chart --------------------------------------------------
+    def _field_scale_arcsec(self):
+        """(arcsec per Photometry-image pixel, exact?) from the image's solution, else the Optics box (approximate)."""
+        sol = self.chart_solution or {}
+        try:
+            if sol.get("scale"):
+                return float(sol["scale"]) * float(sol.get("scale_factor", 1.0) or 1.0), True
+        except (TypeError, ValueError):
+            pass
+        try:
+            superpixel = 1 if self.pattern.get() == core.MONO else 2
+            scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * max(int(self._image_binning()), 1) \
+                * superpixel
+            return (scale, False) if math.isfinite(scale) and scale > 0 else (None, False)
+        except Exception:
+            return None, False
+
+    def _header_compass(self, shape):
+        """2.2.19 (#28): north/east unit vectors and arcsec per image pixel from the lights' own plate solution (FITS
+        WCS), for a field image of a frame that was not solved here: ((north, east), arcsec) or None."""
+        wcs = core.header_wcs(self.preview_header or {})
+        if wcs is None:
+            return None
+        try:
+            superpixel = 1 if self.pattern.get() == core.MONO else 2
+            factor = max(int(self._image_binning()), 1) * superpixel
+            h, w = shape[:2]
+            cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
+            sx, sy = core.image_to_wcs(cx, cy, factor)
+            ra, dec = core.wcs_pixel_to_sky(wcs, sx, sy)
+            ra, dec = float(ra), float(dec)
+            step = 60.0 / 3600.0
+            out = []
+            for d_ra, d_dec in ((0.0, step), (step / max(math.cos(math.radians(dec)), 0.05), 0.0)):
+                px, py = core.wcs_sky_to_pixel(wcs, ra + d_ra, dec + d_dec)
+                ix, iy = core.wcs_to_image(float(px), float(py), factor)
+                v = np.array([ix - cx, iy - cy], dtype=float)
+                if not np.all(np.isfinite(v)) or np.linalg.norm(v) < 1e-6:
+                    return None
+                out.append(v / np.linalg.norm(v))
+            return (out[0], out[1]), float(wcs["scale_arcsec"]) * factor
+        except Exception:
+            return None
+
+    def field_image_info(self) -> dict | None:
+        """2.2.19 (#28): what the field image shows, from the Photometry page as it is now (None without a frame)."""
+        img = self.preview
+        if img is None or not self.preview_is_debayered:
+            return None
+        h, w = img.shape[:2]
+        band = core.band_label(self._band())
+        star = self.star_id.get().strip() or self.planet_name.get().strip() or "target"
+        marks = []
+        if self.target_xy is not None:
+            marks.append((self.target_xy[0], self.target_xy[1], "T", PICK_COLORS["target"], star))
+        for role in list(COMP_ROLES) + ["check"]:
+            xy = getattr(self, f"{role}_xy")
+            if xy is None:
+                continue
+            name = getattr(self, f"{role}_name").get().strip()
+            mag = getattr(self, f"{role}_mag").get().strip()
+            auid = self.seq_auids.get(name)
+            label = (f"{auid} (AAVSO)" if auid and auid != name else name) or role_label(role)
+            if mag:
+                label += f"  {band} {mag}"
+            tag = "K" if role == "check" else f"C{comp_number(role)}"
+            marks.append((xy[0], xy[1], tag, PICK_COLORS[role], label))
+        taken = [m[:2] for m in marks]
+        seq = []
+        if self.mode_key != "discovery":
+            for x, y, st in self.chart_placed:
+                if st.get("seq") and 0 <= x < w and 0 <= y < h and not any(math.hypot(x - a, y - b) < 2.0
+                                                                          for a, b in taken):
+                    seq.append((x, y, st["seq"].get("label") or st.get("label", "")))
+        vec = self.compass_vectors((h, w))
+        arcsec, exact = self._field_scale_arcsec()
+        if vec is None or not exact:
+            hdr_c = self._header_compass((h, w))   # the lights' own plate solution, when not solved here
+            if hdr_c is not None:
+                vec = vec if vec is not None else hdr_c[0]
+                if not exact:
+                    arcsec, exact = hdr_c[1], True
+        center = None
+        if self.chart_solution and self.chart_placed:
+            try:
+                center = core.pixel_to_sky((w - 1) / 2.0, (h - 1) / 2.0, self.chart_solution)
+            except Exception:
+                center = None
+        if center is None:
+            try:
+                center = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
+            except (TypeError, ValueError):
+                center = None
+        hdr = self.preview_header or {}
+        if center is None or not (self.chart_solution and self.chart_placed):
+            pointing = core.frame_pointing(hdr)   # the frame's own center (plate solution or RA/DEC keywords)
+            if pointing is not None:
+                center = (float(pointing[0]), float(pointing[1]))
+        date = str(hdr.get("DATE-OBS") or hdr.get("DATE") or "")[:19].replace("T", " ")
+        fov = (w * arcsec / 60.0, h * arcsec / 60.0) if arcsec else None
+        r, si, so = self._num(self.radius, 0.0), self._num(self.sky_in, 0.0), self._num(self.sky_out, 0.0)
+        parts = [os.path.basename(self.preview_path or "") or "reference frame", f"{w} × {h} px"]
+        if arcsec:
+            parts.append(f"{'' if exact else '≈'}{arcsec:.2f}″/px, field {fov[0]:.1f}′ × {fov[1]:.1f}′")
+        parts.append(f"rings: aperture r {r:g} and sky {si:g}–{so:g} px to scale")
+        if self.chart.get().strip():
+            parts.append(f"AAVSO chart {self.chart.get().strip()}")
+        parts.append(f"SHOBS-P {APP_VERSION}")
+        return {"title": f"{star} — field" + (f", {date} UT" if date else ""), "subtitle": " · ".join(parts),
+                "radius": r, "sky_in": si, "sky_out": so, "north": vec[0] if vec else None,
+                "east": vec[1] if vec else None, "arcsec_px": arcsec, "marks": marks, "seq": seq,
+                "center": center, "fov_arcmin": max(fov) if fov else None}
+
+    def _field_paths(self, report_path: str | None):
+        """(field PNG, AAVSO chart PNG) paths: beside a saved report (<stem>_field.png, <stem>_aavso_chart.png, the
+        report's own number kept), or from Save field image (the output folder, or a dialog)."""
+        if report_path:
+            folder = os.path.dirname(report_path)
+            base = os.path.splitext(os.path.basename(report_path))[0]
+            if base.startswith("AAVSO_"):
+                base = base[len("AAVSO_"):]
+            return (self._unique_path(os.path.join(folder, base + "_field.png")),
+                    self._unique_path(os.path.join(folder, base + "_aavso_chart.png")))
+        stem = self._family_names()[1]
+        stem = stem[:-len("_lightcurve.csv")] if stem.endswith("_lightcurve.csv") else os.path.splitext(stem)[0]
+        path = self.output_path(stem + "_field.png", title="Save field image", defaultextension=".png",
+                                filetypes=[("PNG", "*.png")])
+        if not path:
+            return None, None
+        base = os.path.splitext(path)[0]
+        base = base[:-len("_field")] if base.endswith("_field") else base
+        return path, self._unique_path(base + "_aavso_chart.png")
+
+    def save_field_image(self, report_path: str | None = None, fetch_chart: bool = True) -> str:
+        """2.2.19 (#28): Save field image (Output page), and automatically with a saved variable or transit report: a
+        PNG of the Photometry page's frame with the target, comps and check marked (draw_field_figure), and, in the
+        background, AAVSO's VSP chart of the same field and size saved next to it. Offline (or VSP down) the field
+        image is still saved and the log says the chart is missing. Returns the field PNG's path ('' if none)."""
+        info = self.field_image_info()
+        if info is None:
+            if report_path:
+                self.log("Field image not saved with the report: no calibrated frame on the Photometry page.")
+            else:
+                messagebox.showinfo(APP_TITLE, "The field image is drawn from the Photometry page's frame: calibrate "
+                                               "the lights (and mark the stars) first.")
+            return ""
+        path, chart_path = self._field_paths(report_path)
+        if not path:
+            return ""
+        try:
+            fig = draw_field_figure(self.preview, info, self.stretch.get("photo"))
+            fig.savefig(path, dpi=110, facecolor="#ffffff")
+        except Exception as exc:
+            self.log(f"Field image not saved: {type(exc).__name__}: {exc}")
+            if not report_path:
+                messagebox.showerror(APP_TITLE, f"Could not save the field image:\n{exc}")
+            return ""
+        orient = "N up, E left" if info.get("north") is not None else "orientation unknown (not solved)"
+        self.log(f"Field image saved ({orient}): {path}")
+        if not report_path:
+            self.saved_notice(path, "Compare it with the AAVSO chart of the field (saved beside it when VSP answers).")
+        if fetch_chart and info.get("center") is not None and info.get("fov_arcmin"):
+            ra, dec = info["center"]
+            fov = float(info["fov_arcmin"])
+
+            def work():
+                try:
+                    data, payload = core.vsp_chart_image(ra / 15.0, dec, fov)
+                    target = chart_path
+                    if data[:3] == b"\xff\xd8\xff":
+                        target = os.path.splitext(chart_path)[0] + ".jpg"
+                    elif b"<svg" in data[:400]:
+                        target = os.path.splitext(chart_path)[0] + ".svg"
+                    with open(target, "wb") as fh:
+                        fh.write(data)
+                    self.call_ui(self.log, f"AAVSO chart {payload.get('chartid') or ''} of the same field "
+                                           f"({fov:.0f}′, N up, E left) saved beside it: {target}")
+                except Exception as exc:
+                    why = exc.short() if isinstance(exc, core.VSPError) else str(exc)
+                    self.call_ui(self.log, f"AAVSO chart not saved ({why}): the field image is saved alone. Save field "
+                                           "image again later to fetch the chart.")
+
+            threading.Thread(target=work, daemon=True).start()
+        elif fetch_chart:
+            self.log("AAVSO chart not fetched: the field's position is unknown (Solve, or the target's RA/Dec).")
+        return path
+
+    def _field_image_with_report(self, report_path: str) -> str:
+        """2.2.19 (#28): the field image saved with a variable or transit report; never stops the report."""
+        try:
+            return self.save_field_image(report_path=report_path)
+        except Exception as exc:
+            traceback.print_exc()
+            self.log(f"Field image not saved with the report ({type(exc).__name__}: {exc}).")
+            return ""
 
     def _name_report_check(self) -> bool:
         """2.2.14 (item 7): an AAVSO report must not go out with KNAME = "check" (13 Oct: the check marker never got

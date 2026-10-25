@@ -232,6 +232,8 @@ class TransitPage:
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
         ttk.Button(results, text="Variable View  ▶", style="Accent.TButton", command=app.show_variables_view).pack(
             side=RIGHT)
+        # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
+        ttk.Button(results, text="Save field image…", command=app.save_field_image).pack(side=LEFT)
         self.bar = ttk.Progressbar(prog, length=320, mode="determinate", maximum=1)
         self.bar.pack(side=LEFT)
         self.prog_text = StringVar(value="")
@@ -2425,6 +2427,8 @@ class TransitPage:
         self.app.log(f"AAVSO exoplanet report: {path}")
         self._write_settings(path, meta)
         self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)
+        if self.report is None:
+            self.app._field_image_with_report(path)   # 2.2.19 (#28): not for an opened EXOTIC report's fit
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
                               "the AAVSO Exoplanet Database (check its current instructions)")
@@ -3452,7 +3456,8 @@ class FinderWindow:
                            "and RA/Dec so the lookup fills them?", parent=self.win):
             # 2.2.16 (item 11): the old target's whole field goes (comps, check, spares, session watch stars).
             if app.star_id.get().strip() and not core.same_object_name(app.star_id.get(), e["name"]):
-                app.clear_target(quiet=True, why=f"{e['name']} chosen in the transit planner")
+                # 2.2.19 (#20): a new reduction (the old series and its Use comps choice go too); the planet stays.
+                app._switch_star(f"{e['name']} chosen in the transit planner", keep_planet=True)
             app.star_id.set("")
             app.ra_hours.set("")
             app.dec_deg.set("")

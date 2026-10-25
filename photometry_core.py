@@ -3378,24 +3378,158 @@ def _apply_pm(ra_deg: float, dec_deg: float, pm_ra_cosdec: float, pm_dec: float)
     return ra_deg % 360.0, dec_deg
 
 
-def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0) -> dict:
-    """AAVSO Variable Star Plotter photometry table. RA is hours, Dec is degrees."""
-    import urllib.parse
+# 2.2.19 (#11): the VSP API lives on apps.aavso.org; the old app.aavso.org (a 301 to apps.) is only a fallback for
+# when apps. cannot be reached at all. www.aavso.org/apps/vsp/ answers scripts with a Cloudflare challenge (403), so
+# it is no longer asked. A request keeps its 60 s timeout (VSP can take 10-40 s right after an outage).
+VSP_HOSTS = ("https://apps.aavso.org/vsp/api/chart/", "https://app.aavso.org/vsp/api/chart/")
+VSP_TIMEOUT_S = 60.0
+VSP_RETRY_DELAYS = (2.0, 5.0, 15.0)   # background retries after a 5xx or a timeout (the solve never waits for them)
+_VSP_LATE: dict = {}                  # {query: (time.monotonic(), payload)}: a chart that answered on a retry
 
-    query = urllib.parse.urlencode({
+
+class VSPError(ConnectionError):
+    """2.2.19 (#11): why the AAVSO chart request failed. kind: "http" (status set), "blocked" (403 or a Cloudflare
+    challenge page), "timeout", "network" (cannot connect). retryable: worth asking again in a few seconds."""
+
+    def __init__(self, kind: str, host: str = "", status: int | None = None, detail: str = ""):
+        self.kind, self.host, self.status, self.detail = kind, host, status, detail
+        self.retryable = kind == "timeout" or kind == "network" or (kind == "http" and (status or 0) >= 500)
+        super().__init__(self.short())
+
+    def short(self) -> str:
+        """'503 from apps.aavso.org', 'blocked: 403 (Cloudflare check page) from apps.aavso.org', 'no answer within
+        60 s from apps.aavso.org', 'apps.aavso.org cannot be reached (…)'."""
+        host = self.host or "apps.aavso.org"
+        if self.kind == "blocked":
+            return f"blocked: {self.status or 403} (Cloudflare check page) from {host}"
+        if self.kind == "http":
+            return f"{self.status} from {host}"
+        if self.kind == "timeout":
+            return f"no answer within {VSP_TIMEOUT_S:.0f} s from {host}"
+        return f"{host} cannot be reached" + (f" ({self.detail})" if self.detail else "")
+
+
+def _vsp_error(exc: Exception, base: str) -> VSPError:
+    """2.2.19 (#11): an exception from one VSP request as a VSPError (HTTP status, Cloudflare challenge, timeout)."""
+    import socket
+    import urllib.error
+    import urllib.parse
+    host = urllib.parse.urlparse(base).netloc or base
+    if isinstance(exc, VSPError):
+        return exc
+    if isinstance(exc, urllib.error.HTTPError):
+        body = ""
+        try:
+            body = exc.read(4096).decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        server = str((exc.headers or {}).get("Server", "") if exc.headers is not None else "")
+        challenge = ("just a moment" in body.lower() or "cf-chl" in body.lower() or "challenge" in body.lower()
+                     or (exc.code == 403 and "cloudflare" in server.lower()))
+        if exc.code == 403 or challenge and exc.code in (403, 429, 503):
+            return VSPError("blocked", host, exc.code)
+        return VSPError("http", host, exc.code)
+    reason = getattr(exc, "reason", None)
+    if isinstance(exc, (socket.timeout, TimeoutError)) or isinstance(reason, (socket.timeout, TimeoutError)) \
+            or "timed out" in str(exc).lower():
+        return VSPError("timeout", host)
+    return VSPError("network", host, detail=str(reason or exc).splitlines()[0][:120] if str(reason or exc) else "")
+
+
+def _vsp_query(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0, **extra) -> str:
+    import urllib.parse
+    params = {
         "format": "json",
         "ra": f"{ra_hours * 15.0:.5f}",
         "dec": f"{dec_deg:.5f}",
         "fov": f"{min(max(fov_arcmin, 5.0), 900.0):.0f}",
         "maglimit": maglimit,
-    })
-    errors = []
-    for base in ("https://app.aavso.org/vsp/api/chart/", "https://www.aavso.org/apps/vsp/api/chart/"):
+    }
+    params.update(extra)
+    return urllib.parse.urlencode(params)
+
+
+def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0, **extra) -> dict:
+    """AAVSO Variable Star Plotter photometry table. RA is hours, Dec is degrees.
+    2.2.19 (#11): one round (apps.aavso.org; app.aavso.org only when apps. cannot be reached or says 404); a failure
+    raises VSPError with the HTTP status. A chart that answered a background retry (vsp_retry_in_background) for the
+    same request in the last hour is used at once. extra: more VSP parameters (e.g. orientation for #28's chart)."""
+    import time as _time
+    query = _vsp_query(ra_hours, dec_deg, fov_arcmin, maglimit, **extra)
+    late = _VSP_LATE.get(query)
+    if late is not None and _time.monotonic() - late[0] < 3600.0:
+        return late[1]
+    first = None
+    for base in VSP_HOSTS:
         try:
-            return json.loads(_http_get(base + "?" + query, timeout=60).decode("utf-8"))
+            return json.loads(_http_get(base + "?" + query, timeout=VSP_TIMEOUT_S).decode("utf-8"))
         except Exception as exc:
-            errors.append(f"{base}: {exc}")
-    raise ConnectionError("AAVSO chart request failed.\n" + "\n".join(errors))
+            err = _vsp_error(exc, base)
+            first = first or err
+            # The old host only helps when the new one cannot be reached at all (or has moved); a 5xx, a timeout or
+            # a block from apps. would come back the same way through app.'s redirect (and double the wait).
+            if not (err.kind == "network" or (err.kind == "http" and err.status in (404, 410))):
+                break
+    raise first
+
+
+def vsp_retry_in_background(ra_hours: float, dec_deg: float, fov_arcmin: float, on_done, maglimit: float = 16.0,
+                            delays=VSP_RETRY_DELAYS, sleep=None):
+    """2.2.19 (#11): ask VSP again after each delay (2, 5, 15 s) in a daemon thread, while the 5xx/timeout lasts.
+    on_done(payload, error, tries) is called once from that thread: payload on success (also kept for the next
+    fetch_aavso_chart of the same request), else the last VSPError; a non-retryable answer (blocked, 4xx) stops at
+    once. Returns the thread."""
+    import threading
+    import time as _time
+    sleep = sleep or _time.sleep
+    query = _vsp_query(ra_hours, dec_deg, fov_arcmin, maglimit)
+
+    def run():
+        err = None
+        tries = 0
+        for delay in delays:
+            sleep(delay)
+            tries += 1
+            try:
+                _VSP_LATE.pop(query, None)
+                payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit)
+            except Exception as exc:
+                err = exc if isinstance(exc, VSPError) else VSPError("network", detail=str(exc)[:120])
+                if not err.retryable:
+                    break
+                continue
+            _VSP_LATE[query] = (_time.monotonic(), payload)
+            try:
+                on_done(payload, None, tries)
+            except Exception:
+                pass
+            return
+        try:
+            on_done(None, err, tries)
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+def vsp_chart_image(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0) -> tuple[bytes, dict]:
+    """2.2.19 (#28): the VSP chart picture for a field, oriented like a CCD image (N up, E left), with the chart's
+    JSON (chartid, image_uri). Raises VSPError (or ValueError when the answer has no picture)."""
+    payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit, orientation="ccd")
+    uri = str(payload.get("image_uri") or "")
+    if not uri:
+        raise ValueError("the AAVSO chart answer holds no picture")
+    if uri.startswith("/"):
+        uri = "https://apps.aavso.org" + uri
+    try:
+        data = _http_get(uri, timeout=VSP_TIMEOUT_S)
+    except Exception as exc:
+        raise _vsp_error(exc, uri)
+    if not data[:8].startswith(b"\x89PNG") and not data[:3] == b"\xff\xd8\xff" and b"<svg" not in data[:400]:
+        raise ValueError("the AAVSO chart picture is not an image")
+    return data, payload
 
 
 def _sexagesimal(text: str) -> float:
@@ -4807,7 +4941,16 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
                 st["catalog"] = cat
                 if cat == "AAVSO sequence":
                     st["chartid"] = chart_id
-            results[cat] = ("ok", stars)
+            with gave_up_lock:
+                # 2.2.19 (#11, review): an answer after the solve stopped waiting is reported late, never both used
+                # and reported.
+                late = cat == "AAVSO sequence" and gave_up.is_set()
+                if not late:
+                    results[cat] = ("ok", stars)
+            if late:
+                tell(cat, "late", {"n": len(stars), "error": None, "seconds": _time.monotonic() - t0,
+                                   "arrived": True, "retry": 0})
+                return
             info["times"][cat] = _time.monotonic() - t0
             if status is not None:
                 info["gaia"] = dict(status)
@@ -4825,7 +4968,27 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             results[cat] = ("error", str(exc).splitlines()[0][:200] if str(exc) else exc.__class__.__name__)
             info["times"][cat] = _time.monotonic() - t0
             tell(cat, "error", results[cat][1])
+            if cat == "AAVSO sequence" and isinstance(exc, VSPError) and exc.retryable \
+                    and fetch_aavso_chart is _REAL_FETCHERS.get("fetch_aavso_chart", fetch_aavso_chart) \
+                    and not (cancel is not None and cancel.is_set()):
+                # 2.2.19 (#11): a 5xx or a timeout: ask again in the background (2, 5, 15 s); the solve goes on.
+                info.setdefault("retrying", {})[cat] = len(VSP_RETRY_DELAYS)
 
+                def retried(payload, error, tries):
+                    secs = _time.monotonic() - t0
+                    if payload is None:
+                        tell(cat, "late", {"n": 0, "error": error.short() if isinstance(error, VSPError) else
+                                           str(error or "no answer"), "seconds": secs, "arrived": False,
+                                           "retry": tries})
+                        return
+                    n = len(chart_stars(payload, band))
+                    tell(cat, "late", {"n": n, "error": None, "seconds": secs, "arrived": True, "retry": tries,
+                                       "chartid": str(payload.get("chartid") or "")})
+
+                vsp_retry_in_background(ra_hours, dec_deg, fov_arcmin, retried, delays=VSP_RETRY_DELAYS)
+
+    gave_up = threading.Event()   # 2.2.19 (#11): set when the solve stops waiting (a later AAVSO answer is "late")
+    gave_up_lock = threading.Lock()
     threads = [threading.Thread(target=one, args=(c,), daemon=True) for c in catalogs]
     for t in threads:
         t.start()
@@ -4838,6 +5001,8 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             if secs != last_tick:   # 2.2.16 (item 2): the status line's seconds
                 last_tick = secs
                 tell(None, "tick", secs)
+    with gave_up_lock:
+        gave_up.set()   # review: from here a thread's answer is reported late, not added to `results`
     if use_cache:
         try:
             catalog_cache_prune()
@@ -5805,10 +5970,13 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
         return float("nan")
     total = 0.0
     for name in selection:
-        if (name in comp_names and comp_names.index(name) < len(obs.comp_vars)
-                and math.isfinite(_own_inst(obs, name, comp_names))):
-            v = float(obs.comp_vars[comp_names.index(name)])
+        own_var = (float(obs.comp_vars[comp_names.index(name)])
+                   if name in comp_names and comp_names.index(name) < len(obs.comp_vars) else float("nan"))
+        if math.isfinite(own_var) and math.isfinite(_own_inst(obs, name, comp_names)):
+            v = own_var
         else:
+            # A spare, or (2.2.19 #34, review) a series comp this night measured as a spare (remap_night_comps
+            # leaves its variance NaN): scaled from the nearest original comp, as for a spare.
             m = star_inst(obs, name, comp_names, aliases)
             if not math.isfinite(m):
                 return float("nan")
@@ -5862,6 +6030,53 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
             done += 1
         obs.flag = " ".join(words)
     return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights)}
+
+
+def remap_night_comps(points: list[Obs], night_comps: list[str], series_comps: list[str]) -> int:
+    """2.2.19 (#34): put one night's points into the series' comp layout. comp_insts / comp_vars / pos["c"] are
+    positional (the k-th comp of the run), so a night measured with other comps than the series' comps_used (the
+    Photometry page following a Use comps… choice) would make star_inst read the wrong star on the older nights once
+    comps_used changed. Here each series comp takes its value from the night's comps or spares (by name; NaN when
+    the night did not measure it), and the night's comps that are not series comps become spares. Magnitudes, errors
+    and flags are not touched (the caller re-derives them with the comps in use). Returns the points changed."""
+    night_comps, series_comps = list(night_comps or []), list(series_comps or [])
+    if not series_comps or night_comps == series_comps:
+        return 0
+    nan = float("nan")
+    changed = 0
+    for o in points:
+        vals = {n: float(o.comp_insts[k]) for k, n in enumerate(night_comps) if k < len(o.comp_insts)}
+        had_vars = bool(o.comp_vars)
+        vars_ = {n: float(o.comp_vars[k]) for k, n in enumerate(night_comps) if k < len(o.comp_vars)}
+        pos = dict(o.pos or {})
+        cpos = list(pos.get("c") or [])
+        spos = dict(pos.get("s") or {})
+        cpos_by = {n: cpos[k] for k, n in enumerate(night_comps) if k < len(cpos)}
+        insts, var_list, new_cpos = [], [], []
+        for n in series_comps:
+            if n in vals:
+                insts.append(vals[n])
+                var_list.append(vars_.get(n, nan))
+                new_cpos.append(cpos_by.get(n))
+            else:
+                v = o.spare_insts.pop(n, None)
+                insts.append(float(v) if v is not None else nan)
+                var_list.append(nan)    # a spare's variance is not stored (ensemble_merr scales one)
+                new_cpos.append(spos.pop(n, None))
+        for n in night_comps:
+            if n not in series_comps and n in vals:
+                o.spare_insts[n] = vals[n]
+                if cpos_by.get(n) is not None:
+                    spos[n] = cpos_by[n]
+        o.comp_insts = insts
+        o.comp_vars = var_list if had_vars else []
+        if pos:
+            pos["c"] = new_cpos
+            if spos or "s" in pos:
+                pos["s"] = spos
+            o.pos = pos
+        changed += 1
+    return changed
 
 
 def apply_catalog_mags(observations: list[Obs], changes: dict, comp_sets: dict | None = None,
