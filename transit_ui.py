@@ -18,6 +18,7 @@ import numpy as np
 
 import photometry_core as core
 import transit_core as tc
+import transit_posterior as tpost   # 2.2.19 (#31)
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -164,6 +165,11 @@ class TransitPage:
         self.comp_health_button.pack(side=LEFT, padx=(12, 0))
         self.use_comps_button = ttk.Button(row4, text="Use comps…", command=self.open_use_comps)
         self.use_comps_button.pack(side=LEFT, padx=(6, 0))
+        # 2.2.19 (#31): the MCMC posterior: corner plot window, and credible bands on the plot (on by default).
+        ttk.Button(row4, text="Corner plot…", command=self.open_corner).pack(side=LEFT, padx=(12, 0))
+        self.show_bands = BooleanVar(value=True)
+        ttk.Checkbutton(row4, text="credible bands", variable=self.show_bands,
+                        command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(6, 0))
         self.comp_hint = StringVar(value="")
         ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel").pack(side=LEFT, padx=8)
         self._refit_pending = False
@@ -661,7 +667,7 @@ class TransitPage:
         utc = datetime.fromtimestamp((float(jd.min()) - 2440587.5) * 86400.0, tz=timezone.utc)
         meta = {"obscode": app.observer.get().strip(), "obsdate": utc.strftime("%d-%b-%Y").upper(),
                 "lat": f"{lat:.4f}", "lon": f"{lon:.4f}", "elev": app.elevation.get().strip(),
-                "exposure": f"{np.median(exps):.1f}" if exps else "", "binning": f"{app.binning.get()}x{app.binning.get()}",
+                "exposure": f"{np.median(exps):.1f}" if exps else "", "binning": "1x1",   # 2.2.19 (#27): _binning_meta
                 "filter": obs[0].filt or "CV", "notes": app.notes.get().strip(),
                 "aperture": f"r {app.radius.get():g} px, sky {app.sky_in.get():g}-{app.sky_out.get():g} px",
                 "comps": ", ".join(app.active_comps or app.comps_used), "source": f"night {night}",
@@ -675,6 +681,13 @@ class TransitPage:
             meta.update(telescope=eq.get("telescope", ""), scale_arcsec=eq.get("scale"), radius_px=eq.get("radius_px"),
                         bin=eq.get("binning"), camera_bin=eq.get("camera_bin", 1), superpixel=eq.get("superpixel", 1),
                         sky=eq.get("sky", ""))
+        # 2.2.19 (#27): #BINNING is how the camera binned the frames; SHOBS-P's own Binning goes into the notes.
+        self._binning_meta(meta, obs, eq)
+        try:
+            self._repro_meta(meta, obs, night, t)   # 2.2.19 (#39, #40): gain and the run's settings
+        except Exception as exc:
+            meta.pop("repro", None)
+            app.log(f"Settings record skipped: {exc}")
         try:
             meta["comp_noise"] = core.comp_noise_warning(obs)  # 2.2.8
         except Exception:
@@ -719,6 +732,138 @@ class TransitPage:
             extra.pop("comp_mags", None)
         self._data_extra = extra
         return t, flux, err, am, meta
+
+    def _binning_meta(self, meta: dict, obs, eq: dict) -> None:
+        """2.2.19 (#27): meta["binning"] = the camera's binning (core.camera_binning: XBINNING/YBINNING, MicroObservatory
+        2x2, else 1x1) from the night's own frames (the Input page's lights when those cannot be read);
+        meta["camera_binning"] for the ExoFOP notes; SHOBS-P's processing bin appended to meta["notes"]."""
+        app = self.app
+        paths = [o.path for o in obs[:3] if getattr(o, "path", "")]
+        try:
+            paths += list(app._lights()[:1])
+        except Exception:
+            pass
+        found = None
+        for path in paths:
+            try:
+                head = core.read_header(path)
+            except Exception:
+                head = None
+            if head:
+                found = core.camera_binning(path, head)
+                break
+        if found is None:
+            found = core.camera_binning(paths[0] if paths else "", {})   # a MOBS_ file name still counts
+        xb, yb, how = found
+        meta["binning"] = f"{xb}x{yb}"
+        meta["camera_binning"] = f"{xb}x{yb}" + (" (assumed: no binning keyword in the headers)" if how == "assumed"
+                                                 else " (MicroObservatory)" if how == "MicroObservatory" else "")
+        try:
+            pbin = int((eq or {}).get("binning") or app.binning.get() or 1)
+        except Exception:
+            pbin = 1
+        try:
+            superpixel = int((eq or {}).get("superpixel") or (1 if app.pattern.get() == core.MONO else 2))
+        except Exception:
+            superpixel = 1
+        if superpixel == 2:
+            note = (f"SHOBS-P processing bin {pbin} (OSC superpixel base: {2 * pbin}x{2 * pbin} camera pixels per "
+                    "measured pixel)")
+        else:
+            note = f"SHOBS-P processing bin {pbin} (mono: {pbin}x{pbin} camera pixels per measured pixel)"
+        meta["processing_bin"] = note
+        meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
+
+    def _repro_meta(self, meta: dict, obs, night: str, t) -> None:
+        """2.2.19 (#39, #40): what a problem night needs to be reproduced, from the night's stored setup (what the
+        photometry was measured with, not what the boxes say now): meta["gain"] (gain and its source),
+        meta["repro"] = {name: text} (aperture, bins, comps, check, frames left out, calibration, gain), and
+        meta["frame_t"] = (BJD_TDB of the fitted frames, their frame numbers) for trimmed frames."""
+        app = self.app
+        setup = app._night_info(night) if night else {}
+        pn = setup.get("photon_noise") or getattr(app, "_noise_model", None) or {}
+        meta["gain"] = gain_note(pn)
+        rep = {}
+        radius, s_in, s_out = setup.get("radius"), setup.get("sky_in"), setup.get("sky_out")
+        pbin = setup.get("binning") or app.binning.get()
+        if radius:
+            ap = f"r {radius:g} px, sky {s_in:g}-{s_out:g} px" if s_in and s_out else f"r {radius:g} px"
+            rep["aperture"] = ap + f" (at processing bin {pbin})"
+            meta["aperture"] = ap      # what was measured (the boxes may have changed since; #41)
+        rep["bin"] = (f"camera {meta.get('binning', '?')}; " + str(meta.get("processing_bin") or f"processing bin {pbin}"))
+        comps = list(app.active_comps or setup.get("comps") or app.comps_used)
+        rep["comps"] = ", ".join(comps) if comps else "none recorded"
+        if app.active_comps:
+            rep["comps"] += f" (Use comps choice; measured: {', '.join(setup.get('comps') or app.comps_used)})"
+        check = setup.get("check") if "check" in setup else app.check_used
+        rep["check"] = check or "none"
+        # Frame numbers: the number at the end of each light's file name (as Blink shows it), else the frame's place
+        # in the night's measured frames.
+        night_obs = sorted([o for o in app.observations if o.night == night], key=lambda o: o.jd)
+        nums = {id(o): frame_number(getattr(o, "path", ""), k + 1) for k, o in enumerate(night_obs)}
+        used = {id(o) for o in obs}
+        out_by = {}
+        for o in night_obs:
+            if id(o) not in used:
+                why = (o.flag or "no magnitude").split()[0] if (o.flag or not math.isfinite(o.mag)) else "left out"
+                out_by.setdefault(why, []).append(nums[id(o)])
+        rep["left_out"] = "; ".join(f"{why} {frame_ranges(v)}" for why, v in sorted(out_by.items())) or "none"
+        meta["frame_t"] = (np.asarray(t, dtype=float), np.array([nums[id(o)] for o in obs]))
+        masters = setup.get("masters") or []
+        cal = "; ".join(str(m) for m in masters) if masters else "none recorded"
+        dexp = getattr(getattr(app, "masters", None), "dark_exptime", None)
+        if dexp and any("dark" in str(m) for m in masters):
+            cal += f"; dark EXPTIME {dexp:g} s"
+        rep["calibration"] = cal
+        rep["gain"] = meta["gain"]
+        meta["repro"] = rep
+
+    def settings_lines(self, meta: dict | None = None, result: dict | None = None) -> list:
+        """2.2.19 (#40): the full settings block (log and <report stem>_settings.txt): one 'Name: value' per line."""
+        meta = meta if meta is not None else (self.meta_for_files or {})
+        r = result if result is not None else (self.result or {})
+        rep = dict(meta.get("repro") or {})
+        if not rep:
+            return []
+        lines = [f"Source: {meta.get('source', '')}", f"Aperture: {rep.get('aperture', 'not recorded')}",
+                 f"Binning: {rep.get('bin', '')}", f"Comps: {rep.get('comps', '')}", f"Check: {rep.get('check', '')}",
+                 f"Frames left out (flag: frame numbers): {rep.get('left_out', 'none')}",
+                 f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
+                 "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
+                 f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        wf = r.get("with_flagged")
+        if wf:
+            lines.append(f"Flagged frames put back: {wf['n']} {wf['label']} (error bars x{wf['factor']:g})")
+        return lines
+
+    @staticmethod
+    def _trimmed_frames(meta: dict, r: dict) -> str:
+        trim = (r or {}).get("trim") or meta.get("trim")
+        ft = meta.get("frame_t")
+        if not trim or ft is None or not len(trim.get("t", [])):
+            return ""
+        tt, nums = ft
+        cut = np.asarray(trim["t"], dtype=float)
+        hit = [int(n) for tv, n in zip(tt, nums) if np.any(np.abs(cut - tv) < 1e-7)]
+        return frame_ranges(hit) if hit else f"{len(cut)} frames"
+
+    def settings_note(self, meta: dict, r: dict) -> str:
+        """2.2.19 (#40): the compact one-line form for a report's #NOTES (ASCII)."""
+        rep = meta.get("repro") or {}
+        if not rep:
+            return ""
+        parts = [rep.get("aperture", "").replace(" (at processing bin", " (bin")]
+        parts.append("comps " + rep.get("comps", "").split(" (Use comps choice")[0])
+        parts.append("check " + rep.get("check", "none"))
+        if rep.get("left_out") and rep["left_out"] != "none":
+            parts.append("left out " + rep["left_out"])
+        tr = self._trimmed_frames(meta, r)
+        if tr:
+            parts.append("trimmed " + tr)
+        parts.append("detrend " + (", ".join(r.get("detrend") or []) or "none"))
+        parts.append(rep.get("gain", ""))
+        parts.append("cal " + rep.get("calibration", ""))
+        return "SHOBS-P settings: " + "; ".join(p for p in parts if p)
 
     # ---- fit -------------------------------------------------------------------------------
     def fit(self, auto: bool = False, with_flagged: bool = False):
@@ -1022,11 +1167,24 @@ class TransitPage:
             # 2.2.17 review: the report's time system, converted or not, in the notes and fit file.
             tn = self.report["time_note"]
             result.setdefault("flags", []).append(("warn" if tn.startswith("⚠") else "info", tn.lstrip("⚠ ")))
+        if self.report is None:
+            # 2.2.19 (#41): what this night was measured with, and a caution when the Photometry boxes now differ.
+            try:
+                ap_text, changed = self.app.aperture_state_text(self.night.get())
+            except Exception:
+                ap_text, changed = "", False
+            if ap_text:
+                result.setdefault("flags", []).append(("warn" if changed else "info", ap_text.lstrip("⚠ ").rstrip(".") + "."))
+        if meta.get("gain"):
+            # 2.2.19 (#39): the gain and its source in the notes (page, PNG, fit text); a caution when assumed.
+            result.setdefault("flags", []).append(("warn" if "assumed" in meta["gain"] else "info", meta["gain"] + "."))
         if meta.get("trim"):
             # 2.2.17 (item 5): the trimmed span in the notes (page, PNG, fit file) and on the plot.
             result["trim"] = meta["trim"]
             result.setdefault("flags", []).append(("info", meta["trim"]["text"]))
             self.app.log("Transit fit: " + meta["trim"]["text"])
+        for line in self.settings_lines(meta, result):
+            self.app.log("Transit fit settings: " + line)   # 2.2.19 (#40): the run's settings, in full, in the log
         result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
@@ -1169,6 +1327,23 @@ class TransitPage:
                 self.ax.set_position([left, bottom, right - left, (1 - min(top / h, 0.2)) - bottom])
         except Exception:
             pass
+        self._fit_legend()
+
+    def _fit_legend(self):
+        """2.2.19 (nit): keep room for the legend (rows of 8-pt text, in points) below the lowest data, whatever the
+        plot's size: the lower y limit moves down so the data start above the legend."""
+        fit = getattr(self, "_legend_fit", None)
+        if not fit or self.fig is None:
+            return
+        try:
+            lo, hi, rows = fit
+            ax_h = self.ax.get_position().height * self.fig.get_size_inches()[1] * 72.0
+            if rows <= 0 or ax_h < 60:
+                return
+            room = min((rows * 12.5 + 10.0) / ax_h, 0.45)
+            self.ax.set_ylim(lo - room * (hi - lo) / (1.0 - room), hi)
+        except Exception:
+            pass
 
     def _draw_preview(self, t, flux, note):
         """2.2.11 (John): no transit predicted during these data, so nothing is fitted; show the night's light curve
@@ -1258,6 +1433,10 @@ class TransitPage:
         ex = (self.report or {}).get("results") or {}
         s = (r or {}).get("summary") or {}
         ff = ((r or {}).get("free_fit") or {}).get("p") or {}
+        # 2.2.19 (nit): a free shape that ran away shows "not constrained", not its numbers.
+        free_off = bool(((r or {}).get("free_fit") or {}).get("unconstrained"))
+        if free_off:
+            ff = {}
 
         def val(name, fmt, scale=1.0):
             if name not in s:
@@ -1276,15 +1455,17 @@ class TransitPage:
         rows = [
             ("Tc (BJD_TDB)", val("tc", "{:.5f}"), num(ff.get("tc"), "{:.5f}"),
              num((r or {}).get("tc_pred"), "{:.5f}"), exo("Tc", "{:.5f}")),
-            ("Rp/R*", val("k", "{:.4f}"), num(ff.get("k"), "{:.4f}"), num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
+            ("Rp/R*", val("k", "{:.4f}"), "not constrained" if free_off else num(ff.get("k"), "{:.4f}"),
+             num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
             # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
-            ("Depth (%)", val("depth", "{:.2f}", 100), num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
+            ("Depth (%)", val("depth", "{:.2f}", 100),
+             "not constrained" if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
              num(tc.published_depth(p)[0], "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
             ("a/R*", val("a_rs", "{:.2f}"), num(ff.get("a_rs"), "{:.2f}"), num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
             ("Impact parameter b", val("b", "{:.3f}"), num(ff.get("b"), "{:.3f}"), num(p.get("b"), "{:.3f}"),
              exo("Impact Parameter (b)", "{:.3f}")),
             ("Inclination (°)", val("inc", "{:.2f}"), "", num(p.get("inc"), "{:.2f}"), exo("inc", "{:.2f}")),
-            ("Duration T14 (h)", val("t14", "{:.3f}", 24), num((r or {}).get("free_fit", {}).get("t14") if r and r.get("free_fit") else None, "{:.3f}", 24),
+            ("Duration T14 (h)", val("t14", "{:.3f}", 24), num((r or {}).get("free_fit", {}).get("t14") if r and r.get("free_fit") and not free_off else None, "{:.3f}", 24),
              num(p.get("t14"), "{:.3f}", 24), exo("Duration", "{:.3f}", 24)),
             ("Limb darkening u1", val("u1", "{:.2f}"), "", num((r or {}).get("ld_prior", [None])[0] if r else None, "{:.2f}"), ""),
             ("Limb darkening u2", val("u2", "{:.2f}"), "", num((r or {}).get("ld_prior", [None, None])[1] if r else None, "{:.2f}"), ""),
@@ -1392,6 +1573,7 @@ class TransitPage:
         self._make_span_selector(None)   # 2.2.17 (item 5): a drag means something only on a fitted plot
         self._has_title = bool(r)
         self._single_panel = False
+        self._legend_fit = None   # 2.2.19 (nit): room kept under the light curve for the legend (_fit_legend)
         axr.set_visible(True)
         ax.tick_params(axis="x", labelbottom=False)
         if not r and preview is not None:
@@ -1428,6 +1610,19 @@ class TransitPage:
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
                         capsize=2, label="10-minute bins")
+        bands = r.get("bands") if self.show_bands.get() else None
+        if bands:
+            # 2.2.19 (#31): 68 % and 95 % envelopes of transit × baseline over posterior draws (the baseline's spread
+            # out of transit), and the baseline/detrend line's own spread in the residual panel.
+            try:
+                xb = (np.asarray(bands["t"]) - best["tc"]) * 24
+                ax.fill_between(xb, *bands["m95"], color=GREEN, alpha=0.12, lw=0, zorder=1)
+                ax.fill_between(xb, *bands["m68"], color=GREEN, alpha=0.28, lw=0, zorder=1,
+                                label="68 % and 95 % credible bands")
+                axr.fill_between(xb, *(np.asarray(bands["b95"]) * 100), color=GREEN, alpha=0.12, lw=0, zorder=1)
+                axr.fill_between(xb, *(np.asarray(bands["b68"]) * 100), color=GREEN, alpha=0.28, lw=0, zorder=1)
+            except Exception:
+                pass
         tt = np.linspace(t.min(), t.max(), 1200)
         u1, u2 = tc.kipping_to_u(best["q1"], best["q2"])
         model = tc.occultation(tc.separation(tt, best["tc"], r["period"], best["a_rs"], best["b"]), best["k"], u1, u2)
@@ -1468,7 +1663,10 @@ class TransitPage:
         trim_x = self._draw_trim(r, best, x)   # 2.2.17 (item 5)
         ax.set_ylabel("Relative flux")
         ax.grid(alpha=0.3)
-        ax.legend(fontsize=8, loc="lower left", frameon=False)
+        # 2.2.19 (nit): the legend sat on the pre-ingress points (lower left); it now goes in two columns under the
+        # light curve, in room kept free for it below the data (_fit_legend), on screen and in the PNG.
+        leg = ax.legend(fontsize=8, loc="lower center", ncol=2, frameon=False)
+        n_items = len(leg.get_texts()) if leg is not None else 0
         name = p.get("name") or "Transit"
         state = _state(r.get("verdict"))
         title = {"detected": f"{name}   Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f} BJD_TDB",
@@ -1481,6 +1679,7 @@ class TransitPage:
         lo = min(np.percentile(y, 1), model.min()) - 0.004
         hi = max(np.percentile(y, 99), 1.0) + 0.004
         ax.set_ylim(lo, hi)
+        self._legend_fit = (lo, hi, (n_items + 1) // 2)
         axr.plot(x, r["residuals"] / r["baseline"] * 100, ".", color="#9aa7b0", ms=3)
         rb = _bin(x, r["residuals"] / r["baseline"] * 100, max(10.0 / 60, 3 * r["cadence_days"] * 24))
         if rb:
@@ -1974,6 +2173,12 @@ class TransitPage:
         fnote = tc.flip_report_note(self.result or {})
         if fnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
+        snote = self.settings_note(meta, self.result or {})   # 2.2.19 (#39, #40): settings and gain, compact
+        if snote:
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(snote)
+        for bf in (self.result or {}).get("bound_flags") or []:
+            # 2.2.19 (#31): a parameter pinned by its allowed range is said in the report too.
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + bf["text"])
         if state == "detected" and v and v.get("depth_unreliable"):
             note = ascii_("SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"])
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
@@ -2006,6 +2211,28 @@ class TransitPage:
             return
         self.app.status.set(f"Wrote {path}")
         self.app.log(f"Transit plot PNG: {path}")
+        self._save_corner_beside(path)
+
+    def _save_corner_beside(self, png_path: str) -> str:
+        """2.2.19 (#31): the corner plot beside the transit PNG, as <stem>_corner.png. A failure here never costs the
+        plot PNG (logged only)."""
+        if not (self.result or {}).get("chain"):
+            return ""
+        path = os.path.splitext(png_path)[0] + "_corner.png"
+        try:
+            tpost.save_corner(self.result, path)
+        except Exception as exc:
+            self.app.log(f"Corner plot not saved: {exc}")
+            return ""
+        self.app.log(f"Corner plot PNG: {path}")
+        return path
+
+    def open_corner(self):
+        """2.2.19 (#31): the corner plot of the shown fit's MCMC samples, in its own window."""
+        if not self.result or ((self.result.get("chain") or {}).get("flat")) is None:
+            messagebox.showinfo("SHOBS-P", "Fit a transit first: the corner plot shows that fit's MCMC samples.")
+            return
+        CornerWindow(self.app, self)
 
     def save_csv(self):
         """2.2.18 (item 18): Save light-curve CSV on the Transit page: the magnitude CSV (the Output page's), and with a
@@ -2142,10 +2369,28 @@ class TransitPage:
         with core.AsciiWriter(path, newline="\n") as fh:
             fh.write(tc.aavso_exoplanet_report(self.result, meta))
         self.app.log(f"AAVSO exoplanet report: {path}")
+        self._write_settings(path, meta)
         self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
                               "the AAVSO Exoplanet Database (check its current instructions)")
+
+    def _write_settings(self, report_path: str, meta: dict) -> str:
+        """2.2.19 (#40): <report stem>_settings.txt beside the report: the full settings block. Never costs the
+        report (logged on failure)."""
+        lines = self.settings_lines(meta, self.result)
+        if not lines:
+            return ""
+        path = os.path.splitext(report_path)[0] + "_settings.txt"
+        try:
+            with core.AsciiWriter(path, newline="\n") as fh:
+                fh.write(f"SHOBS-P {getattr(self.app, 'app_version', '')} settings for "
+                         f"{os.path.basename(report_path)}\n" + "\n".join(lines) + "\n")
+        except Exception as exc:
+            self.app.log(f"Settings file not written: {exc}")
+            return ""
+        self.app.log(f"Settings file: {path}")
+        return path
 
     def _fit_nights(self) -> list:
         """2.2.18 (item 10): the series night the shown fit is of ([] for a fit of an opened report)."""
@@ -2694,6 +2939,107 @@ class PlannerWindow:
                               f"{e['sun_tc']:.1f}", f"{e['moon_illum']:.2f}", f"{e['moon_sep']:.0f}",
                               f"{e['sigma_min']:.1f}", e["status"]]
                            + ([f"{e['alt_max']:.1f}", int(bool(e.get("keyhole")))] if self.altaz else []))
+
+
+def frame_number(path: str, fallback: int) -> int:
+    """2.2.19 (#40): a light's frame number from the digits at the end of its file name (..._0042.fit -> 42), else
+    fallback (its place in the night)."""
+    m = re.search(r"(\d+)\D*$", os.path.splitext(os.path.basename(str(path or "")))[0])
+    return int(m.group(1)) if m and len(m.group(1)) <= 6 else fallback
+
+
+def frame_ranges(nums) -> str:
+    """2.2.19 (#40): [1, 2, 3, 7, 97, 98, 99] -> '1-3, 7, 97-99'."""
+    v = sorted({int(n) for n in nums})
+    out, k = [], 0
+    while k < len(v):
+        j = k
+        while j + 1 < len(v) and v[j + 1] == v[j] + 1:
+            j += 1
+        out.append(f"{v[k]}-{v[j]}" if j > k else f"{v[k]}")
+        k = j + 1
+    return ", ".join(out)
+
+
+def gain_note(pn: dict | None) -> str:
+    """2.2.19 (#39): the gain the photon-noise error bars used and where it came from (photometry_core.
+    photon_noise_setup: header EGAIN, else the sky's own noise, else 1 e-/ADU assumed). ASCII."""
+    pn = pn or {}
+    src = pn.get("source")
+    if src == "EGAIN" and pn.get("e_per_adu"):
+        return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN)"
+    if src == "sky" and pn.get("k"):
+        return (f"Gain from the sky's own noise, {pn['k']:.3g} e- per image unit (no EGAIN in the headers; a lower "
+                "limit, so error bars are on the safe side)")
+    if src == "assumed":
+        return ("Gain 1 e-/ADU assumed (no EGAIN in the headers, no usable sky estimate): photon-noise error bars "
+                "scale as 1/sqrt(true gain); add EGAIN to the headers if the camera's gain is known")
+    if src == "old":
+        return "Gain: pre-2.2.17 error model (not in electrons)"
+    return "Gain not recorded for this night (photometry from before 2.2.17)"
+
+
+class CornerWindow:
+    """2.2.19 (#31): the corner plot of the transit fit's MCMC samples (transit_posterior.corner_figure), with a Save
+    PNG button. Parameters held fixed are left out; ⚠ marks one that piles up against its allowed range."""
+
+    def __init__(self, app, page: TransitPage):
+        self.app = app
+        self.page = page
+        self.result = page.result
+        r = self.result
+        win = Toplevel(app)
+        self.win = win
+        name = (r.get("planet") or {}).get("name") or "transit"
+        win.title(f"SHOBS-P — corner plot ({name})")
+        top = ttk.Frame(win, style="Card.TFrame", padding=10)
+        top.pack(fill=BOTH, expand=True)
+        buttons = ttk.Frame(top, style="Card.TFrame")
+        buttons.pack(fill=X, side="bottom", pady=(6, 0))
+        ttk.Button(buttons, text="Save PNG…", command=self.save).pack(side=LEFT)
+        ttk.Button(buttons, text="Close", command=win.destroy).pack(side=RIGHT)
+        ttk.Label(top, text=("Each fitted parameter's MCMC samples: histograms on the diagonal (median and 16/84 % "
+                             "lines; the title gives the value and its error), pairs below it (1σ and 2σ contours). "
+                             "A round hump is a measurement; a histogram that piles up against an edge (⚠) is set "
+                             "by the allowed range, not by the data. Tc is in minutes from its median."),
+                  style="Hint.TLabel", wraplength=900, justify=LEFT).pack(anchor=W, fill=X)
+        for bf in r.get("bound_flags") or []:
+            ttk.Label(top, text="⚠ " + bf["text"], style="Card.TLabel", foreground="#b35c00", wraplength=900,
+                      justify=LEFT).pack(anchor=W, fill=X, pady=(2, 0))
+        self.fig = None
+        if Figure is None:
+            fit_to_content(win)
+            return
+        self.fig = Figure(dpi=100, facecolor="#ffffff")
+        n = len(tpost.corner_params(r))
+        tpost.corner_figure(r, self.fig, font=9.0 if n <= 8 else 8.0)
+        canvas = FigureCanvasTkAgg(self.fig, master=top)
+        widget = canvas.get_tk_widget()
+        # Square, as large as the screen allows (the figure's own size in inches would run past a scaled screen).
+        try:
+            side = int(min(win.winfo_screenheight() * 0.78 - 140, win.winfo_screenwidth() * 0.85, 1100))
+        except Exception:
+            side = 760
+        widget.configure(width=max(side, 420), height=max(side, 420))
+        widget.pack(fill=BOTH, expand=True, pady=(6, 0))
+        canvas.draw_idle()
+        self.canvas = canvas
+        fit_to_content(win)
+
+    def save(self):
+        page = self.page
+        stem = os.path.splitext(page.family_names()[1])[0]
+        path = self.app.output_path(stem + "_corner.png", title="Save corner plot PNG", defaultextension=".png",
+                                    filetypes=[("PNG", "*.png")], parent=self.win)
+        if not path:
+            return
+        try:
+            tpost.save_corner(self.result, path)
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            return
+        self.app.log(f"Corner plot PNG: {path}")
+        self.app.saved_notice(path)
 
 
 class NebWindow:

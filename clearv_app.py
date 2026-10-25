@@ -1334,6 +1334,8 @@ class App(Tk):
             self.transit_page.refresh(shown=True)
         else:
             self.page_frames[index].lift()
+        if index == STEP_PHOTO:
+            self._update_aperture_state()   # 2.2.19 (#41): a loaded or closed series changes what was measured
         if index == STEP_BLINK and self._blink_folder() != self._blink_loaded_from:
             self.load_blink_list()
         elif index == STEP_BLINK:
@@ -1885,14 +1887,28 @@ class App(Tk):
             return self._family_path(folder, safe)
         if folder:
             return self._unique_path(os.path.join(folder, safe))
+        # 2.2.19 (#42): the dialog opens where the last result was saved, with the next free name filled in
+        # (…_SHOBS-P_2.txt), so a second save never needs a name typed by hand; and a name typed after the extension
+        # ("…_SHOBS-P.txt.2", which the dialog then made "…_SHOBS-P.txt.2.txt") is put back in the _2 form.
+        start = self.settings.get("result_dir", "") if isinstance(getattr(self, "settings", None), dict) else ""
         kwargs = {"title": title, "initialfile": safe}
+        if start and os.path.isdir(start):
+            kwargs["initialdir"] = start
+            kwargs["initialfile"] = os.path.basename(self._unique_path(os.path.join(start, safe)))
         if defaultextension:
             kwargs["defaultextension"] = defaultextension
         if filetypes:
             kwargs["filetypes"] = filetypes
         if parent is not None:
             kwargs["parent"] = parent
-        return filedialog.asksaveasfilename(**kwargs) or ""
+        path = filedialog.asksaveasfilename(**kwargs) or ""
+        if path:
+            path = core.tidy_save_name(path)
+            try:
+                self.settings["result_dir"] = os.path.dirname(os.path.abspath(path))
+            except Exception:
+                pass
+        return path
 
     def saved_notice(self, path: str, advice: str = ""):
         """After a save: with an output folder the status bar says where it went (no dialog to click away);
@@ -4763,7 +4779,8 @@ class App(Tk):
             camera_bin = int(float((header or {}).get("XBINNING", 1)))
         except (TypeError, ValueError):
             camera_bin = 1
-        if camera_bin > 1:
+        # 2.2.19 (#37): not for MicroObservatory (binned 2x2 by design) or a monochrome camera (no color to mix).
+        if camera_bin > 1 and not core.is_microobservatory(path, header or {}) and self.pattern.get() != core.MONO:
             self.log(f"Note: the camera binned these frames (XBINNING={camera_bin}). Some capture programs bin a color "
                      "sensor by mixing neighboring red, green, and blue pixels. If the channels look identical or B-V "
                      "sits exactly on the comps' color, capture unbinned and bin here instead.")
@@ -4865,6 +4882,13 @@ class App(Tk):
         self.catalog.trace_add("write", lambda *_: self.refresh_preview() if self.chart_placed else None)
         options = ttk.Frame(card, style="Card.TFrame")
         options.pack(fill=X, pady=(0, 4))
+        # 2.2.19 (#41): what the current photometry was measured with, and a caution when the boxes now differ.
+        self.aperture_state = StringVar(value="")
+        self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
+                                              justify=LEFT)
+        self.aperture_state_label.pack(anchor=W, padx=6, pady=(0, 4))
+        for var in (self.radius, self.sky_in, self.sky_out, self.binning):
+            var.trace_add("write", lambda *_a: self._update_aperture_state())
         ttk.Label(options, text="Aperture r", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
         ttk.Entry(options, textvariable=self.radius, width=6).pack(side=LEFT)
         ttk.Label(options, text="sky in", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
@@ -10295,6 +10319,7 @@ class App(Tk):
         if night_mount == core.MOUNT_ALTAZ:
             self.night_bin[night]["mount"] = night_mount   # GEM nights stay as saved before
         self.night_bin[night]["pier"] = self._night_pier(night_points, night_mount)   # 2.2.14 (item 20)
+        self._update_aperture_state()   # 2.2.19 (#41)
         if (self.comp_band_sources or {}).get("band") == filt:
             # 2.2.17 (round 2): the night's Sloan comp/check sources go with the series (report notes after Load).
             self.comp_band_sources["night"] = night
@@ -10703,6 +10728,55 @@ class App(Tk):
         if setup.get("warning"):
             self.log("⚠ " + setup["warning"])
         return setup
+
+    def measured_aperture(self, night: str = "") -> dict | None:
+        """2.2.19 (#41): what a night's photometry was measured with ({"radius", "sky_in", "sky_out", "binning",
+        "night"}): the given night, else the latest night in the series. None when nothing was measured."""
+        if not night:
+            obs = [o for o in self.observations if math.isfinite(getattr(o, "jd", float("nan")))]
+            if not obs:
+                return None
+            night = max(obs, key=lambda o: o.jd).night
+        info = self._night_info(night)
+        if not info.get("radius"):
+            return None
+        return {"radius": info.get("radius"), "sky_in": info.get("sky_in"), "sky_out": info.get("sky_out"),
+                "binning": info.get("binning"), "night": night}
+
+    def aperture_state_text(self, night: str = "") -> tuple[str, bool]:
+        """2.2.19 (#41): ("Measured with r 8, sky 14–22 px (Bin 2)", changed?) — changed when the Aperture, sky or
+        Binning boxes now differ from that; then the text says to run photometry again. ("", False) without
+        photometry."""
+        m = self.measured_aperture(night)
+        if not m:
+            return "", False
+
+        def box(var):
+            try:
+                return float(var.get())
+            except Exception:
+                return None
+        sky = f", sky {m['sky_in']:g}–{m['sky_out']:g} px" if m.get("sky_in") and m.get("sky_out") else " px"
+        text = f"Measured with r {m['radius']:g}{sky}" + (f" (Bin {m['binning']})" if m.get("binning") else "")
+        now = (box(self.radius), box(self.sky_in), box(self.sky_out), box(self.binning))
+        was = (m["radius"], m.get("sky_in"), m.get("sky_out"), m.get("binning"))
+        changed = any(a is not None and b is not None and abs(float(a) - float(b)) > 1e-6 for a, b in zip(now, was))
+        if changed:
+            what = "Binning" if (now[3] is not None and was[3] is not None and now[3] != was[3]
+                                 and now[:3] == tuple(was[:3])) else "Aperture"
+            text = (f"⚠ {what} changed (now r {now[0]:g}, sky {now[1]:g}–{now[2]:g} px, Bin {now[3]:g}): run "
+                    f"photometry again to apply it. {text}." if None not in now else f"⚠ {what} changed: run "
+                    f"photometry again to apply it. {text}.")
+        return text, changed
+
+    def _update_aperture_state(self):
+        """2.2.19 (#41): refresh the Photometry page's 'Measured with …' line."""
+        try:
+            text, changed = self.aperture_state_text()
+            self.aperture_state.set(text)
+            self.aperture_state_label.configure(foreground="#b35c00" if changed else "#5d6d76")
+        except Exception:
+            pass
 
     def _night_setup(self) -> dict:
         """2.2.3: what a night's reduction used, stored per night in the series so later nights can be compared."""

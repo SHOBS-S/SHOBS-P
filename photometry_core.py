@@ -506,8 +506,101 @@ def rgb_plane(planes: np.ndarray, channel: str | None = None) -> np.ndarray:
 
 
 def is_microobservatory(path: str, header: dict) -> bool:
-    text = " ".join(str(header.get(k, "")) for k in ("TELESCOP", "INSTRUME", "OBSERVAT", "ORIGIN", "SITENAME"))
-    return os.path.basename(path).upper().startswith("MOBS_") or "MICROOBS" in text.upper().replace(" ", "")
+    # 2.2.19 (#27): CREATOR too (EXOTIC recognizes MicroObservatory frames by CREATOR).
+    text = " ".join(str(header.get(k, "")) for k in ("TELESCOP", "INSTRUME", "OBSERVAT", "ORIGIN", "SITENAME",
+                                                     "CREATOR"))
+    if os.path.basename(path or "").upper().startswith("MOBS_") or "MICROOBS" in text.upper().replace(" ", ""):
+        return True
+    return _microobservatory_signature(header)
+
+
+# 2.2.19 (GitHub #37): MicroObservatory's newer files ("Qatar-9261020090627.FITS", 2026) carry neither MOBS_ nor a
+# MicroObservatory keyword. They are recognized by what the header does hold: the Fred Lawrence Whipple Observatory site
+# on Mt. Hopkins (31.68 N, 110.88 W), the telescopes' ~560 mm focal length, and the 650 x 500 frame; any two of the three.
+MOBS_SITE = (31.68, -110.88)
+MOBS_FOCAL_MM = (540.0, 580.0)
+MOBS_FRAME = (650, 500)
+
+
+def _microobservatory_signature(header: dict) -> bool:
+    header = header or {}
+    hits = 0
+    try:
+        site = header_site(header)
+    except Exception:
+        site = None
+    if site and site[0] is not None and site[1] is not None:
+        lat, lon = site[0], site[1]
+        if abs(lat - MOBS_SITE[0]) < 0.1 and abs(abs(lon) - abs(MOBS_SITE[1])) < 0.1:
+            hits += 1
+    try:
+        focal = float(header.get("FOCALLEN") or header.get("FOCAL") or 0)
+    except (TypeError, ValueError):
+        focal = 0.0
+    if MOBS_FOCAL_MM[0] <= focal <= MOBS_FOCAL_MM[1]:
+        hits += 1
+    try:
+        if (int(header.get("NAXIS1") or 0), int(header.get("NAXIS2") or 0)) == MOBS_FRAME:
+            hits += 1
+    except (TypeError, ValueError):
+        pass
+    return hits >= 2
+
+
+SAVE_EXTENSIONS = (".txt", ".csv", ".png", ".cvseries", ".json", ".fits", ".fit")
+
+
+def tidy_save_name(path: str) -> str:
+    """2.2.19 (#42): a save name with a number typed after its extension, "X.txt.2.txt" / "X.txt.2" /
+    "X_lightcurve.csv.2_transit_fit.csv", back to SHOBS-P's "X_2.txt" form (the number before the extension). Other
+    names are returned unchanged."""
+    folder, name = os.path.split(str(path or ""))
+    exts = "|".join(_re.escape(e[1:]) for e in SAVE_EXTENSIONS)
+    m = _re.match(rf"^(?P<stem>.+?)\.(?P<ext>{exts})\.(?P<n>\d+)(?P<rest>(?:_[^.]*)?)(?:\.(?P<ext2>{exts}))?$", name,
+                 _re.IGNORECASE)
+    if not m:
+        return path
+    ext = "." + (m.group("ext2") or m.group("ext"))
+    rest = m.group("rest") or ""
+    if rest:
+        # "…_lightcurve.csv.2_transit_fit.csv": the number belongs to the CSV it was named after.
+        new = f"{m.group('stem')}_{m.group('n')}{rest}{ext}"
+    else:
+        new = f"{m.group('stem')}_{m.group('n')}{ext}"
+    return os.path.join(folder, new) if folder else new
+
+
+def camera_binning(path: str, header: dict) -> tuple[int, int, str]:
+    """2.2.19 (#27): how the camera binned the frames, for a report's #BINNING (never SHOBS-P's own processing Binning):
+    (x, y, source). MicroObservatory frames are 2x2 (6.8 µm pixels binned to 13.6 µm; their headers carry no binning
+    keyword); else XBINNING / YBINNING (YBINNING = XBINNING when missing), else a BINNING keyword ("2" or "2x2");
+    with none of these, 1x1 (source "assumed": capture programs write XBINNING whenever they bin)."""
+    header = header or {}
+    if is_microobservatory(path or "", header):
+        return 2, 2, "MicroObservatory"
+
+    def as_int(v):
+        try:
+            n = int(round(float(v)))
+            return n if n >= 1 else None
+        except (TypeError, ValueError):
+            return None
+    xb = as_int(header.get("XBINNING"))
+    if xb is None:
+        xb = as_int(header.get("XBIN"))
+    if xb is not None:
+        yb = as_int(header.get("YBINNING"))
+        if yb is None:
+            yb = as_int(header.get("YBIN"))
+        return xb, yb or xb, "header"
+    raw = str(header.get("BINNING") or "").strip().lower().replace("×", "x").replace(" ", "")
+    if raw:
+        parts = raw.split("x")
+        a = as_int(parts[0])
+        b = as_int(parts[1]) if len(parts) > 1 else a
+        if a is not None:
+            return a, b or a, "header"
+    return 1, 1, "assumed"
 
 
 def header_site(header: dict):
