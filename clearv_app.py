@@ -705,7 +705,10 @@ class App(Tk):
         self.pattern.trace_add("write", lambda *_a: self._sync_camera_note())
         self.sat_limit = DoubleVar(value=60000)
         # 2.2.19 (#16): the camera's linear limit (raw ADU); empty = the saturation level (nothing changes). Remembered.
-        self.linear_limit = StringVar(value=str(self.settings.get("linear_limit_adu", "") or ""))
+        _lin = self.settings.get("linear_limit_adu", "") or ""
+        if isinstance(_lin, (int, float)) and float(_lin).is_integer():
+            _lin = int(_lin)   # review nit: 32000, not 32000.0
+        self.linear_limit = StringVar(value=str(_lin))
         self.linear_limit.trace_add("write", lambda *_: self._remember_linear_limit())
         self.cloud_limit = DoubleVar(value=20.0)
         self.use_check_zp = BooleanVar(value=True)
@@ -1625,6 +1628,8 @@ class App(Tk):
             return
         if value != "" and not (math.isfinite(value) and value > 0):
             return
+        if value != "" and float(value).is_integer():
+            value = int(value)
         if self.settings.get("linear_limit_adu", "") != value:
             self.settings["linear_limit_adu"] = value
             self._save_settings()
@@ -1685,17 +1690,14 @@ class App(Tk):
         return ""
 
     def _raw_peak_at(self, xy) -> float:
-        """2.2.19 (#16): the brightest raw pixel around xy (image coordinates) in the reference frame's raw file."""
+        """2.2.19 (#16): the brightest raw pixel around xy (image coordinates) in the reference frame's raw file. Only a
+        small window of the file is read (review S6: not the whole 52 MB frame on the window's thread)."""
+        if not self.preview_path:
+            return float("nan")
         cache = getattr(self, "_raw_cache", None)
         if cache is None or cache[0] != self.preview_path:
-            try:
-                raw, _h = core.read_fits(self.preview_path)
-            except Exception:
-                raw = None
-            cache = self._raw_cache = (self.preview_path, raw, {})
-        raw, peaks = cache[1], cache[2]
-        if raw is None:
-            return float("nan")
+            cache = self._raw_cache = (self.preview_path, None, {})
+        peaks = cache[2]
         try:
             radius = float(self.radius.get())
             binning = self._image_binning()
@@ -1705,7 +1707,8 @@ class App(Tk):
         if key not in peaks:
             total_bin = binning * (1 if self.pattern.get() == core.MONO else 2)
             try:
-                peaks[key] = core.raw_peak_near(raw, core.Star("p", float(xy[0]), float(xy[1])), radius, total_bin)
+                peaks[key] = core.raw_peak_in_file(self.preview_path, core.Star("p", float(xy[0]), float(xy[1])),
+                                                   radius, total_bin)
             except Exception:
                 peaks[key] = float("nan")
         return peaks[key]
@@ -4838,6 +4841,7 @@ class App(Tk):
         self.masters_binning = binning
         self.calibrated = calibrated
         self._target_missing_frames = []   # 2.2.19 (#9): a new reference frame
+        self._target_search_hops = 0
         self._raw_cache = None   # 2.2.19 (#16)
         self.preview = calibrated
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
@@ -5432,12 +5436,15 @@ class App(Tk):
             return False
         if getattr(self, "_target_searched_for", None) == getattr(self, "_preview_token", 0):
             return False
+        if getattr(self, "_target_search_hops", 0) >= 2:
+            return False   # review S5c: a found frame can start one more search, never a chain of them
         if self.busy:
             if tries < 40:
                 self.after(250, lambda: self._start_target_search(ra, dec, name, where, xy, edge, tries + 1))
                 return True
             return False
         self._target_searched_for = getattr(self, "_preview_token", 0)
+        self._target_search_hops = getattr(self, "_target_search_hops", 0) + 1
         start = lights.index(self.preview_path) if self.preview_path in lights else -1
         cap = min(self.TARGET_SEARCH_MAX, max(1, len(lights) // 2))
         todo = lights[start + 1:start + 1 + cap]
@@ -5465,6 +5472,7 @@ class App(Tk):
                 prev_src, chain = ref_src, None
                 for k, path in enumerate(todo, 1):
                     if cancel.is_set():
+                        result["cancelled"] = True
                         break
                     raw, header = core.read_fits(path)
                     cal = core.bin_image(raw, binning)
@@ -5486,7 +5494,7 @@ class App(Tk):
                     if loc["on"] is None:
                         result["unknown"] += 1
                     elif loc["on"]:
-                        result.update(found=(path, cal, header, (loc["x"], loc["y"])), how=loc["how"])
+                        result.update(found=(path, cal, header, (loc["x"], loc["y"])), how=loc["how"], reg=reg)
                         break
                     self.call_ui(self._progress, k)
             except Exception as exc:
@@ -5505,15 +5513,22 @@ class App(Tk):
         if result.get("error"):
             self.log(f"Target: the search on the next frames stopped ({result['error']}); click the target by hand.")
             return
+        if result.get("cancelled"):   # review S5d
+            self.log("Target: the search on the next frames was canceled; click the target by hand on a frame that "
+                     "shows it.")
+            return
         found = result.get("found")
+        # review S5a: this frame does not show the target, so "click it by hand" alone cannot work here
+        fix = ("Reject the frames without the target in Blink and Calibrate again (the first kept frame becomes the "
+               "reference and is solved), then the target is placed or can be clicked.")
         if found is None:
             if result["unknown"] and result["unknown"] >= result["checked"]:
                 self.log(f"Target: {where} is not on this frame by its plate solution, and the next frames carry no "
                          "plate solution or pointing and could not be aligned with this one, so SHOBS-P cannot tell "
-                         "where it is on them. Click the target by hand on a frame that shows it.")
+                         f"where it is on them. {fix}")
             else:
                 self.log(f"Target: {name} not found in the first {result['checked'] + 1} frames. Check that the "
-                         "frames match the target, or click the target by hand.")
+                         f"frames match the target. {fix}")
             return
         path, cal, header, at = found
         idx = lights.index(path)
@@ -5530,6 +5545,31 @@ class App(Tk):
             text = ("⚠ " + text + f" That is {share:.0%} of the {len(lights)} frames: check the pointing, or reject "
                     "those frames in Blink.")
         self.log(text)
+        # review S5b: comps, check and watch stars clicked on the old frame while the search ran: carried over with
+        # the alignment, or cleared when the frames were matched another way.
+        reg = result.get("reg")
+        moved, cleared = [], []
+        for role, xy in list(self._marked_roles()):
+            if role == "target" or xy is None:
+                continue
+            if reg is not None:
+                st = core.move_star(core.Star(role, float(xy[0]), float(xy[1])), reg, self.preview.shape)
+                setattr(self, f"{role}_xy", (st.x, st.y))
+                moved.append(role_label(role))
+            else:
+                self.clear_mark(role, redraw=False)
+                cleared.append(role_label(role))
+        for wname, wxy in list(self.watch_xy.items()):
+            if reg is not None:
+                st = core.move_star(core.Star(wname, float(wxy[0]), float(wxy[1])), reg, self.preview.shape)
+                self.watch_xy[wname] = (st.x, st.y)
+            else:
+                self.watch_xy.pop(wname, None)
+        if moved:
+            self.log("  Markers carried over to the new reference frame: " + ", ".join(moved) + ".")
+        if cleared:
+            self.log("  Markers cleared (the new reference frame was matched without an alignment): "
+                     + ", ".join(cleared) + ". Click them again.")
         self.calibrated = cal
         self.preview_header = header
         self.preview_path = path
@@ -5766,6 +5806,7 @@ class App(Tk):
         centroid (rms), with a caution over 0.5 px. #24: comp and check apertures that jump together at the meridian
         flip while the target's does not. #16: frames over the linear limit per star."""
         lines = []
+        self._last_flip_signature = False
         n_all = len(lights)
         if target_off:
             labs = core.frame_labels_for(list(target_off))
@@ -5785,19 +5826,28 @@ class App(Tk):
                       for k, c in enumerate(comps)]
             if check is not None:
                 names.append(("check", check.name, lambda o: o.cen.get("k")))
+            # #30 (review S2): on defocused runs only, how much each aperture's center jitters from frame to frame
+            # (the centring move about its median, each side of a flip on its own). A neighbor's steady pull would
+            # not show here, so a blended star is not called badly centered.
             rms = []
             for label, _name, get in names:
-                vals = [float(get(o)["lc"]) for o in pts if get(o) and math.isfinite(float(get(o).get("lc", "nan")))]
-                rms.append((label, math.sqrt(float(np.mean(np.square(vals)))) if vals else float("nan")))
+                devs = []
+                for seg in ("", "flip"):
+                    v = np.array([(get(o)["dx"], get(o)["dy"]) for o in pts
+                                  if get(o) and (o.segment or "") == seg and not get(o).get("refused")], dtype=float)
+                    if len(v) >= 3:
+                        devs.append(np.hypot(*(v - np.median(v, axis=0)).T))
+                vals = np.concatenate(devs) if devs else np.array([])
+                rms.append((label, math.sqrt(float(np.mean(np.square(vals)))) if vals.size else float("nan")))
             bad = [(lab, v) for lab, v in rms if math.isfinite(v) and v > 0.5]
-            if donut or bad:
-                text = ("Centring: aperture centers against each star's light centroid (rms over the frames): "
+            if donut and any(math.isfinite(v) for _l, v in rms):
+                text = ("Centring (defocused stars): frame-to-frame jitter of each aperture's center (rms): "
                         + ", ".join(f"{lab} {v:.2f} px" for lab, v in rms if math.isfinite(v)) + ".")
                 if bad:
                     text = ("⚠ " + text + " " + ", ".join(lab for lab, _v in bad)
-                            + (" sits" if len(bad) == 1 else " sit") + " more than 0.5 px off: the aperture cuts a "
-                            "different part of the star from frame to frame, which adds noise that the comps do not "
-                            "cancel. Try a larger aperture (Suggest…), or check for a close neighbor.")
+                            + (" moves" if len(bad) == 1 else " move") + " more than 0.5 px from frame to frame: the "
+                            "aperture cuts a different part of the donut each time, which adds noise the comps do not "
+                            "cancel. Try a larger aperture (Suggest…).")
                 lines.append(text)
             # #24: at the flip, comp and check moving together while the target does not.
             flip = [o for o in pts if o.segment == "flip"]
@@ -5819,6 +5869,7 @@ class App(Tk):
                     same = all(math.hypot(m[0] - vx, m[1] - vy) < 1.5 for _l, m in jumped)
                     t_small = math.hypot(t_m[0], t_m[1]) < 0.5 * math.hypot(vx, vy) and t_m[2] <= 0.5
                     if same and t_small:
+                        self._last_flip_signature = True   # 2.2.19 (#24, review S4): read by the save question
                         lines.append(f"⚠ After the meridian flip the {' and '.join(l for l, _m in jumped)} apertures "
                                      f"were off their stars by about ({vx:+.1f}, {vy:+.1f}) px together, while the "
                                      "target's was not: an aperture-placement error at the flip, not a change in "
@@ -6386,6 +6437,13 @@ class App(Tk):
         ref = self.preview
         ref_sources = core.detect_sources(ref, max_sources=80)
         altaz = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ   # 2.2.18 (item 8): field rotation
+        # 2.2.19 (#24, review S3): flipped frames' alignment checked on the stars' centers, as in the run
+        try:
+            t_defocus = core.field_defocus(ref)
+        except Exception:
+            t_defocus = {"donut": False}
+        t_donut = bool(t_defocus.get("donut"))
+        ref_pts = core.refine_points(ref, ref_sources, rmax, t_donut) if len(ref_sources) >= 3 else []
         cancel = self._cancel
         self._progress_start(n, "Aperture test")
         self.log(f"Aperture test: r = {', '.join(f'{r:g}' for r in radii)} px, sky {sky_in:g}–{sky_out:g} px, "
@@ -6415,6 +6473,9 @@ class App(Tk):
                                 reg = core.compose_registration(last["reg"], step, data.shape)
                         if reg is None:
                             raise ValueError("could not align")
+                        if reg.get("flipped") and ref_pts:   # 2.2.19 (#24, review S3)
+                            core.seed_field_defocus(data, t_defocus if t_donut else False)
+                            reg = core.refine_registration(data, reg, ref_pts, rmax, t_donut)
                         last["sources"], last["reg"] = src, reg
                         good = np.isfinite(xy[:, 0])
                         pos = np.full_like(xy, np.nan)
@@ -6488,10 +6549,15 @@ class App(Tk):
             d[i] = np.inf
             if d.size > 1 and float(np.min(d)) < 2.0 * reach:
                 continue
-            r0 = int(math.ceil(reach))
-            box = img[max(0, int(y) - r0):int(y) + r0 + 1, max(0, int(x) - r0):int(x) + r0 + 1]
-            if box.size and np.isfinite(box).any() and float(np.nanmax(box)) >= sat:
-                continue
+            raw_pk = float("nan") if self.precalibrated else self._raw_peak_at((x, y))
+            if math.isfinite(raw_pk):
+                if raw_pk >= sat:   # review nit: saturation judged on the raw pixels, as for #25
+                    continue
+            else:
+                r0 = int(math.ceil(reach))
+                box = img[max(0, int(y) - r0):int(y) + r0 + 1, max(0, int(x) - r0):int(x) + r0 + 1]
+                if box.size and np.isfinite(box).any() and float(np.nanmax(box)) >= sat:
+                    continue
             out.append((float(x), float(y)))
         return out
 
@@ -10340,7 +10406,7 @@ class App(Tk):
             defocus = {"donut": False}
         donut = bool(defocus.get("donut"))
         if donut:
-            self.log(f"Defocused stars (donuts, about {2 * defocus.get('radius', float('nan')):.0f} px across on "
+            self.log(f"Defocused stars (donuts, about {2 * defocus.get('r95', float('nan')):.0f} px across on "
                      f"{defocus.get('rings')} of {defocus.get('n')} test stars): each star is centered on its light "
                      "centroid, not on the bright side of its ring.")
         # 2.2.19 (#24): the frame the stars were marked on was rejected in Blink since (e.g. the frames before a
@@ -10481,6 +10547,7 @@ class App(Tk):
                     raw, header = core.read_fits(path)
                     cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
                     data = core.debayer(cal, pattern, mode)
+                    core.seed_field_defocus(data, defocus if donut else False)   # 2.2.19 (#30): the run's decision
                     header = dict(header)
                     header["_PATH"] = path
                     reg = None
@@ -10886,32 +10953,69 @@ class App(Tk):
         self.status.set(f"{len(self.observations)} points across {len(nights)} night(s). Save the series to add more later.")
         save_now = bool(self.series_path)
         if save_now:
-            # 2.2.19 (#24): a night whose meridian-flip step is marked ⚠ is not auto-saved into the series unasked (a
-            # flip step that big is usually an aperture problem; the 21-22 Oct night went in at -0.81 mag).
-            try:
-                steps = core.flip_offsets(night_points, [o.mag for o in night_points],
-                                          use=[not o.flag for o in night_points])
-                step = (steps.get(night) or {}).get("offset")
-            except Exception:
-                step = None
-            if step is not None and math.isfinite(step) and abs(step) > core.FLIP_STEP_MARK:
+            # 2.2.19 (#24): a night whose meridian-flip step looks like an aperture problem (the check star steps too,
+            # or comp and check jumped together at the flip, or with no check star a step far beyond the night's
+            # scatter) is not auto-saved into the series unasked (the 21-22 Oct night went in at -0.81 mag). A real
+            # variable's or a transit's change across the flip keeps the automatic save (review S4).
+            why = self._flip_step_suspect(night_points, night)
+            if why and why.get("text"):
+                step = why["step"]
                 save_now = messagebox.askyesno(
                     APP_TITLE, f"This night's meridian-flip step is {step:+.3f} mag ⚠ (the frames after the flip "
-                               f"read {abs(step):.3f} mag {'fainter' if step > 0 else 'brighter'} than those before).\n\n"
-                               "A step that big is often an aperture problem at the flip, not the star (see the Log).\n\n"
+                               f"read {abs(step):.3f} mag {'fainter' if step > 0 else 'brighter'} than those before), "
+                               f"and {why['text']}.\n\n"
+                               "That is usually an aperture problem at the flip, not the star (see the Log).\n\n"
                                f"Save {os.path.basename(self.series_path)} with this night now?\n"
                                "Yes saves it. No keeps the night on screen but leaves the file on disk as it was "
                                "(Save series keeps it later; Remove night… takes it out).")
                 if not save_now:
+                    self._hold_autosave = night   # review M1: no automatic save may write it later either
                     self.log(f"Not auto-saved: the night's flip step is {step:+.3f} mag ⚠. "
                              f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
+            elif why is not None and why.get("step") is not None:
+                self.log(f"Flip step {why['step']:+.3f} mag on this night; the check star and the comps show no "
+                         "aperture problem at the flip, so the series was saved as usual.")
         if save_now:
             try:
-                self._write_series(self.series_path)
-                self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
+                if self._write_series(self.series_path) is not None:
+                    self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not auto-save the series: {exc}")
         self._check_planet_transits(night, source="run")   # 2.2.15 (item 1): in the background; flags arrive later
+
+    def _flip_step_suspect(self, night_points, night):
+        """2.2.19 (#24, review S4): None when the night has no flip step over FLIP_STEP_MARK; {"step": s, "text": ""}
+        when it has one that looks like the star (no reason to stop the save); {"step", "text"} with the reason when
+        it looks like an aperture problem: the check star's step is also over the mark and at least half the
+        target's, or the run saw comp and check jump together at the flip (_run_star_notes), or (no check star) the
+        step is over 5 x the night's point-to-point scatter."""
+        try:
+            use = [not o.flag for o in night_points]
+            steps = core.flip_offsets(night_points, [o.mag for o in night_points], use=use)
+            step = (steps.get(night) or {}).get("offset")
+        except Exception:
+            return None
+        if step is None or not math.isfinite(step) or abs(step) <= core.FLIP_STEP_MARK:
+            return None
+        if getattr(self, "_last_flip_signature", False):
+            return {"step": step, "text": "the comp and check apertures jumped together at the flip"}
+        kvals = [o.check_std if o.check_std is not None else float("nan") for o in night_points]
+        if any(math.isfinite(v) for v in kvals):
+            try:
+                kstep = (core.flip_offsets(night_points, kvals, use=use).get(night) or {}).get("offset")
+            except Exception:
+                kstep = None
+            if kstep is not None and math.isfinite(kstep) and abs(kstep) > core.FLIP_STEP_MARK \
+                    and abs(kstep) >= 0.5 * abs(step):
+                return {"step": step, "text": f"the check star steps too ({kstep:+.3f} mag)"}
+            return {"step": step, "text": ""}
+        mags = np.array([o.mag for o, u in zip(night_points, use) if u and math.isfinite(o.mag)])
+        if mags.size >= 6:
+            p2p = 1.4826 * float(np.median(np.abs(np.diff(mags)))) / math.sqrt(2.0)
+            if p2p > 0 and abs(step) > 5.0 * p2p:
+                return {"step": step, "text": f"there is no check star, and the step is {abs(step) / p2p:.0f} × the "
+                                              "night's point-to-point scatter"}
+        return {"step": step, "text": ""}
 
     # ---- 2.2.15 (item 1): planet transits in a Variables campaign -------------------------------------------
     PLANET_RETRY_S = 600.0   # a failed lookup (offline, unknown star) is tried again after this long
@@ -11202,8 +11306,8 @@ class App(Tk):
         self.draw_output()
         if self.series_path:
             try:
-                self._write_series(self.series_path)
-                self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}.")
+                if self._write_series(self.series_path) is not None:   # None: held (2.2.19 #24)
+                    self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}.")
             except OSError as exc:
                 self.log(f"Could not save the series with the planet transit flags: {exc}")
 
@@ -11958,6 +12062,14 @@ class App(Tk):
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
         # from before this session. The new file is written completely (X.part) before anything is renamed.
+        hold = getattr(self, "_hold_autosave", None)
+        if hold and not any(o.night == hold for o in self.observations):
+            hold = self._hold_autosave = None   # the held night was removed (Remove night…)
+        if hold and not getattr(self, "_explicit_save", False):
+            # 2.2.19 (#24, review M1): the user said No to saving a night with a flip step ⚠; no automatic save
+            # (planet transit flags, notes, comps…) writes it behind their back. Save series clears the hold.
+            self.log(f"Not saved: {self.night_label(hold, short=True)} has a flip step ⚠ — Save series to keep it.")
+            return None
         part = path + ".part"
         meta = self._meta()
         core.save_series(part, meta, self.observations)
@@ -12114,6 +12226,7 @@ class App(Tk):
         series. Watch stars and AUIDs that came from a loaded series go (except into a new series started from tonight's
         run, which used them); ones added this session stay."""
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9): a pending planet check is stale
+        self._hold_autosave = None   # 2.2.19 (#24): a held night belongs to the series set aside
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
         self.series_path = ""
@@ -12236,11 +12349,15 @@ class App(Tk):
         if not path:
             return
         self._remember_series_dir(path)
+        self._explicit_save = True   # 2.2.19 (#24, review M1): Save series writes a held night and ends the hold
         try:
             kept = self._write_series(path)
         except OSError as exc:
             messagebox.showerror(APP_TITLE, f"Could not save: {exc}")
             return
+        finally:
+            self._explicit_save = False
+        self._hold_autosave = None
         self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
                         + f". Next night, load this file before reducing: {path}")
 
@@ -13735,8 +13852,8 @@ class App(Tk):
         saved = ""
         if self.series_path:
             try:
-                self._write_series(self.series_path)
-                saved = f" Saved to {os.path.basename(self.series_path)}."
+                saved = (f" Saved to {os.path.basename(self.series_path)}."
+                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         nights = sorted({o.night for o in self.observations})
@@ -14244,8 +14361,8 @@ class App(Tk):
         saved = ""
         if self.series_path:
             try:
-                self._write_series(self.series_path)
-                saved = f" Saved to {os.path.basename(self.series_path)}."
+                saved = (f" Saved to {os.path.basename(self.series_path)}."
+                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Comps in use: {used}.{saved}")
@@ -14312,8 +14429,8 @@ class App(Tk):
         saved = ""
         if self.series_path:
             try:
-                self._write_series(self.series_path)
-                saved = f" Saved to {os.path.basename(self.series_path)}."
+                saved = (f" Saved to {os.path.basename(self.series_path)}."
+                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set("Catalog magnitudes changed." + saved)
@@ -14486,8 +14603,8 @@ class App(Tk):
         saved = ""
         if self.series_path:
             try:
-                self._write_series(self.series_path)
-                saved = f" Saved to {os.path.basename(self.series_path)}."
+                saved = (f" Saved to {os.path.basename(self.series_path)}."
+                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Removed the night of {self.night_label(night, short=True)}. {len(self.observations)} points left.{saved}")

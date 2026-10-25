@@ -1693,11 +1693,14 @@ def light_centroid(img: np.ndarray, x: float, y: float, window: float, sky_in: f
     work = np.where(np.isfinite(data), data - sky, 0.0)
     work = np.clip(work, 0.0, None)
     others = [(float(px) - ox, float(py) - oy) for px, py in exclude]
+    # review S7: the boundary to each neighbor is fixed at the start point (a boundary that moved with the center let
+    # it creep onto a brighter neighbor)
+    mine = np.ones(data.shape, dtype=bool)
+    for px, py in others:
+        mine &= np.hypot(xx - ux, yy - uy) <= np.hypot(xx - px, yy - py)
     wsum = 0.0
     for _ in range(max(1, int(iters))):
-        m = np.hypot(xx - ux, yy - uy) <= w
-        for px, py in others:
-            m &= np.hypot(xx - ux, yy - uy) <= np.hypot(xx - px, yy - py)
+        m = (np.hypot(xx - ux, yy - uy) <= w) & mine
         wsum = float(work[m].sum())
         if wsum <= 0:
             return out
@@ -1713,7 +1716,7 @@ def light_centroid(img: np.ndarray, x: float, y: float, window: float, sky_in: f
 
 
 def _ring_star(smooth: np.ndarray, sky: float, noise: float, near_x: float, near_y: float,
-               strict: bool = True) -> dict | None:
+               strict: bool = True, data: np.ndarray | None = None) -> dict | None:
     """2.2.19 (#30): is the star around the peak (near_x, near_y) a defocused "donut" (or a broad flat top) rather
     than a sharp star? Measured on its quarter-maximum region (at a quarter of the star's brightest point): big
     (radius >= 2.5 px); not much elongated (axis ratio <= 1.6); the brightest point more than max(1.5 px, a quarter
@@ -1764,6 +1767,13 @@ def _ring_star(smooth: np.ndarray, sky: float, noise: float, near_x: float, near
             return None
         if not strict:
             return {"x": gx, "y": gy, "r_half": r_q, "region": reg2}
+        if data is not None:
+            # review S1: a clipped top (two or more raw pixels equal to the star's maximum) is a saturated star,
+            # not a donut (recenter_info's flat-top test)
+            vals = np.asarray(data, dtype=float)[reg2]
+            vmax = float(np.max(vals))
+            if int(np.count_nonzero(np.abs(vals - vmax) <= 1e-6 * max(1.0, abs(vmax)))) >= 2:
+                return None
         if off <= max(1.5, 0.25 * r_q):
             return None
         ev = np.linalg.eigvalsh(np.cov(np.vstack([xs, ys]).astype(float)))
@@ -1811,19 +1821,35 @@ def enclosed_radius(img: np.ndarray, x: float, y: float, size: float, frac: floa
 _FIELD_DEFOCUS: dict = {}
 
 
-def seed_field_defocus(img: np.ndarray, decision) -> None:
-    """2.2.19 (#30): set field_defocus's answer for this image (a run decides once, on its reference frame, and every
-    frame follows it). decision: a field_defocus dict, or True/False."""
+def _defocus_cache_put(img, out: dict) -> None:
+    """2.2.19 (#30): remember field_defocus's answer for this image object; entries of images gone are dropped first
+    (review: a plain clear() after 16 frames also forgot the reference frame's answer)."""
     import weakref
 
-    out = dict(decision) if isinstance(decision, dict) else {"donut": bool(decision), "n": 0, "rings": 0,
-                                                             "radius": float("nan"), "r95": float("nan")}
     try:
-        if len(_FIELD_DEFOCUS) > 16:
+        for k in [k for k, v in _FIELD_DEFOCUS.items() if v[0]() is None]:
+            _FIELD_DEFOCUS.pop(k, None)
+        if len(_FIELD_DEFOCUS) > 64:
             _FIELD_DEFOCUS.clear()
         _FIELD_DEFOCUS[id(img)] = (weakref.ref(img), getattr(img, "shape", None), out)
     except TypeError:
         pass
+
+
+def _defocus_cached(img):
+    """2.2.19 (#30): field_defocus's cached answer for this image object, or None (never measures)."""
+    hit = _FIELD_DEFOCUS.get(id(img))
+    if hit is not None and hit[0]() is img and hit[1] == getattr(img, "shape", None):
+        return hit[2]
+    return None
+
+
+def seed_field_defocus(img: np.ndarray, decision) -> None:
+    """2.2.19 (#30): set field_defocus's answer for this image (a run decides once, on its reference frame, and every
+    frame follows it). decision: a field_defocus dict, or True/False."""
+    out = dict(decision) if isinstance(decision, dict) else {"donut": bool(decision), "n": 0, "rings": 0,
+                                                             "radius": float("nan"), "r95": float("nan")}
+    _defocus_cache_put(img, out)
 
 
 def field_defocus(img: np.ndarray, n: int = 15) -> dict:
@@ -1832,18 +1858,18 @@ def field_defocus(img: np.ndarray, n: int = 15) -> dict:
     A sharp field with a few blends never qualifies, so in-focus centring stays exactly as before. Cached per image
     object (the Photometry page asks for every click). Returns {"donut", "n", "rings", "radius", "r95"} (radius: the
     median quarter-maximum radius of the donuts; r95: the median radius holding 95 % of their light, px)."""
-    import weakref
     from scipy import ndimage
 
-    key = id(img)
-    hit = _FIELD_DEFOCUS.get(key)
-    if hit is not None and hit[0]() is img and hit[1] == getattr(img, "shape", None):
-        return hit[2]
-    out = {"donut": False, "n": 0, "rings": 0, "radius": float("nan")}
+    hit = _defocus_cached(img)
+    if hit is not None:
+        return hit
+    out = {"donut": False, "n": 0, "rings": 0, "radius": float("nan"), "r95": float("nan")}
     try:
         data = np.asarray(img, dtype=float)
         stars = detect_sources(data, max_sources=60, nsigma=8.0, min_sep=4.0)
         h, w = data.shape[:2]
+        fin_all = data[np.isfinite(data)]
+        clip_level = 0.95 * float(np.max(fin_all)) if fin_all.size else float("inf")
         radii, r95, seen = [], [], []
         tested = 0
         for i, (sx, sy) in enumerate(stars):
@@ -1854,22 +1880,40 @@ def field_defocus(img: np.ndarray, n: int = 15) -> dict:
             if any(math.hypot(sx - tx_, sy - ty_) < 20.0 for tx_, ty_ in seen):
                 continue   # the other lobe of a donut already tested (or a close neighbor of a tested star)
             seen.append((float(sx), float(sy)))
-            crop, cx, cy = _crop(data, sx, sy, 28)
-            crop = np.array(crop, dtype=float)
-            fin = np.isfinite(crop)
-            if fin.sum() < 100:
+            ring, half = None, 28
+            for _grow in range(3):
+                # review nit: a big donut's quarter-maximum region can run off a 28 px crop; grow the crop then
+                crop, cx, cy = _crop(data, sx, sy, half)
+                crop = np.array(crop, dtype=float)
+                fin = np.isfinite(crop)
+                if fin.sum() < 100:
+                    break
+                sky = float(np.median(crop[fin]))
+                noise = 1.4826 * float(np.median(np.abs(crop[fin] - sky))) or 1.0
+                crop[~fin] = sky
+                sm = ndimage.uniform_filter(crop, size=3)
+                yy, xx = np.mgrid[0:sm.shape[0], 0:sm.shape[1]]
+                near = np.hypot(xx - cx, yy - cy) <= 2.0
+                iy, ix = np.unravel_index(int(np.argmax(np.where(near, sm, -np.inf))), sm.shape)
+                top = float(sm[iy, ix] - sky)
+                q_lab, _nq = ndimage.label(sm - sky > 0.25 * top)
+                q_reg = q_lab == q_lab[iy, ix]
+                q_ys, q_xs = np.nonzero(q_reg)
+                touches = q_ys.size and (q_ys.min() == 0 or q_xs.min() == 0 or q_ys.max() == sm.shape[0] - 1
+                                         or q_xs.max() == sm.shape[1] - 1)
+                if touches and half < 100 and (half * 2 + 1) < min(h, w):
+                    half = int(half * 1.8)
+                    continue
+                break
+            else:
                 continue
-            sky = float(np.median(crop[fin]))
-            noise = 1.4826 * float(np.median(np.abs(crop[fin] - sky))) or 1.0
-            crop[~fin] = sky
-            sm = ndimage.uniform_filter(crop, size=3)
-            yy, xx = np.mgrid[0:sm.shape[0], 0:sm.shape[1]]
-            near = np.hypot(xx - cx, yy - cy) <= 2.0
-            iy, ix = np.unravel_index(int(np.argmax(np.where(near, sm, -np.inf))), sm.shape)
-            if float(sm[iy, ix] - sky) < 20.0 * noise / 3.0:
+            if fin.sum() < 100 or top < 20.0 * noise / 3.0:
+                continue
+            # review S1: a clipped (saturated) in-focus star has a flat top that can look like a ring: never test one
+            if float(np.max(crop)) >= clip_level:
                 continue
             tested += 1
-            ring = _ring_star(sm, sky, noise, float(ix), float(iy), strict=True)
+            ring = _ring_star(sm, sky, noise, float(ix), float(iy), strict=True, data=crop)
             if ring is not None:
                 radii.append(float(ring["r_half"]))
                 gx = float(sx) + ring["x"] - cx
@@ -1881,12 +1925,7 @@ def field_defocus(img: np.ndarray, n: int = 15) -> dict:
                "r95": float(np.median(r95)) if r95 else float("nan")}
     except Exception:
         pass
-    try:
-        if len(_FIELD_DEFOCUS) > 16:
-            _FIELD_DEFOCUS.clear()
-        _FIELD_DEFOCUS[key] = (weakref.ref(img), getattr(img, "shape", None), out)
-    except TypeError:
-        pass
+    _defocus_cache_put(img, out)
     return out
 
 
@@ -1933,9 +1972,10 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
         search = max(search, float(wide))
     half = int(math.ceil(search + window)) + 3
     if donut:
-        # 2.2.19 (#30): room for the whole donut and some sky around it
+        # 2.2.19 (#30): room for the whole donut and some sky around it (the cached answer only: a run's frames are
+        # seeded with the reference frame's decision, never measured again)
         try:
-            d_rad = float((fd or field_defocus(img)).get("radius") or 0.0)
+            d_rad = float((fd or _defocus_cached(img) or {}).get("radius") or 0.0)
         except Exception:
             d_rad = 0.0
         if not math.isfinite(d_rad):
@@ -2575,6 +2615,31 @@ def raw_peak_near(raw: np.ndarray, star: "Star", radius: float, total_bin: int) 
     if x1 <= x0 or y1 <= y0:
         return float("nan")
     return float(np.nanmax(raw[y0:y1, x0:x1]))
+
+
+def raw_peak_in_file(path: str, star: "Star", radius: float, total_bin: int) -> float:
+    """2.2.19 (#16, review S6): raw_peak_near on a raw file, reading only the window around the star when the file is
+    a plain FITS image (memory-mapped section); any other file is read whole."""
+    rx = (star.x + 0.5) * total_bin - 0.5
+    ry = (star.y + 0.5) * total_bin - 0.5
+    r = max(radius * total_bin, total_bin * 2)
+    if fits is not None and not str(path).lower().endswith(".xisf"):
+        try:
+            with fits.open(path, memmap=True) as hdul:
+                hdu = next((h for h in hdul if getattr(h, "data", None) is not None and h.header.get("NAXIS", 0) == 2),
+                           None)
+                if hdu is not None:
+                    hh, ww = int(hdu.header["NAXIS2"]), int(hdu.header["NAXIS1"])
+                    x0, x1 = max(0, int(rx - r)), min(ww, int(rx + r) + 1)
+                    y0, y1 = max(0, int(ry - r)), min(hh, int(ry + r) + 1)
+                    if x1 <= x0 or y1 <= y0:
+                        return float("nan")
+                    win = np.asarray(hdu.section[y0:y1, x0:x1], dtype=np.float32)
+                    return float(np.nanmax(win))
+        except Exception:
+            pass
+    raw, _h = read_fits(path)
+    return raw_peak_near(raw, star, radius, total_bin)
 
 
 def star_under(img: np.ndarray, x: float, y: float, radius: float, sigma: float = 5.0) -> bool:
