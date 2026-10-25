@@ -150,11 +150,13 @@ add_path_names() {
     for name in "$@"; do
         old_ifs=$IFS
         IFS=:
+        set -f  # a PATH entry is a folder name, never a pattern
         for dir in $PATH; do
             IFS=$old_ifs
             [ -n "$dir" ] && add_candidate "$dir/$name"
             IFS=:
         done
+        set +f
         IFS=$old_ifs
     done
 }
@@ -295,12 +297,40 @@ remove_env_dir() {
     [ ! -e "$ENV_DIR" ]
 }
 
+# --- 0. One setup at a time: a second double-click during the first install must not remove the environment -----
+LOCK="$DATA_DIR/setup.lock"
+release_lock() { rmdir "$LOCK" 2>/dev/null; }
+if ! mkdir "$LOCK" 2>/dev/null; then
+    # A lock older than 60 minutes is left over from a setup that was cut off (window closed, computer restarted).
+    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+        rmdir "$LOCK" 2>/dev/null
+    fi
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        echo 'SHOBS-P is being set up in another window (or was, less than an hour ago).'
+        echo 'Wait for that window to finish, then start SHOBS-P again.'
+        echo "(If no other window is open, delete the folder $LOCK and try again.)"
+        exit 7
+    fi
+fi
+trap release_lock EXIT
+
+# A fingerprint of what the environment must hold (requirements.txt, + certifi on a Mac), kept as python.txt's
+# second line: when it matches and the packages load, a start skips pip altogether.
+fingerprint() {
+    "$1" -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read() + sys.argv[2].encode()).hexdigest())" \
+        "$REQUIREMENTS" "mac=$MAC" 2>/dev/null
+}
+
 # --- 1. The Python SHOBS-P used last time, if it still works ------------------------------------------------------
 PY=""
+LAST_PRINT=""
 if [ -z "$SHOBS_USE_PYTHON" ] && [ -f "$RECORD" ]; then
     last=$(head -n 1 "$RECORD")
+    LAST_PRINT=$(sed -n 2p "$RECORD")
     if [ -n "$last" ] && [ -x "$last" ] && test_python "$last" "" quiet; then
         PY=$TP_PATH
+    elif [ -n "$last" ]; then
+        echo "The Python SHOBS-P used before ($last) no longer works; looking for another one."
     fi
 fi
 IS_NEW=0
@@ -315,8 +345,9 @@ if [ -z "$PY" ]; then
     echo "Setting up SHOBS-P's own Python environment in $ENV_DIR"
     echo '(made from that Python, which itself is left untouched). This takes a moment...'
     if ! remove_env_dir; then
-        echo "The old SHOBS-P environment in $ENV_DIR could not be removed."
-        echo 'Close SHOBS-P if it is running, then try again.'
+        echo "The old SHOBS-P environment in $ENV_DIR could not be removed"
+        echo '(a file in it may be in use or not yours). Close any SHOBS-P window, then try again;'
+        echo 'if that does not help, delete that folder yourself.'
         exit 5
     fi
     venv_out=$("$BASE" -m venv "$ENV_DIR" 2>&1)
@@ -359,10 +390,24 @@ case "$PY" in
     *) [ -d "$(dirname "$(dirname "$PY")")/conda-meta" ] && PIP_USER=1 ;;
 esac
 
-# --- 3. The packages (skipped for the self-test when everything was already in place) -----------------------------
-if [ "$ACTION" != selftest ] || [ "$IS_NEW" = 1 ] || ! test_python "$PY" packages quiet; then
-    echo 'Checking the Python packages SHOBS-P needs (the first time this downloads them: a few minutes)...'
+# --- 3. The packages (skipped when they load and requirements.txt has not changed since the last setup) -----------
+PRINT=$(fingerprint "$PY")
+if [ "$IS_NEW" = 1 ] || [ -z "$PRINT" ] || [ "$PRINT" != "$LAST_PRINT" ] || ! test_python "$PY" packages quiet; then
+    if ! "$PY" -m pip --version >/dev/null 2>&1; then
+        echo ''
+        echo "This Python has no pip, so SHOBS-P cannot install its packages: $PY"
+        echo 'Its pip / venv package is missing. Debian, Ubuntu, Mint: sudo apt install python3-venv'
+        echo '(for a python3.X: python3.X-venv). Or install Python from https://www.python.org/downloads/'
+        echo 'and run this again.'
+        exit 3
+    fi
     set -- -m pip install --disable-pip-version-check
+    if [ "$IS_NEW" = 1 ]; then
+        echo 'Installing the Python packages SHOBS-P needs (this downloads them: a few minutes)...'
+    else
+        echo 'Updating the Python packages SHOBS-P needs...'
+        set -- "$@" --quiet
+    fi
     [ "$PIP_USER" = 1 ] && set -- "$@" --user
     set -- "$@" -r "$REQUIREMENTS"
     # A python.org Mac Python has no certificates of its own until "Install Certificates.command" is run; certifi
@@ -377,7 +422,7 @@ if [ "$ACTION" != selftest ] || [ "$IS_NEW" = 1 ] || ! test_python "$PY" package
         exit 3
     fi
 fi
-printf '%s\n' "$PY" > "$RECORD"
+printf '%s\n%s\n' "$PY" "$PRINT" > "$RECORD"
 
 # 2.2.19 (#33): no certificates for this Python's SSL (python.org Mac) -> point it at certifi's, if certifi is there.
 if [ -z "$SSL_CERT_FILE" ]; then
@@ -393,10 +438,16 @@ if not ok:
     fi
 fi
 
-# Files from a downloaded zip carry the Mac's quarantine mark; once one launcher was allowed, clear the rest too.
-if [ "$MAC" = 1 ] && [ -z "$SHOBS_TEST_PLATFORM" ] && command -v xattr >/dev/null 2>&1; then
-    xattr -dr com.apple.quarantine "$APP_DIR" 2>/dev/null || true
+# Files from a downloaded zip carry the Mac's quarantine mark; once one launcher was allowed, clear it from SHOBS-P's
+# own launchers only (named files, never the folder: it may be Downloads), and only at the first setup.
+if [ "$MAC" = 1 ] && [ "$IS_NEW" = 1 ] && [ -z "$SHOBS_TEST_PLATFORM" ] && command -v xattr >/dev/null 2>&1; then
+    for f in "$APP_DIR/Start SHOBS-P.command" "$APP_DIR/Run self-test.command" "$APP_DIR/shobs_setup.sh" \
+             "$APP_DIR/run_linux.sh" "$APP_DIR/run_selftest.sh"; do
+        [ -f "$f" ] && xattr -d com.apple.quarantine "$f" 2>/dev/null
+    done
 fi
+release_lock
+trap - EXIT
 
 # --- 4. The job ---------------------------------------------------------------------------------------------------
 cd "$APP_DIR" || exit 1
@@ -411,23 +462,32 @@ desktop_quote() {
     printf '"%s"' "$s"
 }
 
+# Tk draws through X: on Wayland that needs XWayland (which sets DISPLAY).
+no_screen_hint() {
+    [ "$MAC" = 0 ] && [ -z "$DISPLAY" ] || return 0
+    if [ -n "$WAYLAND_DISPLAY" ]; then
+        echo 'This is a Wayland session without XWayland (DISPLAY is not set), and Tk needs X to draw its windows.'
+        echo 'Install XWayland (package xwayland), or log in with an "on Xorg" session, then try again.'
+    else
+        echo 'No screen found (DISPLAY is not set): start SHOBS-P from your desktop session.'
+    fi
+}
+
 case "$ACTION" in
     run)
-        if [ "$MAC" = 0 ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
-            echo 'No screen found (DISPLAY is not set): start SHOBS-P from your desktop session.'
-        fi
+        no_screen_hint
         "$PY" "$APP_DIR/clearv_app.py"
         exit $?
         ;;
     selftest)
         echo 'Running the SHOBS-P self-test. It takes a minute or two (the transit fits are the slow part)...'
-        if [ "$MAC" = 0 ] && [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+        if [ "$MAC" = 0 ] && [ -z "$DISPLAY" ]; then
             if command -v xvfb-run >/dev/null 2>&1; then
                 echo '(no screen found, so the window test runs on a hidden screen: xvfb-run)'
                 xvfb-run -a "$PY" "$APP_DIR/selftest.py"
                 exit $?
             fi
-            echo '(no screen found: the window test will fail; run this from your desktop session)'
+            no_screen_hint
         fi
         "$PY" "$APP_DIR/selftest.py"
         exit $?
@@ -443,6 +503,8 @@ case "$ACTION" in
             echo 'Name=SHOBS-P'
             echo 'GenericName=Photometry'
             echo 'Comment=Shiloh Hill Observatory - Photometry (SHOBS-P)'
+            # The menu entry starts Python directly, without the SSL_CERT_FILE set above: fine on Linux, whose
+            # Pythons use the system's certificates (the certifi fallback is for python.org Macs).
             echo "Exec=$(desktop_quote "$PY") $(desktop_quote "$APP_DIR/clearv_app.py")"
             echo "Path=$(printf '%s' "$APP_DIR" | sed -e 's/\\/\\\\/g')"
             echo "Icon=$(printf '%s' "$APP_DIR/shobs_p.png" | sed -e 's/\\/\\\\/g')"

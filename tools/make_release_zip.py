@@ -6,10 +6,12 @@ Zips the app files of the repository into one top folder (clearv_photometry/, as
 Unix permissions with each file, so the Linux and Mac launchers (*.sh, *.command) stay executable when the zip is
 unpacked with Archive Utility on a Mac or unzip on Linux (0755 for those, 0644 for the rest). Windows ignores them.
 
-What goes in: the files git tracks (or, without git, the files in the folder), minus what is for developers only:
+What goes in: the files git tracks (git is required), minus what is for developers only:
 docs/, tools/, .github/, .gitignore, .gitattributes, README.md (GitHub's page; README.txt is the one in the zip),
 CITATION.cff, and run-time leftovers (__pycache__, *.pyc, selftest_log.txt, selftest_reports/, settings, logs).
-The list of files is printed, so check it against the previous release before attaching the zip.
+The list of files is printed, so check it against the previous release before attaching the zip. It refuses to build
+when an app file (*.py, *.sh, *.command, *.ps1, *.bat, requirements.txt) in the top folder is not tracked by git: a new
+module left out of the zip would stop the shipped app with ModuleNotFoundError. Commit (or delete) it first.
 """
 from __future__ import annotations
 
@@ -27,21 +29,22 @@ PATTERNS_OUT = ("*.pyc", "*.log", "*.zip", "*~", ".DS_Store")
 EXECUTABLE = ("*.sh", "*.command")
 
 
-def tracked_files(src: str) -> list[str]:
-    """Paths relative to src, with forward slashes: git's list when src is a git checkout, else a folder walk."""
+APP_PATTERNS = ("*.py", "*.sh", "*.command", "*.ps1", "*.bat", "requirements.txt")
+
+
+def git_files(src: str, *extra: str) -> list[str] | None:
+    """git ls-files in src (paths with forward slashes), or None when src is not a git checkout / git is missing."""
     try:
-        out = subprocess.run(["git", "-C", src, "ls-files", "-z"], capture_output=True, check=True).stdout
-        names = [n for n in out.decode("utf-8").split("\0") if n]
-        if names:
-            return names
+        out = subprocess.run(["git", "-C", src, "ls-files", "-z"] + list(extra), capture_output=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
-        pass
-    names = []
-    for root, dirs, files in os.walk(src):
-        dirs[:] = [d for d in dirs if d not in TOP_DIRS_OUT]
-        for name in files:
-            names.append(os.path.relpath(os.path.join(root, name), src).replace(os.sep, "/"))
-    return names
+        return None
+    return [n for n in out.decode("utf-8").split("\0") if n]
+
+
+def untracked_app_files(src: str) -> list[str]:
+    """Top-level files that look like part of the app but that git does not track (so would be left out)."""
+    others = git_files(src, "--others", "--exclude-standard") or []
+    return sorted(n for n in others if "/" not in n and any(fnmatch.fnmatch(n, p) for p in APP_PATTERNS))
 
 
 def wanted(rel: str) -> bool:
@@ -63,7 +66,16 @@ def main() -> int:
     args = ap.parse_args()
 
     src = os.path.abspath(args.src)
-    names = sorted(n for n in tracked_files(src) if wanted(n) and os.path.isfile(os.path.join(src, n)))
+    tracked = git_files(src)
+    if not tracked:
+        print("%s is not a git checkout (or git is missing): the zip is built from git's list of files only." % src)
+        return 2
+    missing = untracked_app_files(src)
+    if missing:
+        for n in missing:
+            print("PROBLEM: %s is not tracked by git, so it would be left out of the zip. Commit it (or delete it)." % n)
+        return 1
+    names = sorted(n for n in tracked if wanted(n) and os.path.isfile(os.path.join(src, n)))
     if "clearv_app.py" not in names:
         print("clearv_app.py is not in %s: is --src the SHOBS-P folder?" % src)
         return 2
