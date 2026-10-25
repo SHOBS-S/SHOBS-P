@@ -4327,7 +4327,16 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
                 st["catalog"] = cat
                 if cat == "AAVSO sequence":
                     st["chartid"] = chart_id
-            results[cat] = ("ok", stars)
+            with gave_up_lock:
+                # 2.2.19 (#11, review): an answer after the solve stopped waiting is reported late, never both used
+                # and reported.
+                late = cat == "AAVSO sequence" and gave_up.is_set()
+                if not late:
+                    results[cat] = ("ok", stars)
+            if late:
+                tell(cat, "late", {"n": len(stars), "error": None, "seconds": _time.monotonic() - t0,
+                                   "arrived": True, "retry": 0})
+                return
             info["times"][cat] = _time.monotonic() - t0
             if status is not None:
                 info["gaia"] = dict(status)
@@ -4340,11 +4349,6 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
                 catalog_cache_save(key, stars)
             if getattr(stars, "incomplete", ""):
                 info.setdefault("incomplete", {})[cat] = stars.incomplete
-            if cat == "AAVSO sequence" and gave_up.is_set():
-                # 2.2.19 (#11): the chart came after the solve stopped waiting (it is kept for Solve again).
-                tell(cat, "late", {"n": len(stars), "error": None, "seconds": _time.monotonic() - t0,
-                                   "arrived": True, "retry": 0})
-                return
             tell(cat, "ok", len(stars))
         except Exception as exc:
             results[cat] = ("error", str(exc).splitlines()[0][:200] if str(exc) else exc.__class__.__name__)
@@ -4370,6 +4374,7 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
                 vsp_retry_in_background(ra_hours, dec_deg, fov_arcmin, retried, delays=VSP_RETRY_DELAYS)
 
     gave_up = threading.Event()   # 2.2.19 (#11): set when the solve stops waiting (a later AAVSO answer is "late")
+    gave_up_lock = threading.Lock()
     threads = [threading.Thread(target=one, args=(c,), daemon=True) for c in catalogs]
     for t in threads:
         t.start()
@@ -4382,7 +4387,8 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             if secs != last_tick:   # 2.2.16 (item 2): the status line's seconds
                 last_tick = secs
                 tell(None, "tick", secs)
-    gave_up.set()
+    with gave_up_lock:
+        gave_up.set()   # review: from here a thread's answer is reported late, not added to `results`
     if use_cache:
         try:
             catalog_cache_prune()
@@ -5350,10 +5356,13 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
         return float("nan")
     total = 0.0
     for name in selection:
-        if (name in comp_names and comp_names.index(name) < len(obs.comp_vars)
-                and math.isfinite(_own_inst(obs, name, comp_names))):
-            v = float(obs.comp_vars[comp_names.index(name)])
+        own_var = (float(obs.comp_vars[comp_names.index(name)])
+                   if name in comp_names and comp_names.index(name) < len(obs.comp_vars) else float("nan"))
+        if math.isfinite(own_var) and math.isfinite(_own_inst(obs, name, comp_names)):
+            v = own_var
         else:
+            # A spare, or (2.2.19 #34, review) a series comp this night measured as a spare (remap_night_comps
+            # leaves its variance NaN): scaled from the nearest original comp, as for a spare.
             m = star_inst(obs, name, comp_names, aliases)
             if not math.isfinite(m):
                 return float("nan")

@@ -472,6 +472,18 @@ def draw_field_figure(img, info: dict, stretch=None):
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.patches import Circle
+    # Review: a full-size frame (26 Mpx) is cut to about 2000 px first: turning it at full size took seconds on the
+    # window's thread, and the PNG is 1100 px wide anyway. Positions, radii and the plate scale follow.
+    f = int(math.ceil(max(img.shape[:2]) / 2000.0))
+    if f > 1:
+        img = img[::f, ::f]
+        info = dict(info)
+        info["marks"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, *rest) for x, y, *rest in info.get("marks") or []]
+        info["seq"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, lab) for x, y, lab in info.get("seq") or []]
+        for k in ("radius", "sky_in", "sky_out"):
+            info[k] = float(info.get(k) or 0) / f
+        if info.get("arcsec_px"):
+            info["arcsec_px"] = float(info["arcsec_px"]) * f
     orient = field_orientation(info.get("north"), info.get("east"))
     disp = core.stretch_display(img, stretch)
     disp, move = orient_image(disp, orient)
@@ -1139,6 +1151,9 @@ class App(Tk):
         self._busy_lookups = {}            # 2.2.19 (nit): the Input page lookups running now
         self._photo_space_job = None       # 2.2.19 (#10)
         self._photo_fit = None
+        self._photo_line_px = None
+        self._first_light_path = None      # 2.2.19 (#20, review): the light whose header Browse read
+        self._split_cache = None           # 2.2.19 (review): split_lights of the Lights folder (header reads once)
         self._lights_cal_answers = {}      # 2.2.19 (#38): calibration frames in the Lights folder: used or not
         self._fit_after_photometry = False
         self._inst_cache = None
@@ -1229,7 +1244,6 @@ class App(Tk):
 
     def _folders_changed(self):
         """A new folder means the old masters and preview no longer apply."""
-        self._prune_rejected()   # 2.2.19 (#20)
         self.precalibrated = False
         self._pattern_user_set = False    # 2.2.11: a new camera may come with new folders
         self.variable_marks = []
@@ -2948,7 +2962,13 @@ class App(Tk):
         if different and old_star and p.get("host") and not core.same_object_name(old_star, p["host"]):
             # 2.2.16 (item 11): a planet of another star: the old field's comps, check and watch stars go too.
             # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
-            self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}", keep_planet=True)
+            if self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
+                                 keep_planet=True) is None:
+                # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
+                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
+                                       "and its series. Check the planet's name, or answer Yes to start a new "
+                                       "reduction.")
+                return
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
             self.dec_deg.set(f"{p['dec']:.5f}")
@@ -3224,7 +3244,18 @@ class App(Tk):
         another host, the transit planner): a new reduction, so the old star's series, Use comps choice and comp slots
         never reach the new field (they marked the new night "nocomp"). keep_planet: the planet just chosen stays.
         If the series save question is canceled, only the old field's stars are cleared (and a run then refuses the
-        old Use comps choice, see _photometry_done). True when a new reduction was made."""
+        old Use comps choice, see _photometry_done). True when a new reduction was made; None when the open series'
+        question was answered No (review: a mistyped planet must never close a saved series silently)."""
+        if self.observations and not self.busy:
+            name = os.path.basename(self.series_path) if self.series_path else "the open series"
+            old = self.star_id.get().strip() or "the old target"
+            if not messagebox.askyesno(
+                    APP_TITLE, f"{why[:1].upper() + why[1:]}.\n\nStart a new reduction? Yes closes {name} (you are "
+                               "offered a save first if it has unsaved changes) and clears "
+                               f"{old}'s comps, check and watch stars and its Use comps choice.\nNo keeps {old} and "
+                               "its series (check the name you typed).", default="no"):
+                self.log(f"Kept {old} and {name}: {why} (answered No).")
+                return None
         if self.new_reduction(why=why, keep_planet=keep_planet):
             return True
         self.clear_target(quiet=True, why=why)
@@ -3343,8 +3374,16 @@ class App(Tk):
         """2.2.19 (#20): the FITS header of the first light (or the dark: a master file, else its first frame)."""
         try:
             if folder_var is self.light_dir:
-                lights = core.split_lights(core.list_fits(self.light_dir.get()))[0]
-                return core.read_header(lights[0]) if lights else None
+                # Review: one header read on the window's thread, not every file's (split_lights reads them all):
+                # the first file that is neither a master nor a bias/dark/flat.
+                for path in core.list_fits(self.light_dir.get())[:40]:
+                    if core.is_shobsp_master_name(path) or os.path.basename(path).lower().startswith("master"):
+                        continue
+                    header = core.read_header(path)
+                    if not self._cal_kind(path, " ".join(str(header.get(k) or "") for k in ("IMAGETYP", "FRAME"))):
+                        self._first_light_path = path
+                        return header
+                return None
             frames, master = core.calibration_source(folder_var.get())
             path = master or (frames[0] if frames else None)
             return core.read_header(path) if path else None
@@ -3395,19 +3434,25 @@ class App(Tk):
     def _frames_folder_picked(self, key: str):
         """2.2.19 (#20): a Lights or Dark folder was just chosen: the dark/lights exposure note, and for new lights the
         question whether they are another star (header pointing far from the Star ID, or OBJECT without pointing)."""
+        self._prune_rejected()   # review: on Browse / Scan / a run, not on every key typed in the folder box
         self._update_dark_exposure_note()
         if key != "Lights" or self.mode_key == "discovery" or not self.star_id.get().strip():
             return
         header = self._first_header(self.light_dir)
         if not header:
             return
-        if core.frame_pointing(header) is not None:
-            self._check_target_field(header)
-            return
-        obj = str(header.get("OBJECT") or "").strip()
-        if obj and obj.lower() not in core.GENERIC_OBJECTS and not core.same_object_name(obj, self.star_id.get()):
-            # No pointing: the OBJECT name decides, after a lookup (another name of the same star is not asked about).
-            self._check_lights_targets([core.split_lights(core.list_fits(self.light_dir.get()))[0][0]], header)
+        # Review: the same path as Scan folders: a folder pointing at two places is sorted out first (the two-fields
+        # question, sampled headers), then the field question for the frames kept.
+        first = getattr(self, "_first_light_path", None)
+        lights = [p for p in core.list_fits(self.light_dir.get())
+                  if p != first and not core.is_shobsp_master_name(p)
+                  and not os.path.basename(p).lower().startswith("master")]
+        lights = ([first] if first else []) + lights
+        try:
+            kept = self._check_lights_targets(lights, header) if lights else None
+        except Exception:
+            kept = None
+        self._check_target_field(kept if kept is not None else header)
 
     def _drop_offframe_slots(self, shape=None) -> list:
         """2.2.19 (#20): comps and the check kept from an earlier run (names left in their slots) that are not on this
@@ -3514,6 +3559,11 @@ class App(Tk):
         obj = re.sub(r"\s+[b-h]$", "", obj)      # "HD 219134 b" (a planet) -> its star, "HD 219134"
         generic = obj.lower() in core.GENERIC_OBJECTS
         name = self.star_id.get().strip() or "the target"
+        if not generic and core.same_object_name(obj, name):
+            # Review: the frames are labeled as the Input page's star (its RA/Dec must be off): no new reduction.
+            self.log(f"Lights: OBJECT {obj} is the Star ID, but they point {sep:.0f}° from its RA/Dec: check the RA/Dec "
+                     "on the Input page (Look up again).")
+            return
         # 2.2.19 (#20): the question is a new reduction (the series, planet, comps, Use comps choice… go too).
         ask = ((f"These frames are {obj}, not {name}." if not generic else f"These frames are not {name}.")
                + f"\n\nThey point at {core.sexagesimal_ra(c_ra / 15.0)}  {core.sexagesimal_dec(c_dec)}, {sep:.0f}° from "
@@ -3522,7 +3572,9 @@ class App(Tk):
                   "Yes clears ")
                + f"{name}'s target, planet, comps, check and watch stars" + ("" if generic else f", then looks up {obj}")
                + f". No keeps {name}.")
-        if self.busy or not messagebox.askyesno(APP_TITLE, ask):
+        if self.busy:
+            return   # review: asked again later (Scan, Calibrate); a skipped question is not a No
+        if not messagebox.askyesno(APP_TITLE, ask):
             self._field_question_declined = key
             self.log(f"Kept {name} as the target although the lights point {sep:.0f}° away.")
             return
@@ -3784,6 +3836,7 @@ class App(Tk):
             if other and not n:
                 self.log(f"The {key} folder holds {len(other)} file(s) SHOBS-P cannot read (for example "
                          f"{other[0]}). It reads FITS and XISF: save or export them in one of those.")
+        self._prune_rejected()   # 2.2.19 (#20)
         lights, skipped, _note = core.split_lights(core.list_fits(self.light_dir.get()))
         if skipped:
             self._counts["Lights"].set(f"{len(lights)} files (+{len(skipped)} cal skipped)")
@@ -4484,9 +4537,24 @@ class App(Tk):
     def _blink_folder(self):
         return self.light_dir.get() if self.blink_source.get() == "lights" else self.flat_dir.get()
 
+    def _split_lights_cached(self):
+        """2.2.19 (review): core.split_lights of the Lights folder (it reads every file's header), kept while the
+        folder's file list and modification times are the same."""
+        files = core.list_fits(self.light_dir.get())
+        try:
+            key = (self.light_dir.get(), tuple((f, os.path.getmtime(f)) for f in files))
+        except OSError:
+            key = None
+        cache = self._split_cache
+        if key is not None and cache is not None and cache[0] == key:
+            return cache[1]
+        result = core.split_lights(files)
+        self._split_cache = (key, result) if key is not None else None
+        return result
+
     def _lights(self, log_skips: bool = False) -> list[str]:
         """Light frames to use: the Lights folder minus rejected frames and any bias/dark/flat/master files."""
-        paths, skipped, note = core.split_lights(core.list_fits(self.light_dir.get()))
+        paths, skipped, note = self._split_lights_cached()
         if note and log_skips:
             self.log("Note: " + note)
         if skipped and log_skips:
@@ -5140,6 +5208,9 @@ class App(Tk):
     def _cal_kind(path: str, reason: str) -> str | None:
         """2.2.19 (#38): "bias", "dark" or "flat" from why split_lights skipped a file (IMAGETYP or its name)."""
         text = f"{reason} {os.path.basename(path)}".lower()
+        squashed = text.replace(" ", "").replace("_", "").replace("-", "")
+        if "darkflat" in squashed or "flatdark" in squashed:
+            return "darkflat"   # review: a dark flat is neither a flat nor a dark for the lights
         for kind, words in (("flat", ("flat",)), ("dark", ("dark",)), ("bias", ("bias", "offset", "zero"))):
             if any(w in text for w in words):
                 return kind
@@ -5152,7 +5223,7 @@ class App(Tk):
         stay where they are; the answer is kept for this folder). Another program's master (MasterDark.fits) is named
         as not usable. Returns (bias, dark, flat)."""
         try:
-            skipped = core.split_lights(core.list_fits(self.light_dir.get()))[1]
+            skipped = self._split_lights_cached()[1]
         except Exception:
             return bias, dark, flat
         if not skipped:
@@ -5193,7 +5264,7 @@ class App(Tk):
                                f"box is empty.\n\nUse them as {word}{'s' if kind != 'bias' else ''}? (Yes: used for "
                                "this run; the files stay where they are. No: the run goes on without them.)")
             if answers[key]:
-                out[kind] = list(paths)
+                out[kind] = [p for p in paths if p not in self.rejected]   # review: frames set aside in Blink stay out
                 self.log(f"Using the {len(paths)} {kind} frame{'s' if len(paths) != 1 else ''} found in the Lights "
                          f"folder as {kind} frames for this run.")
             else:
@@ -5347,6 +5418,7 @@ class App(Tk):
         return "; ".join(flips), "; ".join(moves)
 
     def run_calibration(self):
+        self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())
         dark, dark_file = core.calibration_source(self.dark_dir.get())
@@ -6860,10 +6932,13 @@ class App(Tk):
         self._photo_space_job = self.after(120, run)
 
     def _photo_log_line_px(self) -> float:
+        if getattr(self, "_photo_line_px", None):
+            return self._photo_line_px   # review nit: measured once
         try:
             from tkinter import font as tkfont
             px = float(tkfont.Font(root=self, family=core.MONO_FONT, size=9).metrics("linespace"))
             if math.isfinite(px) and px > 0:
+                self._photo_line_px = px
                 return px
         except Exception:
             pass
@@ -6893,17 +6968,30 @@ class App(Tk):
         k = ui_scale(widget)
         title_px = PHOTO_TITLE_PT * 1.6 * k
         log_shown = bool(self.photo_logf.winfo_ismapped()) if hasattr(self, "photo_logf") else False
+
+        def is_small(f):
+            return f["h"] < 360.0 * k or (f["limit"] == "height" and f["fill"] < 0.6)
+        fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
         if log_shown:
             try:
                 cur = int(float(self.photo_log.cget("height") or 7))
             except (TypeError, ValueError):
                 cur = 7
-            n = photo_log_lines(w, h, cur, self._photo_log_line_px(), img_w, img_h, title_px)
+            line = self._photo_log_line_px()
+            n = cur
+            if is_small(fit):
+                # Review: only a SMALL image takes lines from the log (a 3:2 frame that fills most of the area keeps
+                # its 7 lines; John's ASI2600 frames are always a little height-limited).
+                n = min(cur, photo_log_lines(w, h, cur, line, img_w, img_h, title_px))
+            elif cur < 7:
+                # Room again (a larger window): the log grows back while the image stays big enough.
+                grow = image_fit_px(w, h - (7 - cur) * line, img_w, img_h, title_px, 6.0 * k)
+                n = 7 if not is_small(grow) else cur
             if n != cur:
                 self.photo_log.configure(height=n)
-                h += int(round((cur - n) * self._photo_log_line_px()))   # what the image area gets
-        fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
-        small = fit["h"] < 360.0 * k or (fit["limit"] == "height" and fit["fill"] < 0.6)
+                h += int(round((cur - n) * line))   # what the image area gets
+                fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
+        small = is_small(fit)
         if small:
             self.photo_small_hint.set("⚠ Small image? Pop out opens it in its own window (also in the View box, top "
                                       "right)" + ("; Hide log gives it more room." if log_shown else "."))
@@ -8357,7 +8445,8 @@ class App(Tk):
             row=1 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
         # 2.2.19 (#15): one line per suggested comp, labeled as on the image (S1, S2 …).
         self.suggest_text = StringVar(value="")
-        ttk.Label(stars, textvariable=self.suggest_text, style="Good.TLabel", wraplength=460, justify=LEFT).grid(
+        ttk.Label(stars, textvariable=self.suggest_text, style="Good.TLabel", wraplength=text_wrap_px(stars, 62),
+                  justify=LEFT).grid(
             row=2 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
 
         watch = self._group(panel, "Watch stars")
@@ -10599,6 +10688,7 @@ class App(Tk):
         return True
 
     def run_photometry(self):
+        self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
         lights = self._lights(log_skips=True)
         if not lights:
@@ -10946,7 +11036,8 @@ class App(Tk):
             self.comp_band_sources = {}
         # 2.2.19 (#20): the rejected frames of THIS Lights folder (the set could hold another folder's: "81 rejected"
         # beside a 42-frame list)
-        n_rej = sum(1 for p in core.split_lights(core.list_fits(self.light_dir.get()))[0] if p in self.rejected)
+        here = os.path.normcase(os.path.abspath(self.light_dir.get().strip() or "."))
+        n_rej = sum(1 for p in self.rejected if os.path.normcase(os.path.abspath(os.path.dirname(p))) == here)
         self.log(f"Photometry on {len(lights)} lights, {n_rej} rejected, aperture {radius:.1f} px, {mode} channel")
         rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
@@ -11304,20 +11395,25 @@ class App(Tk):
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
             )
         replaced = False
+        tonight_comps = None   # 2.2.19 (#34, review): set when the night is put into the series' comp layout
         self.highlight_night = None   # 2.2.15 review: a night added or replaced shows the whole series, unzoomed
         if append and plan:
             self._apply_same_star_plan(plan, night_points)
         if append:
             prev_comps = list(getattr(self, "_prev_stars", ([], ""))[0] or [])
-            if (prev_comps and self.active_comps and list(self.comps_used) != prev_comps
-                    and set(self.comps_used) == set(self.active_comps)):
-                # 2.2.19 (#34): measured with the Use comps choice (the Photometry page follows it): the series keeps
-                # its comps_used, and this night's values go into that layout (by name), so no older night is read
-                # against the wrong comp.
-                core.remap_night_comps(night_points, list(self.comps_used), prev_comps)
-                self.log(f"Comps in use ({', '.join(self.active_comps)}) measured tonight; the series' other comps "
-                         f"({', '.join(n for n in prev_comps if n not in self.active_comps) or 'none'}) as spares.")
-                self.comps_used = prev_comps
+            if prev_comps and list(self.comps_used) != prev_comps:
+                # 2.2.19 (#34; review): measured with other comps than the series' (the Photometry page following a
+                # Use comps choice, or a comp added or changed by hand): the series keeps its comp layout, with this
+                # night's new stars appended, and this night's values go into it by name, so no older night is ever
+                # read against the wrong comp (comp values are stored by position). The night's own magnitudes stay.
+                layout = prev_comps + [n for n in self.comps_used if n not in prev_comps]
+                tonight_comps = list(self.comps_used)
+                core.remap_night_comps(night_points, tonight_comps, layout)
+                if self.active_comps and set(tonight_comps) == set(self.active_comps):
+                    self.log(f"Comps in use ({', '.join(self.active_comps)}) measured tonight; the series' other "
+                             f"comps ({', '.join(n for n in prev_comps if n not in self.active_comps) or 'none'}) as "
+                             "spares.")
+                self.comps_used = layout
             if any(o.night == night for o in self.observations):
                 self.observations = [o for o in self.observations if o.night != night]
                 self.log(f"Replaced the earlier points of {night} with this run.")
@@ -11355,6 +11451,8 @@ class App(Tk):
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self._take_series_snapshot()   # 2.2.14 (item 11): the series (added to or new) as it now is
         self.night_bin[night] = self._night_setup()
+        if tonight_comps is not None:
+            self.night_bin[night]["comps"] = tonight_comps   # review: the comps this night's magnitudes came from
         # 2.2.18 (item 8): the night's mount goes with it; an alt-az night has no pier sides ("—").
         night_mount = getattr(self, "_run_mount", None) or core.MOUNT_GEM
         if night_mount == core.MOUNT_ALTAZ:
@@ -12792,6 +12890,7 @@ class App(Tk):
         if self.active_comps:
             try:
                 self._comps_follow_in_use("as saved in the series")   # 2.2.19 (#34)
+                self._seed_comps_under()   # review: the series' other comps are measured (as spares) next night too
             except Exception:
                 traceback.print_exc()
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
@@ -14838,6 +14937,28 @@ class App(Tk):
             self.update_star_panel()
             self.refresh_preview()
         return True
+
+    def _seed_comps_under(self) -> list:
+        """2.2.19 (#34, review): after Load series with a Use comps choice, the series' comps that are not in use
+        (comps_used minus active_comps) are remembered as moved out, with their catalog V and sky position, so
+        _locate_comps_under finds them after Solve and every new night measures them (as spares); a later Use comps of
+        the original set then never flags nocomp. Returns the names added."""
+        under = self.__dict__.setdefault("_comps_under", {})
+        added = []
+        for n in self.comps_used or []:
+            if n in (self.active_comps or []) or n in under:
+                continue
+            mag = self.comp_catalog_mags.get(n)
+            under[n] = {"xy": None, "mag": f"{float(mag):.3f}" if mag is not None else "", "mag_value": mag,
+                        "bands": None}
+            if mag is not None and n not in self.spare_catalog:
+                entry = {"mag": float(mag), "mags": {}, "catalog": "", "moved_out": True}
+                rd = self.comp_coords.get(n)
+                if rd is not None:
+                    entry["ra"], entry["dec"] = float(rd[0]), float(rd[1])
+                self.spare_catalog[n] = entry
+            added.append(n)
+        return added
 
     def _locate_comps_under(self) -> int:
         """2.2.19 (#34): after a solve, comps moved out of the box (by Use comps…) that have no marker on this frame
