@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import threading
 import traceback
 from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, Y, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
@@ -739,10 +740,6 @@ class TransitPage:
         meta["camera_binning"] for the ExoFOP notes; SHOBS-P's processing bin appended to meta["notes"]."""
         app = self.app
         paths = [o.path for o in obs[:3] if getattr(o, "path", "")]
-        try:
-            paths += list(app._lights()[:1])
-        except Exception:
-            pass
         found = None
         for path in paths:
             try:
@@ -752,6 +749,23 @@ class TransitPage:
             if head:
                 found = core.camera_binning(path, head)
                 break
+        if found is None:
+            # Review: the Input page's lights only when they are this night's camera (the night's stored instrument
+            # name, as exofop_equipment checks); a loaded series' night may come from other equipment.
+            night = obs[0].night if obs else ""
+            stored = str((app._night_info(night) if night else {}).get("instrument") or "").strip()
+            try:
+                lights = list(app._lights()[:1])
+            except Exception:
+                lights = []
+            for path in lights:
+                try:
+                    head = core.read_header(path) or {}
+                except Exception:
+                    continue
+                live = " / ".join(p for p in (str(head.get(k) or "").strip() for k in ("TELESCOP", "INSTRUME")) if p)
+                if stored and live == stored:
+                    found = core.camera_binning(path, head)
         if found is None:
             found = core.camera_binning(paths[0] if paths else "", {})   # a MOBS_ file name still counts
         xb, yb, how = found
@@ -800,7 +814,7 @@ class TransitPage:
         # Frame numbers: the number at the end of each light's file name (as Blink shows it), else the frame's place
         # in the night's measured frames.
         night_obs = sorted([o for o in app.observations if o.night == night], key=lambda o: o.jd)
-        nums = {id(o): frame_number(getattr(o, "path", ""), k + 1) for k, o in enumerate(night_obs)}
+        nums = dict(zip((id(o) for o in night_obs), frame_numbers([getattr(o, "path", "") for o in night_obs])))
         used = {id(o) for o in obs}
         out_by = {}
         for o in night_obs:
@@ -1183,8 +1197,9 @@ class TransitPage:
             result["trim"] = meta["trim"]
             result.setdefault("flags", []).append(("info", meta["trim"]["text"]))
             self.app.log("Transit fit: " + meta["trim"]["text"])
-        for line in self.settings_lines(meta, result):
-            self.app.log("Transit fit settings: " + line)   # 2.2.19 (#40): the run's settings, in full, in the log
+        lines = self.settings_lines(meta, result)
+        if lines:   # 2.2.19 (#40): the run's settings, in full, in the log (one line per fit)
+            self.app.log("Transit fit settings: " + " | ".join(lines))
         result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
@@ -1321,29 +1336,65 @@ class TransitPage:
             top = 24 if getattr(self, "_has_title", False) else 8
             left, right = min(64 / w, 0.3), 1 - min(10 / w, 0.1)
             bottom = min(38 / h, 0.3)
+            leg_pt = self._place_fig_legend(w)   # 2.2.19 review: the legend's own room under the residual panel
+            if leg_pt:
+                bottom = min((42 + leg_pt) / h, 0.42)
             self.fig.subplots_adjust(left=left, right=right, top=1 - min(top / h, 0.2), bottom=bottom)
             if getattr(self, "_single_panel", False):
                 # The light curve alone (no residuals): the flux panel takes the whole plot.
                 self.ax.set_position([left, bottom, right - left, (1 - min(top / h, 0.2)) - bottom])
         except Exception:
             pass
-        self._fit_legend()
 
-    def _fit_legend(self):
-        """2.2.19 (nit): keep room for the legend (rows of 8-pt text, in points) below the lowest data, whatever the
-        plot's size: the lower y limit moves down so the data start above the legend."""
-        fit = getattr(self, "_legend_fit", None)
-        if not fit or self.fig is None:
-            return
+    def _place_fig_legend(self, width_pt: float) -> float:
+        """2.2.19 (nit, review): the fit plot's legend as a figure legend below the residual panel, in as many columns
+        as the figure's width holds (measured from the labels' lengths), so it never covers data and never squeezes
+        the light curve's y range. Returns its height in points (0 without one); the bottom margin makes that room."""
+        items = getattr(self, "_legend_items", None)
+        old = getattr(self, "_fig_legend", None)
+        if old is not None:
+            try:
+                old.remove()
+            except Exception:
+                pass
+            self._fig_legend = None
+        if not items:
+            return 0.0
+        handles, labels = items
+        size = 8 if width_pt >= 420 else 7
+
+        def col_w(text):
+            return len(text) * size * 0.5 + 28
+
+        n = len(labels)
+        ncol = 1
+        for k in range(n, 0, -1):
+            rows = -(-n // k)
+            cols = [labels[c * rows:(c + 1) * rows] for c in range(k)]
+            if sum(max((col_w(t) for t in c), default=0) for c in cols if c) <= width_pt - 20:
+                ncol = k
+                break
+        # The estimate starts the search; the legend's measured size decides (fewer columns until it fits).
         try:
-            lo, hi, rows = fit
-            ax_h = self.ax.get_position().height * self.fig.get_size_inches()[1] * 72.0
-            if rows <= 0 or ax_h < 60:
-                return
-            room = min((rows * 12.5 + 10.0) / ax_h, 0.45)
-            self.ax.set_ylim(lo - room * (hi - lo) / (1.0 - room), hi)
+            renderer = self.fig.canvas.get_renderer()
         except Exception:
-            pass
+            renderer = None
+        for k in range(ncol, 0, -1):
+            leg = self.fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=k,
+                                  fontsize=size, frameon=False, borderaxespad=0.3, handlelength=1.6,
+                                  columnspacing=1.2, labelspacing=0.3)
+            self._fig_legend = leg
+            if renderer is None:
+                return -(-n // k) * size * 1.32 + 6
+            try:
+                box = leg.get_window_extent(renderer)
+            except Exception:
+                return -(-n // k) * size * 1.32 + 6
+            if box.width <= width_pt / 72.0 * self.fig.dpi - 8 or k == 1:
+                return box.height / self.fig.dpi * 72.0 + 6
+            leg.remove()
+            self._fig_legend = None
+        return 0.0
 
     def _draw_preview(self, t, flux, note):
         """2.2.11 (John): no transit predicted during these data, so nothing is fitted; show the night's light curve
@@ -1573,7 +1624,7 @@ class TransitPage:
         self._make_span_selector(None)   # 2.2.17 (item 5): a drag means something only on a fitted plot
         self._has_title = bool(r)
         self._single_panel = False
-        self._legend_fit = None   # 2.2.19 (nit): room kept under the light curve for the legend (_fit_legend)
+        self._legend_items = None   # 2.2.19 (nit): the fit plot's figure legend (_place_fig_legend)
         axr.set_visible(True)
         ax.tick_params(axis="x", labelbottom=False)
         if not r and preview is not None:
@@ -1618,7 +1669,7 @@ class TransitPage:
                 xb = (np.asarray(bands["t"]) - best["tc"]) * 24
                 ax.fill_between(xb, *bands["m95"], color=GREEN, alpha=0.12, lw=0, zorder=1)
                 ax.fill_between(xb, *bands["m68"], color=GREEN, alpha=0.28, lw=0, zorder=1,
-                                label="68 % and 95 % credible bands")
+                                label="68/95 % credible bands")
                 axr.fill_between(xb, *(np.asarray(bands["b95"]) * 100), color=GREEN, alpha=0.12, lw=0, zorder=1)
                 axr.fill_between(xb, *(np.asarray(bands["b68"]) * 100), color=GREEN, alpha=0.28, lw=0, zorder=1)
             except Exception:
@@ -1663,10 +1714,9 @@ class TransitPage:
         trim_x = self._draw_trim(r, best, x)   # 2.2.17 (item 5)
         ax.set_ylabel("Relative flux")
         ax.grid(alpha=0.3)
-        # 2.2.19 (nit): the legend sat on the pre-ingress points (lower left); it now goes in two columns under the
-        # light curve, in room kept free for it below the data (_fit_legend), on screen and in the PNG.
-        leg = ax.legend(fontsize=8, loc="lower center", ncol=2, frameon=False)
-        n_items = len(leg.get_texts()) if leg is not None else 0
+        # 2.2.19 (nit): the legend sat on the pre-ingress points (lower left); it is now a figure legend under the
+        # residual panel (_place_fig_legend, laid out by _set_margins), on screen and in the PNG.
+        self._legend_items = ax.get_legend_handles_labels()
         name = p.get("name") or "Transit"
         state = _state(r.get("verdict"))
         title = {"detected": f"{name}   Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f} BJD_TDB",
@@ -1679,7 +1729,6 @@ class TransitPage:
         lo = min(np.percentile(y, 1), model.min()) - 0.004
         hi = max(np.percentile(y, 99), 1.0) + 0.004
         ax.set_ylim(lo, hi)
-        self._legend_fit = (lo, hi, (n_items + 1) // 2)
         axr.plot(x, r["residuals"] / r["baseline"] * 100, ".", color="#9aa7b0", ms=3)
         rb = _bin(x, r["residuals"] / r["baseline"] * 100, max(10.0 / 60, 3 * r["cadence_days"] * 24))
         if rb:
@@ -2176,8 +2225,8 @@ class TransitPage:
         snote = self.settings_note(meta, self.result or {})   # 2.2.19 (#39, #40): settings and gain, compact
         if snote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(snote)
-        for bf in (self.result or {}).get("bound_flags") or []:
-            # 2.2.19 (#31): a parameter pinned by its allowed range is said in the report too.
+        for bf in [f for f in (self.result or {}).get("bound_flags") or [] if f.get("level", "warn") == "warn"]:
+            # 2.2.19 (#31): a parameter pinned by its allowed range is said in the report too (not b against 0).
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + bf["text"])
         if state == "detected" and v and v.get("depth_unreliable"):
             note = ascii_("SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"])
@@ -2218,7 +2267,7 @@ class TransitPage:
         plot PNG (logged only)."""
         if not (self.result or {}).get("chain"):
             return ""
-        path = os.path.splitext(png_path)[0] + "_corner.png"
+        path = self.app._unique_path(os.path.splitext(png_path)[0] + "_corner.png")   # never over an older one
         try:
             tpost.save_corner(self.result, path)
         except Exception as exc:
@@ -2381,7 +2430,7 @@ class TransitPage:
         lines = self.settings_lines(meta, self.result)
         if not lines:
             return ""
-        path = os.path.splitext(report_path)[0] + "_settings.txt"
+        path = self.app._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")   # never over an older one
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(f"SHOBS-P {getattr(self.app, 'app_version', '')} settings for "
@@ -2948,6 +2997,21 @@ def frame_number(path: str, fallback: int) -> int:
     return int(m.group(1)) if m and len(m.group(1)) <= 6 else fallback
 
 
+def frame_numbers(paths) -> list:
+    """2.2.19 (#40, review): frame numbers for a night's frames in time order: the file names' trailing digits when
+    every frame has them and they are unique and increasing with time (…_0001.fit, …_0002.fit), else 1, 2, 3 … by
+    place (time-stamp names such as Qatar-9261020090627.FITS give repeated or unordered numbers)."""
+    nums = []
+    for k, path in enumerate(paths):
+        n = frame_number(path, -1)
+        if n < 0:
+            break
+        nums.append(n)
+    if len(nums) == len(paths) and all(b > a for a, b in zip(nums, nums[1:])):
+        return nums
+    return list(range(1, len(paths) + 1))
+
+
 def frame_ranges(nums) -> str:
     """2.2.19 (#40): [1, 2, 3, 7, 97, 98, 99] -> '1-3, 7, 97-99'."""
     v = sorted({int(n) for n in nums})
@@ -2981,7 +3045,9 @@ def gain_note(pn: dict | None) -> str:
 
 class CornerWindow:
     """2.2.19 (#31): the corner plot of the transit fit's MCMC samples (transit_posterior.corner_figure), with a Save
-    PNG button. Parameters held fixed are left out; ⚠ marks one that piles up against its allowed range."""
+    PNG button. Parameters held fixed are left out; ⚠ marks one that piles up against its allowed range. Review: by
+    default only the shape parameters (Tc, Rp/R*, a/R*, b, flip step), drawn at their own size in a scrolling body, so
+    the panels stay readable on a small or scaled screen; "Show all parameters" adds the baseline and limb darkening."""
 
     def __init__(self, app, page: TransitPage):
         self.app = app
@@ -2997,34 +3063,58 @@ class CornerWindow:
         buttons = ttk.Frame(top, style="Card.TFrame")
         buttons.pack(fill=X, side="bottom", pady=(6, 0))
         ttk.Button(buttons, text="Save PNG…", command=self.save).pack(side=LEFT)
+        self.show_all = BooleanVar(value=False)
+        ttk.Checkbutton(buttons, text="Show all parameters (baseline, limb darkening)", variable=self.show_all,
+                        command=self.redraw).pack(side=LEFT, padx=(12, 0))
         ttk.Button(buttons, text="Close", command=win.destroy).pack(side=RIGHT)
-        ttk.Label(top, text=("Each fitted parameter's MCMC samples: histograms on the diagonal (median and 16/84 % "
-                             "lines; the title gives the value and its error), pairs below it (1σ and 2σ contours). "
-                             "A round hump is a measurement; a histogram that piles up against an edge (⚠) is set "
-                             "by the allowed range, not by the data. Tc is in minutes from its median."),
-                  style="Hint.TLabel", wraplength=900, justify=LEFT).pack(anchor=W, fill=X)
+        intro = ttk.Label(top, text=("Each fitted parameter's MCMC samples: histograms on the diagonal (median and "
+                                     "16/84 % lines; the title gives the value and its error), pairs below it (1σ and "
+                                     "2σ contours). A round hump is a measurement; a histogram that piles up against "
+                                     "an edge (⚠) is set by the allowed range, not by the data. Tc is in minutes from "
+                                     "its median."), style="Hint.TLabel", wraplength=700, justify=LEFT)
+        intro.pack(anchor=W, fill=X)
+        labels = [intro]
         for bf in r.get("bound_flags") or []:
-            ttk.Label(top, text="⚠ " + bf["text"], style="Card.TLabel", foreground="#b35c00", wraplength=900,
-                      justify=LEFT).pack(anchor=W, fill=X, pady=(2, 0))
+            warn = bf.get("level", "warn") == "warn"
+            lab = ttk.Label(top, text=("⚠ " if warn else "• ") + bf["text"], style="Card.TLabel",
+                            foreground="#b35c00" if warn else "#33424d", wraplength=700, justify=LEFT)
+            lab.pack(anchor=W, fill=X, pady=(2, 0))
+            labels.append(lab)
+        top.bind("<Configure>", lambda e: [lb.configure(wraplength=max(e.width - 30, 300)) for lb in labels], add="+")
         self.fig = None
         if Figure is None:
             fit_to_content(win)
             return
+        scroll_cls = getattr(sys.modules.get(type(app).__module__), "ScrollBody", None)
+        if scroll_cls is not None:
+            self.body = scroll_cls(top, horizontal=True)
+            self.body.outer.pack(fill=BOTH, expand=True, pady=(6, 0))
+            host = self.body.inner
+        else:
+            self.body, host = None, top
         self.fig = Figure(dpi=100, facecolor="#ffffff")
-        n = len(tpost.corner_params(r))
-        tpost.corner_figure(r, self.fig, font=9.0 if n <= 8 else 8.0)
-        canvas = FigureCanvasTkAgg(self.fig, master=top)
-        widget = canvas.get_tk_widget()
-        # Square, as large as the screen allows (the figure's own size in inches would run past a scaled screen).
-        try:
-            side = int(min(win.winfo_screenheight() * 0.78 - 140, win.winfo_screenwidth() * 0.85, 1100))
-        except Exception:
-            side = 760
-        widget.configure(width=max(side, 420), height=max(side, 420))
-        widget.pack(fill=BOTH, expand=True, pady=(6, 0))
-        canvas.draw_idle()
-        self.canvas = canvas
+        self.canvas = FigureCanvasTkAgg(self.fig, master=host)
+        self.canvas.get_tk_widget().pack(anchor=W)
+        self.redraw()
         fit_to_content(win)
+
+    def _shape_only(self) -> bool:
+        return not self.show_all.get()
+
+    def redraw(self):
+        """Draw the chosen parameters at the figure's own size (in pixels); the body scrolls when it is larger."""
+        if self.fig is None:
+            return
+        n = len(tpost.corner_params(self.result, self._shape_only()))
+        tpost.corner_figure(self.result, self.fig, font=9.0 if n <= 6 else 8.0, shape_only=self._shape_only())
+        w_in, h_in = self.fig.get_size_inches()
+        try:
+            self.canvas.get_tk_widget().configure(width=int(w_in * self.fig.dpi), height=int(h_in * self.fig.dpi))
+        except Exception:
+            pass
+        self.canvas.draw_idle()
+        if self.body is not None:
+            self.body.fit()
 
     def save(self):
         page = self.page
@@ -3034,7 +3124,7 @@ class CornerWindow:
         if not path:
             return
         try:
-            tpost.save_corner(self.result, path)
+            tpost.save_corner(self.result, path, shape_only=self._shape_only())
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
             return
