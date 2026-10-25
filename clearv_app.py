@@ -5463,7 +5463,9 @@ class App(Tk):
         except Exception:
             pass
         sat = self._saturated_count()
-        if sat is not None:
+        if sat == "pending":   # 2.2.19 (review): the raw frame is read in the background
+            lines.append("… saturated on this frame (reading the raw pixels).")
+        elif sat is not None:
             lines.append(f"{sat} saturated on this frame (raw pixels; measured, not candidates).")   # 2.2.19 (#25)
         if self.field_check_sources:
             lines.append(f"{len(self.variable_marks)} known or suspected variables in the frame "
@@ -5472,8 +5474,11 @@ class App(Tk):
 
     def _saturated_count(self):
         """Stars saturated on the Photometry page's frame. 2.2.19 (#25): judged on the frame's RAW pixels, as the scan
-        and Variables/Transits do (core.raw_peak_near against the saturation level; pre-calibrated frames: a
-        flat-topped core); the binned, calibrated image hid clipped cores ("0 saturated" beside a clipped V 8.5 star).
+        and Variables/Transits do (raw core against the saturation level; pre-calibrated frames: a flat-topped core);
+        the binned, calibrated image hid clipped cores ("0 saturated" beside a clipped V 8.5 star).
+        Review: the raw frame (50 MB) is read in a worker thread, never on the UI thread; this returns "pending" until
+        then and the Field box is filled again when it is done. Per frame file (path + modification time) the raw
+        frame's maximum per final-image pixel is kept, so a new aperture or saturation level needs no new read.
         Falls back to the old test on the calibrated image when the raw frame cannot be read."""
         try:
             limit = float(self.sat_limit.get())
@@ -5483,38 +5488,77 @@ class App(Tk):
             return None
         pattern = self.pattern.get()
         total_bin = self._image_binning() * (1 if pattern == core.MONO else 2)
-        key = (self.preview_path, getattr(self, "_preview_token", 0), limit, radius, total_bin, bool(self.precalibrated))
-        cache = getattr(self, "_sat_count_cache", None)
-        if cache is not None and cache[0] == key:
-            return cache[1]
-        raw = None
+        path = self.preview_path
         try:
-            if self.preview_path:
-                raw = core.read_fits(self.preview_path)[0]
-            if raw is not None and np.ndim(raw) != 2:
-                raw = None
-        except Exception:
-            raw = None
-        n = 0
-        if raw is not None and found:
-            if self.precalibrated:
-                n = sum(1 for x, y in found
-                        if core.flat_topped_core(raw, core.Star("", x, y), radius, total_bin, cfa=pattern != core.MONO))
-            else:
-                peaks = core.raw_peaks_many(raw, found, radius, total_bin)
-                with np.errstate(invalid="ignore"):
-                    n = int(np.count_nonzero(peaks >= limit))
-        else:
+            mtime = os.path.getmtime(path) if path else None
+        except OSError:
+            mtime = None
+        precal = bool(self.precalibrated)
+        key = (path, mtime, total_bin, precal, radius if precal else None)
+        cache = getattr(self, "_sat_raw_cache", None)
+        if cache is None or cache.get("key") != key:
+            if getattr(self, "_sat_raw_job", None) != key:
+                self._sat_raw_job = key
+                shape = self.preview.shape
+                pts = list(found)
+
+                def work():
+                    value = None
+                    try:
+                        raw = core.read_fits(path)[0] if path else None
+                        if raw is not None and np.ndim(raw) == 2:
+                            if precal:
+                                value = {"flat_count": sum(
+                                    1 for x, y in pts if core.flat_topped_core(raw, core.Star("", x, y), radius,
+                                                                               total_bin, cfa=pattern != core.MONO))}
+                            else:
+                                h, w = shape
+                                block = np.asarray(raw[:h * total_bin, :w * total_bin], dtype=np.float32)
+                                hh, ww = block.shape[0] // total_bin, block.shape[1] // total_bin
+                                block = block[:hh * total_bin, :ww * total_bin]
+                                value = {"blockmax": block.reshape(hh, total_bin, ww, total_bin).max(axis=(1, 3))}
+                        del raw
+                    except Exception:
+                        value = None
+                    self.call_ui(self._saturated_raw_done, key, value)
+
+                threading.Thread(target=work, daemon=True).start()
+            return "pending"
+        value = cache.get("value")
+        if value is None:   # the raw frame could not be read: the old test on the calibrated image
             level = 0.85 * limit
             r = int(math.ceil(radius))
+            n = 0
             for x, y in found:
                 x0, y0 = int(round(x)), int(round(y))
                 box = self.preview[max(0, y0 - r):y0 + r + 1, max(0, x0 - r):x0 + r + 1]
                 if box.size and np.nanmax(box) >= level:
                     n += 1
-        del raw
-        self._sat_count_cache = (key, n)
+            return n
+        if "flat_count" in value:
+            return int(value["flat_count"])
+        bm = value["blockmax"]
+        hb, wb = bm.shape
+        # raw_peak_near looks max(r, 2) final-image pixels around the star
+        rr = int(math.ceil(max(radius, 2.0)))
+        n = 0
+        for x, y in found:
+            x0, y0 = int(round(x)), int(round(y))
+            box = bm[max(0, y0 - rr):min(hb, y0 + rr + 1), max(0, x0 - rr):min(wb, x0 + rr + 1)]
+            if box.size and float(np.nanmax(box)) >= limit:
+                n += 1
         return n
+
+    def _saturated_raw_done(self, key, value):
+        """2.2.19 (review): the raw frame's maxima are in; fill the Field box again (when it is still that frame)."""
+        if getattr(self, "_sat_raw_job", None) == key:
+            self._sat_raw_job = None
+        self._sat_raw_cache = {"key": key, "value": value}
+        if key[0] == self.preview_path and self.mode_key == "discovery":
+            try:
+                self._field_summary()
+            except Exception:
+                traceback.print_exc()
 
     def _image_binning(self) -> int:
         """The binning the image on the Photometry page was made at (the Binning box may have changed since)."""
@@ -6806,7 +6850,8 @@ class App(Tk):
         if self.scan_marks:
             sets.append((self.photo_ax, np.array([m[0] for m in self.scan_marks]),
                          np.array([m[1] for m in self.scan_marks]),
-                         [(f"Scan star {m[2]}" if not str(m[2]).isdigit() else f"Scan candidate #{m[2]}")   # 2.2.19
+                         [(f"Scan candidate #{m[2]}" if str(m[2]).isdigit() else   # 2.2.19 (#12)
+                           f"Watched star {str(m[2])[2:]}" if str(m[2]).startswith("W ") else f"Scan star {m[2]}")
                           + f" — {SCAN_MARK_STYLES[self._scan_kind(m)]['legend'].lower()}"
                           + (f"\n{m[4]}" if len(m) > 4 and m[4] else "")
                           + f"\npixel ({m[0]:.1f}, {m[1]:.1f})" for m in self.scan_marks], 0.0))
@@ -9007,44 +9052,66 @@ class App(Tk):
 
     # ---- Discovery mode ---------------------------------------------------------------
     def _scan_crowding(self, ref, radius: float, sky_out: float, nsigma: float, cap: int):
-        """2.2.19 (#26): the field scan's crowding test, as a function of a list of positions -> bool per position.
-        A neighbor counts when it lies within sky_out (aperture, gap or sky ring) and is less than 3 mag fainter.
-        Neighbors come from an un-thinned detection (separation about one FWHM, so a defocused donut's ring is
-        still one star) and from the catalog stars placed on the frame (core.scan_neighbor_flags); brightness from
-        each peak above the background (detections) or the catalog magnitude (catalog stars)."""
+        """2.2.19 (#26): the field scan's crowding test, as a function of a list of positions -> the light of the
+        neighbors that falls inside each star's aperture, as a fraction of the star's own (core.scan_neighbor_leak:
+        a Moffat profile of the measured FWHM, tabulated once). The neighbors are every detected peak (an un-thinned
+        detection: found_all is thinned to 2 r and hid the closest, most damaging neighbors) and the catalog stars
+        placed on the frame; the larger of the two estimates is used. Brightness: each peak above the background
+        (detections) or the catalog magnitude. Peaks closer than about one FWHM, and detections closer than
+        1.5 FWHM to each other, are one star (a defocused donut or an elongated star is never its own neighbor).
+        Note: the detection is capped (4 x the scan's star limit, at least 2000 peaks, brightest first); fainter
+        neighbors leak little light."""
         fwhm = self._seeing(ref)
-        sep = max(3.0, min(radius, 0.8 * fwhm)) if math.isfinite(fwhm) and fwhm > 0 else max(3.0, 0.6 * radius)
+        ok_fwhm = math.isfinite(fwhm) and fwhm > 0
+        sep = max(3.0, 1.5 * fwhm) if ok_fwhm else max(3.0, radius)
+        same = max(1.5, fwhm) if ok_fwhm else max(1.5, 0.6 * radius)
+        profile = core.aperture_leak_profile(fwhm if ok_fwhm else float("nan"), radius, sky_out)
         dense = core.detect_sources(ref, max_sources=max(4 * int(cap), 2000), nsigma=max(nsigma, 2.0), min_sep=sep)
-        finite = ref[np.isfinite(ref)]
-        background = float(np.median(finite)) if finite.size else 0.0
+        # Brightness from a small aperture (about half the FWHM) against a local sky ring: a peak's height overrated
+        # noise bumps beside a defocused star (K2-29 b: 2.4-sigma bumps 15 px from each donut "crowded" most stars).
+        # A peak that is not 5x its sky noise is no neighbor.
+        r_small = max(1.5, 0.5 * fwhm) if ok_fwhm else max(1.5, 0.3 * radius)
+        ring = (r_small + 0.5 * (fwhm if ok_fwhm else r_small), r_small + 1.5 * (fwhm if ok_fwhm else r_small))
 
         def peak_mags(points):
-            if not len(points):
-                return np.zeros(0)
-            pk = core.peak_values(ref, np.asarray(points, dtype=float), 1.0) - background
+            pts = np.asarray(points, dtype=float).reshape(-1, 2)
+            out = np.full(len(pts), np.nan)
+            good = np.isfinite(pts).all(axis=1)
+            if not good.any():
+                return out
+            try:
+                flux, _sky, noise = core.measure_many(ref, pts[good], r_small, ring[0], ring[1], noise=True)
+            except TypeError:
+                flux, _sky = core.measure_many(ref, pts[good], r_small, ring[0], ring[1])
+                noise = np.zeros(len(flux))
+            flux, noise = np.asarray(flux, dtype=float), np.nan_to_num(np.asarray(noise, dtype=float))
             with np.errstate(all="ignore"):
-                return np.where(pk > 0, -2.5 * np.log10(np.maximum(pk, 1e-9)), np.nan)
+                out[good] = np.where((flux > 0) & (flux > 5.0 * noise), -2.5 * np.log10(np.maximum(flux, 1e-9)),
+                                     np.nan)
+            return out
 
         dense_mags = peak_mags(dense)
-        cat = [(float(x), float(y), st.get("mag")) for x, y, st in (self.chart_placed or [])
+        cat = [(float(x), float(y), float(st["mag"])) for x, y, st in (self.chart_placed or [])
                if st.get("mag") is not None]   # catalog stars without a magnitude cannot be weighed: left out
         cat_xy = np.array([(x, y) for x, y, _m in cat], dtype=float).reshape(-1, 2)
-        cat_m = np.array([float(m) if m is not None else np.nan for _x, _y, m in cat], dtype=float)
+        cat_m = np.array([m for _x, _y, m in cat], dtype=float)
         tol = max(2.0, 0.5 * radius)
-        cache = {}
 
         def test(points):
             pts = np.asarray(points, dtype=float).reshape(-1, 2)
-            flags = core.scan_neighbor_flags(pts, peak_mags(pts), dense, dense_mags, sky_out, 3.0,
-                                             same=max(1.0, 0.5 * sep))
+            leak = core.scan_neighbor_leak(pts, peak_mags(pts), dense, dense_mags, profile, sky_out, same)
             if len(cat_xy) and len(pts):
                 from scipy.spatial import cKDTree
-                if cache.get("cat") is None:
-                    cache["cat"] = core.scan_neighbor_flags(cat_xy, cat_m, cat_xy, cat_m, sky_out, 3.0, same=1.0)
-                d, k = cKDTree(cat_xy).query(pts)
-                # a star the catalog does not list: the detections decide
-                flags |= np.asarray(d <= tol) & cache["cat"][np.minimum(k, len(cat_xy) - 1)]
-            return flags
+                good = np.isfinite(pts).all(axis=1)
+                own = np.full(len(pts), np.nan)
+                if good.any():
+                    d, k = cKDTree(cat_xy).query(pts[good])
+                    hit = d <= tol
+                    own[np.where(good)[0][hit]] = cat_m[k[hit]]
+                # the point's own catalog magnitude against the other catalog stars (a star the catalog does not
+                # list: the detections decide)
+                leak = np.maximum(leak, core.scan_neighbor_leak(pts, own, cat_xy, cat_m, profile, sky_out, same))
+            return leak
 
         return test
 
@@ -9101,19 +9168,23 @@ class App(Tk):
         crowded = 0
         crowd_test = None
         if discovery and found:
-            # 2.2.19 (#26): a neighbor within 3 mag anywhere out to the sky ring (the aperture, the gap, the ring)
-            # spoils the star or its sky. Tested against every detected peak and the catalog stars placed on the
-            # frame: found_all is thinned by min_sep (2 r), which hid exactly the closest, most damaging neighbors.
+            # 2.2.19 (#26): a neighbor whose light reaches the aperture (1 % of the star's or more: left out when the
+            # box is ticked; 0.2 %: a "blended neighbor" caution). Tested against every detected peak and the catalog
+            # stars placed on the frame: found_all is thinned by min_sep (2 r), which hid the closest neighbors.
             try:
                 crowd_test = self._scan_crowding(ref, radius, sky_out, nsigma, cap)
             except Exception as exc:
                 self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).")
                 crowd_test = None
         if discovery and self.scan_skip_crowded.get() and found and crowd_test is not None:
-            flags = crowd_test(found)
-            keep = [p for p, c in zip(found, flags) if not c]
-            crowded = len(found) - len(keep)
-            found = keep
+            try:   # review: a failing crowding test never stops the scan
+                leak = crowd_test(found)
+                keep = [p for p, c in zip(found, leak) if not c >= core.LEAK_CROWDED]
+                crowded = len(found) - len(keep)
+                found = keep
+            except Exception as exc:
+                self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).")
+                crowd_test = None
         excluded = 0
         if self.scan_excluded:
             keep = []
@@ -9149,7 +9220,7 @@ class App(Tk):
         blended = []
         if crowd_test is not None:
             try:
-                blended = [k for k, c in enumerate(crowd_test(xy)) if c]
+                blended = [k for k, c in enumerate(crowd_test(xy)) if c >= core.LEAK_BLENDED]
             except Exception:
                 blended = []
         # Saturated stars (peak near the saturation level on the reference frame) wobble from clipping, not
@@ -9343,8 +9414,8 @@ class App(Tk):
                     inst = core.align_segments(inst, seg, min_frames=5)
                     self.call_ui(self.log, f"  {n_segments - 1} meridian flip(s) or rotator move(s): each star's light "
                                            "curve lined up across them before measuring its scatter.")
-                # 2.2.19 (#25): saturated = raw core clipped on a meaningful fraction of the frames (or saturated on
-                # the reference, as before); clipped on only a few frames = a caution on the candidate.
+                # 2.2.19 (#25): saturated = raw core clipped on 2 or more frames (or saturated on the reference, as
+                # before); clipped on one frame only (cosmic ray, hot pixel) = a caution on the candidate.
                 clip_stack = np.vstack(clips)
                 raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0),
                                                         np.isfinite(np.vstack(raw_peaks)).sum(axis=0)
@@ -9404,12 +9475,12 @@ class App(Tk):
                     how = ("a flat-topped (clipped) core" if precal else
                            f"raw core at or above {raw_limit:.0f} ADU")
                     self.call_ui(self.log, f"  {len(saturated)} saturated star(s) measured but not listed as candidates "
-                                           f"({how} on at least 5% of the frames"
+                                           f"({how} on 2 or more frames"
                                            + (f", or near saturation on the reference frame ({ref_only})"
                                               if ref_only else "") + ").")
                 if clipped_some:
-                    self.call_ui(self.log, f"  {len(clipped_some)} more star(s) clipped on a few frames (a caution on "
-                                           "those candidates).")
+                    self.call_ui(self.log, f"  {len(clipped_some)} more star(s) clipped on one frame only (a cosmic ray "
+                                           "or hot pixel can do that): a caution on those candidates.")
                 cand.sort(key=lambda i: -stats["excess"][i])
                 result["candidates"] = cand
                 result["excess_limit"] = excess_limit
@@ -11845,6 +11916,7 @@ class App(Tk):
         finally:
             self._closing = False
         self._closing = True   # from here on the window goes; nothing asks again
+        self._finish_saves_on_close()   # 2.2.19 (review)
         self.destroy()
 
     def close_series(self):
@@ -12692,10 +12764,23 @@ class App(Tk):
                 outside, fix = [], None
             if outside:
                 what = ", ".join(f"{lab} {pp:.5g} d" for lab, pp in outside)
-                period_lines.append(f"Range   ⚠ {what} outside the search ({lo_now:g}–{hi_now:g} d)")
-                cautions.append(f"The search ({lo_now:g}–{hi_now:g} d) cannot find {what}: the best peak above is "
-                                "another period. Widen the Period search (the button in the Period box) and refit.")
-                self._period_range_fix = fix
+                all_jd = [o.jd for o in obs_list if math.isfinite(o.jd)]
+                data_span = (max(all_jd) - min(all_jd)) if all_jd else 0.0
+                # review: a period longer than half the data span cannot be found by widening the range (a Mira's
+                # 332 d on 3 nights): say so, and offer no button for it.
+                findable = [(lab, pp) for lab, pp in outside if pp <= data_span / 2.0]
+                if findable:
+                    _o, fix = core.period_range_check(findable, lo_now, hi_now)
+                    period_lines.append(f"Range   ⚠ {what} outside the search ({lo_now:g}–{hi_now:g} d)")
+                    cautions.append(f"The search ({lo_now:g}–{hi_now:g} d) cannot find {what}: the best peak above is "
+                                    "another period. Widen the Period search (the button in the Period box) and "
+                                    "refit.")
+                    self._period_range_fix = fix
+                else:
+                    period_lines.append(f"Range   ⚠ {what} outside the search; the data span {data_span:.1f} d, "
+                                        "too short for it")
+                    cautions.append(f"{what} lies outside the search, and the data span only {data_span:.1f} d: "
+                                    "under two cycles, so no search can find it yet. Add nights.")
             if getattr(self, "_period_bins_note", ""):
                 period_lines.append(self._period_bins_note)
             head = 0 if significant else 1
@@ -14618,6 +14703,8 @@ class App(Tk):
         except OSError:
             pass
         state = {"done": False, "error": None, "t0": time.monotonic()}
+        pending = self.__dict__.setdefault("_save_pending", set())
+        pending.add(path)
 
         def work():
             try:
@@ -14632,6 +14719,7 @@ class App(Tk):
             if state.get("reported"):
                 return
             state["reported"] = True
+            pending.discard(path)
             if state["error"] is not None:
                 try:
                     if os.path.getsize(path) == 0:
@@ -14667,6 +14755,23 @@ class App(Tk):
         """Wait for background saves to finish (tests; quitting)."""
         for t in list(getattr(self, "_save_threads", [])):
             t.join(timeout)
+
+    def _finish_saves_on_close(self):
+        """2.2.19 (review): closing the window while a CSV is being written waits for it (up to a minute), and a
+        file that is still empty (its save never finished) is removed rather than left behind."""
+        if any(t.is_alive() for t in getattr(self, "_save_threads", [])):
+            try:
+                self.status.set("Finishing the save in progress before closing…")
+                self.update_idletasks()
+            except Exception:
+                pass
+            self.wait_for_saves(60.0)
+        for path in list(getattr(self, "_save_pending", ())):
+            try:
+                if os.path.exists(path) and os.path.getsize(path) == 0:
+                    os.remove(path)
+            except OSError:
+                pass
 
     def save_png(self):
         if self.out_canvas is None or not self.observations:
@@ -16262,13 +16367,13 @@ class KnownVariablesWindow:
 
 def period_cell(per: dict) -> str:
     """2.2.19 (nit): a field-scan star's best period for the table: "no period (drift)" when the best peak sits at the
-    long end of the search (a slow drift, not a period; it read "20 d (edge)"), "no period (below range)" at the short
-    end, else the period in days."""
+    long end of the search (a slow drift, not a period; it read "20 d (edge)"), "at the short end: search shorter" at
+    the short end, else the period in days."""
     edge = (per.get("ls") or {}).get("edge")
     if edge == "max":
         return "no period (drift)"
     if edge == "min":
-        return "no period (below range)"
+        return "at the short end: search shorter"
     return f"{per['period']:.4f}"
 
 
@@ -16411,6 +16516,7 @@ class ScanView:
         # 2.2.19 (#12): drag on the scatter plot to pick the stars in a box.
         self.canvas.mpl_connect("motion_notify_event", self._on_drag)
         self.canvas.mpl_connect("button_release_event", self._on_release)
+        self.canvas.mpl_connect("figure_leave_event", lambda _e: self._cancel_drag())
         self.canvas.get_tk_widget().bind("<Escape>", lambda _e: self.clear_selection())
         self.draw()
 
@@ -16474,6 +16580,9 @@ class ScanView:
     def _fill_table(self):
         result = self.r
         method = (result.get("color_method") or {}).get("bv", "")
+        # 2.2.19 (#13, review): deleting a selected row makes Tk send <<TreeviewSelect>> with nothing selected; that
+        # is ours, not the user clearing the selection (it wiped the selection on every refill).
+        self._synced_sel = ()
         for item in list(self.tree.get_children()):
             self.tree.delete(item)
         self.rows = {}
@@ -16510,7 +16619,8 @@ class ScanView:
         # 2.2.12 (John): columns sized to what they hold, like the Transit fit table.
         fit_tree_columns(self.tree, getattr(self, "_scan_heads", {}))
         self._update_range_note()
-
+        if getattr(self, "selected", None) is not None:
+            self._sync_tree()   # the shown star's row selected again after the refill
     def _update_range_note(self):
         """2.2.19 (#19): say when known variables in the list have VSX periods outside the scan's period search."""
         frame = getattr(self, "range_frame", None)
@@ -16700,15 +16810,30 @@ class ScanView:
         return "control" in str(key) or "ctrl" in str(key) or "shift" in str(key)
 
     def _on_click(self, event):
+        self._cancel_drag()   # review: a release outside the canvas never arrives; a new press starts afresh
         if event.inaxes is not self.ax_s or event.xdata is None:
             return
         # 2.2.19 (#12): remember the press; a drag picks a box of stars on release, a click picks the nearest.
         self._drag = {"x": event.x, "y": event.y, "xd": event.xdata, "yd": event.ydata, "ctrl": self._ctrl(event),
                       "patch": None}
 
+    def _cancel_drag(self):
+        d, self._drag = self._drag, None
+        if d and d.get("patch") is not None:
+            try:
+                d["patch"].remove()
+            except Exception:
+                pass
+            self.canvas.draw_idle()
+
     def _on_drag(self, event):
         d = self._drag
-        if not d or event.inaxes is not self.ax_s or event.xdata is None:
+        if not d:
+            return
+        if getattr(event, "button", 1) is None:   # the mouse moved with no button held: the release was missed
+            self._cancel_drag()
+            return
+        if event.inaxes is not self.ax_s or event.xdata is None:
             return
         if math.hypot(event.x - d["x"], event.y - d["y"]) < 6:
             return
@@ -16739,6 +16864,7 @@ class ScanView:
             self.picked = list(dict.fromkeys((self.picked if d["ctrl"] else []) + box))
             if box:
                 self.selected = box[0]
+                self._sync_tree()   # review: the table shows the star whose curve is drawn
             self.app.status.set(f"{len(self.picked)} star(s) picked on the scatter plot: Mark on image shows them.")
             self.draw()
             return
@@ -16780,6 +16906,10 @@ class ScanView:
             return None
         row = self.tree.identify_row(event.y)
         if row and tuple(self.tree.selection()) == (row,):
+            try:
+                self.tree.focus_set()   # review: "break" skips Tk's own focus; Escape must still reach the table
+            except Exception:
+                pass
             self.clear_selection()
             return "break"
         return None
@@ -16833,10 +16963,11 @@ class ScanView:
 
     def _on_row(self, _event):
         sel = self.tree.selection()
-        if getattr(self, "_synced_sel", None) is not None:
-            ours, self._synced_sel = self._synced_sel, None
+        ours = getattr(self, "_synced_sel", None)
+        if ours is not None:
             if tuple(sel) == tuple(ours):
-                return
+                return   # a selection the view made itself (refill, sync with the plot)
+            self._synced_sel = None
         if sel and sel[0] in self.rows:
             self.selected = self.rows[sel[0]]
             self.picked = [self.rows[iid] for iid in sel if iid in self.rows]

@@ -2267,44 +2267,80 @@ def raw_peaks_many(raw: np.ndarray, pos, radius: float, total_bin: int) -> np.nd
     return out
 
 
-def scan_saturated(hits, measured, min_fraction: float = 0.05) -> tuple[set, set]:
+def scan_saturated(hits, measured, min_frames: int = 2) -> tuple[set, set]:
     """2.2.19 (#25): (saturated, clipped now and then) star indices from per-star counts of frames whose raw core
-    reached the saturation level (hits) out of the frames measured. Saturated: clipped on at least `min_fraction` of
-    the frames (and on at least one); a star clipped on fewer frames is only a caution."""
+    reached the saturation level (hits) out of the frames measured. Saturated: clipped on `min_frames` (2) frames or
+    more; clipped on one frame only (a cosmic ray or hot pixel can do that) is a caution, not saturation."""
     hits = np.asarray(hits, dtype=float)
     measured = np.asarray(measured, dtype=float)
     sat, some = set(), set()
     for i, (n_hit, n) in enumerate(zip(hits, measured)):
         if n_hit <= 0 or n <= 0:
             continue
-        if n_hit >= max(1.0, min_fraction * n):
+        if n_hit >= min_frames:
             sat.add(i)
         else:
             some.add(i)
     return sat, some
 
 
-def scan_neighbor_flags(points, point_mags, others, other_mags, reach: float, dmag: float = 3.0,
-                        same: float = 1.0) -> np.ndarray:
-    """2.2.19 (#26): crowded[i] is True when one of `others` (an un-thinned list: every detected peak, or the catalog
-    stars placed on the frame) lies within `reach` px of points[i] (the aperture, the gap and the sky ring) and is not
-    at least `dmag` fainter (unknown magnitude: counts). Others closer than `same` px are the star itself."""
+LEAK_CROWDED = 0.01    # 2.2.19 (#26): a neighbor's light in the aperture, as a fraction of the star's: left out
+LEAK_BLENDED = 0.002   # ... and a "blended neighbor" caution
+
+
+def aperture_leak_profile(fwhm: float, radius: float, reach: float, beta: float = 3.0):
+    """2.2.19 (#26): F(d), the fraction of a star's light (Moffat profile, beta 3, this FWHM) that falls inside an
+    aperture of `radius` when the star sits d px from the aperture's center, relative to F(0) (the star's own share).
+    Tabulated once (0 .. reach + radius) and interpolated; 0 beyond the table."""
+    fwhm = float(fwhm) if fwhm and math.isfinite(fwhm) and fwhm > 0 else max(radius / 1.5, 1.0)
+    alpha = fwhm / (2.0 * math.sqrt(2.0 ** (1.0 / beta) - 1.0))
+    step = max(radius / 60.0, 0.05)
+    g = np.arange(-radius + step / 2, radius, step)
+    gx, gy = np.meshgrid(g, g)
+    inside = gx ** 2 + gy ** 2 <= radius ** 2
+    gx, gy = gx[inside], gy[inside]
+    norm = (beta - 1.0) / (math.pi * alpha * alpha) * step * step
+    ds = np.arange(0.0, reach + radius + 0.25, 0.25)
+    frac = np.array([norm * float(np.sum((1.0 + ((gx - d) ** 2 + gy ** 2) / (alpha * alpha)) ** (-beta)))
+                     for d in ds])
+    own = frac[0] if frac[0] > 0 else 1.0
+    table = frac / own
+
+    def leak_fraction(d):
+        return np.interp(np.asarray(d, dtype=float), ds, table, right=0.0)
+
+    return leak_fraction
+
+
+def scan_neighbor_leak(points, point_mags, others, other_mags, profile, reach: float, same: float) -> np.ndarray:
+    """2.2.19 (#26): for each point, the light of its neighbors that falls inside its aperture, as a fraction of the
+    star's own: sum over `others` within `reach` px of 10^(-0.4 (m_j - m_i)) x profile(d). Others closer than `same`
+    px (about one FWHM) are the star itself (a donut or an elongated star detected as two or more peaks); points or
+    neighbors without a magnitude add nothing."""
     pts = np.asarray(points, dtype=float).reshape(-1, 2)
     oth = np.asarray(others, dtype=float).reshape(-1, 2)
-    out = np.zeros(len(pts), dtype=bool)
+    out = np.zeros(len(pts))
     if not len(pts) or not len(oth) or not (reach > 0):
         return out
     pm = np.asarray(point_mags, dtype=float)
     om = np.asarray(other_mags, dtype=float)
+    finite_o = np.isfinite(oth).all(axis=1)
+    if not finite_o.any():
+        return out
+    idx_map = np.where(finite_o)[0]
     from scipy.spatial import cKDTree
-    near = cKDTree(oth).query_ball_point(pts, r=float(reach))
-    for i, idx in enumerate(near):
-        for j in idx:
-            if math.hypot(oth[j, 0] - pts[i, 0], oth[j, 1] - pts[i, 1]) < same:
-                continue
-            if not math.isfinite(om[j]) or not math.isfinite(pm[i]) or om[j] < pm[i] + dmag:
-                out[i] = True
-                break
+    tree = cKDTree(oth[finite_o])
+    for i in range(len(pts)):
+        if not (np.isfinite(pts[i]).all() and math.isfinite(pm[i])):
+            continue
+        near = idx_map[tree.query_ball_point(pts[i], r=float(reach))]
+        if not len(near):
+            continue
+        d = np.hypot(oth[near, 0] - pts[i, 0], oth[near, 1] - pts[i, 1])
+        m = om[near]
+        use = (d >= same) & np.isfinite(m)
+        if use.any():
+            out[i] = float(np.sum(10.0 ** (-0.4 * (m[use] - pm[i])) * profile(d[use])))
     return out
 
 
@@ -7081,7 +7117,7 @@ def scan_cautions(result: dict, i: int) -> list[str]:
     out = []
     clipped = (result.get("clipped_some") or {}).get(i)   # 2.2.19 (#25): raw core clipped on a few frames
     if clipped:
-        out.append(f"clipped on {clipped} frame(s): check linearity")
+        out.append(f"clipped on {clipped} frame{'s' if clipped != 1 else ''}: check linearity")
     elif i in set(result.get("near_sat") or []):
         out.append("near saturation: check linearity")
     if i in set(result.get("blended") or []):   # 2.2.19 (#26)
