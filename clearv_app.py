@@ -94,6 +94,9 @@ SCAN_MARK_STYLES = {
                 "legend": "Candidate to check first"},
     "unchecked": {"color": "#e8e8e8", "ms": 12, "mew": 1.2, "alpha": 0.9, "fs": 9, "weight": "normal",
                   "legend": "Unchecked (no sky positions)"},
+    # 2.2.19 (#12): a star picked on the field scan's scatter plot that is not a candidate
+    "picked": {"color": "#36d6e7", "ms": 13, "mew": 1.6, "alpha": 1.0, "fs": 9, "weight": "bold",
+               "legend": "Picked on the scan plot"},
 }
 
 
@@ -685,7 +688,7 @@ class App(Tk):
         self.radius = DoubleVar(value=8.0)
         self.sky_in = DoubleVar(value=14.0)
         self.sky_out = DoubleVar(value=22.0)
-        self.min_period = DoubleVar(value=0.05)
+        self.min_period = DoubleVar(value=core.DEFAULT_MIN_PERIOD)   # 2.2.19 (#19): was 0.05 d
         self.max_period = DoubleVar(value=20.0)
         self.comp2_name = StringVar()
         self.comp2_mag = StringVar()
@@ -2758,6 +2761,7 @@ class App(Tk):
                    if session_watch else [])
             self.log(f"Cleared the old field ({', '.join(what)}): {why}.")
         self.catalog_period = None
+        self.target_auid = ""   # 2.2.19 (nit)
         self.target_var_type = ""   # 2.2.14 (item 19)
         self.catalog_epoch = None   # 2.2.14 (item 13)
         self.catalog_var_type = ""
@@ -3060,6 +3064,8 @@ class App(Tk):
         self.dec_deg.set(f"{found['dec_deg']:.5f}")
         self._radec_filled = None   # 2.2.15: the target's own RA/Dec now
         self.catalog_period = found.get("period_days")
+        self.target_auid = str(found.get("auid") or "")   # 2.2.19 (nit): the Series box's Star line
+        self.target_auid_name = name or self.star_id.get().strip()
         self.target_var_type = str(found.get("var_type") or "")   # 2.2.14 (item 19)
         self.catalog_epoch = found.get("epoch_jd")   # 2.2.14 (item 13): for O-C on the Output page
         self.catalog_var_type = found.get("var_type") or ""
@@ -5370,13 +5376,23 @@ class App(Tk):
         prow = ttk.Frame(settings, style="Card.TFrame")
         prow.grid(row=4, column=1, columnspan=2, sticky=W, pady=3)
         # review: remembered in the settings (the Variables boxes are kept with each series)
-        saved = self.settings.get("disc_period_range") or [0.05, 20.0]
+        saved = self.settings.get("disc_period_range") or [core.DEFAULT_MIN_PERIOD, 20.0]
         try:
             lo, hi = float(saved[0]), float(saved[1])
             if not (0 < lo < hi):
                 raise ValueError
         except (TypeError, ValueError, IndexError):
-            lo, hi = 0.05, 20.0
+            lo, hi = core.DEFAULT_MIN_PERIOD, 20.0
+        if not self.settings.get("disc_min_period_2219"):
+            # 2.2.19 (#19): the old default 0.05 d moves to 0.02 d once; a value typed from now on stays.
+            if abs(lo - 0.05) < 1e-9 and core.DEFAULT_MIN_PERIOD < hi:
+                lo = core.DEFAULT_MIN_PERIOD
+                self.settings["disc_period_range"] = [lo, hi]
+            self.settings["disc_min_period_2219"] = True
+            try:
+                self._save_settings()
+            except Exception:
+                pass
         self.disc_min_period = DoubleVar(value=lo)
         self.disc_max_period = DoubleVar(value=hi)
         self.disc_period_entries = []
@@ -5389,7 +5405,7 @@ class App(Tk):
             entry.bind("<KP_Enter>", lambda _e: self._disc_period_changed(force=True))
             entry.bind("<FocusOut>", lambda _e: self._disc_period_changed())
             self.disc_period_entries.append(entry)
-        ttk.Checkbutton(settings, text="Leave out crowded stars (neighbor in the sky ring)",
+        ttk.Checkbutton(settings, text="Leave out crowded stars (neighbor in the aperture or sky ring)",
                         variable=self.scan_skip_crowded).grid(row=5, column=0, columnspan=3, sticky=W, pady=(4, 0))
         ttk.Label(settings, text="Saturated and edge stars are measured but never listed as candidates. "
                                  "\"× normal\" compares a star's scatter with stars as bright. The period range "
@@ -5472,26 +5488,56 @@ class App(Tk):
             pass
         sat = self._saturated_count()
         if sat is not None:
-            lines.append(f"{sat} saturated on this frame (measured, never candidates).")
+            lines.append(f"{sat} saturated on this frame (raw pixels; measured, not candidates).")   # 2.2.19 (#25)
         if self.field_check_sources:
             lines.append(f"{len(self.variable_marks)} known or suspected variables in the frame "
                          f"({' + '.join(self.field_check_sources)}).")
         self.disc_field_text.set("\n".join(lines))
 
     def _saturated_count(self):
+        """Stars saturated on the Photometry page's frame. 2.2.19 (#25): judged on the frame's RAW pixels, as the scan
+        and Variables/Transits do (core.raw_peak_near against the saturation level; pre-calibrated frames: a
+        flat-topped core); the binned, calibrated image hid clipped cores ("0 saturated" beside a clipped V 8.5 star).
+        Falls back to the old test on the calibrated image when the raw frame cannot be read."""
         try:
-            level = 0.85 * float(self.sat_limit.get())
-            r = int(math.ceil(float(self.radius.get())))
-            found = core.detect_sources(self.preview, max_sources=400, nsigma=5.0,
-                                        min_sep=max(2 * float(self.radius.get()), 8.0))
+            limit = float(self.sat_limit.get())
+            radius = float(self.radius.get())
+            found = core.detect_sources(self.preview, max_sources=400, nsigma=5.0, min_sep=max(2 * radius, 8.0))
         except Exception:
             return None
+        pattern = self.pattern.get()
+        total_bin = self._image_binning() * (1 if pattern == core.MONO else 2)
+        key = (self.preview_path, getattr(self, "_preview_token", 0), limit, radius, total_bin, bool(self.precalibrated))
+        cache = getattr(self, "_sat_count_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        raw = None
+        try:
+            if self.preview_path:
+                raw = core.read_fits(self.preview_path)[0]
+            if raw is not None and np.ndim(raw) != 2:
+                raw = None
+        except Exception:
+            raw = None
         n = 0
-        for x, y in found:
-            x0, y0 = int(round(x)), int(round(y))
-            box = self.preview[max(0, y0 - r):y0 + r + 1, max(0, x0 - r):x0 + r + 1]
-            if box.size and np.nanmax(box) >= level:
-                n += 1
+        if raw is not None and found:
+            if self.precalibrated:
+                n = sum(1 for x, y in found
+                        if core.flat_topped_core(raw, core.Star("", x, y), radius, total_bin, cfa=pattern != core.MONO))
+            else:
+                peaks = core.raw_peaks_many(raw, found, radius, total_bin)
+                with np.errstate(invalid="ignore"):
+                    n = int(np.count_nonzero(peaks >= limit))
+        else:
+            level = 0.85 * limit
+            r = int(math.ceil(radius))
+            for x, y in found:
+                x0, y0 = int(round(x)), int(round(y))
+                box = self.preview[max(0, y0 - r):y0 + r + 1, max(0, x0 - r):x0 + r + 1]
+                if box.size and np.nanmax(box) >= level:
+                    n += 1
+        del raw
+        self._sat_count_cache = (key, n)
         return n
 
     def _image_binning(self) -> int:
@@ -6404,7 +6450,7 @@ class App(Tk):
         if self._loose_variable_marks():
             items.append(("×", "Variable, not labeled", "#d32f2f"))
         kinds = {self._scan_kind(m) for m in self.scan_marks}
-        for kind in ("new", "known", "caution", "unchecked"):
+        for kind in ("new", "known", "caution", "unchecked", "picked"):
             if kind in kinds:
                 st = SCAN_MARK_STYLES[kind]
                 items.append(("□", st["legend"], st["color"]))
@@ -6784,7 +6830,8 @@ class App(Tk):
         if self.scan_marks:
             sets.append((self.photo_ax, np.array([m[0] for m in self.scan_marks]),
                          np.array([m[1] for m in self.scan_marks]),
-                         [f"Scan candidate #{m[2]} — {SCAN_MARK_STYLES[self._scan_kind(m)]['legend'].lower()}"
+                         [(f"Scan star {m[2]}" if not str(m[2]).isdigit() else f"Scan candidate #{m[2]}")   # 2.2.19
+                          + f" — {SCAN_MARK_STYLES[self._scan_kind(m)]['legend'].lower()}"
                           + (f"\n{m[4]}" if len(m) > 4 and m[4] else "")
                           + f"\npixel ({m[0]:.1f}, {m[1]:.1f})" for m in self.scan_marks], 0.0))
         return sets
@@ -8980,8 +9027,51 @@ class App(Tk):
             "spares or in the color fit. Hover to see what they are.")
         self.log(f"Variable-star check ({src}): {len(self.variable_marks)} known or suspected variables in the frame; "
                  f"{flagged} labeled star(s) flagged and left out of spares and the color fit.")
+        self._scan_known_refresh()   # 2.2.19 (#14)
 
     # ---- Discovery mode ---------------------------------------------------------------
+    def _scan_crowding(self, ref, radius: float, sky_out: float, nsigma: float, cap: int):
+        """2.2.19 (#26): the field scan's crowding test, as a function of a list of positions -> bool per position.
+        A neighbor counts when it lies within sky_out (aperture, gap or sky ring) and is less than 3 mag fainter.
+        Neighbors come from an un-thinned detection (separation about one FWHM, so a defocused donut's ring is
+        still one star) and from the catalog stars placed on the frame (core.scan_neighbor_flags); brightness from
+        each peak above the background (detections) or the catalog magnitude (catalog stars)."""
+        fwhm = self._seeing(ref)
+        sep = max(3.0, min(radius, 0.8 * fwhm)) if math.isfinite(fwhm) and fwhm > 0 else max(3.0, 0.6 * radius)
+        dense = core.detect_sources(ref, max_sources=max(4 * int(cap), 2000), nsigma=max(nsigma, 2.0), min_sep=sep)
+        finite = ref[np.isfinite(ref)]
+        background = float(np.median(finite)) if finite.size else 0.0
+
+        def peak_mags(points):
+            if not len(points):
+                return np.zeros(0)
+            pk = core.peak_values(ref, np.asarray(points, dtype=float), 1.0) - background
+            with np.errstate(all="ignore"):
+                return np.where(pk > 0, -2.5 * np.log10(np.maximum(pk, 1e-9)), np.nan)
+
+        dense_mags = peak_mags(dense)
+        cat = [(float(x), float(y), st.get("mag")) for x, y, st in (self.chart_placed or [])
+               if st.get("mag") is not None]   # catalog stars without a magnitude cannot be weighed: left out
+        cat_xy = np.array([(x, y) for x, y, _m in cat], dtype=float).reshape(-1, 2)
+        cat_m = np.array([float(m) if m is not None else np.nan for _x, _y, m in cat], dtype=float)
+        tol = max(2.0, 0.5 * radius)
+        cache = {}
+
+        def test(points):
+            pts = np.asarray(points, dtype=float).reshape(-1, 2)
+            flags = core.scan_neighbor_flags(pts, peak_mags(pts), dense, dense_mags, sky_out, 3.0,
+                                             same=max(1.0, 0.5 * sep))
+            if len(cat_xy) and len(pts):
+                from scipy.spatial import cKDTree
+                if cache.get("cat") is None:
+                    cache["cat"] = core.scan_neighbor_flags(cat_xy, cat_m, cat_xy, cat_m, sky_out, 3.0, same=1.0)
+                d, k = cKDTree(cat_xy).query(pts)
+                # a star the catalog does not list: the detections decide
+                flags |= np.asarray(d <= tol) & cache["cat"][np.minimum(k, len(cat_xy) - 1)]
+            return flags
+
+        return test
+
     def scan_field(self):
         lights = self._lights(log_skips=True)
         if not lights or self.masters is None or self.preview is None or not self.preview_is_debayered:
@@ -9033,12 +9123,19 @@ class App(Tk):
                      + (" (raise \"Most stars to measure\" to go fainter)." if discovery else "."))
         found = [(x, y) for x, y in found_all if edge <= x < w - edge and edge <= y < h - edge]
         crowded = 0
-        if discovery and self.scan_skip_crowded.get() and found:
-            # A neighbor inside the sky annulus spoils both the star and its sky: leave such pairs out.
-            from scipy.spatial import cKDTree
-            tree = cKDTree(np.asarray(found_all, dtype=float))
-            counts = tree.query_ball_point(np.asarray(found, dtype=float), r=sky_out, return_length=True)
-            keep = [p for p, c in zip(found, counts) if c <= 1]      # itself only
+        crowd_test = None
+        if discovery and found:
+            # 2.2.19 (#26): a neighbor within 3 mag anywhere out to the sky ring (the aperture, the gap, the ring)
+            # spoils the star or its sky. Tested against every detected peak and the catalog stars placed on the
+            # frame: found_all is thinned by min_sep (2 r), which hid exactly the closest, most damaging neighbors.
+            try:
+                crowd_test = self._scan_crowding(ref, radius, sky_out, nsigma, cap)
+            except Exception as exc:
+                self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).")
+                crowd_test = None
+        if discovery and self.scan_skip_crowded.get() and found and crowd_test is not None:
+            flags = crowd_test(found)
+            keep = [p for p, c in zip(found, flags) if not c]
             crowded = len(found) - len(keep)
             found = keep
         excluded = 0
@@ -9072,6 +9169,13 @@ class App(Tk):
         if len(xy) < 8:
             messagebox.showinfo(APP_TITLE, "Fewer than 8 stars found in the frame; a field scan needs more.")
             return
+        # 2.2.19 (#26): stars kept with a neighbor (box unticked, or watched stars) get a "blended neighbor" caution.
+        blended = []
+        if crowd_test is not None:
+            try:
+                blended = [k for k, c in enumerate(crowd_test(xy)) if c]
+            except Exception:
+                blended = []
         # Saturated stars (peak near the saturation level on the reference frame) wobble from clipping, not
         # variability: they are measured but never listed as candidates.
         try:
@@ -9091,6 +9195,16 @@ class App(Tk):
                 saturated.add(k)
         mode = self.debayer_mode.get()
         pattern = self.pattern.get()
+        # 2.2.19 (#25): saturation is decided from the RAW pixels of every frame, as Variables and Transits do
+        # (binning, debayer and dark subtraction average a clipped core down: a V 8.5 star clipped at 65,535 read
+        # well under 0.85 x the limit on the binned reference). Pre-calibrated frames: a flat-topped core.
+        try:
+            raw_limit = float(self.sat_limit.get())
+        except (TypeError, ValueError):
+            raw_limit = float("inf")
+        precal = bool(self.precalibrated)
+        total_bin = binning * (1 if pattern == core.MONO else 2)
+        ref_path = self.preview_path
         masters = self.masters
         color = bool(self.measure_color.get())
         if color and self._sloan_run():
@@ -9165,6 +9279,7 @@ class App(Tk):
                 rows, jds = [], []
                 frame_side = []
                 peaks = []
+                raw_peaks, clips = [], []   # 2.2.19 (#25)
                 chans = {"green": [], "red": [], "blue": []} if color else None
                 for i, path in enumerate(lights, 1):
                     if cancel.is_set():
@@ -9197,6 +9312,20 @@ class App(Tk):
                         # 2.2.12: a frame where the star is not detected is left out of its curve and scatter.
                         row = core.detected_mags(flux, exp, noise)
                         peak_row = core.peak_values(img, pos, radius)
+                        # 2.2.19 (#25): each star's raw core on this frame (clipped -> True).
+                        if precal:
+                            raw_row = np.full(len(pos), np.nan)
+                            clip_row = np.zeros(len(pos), dtype=bool)
+                            with np.errstate(all="ignore"):
+                                bright = peak_row >= 0.25 * np.nanmax(peak_row)
+                            for k in np.where(bright)[0]:
+                                clip_row[k] = core.flat_topped_core(
+                                    raw, core.Star("", float(pos[k][0]), float(pos[k][1])), radius,
+                                    total_bin, cfa=pattern != core.MONO)
+                        else:
+                            raw_row = core.raw_peaks_many(raw, pos, radius, total_bin)
+                            with np.errstate(invalid="ignore"):
+                                clip_row = raw_row >= raw_limit
                         frame_jd = core.mid_jd(header)
                         side = (bool(reg.get("flipped")), core.header_rotator(header))
                         crow = {}
@@ -9212,6 +9341,8 @@ class App(Tk):
                         jds.append(frame_jd)
                         frame_side.append(side)
                         peaks.append(peak_row)
+                        raw_peaks.append(raw_row)
+                        clips.append(clip_row)
                         if color:
                             for ch in ("green", "red", "blue"):
                                 chans[ch].append(crow[ch])
@@ -9236,6 +9367,15 @@ class App(Tk):
                     inst = core.align_segments(inst, seg, min_frames=5)
                     self.call_ui(self.log, f"  {n_segments - 1} meridian flip(s) or rotator move(s): each star's light "
                                            "curve lined up across them before measuring its scatter.")
+                # 2.2.19 (#25): saturated = raw core clipped on a meaningful fraction of the frames (or saturated on
+                # the reference, as before); clipped on only a few frames = a caution on the candidate.
+                clip_stack = np.vstack(clips)
+                raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0),
+                                                        np.isfinite(np.vstack(raw_peaks)).sum(axis=0)
+                                                        if not precal else np.full(clip_stack.shape[1], len(clips)))
+                ref_only = len(saturated - raw_sat)
+                saturated.update(raw_sat)
+                clipped_some = {i: int(clip_stack[:, i].sum()) for i in raw_some if i not in saturated}
                 stats = core.field_variability(inst, exclude=sorted(saturated))
                 offset = 0.0
                 zp = None
@@ -9259,6 +9399,8 @@ class App(Tk):
                     "excess": stats["excess"], "usable": stats["usable"], "n_good": stats["n_good"],
                     "calibrated": offset != 0.0, "frames": len(rows), "zp": zp, "zp_catalog": catalog_used,
                     "watched": watched, "names": cat_name,
+                    "blended": list(blended), "clipped_some": clipped_some,   # 2.2.19 (#25, #26)
+                    "ref_path": ref_path,   # 2.2.19 (#14): the frame the positions belong to
                 }
                 too_faint = set()
                 limit = mag_limit
@@ -9283,8 +9425,15 @@ class App(Tk):
                         and stats["scatter"][i] >= 0.005 and i not in saturated and i not in too_faint]
                 result["saturated"] = sorted(saturated)
                 if saturated:
+                    how = ("a flat-topped (clipped) core" if precal else
+                           f"raw core at or above {raw_limit:.0f} ADU")
                     self.call_ui(self.log, f"  {len(saturated)} saturated star(s) measured but not listed as candidates "
-                                           f"(peak at or above {sat_level:.0f} on the reference frame).")
+                                           f"({how} on at least 5% of the frames"
+                                           + (f", or near saturation on the reference frame ({ref_only})"
+                                              if ref_only else "") + ").")
+                if clipped_some:
+                    self.call_ui(self.log, f"  {len(clipped_some)} more star(s) clipped on a few frames (a caution on "
+                                           "those candidates).")
                 cand.sort(key=lambda i: -stats["excess"][i])
                 result["candidates"] = cand
                 result["excess_limit"] = excess_limit
@@ -9298,8 +9447,11 @@ class App(Tk):
                 # (a core that clips now and then adds scatter that looks like variability).
                 with np.errstate(all="ignore"):
                     top = np.nanmax(np.vstack(peaks), axis=0)
+                    raw_top = np.nanmax(np.vstack(raw_peaks), axis=0)   # 2.2.19 (#25): the raw core too
                 result["near_sat"] = sorted(i for i in range(len(labels)) if i not in saturated
-                                            and math.isfinite(top[i]) and top[i] >= near_sat_level)
+                                            and ((math.isfinite(top[i]) and top[i] >= near_sat_level)
+                                                 or (not precal and math.isfinite(raw_top[i])
+                                                     and raw_top[i] >= 0.80 * raw_limit)))
                 # Flip boundary: the biggest change starts at a meridian flip, rotator move or long gap.
                 result["boundaries"] = core.scan_boundaries(seg, jd)
                 at_flip = {}
@@ -9494,19 +9646,66 @@ class App(Tk):
             child.destroy()
         self.scan_view = ScanView(self.discovery_host, self, result)
 
-    def mark_scan_candidates(self, result, only=None):
+    def mark_scan_candidates(self, result, only=None, skip=None, picked=None, source: str = "all", show: bool = True):
         # 2.2.5: each mark carries its kind (possible new / known / check first / unchecked) and the reason.
         # 2.2.7: only= a list of candidates to mark (the rows selected); their numbers stay as in the table.
+        # 2.2.19 (#14): skip= stars left out (known variables hidden on the Output page). (#12): picked= any measured
+        # stars (from the scatter plot): candidates keep their number and kind, the others are marked with their
+        # label (S066) as "picked". source: "selection" marks clear when the selection is cleared (#13).
         keep = set(only) if only else None
+        skip = set(skip or ())
+        cand = list(result["candidates"])
         self.scan_marks = [(result["xy"][i][0], result["xy"][i][1], str(rank), *core.scan_candidate_kind(result, i))
-                           for rank, i in enumerate(result["candidates"], 1) if keep is None or i in keep]
-        self.show_step(STEP_PHOTO)
+                           for rank, i in enumerate(cand, 1) if (keep is None or i in keep) and i not in skip]
+        for i in picked or ():
+            if i in cand or i in skip:
+                continue
+            kind, why = core.scan_candidate_kind(result, i)
+            self.scan_marks.append((result["xy"][i][0], result["xy"][i][1], str(result["labels"][i]),
+                                    "known" if kind == "known" else "picked", why))
+        self._scan_marks_source = source
+        if show:
+            self.show_step(STEP_PHOTO)
         self.refresh_preview()
 
     def clear_scan_marks(self):
         self.scan_marks = []
+        self._scan_marks_source = None
         self.refresh_preview()
         self.status.set("Candidate marks cleared.")
+
+    def _scan_known_refresh(self):
+        """2.2.19 (#14): the field's variable-star check (VSX/SIMBAD, after the solve) can finish after a scan, or the
+        scan's own query can fail: fill the finished scan's known-variable matches from the stars marked on the image
+        (same pixel tolerance as the labeled-star check) and redraw the Output page."""
+        r = self.last_scan
+        if not r or not self.variable_marks or not r.get("xy") or r.get("ref_path") != self.preview_path:
+            return   # no scan, or a scan of other frames
+        reach = self._variable_reach()
+        vsx = list(r["vsx"]) if r.get("vsx") is not None else [None] * len(r["xy"])
+        added = 0
+        for i, (x, y) in enumerate(r["xy"]):
+            if vsx[i]:
+                continue
+            best = None
+            for vx, vy, v in self.variable_marks:
+                d = math.hypot(vx - x, vy - y)
+                if d <= reach and (best is None or d < best[0]):
+                    best = (d, v)
+            if best is not None:
+                vsx[i] = best[1]
+                added += 1
+        if r.get("vsx") is not None and not added:
+            return
+        r["vsx"] = vsx
+        if not r.get("vsx_sources"):
+            r["vsx_sources"] = list(self.field_check_sources or ["VSX"])
+        view = getattr(self, "scan_view", None)
+        if view is not None and getattr(view, "r", None) is r:
+            try:
+                view._known_changed()
+            except Exception:
+                traceback.print_exc()
 
     def _warn_marker_offsets(self, radius: float) -> list:
         """2.2.18 (item 5): before photometry, say in the Log when the frames would be measured off a marked star's
@@ -11056,6 +11255,21 @@ class App(Tk):
         self._period_note = f"every point ({len(usable)})"
         point_nights = [o.night for o in usable]
         minutes = {"5 min bins": 5.0, "10 min bins": 10.0, "30 min bins": 30.0}.get(self.period_bins.get())
+        self._period_bins_note = ""
+        point_jd, point_values, point_note = jd, values, self._period_note
+        if minutes:
+            # 2.2.19 (#19): a period shorter than about 10 bins is smeared by them (BL Cam, 0.039 d, was searched in
+            # 10-min bins: under 6 per cycle). With the VSX or a marked period that short, use every point.
+            try:
+                expected = [p for p in ([self.catalog_period] if self.catalog_period else []) + self._parse_marks()
+                            if p and p > 0]
+            except Exception:
+                expected = []
+            if expected and min(expected) < 10.0 * minutes / 1440.0:
+                short = min(expected)
+                self._period_bins_note = (f"Bins    ⚠ {short:.4g} d spans only {short * 1440.0 / minutes:.1f} "
+                                          f"{minutes:g}-min bins: searched every point instead")
+                minutes = None
         if minutes:
             # Bins make each night count by the hours observed, not by how many frames were taken,
             # and the false-alarm probability is no longer inflated by thousands of correlated frames.
@@ -11074,6 +11288,20 @@ class App(Tk):
         except Exception as exc:
             self.status.set(f"Period search: {exc}")
             self.period = None
+        if self.period and minutes and len(jd) != len(point_jd) \
+                and self.period["period_days"] < 10.0 * minutes / 1440.0:
+            # 2.2.19 (#19): the best peak from bins is itself under 10 bins long: search every point instead.
+            try:
+                again = core.lomb_scargle(point_jd, point_values, float(self.min_period.get()),
+                                          float(self.max_period.get()))
+            except Exception:
+                again = None
+            if again:
+                self._period_bins_note = (f"Bins    ⚠ the peak from {minutes:g}-min bins ({self.period['period_days']:.4g}"
+                                          f" d) spans under 10 bins: searched every point instead")
+                self.period = again
+                jd, values, point_nights = point_jd, point_values, [o.night for o in usable]
+                self._period_note = point_note
         if self.period:
             # 2.2.3: sanity checks on the best period (one-day aliases; a period carried by one night alone).
             self.period["alias_text"] = core.period_alias_text(self.period["period_days"])
@@ -11251,6 +11479,8 @@ class App(Tk):
         meta["comps_used"] = list(self.comps_used)
         meta["star_bands"] = self.star_bands
         meta["seq_auids"] = dict(self.seq_auids)   # 2.2.13
+        if getattr(self, "target_auid", "") and getattr(self, "target_auid_name", "") == self.star_id.get().strip():
+            meta["target_auid"] = self.target_auid   # 2.2.19 (nit): the Output page's Star line
         meta["report_names"] = dict(self.report_names)   # 2.2.14 (item 7)
         meta["night_notes"] = self.night_notes
         meta["use_check_zp"] = bool(self.use_check_zp.get())
@@ -11313,6 +11543,23 @@ class App(Tk):
         if stars and getattr(self, "_prev_stars", None) is not None:
             self.comps_used, self.check_used = list(self._prev_stars[0]), self._prev_stars[1]
 
+    def _migrate_min_period(self, meta: dict):
+        """2.2.19 (#19): a series saved before 2.2.19 that holds the old default shortest period (0.05 d) now
+        searches from 0.02 d (the old default hid HADS / SX Phe periods, BL Cam 0.039 d). Once: the series is saved
+        with the new version, so a 0.05 typed later stays."""
+        try:
+            old = float(meta.get("min_period"))
+        except (TypeError, ValueError):
+            return
+        try:
+            version = tuple(int(x) for x in str(meta.get("app_version") or "0").split("."))
+        except ValueError:
+            version = (0,)
+        if abs(old - 0.05) < 1e-9 and version < (2, 2, 19):
+            self.min_period.set(core.DEFAULT_MIN_PERIOD)
+            self.log(f"Period search now starts at {core.DEFAULT_MIN_PERIOD:g} d (the old default 0.05 d missed "
+                     "short periods); type another shortest period on the Output page if you want one.")
+
     def _apply_meta_values(self, meta: dict):
         for key in self._META_STRINGS:
             if meta.get(key) not in (None, ""):
@@ -11332,6 +11579,7 @@ class App(Tk):
                     getattr(self, key).set(float(meta[key]))
                 except (TypeError, ValueError):
                     pass
+        self._migrate_min_period(meta)   # 2.2.19 (#19)
         if meta.get("binning"):
             want = int(meta["binning"])
             have = self.masters_binning if self.calibrated is not None else None
@@ -11354,6 +11602,9 @@ class App(Tk):
             self.star_bands = meta["star_bands"]
         if isinstance(meta.get("seq_auids"), dict):
             self.seq_auids = {**self.seq_auids, **meta["seq_auids"]}
+        if meta.get("target_auid"):
+            self.target_auid = str(meta["target_auid"])   # 2.2.19 (nit)
+            self.target_auid_name = str(meta.get("star_id") or "").strip()
         given = meta.get("report_names")   # 2.2.14 (item 7)
         self.report_names = {str(k): str(v) for k, v in given.items() if v} if isinstance(given, dict) else {}
         if isinstance(meta.get("night_notes"), dict):
@@ -11821,7 +12072,10 @@ class App(Tk):
         page = ttk.Frame(self.pages)
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
-        ttk.Label(card, text="Output – Variability", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
+        # 2.2.19 (nit): the star's name in the heading ("Output – Variability: BL Cam").
+        self.output_heading = StringVar(value="Output – Variability")
+        ttk.Label(card, textvariable=self.output_heading, font=(core.UI_FONT, 16, "bold"),
+                  style="Card.TLabel").pack(anchor=W)
         self._build_summary(card)
         row = ttk.Frame(card, style="Card.TFrame")
         row.pack(fill=X)
@@ -12412,6 +12666,7 @@ class App(Tk):
         if old_model:
             cautions.append(old_model)
         period_lines = []
+        self._period_range_fix = None   # 2.2.19 (#19)
         # 2.2: one short night cannot pin a period down; show the fold and periodogram grayed, with a note.
         span_used = (max(o.jd for o in usable) - min(o.jd for o in usable)) if usable else 0.0
         too_short = bool(self.period) and len(nights) == 1 and span_used < 2.0 * self.period["period_days"]
@@ -12501,6 +12756,22 @@ class App(Tk):
             ]
             if self.catalog_period:
                 period_lines.append(f"VSX     {self.catalog_period:.5f} d")
+            # 2.2.19 (#19): the VSX period or a marked period outside the range searched cannot be found: say so.
+            try:
+                lo_now, hi_now = float(self.min_period.get()), float(self.max_period.get())
+                outside, fix = core.period_range_check(
+                    ([("VSX", self.catalog_period)] if self.catalog_period else [])
+                    + [("Marked", m) for m in self._parse_marks()], lo_now, hi_now)
+            except Exception:
+                outside, fix = [], None
+            if outside:
+                what = ", ".join(f"{lab} {pp:.5g} d" for lab, pp in outside)
+                period_lines.append(f"Range   ⚠ {what} outside the search ({lo_now:g}–{hi_now:g} d)")
+                cautions.append(f"The search ({lo_now:g}–{hi_now:g} d) cannot find {what}: the best peak above is "
+                                "another period. Widen the Period search (the button in the Period box) and refit.")
+                self._period_range_fix = fix
+            if getattr(self, "_period_bins_note", ""):
+                period_lines.append(self._period_bins_note)
             head = 0 if significant else 1
             if self.period.get("alias_text"):
                 period_lines[head] += "   ⚠ near a day alias"
@@ -12554,7 +12825,15 @@ class App(Tk):
         check_vals_all = [float(v) for v, ex in zip(check_vals, excluded) if not ex and math.isfinite(v)]
         comps = self.active_comps or self.comps_used
         span = (max(jd) - min(jd)) if len(jd) else 0.0
+        # 2.2.19 (nit): the star's name (and AAVSO AUID) on top of the Series box and in the page heading.
+        star_name = self.star_id.get().strip()
+        auid = str(getattr(self, "target_auid", "") or "").strip()
+        if getattr(self, "target_auid_name", "") != star_name:
+            auid = ""   # an AUID looked up for another star
+        if hasattr(self, "output_heading"):
+            self.output_heading.set("Output – Variability" + (f": {star_name}" if star_name else ""))
         series_lines = [
+            f"Star    {star_name or '—'}" + (f"   AUID {auid}" if auid else ""),
             f"Points  {len(obs_list)} ({len(usable)} used)",
             f"Nights  {len(nights)}   span {span:.1f} d",
             *self._comps_lines(comps),   # 2.2.14 (item 9): wrapped, so 6+ comps do not run off the box
@@ -12566,6 +12845,7 @@ class App(Tk):
         ]
         rows = self._night_rows(obs_list, mag, excluded, nights, flip_steps, pier_by_night)
         self._fill_summary(series_lines, period_lines, color_lines, rows, cautions)
+        self._show_period_range_fix()   # 2.2.19 (#19)
 
         ax = self.out_ax3
         # 2.2.16 (item 14): with a night zoomed on the light curve, the check star shows the same night on the same
@@ -12689,6 +12969,9 @@ class App(Tk):
             var = StringVar(value="—")
             ttk.Label(box, textvariable=var, style="Box.TLabel", justify=LEFT).pack(anchor=W)
             self.summary_vars[key] = var
+            if key == "period":
+                # 2.2.19 (#19): shown when the VSX or a marked period lies outside the search range.
+                self.period_fix_button = ttk.Button(box, text="", command=self._apply_period_range_fix)
         table_row = ttk.Frame(holder, style="Card.TFrame")
         table_row.pack(fill=X, pady=(6, 0))
         cols = [c for c, _l, _w in self.SUMMARY_COLUMNS]
@@ -13954,7 +14237,9 @@ class App(Tk):
             if obs.night not in nights:
                 nights.append(obs.night)
         counts = {n: sum(1 for o in self.observations if o.night == n) for n in nights}
-        listing = "\n".join(f"  {i + 1})  {n}   ({counts[n]} points)" for i, n in enumerate(nights))
+        # 2.2.19 (nit): the night as the other night pickers show it, "22–23 Oct 2026 (JD2461336)".
+        listing = "\n".join(f"  {i + 1})  {self.night_label(n, short=True)} ({n})   ({counts[n]} points)"
+                            for i, n in enumerate(nights))
         answer = simpledialog.askstring(APP_TITLE, f"Which night should be removed from the series?\n\n{listing}\n\nType its number:", parent=self)
         if not answer:
             return
@@ -13990,6 +14275,26 @@ class App(Tk):
         if not (math.isfinite(lo) and math.isfinite(hi) and 0 < lo < hi):
             return None, "the shortest period must be above 0 and below the longest"
         return (lo, hi), ""
+
+    def _show_period_range_fix(self):
+        """2.2.19 (#19): the Period box's one-click "Search 0.02–20 d instead", shown only when needed."""
+        button = getattr(self, "period_fix_button", None)
+        if button is None:
+            return
+        fix = getattr(self, "_period_range_fix", None)
+        if fix:
+            button.configure(text=f"Search {fix[0]:g}–{fix[1]:g} d instead")
+            button.pack(anchor=W, pady=(4, 0))
+        else:
+            button.pack_forget()
+
+    def _apply_period_range_fix(self):
+        fix = getattr(self, "_period_range_fix", None)
+        if not fix:
+            return
+        self.min_period.set(fix[0])
+        self.max_period.set(fix[1])
+        self._period_box_changed(force=True)
 
     def _period_box_changed(self, force: bool = False):
         """2.2.18 (item 16): the Output page's Period search boxes refit on Enter, and on leaving a box when the
@@ -14368,10 +14673,74 @@ class App(Tk):
             self._save_one_night = False
         if path:
             obs = [o for o in self.observations if scope == "series" or o.night == self.highlight_night]
-            core.write_curve_csv(path, obs, self.night_notes, self._scint_setup())
-            self.status.set(f"Wrote {path}")
+            notes, scint = dict(self.night_notes), self._scint_setup()
+            # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's frame-label
+            # column reads the frame folders' headers); the whole series when no night is highlighted, as before.
+            self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint),
+                                     f"light-curve CSV ({len(obs)} points)")
             self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
         return path or ""
+
+    SPINNER = "◐◓◑◒"
+
+    def _save_in_background(self, path: str, write, what: str):
+        """2.2.19 (nit): run write() (no Tk, no on-screen figure) in a worker thread. A save that is done within a
+        moment finishes as before; a longer one shows "◐ Saving …" in the status bar until a done line. The file is
+        created at once, so the next save's numbering (_family_path) already sees it."""
+        try:
+            open(path, "a").close()
+        except OSError:
+            pass
+        state = {"done": False, "error": None, "t0": time.monotonic()}
+
+        def work():
+            try:
+                write()
+            except Exception as exc:
+                state["error"] = exc
+                traceback.print_exc()
+            state["done"] = True
+            self.call_ui(finish)
+
+        def finish():
+            if state.get("reported"):
+                return
+            state["reported"] = True
+            if state["error"] is not None:
+                try:
+                    if os.path.getsize(path) == 0:
+                        os.remove(path)   # the placeholder of a save that failed
+                except OSError:
+                    pass
+                self.log(f"Could not save {path}: {state['error']}")
+                self.status.set(f"✖ Could not save the {what}: {state['error']}")
+                messagebox.showerror(APP_TITLE, f"Could not save the {what}:\n{state['error']}")
+                return
+            took = time.monotonic() - state["t0"]
+            self.log(f"Saved {path}")
+            self.status.set(f"✔ Saved {os.path.basename(path)}, the {what}"
+                            + (f" ({took:.0f} s)." if took >= 1.0 else "."))
+
+        def spin(k=0):
+            if state["done"] or state.get("reported"):
+                return
+            self.status.set(f"{self.SPINNER[k % len(self.SPINNER)]} Saving the {what}… "
+                            f"{time.monotonic() - state['t0']:.0f} s")
+            self.after(150, lambda: spin(k + 1))
+
+        thread = threading.Thread(target=work, daemon=True)
+        self._save_threads = [t for t in getattr(self, "_save_threads", []) if t.is_alive()] + [thread]
+        thread.start()
+        thread.join(0.3)
+        if state["done"]:
+            finish()
+        else:
+            spin()
+
+    def wait_for_saves(self, timeout: float = 30.0):
+        """Wait for background saves to finish (tests; quitting)."""
+        for t in list(getattr(self, "_save_threads", [])):
+            t.join(timeout)
 
     def save_png(self):
         if self.out_canvas is None or not self.observations:
@@ -15965,6 +16334,18 @@ class KnownVariablesWindow:
         self.view.watch_selected()
 
 
+def period_cell(per: dict) -> str:
+    """2.2.19 (nit): a field-scan star's best period for the table: "no period (drift)" when the best peak sits at the
+    long end of the search (a slow drift, not a period; it read "20 d (edge)"), "no period (below range)" at the short
+    end, else the period in days."""
+    edge = (per.get("ls") or {}).get("edge")
+    if edge == "max":
+        return "no period (drift)"
+    if edge == "min":
+        return "no period (below range)"
+    return f"{per['period']:.4f}"
+
+
 class ScanView:
     """Field-scan results: scatter vs brightness, candidate list, and the selected star's light curve."""
 
@@ -16014,9 +16395,11 @@ class ScanView:
                  + (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
                     "move(s) first. " if result.get("segments", 1) > 1 else "")
                  + 
-                 "Click a point or a row to see its light curve. A candidate is a lead, not a discovery: "
-                 "check it on another night and look for a nearby bright star or a bad pixel first. A period "
-                 "marked (edge) sits at the end of the search range, so the true period may lie outside it."
+                 "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
+                 "on the scatter plot to pick several stars, then Mark on image. A candidate is a lead, not a "
+                 "discovery: check it on another night and look for a nearby bright star or a bad pixel first. "
+                 "\"No period\" means the best peak sat at the end of the search range: a drift, or a period "
+                 "outside the range."
                  + color_note,
             style="Hint.TLabel", wraplength=1300, justify=LEFT,
         ).pack(anchor=W, pady=(2, 6))
@@ -16035,6 +16418,8 @@ class ScanView:
         self.mark_button = ttk.Button(nav, text="Clear candidate marks" if app.scan_marks else "Mark candidates on image",
                                       command=self.toggle_marks)
         self.mark_button.pack(side=LEFT)
+        # 2.2.19 (#12): the stars picked on the scatter plot (click, Ctrl+click, drag), or the selected star.
+        ttk.Button(nav, text="Mark on image", command=self.mark_picked).pack(side=LEFT, padx=(6, 0))
         ttk.Button(nav, text="Watch selected star", command=self.watch_selected).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
         # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
@@ -16043,12 +16428,25 @@ class ScanView:
         self.n_known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
         hide_box = ttk.Checkbutton(nav, text="Hide known variables", variable=self.hide_known, command=self._hide_changed)
         hide_box.pack(side=LEFT, padx=(12, 0))
+        self.hide_box = hide_box
+        self.picked = []   # 2.2.19 (#12): stars picked on the scatter plot
+        self._drag = None
         if result.get("vsx") is None:
             hide_box.state(["disabled"])
         self.hidden_text = StringVar(value="")
         ttk.Label(nav, textvariable=self.hidden_text, style="Hint.TLabel").pack(side=LEFT, padx=6)
         if on_close is not None:
             ttk.Button(nav, text="Close", command=on_close).pack(side=RIGHT)
+
+        # 2.2.19 (#19): known variables whose VSX period lies outside the period search, with a one-click fix.
+        self.range_frame = ttk.Frame(top, style="Card.TFrame")
+        self.range_text = StringVar(value="")
+        ttk.Label(self.range_frame, textvariable=self.range_text, style="Warn.TLabel").pack(side=LEFT)
+        self.range_button = ttk.Button(self.range_frame, text="", command=self._apply_range_fix)
+        self.range_button.pack(side=LEFT, padx=(8, 0))
+        self._range_fix = None
+        self._range_packed = False
+        self._range_before = nav
 
         body = ttk.Frame(top, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True)
@@ -16070,6 +16468,9 @@ class ScanView:
         self._fill_table()
         self.tree.bind("<<TreeviewSelect>>", self._on_row)
         self.tree.bind("<<TreeviewSelect>>", self._update_mark_button, add="+")
+        # 2.2.19 (#13): a second click on the selected row, or Escape, clears the selection (Ctrl+click toggles).
+        self.tree.bind("<Button-1>", self._on_tree_click)
+        self.tree.bind("<Escape>", lambda _e: self.clear_selection())
 
         if Figure is None:
             return
@@ -16081,21 +16482,68 @@ class ScanView:
         self.canvas.get_tk_widget().configure(width=400, height=300)
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         self.canvas.mpl_connect("button_press_event", self._on_click)
+        # 2.2.19 (#12): drag on the scatter plot to pick the stars in a box.
+        self.canvas.mpl_connect("motion_notify_event", self._on_drag)
+        self.canvas.mpl_connect("button_release_event", self._on_release)
+        self.canvas.get_tk_widget().bind("<Escape>", lambda _e: self.clear_selection())
         self.draw()
 
     def _is_known(self, i) -> bool:
-        return bool(self.r.get("vsx") and self.r["vsx"][i])
+        if i is None:
+            return False
+        vsx = self.r.get("vsx")
+        return bool(vsx is not None and 0 <= i < len(vsx) and vsx[i])
+
+    def _hiding(self) -> bool:
+        return bool(getattr(self, "hide_known", None) is not None and self.hide_known.get())
+
+    def _hidden(self) -> set:
+        """2.2.19 (#14): every measured star matched to a known or suspected variable, when they are hidden."""
+        if not self._hiding():
+            return set()
+        return {i for i in range(len(self.r["labels"])) if self._is_known(i) and i not in (self.r.get("watched") or [])}
+
+    def _known_changed(self):
+        """2.2.19 (#14): the known-variable matches arrived after the page was drawn (App._scan_known_refresh)."""
+        self.n_known = sum(1 for i in self.r["candidates"] if self._is_known(i))
+        if self.r.get("vsx") is not None and getattr(self, "hide_box", None) is not None:
+            self.hide_box.state(["!disabled"])
+        self._hide_changed()
 
     def _hide_changed(self):
-        n = self.n_known if self.hide_known.get() else 0
+        n = self.n_known if self._hiding() else 0
         self.hidden_text.set(f"{n} known variable(s) hidden" if n else "")
-        if self.hide_known.get() and self._is_known(self.selected):
-            rest = [i for i in self.r["candidates"] if not self._is_known(i)]
-            if rest:
-                self.selected = rest[0]
+        hidden = self._hidden()
+        if self.selected in hidden:
+            rest = [i for i in self.r["candidates"] if i not in hidden]
+            self.selected = rest[0] if rest else None
+        self.picked = [i for i in self.picked if i not in hidden]
         self._fill_table()
+        # 2.2.19 (#14): the image marks follow the box too.
+        if self.app.scan_marks and self.app.last_scan is self.r:
+            if getattr(self.app, "_scan_marks_source", None) == "selection":
+                keep = [i for i in self._marked_now() if i not in hidden]
+                if keep:
+                    self.app.mark_scan_candidates(self.r, only=keep, picked=keep, skip=hidden, source="selection",
+                                                  show=False)
+                else:
+                    self.app.clear_scan_marks()
+            else:
+                self.app.mark_scan_candidates(self.r, skip=hidden, show=False)
+            self._update_mark_button()
         if getattr(self, "fig", None) is not None:
             self.draw()
+
+    def _marked_now(self) -> list:
+        """The scan stars marked on the image now (by position)."""
+        xy = self.r["xy"]
+        out = []
+        for m in self.app.scan_marks:
+            for i, (x, y) in enumerate(xy):
+                if abs(x - m[0]) < 1e-6 and abs(y - m[1]) < 1e-6:
+                    out.append(i)
+                    break
+        return out
 
     def _fill_table(self):
         result = self.r
@@ -16103,11 +16551,11 @@ class ScanView:
         for item in list(self.tree.get_children()):
             self.tree.delete(item)
         self.rows = {}
-        hide = bool(getattr(self, "hide_known", None) and self.hide_known.get())
-        listed = [(rank, i) for rank, i in enumerate(result["candidates"], 1) if not (hide and self._is_known(i))]
+        hidden = self._hidden()   # 2.2.19 (#14): candidates and near misses alike
+        listed = [(rank, i) for rank, i in enumerate(result["candidates"], 1) if i not in hidden]
         if not result["candidates"]:
             # Nothing reached the candidate level: show the closest misses, marked as such (2.2.1).
-            listed += [(f"~{k}", i) for k, i in enumerate(result.get("near") or [], 1)]
+            listed += [(f"~{k}", i) for k, i in enumerate(result.get("near") or [], 1) if i not in hidden]
         listed += [("W", i) for i in result.get("watched", []) if i not in result["candidates"]]
         for rank, i in listed:
             per = result["periods"].get(i, {})
@@ -16129,12 +16577,54 @@ class ScanView:
             bv = result["bv"][i] if result.get("bv") is not None else float("nan")
             item = self.tree.insert("", END, values=(
                 rank, where, f"{result['mag'][i]:.2f}", f"{result['scatter'][i]:.3f}", f"{result['excess'][i]:.1f}",
-                (f"{per['period']:.4f}" + (" (edge)" if per["ls"].get("edge") else "")) if per else "",
+                period_cell(per) if per else "",
                 f"{bv:.2f}" if math.isfinite(bv) else "", "; ".join(self.cautions(i)), vsx_text,
             ))
             self.rows[item] = i
         # 2.2.12 (John): columns sized to what they hold, like the Transit fit table.
         fit_tree_columns(self.tree, getattr(self, "_scan_heads", {}))
+        self._update_range_note()
+
+    def _update_range_note(self):
+        """2.2.19 (#19): say when known variables in the list have VSX periods outside the scan's period search."""
+        frame = getattr(self, "range_frame", None)
+        if frame is None:
+            return
+        r = self.r
+        rng = r.get("period_range")
+        vsx = r.get("vsx")
+        expected = []
+        if rng and vsx is not None:
+            for i in set(self.rows.values()):
+                hit = vsx[i] if i < len(vsx) else None
+                if hit and hit.get("period"):
+                    expected.append((hit.get("name", "VSX"), hit.get("period")))
+        outside, fix = core.period_range_check(expected, float(rng[0]), float(rng[1])) if expected else ([], None)
+        self._range_fix = fix
+        if outside:
+            names = ", ".join(f"{n} {p:.4g} d" for n, p in outside[:3]) + (" …" if len(outside) > 3 else "")
+            self.range_text.set(f"⚠ VSX period outside the search ({rng[0]:g}–{rng[1]:g} d): {names}.")
+            self.range_button.configure(text=f"Search {fix[0]:g}–{fix[1]:g} d instead")
+            if not self._range_packed:
+                frame.pack(fill=X, side="bottom", pady=(4, 0), before=self._range_before)
+                self._range_packed = True
+        elif self._range_packed:
+            frame.pack_forget()
+            self._range_packed = False
+
+    def _apply_range_fix(self):
+        fix = self._range_fix
+        app = self.app
+        if not fix:
+            return
+        if app.mode_key != "discovery" or not hasattr(app, "disc_min_period"):
+            app.min_period.set(fix[0])
+            app.max_period.set(fix[1])
+            app.status.set(f"Period search set to {fix[0]:g}–{fix[1]:g} d: run the field scan again to use it.")
+            return
+        app.disc_min_period.set(fix[0])
+        app.disc_max_period.set(fix[1])
+        app._disc_period_changed(force=True)
 
     def cautions(self, i) -> list[str]:
         """2.2.2: reasons to doubt a candidate before celebrating."""
@@ -16149,6 +16639,9 @@ class ScanView:
         sat = np.zeros(len(mag), dtype=bool)
         for k in r.get("saturated") or []:
             sat[k] = True
+        for k in self._hidden():   # 2.2.19 (#14)
+            ok[k] = False
+        self._plot_ok = ok
         ax.plot(mag[ok & ~sat], sc[ok & ~sat], ".", color="#9aa7b0", ms=5, label="stars")
         if (ok & sat).any():
             ax.plot(mag[ok & sat], sc[ok & sat], "x", color="#5d6d76", ms=7, mew=1.4, label="saturated (never candidates)")
@@ -16158,9 +16651,10 @@ class ScanView:
         if r.get("auto_mag_limit") is not None:
             ax.axvline(r["auto_mag_limit"], color="#9aa7b0", lw=0.8, ls="--", label="faintest (scatter 0.25 mag)")
         cand = r["candidates"]
-        hide = bool(getattr(self, "hide_known", None) and self.hide_known.get())
+        hidden = self._hidden()   # 2.2.19 (#14): known variables leave the plot entirely (not only their rings)
+        hide = bool(hidden)
         if cand:
-            known = [] if hide else [i for i in cand if r.get("vsx") and r["vsx"][i]]
+            known = [i for i in cand if self._is_known(i) and i not in hidden]
             new = [i for i in cand if not self._is_known(i)]
             if new:
                 ax.plot(mag[new], sc[new], "o", mfc="none", mec="#d62828", ms=10, mew=1.4, label="candidate")
@@ -16175,8 +16669,12 @@ class ScanView:
                 i = r["labels"].index(name)
                 if ok[i]:
                     ax.annotate(name, (mag[i], sc[i]), textcoords="offset points", xytext=(6, -10), fontsize=8, color="#16324a")
+        picked = [k for k in self.picked if ok[k]]   # 2.2.19 (#12)
+        if picked:
+            ax.plot(mag[picked], sc[picked], "o", mfc="none", mec="#0097a7", ms=13, mew=1.8,
+                    label=f"picked ({len(picked)})")
         i = self.selected
-        if 0 <= i < len(mag) and np.isfinite(sc[i]):
+        if i is not None and 0 <= i < len(mag) and np.isfinite(sc[i]):
             ax.plot(mag[i], sc[i], "*", color="#ffb000", ms=14, mec="#333333")
         ax.set_yscale("log")
         ax.set_xlabel("Magnitude" if r["calibrated"] else "Instrumental magnitude")
@@ -16190,6 +16688,15 @@ class ScanView:
 
     def _draw_star(self, i):
         r = self.r
+        if i is None:   # 2.2.19 (#13): nothing selected
+            for ax, text in ((self.ax_lc, "Click a star on the plot or a row in the table to see its light curve"),
+                             (self.ax_ls, "No star selected")):
+                ax.clear()
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.text(0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center", fontsize=9,
+                        color="#5d6d76", wrap=True)
+            return
         lc = r["light_curves"][:, i]
         good = np.isfinite(lc)
         ax = self.ax_lc
@@ -16242,8 +16749,9 @@ class ScanView:
             ax.axvline(per["period"], color="#d62828", lw=0.8)
             ax.set_xscale("log")
             edge = ls.get("edge")
-            ax.set_title(f"Lomb-Scargle   best {per['period']:.4f} d"
-                         + ("   ⚠ at the edge of the search: widen the range" if edge else ""),
+            # 2.2.19 (nit): a peak at the search edge is not a period ("20 d (edge)" for a drifting star).
+            ax.set_title((f"Lomb-Scargle   {period_cell(per)}  ⚠ peak at the search edge" if edge
+                          else f"Lomb-Scargle   best {per['period']:.4f} d"),
                          fontsize=10, color="#b00020" if edge else "black")
             ax.set_xlabel("Period (days)")
             ax.set_ylabel("Power")
@@ -16251,18 +16759,131 @@ class ScanView:
             ax.set_title("Not enough points for a period", fontsize=10)
         ax.grid(True, alpha=0.3)
 
+    def _plot_points(self):
+        """Indices of the stars drawn on the scatter plot (usable, finite scatter, not hidden)."""
+        r = self.r
+        sc = np.asarray(r["scatter"], dtype=float)
+        ok = np.asarray(r["usable"], dtype=bool) & np.isfinite(sc) & (sc > 0) & np.isfinite(np.asarray(r["mag"], float))
+        for k in self._hidden():
+            ok[k] = False
+        return np.where(ok)[0]
+
+    @staticmethod
+    def _ctrl(event) -> bool:
+        key = getattr(event, "key", None) or ""
+        return "control" in str(key) or "ctrl" in str(key) or "shift" in str(key)
+
     def _on_click(self, event):
         if event.inaxes is not self.ax_s or event.xdata is None:
             return
+        # 2.2.19 (#12): remember the press; a drag picks a box of stars on release, a click picks the nearest.
+        self._drag = {"x": event.x, "y": event.y, "xd": event.xdata, "yd": event.ydata, "ctrl": self._ctrl(event),
+                      "patch": None}
+
+    def _on_drag(self, event):
+        d = self._drag
+        if not d or event.inaxes is not self.ax_s or event.xdata is None:
+            return
+        if math.hypot(event.x - d["x"], event.y - d["y"]) < 6:
+            return
+        from matplotlib.patches import Rectangle
+        if d["patch"] is None:
+            d["patch"] = Rectangle((d["xd"], d["yd"]), 0, 0, fill=True, fc="#0097a7", alpha=0.12, ec="#0097a7", lw=1)
+            self.ax_s.add_patch(d["patch"])
+        d["patch"].set_bounds(min(d["xd"], event.xdata), min(d["yd"], event.ydata), abs(event.xdata - d["xd"]),
+                              abs(event.ydata - d["yd"]))
+        self.canvas.draw_idle()
+
+    def _on_release(self, event):
+        d, self._drag = self._drag, None
+        if not d:
+            return
         r = self.r
-        mag, sc = np.asarray(r["mag"]), np.asarray(r["scatter"])
-        ok = np.where(np.asarray(r["usable"]) & np.isfinite(sc) & (sc > 0))[0]
+        mag, sc = np.asarray(r["mag"], dtype=float), np.asarray(r["scatter"], dtype=float)
+        ok = self._plot_points()
         if not ok.size:
             return
+        x1 = event.xdata if (event.inaxes is self.ax_s and event.xdata is not None) else None
+        dragged = x1 is not None and math.hypot(event.x - d["x"], event.y - d["y"]) >= 6
+        if dragged:
+            lo_x, hi_x = sorted((d["xd"], x1))
+            lo_y, hi_y = sorted((d["yd"], event.ydata))
+            box = [int(k) for k in ok if lo_x <= mag[k] <= hi_x and lo_y <= sc[k] <= hi_y]
+            box.sort(key=lambda k: mag[k])
+            self.picked = list(dict.fromkeys((self.picked if d["ctrl"] else []) + box))
+            if box:
+                self.selected = box[0]
+            self.app.status.set(f"{len(self.picked)} star(s) picked on the scatter plot: Mark on image shows them.")
+            self.draw()
+            return
         # Distance in plot units: magnitude on x, log scatter on y.
-        d = np.hypot((mag[ok] - event.xdata) / 0.3, (np.log10(sc[ok]) - math.log10(max(event.ydata, 1e-6))) / 0.15)
-        self.selected = int(ok[int(np.argmin(d))])
+        dist = np.hypot((mag[ok] - d["xd"]) / 0.3, (np.log10(sc[ok]) - math.log10(max(d["yd"], 1e-6))) / 0.15)
+        k = int(ok[int(np.argmin(dist))])
+        if d["ctrl"]:
+            # Ctrl+click: add the star to the picked set, or take it out.
+            if k in self.picked:
+                self.picked.remove(k)
+                if self.selected == k:
+                    self.selected = self.picked[-1] if self.picked else None
+            else:
+                self.picked.append(k)
+                self.selected = k
+        elif k == self.selected:
+            self.clear_selection()   # 2.2.19 (#13): a second click clears
+            return
+        else:
+            self.selected = k
+            self.picked = [k]
+        self._sync_tree()
         self.draw()
+
+    def _sync_tree(self):
+        """Select the table row of the selected star (when it has one), without starting another redraw."""
+        want = [iid for iid, i in self.rows.items() if i == self.selected]
+        if tuple(self.tree.selection()) != tuple(want):
+            # Tk sends <<TreeviewSelect>> later: _on_row recognizes this selection as ours and ignores it.
+            self._synced_sel = tuple(want)
+            if want:
+                self.tree.selection_set(want)
+            else:
+                self.tree.selection_remove(self.tree.selection())
+
+    def _on_tree_click(self, event):
+        """2.2.19 (#13): a plain click on the only selected row clears the selection (Ctrl+click toggles, as Tk does)."""
+        if event.state & 0x0005:   # Shift or Control: Tk's own extend / toggle
+            return None
+        row = self.tree.identify_row(event.y)
+        if row and tuple(self.tree.selection()) == (row,):
+            self.clear_selection()
+            return "break"
+        return None
+
+    def clear_selection(self):
+        """2.2.19 (#13): nothing selected: the table, the plot's star and picks, and the image marks made from a
+        selection all clear (marks of every candidate stay until Clear candidate marks)."""
+        if self.tree.selection():
+            self._synced_sel = ()
+            self.tree.selection_remove(self.tree.selection())
+        self.selected = None
+        self.picked = []
+        if self.app.scan_marks and getattr(self.app, "_scan_marks_source", None) == "selection":
+            self.app.clear_scan_marks()
+        self._update_mark_button()
+        if getattr(self, "fig", None) is not None:
+            self.draw()
+
+    def mark_picked(self):
+        """2.2.19 (#12): mark the stars picked on the scatter plot (or the selected star) on the Photometry image, with
+        the candidate marks (candidates keep their number; other stars are labeled S066 …), so they can be looked at
+        and watched."""
+        chosen = [i for i in (self.picked or ([self.selected] if self.selected is not None else []))
+                  if i not in self._hidden()]
+        if not chosen:
+            self.app.status.set("Pick stars on the scatter plot first (click, Ctrl+click, or drag a box).")
+            return
+        self.app.mark_scan_candidates(self.r, only=chosen, picked=chosen, source="selection")
+        self.mark_button.configure(text="Clear candidate marks")
+        self.app.status.set(f"{len(chosen)} star(s) marked on the image. Click one there, or use Watch selected star.")
 
     def toggle_marks(self):
         if self.app.scan_marks:
@@ -16272,7 +16893,9 @@ class ScanView:
             # 2.2.7: rows selected in the table → only those candidates (numbers kept); none → all of them.
             chosen = [self.rows[iid] for iid in self.tree.selection() if iid in self.rows]
             chosen = [i for i in chosen if i in self.r["candidates"]]
-            self.app.mark_scan_candidates(self.r, only=chosen or None)
+            # 2.2.19 (#14): hidden known variables are not marked.
+            self.app.mark_scan_candidates(self.r, only=chosen or None, skip=self._hidden(),
+                                          source="selection" if chosen else "all")
             self.mark_button.configure(text="Clear candidate marks")
 
     def _update_mark_button(self, _event=None):
@@ -16284,15 +16907,23 @@ class ScanView:
 
     def _on_row(self, _event):
         sel = self.tree.selection()
+        if getattr(self, "_synced_sel", None) is not None:
+            ours, self._synced_sel = self._synced_sel, None
+            if tuple(sel) == tuple(ours):
+                return
         if sel and sel[0] in self.rows:
             self.selected = self.rows[sel[0]]
+            self.picked = [self.rows[iid] for iid in sel if iid in self.rows]
             self.draw()
+        elif not sel and self.selected is not None:
+            self.clear_selection()   # 2.2.19 (#13): Ctrl+click took the last row out
 
     def watch_selected(self):
         """Add the selected scan star to the watch list, so photometry runs follow it from now on."""
         i = self.selected
         r = self.r
-        if not (0 <= i < len(r["labels"])):
+        if i is None or not (0 <= i < len(r["labels"])):
+            self.app.status.set("Select a star first (a row in the table or a point on the plot).")
             return
         label = r["labels"][i]
         if label in MARKED_LABELS:
