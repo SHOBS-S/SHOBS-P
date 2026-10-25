@@ -1740,11 +1740,252 @@ class Obs:
     # units taken as electrons, plus a fixed 0.005 mag); 1 = 2.2.17 (electrons via EGAIN / binning / superpixel /
     # flat, no fixed term). Series saved before 2.2.17 read as 0, so a comps change keeps their model.
     e_model: int = 0
+    # 2.2.19 (#16): each star's brightest raw pixel in this frame {name: ADU} (target, comps, check), for the
+    # linear-limit count in Comp health. Saved with the series; empty for series saved before 2.2.19.
+    raw_peaks: dict = field(default_factory=dict)
+    # 2.2.19 (#30, #24): per-frame centring record, not saved: {"t": {...}, "c": [{...}, ...], "k": {...}} with "dx",
+    # "dy" (how far the centring moved the star from its aligned position, px), "refused" (moved further than the jump
+    # limit, so the aligned position was measured) and "lc" (distance from the measured position to the star's light
+    # centroid inside the aperture, px).
+    cen: dict = field(default_factory=dict)
+
+
+def light_centroid(img: np.ndarray, x: float, y: float, window: float, sky_in: float | None = None,
+                   sky_out: float | None = None, exclude=(), iters: int = 25) -> dict:
+    """2.2.19 (#30): the sky-subtracted, light-weighted centroid inside `window` px of the center, iterated until it
+    stops moving. Sky: sigma-clipped median of the annulus sky_in..sky_out (default 1.5..2.5 x window) around the start.
+    exclude: other stars' (x, y); pixels nearer one of them than the current center never count (a neighbor's light
+    cannot pull the center). This is where a defocused star's ("donut") light is, whatever its ring looks like.
+    Returns {"x", "y", "ok", "sky", "flux"}."""
+    w = max(1.0, float(window))
+    s_in = float(sky_in) if sky_in else 1.5 * w
+    s_out = float(sky_out) if sky_out and sky_out > s_in else max(s_in + 2.0, 2.5 * w)
+    out = {"x": float(x), "y": float(y), "ok": False, "sky": float("nan"), "flux": float("nan")}
+    half = int(math.ceil(s_out)) + 3
+    crop, cx, cy = _crop(img, x, y, half)
+    if crop.size < 25:
+        return out
+    data = np.asarray(crop, dtype=float)
+    ox, oy = float(x) - (cx + (x - round(x))), float(y) - (cy + (y - round(y)))   # crop origin in image coords
+    yy, xx = np.mgrid[0 : data.shape[0], 0 : data.shape[1]]
+    ux, uy = float(x) - ox, float(y) - oy
+    d0 = np.hypot(xx - ux, yy - uy)
+    ring = data[(d0 >= s_in) & (d0 <= s_out) & np.isfinite(data)]
+    if ring.size < 10:
+        return out
+    sky = float(np.median(ring))
+    for _ in range(5):
+        mad = 1.4826 * float(np.median(np.abs(ring - sky)))
+        if not mad > 0:
+            break
+        keep = ring[np.abs(ring - sky) <= 3.0 * mad]
+        if keep.size < 10 or keep.size == ring.size:
+            break
+        ring = keep
+        sky = float(np.median(ring))
+    work = np.where(np.isfinite(data), data - sky, 0.0)
+    work = np.clip(work, 0.0, None)
+    others = [(float(px) - ox, float(py) - oy) for px, py in exclude]
+    wsum = 0.0
+    for _ in range(max(1, int(iters))):
+        m = np.hypot(xx - ux, yy - uy) <= w
+        for px, py in others:
+            m &= np.hypot(xx - ux, yy - uy) <= np.hypot(xx - px, yy - py)
+        wsum = float(work[m].sum())
+        if wsum <= 0:
+            return out
+        nx = float((work[m] * xx[m]).sum() / wsum)
+        ny = float((work[m] * yy[m]).sum() / wsum)
+        if not (math.isfinite(nx) and math.isfinite(ny)):
+            return out
+        done = math.hypot(nx - ux, ny - uy) < 0.003
+        ux, uy = nx, ny
+        if done:
+            break
+    return {"x": ux + ox, "y": uy + oy, "ok": True, "sky": sky, "flux": wsum}
+
+
+def _ring_star(smooth: np.ndarray, sky: float, noise: float, near_x: float, near_y: float,
+               strict: bool = True) -> dict | None:
+    """2.2.19 (#30): is the star around the peak (near_x, near_y) a defocused "donut" (or a broad flat top) rather
+    than a sharp star? Measured on its quarter-maximum region (at a quarter of the star's brightest point): big
+    (radius >= 2.5 px); not much elongated (axis ratio <= 1.6); the brightest point more than max(1.5 px, a quarter
+    of that radius) from the region's light centroid (a sharp star's peak is its center); the light stays up all
+    around the circle through the brightest point (>= 0.2 of it: a ring, not two stars side by side, which leave it
+    dark across their line). The center may be dark (a hollow donut). The peak found must lie inside that region,
+    within its radius of the centroid (otherwise the region is a neighbor's). Real donuts (K2-29 b, HD 219134, Oct
+    2026) sit at 1.9-3.5 px offsets with the light at 0.4-0.7 of the peak all around; sharp stars stay below 1.5 px.
+    strict=False (a star in a field already known to be defocused, field_defocus): only the region and the
+    ownership tests, so a faint or lopsided donut is still centered on its light.
+    Returns {"x", "y", "r_half", "region"} (centroid in crop coordinates; r_half = the region's radius) or None."""
+    from scipy import ndimage
+    from scipy.ndimage import map_coordinates
+
+    try:
+        py0, px0 = int(round(near_y)), int(round(near_x))
+        lvl = float(smooth[py0, px0] - sky)
+        if not lvl > 4.0 * noise / 3.0:
+            return None
+        lab, _n = ndimage.label(smooth - sky > 0.5 * lvl)
+        own = int(lab[py0, px0])
+        if not own:
+            return None
+        reg = lab == own
+        iy, ix = np.unravel_index(int(np.argmax(np.where(reg, smooth, -np.inf))), smooth.shape)
+        top = float(smooth[iy, ix] - sky)
+        lab2, _n2 = ndimage.label(smooth - sky > 0.25 * top)
+        own2 = int(lab2[iy, ix])
+        if not own2:
+            return None
+        reg2 = lab2 == own2
+        if not reg2[py0, px0]:
+            return None   # the peak found is not part of this star (a brighter neighbor's region)
+        n = int(np.count_nonzero(reg2))
+        ys, xs = np.nonzero(reg2)
+        if ys.min() == 0 or xs.min() == 0 or ys.max() == smooth.shape[0] - 1 or xs.max() == smooth.shape[1] - 1:
+            return None   # region runs off the crop: a bright star's wing or a nebula, not a measured donut
+        w = np.clip(smooth[reg2] - sky, 0, None)
+        if not w.sum() > 0:
+            return None
+        gx, gy = float((w * xs).sum() / w.sum()), float((w * ys).sum() / w.sum())
+        # the region's radius: a filled disc's from its area; a hollow ring's (an annulus) from its outer edge
+        r_q = max(math.sqrt(n / math.pi), float(np.percentile(np.hypot(xs - gx, ys - gy), 90)))
+        if strict and r_q < 2.5:
+            return None
+        off = math.hypot(float(ix) - gx, float(iy) - gy)
+        if math.hypot(px0 - gx, py0 - gy) > max(r_q, 1.5):
+            return None
+        if not strict:
+            return {"x": gx, "y": gy, "r_half": r_q, "region": reg2}
+        if off <= max(1.5, 0.25 * r_q):
+            return None
+        ev = np.linalg.eigvalsh(np.cov(np.vstack([xs, ys]).astype(float)))
+        if not (ev[0] > 0 and math.sqrt(ev[1] / ev[0]) <= 1.6):
+            return None
+        ang = np.linspace(0.0, 2.0 * math.pi, 24, endpoint=False)
+        circ = map_coordinates(smooth, [gy + off * np.sin(ang), gx + off * np.cos(ang)], order=1, mode="nearest") - sky
+        if float(circ.min()) < 0.2 * top:
+            return None
+        return {"x": gx, "y": gy, "r_half": r_q, "region": reg2}
+    except Exception:
+        return None
+
+
+def enclosed_radius(img: np.ndarray, x: float, y: float, size: float, frac: float = 0.95) -> float:
+    """2.2.19 (#30): the radius (px) around (x, y) that holds `frac` of the star's light: the growth curve out to
+    3 x size (size ~ the star's radius), sky from the ring 3-4.5 x size. NaN when it cannot be measured."""
+    try:
+        size = max(1.5, float(size))
+        r_max, s_in, s_out = 3.0 * size, 3.0 * size, 4.5 * size
+        crop, cx, cy = _crop(img, x, y, int(math.ceil(s_out)) + 2)
+        data = np.asarray(crop, dtype=float)
+        yy, xx = np.mgrid[0:data.shape[0], 0:data.shape[1]]
+        d = np.hypot(xx - (cx + x - round(x)), yy - (cy + y - round(y)))
+        ok = np.isfinite(data)
+        ring = data[(d >= s_in) & (d <= s_out) & ok]
+        if ring.size < 20:
+            return float("nan")
+        sky = float(np.median(ring))
+        net = np.where(ok, data - sky, 0.0)
+        radii = np.arange(1.0, r_max + 0.25, 0.5)
+        cum = np.array([float(net[d <= r].sum()) for r in radii])
+        total = float(np.max(cum[-4:])) if cum.size >= 4 else float(cum[-1])
+        if not total > 0:
+            return float("nan")
+        k = int(np.argmax(cum >= frac * total))
+        if k == 0:
+            return float(radii[0])
+        r0, r1, c0, c1 = radii[k - 1], radii[k], cum[k - 1], cum[k]
+        return float(r0 + (frac * total - c0) / (c1 - c0) * (r1 - r0)) if c1 > c0 else float(r1)
+    except Exception:
+        return float("nan")
+
+
+_FIELD_DEFOCUS: dict = {}
+
+
+def seed_field_defocus(img: np.ndarray, decision) -> None:
+    """2.2.19 (#30): set field_defocus's answer for this image (a run decides once, on its reference frame, and every
+    frame follows it). decision: a field_defocus dict, or True/False."""
+    import weakref
+
+    out = dict(decision) if isinstance(decision, dict) else {"donut": bool(decision), "n": 0, "rings": 0,
+                                                             "radius": float("nan"), "r95": float("nan")}
+    try:
+        if len(_FIELD_DEFOCUS) > 16:
+            _FIELD_DEFOCUS.clear()
+        _FIELD_DEFOCUS[id(img)] = (weakref.ref(img), getattr(img, "shape", None), out)
+    except TypeError:
+        pass
+
+
+def field_defocus(img: np.ndarray, n: int = 15) -> dict:
+    """2.2.19 (#30): is this frame's field defocused (donut stars)? Tests up to n bright stars away from the edge (one
+    per 20 px, so the two lobes of a donut count once) with _ring_star (strict); the field is defocused when at least half of them (and at least 3) are donuts.
+    A sharp field with a few blends never qualifies, so in-focus centring stays exactly as before. Cached per image
+    object (the Photometry page asks for every click). Returns {"donut", "n", "rings", "radius", "r95"} (radius: the
+    median quarter-maximum radius of the donuts; r95: the median radius holding 95 % of their light, px)."""
+    import weakref
+    from scipy import ndimage
+
+    key = id(img)
+    hit = _FIELD_DEFOCUS.get(key)
+    if hit is not None and hit[0]() is img and hit[1] == getattr(img, "shape", None):
+        return hit[2]
+    out = {"donut": False, "n": 0, "rings": 0, "radius": float("nan")}
+    try:
+        data = np.asarray(img, dtype=float)
+        stars = detect_sources(data, max_sources=60, nsigma=8.0, min_sep=4.0)
+        h, w = data.shape[:2]
+        radii, r95, seen = [], [], []
+        tested = 0
+        for i, (sx, sy) in enumerate(stars):
+            if tested >= n:
+                break
+            if not (30 <= sx < w - 30 and 30 <= sy < h - 30):
+                continue
+            if any(math.hypot(sx - tx_, sy - ty_) < 20.0 for tx_, ty_ in seen):
+                continue   # the other lobe of a donut already tested (or a close neighbor of a tested star)
+            seen.append((float(sx), float(sy)))
+            crop, cx, cy = _crop(data, sx, sy, 28)
+            crop = np.array(crop, dtype=float)
+            fin = np.isfinite(crop)
+            if fin.sum() < 100:
+                continue
+            sky = float(np.median(crop[fin]))
+            noise = 1.4826 * float(np.median(np.abs(crop[fin] - sky))) or 1.0
+            crop[~fin] = sky
+            sm = ndimage.uniform_filter(crop, size=3)
+            yy, xx = np.mgrid[0:sm.shape[0], 0:sm.shape[1]]
+            near = np.hypot(xx - cx, yy - cy) <= 2.0
+            iy, ix = np.unravel_index(int(np.argmax(np.where(near, sm, -np.inf))), sm.shape)
+            if float(sm[iy, ix] - sky) < 20.0 * noise / 3.0:
+                continue
+            tested += 1
+            ring = _ring_star(sm, sky, noise, float(ix), float(iy), strict=True)
+            if ring is not None:
+                radii.append(float(ring["r_half"]))
+                gx = float(sx) + ring["x"] - cx
+                gy = float(sy) + ring["y"] - cy
+                r95.append(enclosed_radius(data, gx, gy, ring["r_half"], 0.95))
+        r95 = [v for v in r95 if math.isfinite(v)]
+        out = {"donut": bool(tested >= 3 and len(radii) >= max(3, 0.5 * tested)), "n": tested, "rings": len(radii),
+               "radius": float(np.median(radii)) if radii else float("nan"),
+               "r95": float(np.median(r95)) if r95 else float("nan")}
+    except Exception:
+        pass
+    try:
+        if len(_FIELD_DEFOCUS) > 16:
+            _FIELD_DEFOCUS.clear()
+        _FIELD_DEFOCUS[key] = (weakref.ref(img), getattr(img, "shape", None), out)
+    except TypeError:
+        pass
+    return out
 
 
 def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
                   blend_check: bool = True, search: float | None = None, wing: str = "gauss",
-                  min_sigma: float | None = None) -> dict:
+                  min_sigma: float | None = None, donut: bool | None = None) -> dict:
     """2.2.8: center on the star nearest (x, y), not on whatever is brightest nearby.
 
     1. Look for significant peaks (3x3-smoothed, above sky + 4 sigma of the smoothed noise) within a search radius
@@ -1758,9 +1999,22 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
     start point on a bright star's own wing is centered on that star unless the light between peak and start point dips
     and rises again. The default "gauss" keeps the 2.2.8 test (target clicks and every frame's centring), which keeps a
     faint target in a brighter neighbor's wing even when it shows only as a shoulder (CoRoT-1 b, 2.2.7).
+    2.2.19 (#30): in a defocused field (donut stars; donut=None asks field_defocus about this image, True/False
+    decides) the star is centered on its light centroid over the whole star (light_centroid), not on its ring; the
+    result then carries "donut": True and "donut_radius" (the star's quarter-maximum radius). In-focus fields keep
+    the 2.2.8 centring exactly.
     Returns {"x", "y", "shift", "found"}."""
     from scipy import ndimage
 
+    # 2.2.19 (#30): is this a defocused (donut) field?
+    if donut is None:
+        try:
+            fd = field_defocus(img)
+        except Exception:
+            fd = {"donut": False}
+        donut = bool(fd.get("donut"))
+    else:
+        fd = None
     wide = search
     if fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
         search = max(3.0, 2.5 * float(fwhm))
@@ -1771,6 +2025,15 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
     if wide is not None and math.isfinite(wide):
         search = max(search, float(wide))
     half = int(math.ceil(search + window)) + 3
+    if donut:
+        # 2.2.19 (#30): room for the whole donut and some sky around it
+        try:
+            d_rad = float((fd or field_defocus(img)).get("radius") or 0.0)
+        except Exception:
+            d_rad = 0.0
+        if not math.isfinite(d_rad):
+            d_rad = 0.0
+        half = max(half, int(math.ceil(2.5 * max(d_rad, 6.0) + max(search, window))) + 3)
     crop, cx, cy = _crop(img, x, y, half)
     keep = {"x": float(x), "y": float(y), "shift": 0.0, "found": False}
     if crop.size < 9:
@@ -1883,6 +2146,30 @@ def recenter_info(img: np.ndarray, x: float, y: float, radius: float, fwhm: floa
             except Exception:
                 continue
         other_pts.append((float(ox), float(oy)))
+    # 2.2.19 (#30): a defocused star ("donut", dark center) or a broad flat top has its peaks on the ring, so the
+    # nearest-peak centring below lands on the ring (K2-29 b, 23 Oct 2026: 1-4 px off the light centroid, a
+    # different part of the ring clipped every frame, ~5x excess noise). Such a star is centered on its light
+    # centroid over the whole star instead; ring peaks are not other stars, real neighbors still are.
+    ring = _ring_star(smooth, sky, noise, peak_x, peak_y, strict=False) if donut else None
+    if ring is not None:
+        reg = ring["region"]
+        outside = [(ox, oy) for ox, oy in other_pts
+                   if not reg[int(oy), int(ox)] and math.hypot(ox - ring["x"], oy - ring["y"]) > ring["r_half"]]
+        win = max(float(radius), 2.0 * ring["r_half"])
+        to_img = (float(x) - sx, float(y) - sy)
+        lc = light_centroid(img, ring["x"] + to_img[0], ring["y"] + to_img[1], win,
+                            exclude=[(ox + to_img[0], oy + to_img[1]) for ox, oy in outside])
+        if lc["ok"] and math.hypot(lc["x"] - to_img[0] - ring["x"], lc["y"] - to_img[1] - ring["y"]) <= ring["r_half"]:
+            x_new, y_new = float(lc["x"]), float(lc["y"])
+            peak_lvl = float(smooth[int(round(peak_y)), int(round(peak_x))] - sky)
+            try:
+                click_lvl = float(smooth[int(round(min(max(sy, 0), smooth.shape[0] - 1))),
+                                         int(round(min(max(sx, 0), smooth.shape[1] - 1)))] - sky)
+            except Exception:
+                click_lvl = float("nan")
+            return {"x": x_new, "y": y_new, "shift": float(math.hypot(x_new - x, y_new - y)), "found": True,
+                    "peak_sigma": peak_lvl / noise if noise > 0 else float("nan"), "peak_level": peak_lvl,
+                    "click_level": click_lvl, "donut": True, "donut_radius": float(ring["r_half"])}
     others = [math.hypot(ox - peak_x, oy - peak_y) for ox, oy in other_pts]
     # Pixels nearer another star's peak than this one's never count for this star's center.
     mine = np.ones(data.shape, dtype=bool)
@@ -1940,9 +2227,11 @@ def real_star(info: dict, min_sigma: float = 10.0) -> bool:
         return False
 
 
-def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None) -> tuple[float, float, float]:
-    """Center on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found."""
-    r = recenter_info(img, x, y, radius, fwhm)
+def recenter(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
+             donut: bool | None = None) -> tuple[float, float, float]:
+    """Center on the nearest star (see recenter_info); returns (x, y, shift). Keeps (x, y) when no star is found.
+    2.2.19 (#30): donut as in recenter_info (None: ask field_defocus)."""
+    r = recenter_info(img, x, y, radius, fwhm, donut=donut)
     return r["x"], r["y"], r["shift"]
 
 
@@ -2198,6 +2487,117 @@ def move_star(star: "Star", reg: dict | None, shape: tuple[int, int]) -> "Star":
         y=sa * bx + ca * by + cy + reg["dy"],
         catalog_mag=star.catalog_mag,
     )
+
+
+def refine_points(ref_img: np.ndarray, ref_sources, radius: float, donut: bool | None = None,
+                  n: int = 15) -> list[tuple[float, float]]:
+    """2.2.19 (#24): up to n bright, isolated reference stars away from the edge, centered the way the run centers
+    stars (recenter_info; light centroid on donuts), for refine_registration. Computed once per run."""
+    out = []
+    try:
+        h, w = ref_img.shape[:2]
+        pts = np.asarray(ref_sources, dtype=float)
+        margin = max(12.0, 3.0 * float(radius))
+        sep = max(15.0, 4.0 * float(radius))
+        for i, (sx, sy) in enumerate(pts):
+            if len(out) >= n:
+                break
+            if not (margin <= sx < w - margin and margin <= sy < h - margin):
+                continue
+            d = np.hypot(pts[:, 0] - sx, pts[:, 1] - sy)
+            d[i] = np.inf
+            if d.size > 1 and float(np.min(d)) < sep:
+                continue
+            a = recenter_info(ref_img, float(sx), float(sy), radius, donut=donut, blend_check=False)
+            if a.get("found") and not a.get("blended"):
+                out.append((float(a["x"]), float(a["y"])))
+    except Exception:
+        pass
+    return out
+
+
+def refine_registration(img: np.ndarray, reg: dict | None, ref_points, radius: float, donut: bool | None = None,
+                        min_move: float = 1.0) -> dict | None:
+    """2.2.19 (#24): check a frame's registration on the stars' own centers and correct its shift.
+
+    register_frame matches detected peaks. On defocused stars (donuts) a peak sits on the bright side of the ring,
+    a fixed few pixels from the star's center in sensor coordinates; at a meridian flip the field turns 180° but that
+    offset does not, so the flip transform comes out about twice the ring offset wrong (HD 219134 21-22 Oct 2026:
+    comp and check ~8 px off on every frame after the flip, apertures catching half the light; the target re-centered
+    itself and hid it). ref_points (refine_points: reference stars centered on the reference frame) are moved into
+    this frame and centered there (search wide enough for the error); the median offset is added to the shift when
+    it is at least min_move px and the stars agree (median spread < 1.5 px, at least 3 stars).
+    Returns a new reg dict with "refined": (dx, dy) and "refine_n", or reg unchanged."""
+    if reg is None or not ref_points:
+        return reg
+    try:
+        shape = img.shape[:2]
+        h, w = shape
+        margin = max(12.0, 3.0 * float(radius))
+        search = max(10.0, 2.0 * float(radius))
+        res = []
+        for x, y in ref_points:
+            p = move_star(Star("r", x, y), reg, shape)
+            if not (margin <= p.x < w - margin and margin <= p.y < h - margin):
+                continue
+            b = recenter_info(img, p.x, p.y, radius, donut=donut, blend_check=False, search=search)
+            if not b.get("found") or b.get("blended") or b["shift"] > search:
+                continue
+            res.append((b["x"] - p.x, b["y"] - p.y))
+        if len(res) < 3:
+            return reg
+        arr = np.asarray(res, dtype=float)
+        med = np.median(arr, axis=0)
+        spread = float(np.median(np.hypot(arr[:, 0] - med[0], arr[:, 1] - med[1])))
+        if math.hypot(med[0], med[1]) < min_move or spread > 1.5:
+            return reg
+        out = dict(reg)
+        out["dx"] = float(reg["dx"] + med[0])
+        out["dy"] = float(reg["dy"] + med[1])
+        out["refined"] = (float(med[0]), float(med[1]))
+        out["refine_n"] = len(res)
+        return out
+    except Exception:
+        return reg
+
+
+def target_in_frame(ra_deg: float, dec_deg: float, shape: tuple[int, int], factor: float, header: dict | None = None,
+                    ref_xy=None, reg: dict | None = None, ref_header: dict | None = None,
+                    solution: dict | None = None, margin: float = 0.0) -> dict:
+    """2.2.19 (#9): where the target is on another frame, without plate-solving it. In order: the frame's own plate
+    solution in its header; the alignment with the reference (reg, ref_xy = the target's pixel on the reference, which
+    may lie off that frame); the change in header pointing between the reference and this frame, put through the
+    reference's solution (same camera angle assumed). factor = app binning x 2 on a color camera (x 1 mono).
+    Returns {"x", "y", "on" (True/False, None when nothing can tell), "how"}; on = inside the frame by margin px."""
+    h, w = shape[:2]
+    out = {"x": float("nan"), "y": float("nan"), "on": None, "how": ""}
+    xy = None
+    try:
+        wcs = header_wcs(header or {})
+        if wcs is not None:
+            fx, fy = wcs_sky_to_pixel(wcs, ra_deg, dec_deg)
+            ix, iy = wcs_to_image(fx, fy, factor)
+            xy, out["how"] = (float(ix), float(iy)), "the plate solution in its header"
+    except Exception:
+        xy = None
+    if xy is None and reg is not None and ref_xy is not None:
+        s = move_star(Star("t", float(ref_xy[0]), float(ref_xy[1])), reg, shape)
+        xy, out["how"] = (s.x, s.y), "the alignment with the reference frame"
+    if xy is None and ref_xy is not None and solution is not None:
+        try:
+            p0, p1 = header_pointing(ref_header or {}), header_pointing(header or {})
+            if p0 is not None and p1 is not None:
+                a = sky_to_pixel(p0[0], p0[1], solution)
+                b = sky_to_pixel(p1[0], p1[1], solution)
+                xy = (float(ref_xy[0]) - (b[0] - a[0]), float(ref_xy[1]) - (b[1] - a[1]))
+                out["how"] = "the header pointing"
+        except Exception:
+            xy = None
+    if xy is None or not (math.isfinite(xy[0]) and math.isfinite(xy[1])):
+        return out
+    out.update({"x": xy[0], "y": xy[1],
+                "on": bool(margin <= xy[0] < w - margin and margin <= xy[1] < h - margin)})
+    return out
 
 
 def compose_registration(first: dict, second: dict, shape: tuple[int, int]) -> dict:
@@ -2636,6 +3036,7 @@ def reduce_frame(
     sat_limit: float = 60000,
     aligned: bool = True,
     electrons=None,
+    donut=None,
 ) -> Obs:
     """One calibrated, debayered frame -> one differential magnitude.
 
@@ -2643,6 +3044,8 @@ def reduce_frame(
     magnitude of the comps against the mean of their catalog magnitudes.
     2.2.17 (item 8): electrons = electrons per image unit (a number or a map, see photon_noise_setup) for the photon
     noise; None keeps the measured "variance" (flux in image units as electrons, the pre-2.2.17 model).
+    2.2.19 (#30): donut = the run's defocus decision (field_defocus on the reference frame: the dict, or True/False),
+    so every frame centers the same way; None asks field_defocus about this frame. obs.cen records each star's centring (see Obs.cen).
     """
     exp = header_exptime(header)
     jd = mid_jd(header)
@@ -2652,12 +3055,27 @@ def reduce_frame(
         if comp.catalog_mag is None or not math.isfinite(comp.catalog_mag):
             raise ValueError(f"{comp.name} needs a catalog magnitude in the band you are measuring")
 
+    if donut is not None:
+        # 2.2.19 (#30): the run's decision holds for this frame (recenter asks field_defocus, which reads the cache)
+        seed_field_defocus(img, donut)
+    cen = {"c": []}
+
+    def _cen(sx, sy, ux, uy, mx, my, refused):
+        # 2.2.19 (#30): how far the centring moved the star, and how far the measured spot is from its light
+        try:
+            lc = light_centroid(img, mx, my, radius, sky_inner, sky_outer)
+            off = math.hypot(lc["x"] - mx, lc["y"] - my) if lc["ok"] else float("nan")
+        except Exception:
+            off = float("nan")
+        return {"dx": float(ux - sx), "dy": float(uy - sy), "refused": bool(refused), "lc": float(off)}
+
     tx, ty, shift = recenter(img, target.x, target.y, radius)
     drifted = shift > radius
     # 2.2.8: frames are aligned to well under a pixel, so a big jump means the centring found another star: measure
     # at the aligned position instead.
     jump_limit = recenter_jump_limit(radius) if aligned else float("inf")   # unaligned frames follow drift by centring
     use_x, use_y = (target.x, target.y) if shift > jump_limit else (tx, ty)
+    cen["t"] = _cen(target.x, target.y, tx, ty, use_x, use_y, shift > jump_limit)
     var = measure_aperture(img, use_x, use_y, radius, sky_inner, sky_outer)
     fwhm, elong, peak = shape_metrics(img, use_x, use_y, radius, var["sky"])
 
@@ -2668,8 +3086,10 @@ def reduce_frame(
     comp_peak = float("-inf")
     for comp in comps:
         cx, cy, c_shift = recenter(img, comp.x, comp.y, radius)
+        ux, uy = cx, cy
         if c_shift > jump_limit:
             cx, cy = comp.x, comp.y
+        cen["c"].append(_cen(comp.x, comp.y, ux, uy, cx, cy, c_shift > jump_limit))
         comp_pos.append([round(float(cx), 2), round(float(cy), 2)])
         measured = measure_aperture(img, cx, cy, radius, sky_inner, sky_outer)
         if measured["flux"] <= 0:
@@ -2691,8 +3111,10 @@ def reduce_frame(
     k_pos = None
     if check is not None:
         kx, ky, k_shift = recenter(img, check.x, check.y, radius)
+        ux, uy = kx, ky
         if k_shift > jump_limit:
             kx, ky = check.x, check.y
+        cen["k"] = _cen(check.x, check.y, ux, uy, kx, ky, k_shift > jump_limit)
         chk = measure_aperture(img, kx, ky, radius, sky_inner, sky_outer)
         k_pos = [round(float(kx), 2), round(float(ky), 2)]
 
@@ -2764,6 +3186,7 @@ def reduce_frame(
         target_inst=float(v_inst),
         comp_cat=c_cat,
         pos={"t": [round(float(use_x), 2), round(float(use_y), 2)], "c": comp_pos, "k": k_pos},
+        cen=cen,
     )
 
 
@@ -5648,6 +6071,27 @@ def suggest_apertures(fwhm: float) -> dict:
     return {"radius": r, "sky_in": sky_in, "sky_out": sky_out}
 
 
+def donut_apertures(defocus: dict) -> dict | None:
+    """2.2.19 (#30): apertures for a defocused (donut) field from field_defocus: r = the radius holding 95 % of the
+    light, at least 1.5 x the donut's (quarter-maximum) radius, rounded up to 0.5 px; the sky ring outside the light
+    (from r + 3 and 2.2 x the donut radius) with four times the aperture's area. "clip_below" = 1.5 x the donut
+    radius: a smaller aperture clips the ring. The FWHM of a Gaussian fit means little on a donut (K2-29 b: 8.24 px).
+    None when the field is not defocused."""
+    if not defocus or not defocus.get("donut"):
+        return None
+    rq = float(defocus.get("radius") or float("nan"))
+    r95 = float(defocus.get("r95") or float("nan"))
+    if not math.isfinite(rq):
+        return None
+    clip = 1.5 * rq
+    r = max(clip, r95 if math.isfinite(r95) else clip, 3.0)
+    r = math.ceil(r * 2.0) / 2.0
+    sky_in = float(math.ceil(max(r + 3.0, 2.2 * rq)))
+    sky_out = float(math.ceil(math.sqrt(sky_in ** 2 + 4.0 * r ** 2)))
+    return {"radius": r, "sky_in": sky_in, "sky_out": sky_out, "clip_below": round(clip, 1),
+            "r95": r95, "donut_radius": rq}
+
+
 def sky_inner_radius(r: float, fwhm: float) -> float:
     """2.2.16 (item 1): the sky ring starts at least 1.5 x FWHM outside the aperture (and r + 3, 3.2 x FWHM as before),
     so the star's wings stay out of the sky; the outer radius then keeps the ring's area (4 x the aperture's)."""
@@ -5711,7 +6155,8 @@ def aperture_test_stats(mags_by_r: dict, ref_label: str, has_comp2: bool, boot: 
 
     def series(m):
         comps = m[:, 1] if (not has_comp2 or ref_label == "comp 2") else np.nanmean(m[:, 1:3], axis=1)
-        other = m[:, 3] if ref_label == "check star" else (m[:, 2] if ref_label == "comp 2" else m[:, 0])
+        other = m[:, 3] if ref_label in ("check star", "field star") else (m[:, 2] if ref_label == "comp 2"
+                                                                            else m[:, 0])   # 2.2.19: field star
         return other - comps, m[:, 0] - comps
 
     ref = np.array([series(mags_by_r[r][:n])[0] for r in radii])
@@ -6014,6 +6459,8 @@ def obs_to_dict(obs: Obs) -> dict:
         "comp_vars": list(obs.comp_vars),
         "n_comps": int(obs.n_comps or 0),
         "e_model": int(obs.e_model or 0),   # 2.2.17 (item 8)
+        "raw_peaks": {str(k): (float(v) if v is not None and math.isfinite(float(v)) else None)
+                      for k, v in (obs.raw_peaks or {}).items()},   # 2.2.19 (#16)
     }
 
 
@@ -6057,6 +6504,7 @@ def obs_from_dict(raw: dict) -> Obs:
         comp_vars=[_float_or_nan(v) for v in (raw.get("comp_vars") or [])],
         n_comps=int(raw.get("n_comps") or 0),
         e_model=int(raw.get("e_model") or 0),   # 2.2.17 (item 8): missing = before 2.2.17
+        raw_peaks={str(k): _float_or_nan(v) for k, v in (raw.get("raw_peaks") or {}).items()},   # 2.2.19 (#16)
     )
 
 
@@ -8109,7 +8557,7 @@ def save_extremum_row(path: str, row: dict) -> str:
 
 def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                 spare_names: list[str] | None = None, aliases: dict | None = None,
-                night_sign: dict | None = None) -> dict | None:
+                night_sign: dict | None = None, linear_limit: float | None = None) -> dict | None:
     """Measure each comp, spare comp, and the check star against the others, frame by frame.
 
     For every star, its instrumental magnitude minus the mean of the other stars in the same
@@ -8121,6 +8569,8 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     2.2.14 (item 20): each star's flip step on every night with both sides ("flip_steps": {night: step}, after minus
     before, times night_sign[night] when given so every night reads the same pair of pier sides the same way), with
     "pier" / "pier_kind" from pier_verdicts: steady on both sides, or a stepper.
+    2.2.19 (#16): with linear_limit (raw ADU), each row's "over_linear" = (frames with the star's raw peak at or above
+    it, frames with a recorded raw peak); (0, 0) for series saved before 2.2.19 (no per-star peaks).
     """
     spare_names = list(spare_names or [])
     aliases = aliases or {}
@@ -8260,6 +8710,18 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
             excluded.append(labels[j])
         nightly, summary, resid = evaluate(core_set)
     pier_verdicts(summary)   # 2.2.14 (item 20)
+    if linear_limit is not None and math.isfinite(float(linear_limit)):
+        for row in summary:   # 2.2.19 (#16)
+            name = row["label"][:-len(" (check)")] if row.get("kind") == "check" else row["label"]
+            keys = [name] + list(aliases.get(name, ()))
+            n_with = n_over = 0
+            for o in observations:
+                v = next((o.raw_peaks.get(k) for k in keys if (o.raw_peaks or {}).get(k) is not None), None)
+                if v is None or not math.isfinite(float(v)):
+                    continue
+                n_with += 1
+                n_over += float(v) >= float(linear_limit)
+            row["over_linear"] = (n_over, n_with)
     return {"labels": labels, "kinds": kinds, "nights": night_list, "nightly": nightly, "summary": summary,
             "excluded": excluded, "too_few": False,
             # 2.2.2: frame-by-frame residuals for the within-night plot.
@@ -9022,7 +9484,9 @@ def edge_problems(observations: list, shape: tuple, comp_names: list[str], check
         closest = float(np.nanmin(dist))
         problem = []
         if closest < margin:
-            problem.append(f"comes within {max(closest, 0):.0f} px of the frame edge")
+            # 2.2.19 (nit): say how far in a star has to be, so the user knows where to pick instead
+            problem.append(f"comes within {max(closest, 0):.0f} px of the frame edge (stars at least {margin:.0f} px "
+                           "in are safe)")
         if flat_img is not None:
             fx = np.clip(np.round(xy[:, 0]).astype(int), 0, flat_img.shape[1] - 1)
             fy = np.clip(np.round(xy[:, 1]).astype(int), 0, flat_img.shape[0] - 1)
