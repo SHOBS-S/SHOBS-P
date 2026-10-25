@@ -128,8 +128,16 @@ def load_report(path: str, radec=None) -> dict:
         rep = tc.parse_exoplanet_report(fh.read())
     h = rep["header"]
     t_old = np.asarray(rep["t"], dtype=float)
-    t, note = to_bjd_tdb(t_old, h.get("DATE_TYPE", ""), radec, _float(h.get("OBSLAT")), _float(h.get("OBSLON")))
+    try:
+        t, note = to_bjd_tdb(t_old, h.get("DATE_TYPE", ""), radec, _float(h.get("OBSLAT")), _float(h.get("OBSLON")))
+    except NightError as exc:
+        # review (#18): the planet still comes from the header, so the window can look it up and load this again
+        exc.planet, exc.host = h.get("EXOPLANET_NAME", ""), h.get("STAR_NAME", "")
+        raise
     shift = float(np.nanmedian(t - t_old)) if len(t) else 0.0
+    rplanet = tc.planet_from_report(rep)
+    if rplanet.get("t0") and shift:
+        rplanet["t0"] = rplanet["t0"] + shift      # review (#18): the report's own T0 moves with its times
     single = rep["results"].get("Tc")
     flip = tc.report_flip_time(h)
     night = {"kind": "report", "path": path, "source": os.path.basename(path), "planet": h.get("EXOPLANET_NAME", ""),
@@ -137,7 +145,7 @@ def load_report(path: str, radec=None) -> dict:
              "software": h.get("SOFTWARE", ""), "t": t, "flux": rep["flux"], "err": rep["err"],
              "airmass": rep["airmass"], "t_flip": (flip + shift) if flip is not None else None,
              "single_tc": ((single[0] + shift, single[1]) if single and single[0] is not None else None),
-             "time_note": note, "report_planet": tc.planet_from_report(rep), "notes": []}
+             "time_note": note, "report_planet": rplanet, "notes": []}
     if "NO TRANSIT MEASURED" in str(h.get("NOTES", "")).upper():
         night.update(user_off=True, off_reason="its single-night fit found no transit")
     return _finish_night(night)
@@ -235,7 +243,10 @@ def night_label(n: dict) -> str:
     if n.get("obsdate"):
         return str(n["obsdate"])
     if len(n.get("t", [])):
-        return tc.jd_to_local(float(n["t"][0])).strftime("%d-%b-%Y").upper()
+        # review (#18): the reports' convention: the UT date of the first point
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp((float(n["t"][0]) - 2440587.5) * 86400.0, tz=timezone.utc).strftime(
+            "%d-%b-%Y").upper()
     return n.get("source", "")
 
 
@@ -244,8 +255,6 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None) -> Non
     no predicted transit in the data (left out); ⚠ a filter other than most nights' (depth and limb darkening may
     differ). Nights the user left out by hand ("user_off") stay out."""
     want = norm_name(planet_name)
-    filters = [str(n.get("filter") or "").upper() for n in nights if not n.get("error")]
-    main_filter = max(set(filters), key=filters.count) if filters else ""
     kept = []
     for n in nights:
         n["status"], n["use"] = ("ok", "✔ ready"), True
@@ -275,13 +284,17 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None) -> Non
             n["status"], n["use"] = ("off", f"— left out: {why} (Leave out / put back includes it)" if why else
                                      "— left out by you"), False
             continue
-        if main_filter and str(n.get("filter") or "").upper() != main_filter:
-            n["status"] = ("warn", f"⚠ filter {n.get('filter') or '?'} (most nights {main_filter}): depth and limb "
-                                   "darkening may differ; consider Depth per filter")
-        elif any(lvl == "info" for lvl, _t in n.get("notes", [])) or n.get("time_note"):
+        if any(lvl == "info" for lvl, _t in n.get("notes", [])) or n.get("time_note"):
             n["status"] = ("ok", "✔ ready (" + "; ".join([n["time_note"]] if n.get("time_note") else []
                                                          + [t for lvl, t in n.get("notes", []) if lvl == "info"]) + ")")
         kept.append(n)
+    # review (#18): the filter most of the nights in use have (left-out nights do not count)
+    filters = [str(n.get("filter") or "").upper() for n in kept]
+    main_filter = max(set(filters), key=filters.count) if filters else ""
+    for n in kept:
+        if main_filter and str(n.get("filter") or "").upper() != main_filter:
+            n["status"] = ("warn", f"⚠ filter {n.get('filter') or '?'} (most nights {main_filter}): depth and limb "
+                                   "darkening may differ; consider Depth per filter")
 
 
 # ---- Joint model ------------------------------------------------------------------------------------------------
@@ -354,6 +367,10 @@ class JointProblem:
             if not (d["t"][0] - 0.2 < x[itc] < d["t"][-1] + 0.2):
                 return False
             if ist is not None and abs(x[ist]) >= 0.5:
+                return False
+            # review (#18): the same limits as the least-squares bounds
+            if not 0.5 < x[_c0] < 1.5 or (_cam is not None and abs(x[_cam]) >= 1.0) or \
+                    (_ct is not None and abs(x[_ct]) >= 1.0):
                 return False
         return True
 
@@ -545,7 +562,7 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
         alt.append(x)
     x = _least_squares(prob, prob.start, alt)
     # 3. Each night's errors from its joint residuals.
-    scales, rchis, betas = [], [], []
+    scales, rchis, betas, rules = [], [], [], []
     for j, d in enumerate(prob.nights):
         resid = d["flux"] - prob.night_model(x, j)
         npar = 1 + sum(1 for i in prob._in[j][1:] if i is not None)
@@ -554,7 +571,12 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
         beta = tc.red_noise_beta(d["t"], resid, cad)
         rchis.append(rchi)
         betas.append(beta)
-        scales.append(max(1.0, math.sqrt(rchi) * beta))
+        # review (#18): SHOBS-P files (and the page's fit) carry the single-night fit's scaled errors already, so
+        # max(1, sqrt(chi2_nu) * beta) keeps beta from counting twice; other software (EXOTIC) gets the single-night
+        # rule sqrt(max(chi2_nu, 1)) * beta.
+        pre = prescaled(use[j])
+        rules.append("pre-scaled (SHOBS-P)" if pre else "single-night rule")
+        scales.append(max(1.0, math.sqrt(rchi) * beta) if pre else math.sqrt(max(rchi, 1.0)) * beta)
     prob.set_errors(scales)
     say("  error bars x" + ", x".join(f"{s:.2f}" for s in scales) + " (χ²ν " + ", ".join(f"{r:.2f}" for r in rchis)
         + "; β " + ", ".join(f"{b:.2f}" for b in betas) + ")")
@@ -595,7 +617,7 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "t": d["t"] + d["t_ref"], "flux": d["flux"], "err": d["err"], "model": model, "baseline": base,
             "detrended": d["flux"] / base, "residuals": resid, "rms": float(np.std(resid)),
             "rms_bin10": tc.binned_rms(d["t"], resid, 10.0), "n_points": len(d["t"]), "error_scale": scales[j],
-            "rchi2_raw": rchis[j], "beta": betas[j], "chi2": chi2s[j], "group": d["group"],
+            "rchi2_raw": rchis[j], "beta": betas[j], "chi2": chi2s[j], "group": d["group"], "scale_rule": rules[j],
             "airmass": n.get("airmass") is not None and prob._in[j][2] is not None,
             "flip": prob._in[j][4] is not None, "time_note": n.get("time_note", ""), "index": j})
         _ = itc
@@ -607,6 +629,11 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "rchi2": float(sum(chi2s)) / max(n_data - len(prob.free), 1),
             "detrend": [nm for nm, on in (("airmass", detrend_airmass), ("time", detrend_time)) if on],
             "per_filter": per_filter}
+
+
+def prescaled(night: dict) -> bool:
+    """Review (#18): errors already scaled by a SHOBS-P single-night fit (SHOBS-P reports, fit CSVs, the page)."""
+    return night.get("kind") in ("csv", "current") or str(night.get("software") or "").upper().startswith("SHOBS-P")
 
 
 def _majority_filter(nights) -> str:
@@ -621,8 +648,9 @@ def _med_err(v):
 
 # ---- Timing: O − C and linear ephemerides -----------------------------------------------------------------------
 def parse_ephemeris(t0, t0_err, period, period_err, source: str = "") -> dict:
-    """A typed ephemeris (strings or numbers). T0 must be a BJD_TDB (2,4xx,xxx.x); a reduced JD (5x,xxx) or MJD is
-    accepted and said so. Uncertainties may be blank (then not known: O − C sigma has the fit's part only)."""
+    """A typed ephemeris (strings or numbers). T0 must be a BJD_TDB (2,4xx,xxx.x); a reduced JD (BJD − 2,400,000, e.g.
+    60217.71769) is accepted and said so (an MJD, 2,400,000.5 lower, is not: type the full BJD). Uncertainties may
+    be blank (then not known: O − C sigma has the fit's part only)."""
     def num(v, what, required=True):
         s = str(v if v is not None else "").strip().replace("±", "").replace("+/-", "").replace(",", ".")
         if not s:
@@ -638,7 +666,7 @@ def parse_ephemeris(t0, t0_err, period, period_err, source: str = "") -> dict:
     note = ""
     if 40000 < t0v < 100000:
         t0v += 2400000.0
-        note = "T0 read as a reduced JD (+2,400,000)"
+        note = "T0 read as a reduced BJD (+2,400,000); type the full BJD_TDB if it was an MJD"
     if not 2.3e6 < t0v < 2.6e6:
         raise ValueError(f"T0 {t0v} is not a BJD_TDB (expected 2,4xx,xxx.x)")
     if not 0.05 < pv < 1000:
@@ -753,10 +781,16 @@ def timing_analysis(nights: list, eph_in: dict | None, eph_alt: dict | None = No
                          "nsigma": oc / (s * 1440.0) if s > 0 else float("nan"), "pred_err_min": ps * 1440.0})
         lin["source"] = "this joint fit (weighted least squares)"
         out["own"] = {"eph": lin, "rows": rows}
-    if eph_in and eph_in.get("t0") and eph_in.get("period"):
+    out["counted_from"] = "input" if out["input"] else "first night"
+    if lin is not None:
+        lin["count"] = out["counted_from"]
+    # Review (#18): an EXOTIC report's QC-XC mid-time is EXOTIC's prediction for one of these very nights, not an
+    # independent measurement, so it never enters the combined ephemeris.
+    if eph_in and eph_in.get("t0") and eph_in.get("period") and not eph_in.get("is_prediction"):
         comb = linear_ephemeris(out["epochs"], tcs, sig, prior=eph_in)
         if comb is not None and comb["prior"]:
             comb["source"] = "this joint fit with the input ephemeris's T0 and P as two more measurements"
+            comb["count"] = "input"
             out["combined"] = comb
     out["statements"] = timing_statements(out)
     return out
@@ -793,10 +827,12 @@ def timing_statements(a: dict) -> list:
                               f"{agree}."))
         elif eph.get("t0_err") is not None and abs(m) <= 2.0 * float(np.mean(epe)):
             out.append(("info", f"Against {name} all {n} nights run {'late' if m > 0 else 'early'} by "
-                                f"{m:+.1f} ± {sm:.1f} min on average (fit errors only), and {agree}. That ephemeris "
-                                f"predicts these epochs only to {eph_txt}, so the offset is the ephemeris's own "
-                                "error (it is out of date), not timing variations in the data. Use an up-to-date "
-                                "ephemeris; the joint fit's own is below."))
+                                f"{m:+.1f} ± {sm:.1f} min on average (fit errors only), and {agree}. The offset is within "
+                                f"what that ephemeris can predict ({eph_txt} at these epochs), so it is most likely "
+                                "the ephemeris, not the data (a constant offset can also come from a clock or "
+                                "time-system error, e.g. exposure start instead of mid, or JD_UTC labeled BJD_TDB). "
+                                "A current ephemeris (e.g. Exoplanet Watch's or ExoClock's, typed as the alternative) "
+                                "settles it."))
         elif eph.get("t0_err") is None:
             out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), and {agree}. That ephemeris states no uncertainty, "
@@ -845,8 +881,13 @@ def eph_line(e: dict) -> str:
     return f"T0 {e['t0']:.7f}{te} BJD_TDB, P {e['period']:.9f}{pe} d"
 
 
+COMBINED_CAVEAT = ("for comparison only: the input T0 and P are taken as independent measurements; not valid if the "
+                   "input ephemeris already includes these nights")
+
+
 def lin_line(lin: dict) -> str:
-    return (f"T0 {lin['t0']:.7f} +/- {lin['t0_err']:.7f} BJD_TDB (epoch {lin['n_ref']} of the input count), "
+    count = "of the input ephemeris's count" if lin.get("count", "input") == "input" else "counted from the first night"
+    return (f"T0 {lin['t0']:.7f} +/- {lin['t0_err']:.7f} BJD_TDB (epoch {lin['n_ref']} {count}), "
             f"P {lin['period']:.9f} +/- {lin['period_err']:.9f} d, cov(T0,P) {lin['cov']:.4e} d^2 (correlation "
             f"{lin['corr']:+.3f}), chi2_red {lin['chi2_red']:.2f} ({lin['dof']} dof)"
             + (", errors scaled by sqrt(chi2_red)" if lin["scaled"] else ""))
@@ -879,7 +920,8 @@ def write_timing_csv(path: str, fit: dict, a: dict, meta: dict | None = None) ->
         lines.append(f"# Updated ephemeris from these nights (oc_own columns; weighted least squares): "
                      f"{lin_line(a['own']['eph'])}")
     if a.get("combined"):
-        lines.append(f"# Updated ephemeris, these nights + input T0 and P as measurements: {lin_line(a['combined'])}")
+        lines.append(f"# Comparison ephemeris, these nights + input T0 and P ({COMBINED_CAVEAT}): "
+                     f"{lin_line(a['combined'])}")
     lines.append("# O-C sigma: oc_*_err_min = Tc error and the ephemeris's propagated error "
                  "sqrt(sigma_T0^2 + (n sigma_P)^2) in quadrature (oc_own: Tc error only)")
     lines = [core.ascii_safe(x) for x in lines]
@@ -966,7 +1008,8 @@ def draw(fig, fit: dict, a: dict, title: str = "") -> None:
         if i < len(panels) - 1:
             ax.tick_params(labelbottom=False)
         else:
-            ax.set_xlabel("Epoch (input ephemeris count)", fontsize=9)
+            ax.set_xlabel("Epoch (input ephemeris count)" if a.get("counted_from", "input") == "input" else
+                          "Epoch (counted from the first night)", fontsize=9)
     # Stacked light curves.
     axl = fig.add_subplot(gs[:, 1])
     nights = [fit["nights"][i] for i in a["order"]]
@@ -1056,7 +1099,9 @@ def _eph_from_planet(p: dict | None) -> dict | None:
     if not p or not p.get("t0") or not p.get("period"):
         return None
     return {"t0": float(p["t0"]), "t0_err": p.get("t0_err"), "period": float(p["period"]),
-            "period_err": p.get("period_err"), "t14": p.get("t14"), "source": tc.ephemeris_source(p)}
+            "period_err": p.get("period_err"), "t14": p.get("t14"), "source": tc.ephemeris_source(p),
+            # review (#18): EXOTIC's QC-XC predicted mid-time for one of the nights, not a measurement
+            "is_prediction": "QC-XC" in str(p.get("eph_source") or "")}
 
 
 class MultiNightWindow:
@@ -1136,7 +1181,8 @@ class MultiNightWindow:
         ttk.Button(alt, text="Apply", command=self.apply_alt).pack(side=LEFT, padx=(8, 0))
         ttk.Button(alt, text="Clear", command=self.clear_alt).pack(side=LEFT, padx=(4, 0))
         self.alt_text = StringVar(value="Optional: e.g. Exoplanet Watch's or ExoClock's current ephemeris, typed or "
-                                        "pasted; blank ± = not known.")
+                                        "pasted; T0 as a full BJD_TDB (or reduced, BJD − 2,400,000); blank ± = not "
+                                        "known.")
         ttk.Label(top, textvariable=self.alt_text, style="Hint.TLabel").pack(anchor=W)
 
         opts = ttk.Frame(top, style="Card.TFrame")
@@ -1175,10 +1221,15 @@ class MultiNightWindow:
         self.ttree.tag_configure("warn", foreground="#b35c00")
         self.ttree.pack(fill=X, pady=(4, 2))
         # The plain-words reading (on time / the ephemeris is out of date / outliers) right under the table.
-        self.reading = Text(top, height=3, wrap="word", font=(core.UI_FONT, 10), relief="flat", bg="#ffffff")
+        rbox = ttk.Frame(top, style="Card.TFrame")
+        rbox.pack(fill=X, pady=(2, 2))
+        self.reading = Text(rbox, height=3, wrap="word", font=(core.UI_FONT, 10), relief="flat", bg="#ffffff")
         for lvl, color in LEVEL_COLORS.items():
             self.reading.tag_configure(lvl, foreground=color)
-        self.reading.pack(fill=X, pady=(2, 2))
+        rscroll = ttk.Scrollbar(rbox, orient="vertical", command=self.reading.yview)
+        self.reading.configure(yscrollcommand=rscroll.set)
+        rscroll.pack(side=RIGHT, fill="y")
+        self.reading.pack(side=LEFT, fill=X, expand=True)
 
         bottom = ttk.Frame(top, style="Card.TFrame")
         bottom.pack(fill=X, side="bottom", pady=(6, 0))
@@ -1270,6 +1321,12 @@ class MultiNightWindow:
                 self.planet.update({k: got.get(k) for k in ("t0", "t0_err", "period", "period_err", "ra", "dec",
                                                               "reference", "source") if got.get(k) is not None})
                 self.planet.pop("eph_source", None)
+                # review (#18): a planet from a report lacks Teff (limb darkening), b and the rest: fill what is
+                # missing from the lookup, never overwrite what the page or the report gave.
+                for k in ("teff", "logg", "b", "b_err", "k", "k_err", "t14", "a_rs", "a_rs_err", "inc", "host",
+                          "depth", "tic"):
+                    if self.planet.get(k) is None and got.get(k) is not None:
+                        self.planet[k] = got[k]
             else:
                 self.planet = dict(got)
             self.prog_text.set(f"Ephemeris: {tc.ephemeris_source(self.planet)}.")
@@ -1277,7 +1334,19 @@ class MultiNightWindow:
             self.prog_text.set(f"✖ No ephemeris found for {name}" + (f" ({why})" if why else "")
                                + "; type one as the alternative to see O − C.")
         self._show_planet()
+        self._reload_failed()
         self.refresh_nights()
+
+    def _reload_failed(self):
+        """Review (#18): files refused for want of the star's RA/Dec (JD_UTC times) load again once it is known."""
+        if self._radec() is None:
+            return
+        for i, n in enumerate(list(self.nights)):
+            if n.get("error") and "RA/Dec" in n["error"] and n.get("path"):
+                try:
+                    self.nights[i] = load_night(n["path"], self._radec())
+                except Exception as exc:
+                    n["error"] = str(exc)
 
     def apply_alt(self):
         v = self.alt_vars
@@ -1334,7 +1403,8 @@ class MultiNightWindow:
                 night = load_night(path, self._radec())
             except Exception as exc:
                 night = {"kind": "file", "path": path, "source": os.path.basename(path), "error": str(exc),
-                         "t": np.array([]), "notes": []}
+                         "t": np.array([]), "notes": [], "planet": getattr(exc, "planet", ""),
+                         "host": getattr(exc, "host", "")}
             self.nights.append(night)
             if self.planet is None and night.get("planet"):
                 rp = night.get("report_planet") or {"name": night["planet"]}
@@ -1460,7 +1530,7 @@ class MultiNightWindow:
         threading.Thread(target=work, daemon=True).start()
 
     def _progress(self, token, phase, done, total):
-        if token is not self._token:
+        if token is not self._token or getattr(self, "_closed", False):
             return
         if phase == "joint":
             self.bar.configure(mode="indeterminate")
@@ -1487,6 +1557,8 @@ class MultiNightWindow:
             return
         self._running = False
         self.app._end_job()
+        if getattr(self, "_closed", False):
+            return
         try:
             self.bar.stop()
             self.bar.configure(mode="determinate")
@@ -1546,7 +1618,14 @@ class MultiNightWindow:
         st = list(a.get("statements") or [])
         for lvl, text in st:
             t.insert(END, text + "\n", lvl)
-        t.configure(state="disabled", height=min(max(len(st) + 1, 2), 6))
+        t.configure(state="disabled", height=min(max(len(st) + 1, 2), 8))
+        # review (#18): as many lines as the wrapped text needs (up to 8; the scroll bar reaches the rest)
+        try:
+            t.update_idletasks()
+            n_lines = int(t.count("1.0", "end", "displaylines")[0])
+            t.configure(height=min(max(n_lines, 2), 8))
+        except Exception:
+            pass
 
     def _placeholder(self, text):
         if self.fig is None:
@@ -1610,12 +1689,11 @@ class MultiNightWindow:
         self.app.saved_notice(path)
 
     def close(self):
+        # review (#18): a fit still running is canceled; the app stays busy until its thread really ends (_done),
+        # so no second job starts beside a least-squares step that cannot stop mid-way.
+        self._closed = True
         if self._running:
             self.app.cancel_job()
-        self._token = None
-        if self._running:
-            self._running = False
-            self.app._end_job()
         try:
             self.win.destroy()
         except Exception:
@@ -1667,14 +1745,15 @@ def summary_lines(fit: dict, a: dict) -> list:
         out.append(("info", "O − C own fit (Tc error only): updated ephemeris " + lin_line(a["own"]["eph"])
                     .replace("+/-", "±")))
     if a.get("combined"):
-        out.append(("info", "With the input T0 and P as measurements: " + lin_line(a["combined"]).replace("+/-", "±")))
+        out.append(("off", f"Comparison ({COMBINED_CAVEAT}): these nights with the input T0 and P "
+                           + lin_line(a["combined"]).replace("+/-", "±")))
     out.append(("head", "Reading"))
     out += list(a.get("statements") or [])
     notes = []
     for n in fit["nights"]:
         bits = []
-        if n["error_scale"] > 1.0001:
-            bits.append(f"error bars ×{n['error_scale']:.2f} (χ²ν {n['rchi2_raw']:.2f}, β {n['beta']:.2f})")
+        bits.append(f"error bars ×{n['error_scale']:.2f} ({n.get('scale_rule', '')}; χ²ν {n['rchi2_raw']:.2f}, "
+                    f"β {n['beta']:.2f})")
         if n.get("time_note"):
             bits.append(n["time_note"])
         if not n.get("airmass") and "airmass" in fit["detrend"]:
