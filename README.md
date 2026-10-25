@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23417064.svg)](https://doi.org/10.5281/zenodo.23417064)
 
-A Windows desktop app for differential aperture photometry with one-shot-color (OSC) and monochrome
+A desktop app (Windows, macOS, Linux) for differential aperture photometry with one-shot-color (OSC) and monochrome
 astronomical cameras. It takes you from raw FITS frames to a calibrated light curve and an AAVSO-ready report in
 one window.
 
@@ -62,7 +62,7 @@ Sloan g′r′i′), and error bars from the CCD equation plus scintillation (Me
 
 ## Requirements
 
-- Windows 10 or 11
+- Windows 10 or 11, macOS (12 Monterey or newer, python.org Python), or Linux (Python with Tkinter)
 - Python 3.11 or newer: [python.org](https://www.python.org/downloads/) (check "Add python.exe to PATH") or Anaconda/Miniconda
 - Packages (installed automatically): numpy, scipy, matplotlib, astropy, photutils, ccdproc
 
@@ -75,6 +75,8 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
 
 ## Install
 
+### Windows
+
 1. Install **Python 3.11 or newer** from [python.org](https://www.python.org/downloads/). On the first installer
    screen, tick **"Add python.exe to PATH"**.
 2. Download **`SHOBS-P_v<version>.zip`** from the latest [release](../../releases/latest) and unzip it somewhere
@@ -84,6 +86,30 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
    on the Desktop and in the Start menu.
 4. Double-click **`Run self-test.bat`**. It changes nothing, takes a minute, and should end with
    `RESULT: ALL PASSED` in `selftest_log.txt`.
+
+### Linux
+
+1. Install Python 3.11 or newer with Tkinter (Debian/Ubuntu/Mint: `sudo apt install python3-tk python3-venv`;
+   Fedora: `sudo dnf install python3-tkinter`; Arch: `sudo pacman -S tk`).
+2. Unzip SHOBS-P anywhere in your home folder.
+3. Open a terminal in the `clearv_photometry` folder and type `./run_linux.sh`. The first start finds a working
+   Python, sets up SHOBS-P's own environment in `~/.local/share/SHOBS-P/python-env` and downloads the packages (a
+   few minutes); later starts skip the download unless a new version needs other packages.
+4. `./run_linux.sh --desktop` adds SHOBS-P to your applications menu (no sudo). `./run_selftest.sh` checks the
+   install; the log is `selftest_log.txt`.
+
+### Mac
+
+1. Install Python from [python.org](https://www.python.org/downloads/macos/) (it includes Tk). Homebrew's Python also
+   works with `brew install python-tk@3.13`.
+2. Unzip SHOBS-P, for example into Documents.
+3. Double-click **Start SHOBS-P.command**. The first time macOS may refuse a file from an unidentified developer:
+   right-click (or Control-click) it, choose **Open**, then **Open** again (once only). The first start sets up
+   SHOBS-P's own environment in `~/Library/Application Support/SHOBS-P/python-env` and downloads the packages; keep
+   the Terminal window open while SHOBS-P runs.
+4. Double-click **Run self-test.command** to check the install.
+
+To start afresh on Linux or a Mac, delete that SHOBS-P folder; the next start sets everything up again.
 
 ## Quick start
 
@@ -109,7 +135,7 @@ Every page and button is described in **[README.txt](README.txt)** (also in the 
 
 ## Known limitations
 
-- **Made for Windows** (10 or 11). It is plain Python and also runs on a Mac (python.org Python, which includes Tk; start it with `python clearv_app.py`); the Mac is lightly tested so far.
+- **Windows is the most tested.** Linux and Mac launchers are new in 2.2.19; reports from Linux and Mac users are especially welcome.
 - **Color (OSC) cameras are the most tested.** Monochrome cameras are supported (V, B, R, clear and LRGB imaging
   filters, and Sloan g′ r′ i′ z′ u′ since 2.2.17); that path is newer, so reports from mono users are especially welcome.
 - **Johnson/Cousins I is not supported yet**: the comparison-star catalogs used carry B, V, R and Sloan only.
@@ -126,7 +152,7 @@ user folder (`C:\Users\<you>`).
 
 ## Documentation
 
-**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, written for 2.2.18) walks you through the program task
+**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, updated for 2.2.19) walks you through the program task
 by task: installing, your first night, reducing a variable star, fitting a transit, scanning a field, and what every
 message means.
 

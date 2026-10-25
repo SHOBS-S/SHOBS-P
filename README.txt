@@ -1,7 +1,7 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.18.1
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.19
 ======================================================
 
-Windows desktop app for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
+Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
 reports, exoplanet transit fits and AAVSO exoplanet reports, and a field scan that finds stars that vary.
 
 Quick start
@@ -45,6 +45,18 @@ app's ID, so the pin keeps the SHOBS-P icon and name. The shortcut starts the ap
 window; any error message is shown in the app and written to .shobs_p.log in your user folder. Run it again if you
 move the folder. run_windows.bat still works and shows the console, which is handy when something goes wrong.
 
+Run on Linux or a Mac (2.2.19)
+Linux: install Python 3.11+ with Tkinter (Debian/Ubuntu: sudo apt install python3-tk python3-venv; Fedora: sudo dnf
+install python3-tkinter; Arch: sudo pacman -S tk), unzip SHOBS-P in your home folder, open a terminal there and type
+./run_linux.sh (the first start sets up SHOBS-P's own environment in ~/.local/share/SHOBS-P and downloads the
+packages; later starts skip that). ./run_linux.sh --desktop adds an applications-menu entry; ./run_selftest.sh checks
+the install.
+Mac: install Python from python.org (it includes Tk), unzip SHOBS-P, and double-click "Start SHOBS-P.command". The
+first time macOS may refuse a file from an unidentified developer: right-click it, Open, Open. Keep the Terminal
+window open while SHOBS-P runs. "Run self-test.command" checks the install. SHOBS-P's environment lives in
+~/Library/Application Support/SHOBS-P.
+Starting afresh: delete that SHOBS-P folder (Linux or Mac) and the next start sets everything up again.
+
 Modes (2.0)
 The three buttons at the top of the sidebar switch modes; the whole frame takes the mode's color and the banner
 names it. Input, Blink, and Calibrate are shared, and calibrated frames and marked stars carry over.
@@ -53,6 +65,79 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.19 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables;
+GitHub issue numbers in brackets)
+- S  Defocused (donut) stars are centered on their light, not on the bright side of the ring [#30]. SHOBS-P
+     decides once per run whether the field is defocused; then every star is centered on its light centroid,
+     Suggest sizes the aperture to hold 95 % of the light, Run warns when the aperture would clip the ring, and the
+     Log reports how much each aperture jittered. In-focus fields are measured exactly as before.
+- S  After a meridian flip the comp and check apertures land on their stars again [#24]: flipped frames are checked
+     on up to 15 stars' centers. When the frame the stars were marked on is rejected in Blink, the first kept frame
+     becomes the reference. A night whose flip step looks like an aperture problem (the check star steps too, or
+     comp and check jump together) is not saved to the series without asking; "No" keeps the file as it was until
+     Save series.
+- S  Target not on the first frame [#9]: SHOBS-P steps forward to the first frame that holds it, uses that as the
+     reference, skips the frames that miss it and lists them ("not on the frame in 5 of 142 images (frames 1-5)").
+- S  Linear limit [#16]: a "linear ADU" box beside the saturation level (empty = no change). A comp or target whose
+     raw peak nears it gets a caution when you pick it, the run counts the frames over it, and Comp health has an
+     "Over linear limit" column.
+- S  New reduction [#20]: a New reduction button on the Input page, and when the lights are another star SHOBS-P
+     asks "These frames are DY Peg, not BL Cam. Start a new reduction?". The old series (save offered), Use comps
+     choice, target, comps, check, watch stars and rejected frames are cleared, so one star's comps are never applied
+     to another's night. The Input page also warns when the dark's exposure differs from the lights'.
+- S  Calibration frames found in the Lights folder (for example MicroObservatory darks) are offered for use instead
+     of being skipped [#38]; dark-flats are never taken as flats.
+- S  The Photometry page's comps follow Use comps [#34]: markers and the comp box show the comps in use; the others
+     are still measured as spares, and choosing the original set puts them back.
+- S  Suggested comps are thick green rings labeled S1, S2... with a line each in the star panel; AAVSO sequence
+     stars are thin dashed cyan rings with their V label; a small key on the image [#15].
+- S  Small images at 125-150 % display scaling [#10]: the Log gives up lines to let a small frame (MicroObservatory)
+     grow, and a "Pop out" hint appears when the image is still small.
+- S  AAVSO sequence (VSP) requests go to apps.aavso.org, retry in the background (2, 5, 15 s) without holding up the
+     solve, and say exactly what happened ("did not answer (503 from apps.aavso.org)") [#11].
+- S  Save field image [#28]: the reference frame, N up and E left, compass, scale bar, target/comps/check with their
+     apertures, saved beside a report (with the AAVSO chart of the same field when VSP answers).
+- S  "Measured with r 8, sky 14-22 px" under the Photometry options; it turns orange when the boxes no longer match
+     the photometry ("run photometry again to apply it") [#41].
+- S  Newer MicroObservatory files are recognized (site, focal length and frame size), so their site and optics are
+     never saved as yours [#37]. Saved names typed with an extension in the middle (...txt.2.txt) are tidied, never
+     overwrite a file, and every file of one save (report, CSV, PNG, corner plot, settings, field image) shares its
+     number [#42].
+- S  Busy indicator on the Star ID and planet lookups (service named, seconds counting); focal length, pixel size
+     and a clear mount type from your own headers are remembered when the setting is empty.
+- S  Aperture cautions: r larger than 2.5 x FWHM carried over from another target, or too small for a donut; the
+     near-edge note says how far in a star must be. Suggest works without a check star and in Discovery.
+- T  Multi-night transit analysis [#18] (Multi-night... on the Transit fit page): load several nights of one planet
+     (AAVSO exoplanet reports, SHOBS-P fit CSVs, the night on the page); one joint fit with a shared shape and
+     per-night Tc, baseline and detrending; a timing table with O-C against the input ephemeris, a typed alternative
+     (for example Exoplanet Watch's) and the nights' own updated ephemeris (with its covariance); O-C diagram,
+     stacked light curve, and an ExoClock-ready timing CSV.
+- T  Tc against the ephemeris [#29]: the predicted Tc for the epoch with its uncertainty, O-C in minutes and in
+     sigma, on the page, in the report notes and in the fit CSV (correct for epochs before T0 too).
+- T  Corner plot... [#31]: the MCMC posterior of every fitted parameter, with a warning when one piles up against
+     its allowed range ("the error bar is not a measurement"); saved beside the transit PNG. Credible bands (68 % and
+     95 %) shaded around the fitted curve (tick box to hide them). Tc is bounded only by the data span, never by a
+     window around the prediction.
+- T  #BINNING in reports is the camera's binning (MicroObservatory 2x2); SHOBS-P's processing bin goes in #NOTES
+     [#27]. The report notes and a <name>_settings.txt record the reduction settings (aperture, sky, bins, comps,
+     check, frames left out, detrending, calibration, gain) so a result can be reproduced [#40], and the gain and
+     where it came from are shown [#39].
+- T  Legend under the plot (never on the data); a runaway free-shape fit says "not constrained"; "Both" detrending
+     that absorbs the transit says so and which single trend detects it.
+- D  Saturation is judged on the raw pixels on every frame (clipped on 2 or more frames = saturated) [#25].
+     Crowding is the share of a neighbor's light that falls in the aperture: 1 % or more leaves the star out,
+     0.2 % or more gives a "blended neighbor" caution [#26].
+- D  Output: a selected candidate can be unselected (click again, Ctrl+click or Escape) [#13]; Hide known variables
+     hides them from the list, the plot and the image [#14]; click or drag on the scatter plot and Mark on image
+     [#12]. Drifting stars say "no period (drift)".
+- V  Period search starts at 0.02 d (was 0.05) and warns when the VSX or marked period is outside the range, with a
+     one-click wider search; short periods are searched on every point when bins are too coarse [#19].
+- V  Output heading and Series box name the star (and its AUID); Remove night lists dates; Save light-curve CSV runs
+     in the background with a spinner.
+- S  Linux and Mac launchers [#23, #33]: run_linux.sh and run_selftest.sh (Linux, with an optional applications-menu
+     entry), Start SHOBS-P.command and Run self-test.command (Mac). Like Windows they find a working Python 3.11+ with
+     Tk and keep SHOBS-P's own environment (~/.local/share/SHOBS-P or ~/Library/Application Support/SHOBS-P).
 
 New in 2.2.18.1 (install fix; no change to the program itself)
 - S  The start files find Python by testing it, not by trusting the Windows "py" launcher. Create shortcuts.bat,
@@ -886,6 +971,16 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.19 Donut (defocused) centring (#30); comp/check after a flip and reference from the first kept frame (#24);
+       target not on the first frame (#9); linear limit (#16); New reduction and the next star's state (#20);
+       calibration frames in the Lights folder (#38); comps follow Use comps (#34); S1 rings and dashed sequence
+       rings (#15); small images at 125 % (#10); VSP on apps.aavso.org with retries (#11); field image (#28);
+       multi-night transit analysis (#18); Tc O-C (#29); corner plot, prior-bound flag and credible bands (#31);
+       camera #BINNING (#27); newer MicroObservatory files (#37); gain and settings record (#39, #40); aperture
+       applied label (#41); save names (#42); Discovery raw saturation and flux-leak crowding (#25, #26), Output
+       selection, Hide known, Mark on image (#12-#14); period search from 0.02 d (#19); Linux and Mac launchers
+       (#23, #33).
+2.2.18.1 Install fix: Python found by testing it; SHOBS-P's own environment.
 2.2.18 Alt-az mounts and derotators; markers centered from a star's wing and a pre-run marker check; RGB
        pre-calibrated frames; mono detection from the lights; remembered optics and observer code; editable
        comp catalog magnitudes; Keep-question buttons; timestamped log file; save prompt on close; duplicate
