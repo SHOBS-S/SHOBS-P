@@ -860,6 +860,16 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         pf["tc"] += t_ref
         free_fit = {"p": pf, "chi2": chi2f, "depth": pf["k"] ** 2,
                     "t14": total_duration(period, pf["a_rs"], min(pf["b"], pf["a_rs"] * 0.999), pf["k"])}
+        # 2.2.19 (nit): a free shape that runs away (Jeff's TrES-2 b: 16 % depth) is "not constrained", not numbers.
+        try:
+            import transit_posterior as tpost
+            ef = dict(zip(prob_f.free, map(float, lsq_errors(prob_f))))
+            pub, pub_label = published_depth(planet)
+            ref, ref_label = (pub, f"published {pub_label}") if pub else (summary["depth"][0], "MCMC depth")
+            free_fit["err"] = ef
+            free_fit["unconstrained"] = tpost.free_shape_unconstrained(free_fit, ef, ref, ref_label)
+        except Exception:
+            free_fit["unconstrained"] = ""
     except Exception as exc:
         say(f"  free-shape check skipped: {exc}")
     flip = None
@@ -871,6 +881,16 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     model = prob_s.model(best)
     base = prob_s.baseline(best)
     resid = flux - model
+    # 2.2.19 (#31): parameters pinned against their allowed range, and the credible bands for the plot (from the same
+    # chain; capped draws, so a second or less). Neither may cost the fit.
+    bound_flags, bands = [], None
+    try:
+        import transit_posterior as tpost
+        bound_flags = tpost.prior_bound_flags(prob_s, chain["flat"])
+        bands = tpost.credible_bands(prob_s, chain["flat"], best)
+        bands["t"] = bands["t"] + t_ref
+    except Exception as exc:
+        say(f"  posterior checks skipped: {exc}")
     best["tc"] += t_ref
     summary["tc"] = (summary["tc"][0] + t_ref, summary["tc"][1])
     fmask = S["flagged"]
@@ -894,8 +914,10 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         "with_flagged": ({"n": int(fmask.sum()), "label": flagged_label, "factor": FLAGGED_ERR_FACTOR}
                          if fmask.any() else None),
         "excluded": excluded if excluded and len(np.atleast_1d(excluded.get("t", []))) else None,
+        "bound_flags": bound_flags, "bands": bands,   # 2.2.19 (#31)
     }
     result["verdict"] = transit_verdict(result, prob_s)
+    _both_detrend_check(result, prob_s, say)   # 2.2.19 (nit)
     result["flags"] = transit_flags(result)
     v = result["verdict"]
     v["depth_unreliable"] = depth_unreliable(result) if v["state"] == "detected" else ""
@@ -930,6 +952,30 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         result["flags"].insert(0, ("warn", note))
     v["note"] = note
     return result
+
+
+def _both_detrend_check(result: dict, prob_s, say) -> None:
+    """2.2.19 (nit): detrend "Both" (airmass + time slope) found no transit: refit with each alone (least squares, only
+    in this case) and, when one of them detects it, say so in the verdict instead of a plain "no detection"."""
+    v = result["verdict"]
+    if not (v["state"] == "none" and v["dbic"] < 10 and "c_am" in prob_s.free and "c_t" in prob_s.free):
+        return
+    try:
+        import transit_posterior as tpost
+        best_rel = dict(result["best"], tc=result["best"]["tc"] - result["t_ref"])
+        # From the Both fit and the published Rp/R* only: ~1-2 s (all of the fit's starts took ~4x as long, same answer
+        # on KOI-217 b's Both night).
+        k0 = (result.get("planet") or {}).get("k")
+        check = tpost.single_detrend_dbic(prob_s, best_rel, [{"k": k0}] if k0 else [])
+        text = tpost.both_detrend_text(check)
+    except Exception as exc:
+        say(f"  single-detrend check skipped: {exc}")
+        return
+    v["both_check"] = check
+    if text:
+        v["both_absorbs"] = text
+        v["reason"] = text + " " + v["reason"]
+        say("  " + text)
 
 
 RCHI2_LOW = 0.5    # 2.2.17 (item 8): reduced chi-square below this: error bars too large (error model)
@@ -1464,7 +1510,12 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
                               "heavily on the b prior."))
     ff = r.get("free_fit")
-    if ff:
+    if ff and ff.get("unconstrained"):
+        # 2.2.19 (nit): the free shape ran away; its numbers are not shown.
+        flags.append(("info", f"With the shape left free the fit is not constrained ({ff['unconstrained']}): this "
+                              "light curve alone cannot fix a/R* and b, so the Free shape column is left empty. The "
+                              "reported values use the published a/R* and b."))
+    elif ff:
         dk = ff["p"]["k"] - k
         if "k" in s and s["k"][1] > 0 and abs(dk) > 2 * s["k"][1]:
             flags.append(("warn", f"With the shape left free, Rp/R* goes to {ff['p']['k']:.3f} (b {ff['p']['b']:.2f}, "
@@ -1598,6 +1649,8 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                                   + ("neither the depth nor the timing is trusted (the step trades off against both)."
                                      if FLIP_NO_BASELINE_VERDICT == "inconclusive" else
                                      "the depth is not trusted; the timing is.")))
+    for bf in r.get("bound_flags") or []:
+        flags.append(("warn", bf["text"]))   # 2.2.19 (#31)
     wf = r.get("with_flagged")
     if wf:
         flags.append(("warn", f"This fit includes {wf['n']} frame{'s' if wf['n'] != 1 else ''} flagged {wf['label']}, "
@@ -2418,7 +2471,10 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
         how = []
         if meta.get("bin"):
             how.append(f"Bin {meta['bin']}")
-        if meta.get("camera_bin", 1) and meta.get("camera_bin", 1) > 1:
+        cam = str(meta.get("camera_binning") or "").split(" ")[0]   # 2.2.19 (#27): MicroObservatory 2x2 too
+        if cam and cam != "1x1":
+            how.append(f"camera binning {cam}")
+        elif not cam and meta.get("camera_bin", 1) and meta.get("camera_bin", 1) > 1:
             how.append(f"camera bin {meta['camera_bin']}")
         if meta.get("superpixel", 1) == 2:
             how.append("color superpixel")
@@ -2442,7 +2498,10 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
                if _is_sloan_code(meta.get("filter")) else "")   # 2.2.17 (item 1): "SI (Sloan i′, …)"
             + ("monochrome camera" if mono else "one-shot color camera") + ", untransformed)\n"
             f"  Pixel scale: {scale_text}\n"
-            f"  Photometric aperture: {ap_text}\n"
+            # 2.2.19 (#27): the camera's binning (as #BINNING) and SHOBS-P's processing bin, apart.
+            + (f"  Binning: camera {meta['camera_binning']}; {meta.get('processing_bin') or 'SHOBS-P processing bin not recorded'}\n"
+               if meta.get("camera_binning") else "")
+            + f"  Photometric aperture: {ap_text}\n"
             f"  Coverage: {cov}{span}\n"
             f"  Result: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, depth "
             f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n"
@@ -2498,7 +2557,9 @@ def fit_text(result: dict, meta: dict) -> str:
               f"MCMC             {ch['walkers']} walkers, {ch['burn']} burn-in + {ch['steps']} steps, "
               f"acceptance {ch['acceptance']:.2f}"]
     ff = result.get("free_fit")
-    if ff:
+    if ff and ff.get("unconstrained"):
+        lines.append(f"Free-shape check not constrained ({ff['unconstrained']})")   # 2.2.19 (nit)
+    elif ff:
         lines.append(f"Free-shape check Rp/R* {ff['p']['k']:.4f}, a/R* {ff['p']['a_rs']:.2f}, b {ff['p']['b']:.3f}")
     if result.get("comp_loo"):
         # 2.2.16 (item 6)
