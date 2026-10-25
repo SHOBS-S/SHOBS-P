@@ -2246,6 +2246,68 @@ def flat_topped_core(raw: np.ndarray, star: "Star", radius: float, total_bin: in
     return flagged >= (2 if cfa else 1)
 
 
+def raw_peaks_many(raw: np.ndarray, pos, radius: float, total_bin: int) -> np.ndarray:
+    """2.2.19 (#25): raw_peak_near for many stars (final-image positions, one row per star); NaN off the frame."""
+    pos = np.asarray(pos, dtype=float).reshape(-1, 2)
+    out = np.full(len(pos), np.nan)
+    if raw is None or np.ndim(raw) < 2:
+        return out
+    h, w = raw.shape[0], raw.shape[1]
+    r = max(radius * total_bin, total_bin * 2)
+    for k, (x, y) in enumerate(pos):
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        rx = (x + 0.5) * total_bin - 0.5
+        ry = (y + 0.5) * total_bin - 0.5
+        x0, x1 = max(0, int(rx - r)), min(w, int(rx + r) + 1)
+        y0, y1 = max(0, int(ry - r)), min(h, int(ry + r) + 1)
+        if x1 > x0 and y1 > y0:
+            with np.errstate(all="ignore"):
+                out[k] = float(np.nanmax(raw[y0:y1, x0:x1]))
+    return out
+
+
+def scan_saturated(hits, measured, min_fraction: float = 0.05) -> tuple[set, set]:
+    """2.2.19 (#25): (saturated, clipped now and then) star indices from per-star counts of frames whose raw core
+    reached the saturation level (hits) out of the frames measured. Saturated: clipped on at least `min_fraction` of
+    the frames (and on at least one); a star clipped on fewer frames is only a caution."""
+    hits = np.asarray(hits, dtype=float)
+    measured = np.asarray(measured, dtype=float)
+    sat, some = set(), set()
+    for i, (n_hit, n) in enumerate(zip(hits, measured)):
+        if n_hit <= 0 or n <= 0:
+            continue
+        if n_hit >= max(1.0, min_fraction * n):
+            sat.add(i)
+        else:
+            some.add(i)
+    return sat, some
+
+
+def scan_neighbor_flags(points, point_mags, others, other_mags, reach: float, dmag: float = 3.0,
+                        same: float = 1.0) -> np.ndarray:
+    """2.2.19 (#26): crowded[i] is True when one of `others` (an un-thinned list: every detected peak, or the catalog
+    stars placed on the frame) lies within `reach` px of points[i] (the aperture, the gap and the sky ring) and is not
+    at least `dmag` fainter (unknown magnitude: counts). Others closer than `same` px are the star itself."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 2)
+    oth = np.asarray(others, dtype=float).reshape(-1, 2)
+    out = np.zeros(len(pts), dtype=bool)
+    if not len(pts) or not len(oth) or not (reach > 0):
+        return out
+    pm = np.asarray(point_mags, dtype=float)
+    om = np.asarray(other_mags, dtype=float)
+    from scipy.spatial import cKDTree
+    near = cKDTree(oth).query_ball_point(pts, r=float(reach))
+    for i, idx in enumerate(near):
+        for j in idx:
+            if math.hypot(oth[j, 0] - pts[i, 0], oth[j, 1] - pts[i, 1]) < same:
+                continue
+            if not math.isfinite(om[j]) or not math.isfinite(pm[i]) or om[j] < pm[i] + dmag:
+                out[i] = True
+                break
+    return out
+
+
 def _header_float(header: dict, *keys: str) -> float | None:
     for key in keys:
         raw = header.get(key)
@@ -5426,7 +5488,8 @@ def field_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> tuple[l
         for v in fetch_vsx_cone(ra_deg, dec_deg, radius_deg):
             per = f", P = {v['period']:g} d" if v.get("period") else ""
             found.append({"name": v["name"], "type": v.get("type", ""), "source": "VSX",
-                          "desc": f"VSX {v.get('type', '') or 'variable'}{per}", "ra": v["ra"], "dec": v["dec"]})
+                          "desc": f"VSX {v.get('type', '') or 'variable'}{per}", "ra": v["ra"], "dec": v["dec"],
+                          "period": v.get("period")})   # 2.2.19 (#19): for the period-range check
         answered.append("VSX")
     except Exception:
         pass
@@ -5503,6 +5566,30 @@ def robust_sigma(values) -> float:
     if v.size < 5:
         return float("nan")
     return float(1.4826 * np.median(np.abs(v - np.median(v))))
+
+
+DEFAULT_MIN_PERIOD = 0.02   # 2.2.19 (#19): days; many HADS / SX Phe stars have periods of 0.03-0.05 d
+
+
+def period_range_check(expected, lo: float, hi: float):
+    """2.2.19 (#19): expected periods ([(label, days)], e.g. the VSX period and the "Mark periods") that lie outside
+    the search range lo-hi. Returns (outside [(label, days)], suggested (lo, hi) that covers them, or None). The
+    suggested minimum is DEFAULT_MIN_PERIOD (or 0.8 x a still shorter period), the maximum 1.25 x a longer one."""
+    out = []
+    for label, p in expected or ():
+        try:
+            p = float(p)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(p) and p > 0 and not (lo <= p <= hi):
+            out.append((label, p))
+    if not out:
+        return [], None
+    shortest = min(p for _l, p in out)
+    longest = max(p for _l, p in out)
+    new_lo = lo if shortest >= lo else min(DEFAULT_MIN_PERIOD, float(f"{0.8 * shortest:.2g}"))
+    new_hi = hi if longest <= hi else float(f"{1.25 * longest:.2g}")
+    return out, (new_lo, new_hi)
 
 
 def period_edge_text(ls: dict) -> str:
@@ -6992,8 +7079,20 @@ def color_method(obs: Obs, key: str) -> str:
 def scan_cautions(result: dict, i: int) -> list[str]:
     """2.2.2: reasons to doubt a field-scan candidate (near saturation; biggest change at a flip or gap)."""
     out = []
-    if i in set(result.get("near_sat") or []):
+    clipped = (result.get("clipped_some") or {}).get(i)   # 2.2.19 (#25): raw core clipped on a few frames
+    if clipped:
+        out.append(f"clipped on {clipped} frame(s): check linearity")
+    elif i in set(result.get("near_sat") or []):
         out.append("near saturation: check linearity")
+    if i in set(result.get("blended") or []):   # 2.2.19 (#26)
+        out.append("blended neighbor: check")
+    vsx = result.get("vsx")
+    hit = vsx[i] if vsx is not None and i < len(vsx) else None
+    rng = result.get("period_range")
+    if hit and rng and hit.get("period"):   # 2.2.19 (#19): a known period the search could not find
+        outside, _fix = period_range_check([("VSX", hit.get("period"))], float(rng[0]), float(rng[1]))
+        if outside:
+            out.append(f"VSX period {outside[0][1]:.4g} d outside the search")
     kind = (result.get("at_boundary") or {}).get(i)
     if kind == "flip":
         out.append("change begins at flip: check")
@@ -7025,6 +7124,14 @@ def scan_candidate_kind(result: dict, i: int) -> tuple[str, str]:
     return "new", f"not in {sources}"
 
 
+def scan_period_value(per: dict):
+    """2.2.19 (nit): a field-scan star's best period, or None when the best peak sits at the edge of the search (no
+    period: a drift reads as the longest period searched, "20 d")."""
+    if not per or (per.get("ls") or {}).get("edge"):
+        return None
+    return per.get("period")
+
+
 def write_scan_candidates(path: str, result: dict) -> None:
     """One row per star that stands out, ready to start a VSX new-variable submission."""
     with AsciiWriter(path) as fh:
@@ -7042,7 +7149,7 @@ def write_scan_candidates(path: str, result: dict) -> None:
                 num(ra, "{:.6f}"), num(dec, "{:.6f}"),
                 format_radec(ra, dec) if math.isfinite(ra) else "",
                 num(result["mag"][i], "{:.3f}"), num(result["scatter"][i]), num(result["expected"][i]),
-                num(result["excess"][i], "{:.2f}"), num(per.get("period")), num(per.get("power"), "{:.3f}"),
+                num(result["excess"][i], "{:.2f}"), num(scan_period_value(per)), num(per.get("power"), "{:.3f}"),
                 num(result["bv"][i], "{:.3f}") if result.get("bv") is not None else "",
                 num(result["vr"][i], "{:.3f}") if result.get("vr") is not None else "",
                 (result.get("color_method") or {}).get("bv", ""),
@@ -7075,7 +7182,7 @@ def write_scan_stars(path: str, result: dict) -> None:
                 num(ra, "{:.6f}"), num(dec, "{:.6f}"), format_radec(ra, dec) if math.isfinite(ra) else "",
                 num(result["mag"][i], "{:.3f}"), num(result["scatter"][i]), num(result["expected"][i]),
                 num(result["excess"][i], "{:.2f}"), str(cand_rank.get(i, "")), kind,
-                "yes" if i in sat else "", "yes" if result["usable"][i] else "no", num(per.get("period")),
+                "yes" if i in sat else "", "yes" if result["usable"][i] else "no", num(scan_period_value(per)),
                 (vsx or {}).get("name", "").replace(",", " "), (vsx or {}).get("type", "").replace(",", " "),
                 str(int(result["n_good"][i])), "; ".join(scan_cautions(result, i)).replace(",", ";"),
             ]) + "\n")
