@@ -9,7 +9,9 @@ This chapter covers:
 - reading the verdict, the numbers and the plot,
 - the comparison-star checks on this page (leave-one-comp-out, **Comp health…**, **Use comps…**),
 - leaving out a bad stretch with **Trim**,
-- saving and submitting the result.
+- the corner plot of the fit's uncertainties,
+- saving and submitting the result,
+- fitting several nights of one planet together (**Multi-night…**).
 
 ## Get to the fit
 
@@ -28,6 +30,8 @@ depends on the number of frames and comps.
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 
+In 2.2.19 the legend sits under the residual panel, and the tools row has **Multi-night…** and **Corner plot…**.
+
 ## The page, top to bottom
 
 - **Planet line**: the planet's period, duration, depth and shape, and where they came from.
@@ -36,17 +40,22 @@ depends on the number of frames and comps.
   flagged, trimmed.
 - **Open AAVSO exoplanet report (EXOTIC)…**: fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
 - **Detrend**: **airmass** (on by default) and **time slope** (off). These are baseline trends fitted together with
-  the transit. Add **time slope** only when the baseline clearly drifts and airmass does not explain it.
+  the transit. Add **time slope** only when the baseline clearly drifts and airmass does not explain it. With both
+  ticked ("Both"), the two trends can together absorb a transit. When that happens, SHOBS-P refits with each trend
+  alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32). Untick
+  time slope and fit again only if that trend is not real …"*.
 - **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.
 - **Fit transit** runs the fit again with the current settings. **Cancel** stops it.
-- **Tonight's transits…**, **Transit planner…** (see chapter 16) and **Nearby-binary (NEB) check…** (below).
+- **Tonight's transits…**, **Transit planner…** (see chapter 16), **Nearby-binary (NEB) check…** and
+  **Multi-night…** (below).
 - **Comp health…** and **Use comps…** (below).
+- **Corner plot…** and the **credible bands** box (below).
 - **Trim** row (below).
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
-  package…**, **Open ExoFOP…**, **Save light-curve CSV…** and **Save plot PNG…**, with **Variable View  ▶** at the
-  right.
+  package…**, **Open ExoFOP…**, **Save light-curve CSV…**, **Save plot PNG…** and **Save field image…**, with
+  **Variable View  ▶** at the right.
 
 ## Read the verdict
 
@@ -84,17 +93,27 @@ The table under the plot has one row per quantity: **Tc (BJD_TDB)**, **O − C (
 
 - **SHOBS-P (MCMC)**: the result, value ± uncertainty. This is what goes in the report.
 - **Free shape**: a quick fit with a/R\* and b left free. It is a cross-check: if Rp/R\* moves a lot here, your data
-  alone do not pin the shape down, and the result leans on the published shape.
+  alone do not pin the shape down, and the result leans on the published shape. When the free fit runs away (for
+  example to an impossible depth), the column says **not constrained** instead of numbers, and a note explains that
+  the reported values use the published a/R\* and b.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
+  On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.
 
 Rows a caution talks about are shown in orange.
 
 ### O − C
 
-**O − C (min)** is your mid-transit time minus the time the ephemeris predicts, in minutes. Its ± includes both your
-timing error and the ephemeris's. A note names the ephemeris, for example *"O − C +2.3 ± 1.1 min (epoch 412);
-ephemeris from NASA Exoplanet Archive (…)"*. The note turns orange when O − C is more than 3σ from zero. If the
+**O − C (min)** is your mid-transit time minus the time the ephemeris predicts, in minutes, and in σ, for example
+`+5.38 ± 11.15 (+0.5σ)`. Its ± combines your timing error and the ephemeris's (in quadrature). The ephemeris's own
+uncertainty is propagated to your epoch, and shown in the Published column as `0 ± 11.10 (ephemeris)`. It is also right
+for an epoch before the ephemeris's T0. A note gives the whole story, for example *"O − C +5.38 ± 11.15 min (+0.48σ; fit
+and ephemeris σ in quadrature) vs predicted Tc 2461328.625780 ± 0.007706 BJD_TDB (±11.10 min) at epoch 2362;
+ephemeris from …"*. The same line goes into the report's notes and the fit CSV. The note turns orange when O − C is
+more than 3σ from zero.
+
+The fit looks for Tc anywhere within your data (plus 0.2 day either side), never only in a window around the
+prediction, so a late or early transit is found where it really is. If the
 prediction itself is uncertain by more than about 10 minutes, a note says the O − C *"mostly tests the
 ephemeris"*, which is still useful: that is what timing observations are for.
 
@@ -106,9 +125,39 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 - Blue dotted line: the published transit shape, for comparison.
 - Gray dashed line and band: the predicted mid-transit and its uncertainty.
 - Thin green lines: the fitted start and end of the transit.
+- Green shading around the model: the 68 % and 95 % **credible bands**, the range of models the MCMC allows. The
+  lower panel shades the baseline's own spread the same way. Untick **credible bands** to hide them.
 - Lower panel (**Resid. %**): the residuals. They should look like noise, with no dip or step.
 
-The horizontal axis is **Hours from fitted mid-transit**.
+The horizontal axis is **Hours from fitted mid-transit**. The legend sits under the residual panel, never on the
+data.
+
+## Notes about the reduction
+
+The notes under the table also say:
+
+- what this night was measured with, for example *"Measured with r 8, sky 14–22 px (Bin 1)."*, in orange when the
+  Photometry page's boxes have changed since (run photometry again to apply them);
+- the camera gain the error bars used and where it came from, for example *"Gain 0.25 e-/ADU (header EGAIN)."* When
+  the headers have no gain, it is estimated from the sky's own noise, or 1 e-/ADU is assumed, in orange.
+
+The full set of reduction settings (aperture, binning, comps, check, frames left out, trimmed frames, detrending,
+calibration, gain) is written to the log after each fit, one line per fit, and saved with the report (see below), so
+a result can be reproduced later.
+
+## The corner plot
+
+**Corner plot…** opens a window with the MCMC samples of every fitted parameter: a histogram per parameter on the
+diagonal (with its median and 16/84 % lines, and the value and error in the title), and each pair below it, with 1σ and
+2σ contours. Tc is in minutes from its median. By default the window shows the shape parameters (Tc, Rp/R\*, a/R\*, b,
+and the flip step if fitted); tick **Show all parameters (baseline, limb darkening)** for the rest. **Save PNG…** saves
+the plot.
+
+How to read it: a round hump is a measurement. A histogram that piles up against the edge of its allowed range is
+set by that range, not by your data, so its error bar is not a measurement. SHOBS-P flags such a parameter with ⚠ in
+the window, in the page's notes and in the report's notes, for example *"a/R\* is limited by its prior range: its MCMC
+samples pile up against …, so the error bar is not a measurement."* An impact parameter b against 0 is the exception:
+that is a central transit, and the note says to read b as an upper limit.
 
 ## Check the comparison stars
 
@@ -191,13 +240,17 @@ When the verdict is "detected" and you are happy with the fit:
 3. Click **Open AAVSO Exoplanet Database…** and upload the report there, following the AAVSO's current
    instructions.
 4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**.
-5. Click **Save plot PNG…** for your own records.
+5. Click **Save plot PNG…** for your own records. The corner plot is saved beside it, as `…_corner.png`.
 6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
    (the same as on the Variables Output page) and a fit CSV beside it, named like
    `TrES-3b_TG_05-OCT-2026_SHOBS-P_transit_fit.csv`. The fit CSV has the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`,
    `model`, `residual` and `flag`, one row per point in time order. Trimmed points are rows too, flagged `trimmed`,
    with no error, model or residual. With an **Output** folder set, both files get the same number as the report and
-   plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved.
+   plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved. Under its first line, the fit
+   CSV has comment lines starting with `#`: the planet, filter, fitted Tc and verdict, and the O − C line.
+
+Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
+the AAVSO chart of the field when it answers) beside it. Chapter 19 describes them.
 
 **Uploading twice.** **Open AAVSO Exoplanet Database…** and **Open ExoFOP…** work like **Open AAVSO WebObs…** in
 chapter 15: when the page opens, the night of the report (or package) you saved last is marked sent, and the night
@@ -207,6 +260,41 @@ unmark it.
 
 If the verdict is "inconclusive" or "none", SHOBS-P asks before saving a report and writes the verdict into its
 notes. Chapter 19 describes every file and both upload sites.
+
+## Fit several nights together (Multi-night…)
+
+One night gives one transit time. Several nights of the same planet, fitted together, give a better shape, a time for
+every night, and a check of the ephemeris. **Multi-night…** opens the **multi-night transit analysis** window.
+
+1. Press **Add reports or fit CSVs…** and pick the nights: AAVSO exoplanet reports (from SHOBS-P or EXOTIC, `.txt`)
+   or SHOBS-P fit CSVs (`…_transit_fit.csv`). The night fitted on the Transit fit page joins them when **Include the
+   Transit fit page's night** is ticked.
+2. Check the list. The **Status** column says **✔ ready** for each usable night. A night of another planet, the same
+   night twice, fewer than 20 points, or no transit predicted during the data is left out (**✖** and the reason). A
+   night in another filter than most gets a ⚠; consider **Depth and limb darkening per filter**. **Leave out / put
+   back** (or a double-click) and **Remove** change the list.
+3. Check the **Input ephemeris** (filled from the planet; **Look up (NASA Exoplanet Archive)** fetches it). Optionally
+   type an **Alternative ephemeris** (T0, P, their ±, and a source, for example Exoplanet Watch's or ExoClock's
+   current one) and press **Apply**.
+4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
+
+The joint fit uses one transit shape (Rp/R\*, a/R\*, b and limb darkening) for all nights, with each night's own
+mid-transit time, baseline and detrending. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
+O − C against three ephemerides: **O − C input** (min and σ), **O − C alternative**, and **O − C own fit**, the nights'
+own updated linear ephemeris. Outlier nights are flagged.
+
+Under the table, a few lines read the timing in plain words. For example, when all nights are late or early by about
+the same amount, and that offset is within what the input ephemeris can predict at these epochs, it says the offset
+is *"most likely the ephemeris, not the data"*. (A constant offset can also come from a clock or time-system error.)
+A current ephemeris, typed as the alternative, settles it.
+
+The **Plots** tab shows the O − C diagrams and the nights stacked with the joint model; the **Summary and
+ephemerides** tab gives the joint shape, each ephemeris (the updated one with its uncertainties and their
+covariance) and notes per night. It also lists a combined ephemeris of these nights with the input T0 and P. That
+one is *for comparison only*: it is not valid if the input ephemeris already includes these nights.
+
+**Save timing CSV…** writes one row per epoch (mid-time in BJD_TDB with its error, the three O − C, the flag) with
+the ephemerides in its header lines, ready for ExoClock. **Save plot PNG…** saves the plots.
 
 ---
 

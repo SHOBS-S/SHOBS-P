@@ -52,7 +52,7 @@ always points to the latest version:
 
 The suggested citation, exactly as the Credits page shows it (and copies with **Copy**):
 
-> Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.2.18, Zenodo,
+> Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.2.19, Zenodo,
 > doi:10.5281/zenodo.23417064
 
 The version in it is always the one you are running.
@@ -63,7 +63,7 @@ In BibTeX:
 @software{shobs_p,
   author    = {Armbrust, John W. and {Shiloh Hill Observatory}},
   title     = {{SHOBS-P: Shiloh Hill Observatory Photometry}},
-  version   = {2.2.18},
+  version   = {2.2.19},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.23417064},
@@ -71,8 +71,8 @@ In BibTeX:
 }
 ```
 
-Always give the version you used. It is at the bottom of the sidebar (**Version 2.2.18**), in the citation on the
-Credits page, and in the `#SOFTWARE=SHOBS-P 2.2.18` line of every AAVSO report SHOBS-P writes.
+Always give the version you used. It is at the bottom of the sidebar (**Version 2.2.19**), in the citation on the
+Credits page, and in the `#SOFTWARE=SHOBS-P 2.2.19` line of every AAVSO report SHOBS-P writes.
 
 To cite one specific release rather than the latest, open the DOI above. The Zenodo page lists every version with
 its own DOI; use the one for your version.

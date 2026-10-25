@@ -10,7 +10,7 @@ that everything fits together.
 
 From top to bottom:
 
-- **The series line**, with **Load series…** and **Close series** on the right.
+- **The series line**, with **New reduction**, **Load series…** and **Close series** on the right.
 - **Frames**: five rows, **Bias**, **Dark**, **Flat**, **Lights** and **Output**.
 - On the left: **Target** (Variables and Transits), **Planet (Transits)** (Transits only), or **Field center (only
   needed when the headers do not say)** (Discovery, only when needed).
@@ -38,11 +38,18 @@ What the counts mean:
   changed.
 - **master file**: the row points at one master file (see below).
 - On the **Lights** row after scanning: **(+3 cal skipped)** means three bias, dark or flat frames were found among
-  the lights and will be left out; **(12 set aside: another field)** means frames of another field were set aside (see
+  the lights and are not measured as lights (when the matching Bias, Dark or Flat row is empty, Calibrate offers to
+  use them; chapter 7); **(12 set aside: another field)** means frames of another field were set aside (see
   "The checks SHOBS-P makes" below).
 
 SHOBS-P reads FITS (`.fits`, `.fit`, `.fts`, also gzip and fpack-compressed) and PixInsight XISF files. If a folder
 holds only files it cannot read, such as camera RAW or TIFF, the log says so.
+
+**Darks of another exposure.** When the darks' exposure differs from the lights', an orange line under the Frames box
+says so as soon as you choose the folders, for example **⚠ Darks 60 s, lights 120 s: the master dark is scaled ×2 to
+the lights' exposure. Fine for a cooled camera; 120 s darks are better.** When the dark would be scaled more than 3
+times, the line is red (✖) and Calibrate will ask about it. Once you have chosen at Calibrate to scale these darks,
+the line turns gray (✔).
 
 Any of Bias, Dark and Flat may be left empty. That step is simply skipped. Press **✕** to empty a row; the status bar
 says, for example, **Dark folder cleared. Calibration will skip it.**
@@ -75,6 +82,9 @@ In Variables and Transits mode, the **Target** box names the star you observed.
 Things to know:
 
 - The lookup happens only when you press Enter or leave the box, not as you type.
+- While it runs, a line under the boxes shows a moving bar and counts the seconds, for example **⟳ Looking up SZ Lyn
+  at the SIMBAD and VSX… 4 s**. If SIMBAD and VSX do not answer, the line turns red and says so (after 60 seconds at
+  most): type RA and Dec yourself, or press **Look up again** later.
 - If the name is only spelled a little differently from the AAVSO's version (spaces or capitals), an orange line
   appears, such as **AAVSO spells this "HD 219134"**, with a **Use it** button. Using the AAVSO spelling keeps your
   reports matching the AAVSO's records.
@@ -83,15 +93,24 @@ Things to know:
   empty and let the plate solution fill them in later.
 - RA is in decimal **hours** and Dec in decimal **degrees** (J2000).
 
-**Changing to another target.** Press **Clear target**. It empties the Star ID, RA and Dec, **and also all comparison
-stars and the check star**, so nothing from the old field is carried over. Then type the new name and press Enter.
+**Changing to another target.** Press **New reduction** on the series line. It starts over for another star, as if
+you had just started SHOBS-P: the open series is closed (you are offered a save first), and the target, planet,
+comparison stars, check star, watch stars, **Use comps** choice, VSX period and rejected frames are cleared. The frame
+folders, site and optics stay. SHOBS-P asks first: **Start a new reduction?** Then type the new name and press Enter.
+
+This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's
+night. **Clear target** still empties only the Star ID, RA and Dec and the comparison and check stars.
 
 ### Transits mode: the planet
 
 In Transits mode, a **Planet (Transits)** box appears under the Target. Type the planet's name under any of its names
 (for example `TrES-3 b`, `TOI-2046 b` or `KELT-16 b`) and press Enter. SHOBS-P fills in the period, the transit time,
-duration, depth and shape from the NASA Exoplanet Archive, and also the host star's name and position. Chapter 16
-covers this box and **Tonight's transits…** in detail.
+duration, depth and shape from the NASA Exoplanet Archive, and also the host star's name and position. While it
+looks the planet up, a moving bar runs beside the box and the empty boxes say "looking up…". Chapter 16 covers this
+box and **Tonight's transits…** in detail.
+
+If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
+reduction. **No** keeps the old star and its series; check the planet's name.
 
 ### Discovery mode: the field center
 
@@ -111,7 +130,8 @@ where the frames point; a few arcminutes off is fine.
 
 These boxes are described in chapter 4, including the **Mount** choice. They are usually filled already: the site,
 telescope, focal length, pixel size and mount are remembered, and **Scan folders** fills empty boxes from your FITS
-headers.
+headers. When you have not saved a focal length, pixel size or mount yet, the values from your own lights' headers are
+remembered as yours (never those of someone else's frames, MicroObservatory's or a loaded series).
 
 ## Press Scan folders
 
@@ -137,16 +157,24 @@ Most nights, none of these appear. When one does, read the question; each one sa
 lists them, for example "40 frames at … (OBJECT SZ Lyn)" and "12 frames at …", and asks whether to use only the frames
 near your target. **Yes** sets the others aside as rejected frames; you can bring any of them back on the Blink page.
 
-**The frames point somewhere else.** If the lights point well away from the target on the Input page (at least a degree,
-and more than the frame's own size),
-SHOBS-P asks whether to clear the old target and look up the star named in the frames' `OBJECT` keyword instead. Answer
-**No** if you meant it (for example, the target is near the edge of a wide field); you will not be asked again for
-that pair.
+**The frames are another star.** If the lights point well away from the target on the Input page (at least a degree,
+and more than the frame's own size), SHOBS-P asks as soon as you choose the Lights folder, for example:
+
+> These frames are DY Peg, not BL Cam.
+> …
+> Start a new reduction? …
+
+**Yes** starts a new reduction (see "Changing to another target" above): the open series is closed (with a save
+offered), the old star's target, planet, comps, check and watch stars are cleared, and the star named in the frames'
+`OBJECT` keyword is looked up. Rejected frames of the new Lights folder are kept. Answer **No** if you meant it (for
+example, the target is near the edge of a wide field); you will not be asked again for that pair. If `OBJECT` names
+the Input page's own star but the frames point elsewhere, SHOBS-P asks nothing and the log suggests checking the RA
+and Dec instead.
 
 **A mislabeled OBJECT.** Capture programs often write a plan name or an old target name into `OBJECT`. If the frames
 point at your target anyway, SHOBS-P only notes in the log that "the OBJECT keyword looks mislabeled" and carries
-on. If the `OBJECT` names a different star in another place, it asks whether to switch targets (the default answer is
-**No**).
+on. If the `OBJECT` names a different star in another place, it asks the same **These frames are …, not …** question
+(the default answer is **No**).
 
 **Frames from another site.** If the header's site is more than 50 km from yours, SHOBS-P asks whether to use the
 site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
@@ -175,10 +203,12 @@ calibrated again (chapter 4).
 used for these lights, and the hint under **Mount** says so. If it differs from your **Mount** box, the hint suggests
 changing the box when this is your own telescope.
 
-**MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them.
+**MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them. Newer
+MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
+their site, focal length and frame size. Their site and optics are never saved as yours.
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself
-binned the frames, the log notes it after calibration (chapter 7). Changing **Binning** after calibrating means
+binned the color frames, the log notes it after calibration (chapter 7). Changing **Binning** after calibrating means
 calibrating again; the masters must match.
 
 ## The series line

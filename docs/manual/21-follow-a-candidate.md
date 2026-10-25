@@ -12,23 +12,39 @@ another night, with the same behavior. This chapter covers:
 
 Work down the scan table (see [20. Scan a field](20-scan-a-field.md)) and, for each candidate:
 
-1. Read **Check first**. A candidate whose change begins at a flip or a gap, or that is near saturation, is most
-   likely instrumental. Follow it only if its light curve also changes well away from the flip or gap.
+1. Read **Check first**. A candidate whose change begins at a flip or a gap, that is near saturation or clipped, or
+   that has a blended neighbor, is most likely instrumental. Follow it only if its light curve also changes well away from the flip or gap.
 2. Read **VSX**. **KNOWN (VSX): …** is already cataloged. It may still be worth following if the catalog lacks a
-   period or type, but it is not a new variable.
+   period or type, but it is not a new variable. Tick **Hide known variables** to take them out of the table, the
+   plot and the image while you work through the new ones.
 3. Look at its light curve (click the row). A real variable usually changes smoothly, or repeats; a single-frame
-   spike is usually a cosmic ray, a satellite or a hot pixel.
+   spike is usually a cosmic ray, a satellite or a hot pixel. A **Best period** of **no period (drift)** means the
+   periodogram's best peak sat at the long end of the search: the star drifts slowly, which may be the star or may be
+   the instrument. Click the row again (or press **Esc**) to clear the selection.
 4. Click **Mark candidates on image** and look at the star in the image. A bright neighbor, a diffraction spike,
    a column defect or the frame edge can each make a star "vary".
 5. Look at **× normal** together with **Scatter**. A faint star at 3× normal may scatter 0.1 mag from noise alone; a
    bright star at 3× normal with 0.02 mag scatter is a cleaner lead.
 
+### Pick stars on the scatter plot
+
+Not every interesting star reaches the candidate level. On the **Scatter vs brightness** plot you can pick any
+measured star:
+
+- **Click** a point to pick that star (and draw its light curve); click it again to clear.
+- **Ctrl+click** adds a star to the picked set, or takes it out.
+- **Drag** a box to pick every star inside it.
+
+Picked stars are ringed on the plot. Press **Mark on image** to mark them on the Photometry image: candidates keep
+their rank number, other stars are labeled with SHOBS-P's label (for example `S066`) and drawn as **Picked on the scan
+plot**. From there you can look at each one, and watch it (below).
+
 ## Put a candidate on the watch list
 
 Watch stars are measured on every later run, with their own light curves. There are three ways to add one:
 
-- On the **Output – Field scan** page, click the candidate's row and press **Watch selected star**. The status bar
-  says *"Watching …"*.
+- On the **Output – Field scan** page, click the candidate's row (or its point on the scatter plot) and press **Watch
+  selected star**. The status bar says *"Watching …"*.
 - In **Known variables measured…**, select a known variable and press **Watch selected**. This works even for one the
   scan could not measure (it is watched by its sky position).
 - On the Photometry page, with **● Watch it** chosen, click the star in the image.

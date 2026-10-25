@@ -1,6 +1,6 @@
 # 1. Welcome
 
-SHOBS-P (Shiloh Hill Observatory Photometry) is a Windows program for differential aperture photometry. It takes a
+SHOBS-P (Shiloh Hill Observatory Photometry) is a desktop program (Windows, macOS and Linux) for differential aperture photometry. It takes a
 night of raw FITS frames from a color (OSC) or monochrome camera and turns them into a calibrated light curve and a
 report you can send to the AAVSO or ExoFOP, all in one window.
 
@@ -59,7 +59,8 @@ Knowing the limits saves time:
   builds its own masters and reuses them.
 - **It needs the internet for lookups**: star and planet names, catalogs and the variable-star check. Calibration and
   photometry themselves run offline.
-- **It is made for Windows 10 and 11.** It also runs on a Mac, but the Mac is only lightly tested.
+- **Windows 10 and 11 are the most tested.** It also runs on a Mac and on Linux, with their own start files since
+  2.2.19 (chapter 2); reports from Mac and Linux users are especially welcome.
 
 ## How to use this manual
 

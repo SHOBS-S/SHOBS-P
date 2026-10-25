@@ -91,8 +91,19 @@ put back to **MONO**, because it would debayer them a second time.
 
 These questions appear before the masters are built. Each one explains what **Yes** and **No** do.
 
+**Calibration frames in the Lights folder.** Some downloads (MicroObservatory's, for example) put the darks in with
+the lights. When bias, dark or flat frames are found in the Lights folder and the matching row on the Input page is
+empty, SHOBS-P asks, for example:
+
+> 2 dark frames (60 s) are in the Lights folder, and the Dark box is empty.
+>
+> Use them as darks? (Yes: used for this run; the files stay where they are. No: the run goes on without them.)
+
+The answer is kept for that folder, so you are asked once. Frames you rejected in Blink stay out. Dark-flats are never
+taken as flats (or as darks). A master made by another program in the Lights folder is not used, and the log says why.
+
 **The darks don't match the lights' exposure.** If the darks are more than 3 times shorter or longer than the lights,
-SHOBS-P asks:
+SHOBS-P asks (the Input page already warned you, chapter 5):
 
 - **Yes**: calibrate without the dark this time (bias only). A cooled camera's dark current is usually tiny, and the
   bias still removes the pedestal.
@@ -134,8 +145,9 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
   from the headers or the **Mount** box.
 - **"Zenith keyhole: the field reached altitude …"** (also written at the scan): on an alt-az mount the field went above 85°, where the mount's
   azimuth speed and the field rotation get extreme. Check those frames on the Blink page.
-- **"Note: the camera binned these frames (XBINNING=2) …"**: your camera did the binning. Some capture programs mix
-  red, green and blue when they bin a color sensor; capture unbinned and set **Binning** in SHOBS-P instead.
+- **"Note: the camera binned these frames (XBINNING=2) …"**: your color camera did the binning. Some capture
+  programs mix red, green and blue when they bin a color sensor; capture unbinned and set **Binning** in SHOBS-P
+  instead. (Not shown for MicroObservatory frames, which are binned by design, or for a monochrome camera.)
 - **"The lights carry a plate solution in their FITS headers: Solve uses it directly."**: good news; the solve will
   be quick.
 - **"Caution: the FITS FILTER is 'Ha', which SHOBS-P cannot calibrate …"**: see chapter 4, "Filters SHOBS-P cannot

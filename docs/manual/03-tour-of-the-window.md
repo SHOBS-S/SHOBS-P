@@ -13,7 +13,7 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.18**).
+4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.19**).
 
 ## The three modes and their colors
 
@@ -116,8 +116,8 @@ when you publish results made with SHOBS-P.
 
 ## What SHOBS-P remembers, and what it does not
 
-SHOBS-P keeps a small settings file in your Windows user folder (`C:\Users\<you>\.shobs_p_settings.json`). It is not
-in the program folder, so updates do not touch it.
+SHOBS-P keeps a small settings file in your user folder (`C:\Users\<you>\.shobs_p_settings.json` on Windows,
+`~/.shobs_p_settings.json` on Linux and the Mac). It is not in the program folder, so updates do not touch it.
 
 **Remembered between sessions:**
 
@@ -126,6 +126,7 @@ in the program folder, so updates do not touch it.
 - your **Telescope** name, **Telescope aperture (mm)**, **Focal length (mm)**, **Pixel size (µm)** and **Mount**, and
   the **Include scintillation** checkbox;
 - your **Observer code**;
+- the **linear ADU** box on the Photometry page (your camera's linear limit, chapter 8);
 - the Blink **Speed** and the display **Stretch** on the Blink and Photometry pages;
 - whether the Photometry tips are shown, and where you last put the popped-out image window;
 - a monochrome **Filter** you picked by hand on the Calibrate page;
@@ -144,8 +145,14 @@ All of these except the folders are saved in a **series file** when you save a s
 it (chapter 10). That is why the Input page says "Settings are saved with the series". The folders you must choose
 again each night.
 
+To start over for another star without closing SHOBS-P, press **New reduction** on the Input page (chapter 5). It
+clears everything that belongs to the old star; your folders, site and optics stay.
+
 Until you type your own, **Focal length (mm)** and **Pixel size (µm)** start at 2900 mm and 3.76 µm. If the boxes
-still hold these starting values (or are empty), the lights' FITS headers fill them in.
+still hold these starting values (or are empty), the lights' FITS headers fill them in. When you have not saved a
+focal length, pixel size or mount of your own yet, the values your own lights' headers give are remembered as yours.
+The log says so, for example `Mount: … from the lights' headers (…), saved as yours (change it in the Optics box if
+that is wrong).` A value you typed is never replaced this way.
 
 **Never stored anywhere unless you type it:** your site. SHOBS-P ships with the Site boxes empty, and it never saves
 a site read from somebody else's frames as yours without asking you first. In the same way, the optics of a loaded

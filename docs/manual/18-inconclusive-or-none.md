@@ -36,6 +36,14 @@ night was noisy, or much of the transit is missing.
 - Look at **Comp health…**: a noisy comp raises the scatter for every point.
 - Try fewer, better comps with **Use comps…** (the fit reruns at once).
 
+### "No detection with Both: …"
+
+With both **airmass** and **time slope** ticked, the two trends can together absorb a transit, especially when
+airmass and time change together through the night. SHOBS-P then refits with each trend alone, and when one of them
+detects the transit, the verdict starts, for example: *"No detection with Both: airmass and time trends are nearly the
+same over this night (correlation +0.97) and may absorb the transit together. Airmass alone detects it (ΔBIC 32).
+Untick time slope and fit again only if that trend is not real (a slope artifact can also read as a detection)."*
+
 ### "Tc is not pinned down (± … h for a …-hour transit)"
 
 The fit cannot tell when the transit happened. This usually means ingress or egress (or both) were not observed,
@@ -90,6 +98,13 @@ The notes beside the table add detail. The ones you will see most with a weak re
 - **"… = … is …σ from the published …. The light curve pulls hard against the known shape: look for a trend, a bad
   comp, or clouds."**
 - **"With the shape left free, Rp/R\* goes to …. The data alone do not pin the shape…"**
+- **"With the shape left free the fit is not constrained (…): this light curve alone cannot fix a/R\* and b, so the
+  Free shape column is left empty. The reported values use the published a/R\* and b."** The free fit ran away. This
+  is information, not a fault of the main fit.
+- **"… is limited by its prior range: its MCMC samples pile up against …, so the error bar is not a measurement."**
+  (orange) The data did not constrain that parameter; its value and error come from the allowed range. Open **Corner
+  plot…** to see it (chapter 17). The same sentence goes into the report's notes. For b against 0 the note is only
+  information: a central transit, with b read as an upper limit.
 - **"Leaving out C2 makes the transit … deeper (…σ)…"**: one comparison star moves the result. Check it in
   **Comp health…** (the link in the note opens it).
 - **"The comp choice moves … by more than its statistical error (…). Treat the comp spread below as a systematic

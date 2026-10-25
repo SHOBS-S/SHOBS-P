@@ -18,7 +18,7 @@ The night table's **Flags** column counts them per night, for example `12 cloud,
 
 | Shown as | Meaning | What to do |
 |---|---|---|
-| `sat` | The target's peak reached the saturation level (**raw sat ADU** on the Photometry page) | Shorter exposures next time, or slight defocus. Check that **raw sat ADU** fits your camera. |
+| `sat` | The target's peak reached the saturation level (**raw sat ADU** on the Photometry page) | Shorter exposures next time, or slight defocus. Check that **raw sat ADU** fits your camera. (Frames over the **linear ADU** limit are not flagged; the log and Comp health count them, chapter 8.) |
 | `compsat` | A comp's peak reached the saturation level | Choose a fainter comp. |
 | `drift` | The target was found farther from its expected position than the aperture radius | Often trailing, wind or a bad alignment. Look at those frames in Blink. |
 | `noflux` | No light measured for the target | Usually a frame with no stars (cloud, dome). |
@@ -117,11 +117,29 @@ An alt-az mount has no meridian flips and no pier sides, so there is nothing to 
 
 When the series has nights on both pier sides and none of these is ticked, a caution tells you how much each side reads against the other and suggests **Pier side as segments**.
 
+### When the flip step is the apertures, not the star
+
+A step can also come from the apertures landing beside their stars after the flip. SHOBS-P checks each flipped frame's alignment on up to 15 stars' own centers, so this is rare now. After each run it also compares how the comp and check apertures moved at the flip. When they were off their stars together while the target's was not, the log says so:
+
+> ⚠ After the meridian flip the C1 and check apertures were off their stars by about (+3.1, −2.4) px together, while the target's was not: an aperture-placement error at the flip, not a change in the stars …
+
+The check star then looks normal and hides the problem. Look at `comp1_x`/`comp1_y` and `check_x`/`check_y` in the light-curve CSV; if they sit off the stars, reduce the frames after the flip on their own.
+
+Such a night, or one whose check star steps along with the target, is not saved into an open series without asking (chapter 9, "After the run"). A step the check star and comps do not share is taken as the star's, and the series is saved as usual.
+
 > **Caution:** On a star that changes a lot within a night, a "flip step" read from the target's light curve is mostly the star changing. SHOBS-P warns you in that case. Look at **Comp health…** instead: it shows each comp's step at the flip (chapter 11).
 
 ## Stars near the frame edge
 
-After a run, SHOBS-P may warn that a comp, spare or check star sat **near the frame edge or a weak part of the flat**. Such stars can drift out of the good part of the image as the night goes on. Choose other stars next time if you can.
+After a run, SHOBS-P may warn that a comp, spare or check star sat **near the frame edge or a weak part of the flat**. Such stars can drift out of the good part of the image as the night goes on. The warning says how far in a star must be, for example "comes within 9 px of the frame edge (stars at least 66 px in are safe)". Choose other stars next time if you can.
+
+## Frames without the target
+
+When the first frames of a night miss the target (the telescope still settling, for example), SHOBS-P makes the first frame that holds it the reference (chapter 8). The run then skips every frame on which the target is off the frame or too near its edge, and lists them at the end: "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames were skipped." When that is more than a fifth of the night, the line starts with ⚠ and adds a hint: a run of frames at the start points to the pointing, scattered ones to tracking or clouds.
+
+## Centring of defocused stars
+
+On a defocused (donut) field, the log reports after each run how much each aperture's center jittered from frame to frame, for example "Centring (defocused stars): frame-to-frame jitter of each aperture's center (rms): target 0.12 px, C1 0.15 px, …". Over 0.5 px it becomes a ⚠ caution: the aperture cuts a different part of the donut each time, which adds noise the comps do not cancel. Try a larger aperture (**Suggest…**).
 
 ![The Output page light curve with cloud-flagged points shown as gray crosses](img/12-flagged-points.png)
 

@@ -24,12 +24,12 @@ The order matters: load first, reduce second.
 2. A message tells you how many points and nights were loaded, and that the star positions are not stored.
 3. The line at the top of the Input page now reads something like **Series: SZ_Lyn.cvseries — 8 nights, last 13–14 Oct. After the run you'll be asked to add the night.**
 4. Point the Input page at the new night's bias, dark, flat and lights, and blink and calibrate as usual.
-5. On the Photometry page, mark the target, the **same comps** and the **same check star** as before. Names left over from the series show in the Stars panel with **⚠ not marked on this image**; click each star on the image to mark it again. Clicking a comp that the series already knows puts it back into its old slot.
+5. On the Photometry page, mark the target, the **same comps** and the **same check star** as before. Names left over from the series show in the Stars panel with **⚠ not marked on this image**; click each star on the image to mark it again. Clicking a comp that the series already knows puts it back into its old slot. If the series has a **Use comps…** choice, the comp rows show the comps in use; the series' other comps are found after the solve and still measured on every frame as spares, so a later **Use comps…** can bring them back (chapter 11).
 6. Use the same aperture sizes as the other nights.
 7. Press **Run photometry**.
 8. When asked **Add these N points as the night of … to the M points already in the series?**, answer **Yes**.
 
-**Yes** adds the night and keeps every earlier night. Because the series file is open, SHOBS-P saves it at once (the status bar says **Auto-saved to …**).
+**Yes** adds the night and keeps every earlier night. Because the series file is open, SHOBS-P saves it at once (the status bar says **Auto-saved to …**). The one exception is a night with a large meridian-flip step that looks like an aperture problem: SHOBS-P asks before saving it (chapter 9, "After the run"), and if you answer **No**, the file is left as it was until you press **Save series**.
 
 **No** starts a *new* series with this night only. The old file on disk is not changed, but the new series is not saved until you press **Save series** and give it a new name.
 
@@ -43,7 +43,7 @@ The add-night question may carry one or more warnings. Each one is about somethi
 Different filters do not belong in one series. Answer **No** unless you mean to mix them.
 
 **Careful: this night used different stars than the series.**
-It lists the series' comps and check and tonight's. Different comps put each night on its own zero point. Usually it is better to answer No, go back to the Photometry page, mark the series' comps, and run again. If a comp was missing tonight (off the frame, for example), you can add the night anyway and then use **Use comps…** (chapter 11) to pick a set every night shares.
+It lists the series' comps and check and tonight's. Different comps put each night on its own zero point. Usually it is better to answer No, go back to the Photometry page, mark the series' comps, and run again. If a comp was missing tonight (off the frame, for example), you can add the night anyway and then use **Use comps…** (chapter 11) to pick a set every night shares. Comps that simply follow the series' **Use comps…** choice do not count as different stars: the night is put into the series' comp layout by name.
 
 **One star, one name: …**
 The same star appears under another catalog's name tonight (for example a Gaia name tonight and a Tycho name in the series). **Yes** uses the series' names and catalog magnitudes for this night, so every night stays on one zero point. This is almost always what you want.
@@ -70,10 +70,16 @@ A note travels with a night: in the night table's **Note** column, in the light-
 All of these are in the **Series** row on the Output page. When the series has a file, each of them saves the file straight away.
 
 - **Add series file…** merges another saved series into the one that is open, for example a night you saved on its own. You see how many points and which nights will be added, with warnings if the comps or reduction differ. Series from Variables and Transits modes cannot be merged.
-- **Remove night…** removes one night. Type its number from the list and confirm. This cannot be undone, except from the backup copy described below.
+- **Remove night…** removes one night. The list shows each night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`. Type its number and confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
 If you load another series, close this one, switch modes, or close the SHOBS-P window while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open. When you close the window, it asks only if a series file has unsaved changes or a series of two or more nights has never been saved.
+
+## Switching to another star
+
+Press **New reduction** on the Input page before you start on another star (chapter 5). It closes the open series (offering a save first) and clears the old star's target, planet, comps, check and watch stars, **Use comps…** choice and rejected frames. SHOBS-P also offers a new reduction by itself when the lights you choose are another star. This keeps one star's comps from being applied to another star's night.
+
+As a last guard, a **Use comps…** choice whose stars were never measured on a new night is not applied to it. The log says, for example, "✖ Use comps choice (…) not applied to …: … were not measured on any of its frames (another field's comps?). … for another star, use New reduction on the Input page."
 
 When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another. If it cannot tell from the positions whether the two names are the same star, it asks; **No** (the default) keeps what is marked.
 

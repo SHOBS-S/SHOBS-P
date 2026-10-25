@@ -5,11 +5,12 @@ It takes about ten minutes, most of it waiting for downloads.
 
 ## What you need
 
-- Windows 10 or 11.
+- Windows 10 or 11, a Mac (macOS 12 Monterey or newer), or Linux. The Windows steps come first; Linux and the Mac have their own sections
+  below.
 - An internet connection (for the install, and later for star and catalog lookups).
 - **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works.
 
-## Install Python
+## Install Python (Windows)
 
 1. Go to [python.org/downloads](https://www.python.org/downloads/) and download the latest Python for Windows.
 2. Run the installer. On the first screen, tick **Add python.exe to PATH**. This matters: the SHOBS-P start files
@@ -20,11 +21,11 @@ It takes about ten minutes, most of it waiting for downloads.
 > SHOBS-P checks each Python it finds and uses the first one that has everything it needs, including Tkinter, the
 > window toolkit. SHOBS-P makes its own environment from it (see below), so your Python is normally left as it is.
 
-## Install SHOBS-P
+## Install SHOBS-P on Windows
 
 1. Open the SHOBS-P releases page at
    [github.com/SHOBS-S/SHOBS-P/releases](https://github.com/SHOBS-S/SHOBS-P/releases).
-2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.18.zip`).
+2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.19.zip`).
 3. Unzip it somewhere permanent, for example `C:\Astro`. Avoid your Downloads folder: the shortcuts point at this
    folder, so it should not move.
 4. Open the folder the zip made. It holds files such as `clearv_app.py`, `Create shortcuts.bat`,
@@ -52,15 +53,51 @@ with the reason it was not usable. Install Python from python.org (tick **Add py
 If you ever move the SHOBS-P folder, double-click **Create shortcuts.bat** again so the shortcuts point at the new
 place.
 
+## Install on Linux
+
+1. Install Python 3.11 or newer with Tkinter, the window toolkit. Most distributions already have Python; add
+   Tkinter (and, on Debian-based systems, the venv package) with your package manager:
+   - Debian, Ubuntu, Mint: `sudo apt install python3-tk python3-venv`
+   - Fedora: `sudo dnf install python3-tkinter`
+   - Arch: `sudo pacman -S tk`
+2. Unzip SHOBS-P anywhere in your home folder.
+3. Open a terminal in that folder and type `./run_linux.sh`.
+   The first start finds a Python that works, makes SHOBS-P's own environment in
+   `~/.local/share/SHOBS-P/python-env` (your own Python is left untouched) and downloads the packages. This takes a
+   few minutes. Later starts skip the download, unless a new version needs other packages.
+4. For an entry in your applications menu, type `./run_linux.sh --desktop` once. It needs no `sudo`. It also puts
+   an icon on your Desktop, if you have one. Run it again if you move the SHOBS-P folder.
+5. To check the install, type `./run_selftest.sh` (see the self-test below).
+
+If the terminal says `SHOBS-P could not find a Python it can use.`, every Python it tried is listed with the reason.
+When Tkinter is missing, it names the package to install. Install it and run `./run_linux.sh` again.
+
+## Install on a Mac
+
+1. Install Python from [python.org/downloads](https://www.python.org/downloads/). It includes Tk, the window
+   toolkit. (A Homebrew Python works too, with `brew install python-tk@3.13` for a Python 3.13.)
+2. Unzip SHOBS-P somewhere permanent, for example in Documents.
+3. Double-click **Start SHOBS-P.command**. The first time, macOS may refuse to open a file from an unidentified
+   developer. Right-click (or Control-click) the file, choose **Open**, then **Open** again. You only do this once.
+   (If newer macOS offers no **Open**, use **Open Anyway** in System Settings → Privacy & Security. Or, in Terminal in
+   the SHOBS-P folder, `xattr -d com.apple.quarantine "Start SHOBS-P.command"` does the same.)
+4. The first start makes SHOBS-P's own environment in `~/Library/Application Support/SHOBS-P/python-env` and
+   downloads the packages, which takes a few minutes. Keep the Terminal window open while SHOBS-P runs; closing it
+   closes the program.
+5. To check the install, double-click **Run self-test.command**.
+
+If no suitable Python is found, install Python from python.org and double-click **Start SHOBS-P.command** again.
+
 ## Check the install with the self-test
 
-1. In the SHOBS-P folder, double-click **Run self-test.bat**.
+1. In the SHOBS-P folder, double-click **Run self-test.bat** (Windows) or **Run self-test.command** (Mac). On Linux,
+   type `./run_selftest.sh` in a terminal in that folder.
 2. Wait a minute or two. The transit fits are the slow part. The test changes no settings and no data. A SHOBS-P
    window may open and close by itself; that is part of the test.
 3. The last line should read `RESULT: ALL PASSED`.
 
 The test writes its log to `selftest_log.txt` in the SHOBS-P folder, and a copy to `SHOBS-P_selftest_log.txt` in your
-Downloads folder. If you ever report a problem, attach this file.
+Downloads folder (on Linux and the Mac, when you have one). If you ever report a problem, attach this file.
 
 A line such as `(no sample transit reports to run on: skipped)` or `(NASA Exoplanet Archive not reachable: skipped)`
 is normal: that part of the test is simply skipped.
@@ -74,7 +111,8 @@ If the result says `FAILED`, the lines marked `FAIL` say which part. See chapter
 ## Start SHOBS-P
 
 Double-click the **SHOBS-P** icon on the Desktop, or choose it from the Start menu. The program opens without a
-console window. Any error is shown in the program itself and written to a log file (see "When something goes wrong"
+console window. On Linux, type `./run_linux.sh` or choose SHOBS-P from the applications menu; on a Mac, double-click
+**Start SHOBS-P.command**. Any error is shown in the program itself and written to a log file (see "When something goes wrong"
 below).
 
 The first time, SHOBS-P opens:
@@ -108,28 +146,36 @@ That is expected here; the stars are already marked for you.
   It also checks the Python packages first.
   Use it when the program will not start from the icon: the console shows the error, and the window stays open with
   `The app did not start. Leave this window open and copy the message above.`
-- **On a Mac**, install Python from python.org (it includes Tkinter), install the packages with
-  `python3 -m pip install -r requirements.txt` in the SHOBS-P folder, then start the program with
-  `python3 clearv_app.py`.
+- **On Linux or a Mac**, use the start files described above (`run_linux.sh`, **Start SHOBS-P.command**). The
+  terminal window shows any error, and says `SHOBS-P did not start, or stopped with an error. Copy the message
+  above.`
+
+### Starting afresh
+
+If the install gets into a muddle, delete SHOBS-P's own environment and let the next start set it up again. On
+Windows, delete the `SHOBS-P` folder in `%LOCALAPPDATA%` and run **Create shortcuts.bat** again. On Linux, delete the `SHOBS-P` folder in `~/.local/share`; on a Mac,
+delete the `SHOBS-P` folder in `~/Library/Application Support`. Your settings are not in that folder, so they are
+kept.
 
 ## Updating to a new version
 
 1. Download the new zip from the releases page.
 2. Unzip it. You can replace the old folder or unzip beside it.
-3. Run **Create shortcuts.bat** in the new folder. It points the shortcuts at the new version and installs any new
+3. On Windows, run **Create shortcuts.bat** in the new folder. (On Linux or a Mac, just start the new version with
+   its start file; run `./run_linux.sh --desktop` again for the menu entry.) It points the shortcuts at the new version and installs any new
    packages it needs. SHOBS-P's own Python environment is shared by every version, so this is quick. (The first time
    you run it after updating from 2.2.18 or older, it sets that environment up and downloads the packages once.)
 
-Your settings (site, telescope, and so on) are kept in your Windows user folder, not in the SHOBS-P folder, so an
+Your settings (site, telescope, and so on) are kept in your user folder (your home folder), not in the SHOBS-P folder, so an
 update does not lose them. Chapter 3 lists what is remembered.
 
 ## When something goes wrong
 
 - If something fails inside the program, a box says **Something went wrong:** with the error, and the details go to
-  `.shobs_p.log` in your user folder (`C:\Users\<you>`).
+  `.shobs_p.log` in your user folder (`C:\Users\<you>` on Windows, your home folder `~` on Linux and the Mac).
 - `.shobs_p.log` also holds every line of the Log window, each with the date and time in front. When it grows past
   5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts.
-- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.18**).
+- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.19**).
 - To report a problem, open an Issue on the SHOBS-P GitHub page and attach `selftest_log.txt` and `.shobs_p.log`,
   with a screenshot.
 

@@ -19,6 +19,10 @@ In the Output page's **Notes** box, the default note is **OSC reduced; not trans
 
 The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the filter code, and the UTC date (or a date range such as `16-SEP-2026_to_06-OCT-2026` for several nights). With an Output folder, an existing file is never overwritten; a new copy gets `_2`, `_3` and so on.
 
+Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame turned north up and east left, with the
+target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
+saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars.
+
 ### Questions before saving
 
 **The Star ID is “hd219134”. AAVSO spells it “HD 219134” … Use “HD 219134” in the report?**

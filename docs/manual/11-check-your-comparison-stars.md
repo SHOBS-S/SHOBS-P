@@ -34,6 +34,7 @@ Click a row in the table to highlight that star's curve.
 | **Flip step** | Its jump at a meridian flip |
 | **Both pier sides** | Whether it reads the same on both pier sides, over all nights with a flip |
 | **Nights** | Nights it was measured |
+| **Over linear limit** | Frames where its brightest raw pixel reached the **linear ADU** limit, for example `⚠ 12 of 99 frames` (chapter 8). Without a linear limit set, the column is **Over saturation** and counts against the saturation level. **—** for nights measured before 2.2.19, which kept no per-star peaks |
 | **Pixel (x, y)** | Its median position on the frames |
 | **From target** | Its distance from the target in pixels (does not change with framing) |
 | **Verdict** | SHOBS-P's judgment |
@@ -67,6 +68,8 @@ SHOBS-P stores each comp's and spare's measurement in every frame. **Use comps�
 ![The Comparison stars in use window for a ten-night series](img/11-use-comps.png)
 
 The light curve, period and summary update. If the series has a file, it is saved with the new choice. The log lists the comps now in use, and nights you add later use the same choice.
+
+The Photometry page follows the choice too: its comp rows and markers change to the comps in use. The comps you left out are still measured on every new night, as spares, so choosing them again later never leaves a night without them (chapter 8).
 
 To return to the comps the nights were reduced with, open **Use comps…** again and press **Back to the original comps**, then **Apply**.
 

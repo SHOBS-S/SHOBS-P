@@ -14,18 +14,27 @@ On the **Output – Variability** page:
 
 ## Set the search
 
-1. In **Period search (days)**, type the shortest and longest period to try. The defaults are 0.05 to 20 days.
+1. In **Period search (days)**, type the shortest and longest period to try. The defaults are 0.02 to 20 days. (Before
+   2.2.19 the shortest was 0.05 d, which missed many short-period pulsators. A series saved with that old default now
+   searches from 0.02 d, and the log says so.)
 2. Press **Enter**, or click into another box. The search runs again with the new range. (It does not rerun while you
    are still typing, or when you leave a box without changing it.) **Refit period** also runs it again.
 
 Choose a range that fits your star and your data:
 
 - The shortest period needs frames closer together than half of it.
-- The longest period your data can really test is about half the span of the data. On the periodogram, longer periods are shaded gray and labeled **longer than the data can test**. The search still runs there, but a peak in the gray zone is not to be trusted.
+- The longest period your data can really test is about half the span of the data.
+- When the VSX period, or a period you marked, lies outside the range, the Period box says so with a **Range ⚠** line
+  and a caution, and a button such as **Search 0.02–20 d instead** widens the search in one click. A period longer than
+  half the data span gets no button: no search can find it yet, so add nights. On the periodogram, longer periods are shaded gray and labeled **longer than the data can test**. The search still runs there, but a peak in the gray zone is not to be trusted.
 
 ### Period from
 
 The **Period from** box chooses what the search uses: **Every point**, or **5 min bins**, **10 min bins** (the default) or **30 min bins**. Bins make each night count by the hours you observed, not by how many frames you took, and they stop thousands of correlated frames from making a peak look more certain than it is. Keep the default unless you are after a period of less than about an hour; then use **5 min bins** or **Every point**. If there are fewer than 8 bins, SHOBS-P uses every point. The Period box's **Basis** line says what was used.
+
+Bins smear a period shorter than about ten bins. So when the VSX or a marked period is that short, or the best peak
+found from bins is, SHOBS-P searches every point instead, and a **Bins ⚠** line in the Period box says so (for
+example "⚠ 0.039 d spans only 5.6 10-min bins: searched every point instead").
 
 ### Check-star correction
 

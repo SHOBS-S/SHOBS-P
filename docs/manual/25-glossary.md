@@ -7,7 +7,7 @@ entry.
 transit's shape and duration. The fit holds it near the published value.
 
 **AAVSO sequence** — The comparison stars the AAVSO publishes for a variable star's chart, with checked magnitudes.
-SHOBS-P circles them in cyan and suggests them first. Their labels are magnitudes without the decimal point: 91 is
+SHOBS-P draws them as thin dashed cyan rings and suggests them first. Their labels are magnitudes without the decimal point: 91 is
 V 9.1.
 
 **Airmass** — How much atmosphere the light passes through: 1 at the zenith, about 2 at 30° altitude. Stars dim and
@@ -37,7 +37,8 @@ pixels in a pattern such as RGGB. A monochrome camera has none (SHOBS-P calls it
 parameters. SHOBS-P needs a ΔBIC of 10 or more to call a transit detected.
 
 **Binning** — Adding neighboring pixels together. SHOBS-P's **Binning** (Input page) adds same-color pixels only, so
-colors stay separate. It is separate from any binning done in the camera.
+colors stay separate. It is separate from any binning done in the camera. A transit report's `#BINNING` is the
+camera's binning; SHOBS-P's own "processing bin" goes into the report's notes.
 
 **BJD_TDB** — Barycentric Julian Date in Barycentric Dynamical Time: the time the light would have reached the center
 of mass of the solar system, on a uniform time scale. The standard for exoplanet timing. It differs from JD by up to
@@ -58,6 +59,18 @@ reports and the transit fit.
 
 **Comp (comparison star)** — A steady star of known magnitude in the same frame. The target's magnitude is measured
 against it, so changes in the sky affect both and cancel. SHOBS-P takes up to ten, **C1** to **C10**.
+
+**Corner plot** — A grid of plots of an **MCMC** fit's samples: one histogram per fitted parameter, and every pair
+of parameters against each other. It shows each parameter's **posterior**, and whether two parameters trade off
+against each other. **Corner plot…** on the Transit fit page.
+
+**Credible band** — The range of model curves the **MCMC** allows: the 68 % band holds the middle 68 % of the
+sampled models at each moment, the 95 % band the middle 95 %. Shaded around the transit fit.
+
+**Defocus, donut** — Defocusing the telescope on purpose spreads each star's light over many pixels, so bright stars
+don't saturate and pixel-to-pixel errors average out. A strongly defocused star looks like a ring (a donut), often
+with a dark center from the secondary mirror. SHOBS-P finds such fields by itself and centers each star on its
+light.
 
 **Derotator** — A rotator on an **alt-az mount** that turns the camera through the night to follow the field
 rotation, so the stars stay put on the sensor. SHOBS-P recognizes one from a rotator reading that drifts smoothly in
@@ -104,6 +117,9 @@ would have reached the Sun's center. AAVSO variable-star reports use JD; timing 
 **Limb darkening** — A star looks darker near its edge than at its center, which rounds the bottom of a transit.
 SHOBS-P sets it from the star's temperature and the filter.
 
+**Linear limit** — The raw level (in ADU) up to which your camera's response stays proportional to the light. Above
+it, but below saturation, a star reads too faint. Typed in the **linear ADU** box on the Photometry page.
+
 **Lomb-Scargle periodogram** — A period search for unevenly spaced data. Its plot shows how well each trial period
 fits; the highest peak is the best period.
 
@@ -117,10 +133,15 @@ target crosses the meridian. The field ends up rotated 180° on the sensor. One 
 low-resolution survey such as TESS. The NEB check measures the neighbors to rule them out.
 
 **O − C** — Observed minus calculated: the measured time of a transit (or a variable's maximum or minimum) minus the
-time the ephemeris predicts. A changing O − C shows a period change or a wrong ephemeris.
+time the ephemeris predicts. A changing O − C shows a period change or a wrong ephemeris. SHOBS-P gives it in minutes
+and in σ, where σ combines your timing error and the ephemeris's own uncertainty at that epoch. A constant O − C over
+several nights usually means the ephemeris is out of date.
 
 **Plate solution (WCS)** — The mapping between pixels in the image and positions on the sky. Many capture programs
 write one into the FITS header; otherwise SHOBS-P finds it by matching star patterns to the catalogs.
+
+**Posterior** — What a fit learns about a parameter: the spread of values the data allow, here the **MCMC** samples.
+A round hump is a measurement; one piled up against the end of its allowed range (the prior) is not.
 
 **Red noise, β** — Noise that is correlated in time (seeing, tracking, thin cloud) rather than random from frame to
 frame. β above 1 means the binned scatter falls more slowly than random noise would; the fit widens its

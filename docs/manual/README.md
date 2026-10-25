@@ -1,13 +1,14 @@
-# SHOBS-P User's Manual (version 2.2.18)
+# SHOBS-P User's Manual (version 2.2.19)
 
-> Draft, October 2026. Written for SHOBS-P 2.2.18 and checked against the program. Chapters 2 and 24 updated for
-> 2.2.18.1 (new install scripts; the program itself is unchanged).
+> Draft, October 2026. Written for SHOBS-P 2.2.18 and updated for 2.2.19 (Linux and Mac start files, New reduction,
+> defocused stars, the linear limit, the corner plot and multi-night transit timing, among others), checked against
+> the program. Screenshots are from 2.2.17 and 2.2.18; where 2.2.19 looks different, the text says so.
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
 
 1. **[Welcome](01-welcome.md)** — what SHOBS-P is, who it is for, what it does not do.
-2. **[Installing and starting](02-installing-and-starting.md)** — Python, the release zip, shortcuts, first launch, `Run self-test.bat`.
+2. **[Installing and starting](02-installing-and-starting.md)** — Python, the release zip, shortcuts, first launch, Linux and Mac start files, the self-test, starting afresh.
 3. **[A tour of the window](03-tour-of-the-window.md)**
    - The three modes and their colors: Variables (navy), Transits (green), Discovery (plum).
    - The five steps: Input → Blink → Calibrate → Photometry → Output.
@@ -21,10 +22,10 @@
 
 ## Part 2 — Common steps (all modes)
 
-5. **[Input](05-input.md)** — choosing folders, target lookup, the series line (Load / Close series), what the program checks in your headers (pointing, mislabeled frames, mixed binning).
+5. **[Input](05-input.md)** — choosing folders, target lookup, New reduction, the series line (Load / Close series), what the program checks in your headers (another star's frames, mislabeled frames, mixed binning).
 6. **[Blink](06-blink.md)** — playing the frames, stretch, rejecting and keeping frames, the rejected list, frame numbers.
 7. **[Calibrate](07-calibrate.md)** — what happens, masters reuse, binning, common warnings.
-8. **[Photometry page basics](08-photometry-basics.md)** — auto-solve, the image view (zoom, pop-out, compass, View box, stretch), the step strip, clicking stars and how names and magnitudes fill in, apertures and Suggest apertures, running photometry and the questions it may ask.
+8. **[Photometry page basics](08-photometry-basics.md)** — auto-solve, the image view (zoom, pop-out, compass, View box, stretch), the step strip, clicking stars and how names and magnitudes fill in, apertures and Suggest apertures, defocused stars, the linear limit, running photometry and the questions it may ask.
 
 ## Part 3 — Variables mode
 
@@ -39,9 +40,9 @@
 ## Part 4 — Transits mode
 
 16. **[Plan a transit night](16-plan-a-transit-night.md)** — planet lookup by any name, Tonight's transits, baseline, meridian flips and the zenith keyhole.
-17. **[Fit a transit and submit it](17-fit-a-transit-and-submit-it.md)** — the Transit fit page, the verdict, O − C, rms lines, leave-one-comp-out, Trim, Comp health and Use comps on this page.
+17. **[Fit a transit and submit it](17-fit-a-transit-and-submit-it.md)** — the Transit fit page, the verdict, O − C, rms lines, leave-one-comp-out, Trim, Comp health and Use comps on this page, the corner plot, multi-night transit timing.
 18. **[When the fit says "inconclusive" or "none"](18-inconclusive-or-none.md)** — gaps, one-sided baselines, cloud-flagged frames, the depth-unreliable warning.
-19. **[Reports](19-transit-reports.md)** — AAVSO exoplanet report, ExoFOP package, the fit CSV, opening an EXOTIC report for a side-by-side fit.
+19. **[Reports](19-transit-reports.md)** — AAVSO exoplanet report, ExoFOP package, the fit CSV, the settings file and field image, opening an EXOTIC report for a side-by-side fit.
 
 ## Part 5 — Discovery mode
 
@@ -57,4 +58,4 @@
 26. **[Credits and how to cite SHOBS-P](26-credits-and-citing.md)** — the Copy button, DOI, CITATION.cff.
 
 ---
-*Screenshots are from SHOBS-P on Windows; some are still placeholders.*
+*Screenshots are from SHOBS-P 2.2.17–2.2.18 on Windows; some are still placeholders.*

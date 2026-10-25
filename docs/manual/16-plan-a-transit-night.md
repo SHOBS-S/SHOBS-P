@@ -35,7 +35,9 @@ To enter a planet:
 1. In the **Planet (Transits)** box, type the name in **Planet**, for example `TrES-3 b`, `KOI-217 b`,
    `TOI-2046 b` or `EPIC 220504338 b`.
 2. Press **Enter** (or Tab out of the box). The lookup starts by itself; the line under the box says
-   *Looking up …* and then where the values came from.
+   *⟳ Looking up … at the NASA Exoplanet Archive…* with the seconds counting (and a moving bar beside the box), and
+   then where the values came from. If the archive does not answer, the line says so in red; type the values or
+   press **Look up again** later.
 3. Check the filled boxes: **Period (d)**, **T0 (BJD_TDB)**, **Duration T14 (h)**, **Depth (%)**, **Rp/R\***,
    **a/R\***, **Impact parameter b** and **Star Teff (K)** (used for limb darkening).
 
@@ -52,8 +54,10 @@ Things worth knowing about the lookup:
   a window asks *"… has N known planets. Which one did you observe?"*. Click the planet. Planets that do not
   transit are marked **(does not transit)**. **Cancel** stops the lookup.
 - **A planet of another star.** If the planet orbits a different star than the one now on the Input page, SHOBS-P
-  clears the old target, comparison stars, check star and watch stars, and fills in the new host. This keeps a
-  previous field's stars from leaking into the new one.
+  starts a new reduction (chapter 5): it clears the old target, comparison stars, check star, watch stars and **Use
+  comps…** choice, closes an open series (asking first, with a save offered), and fills in the new host. This keeps a
+  previous field's stars from leaking into the new one. If a series is open and you answer **No**, the old star and
+  its series stay; check the planet's name.
 - **Typing values by hand.** Every box can be edited. If the lookup fails (for example, no internet), type the
   period, T0 and duration yourself; the rest help the fit but are optional. If you type a depth that disagrees with
   Rp/R\* by more than 20%, SHOBS-P notes it and compares against (Rp/R\*)².
@@ -103,7 +107,8 @@ To use a planet from the list:
 
 1. Double-click its row.
 2. If the Input page already has a target, SHOBS-P asks whether to clear it (and its RA/Dec) so the lookup can fill
-   them. Answer **Yes** for a new field.
+   them. Answer **Yes** for a new field. For another star this is a new reduction (chapter 5): an open series is
+   closed, with a save offered first.
 
 SHOBS-P switches to Transits mode if needed, looks the planet up, opens the Input page, and the status bar says
 when the transit runs and when to start, for example *"Transit 22:10–00:35, start by 21:10."*
@@ -171,8 +176,10 @@ What SHOBS-P does:
 
 - **Tonight's transits** marks such nights with **flip** in the **Meridian** column, and **no meridian flip** hides
   them.
-- During photometry, frames on both sides of the flip are aligned and measured as usual. The Calibrate log notes
-  where the flip happened (*"Meridian flip before frame …"*).
+- During photometry, frames on both sides of the flip are aligned and measured as usual; the alignment of each
+  flipped frame is checked on up to 15 stars' own centers, so the comp and check apertures land on their stars. The
+  Calibrate log notes where the flip happened (*"Meridian flip before frame …"*). If you reject the frames before the
+  flip in Blink, the first kept frame becomes the reference (chapter 6).
 - The transit fit tests whether a plain jump at the largest gap in the data explains the dip as well as a transit
   does. If it does, the verdict becomes "inconclusive" rather than "detected".
 

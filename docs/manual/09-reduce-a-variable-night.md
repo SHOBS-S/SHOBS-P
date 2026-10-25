@@ -33,10 +33,10 @@ If the Star ID lookup found RA/Dec, SHOBS-P usually places the Target marker (or
 
 ### Comparison stars: AAVSO sequence first
 
-For AAVSO work, the best comps are the stars of the AAVSO comparison sequence. They are drawn as **cyan circles**, labeled with their V magnitude without the decimal point (for example `112` means V 11.2). When you use them, the report names them by their AUID and other observers' data can be compared with yours.
+For AAVSO work, the best comps are the stars of the AAVSO comparison sequence. They are drawn as **thin dashed cyan rings**, labeled with their V magnitude without the decimal point (for example `112` means V 11.2). When you use them, the report names them by their AUID and other observers' data can be compared with yours.
 
 1. Pick **●  Comps (C1–C10)**.
-2. Click a comp star. Green rings mark **suggested comps**: stars near the target's brightness and color, with AAVSO sequence stars preferred.
+2. Click a comp star. Thick green rings labeled **S1**, **S2** … mark **suggested comps**: stars near the target's brightness and color, with AAVSO sequence stars preferred. A line per suggestion under the **Stars** panel says why it was picked.
 3. Look at the comp's row in the **Stars** panel at the right. Its name (AUID or catalog name) and magnitude fill in from the catalogs. The line under it says where the magnitude came from, whether the star is a known variable, and how far it is from the target in brightness and color.
 4. Repeat for more comps. Two to five good comps is typical.
 
@@ -80,7 +80,8 @@ After the run, SHOBS-P may ask more questions:
 
 - **Add these N points as the night of …** appears only if a series is open. See chapter 10.
 - A question about dew or haze, or about frames during a planet transit. See chapter 12, [Flags and bad data](12-flags-and-bad-data.md).
-- A warning that a comp or the check is near the frame edge or a weak part of the flat. Consider other stars next time.
+- A warning that a comp or the check is near the frame edge or a weak part of the flat. It says how far in a star must be to be safe. Consider other stars next time.
+- **This night's meridian-flip step is … mag ⚠ …** appears only when a series is open and saves itself, and the night has a large step at the flip that looks like an aperture problem rather than the star: the check star steps too, or the comp and check apertures jumped together at the flip (or, with no check star, the step is far beyond the night's scatter). **Yes** saves the night into the series file. **No** keeps the night on screen but leaves the file on disk as it was; no automatic save writes it later either. Press **Save series** to keep it, or **Remove night…** to take it out. Chapter 12 explains flip steps.
 
 Then the **Output – Variability** page opens.
 
@@ -88,7 +89,7 @@ Then the **Output – Variability** page opens.
 
 ![The Output – Variability page after one night](img/09-output-page.png)
 
-The page has, from top to bottom:
+The page heading names the star, for example **Output – Variability: SZ Lyn**. The page has, from top to bottom:
 
 1. **Three summary boxes**: **Series**, **Period** and **Color**.
 2. **The night table**, one row per night.
@@ -99,6 +100,7 @@ The page has, from top to bottom:
 
 ### The Series box
 
+- **Star**: the star's name, and its AAVSO AUID when VSX knows one.
 - **Points**: how many points in total, and how many are used. The rest are flagged (chapter 12).
 - **Nights** and the time **span**.
 - **Comps**: the comparison stars in use.
@@ -148,12 +150,13 @@ On a single night, the fold and periodogram are often grayed with a note that on
 The **Results** row has:
 
 - **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page.
-- **Save light-curve CSV**: every point, including flagged ones with their flag word.
+- **Save light-curve CSV**: every point, including flagged ones with their flag word. A long series can take a few seconds; the CSV is written in the background and the status bar shows a turning ◐ and the seconds until it says **✔ Saved …**.
 - **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns.
 - **Save plot PNG**: the four plots with the summary boxes and cautions above them.
+- **Save field image**: a picture of the reference frame, turned north up and east left, with a compass, a scale bar, and the target, comps and check star marked with their apertures. The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report.
 - **Refit period**: runs the period search again.
 
-If you set an **Output** folder on the Input page, these files go there without a dialog, and the report, CSV and plot of one set of results share a number so they belong together. Chapter 22 lists every file SHOBS-P writes.
+If you set an **Output** folder on the Input page, these files go there without a dialog, and the report, CSV, plot and field image of one set of results share a number so they belong together. Without an Output folder, the save dialog opens in the folder you last saved to (this session) with the next free name already filled in. A name typed with a number after the extension (such as `…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`, and never overwrites a file. Chapter 22 lists every file SHOBS-P writes.
 
 To keep this night for later, press **Save series** (chapter 10). Nothing is written to disk until you save.
 

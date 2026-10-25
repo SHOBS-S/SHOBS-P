@@ -59,6 +59,11 @@ What makes a frame worth rejecting:
 
 Don't reject frames just because the star looks a little fainter; that may be the variation you are measuring.
 
+> **Tip:** You may reject the frame you marked the stars on (for example all the frames before a meridian flip). The
+> next photometry run then makes the first kept frame its reference and carries the markers over to it, and the log
+> says so: **Reference: the frame the stars were marked on (…) is rejected, so the first kept frame (…) is the
+> reference; the markers were carried over to it…**
+
 ## Bring a frame back
 
 There are two ways:
@@ -98,6 +103,9 @@ master flat. The list then reads **Rejected flats …**.
 - **The Blink speed and stretch are remembered** between sessions.
 - **Blink always shows what is in the folder now.** If you change the Lights folder on the Input page, Blink loads the
   new list next time you open it.
+- **Rejected frames belong to their folder.** When you choose another Lights or Flat folder, the frames you rejected
+  in the old one are forgotten, so a new night never starts with another night's rejections. **New reduction** on the
+  Input page clears every rejected frame.
 
 ---
 

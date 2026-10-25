@@ -15,7 +15,8 @@ From top to bottom:
   **● Watch**, and **Clear selected**. On the right: **Circles**, **Solve again** and the orange **Run photometry**
   button.
 - **The options row.** The aperture boxes **Aperture r**, **sky in** and **sky out**, the **Suggest…** button,
-  **raw sat ADU**, and **Also measure R and B (color index; slower)**. On the right, the **View** box.
+  **raw sat ADU**, **linear ADU**, and **Also measure R and B (color index; slower)**. On the right, the **View** box.
+  After a run, a gray line under it says what the photometry was measured with (see "Apertures" below).
 - **The step strip**: what is done and what to do next.
 - **The image** on the left, with a legend under it, and the **Stars** and **Watch stars** panels on the right.
 - **The progress row**: a progress bar, **Cancel run**, and **Hide log** / **Show log**, with the log under it.
@@ -48,6 +49,19 @@ When solved, the title over the image reads, for example, "Solved · AAVSO chart
 
 **Solve again** repeats the solve, for example after a catalog did not answer, or after you corrected the focal
 length.
+
+**When the AAVSO sequence is slow.** The AAVSO chart server (VSP, at apps.aavso.org) sometimes answers late or not at
+all. SHOBS-P does not hold up the solve for it: it asks again in the background a few times, and the log says exactly
+what happened, for example "AAVSO sequence did not answer (503 from apps.aavso.org); asking again in the background
+(…)". If it answers later, the log says so and the status bar says **The AAVSO sequence answered after the solve:
+Solve again to use it.** Press **Solve again**; the sequence is used at once, with no new request.
+
+**When the target is not on the first frame.** Sometimes the first frames miss the target, for example while the
+telescope was still settling. If the plate solution puts the target off the first frame, SHOBS-P looks at the next
+frames (up to 10) for the first one that holds it, without solving each one. That frame becomes the reference: the
+image is solved again and the Target marker placed. The log says, for example, "Target: SZ Lyn is on frame 6 (…), not
+on frames 1–5. Frame 6 is the reference now; the run skips the 5 frames without SZ Lyn and lists every frame that
+misses it." If it cannot find the target, the log says to reject the frames without it in Blink and calibrate again.
 
 > **Tip:** A solve needs only a rough idea of where the frame points: the target's name looked up on the Input page
 > is enough. Frames without a plate solution or RA/Dec in their headers are fine.
@@ -93,6 +107,11 @@ move to a second monitor. The window has the same **● Target**, **● Comps (C
 **Clear selected** controls, and **Zoom**, **−**, **+**, **Fit** and **Go back**. The **+** and **−** keys also zoom
 there.
 
+**Small image?** On a small frame (MicroObservatory's, for example), or with Windows display scaling at 125 % or 150 %,
+the image area can get short and wide. SHOBS-P then gives the image room first: the log under it shrinks (down to 3
+lines). If the image is still drawn small, a line under it says **⚠ Small image? Pop out opens it in its own window
+(also in the View box, top right); Hide log gives it more room.**, with its own **Pop out** button.
+
 While the image is out, the page shows **Image is in its own window (Bring back in the View box).** and the **Pop out**
 button reads **Bring back**. The image comes back when you press **Go back** or **Bring back**, close the window,
 start a run, switch modes or leave the Photometry page. SHOBS-P remembers where you put the window.
@@ -124,14 +143,19 @@ The legend under the image lists only the marks drawn right now. The most common
 | Green **+** with **C1**, **C2** … | comparison stars |
 | Blue **+** with **K** | the check star |
 | Solid, dashed and dotted rings around a marked star | the aperture, and the inner and outer edges of the sky ring |
-| Cyan circle with a number | an AAVSO sequence star; the number is its V magnitude without the decimal point (91 = V 9.1) |
+| Thin dashed cyan ring with a number | an AAVSO sequence star; the number is its V magnitude without the decimal point (91 = V 9.1) |
 | Yellow circle | a star of the catalog chosen in **Circles** |
-| Large green ring | a suggested comparison star |
+| Thick green ring with **S1**, **S2** … | a suggested comparison star |
 | Small light-blue diamond | a spare comparison star SHOBS-P picked |
 | Cyan diamond with **W** | a watch star |
 
 Hold the pointer over any star to see a small box with its name, catalog magnitudes, color and pixel position, and
 a warning if it is a known variable.
+
+Suggested comps and AAVSO sequence stars are easy to mix up on a busy field, so a small key on the image itself (in the
+corner beside the compass) shows the two: **S1, S2 …  suggested comp** and **91 = V 9.1  AAVSO sequence**. Like the
+compass, it follows **Show labels**. (In 2.2.19 the sequence rings are dashed and the suggested rings thicker and
+labeled, so they look a little different from the screenshots here.)
 
 ## The step strip
 
@@ -181,10 +205,17 @@ APASS, Gaia and Tycho-2. The line under each row says where the magnitude came f
 
 - its color (B−V) and a warning if it is very red;
 - how much brighter or fainter than the target it is, with a warning if it is more than about 1 magnitude away;
-- "not a known or suspected variable (VSX + SIMBAD)", or a red ⚠ if it is one.
+- "not a known or suspected variable (VSX + SIMBAD)", or a red ⚠ if it is one;
+- with a **linear ADU** set, a caution when the star's brightest raw pixel is over or near the linear limit, for
+  example "⚠ raw peak 41,200 ADU is over the linear limit (36,000): the camera's response bends there, so this star
+  reads too faint — pick a fainter comp." (for the target: "— shorter exposures or more defocus");
+- for a comp or check star near the frame edge, how far in a star must be, for example "⚠ only 12 px from the frame
+  edge: its sky ring (out to 22 px) needs the star at least 27 px in, with room for drift — pick a star further in".
 
-**Suggested comparison stars** are drawn as large green rings: up to four catalog stars close to the target in
-brightness and color, not variable, not near saturation, AAVSO sequence stars first. They are good first choices.
+**Suggested comparison stars** are drawn as thick green rings labeled **S1**, **S2** …: up to four catalog stars close
+to the target in brightness and color, not variable, not near saturation, AAVSO sequence stars first. They are good
+first choices. Under the **Stars** panel, one line per suggestion says what it is and why, for example "S1 = … V 11.20
+(AAVSO sequence 112): 0.3 mag fainter than the target, B−V 0.62 (target 0.60)", and "— now C2" once you use it.
 Chapter 9 says more about choosing comps.
 
 **Variables are caught.** If you click a known or suspected variable as a comp or check star, SHOBS-P asks whether to
@@ -212,6 +243,11 @@ The image must be solved for this to work.
 
 To replace a comparison star, remove it first and then click the new one; clicks in Comps mode always add.
 
+**Comps follow Use comps.** When you choose a subset of comps with **Use comps…** (chapter 11), the comp rows and
+markers on this page change to the comps in use. The others are not lost: they are still measured on every frame as
+spares (small diamonds), and choosing the original set again puts them back where they were. The log says, for
+example, "Photometry comps now match Use comps: C1 …, C2 …; … still measured as spare".
+
 ### Watch stars
 
 **● Watch** adds a star you want to follow without using it as a comparison star, for example a suspected variable in
@@ -228,16 +264,42 @@ boxes are in pixels on the calibrated image:
 
 The rings are drawn on the image as you type, so you can see whether a neighbor star falls inside them.
 
+**What was measured.** After a run, a gray line under the options row says what the photometry was measured with, for
+example "Measured with r 8, sky 14–22 px (Bin 1)". If you then change the aperture, sky or **Binning** boxes, the line
+turns orange: "⚠ Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
+next run.
+
+**Aperture kept from another target.** The aperture boxes keep their values from the last target. On a new image,
+the log cautions when they don't fit these stars: an aperture larger than 2.5 × the stars' FWHM (it adds sky noise and
+neighbors), or, on defocused stars, one that clips the donut. Each caution says what **Suggest…** would give.
+
+### Defocused stars (donuts)
+
+Many transit observers defocus on purpose, so each star becomes a ring (a "donut"). SHOBS-P decides once per run
+whether the field is defocused. If it is, the log says, for example, "Defocused stars (donuts, about 24 px across on
+12 of 15 test stars): each star is centered on its light centroid, not on the bright side of its ring." Then:
+
+- every star is centered on the middle of its light, the same way on every frame;
+- **Suggest…** sizes the aperture to hold 95 % of the star's light (never smaller than the donut), instead of using
+  the FWHM, which means little on a donut;
+- **Run photometry** asks first when the aperture would clip the ring (see the questions below);
+- after the run, the log reports how much each aperture's center jittered from frame to frame (the rms, in pixels),
+  with a caution over 0.5 px.
+
+In-focus fields are measured exactly as before.
+
 ### Let SHOBS-P suggest the sizes
 
 1. Press **Suggest…**. SHOBS-P measures the star size (FWHM) on bright, isolated stars and opens the **Suggested
-   apertures** window.
-2. Read the bold line: the suggested **Aperture r** (1.8 × FWHM) and sky ring. Notes below it warn about neighbors
-   inside a marked star's aperture.
+   apertures** window. (On defocused stars it measures the radius that holds 95 % of the light instead.)
+2. Read the bold line: the suggested **Aperture r** (1.8 × FWHM, or the 95 % light radius on donuts) and sky ring.
+   Notes below it warn about neighbors inside a marked star's aperture.
 3. Optional, but worth it on a new setup: press **Test 4 apertures on 30 frames** (or **60 frames (slower, surer)**).
    SHOBS-P measures real frames with four aperture sizes and tells you which gave the least scatter on the check star,
    for example "Clear winner: r = 4.8 …" or "No clear winner: … Keep the suggested r = 5.8". The test needs at least
-   one comp, and ideally a check star.
+   one comp, and ideally a check star. Without a check star it judges on the target, and says so ("⚠ No check star:
+   judging on the target, which may truly vary …"). In Discovery, which has no comps, it uses bright, isolated,
+   unsaturated field stars instead.
 4. Press **Use these aperture sizes**. The boxes are filled and the window closes.
 
 ![The Suggested apertures window after a 30-frame test](img/08-suggest-apertures.png)
@@ -249,6 +311,14 @@ The rings are drawn on the image as you type, so you can see whether a neighbor 
 **raw sat ADU** is the level at which your camera saturates, in the units of the **raw** frame (for most 16-bit
 cameras, about 60000 or a little more). SHOBS-P checks every star's peak on the raw frame against it and flags
 saturated frames. Set it to your camera's real full-well value if you know it.
+
+### Linear ADU
+
+**linear ADU** is your camera's linear limit, in raw units (chapter 4). Leave it empty if you don't know it; nothing
+changes then. With a value set below **raw sat ADU**, SHOBS-P cautions when you pick a star whose raw peak is over or
+near it (see "Comparison stars and the check star" above), counts after each run the frames where each star went over
+it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"), and Comp health shows an **Over linear limit**
+column (chapter 11).
 
 ### Color
 
@@ -270,6 +340,11 @@ flips: the alignment follows the field rotation instead, and the log says how fa
 If the field turns by more than 5° on a German equatorial mount, the log suggests setting **Mount** to **Alt-az**. Frames that cannot be lined up (cloud, trailing) are skipped and listed in the log. When the run is done,
 SHOBS-P switches to the Output page.
 
+After a meridian flip, SHOBS-P checks the alignment of each flipped frame on up to 15 stars' own centers, so the comp
+and check apertures land on their stars again. If the frame you marked the stars on was rejected in Blink, the first
+kept frame becomes the reference (chapter 6). Frames that miss the target are skipped and listed at the end, for
+example "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames were skipped."
+
 To stop, press **Cancel run**. Nothing is added: the progress line says "Canceled; nothing was added."
 
 ### Questions it may ask
@@ -278,6 +353,9 @@ You will not see most of these on most nights. Each window explains its choices.
 
 - **The aperture is much larger (or smaller) than the stars.** Common after switching telescopes. **No** stops so you
   can press **Suggest…**; the window says what it would use.
+- **Defocused stars: the aperture clips the ring.** On a defocused field, an aperture smaller than the donut loses a
+  different part of the ring in every frame. The question gives the smallest safe r and what **Suggest…** would use,
+  and asks **Run with the current aperture anyway?**
 - **There is no star under a marker.** A marker on blank sky. **No** stops so you can move it.
 - **Names without markers.** A comp or check row has a name but no marker on this image (often left from a series).
   **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.

@@ -9,11 +9,15 @@ The Input page's **Output** folder decides where results go:
 
 - **With an Output folder**, every Save button writes there without asking. The status bar says what was saved
   where, for example *"Saved AAVSO_HD_219134_TG_05-OCT-2026_SHOBS-P.txt to Results."*
-- **Without one**, each Save opens a dialog with a suggested name, and a message confirms where the file went.
+- **Without one**, each Save opens a dialog with a suggested name, and a message confirms where the file went. The
+  dialog opens in the folder you last saved a result to in this session, with the next free name (and number) filled
+  in. A name typed with a number after its extension (`…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`; if that name
+  is taken, the next free one is used and the status bar says so.
 - **Nothing is overwritten.** If a file of that name exists, the new one gets `_2`, `_3` and so on.
 - **Matching numbers.** The report, light-curve CSV and plot PNG of one set of results share one number, so they
-  sort together (for example `…_SHOBS-P_2.txt`, `…_SHOBS-P_lightcurve_2.csv`, `…_SHOBS-P_lightcurve_2.png`). A new
-  result starts a new number.
+  sort together (for example `…_SHOBS-P_2.txt`, `…_SHOBS-P_lightcurve_2.csv`, `…_SHOBS-P_lightcurve_2.png`). The files
+  saved beside them (corner plot, settings file, field image, AAVSO chart) keep that number too, and a number counts
+  as taken when any of them exists. A new result starts a new number.
 - **The Output folder is not remembered** between sessions. Set it again each time you start SHOBS-P. Series files
   are the exception: they always ask where to go, and save back to their own file after that.
 
@@ -34,7 +38,7 @@ Every text file SHOBS-P writes (reports, CSVs, fit notes) carries a line such as
 
 `# Created 121153Z OCT 26 by SHOBS-P`
 
-The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.18*
+The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.19*
 in the picture. The line tells you, and anyone you send the file to, when it was made and with which program.
 
 ## Result files by mode
@@ -46,6 +50,7 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. |
 | **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
+| **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame, north up and east left, with the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
 | **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. |
 | **Watch stars…** → **Export watch light curves CSV…** | `watch_stars.csv` |
@@ -57,12 +62,16 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 
 | Button | File |
 |---|---|
-| **Save AAVSO exoplanet report…** | `AAVSO_<planet>_<date>_SHOBS-P.txt` (for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`) |
-| **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png` |
-| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag` (trimmed points flagged `trimmed`). It gets the same number as the report and plot. |
+| **Save AAVSO exoplanet report…** | `AAVSO_<planet>_<date>_SHOBS-P.txt` (for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`), and beside it `AAVSO_<planet>_<date>_SHOBS-P_settings.txt` (the reduction settings) and the field image `<planet>_<date>_SHOBS-P_field.png` (with `…_aavso_chart.png`). |
+| **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png`, and the corner plot `…_transit_corner.png` beside it |
+| **Corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png` |
+| **Save field image…** | `<star>_<filter>_<date>_SHOBS-P_field.png`, named after the Star ID (the host star), with `…_aavso_chart.png` |
+| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag` (trimmed points flagged `trimmed`). Comment lines starting with `#` under the Created line give the planet, filter, Tc, verdict and O − C. It gets the same number as the report and plot. |
 | **Save ExoFOP package…** | A folder `ExoFOP_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` holding `…_lightcurve.csv`, `…_fit.txt` and `…_plot.png`. |
 | **Tonight's transits…** → **Export CSV…** | `transits_<date>.csv` |
 | **Transit planner…** → **Export CSV…** | `<planet>_transits.csv` |
+| **Multi-night…** → **Save timing CSV…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight_timings.csv`: one row per epoch (mid-time in BJD_TDB with its error, O − C against each ephemeris), with the joint shape and the ephemerides in `#` header lines |
+| **Multi-night…** → **Save plot PNG…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight.png` |
 
 See [19. Reports](19-transit-reports.md).
 
@@ -117,12 +126,13 @@ delete the subfolder at any time; it is rebuilt when needed. See [7. Calibrate](
 
 ## Files in your user folder
 
-These live in your user folder (on Windows `C:\Users\<you>`). The names start with a dot, so Windows Explorer may
-hide them; type the name into the address bar, or turn on hidden items.
+These live in your user folder (on Windows `C:\Users\<you>`, on Linux and the Mac your home folder `~`). The names
+start with a dot, so Windows Explorer and the Mac's Finder may hide them; type the name into the address bar, or turn
+on hidden items (on a Mac, Cmd+Shift+period in Finder).
 
 | File | What it holds |
 |---|---|
-| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, focal length, pixel size, mount, observer code, scintillation choice, stretch, Blink speed, window places, Tonight's transits limits, Discovery's period range and watch stars, and similar. Not the folders. |
+| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, focal length, pixel size, mount, observer code, scintillation choice, linear limit, stretch, Blink speed, window places, Tonight's transits limits, Discovery's period range and watch stars, and similar. Not the folders. |
 | `.shobs_p.log` | Every line of the Log window, each with the date and time in front, and the full details of any error. Past 5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts. |
 | `.shobs_p_transit_catalog.csv` | The list of transiting planets for Tonight's transits, refreshed weekly. |
 | `.shobs_p_cache\catalogs\` | Star catalogs fetched for your fields, kept for 30 days so solving the same field again is faster. |
@@ -138,8 +148,12 @@ never replaces your own site.
 
 ## The self-test log
 
-**Run self-test.bat** writes `selftest_log.txt` in the program folder and a copy, `SHOBS-P_selftest_log.txt`, in
-your Downloads folder. See [24. Troubleshooting](24-troubleshooting.md).
+**Run self-test.bat** (Windows), **Run self-test.command** (Mac) and `./run_selftest.sh` (Linux) write
+`selftest_log.txt` in the program folder and a copy, `SHOBS-P_selftest_log.txt`, in your Downloads folder (when you
+have one).
+
+SHOBS-P's own Python environment is not in the program folder either: it is in `%LOCALAPPDATA%\SHOBS-P` on Windows,
+`~/.local/share/SHOBS-P` on Linux and `~/Library/Application Support/SHOBS-P` on a Mac (chapter 2). See [24. Troubleshooting](24-troubleshooting.md).
 
 ---
 

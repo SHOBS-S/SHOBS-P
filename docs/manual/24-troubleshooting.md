@@ -15,13 +15,15 @@ changes nothing: no settings, no data.
 To run it:
 
 1. Open the SHOBS-P program folder.
-2. Double-click **Run self-test.bat**. A console window opens.
+2. Double-click **Run self-test.bat** (Windows) or **Run self-test.command** (Mac), or type `./run_selftest.sh` in a
+   terminal in that folder (Linux). A console window opens.
 3. Wait a minute or two. The transit fits are the slow part.
 4. Read the last line. It should be `RESULT: ALL PASSED`.
 
 
 The full log is written to `selftest_log.txt` in the program folder, with a copy, `SHOBS-P_selftest_log.txt`, in
-your Downloads folder.
+your Downloads folder (on Linux and the Mac, when you have one). On Linux without a screen, the window test runs on a
+hidden screen when `xvfb-run` is installed.
 
 What the self-test does, in sections:
 
@@ -42,7 +44,8 @@ If the result is `N FAILED`, send `selftest_log.txt` with your report (see below
 
 SHOBS-P started from its desktop shortcut has no console window. When something goes wrong inside the program,
 it shows *"Something went wrong: … Details were written to ….shobs_p.log."* and appends the full error to
-`.shobs_p.log` in your user folder (`C:\Users\<you>`). Messages that would have gone to a console go there too.
+`.shobs_p.log` in your user folder (`C:\Users\<you>`; your home folder `~` on Linux and the Mac). Messages that
+would have gone to a console go there too.
 
 The file also holds every line of the program's own log (below), each with the date and time in front, so you can
 look back at an earlier session. When it grows past 5 MB, it is renamed `.shobs_p.log.1` and a new one starts; only
@@ -61,6 +64,10 @@ lines are also written to `.shobs_p.log`, as above.
 and if SHOBS-P cannot start, the console shows why and stays open (*"The app did not start. Leave this window open
 and copy the message above."*). Use it when the desktop shortcut does nothing.
 
+On Linux and the Mac, SHOBS-P always starts from a terminal (`./run_linux.sh`, or the Terminal window that **Start
+SHOBS-P.command** opens), so any error is shown there: *"SHOBS-P did not start, or stopped with an error. Copy the
+message above."*
+
 ## Typical problems
 
 ### Starting
@@ -71,6 +78,14 @@ and copy the message above."*). Use it when the desktop shortcut does nothing.
 | *"SHOBS-P could not find a Python it can use."* | Each Python it tried is listed above that line with the reason. Install Python 3.11 or newer from python.org (tick **Add python.exe to PATH**), then try again. |
 | The shortcut stopped working after you moved the folder. | Run **Create shortcuts.bat** again from the new place. |
 | *matplotlib is not installed.* where the image should be. | The packages did not install. Run **run_windows.bat**, which installs them, and read any error it shows. |
+| Linux: *"These Pythons are missing Tkinter, the window toolkit"* | Install the package it names (Debian, Ubuntu, Mint: `sudo apt install python3-tk`; Fedora: `sudo dnf install python3-tkinter`; Arch: `sudo pacman -S tk`), then run `./run_linux.sh` again. |
+| Linux: *"SHOBS-P could not make its own environment …"* and a line about the venv package | Debian, Ubuntu, Mint: `sudo apt install python3-venv`, then try again. |
+| Linux: *"This is a Wayland session without XWayland (DISPLAY is not set) …"* or *"No screen found (DISPLAY is not set) …"* | Tk needs X to draw its windows. Install XWayland (package `xwayland`) or log in with an "on Xorg" session; or start SHOBS-P from your desktop session, not over a plain SSH login. |
+| Mac: macOS refuses to open **Start SHOBS-P.command** (a file from an unidentified developer, or one Apple could not check). | Right-click (or Control-click) it, choose **Open**, then **Open** again. Once is enough. If newer macOS offers no **Open**, press **Open Anyway** in System Settings → Privacy & Security, or type `xattr -d com.apple.quarantine "Start SHOBS-P.command"` in Terminal in the SHOBS-P folder. |
+| Mac: *"SHOBS-P could not find a Python it can use."* | Install Python from python.org (it includes Tk) and double-click again. A Homebrew Python needs its Tk package; the message names it (for example `brew install python-tk@3.13`). |
+| Mac: SHOBS-P closed when you closed the Terminal window. | Keep the Terminal window open while SHOBS-P runs. |
+| *"SHOBS-P is being set up in another window …"* (Linux, Mac) | A second start while the first setup was still running. Wait for it to finish, then start again. |
+| The install seems broken after an update or a Python upgrade. | Start afresh: delete SHOBS-P's own environment folder and start again (chapter 2, "Starting afresh"). Your settings are kept. |
 | The window runs off the screen, or text is cut. | Maximize the window. On a scaled display (125–150%) the lower rows of the Output pages need the full height. In a narrow window (for example half the screen), the Input page's boxes and the Photometry page's **View** box wrap onto more rows instead of hiding. |
 
 ### Input and calibration
@@ -91,7 +106,9 @@ and copy the message above."*). Use it when the desktop shortcut does nothing.
 | Frames from another telescope do not solve. | Set that telescope's focal length and pixel size in the Optics box. |
 | The check star (or a comp) reads much fainter than its catalog magnitude, or scatters a lot. | The marker is probably a few pixels off the star's center, so every frame is measured beside the star. Before each run SHOBS-P warns in the log (*"⚠ Check marker at … is … px from the center of the star there …"*). Clear the marker, zoom in, and click the star again. |
 | A star's name and magnitude do not fill in when clicked. | The image is not solved yet, or the star is not in the catalogs. Type the magnitude yourself. |
-| The image is too small to click stars. | Wheel to zoom, drag to pan, or **Pop out** the image into its own window. |
+| The image is too small to click stars. | Wheel to zoom, drag to pan, or **Pop out** the image into its own window. At 125–150 % display scaling a small frame (MicroObservatory) can stay small even after the log shrinks; the line **⚠ Small image? …** under the image has a **Pop out** button, and **Hide log** gives more room. |
+| The AAVSO sequence is missing (*"AAVSO sequence did not answer (…)"* in the log). | The AAVSO chart server (VSP, apps.aavso.org) was slow or down. SHOBS-P asks again in the background; if the log later says it answered, press **Solve again**. Otherwise **Solve again** later. |
+| The target marker is not placed, and the log says the target is not on this frame. | The first frames may miss the target; SHOBS-P looks at the next frames for it (chapter 8). If it cannot find it, reject the frames without the target in Blink and calibrate again. |
 | The solve or lookups fail at night. | The catalogs and lookups need the internet. Calibration and photometry do not. Catalog stars fetched for a field are kept for 30 days, which often lets the same field solve again without the internet. |
 
 ### Results
@@ -100,7 +117,8 @@ and copy the message above."*). Use it when the desktop shortcut does nothing.
 |---|---|
 | Error bars much larger than the scatter (χ²ν far below 1). | Usually the camera gain: the EGAIN keyword is missing or wrong in your headers. The photometry log's *Photon noise* line says which gain was used. |
 | Steps between nights in a series. | Different comps, apertures or equipment between nights. Read the **Careful:** lines when adding a night, and use **Use comps…** to put every night on the same comps. |
-| A step at the meridian flip. | Look at **Comp health…**: a comp that jumps at the flip is a common cause. Try **Pier side as segments** (Variables mode). |
+| A step at the meridian flip. | Look at **Comp health…**: a comp that jumps at the flip is a common cause. Read the log after the run: a line *"⚠ After the meridian flip the … apertures were off their stars …"* means an aperture problem, not the stars (chapter 12). Try **Pier side as segments** (Variables mode). |
+| One star's comps turned up on another star's night (points flagged `nocomp`). | Press **New reduction** on the Input page before you start on another star (chapter 5). |
 | Frames on an alt-az mount are lost or misaligned through the night. | Set **Mount** to **Alt-az** in the Optics box (Input page), so the alignment follows the field rotation. |
 | The transit fit does not start. | It needs a planet on the Input page and at least 20 usable points. Look at the hint under the page title. |
 | The Output pages show an old result. | Run photometry again: an old transit fit is cleared as soon as the data change. |
@@ -110,12 +128,13 @@ and copy the message above."*). Use it when the desktop shortcut does nothing.
 
 Problems and ideas go to the project's GitHub Issues page (github.com/SHOBS-S/SHOBS-P/issues). The forms ask for:
 
-- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.18**),
+- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.19**),
+- your computer's system (Windows, macOS or Linux, and which version),
 - your camera, and whether it is color or monochrome,
 - the mode and the step,
 - what you expected and what happened,
 - a screenshot,
-- `selftest_log.txt` from **Run self-test.bat**, and `.shobs_p.log` from your user folder.
+- `selftest_log.txt` from the self-test, and `.shobs_p.log` from your user folder.
 
 A copy of the program's own log (from the Calibrate page) around the time of the problem helps too.
 

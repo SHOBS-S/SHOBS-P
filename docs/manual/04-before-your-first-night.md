@@ -45,7 +45,20 @@ real scatter, especially for bright stars and short exposures.
 
 **About Binning.** Leave your camera unbinned (bin 1) when you capture, and use this box if you want bigger pixels.
 SHOBS-P bins only pixels of the same color, so the colors of an OSC camera stay separate. Some capture programs mix
-red, green and blue when they bin a color sensor; SHOBS-P notes this in the log when it sees camera-binned frames.
+red, green and blue when they bin a color sensor; SHOBS-P notes this in the log when it sees camera-binned color
+frames. (MicroObservatory frames come binned 2×2 by design, and a monochrome camera has no colors to mix, so neither
+gets the note.)
+
+## Your camera's linear limit
+
+Every camera's response bends before it saturates: above a certain level, a pixel collects fewer counts than the light
+deserves, so a bright star reads too faint. On some cameras this starts well below full scale. If you know your camera's linear limit (from its data sheet, or from a linearity test), type it in raw ADU in
+the **linear ADU** box beside **raw sat ADU** on the Photometry page. SHOBS-P remembers it.
+
+With the box filled, SHOBS-P checks each star's brightest raw pixel against it: when you pick a comparison star or the
+target (chapter 8), when it measures every frame (the log counts the frames over the limit for each star), and in Comp
+health (chapter 11). Leave the box empty if you don't know the limit; then only the saturation level is checked, as
+before.
 
 ## Your observer code
 
@@ -128,6 +141,8 @@ matters most for precise photometry.
 - The **same exposure** as your lights, at the same gain, offset and sensor temperature.
 - SHOBS-P scales a dark to the lights' exposure if it must, but if the darks are more than 3 times shorter or longer
   than the lights, it asks whether to leave the dark out. Scaling a dark up also scales up its noise.
+- The Input page tells you as soon as you choose the folders when the darks' exposure differs from the lights', so
+  you can pick the right darks before you calibrate (chapter 5).
 - 10 to 30 frames.
 
 **Flat frames**
@@ -221,8 +236,9 @@ Why this works:
   the flats' age and tells you if they don't match).
 - **One night, one field, one Lights folder.** Keep each night's lights of one target in their own folder. SHOBS-P can
   sort out a folder that holds two fields (it asks), but it is quicker not to need that.
-- **Calibration frames that end up in a Lights folder are skipped** automatically, so a capture program that saves
-  everything together still works.
+- **Calibration frames that end up in a Lights folder** are never measured as lights, so a capture program that
+  saves everything together still works. When the matching Bias, Dark or Flat box is empty, SHOBS-P offers to use
+  them (chapter 7). Dark-flats are never taken as flats.
 - **A Reports folder per target** to use as the **Output** folder: every Save button then writes there without asking,
   and never overwrites a file.
 
