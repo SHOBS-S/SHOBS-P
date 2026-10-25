@@ -2275,6 +2275,22 @@ class App(Tk):
                 tuple(self.active_comps or self.comps_used), self.highlight_night if self._save_one_night else None,
                 fit)   # 2.2.17 (item 9 nit): a new transit fit starts a new numbered set
 
+    # 2.2.19 (#31, #40, review): files written beside a saved report or plot, named from its (numbered) stem:
+    # <stem>_corner.png (corner plot), <stem>_settings.txt (settings record); batch E adds <stem>_field.png and
+    # <stem>_aavso_chart.png. A number is free only when none of these exists either.
+    FAMILY_DERIVED = ("_corner.png", "_settings.txt", "_field.png", "_aavso_chart.png")
+
+    def _set_taken(self, folder: str, names, k: int) -> bool:
+        """2.2.19 (review): is number k taken for any of these names, or for a file derived from one of them?"""
+        for n in names:
+            path = self._suffixed(os.path.join(folder, n), k)
+            if os.path.exists(path):
+                return True
+            stem = os.path.splitext(path)[0]
+            if any(os.path.exists(stem + suf) for suf in self.FAMILY_DERIVED):
+                return True
+        return False
+
     def _family_path(self, folder: str, filename: str) -> str:
         """2.2.3: one number for one save. The first of the three files saved for these results picks the lowest
         number free for all three names; the others reuse it. Saving the same kind again starts a new set."""
@@ -2285,11 +2301,11 @@ class App(Tk):
             names = names + [filename]
         if state and state["key"] == key and filename not in state["used"]:
             path = self._suffixed(os.path.join(folder, filename), state["k"])
-            if not os.path.exists(path):
+            if not self._set_taken(folder, [filename], state["k"]):
                 state["used"].add(filename)
                 return path
         k = 1
-        while any(os.path.exists(self._suffixed(os.path.join(folder, n), k)) for n in names):
+        while self._set_taken(folder, names, k):
             k += 1
         self._save_set = {"key": key, "k": k, "used": {filename}}
         return self._suffixed(os.path.join(folder, filename), k)
@@ -2317,27 +2333,32 @@ class App(Tk):
             return self._family_path(folder, safe)
         if folder:
             return self._unique_path(os.path.join(folder, safe))
-        # 2.2.19 (#42): the dialog opens where the last result was saved, with the next free name filled in
-        # (…_SHOBS-P_2.txt), so a second save never needs a name typed by hand; and a name typed after the extension
-        # ("…_SHOBS-P.txt.2", which the dialog then made "…_SHOBS-P.txt.2.txt") is put back in the _2 form.
-        start = self.settings.get("result_dir", "") if isinstance(getattr(self, "settings", None), dict) else ""
+        # 2.2.19 (#42): the dialog opens where the last result was saved this session (not remembered between
+        # launches, like the Output folder), with the next free name filled in (…_SHOBS-P_2.txt; for the report /
+        # CSV / PNG set, the set's common number), so a second save never needs a name typed by hand. A number typed
+        # after the extension ("…_SHOBS-P.txt.2", made "…_SHOBS-P.txt.2.txt" by the dialog) is put back in the _2
+        # form, and never onto a file that exists (the dialog only asked about the name as typed).
+        start = getattr(self, "_result_dir", "")
         kwargs = {"title": title, "initialfile": safe}
         if start and os.path.isdir(start):
             kwargs["initialdir"] = start
-            kwargs["initialfile"] = os.path.basename(self._unique_path(os.path.join(start, safe)))
+            suggest = self._family_path(start, safe) if family else self._unique_path(os.path.join(start, safe))
+            kwargs["initialfile"] = os.path.basename(suggest)
         if defaultextension:
             kwargs["defaultextension"] = defaultextension
         if filetypes:
             kwargs["filetypes"] = filetypes
         if parent is not None:
             kwargs["parent"] = parent
-        path = filedialog.asksaveasfilename(**kwargs) or ""
+        raw = filedialog.asksaveasfilename(**kwargs) or ""
+        path = core.tidy_save_name(raw) if raw else ""
+        if path and path != raw and os.path.exists(path):
+            free = self._unique_path(path)
+            self.log(f"{os.path.basename(path)} already exists: saved as {os.path.basename(free)} instead.")
+            self.status.set(f"{os.path.basename(path)} already exists: saved as {os.path.basename(free)} instead.")
+            path = free
         if path:
-            path = core.tidy_save_name(path)
-            try:
-                self.settings["result_dir"] = os.path.dirname(os.path.abspath(path))
-            except Exception:
-                pass
+            self._result_dir = os.path.dirname(os.path.abspath(path))
         return path
 
     def saved_notice(self, path: str, advice: str = ""):
@@ -5856,8 +5877,10 @@ class App(Tk):
         # 2.2.19 (#41): what the current photometry was measured with, and a caution when the boxes now differ.
         self.aperture_state = StringVar(value="")
         self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
-                                              justify=LEFT)
-        self.aperture_state_label.pack(anchor=W, padx=6, pady=(0, 4))
+                                              justify=LEFT, wraplength=700)
+        self.aperture_state_label.pack(anchor=W, fill=X, padx=6, pady=(0, 4))
+        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(wraplength=max(e.width - 40, 300)),
+                  add="+")   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
         ttk.Label(options, text="Aperture r", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))

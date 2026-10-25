@@ -1651,7 +1651,7 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                                      if FLIP_NO_BASELINE_VERDICT == "inconclusive" else
                                      "the depth is not trusted; the timing is.")))
     for bf in r.get("bound_flags") or []:
-        flags.append(("warn", bf["text"]))   # 2.2.19 (#31)
+        flags.append((bf.get("level", "warn"), bf["text"]))   # 2.2.19 (#31); b against 0 is a note (review)
     wf = r.get("with_flagged")
     if wf:
         flags.append(("warn", f"This fit includes {wf['n']} frame{'s' if wf['n'] != 1 else ''} flagged {wf['label']}, "
@@ -2520,7 +2520,9 @@ def fit_text(result: dict, meta: dict) -> str:
              f"Observer       {meta.get('obscode', '')}   site {meta.get('lat', '')}, {meta.get('lon', '')}",
              f"Night          {meta.get('obsdate', '')}   {result['n_points']} points, cadence "
              f"{result['cadence_days'] * 86400:.0f} s, filter {meta.get('filter', 'CV')}",
-             f"Equipment      {meta.get('notes', '')}",
+             # 2.2.19 (#27 review): the processing bin is in the ExoFOP block's Binning line, not repeated here.
+             "Equipment      " + " | ".join(part for part in str(meta.get("notes", "")).split(" | ")
+                                            if not part.startswith("SHOBS-P processing bin")),
              f"Photometry     aperture {meta.get('aperture', '')}; comps {meta.get('comps', '')}"
              + (f"; {meta['scint']}" if meta.get("scint") else ""),
              f"Ephemeris      P {result['period']:.8f} d, "

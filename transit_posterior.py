@@ -91,18 +91,25 @@ def prior_bound_flags(prob, flat) -> list:
         if not sides:
             continue
         label = LABELS.get(name, name)
+        level = "warn"
         if name == "b" and len(sides) == 1 and sides[0][0] == "lo":
+            # 2.2.19 review: a central transit (published b ≈ 0) is a measurement with a one-sided error, not a
+            # prior problem: a note, not a caution, and kept out of the report notes.
             q95 = float(np.percentile(x, 95))
-            text = (f"b piles up against 0, the lower end of its range: the ± is not a two-sided measurement; read b "
-                    f"as an upper limit (b < {q95:.2f}, 95%).")
+            level = "info"
+            text = (f"b sits against 0, the lower end of its range (a central transit): read b as an upper limit "
+                    f"(b < {q95:.2f}, 95%), not value ± error.")
+        elif len(sides) == 2:
+            where = ("its whole allowed window (data span ± 0.2 d)" if name == "tc" else
+                     f"its whole allowed range ({_edge_text(name, lo, 'lo')} to {_edge_text(name, hi, 'hi')})")
+            text = (f"{label} is limited by its prior range: its MCMC samples spread over {where}, so the error bar "
+                    "is not a measurement.")
         else:
-            where = (("both ends of its allowed window (data span ± 0.2 d)" if name == "tc" else
-                      f"both ends of its allowed range ({_edge_text(name, lo, 'lo')} to {_edge_text(name, hi, 'hi')})")
-                     if len(sides) == 2 else _edge_text(name, sides[0][1], sides[0][0]))
-            text = (f"{label} is limited by its prior range: its MCMC samples pile up against {where}, so the error "
-                    "bar is not a measurement.")
+            text = (f"{label} is limited by its prior range: its MCMC samples pile up against "
+                    f"{_edge_text(name, sides[0][1], sides[0][0])}, so the error bar is not a measurement.")
         out.append({"name": name, "label": label, "sides": [sd[0] for sd in sides], "edges": [sd[1] for sd in sides],
-                    "frac": max(sd[2] for sd in sides), "text": text})
+                    "frac": max(sd[2] for sd in sides), "text": text, "level": level,
+                    "upper": float(np.percentile(x, 95)) if level == "info" else None})
     return out
 
 
@@ -176,7 +183,7 @@ def single_detrend_dbic(prob, best: dict, starts) -> dict:
     out = {"corr": float(np.corrcoef(am, t)[0, 1]) if np.std(am) > 0 and np.std(t) > 0 else float("nan")}
     for which, use_am, use_t in (("airmass", True, False), ("time", False, True)):
         try:
-            p1 = tc.TransitProblem(t, flux, err, am, prob.period, prob.priors, tuple(prob.free) + ("c_am", "c_t"),
+            p1 = tc.TransitProblem(t, flux, err, am, prob.period, prob.priors, tuple(prob.free),
                                    dict(best), use_am, use_t, prob.ld_prior,
                                    prob.t_flip)
             # The start: the Both fit's shape, with this baseline only.
@@ -210,15 +217,15 @@ def both_detrend_text(check: dict, threshold: float = 10.0) -> str:
     corr = check.get("corr")
     same = isinstance(corr, float) and math.isfinite(corr) and abs(corr) > 0.9
     why = ("airmass and time trends are nearly the same over this night (correlation "
-           f"{corr:+.2f}) and absorb the transit together" if same else
-           "the airmass and time slopes together absorb the transit")
+           f"{corr:+.2f}) and may absorb the transit together" if same else
+           "the airmass and time slopes together may absorb the transit")
     alone = "; ".join(f"{'Airmass' if w == 'airmass' else 'time slope'} alone detects it (ΔBIC {d:.0f})"
                       for w, d in hits)
     alone = alone[:1].upper() + alone[1:]
-    if len(hits) == 2:
-        fix = "Untick one of the two (airmass or time slope) and fit again"
-    else:
-        fix = "Untick time slope and fit again" if hits[0][0] == "airmass" else "Untick airmass and fit again"
+    other = ("one of the two (airmass or time slope)" if len(hits) == 2 else
+             "time slope" if hits[0][0] == "airmass" else "airmass")
+    fix = (f"Untick {other} and fit again only if that trend is not real (a slope artifact can also read as a "
+           "detection)")
     return f"No detection with Both: {why}. {alone}. {fix}."
 
 
@@ -232,10 +239,15 @@ def _transform(name: str, x, tc_med: float):
     return x
 
 
-def corner_params(result: dict) -> list:
-    """The fitted (free) parameters in corner-plot order; parameters held fixed are left out."""
+SHAPE_PARAMS = ("tc", "k", "a_rs", "b", "step")
+
+
+def corner_params(result: dict, shape_only: bool = False) -> list:
+    """The fitted (free) parameters in corner-plot order; parameters held fixed are left out. shape_only: Tc, Rp/R*,
+    a/R*, b and the flip step (the Corner plot window's default; review: ten parameters on a laptop were unreadable)."""
     free = list(result.get("free_params") or [])
-    return [p for p in ORDER if p in free] + [p for p in free if p not in ORDER]
+    out = [p for p in ORDER if p in free] + [p for p in free if p not in ORDER]
+    return [p for p in out if p in SHAPE_PARAMS] if shape_only else out
 
 
 def _fmt(v: float, e: float) -> str:
@@ -256,7 +268,7 @@ def _contour_levels(h, fracs=(0.393, 0.865)):
     return [lv for lv in levels if lv > 0]
 
 
-def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float = 8.0):
+def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float = 8.0, shape_only: bool = False):
     """2.2.19 (#31): the corner plot of the MCMC samples on a matplotlib Figure (made here when fig is None, Agg).
     Diagonal: each fitted parameter's histogram with the median and 16/84 % lines, value +err/−err in the title
     (⚠ and an orange title when the parameter piles up against its allowed range). Below the diagonal: 2-D density
@@ -268,7 +280,7 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
         FigureCanvasAgg(fig)
     chain = result["chain"]["flat"]
     free = list(result["free_params"])
-    names = corner_params(result)
+    names = corner_params(result, shape_only)
     n = len(names)
     side = min(max(1.25 * n + 0.9, 5.0), 12.5)
     fig.set_size_inches(side, side, forward=False)
@@ -280,7 +292,8 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
     t_ref = float(result.get("t_ref", 0.0))
     tc_med = float(np.median(flat[:, free.index("tc")])) if "tc" in free else 0.0
     data = {p: _transform(p, flat[:, free.index(p)], tc_med) for p in names}
-    flagged = {f["name"] for f in (result.get("bound_flags") or [])}
+    flagged = {f["name"] for f in (result.get("bound_flags") or []) if f.get("level", "warn") == "warn"}
+    upper = {f["name"]: f.get("upper") for f in (result.get("bound_flags") or []) if f.get("level") == "info"}
     ranges = {}
     for p in names:
         lo, hi = np.percentile(data[p], [0.2, 99.8])
@@ -302,6 +315,8 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
                 label = LABELS.get(pi, pi)
                 if pi == "tc":
                     title = f"Tc = {tc_med + t_ref:.5f}\n+{q84 - q50:.1f} / −{q50 - q16:.1f} min"
+                elif upper.get(pi) is not None:
+                    title = f"{label} < {upper[pi]:.2f} (95 %)\nagainst 0: upper limit"
                 else:
                     e = 0.5 * (q84 - q16)
                     title = f"{label} = {_fmt(q50, e)}\n+{_fmt(q84 - q50, e)} / −{_fmt(q50 - q16, e)}"
@@ -344,7 +359,7 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
     fig.suptitle(f"{name}: MCMC posterior ({ch['walkers']} walkers × {ch['steps']} steps; median and 16/84 % lines)",
                  fontsize=font + 2, y=0.985)
     if flagged:
-        fig.text(0.98, 0.955, "⚠ piles up against its allowed range: that error bar is not a measurement",
+        fig.text(0.98, 0.955, "⚠ set by its allowed range, not by the data: that error bar is not a measurement",
                  ha="right", va="top", fontsize=font, color=orange)
     return fig
 
@@ -362,8 +377,8 @@ def _smooth(h):
     return k[0] * p[:, :-2] + k[1] * p[:, 1:-1] + k[2] * p[:, 2:]
 
 
-def save_corner(result: dict, path: str, dpi: int = 110) -> str:
-    """Write the corner plot to path (PNG) and return it."""
-    fig = corner_figure(result)
+def save_corner(result: dict, path: str, dpi: int = 110, shape_only: bool = False) -> str:
+    """Write the corner plot to path (PNG) and return it (all fitted parameters unless shape_only)."""
+    fig = corner_figure(result, shape_only=shape_only)
     fig.savefig(path, dpi=dpi, facecolor="#ffffff")
     return path
