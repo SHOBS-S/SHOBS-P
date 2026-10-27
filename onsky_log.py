@@ -82,8 +82,11 @@ def night_of(jd: float) -> str:
     return t.date().isoformat()
 
 
-def build(ctx: dict, points: list, app_version: str) -> dict:
-    """The on-sky log document from the run's context (stars, aperture, setup) and its Obs points."""
+def build(ctx: dict, points: list, app_version: str, header_reads: bool = True) -> dict:
+    """The on-sky log document from the run's context (stars, aperture, setup) and its Obs points. Copies every
+    value out of the points (plain numbers and strings), so SHOBS-P may change the Obs objects afterwards.
+    header_reads=False leaves focuspos / pierside / ccd_temp_c empty (fill_headers adds them later, off the UI
+    thread)."""
     hdr = ctx.get("header") or {}
     key = sp.setup_key(hdr)
     target = ctx.get("target")
@@ -115,15 +118,18 @@ def build(ctx: dict, points: list, app_version: str) -> dict:
 
         if target is not None:
             put(target.name, getattr(o, "target_inst", None), pos.get("t"))
+        if check is not None:
+            put(check.name, getattr(o, "kmag", None), pos.get("k"))     # Obs.kmag: the check's instrumental mag
         cpos = pos.get("c") or []
         for i, c in enumerate(comps):
             insts = getattr(o, "comp_insts", None) or []
             put(c.name, insts[i] if i < len(insts) else None, cpos[i] if i < len(cpos) else None)
         spos = pos.get("s") or {}
-        for name, inst in (getattr(o, "spare_insts", {}) or {}).items():
+        for name, inst in list((getattr(o, "spare_insts", {}) or {}).items()):
             put(name, inst, spos.get(name))
-        extra = _header_extras(getattr(o, "path", ""))
+        extra = _header_extras(getattr(o, "path", "")) if header_reads else {}
         frames_out.append({
+            "_path": getattr(o, "path", "") or "",
             "file": os.path.basename(getattr(o, "path", "") or ""),
             "jd_mid": _f(getattr(o, "jd", None), 6),
             "airmass": _f(getattr(o, "airmass", None), 4),
@@ -179,6 +185,18 @@ def build(ctx: dict, points: list, app_version: str) -> dict:
     }
 
 
+def fill_headers(doc: dict) -> dict:
+    """Read each frame's FOCUSPOS / PIERSIDE / CCD-TEMP (file I/O: the background part) and drop the paths."""
+    for f in doc.get("frames") or []:
+        path = f.pop("_path", "")
+        if f.get("focuspos") is None and f.get("pierside") is None:
+            extra = _header_extras(path)
+            f["focuspos"] = extra.get("focuspos")
+            f["pierside"] = extra.get("pierside")
+            f["ccd_temp_c"] = _f(extra.get("ccd_temp_c"), 2)
+    return doc
+
+
 def file_name(doc: dict) -> str:
     return (f"{doc.get('night') or 'night-unknown'}__{sp.slug(doc.get('target') or 'target')}__"
             f"{doc.get('run_id') or 'run'}.json")
@@ -190,7 +208,10 @@ def new_run_id() -> str:
 
 def write(ctx: dict, points: list, app_version: str) -> str:
     """Build and write the log; returns its path (raises on a problem: write_async catches)."""
-    doc = build(ctx, points, app_version)
+    return write_doc(fill_headers(build(ctx, points, app_version, header_reads=False)))
+
+
+def write_doc(doc: dict) -> str:
     path = os.path.join(sp.onsky_dir(), file_name(doc))
     sp.write_json(path, doc)
     return path
@@ -201,18 +222,27 @@ def write_async(ctx: dict, points: list, app_version: str, log=None) -> threadin
     thread: pass a thread-safe logger). Never raises; None when switched off or nothing to write."""
     if os.environ.get("SHOBS_ONSKY_OFF") or not points or not ctx:
         return None
-    pts = list(points)
+    try:   # the values are copied out of the points HERE, on the caller's (UI) thread: SHOBS-P goes on to change them
+        doc = build(ctx, list(points), app_version, header_reads=False)
+    except Exception as exc:
+        if log:
+            log(f"On-sky log for SHOBS-FLUX not written ({type(exc).__name__}: {exc}); the reduction is not affected.")
+        return None
+    n = len(doc.get("frames") or [])
 
     def run():
         try:
-            path = write(ctx, pts, app_version)
+            path = write_doc(fill_headers(doc))
             if log:
-                log(f"On-sky log for SHOBS-FLUX written: {os.path.basename(path)} ({len(pts)} frames).")
+                log(f"On-sky log for SHOBS-FLUX written: {os.path.basename(path)} ({n} frames).")
         except Exception as exc:
             if log:
                 log(f"On-sky log for SHOBS-FLUX not written ({type(exc).__name__}: {exc}); the reduction is "
                     "not affected.")
 
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
+    try:
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+    except RuntimeError:
+        return None
     return t

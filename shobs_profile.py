@@ -93,7 +93,7 @@ def _num_part(v) -> str:
     if f is None:
         return "na"
     if abs(f - round(f)) < 1e-9:
-        return str(int(round(f)))
+        return str(int(round(f))).replace("-", "m")
     return f"{f:g}".replace(".", "p").replace("-", "m")
 
 
@@ -110,9 +110,9 @@ def system_id(telescope, focal_mm, cam_id: str) -> str:
     return f"{slug(telescope)}-{int(round(f)) if f is not None and f > 0 else 0}mm__{cam_id}"
 
 
-def profile_path(kind: str, pid: str) -> str:
-    """kind = 'cameras' | 'systems' | 'specs'."""
-    return os.path.join(sub_dir(kind), f"{pid}.json")
+def profile_path(kind: str, pid: str, make: bool = True) -> str:
+    """kind = 'cameras' | 'systems' | 'specs'. make=False only names the path (no folders made)."""
+    return os.path.join(sub_dir(kind, make), f"{pid}.json")
 
 
 # ---- value records -------------------------------------------------------------------------------------------------
@@ -123,8 +123,7 @@ def record(value, unit: str, source: str, sigma=None, n=None, date=None, conditi
     with source 'none'."""
     if source not in SOURCES:
         raise ValueError(f"unknown source {source!r}")
-    if isinstance(value, float) and not math.isfinite(value):
-        value = None
+    value, sigma, n = _plain(value), _plain(sigma), _plain(n)
     if value is None:
         source = "none"
     out = {"value": value, "unit": unit, "sigma": sigma, "source": source, "n": n, "date": date,
@@ -132,6 +131,25 @@ def record(value, unit: str, source: str, sigma=None, n=None, date=None, conditi
     if note:
         out["note"] = note
     return out
+
+
+def _plain(v):
+    """A JSON-safe number: numpy scalars become int / float, NaN and infinity become None; other values as they
+    are (a list stays a list)."""
+    if v is None or isinstance(v, (bool, str, list, dict)):
+        return v
+    if hasattr(v, "item") and callable(v.item):          # numpy scalar
+        try:
+            v = v.item()
+        except (TypeError, ValueError):
+            return None
+    if isinstance(v, int):
+        return v
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def is_record(obj) -> bool:
@@ -190,7 +208,7 @@ def load(path: str) -> dict:
     if fmt not in (CAMERA_FORMAT, SYSTEM_FORMAT, SPEC_FORMAT, ONSKY_FORMAT):
         raise ProfileError(f"it is not a SHOBS profile (format {fmt!r})")
     ver = doc.get("format_version")
-    if not isinstance(ver, int) or ver > FORMAT_VERSION:
+    if not isinstance(ver, int) or isinstance(ver, bool) or ver > FORMAT_VERSION:
         raise ProfileError(f"it is format version {ver!r}; this program reads version {FORMAT_VERSION} "
                            "(a newer SHOBS app wrote it: update this one)")
     return doc
@@ -203,7 +221,7 @@ def validate(doc: dict) -> list[str]:
     fmt = doc.get("format")
     if fmt not in (CAMERA_FORMAT, SYSTEM_FORMAT, SPEC_FORMAT, ONSKY_FORMAT):
         return [f"format is {fmt!r}, not a SHOBS profile"]
-    if doc.get("format_version") != FORMAT_VERSION:
+    if doc.get("format_version") != FORMAT_VERSION or isinstance(doc.get("format_version"), bool):
         out.append(f"format_version is {doc.get('format_version')!r}, expected {FORMAT_VERSION}")
     if fmt in (CAMERA_FORMAT, SYSTEM_FORMAT):
         for key in ("profile_id", "revision", "created", "updated"):
@@ -237,8 +255,10 @@ def validate(doc: dict) -> list[str]:
         if rec.get("source") not in SOURCES:
             out.append(f"{where}: unknown source {rec.get('source')!r}")
         v = rec.get("value")
-        if v is not None and not isinstance(v, (int, float, list, str)):
-            out.append(f"{where}: value is not a number")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float, list))):
+            out.append(f"{where}: value is not a number or a list of numbers")
+        elif isinstance(v, float) and not math.isfinite(v):
+            out.append(f"{where}: value is not finite")
     return out
 
 
@@ -296,7 +316,7 @@ def save_profile(doc: dict, written_by: str = "") -> str:
                 old = {}
             hist = sub_dir("history")
             rev = old.get("revision", 0) if isinstance(old.get("revision"), int) else 0
-            stamp = time.strftime("%Y%m%d-%H%M%S")
+            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
             shutil.copy2(path, os.path.join(hist, f"{kind}__{pid}__rev{rev}__{stamp}.json"))
             if fmt != SPEC_FORMAT:
                 doc = dict(doc)
@@ -310,15 +330,19 @@ def save_profile(doc: dict, written_by: str = "") -> str:
 
 def history_of(kind: str, pid: str) -> list[str]:
     """Earlier revisions of one profile in history/, oldest first."""
-    hist = sub_dir("history")
+    hist = sub_dir("history", make=False)
+    if not os.path.isdir(hist):
+        return []
     pre = f"{kind}__{pid}__rev"
     return sorted((os.path.join(hist, n) for n in os.listdir(hist) if n.startswith(pre) and n.endswith(".json")),
-                  key=lambda p: os.path.getmtime(p))
+                  key=lambda p: (os.path.getmtime(p), p))
 
 
 def list_profiles(kind: str) -> list[str]:
     """Profile files of one kind ('cameras', 'systems', 'specs'), by name."""
-    d = sub_dir(kind)
+    d = sub_dir(kind, make=False)
+    if not os.path.isdir(d):
+        return []
     return sorted(os.path.join(d, n) for n in os.listdir(d) if n.endswith(".json") and not n.startswith("."))
 
 
@@ -389,7 +413,7 @@ def setup_missing(key: dict) -> list[str]:
 
 def find_camera_profile(cam_id: str) -> dict | None:
     """The saved camera profile with this id, or None."""
-    path = profile_path("cameras", cam_id)
+    path = profile_path("cameras", cam_id, make=False)
     if not os.path.exists(path):
         return None
     try:
@@ -412,8 +436,10 @@ def find_system_profile(cam_id: str, focal_mm=None, tolerance: float = 0.03) -> 
         tel = doc.get("telescope") or {}
         f = _finite(tel.get("focal_mm"))
         if focal_mm is None or f is None or abs(f - float(focal_mm)) <= tolerance * max(f, 1.0):
-            found.append(doc)
-    return found[0] if len(found) == 1 or (found and focal_mm is not None) else None
+            found.append((abs(f - float(focal_mm)) if focal_mm is not None and f is not None else 0.0, doc))
+    if focal_mm is None:
+        return found[0][1] if len(found) == 1 else None
+    return min(found, key=lambda t: t[0])[1] if found else None
 
 
 def find_spec(instrume, extra_dirs: tuple = ()) -> dict | None:
@@ -422,7 +448,7 @@ def find_spec(instrume, extra_dirs: tuple = ()) -> dict | None:
     want = slug(instrume)
     if want == "unknown":
         return None
-    for d in (sub_dir("specs"),) + tuple(extra_dirs):
+    for d in (sub_dir("specs", make=False),) + tuple(extra_dirs):
         if not d or not os.path.isdir(d):
             continue
         for name in sorted(os.listdir(d)):

@@ -380,15 +380,19 @@ def main() -> None:
             o = core.Obs(jd=2461339.75, mag=5.5, merr=0.01, cmag=9.0, kmag=None, airmass=1.2, path=frame, exptime=0.75,
                          flux_var=1.0, flux_comp=1.0, fwhm=6.1, sky=12.0)
             o.target_inst, o.comp_insts = -11.2, [-6.9]
-            o.raw_peaks = {"HD 219134": 16594.0, "C1": 2100.0}
-            o.pos = {"t": [100.0, 100.0], "c": [[200.0, 120.0]]}
-            ctx = {"run_id": onsky_log.new_run_id(), "target": t, "comps": [c1], "check": None, "spares": [],
+            o.raw_peaks = {"HD 219134": 16594.0, "C1": 2100.0, "K": 3000.0}
+            o.pos = {"t": [100.0, 100.0], "c": [[200.0, 120.0]], "k": [300.0, 50.0]}
+            o.kmag = -7.4
+            ctx = {"run_id": onsky_log.new_run_id(), "target": t, "comps": [c1], "check": core.Star("K", 300.0, 50.0, 10.2),
+                   "spares": [],
                    "radius": 15.0, "sky_in": 20.0, "sky_out": 30.0, "binning": 1, "pattern": "RGGB",
                    "debayer": "green", "precalibrated": False, "mode_key": "transits", "filt": "TG", "band": "V",
                    "header": {"INSTRUME": "ZWO ASI2600MC Air", "GAIN": 100, "OFFSET": 50, "XBINNING": 1,
                               "FOCALLEN": 2905, "XPIXSZ": 3.76, "EGAIN": 0.2429, "BAYERPAT": "RGGB",
                               "SITELAT": 35.3}}
             th = onsky_log.write_async(ctx, [o], "selftest")
+            o.comp_insts = [-1.0]                      # SHOBS-P changes the points after handing them over
+            o.spare_insts["late"] = -3.0
             th.join(20)
             files = os.listdir(os.path.join(tmp, "onsky"))
             check("on-sky log written in the background", len(files) == 1, ", ".join(files))
@@ -401,6 +405,9 @@ def main() -> None:
             st = fr0["stars"]["C1"]
             check("on-sky log: comp flux from its instrumental magnitude",
                   abs(st["flux"] - 0.75 * 10 ** (0.4 * 6.9)) < 0.1 and st["peak_adu"] == 2100.0, st)
+            check("on-sky log: the check star is measured, later changes to the points ignored",
+                  fr0["stars"]["K"]["inst_mag"] == -7.4 and fr0["stars"]["C1"]["inst_mag"] == -6.9
+                  and "late" not in fr0["stars"] and "_path" not in fr0)
             check("on-sky log: the site is never written", "SITELAT" not in json.dumps(doc) and "site" not in doc)
             os.environ["SHOBS_ONSKY_OFF"] = "1"
             check("SHOBS_ONSKY_OFF turns it off", onsky_log.write_async(ctx, [o], "selftest") is None)
