@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.19
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.19.1
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -65,6 +65,14 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.19.1 (one addition; nothing on screen changes)
+- S: each reduction now leaves a small on-sky log for SHOBS-FLUX (the companion app that characterizes your camera
+  and telescope): one JSON file per reduction in the SHOBS data folder (.shobs\onsky in your user folder) with the
+  setup, the aperture, and per frame the time, airmass, focus, pier side, FWHM, sky and each star's flux, catalog
+  magnitude and brightest pixel. SHOBS-FLUX learns your system's zero point, extinction and seeing from these.
+  Written in the background after the points are made; a problem is only logged and never stops the reduction.
+  The site is never written. Set the environment variable SHOBS_ONSKY_OFF=1 to turn it off.
 
 New in 2.2.19 (S = shared by every mode, M = one mode only, T = Transits, D = Discovery, V = Variables;
 GitHub issue numbers in brackets)
@@ -971,6 +979,7 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.19.1 On-sky log for SHOBS-FLUX (one JSON file per reduction in .shobs\onsky); shared shobs_profile.py.
 2.2.19 Donut (defocused) centring (#30); comp/check after a flip and reference from the first kept frame (#24);
        target not on the first frame (#9); linear limit (#16); New reduction and the next star's state (#20);
        calibration frames in the Lights folder (#38); comps follow Use comps (#34); S1 rings and dashed sequence

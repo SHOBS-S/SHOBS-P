@@ -46,6 +46,11 @@ import numpy as np
 import photometry_core as core
 import transit_core as tcore
 
+try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
+    import onsky_log
+except Exception:
+    onsky_log = None
+
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     from matplotlib.figure import Figure
@@ -55,7 +60,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.19"
+APP_VERSION = "2.2.19.1"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -12023,6 +12028,14 @@ class App(Tk):
             self._restore_series_catalog()
             return
         self.photo_bring_back()   # 2.2.16 (item 16): the run's progress and results show on the page
+        # 2.2.19.1: what the on-sky log for SHOBS-FLUX needs from this run (written when the points are made)
+        self._onsky_ctx = {
+            "run_id": onsky_log.new_run_id() if onsky_log else "", "target": target, "comps": list(comps),
+            "check": check, "spares": list(spares), "radius": radius, "sky_in": sky_in, "sky_out": sky_out,
+            "binning": binning, "pattern": pattern, "debayer": mode, "precalibrated": bool(precalibrated),
+            "mode_key": self.mode_key, "filt": self._filter_code(), "band": self._band(),
+            "header": dict(self.preview_header or {}),
+        }
         if watch:
             self.log(f"Watch stars measured every frame ({len(watch)}): " + ", ".join(w.name for w in watch))
         missing_watch = [w["name"] for w in self.watch_list if w["name"] not in self.watch_xy]
@@ -12502,6 +12515,10 @@ class App(Tk):
         for obs in night_points:
             obs.night = night
             obs.filt = filt
+        # 2.2.19.1: the on-sky log for SHOBS-FLUX (background thread; never stops the reduction)
+        ctx, self._onsky_ctx = getattr(self, "_onsky_ctx", None), None
+        if onsky_log and ctx:
+            onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t))
         self._mark_rotator_excursion(night_points)
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night

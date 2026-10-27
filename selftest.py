@@ -357,6 +357,63 @@ def main() -> None:
     except Exception as exc:
         check("2.2.17 checks", False, str(exc).splitlines()[0] if str(exc) else repr(exc))
 
+    section("2k 2.2.19.1: on-sky log for SHOBS-FLUX, shared profile code")
+    try:
+        import json
+        import tempfile
+        import onsky_log
+        import shobs_profile as sp
+        check("shobs_profile.py is the version this SHOBS-P was built with",
+              sp.SHOBS_PROFILE_VERSION == onsky_log.NEEDS_PROFILE_VERSION, sp.SHOBS_PROFILE_VERSION)
+        check("shobs_profile.py checks itself", sp.self_check() == [], ", ".join(sp.self_check()))
+        old_home = os.environ.get("SHOBS_DATA_HOME")
+        tmp = tempfile.mkdtemp(prefix="shobs_p_onsky_")
+        os.environ["SHOBS_DATA_HOME"] = tmp       # never the real ~/.shobs
+        try:
+            frame = os.path.join(tmp, "Light_test_0001.fit")
+            cards = ["SIMPLE  =                    T", "BITPIX  =                   16", "NAXIS   =                    0",
+                     "FOCUSPOS=                 6512", "PIERSIDE= 'WEST    '", "CCD-TEMP=                -10.0", "END"]
+            with open(frame, "wb") as fh:
+                fh.write("".join(c.ljust(80) for c in cards).ljust(2880).encode("ascii"))
+            t = core.Star("HD 219134", 100.0, 100.0, None)
+            c1 = core.Star("C1", 200.0, 120.0, 9.85)
+            o = core.Obs(jd=2461339.75, mag=5.5, merr=0.01, cmag=9.0, kmag=None, airmass=1.2, path=frame, exptime=0.75,
+                         flux_var=1.0, flux_comp=1.0, fwhm=6.1, sky=12.0)
+            o.target_inst, o.comp_insts = -11.2, [-6.9]
+            o.raw_peaks = {"HD 219134": 16594.0, "C1": 2100.0}
+            o.pos = {"t": [100.0, 100.0], "c": [[200.0, 120.0]]}
+            ctx = {"run_id": onsky_log.new_run_id(), "target": t, "comps": [c1], "check": None, "spares": [],
+                   "radius": 15.0, "sky_in": 20.0, "sky_out": 30.0, "binning": 1, "pattern": "RGGB",
+                   "debayer": "green", "precalibrated": False, "mode_key": "transits", "filt": "TG", "band": "V",
+                   "header": {"INSTRUME": "ZWO ASI2600MC Air", "GAIN": 100, "OFFSET": 50, "XBINNING": 1,
+                              "FOCALLEN": 2905, "XPIXSZ": 3.76, "EGAIN": 0.2429, "BAYERPAT": "RGGB",
+                              "SITELAT": 35.3}}
+            th = onsky_log.write_async(ctx, [o], "selftest")
+            th.join(20)
+            files = os.listdir(os.path.join(tmp, "onsky"))
+            check("on-sky log written in the background", len(files) == 1, ", ".join(files))
+            doc = json.load(open(os.path.join(tmp, "onsky", files[0]), encoding="utf-8"))
+            fr0 = doc["frames"][0]
+            check("on-sky log: setup, band, night", doc["setup"]["camera_id"] == "zwo-asi2600mc-air__g100__o50__bin1"
+                  and doc["band"] == "TG" and doc["night"] == "2026-10-25", doc["night"])
+            check("on-sky log: focus, pier side and temperature from the frame header",
+                  fr0["focuspos"] == 6512 and fr0["pierside"] == "WEST" and fr0["ccd_temp_c"] == -10.0)
+            st = fr0["stars"]["C1"]
+            check("on-sky log: comp flux from its instrumental magnitude",
+                  abs(st["flux"] - 0.75 * 10 ** (0.4 * 6.9)) < 0.1 and st["peak_adu"] == 2100.0, st)
+            check("on-sky log: the site is never written", "SITELAT" not in json.dumps(doc) and "site" not in doc)
+            os.environ["SHOBS_ONSKY_OFF"] = "1"
+            check("SHOBS_ONSKY_OFF turns it off", onsky_log.write_async(ctx, [o], "selftest") is None)
+            os.environ.pop("SHOBS_ONSKY_OFF")
+        finally:
+            if old_home is None:
+                os.environ.pop("SHOBS_DATA_HOME", None)
+            else:
+                os.environ["SHOBS_DATA_HOME"] = old_home
+            shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        check("on-sky log", False, traceback.format_exc(limit=3).strip().splitlines()[-1])
+
     section("3  period search (real Astropy Lomb-Scargle)")
     t, y, nights = [], [], []
     for n in (2461300, 2461309, 2461311, 2461313, 2461315, 2461320):
