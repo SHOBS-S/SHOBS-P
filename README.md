@@ -160,7 +160,7 @@ user folder (`C:\Users\<you>`).
 
 ## Documentation
 
-**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, updated for 2.2.19) walks you through the program task
+**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, updated for 2.2.20) walks you through the program task
 by task: installing, your first night, reducing a variable star, fitting a transit, scanning a field, and what every
 message means.
 

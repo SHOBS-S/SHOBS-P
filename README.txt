@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.19.1
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.20
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -70,6 +70,30 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.20 (S = shared by every mode, T = Transits, V = Variables; GitHub issue numbers in brackets)
+- S  One busy bar for every wait: a green back-and-forth bar with words at the left end of the bottom status strip
+     ("Photometry... 12 of 38, about 1:20 left", "Fitting the transit: MCMC step... 1,200 of 3,000"). The small
+     bars, ticking "Looking up... 8 s" lines, text spinners and filling bars are gone; the status line keeps the
+     result (lines start with a check mark, a cross or a warning sign). The Multi-night window has its own bar.
+- S  Field image: the frame is shown as shot, filling the picture, with N and E arrows; the subtitle wraps; a
+     smoother background. A sequence ring next to the target (HD 219134 is itself an AAVSO sequence star) is no
+     longer drawn.
+- S  New reduction resets the Output page notes [#46]; saving a report whose notes name a star that is not in this
+     reduction asks first.
+- S  Linux and Mac setup [#33]: tries Python 3.13, 3.12, 3.11 before newer ones, installs ready-made packages only
+     (no compiler prompt on a Mac), and moves on to the next Python when one has no ready-made packages yet;
+     clearer messages when no Python works or the internet is down.
+- V  No-AUID warning: when VSX knows the star but has no AUID, the Output page says WebObs will reject the report
+     and how to request one.
+- T  Save for ExoClock and Go to ExoClock [#47] on the Transit fit page: the upload file (JD_UTC at mid-exposure,
+     raw relative flux, error) and ExoClock_info.txt with what to pick on the upload form.
+- T  Multi-night window: plots get the free height (drag the divider) or Pop out; one legend outside the panels;
+     night labels in the margin; no overlapping ticks or clipped titles; a Corner plot of the joint fit.
+- T  Transit-fit CSV carries airmass and the flip segment [#45]; Multi-night warns when some nights have no
+     airmass (their Tc may shift) and offers "Fit every night against time only"; the Single-night Tc column is
+     filled for CSV rows.
+- T  Corner plot window: the title no longer clips or runs into the top panel.
 
 New in 2.2.19.1 (one addition; nothing on screen changes)
 - S: each reduction now leaves a small on-sky log for SHOBS-FLUX (the companion app that characterizes your camera
@@ -984,6 +1008,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.2.20 One busy bar; field image as shot; New reduction notes (#46); Mac/Linux Python choice (#33); no-AUID
+       warning; ExoClock (#47); Multi-night plots, corner plot and airmass in the fit CSV (#45).
 2.2.19.1 On-sky log for SHOBS-FLUX (one JSON file per reduction in .shobs\onsky); shared shobs_profile.py.
 2.2.19 Donut (defocused) centring (#30); comp/check after a flip and reference from the first kept frame (#24);
        target not on the first frame (#9); linear limit (#16); New reduction and the next star's state (#20);
