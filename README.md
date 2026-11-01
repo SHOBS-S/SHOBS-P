@@ -64,7 +64,7 @@ Sloan g′r′i′), and error bars from the CCD equation plus scintillation (Me
 
 - Windows 10 or 11, macOS (12 Monterey or newer, python.org Python), or Linux (Python with Tkinter)
 - Python 3.11 or newer: [python.org](https://www.python.org/downloads/) (check "Add python.exe to PATH") or Anaconda/Miniconda
-- Packages (installed automatically): numpy, scipy, matplotlib, astropy, photutils, ccdproc
+- Packages (installed automatically): numpy, scipy, matplotlib, astropy, photutils, ccdproc, tzdata
 
 ![SHOBS-P transit fit of TrES-3 b](docs/transit_fit.png)
 
