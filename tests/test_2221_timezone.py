@@ -162,10 +162,10 @@ class TestSettingsAndSeries(unittest.TestCase):
         self.assertEqual(site_time.zone_name(), "America/Phoenix")
         meta = app._meta()
         self.assertEqual(meta["site_tz"], "America/Phoenix")
-        # a series saved before 2.2.21 (no site_tz): the computer's zone, and the settings file keeps yours
+        # a series saved before 2.2.21 (no site_tz): the box keeps its zone (2.2.21 review), the settings keep yours
         old = {k: v for k, v in meta.items() if k != "site_tz"}
         app._apply_meta(old)
-        self.assertEqual(app.site_tz.get(), "America/New_York")
+        self.assertEqual(app.site_tz.get(), "America/Phoenix")
         self.assertEqual(self._saved().get("site_tz"), "America/Phoenix")
         meta["site_tz"] = "Europe/Madrid"
         app._apply_meta(meta)

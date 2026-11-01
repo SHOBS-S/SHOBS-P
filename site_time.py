@@ -51,6 +51,9 @@ _WINDOWS_ZONES = {
 }
 
 
+UNKNOWN_WINDOWS_ZONE = ""   # a Windows zone name not in _WINDOWS_ZONES (the Log says to pick the site's zone)
+
+
 def computer_zone_name() -> str:
     """This computer's own IANA zone name, or "" when it cannot be told (then the computer's clock is used as is)."""
     tz = os.environ.get("TZ", "").lstrip(":")
@@ -62,7 +65,11 @@ def computer_zone_name() -> str:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                 r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation") as key:
                 name = str(winreg.QueryValueEx(key, "TimeZoneKeyName")[0]).strip("\x00 ")
-            return _WINDOWS_ZONES.get(name, "")
+            iana = _WINDOWS_ZONES.get(name, "")
+            if not iana:   # 2.2.21 review: say why the Time zone box is empty
+                global UNKNOWN_WINDOWS_ZONE
+                UNKNOWN_WINDOWS_ZONE = name
+            return iana
         except Exception:
             return ""
     try:   # Linux and Mac: /etc/localtime links to .../zoneinfo/Area/City

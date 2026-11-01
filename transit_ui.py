@@ -258,7 +258,7 @@ class TransitPage:
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
         _rbutton(text="Save field image…", command=app.save_field_image)
         # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights)
-        self.multinight_series_button = _rbutton(text="Multi-night fit…", command=self.open_multinight_series)
+        self.multinight_series_button = _rbutton(text="Fit the series' nights…", command=self.open_multinight_series)
         self.multinight_series_button.state(["disabled"])
         try:
             rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
@@ -442,10 +442,10 @@ class TransitPage:
         return self._multinight
 
     def open_multinight_series(self):
-        """2.2.21 (#44): Multi-night fit…: the Multi-night window with every night of the open Transits series."""
+        """2.2.21 (#44): Fit the series' nights…: the Multi-night window with every night of the open Transits series."""
         import multinight
         if len(multinight.series_transit_nights(self.app)) < 2:
-            messagebox.showinfo("SHOBS-P", "Multi-night fit… needs a Transits series with at least two nights. "
+            messagebox.showinfo("SHOBS-P", "Fit the series' nights… needs a Transits series with at least two nights. "
                                            "Multi-night… (above) takes reports and fit CSVs instead.")
             return None
         win = self.open_multinight()
@@ -453,7 +453,7 @@ class TransitPage:
         return win
 
     def update_series_button(self) -> int:
-        """2.2.21 (#44): Multi-night fit… enabled when the open Transits series has 2 or more nights."""
+        """2.2.21 (#44): Fit the series' nights… enabled when the open Transits series has 2 or more nights."""
         import multinight
         n = len(multinight.series_transit_nights(self.app))
         try:
@@ -471,12 +471,12 @@ class TransitPage:
         return n
 
     def _series_hint_after_save(self):
-        """2.2.21 (#44): after a save, a short line pointing at Multi-night fit… when the series has 2+ nights."""
+        """2.2.21 (#44): after a save, a short line pointing at Fit the series' nights… when the series has 2+ nights."""
         n = self.update_series_button()
         if n >= 2 and self.report is None:
-            text = f"This series has {n} transit nights: fit them together with Multi-night fit… (Results row)."
+            text = f"This series has {n} transit nights; Fit the series' nights… (Results row) fits them together."
             self.series_hint.set(text)
-            self.app.log(text)
+            self.app.log(text, keep_status=True)   # 2.2.21 review: keep the save line and upload offer
 
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
@@ -1394,7 +1394,7 @@ class TransitPage:
             # 2.2.19 (r2: nit): a refit with the same settings (e.g. an automatic one) does not repeat the line
             if text != getattr(self, "_settings_logged", None):
                 self._settings_logged = text
-                self.app.log(text)
+                self.app.log(text, keep_status=True)   # 2.2.21 review: keep the save line and upload offer
         result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
@@ -2214,7 +2214,7 @@ class TransitPage:
                               "utc": self._bjd_offset(first), "utc_ascii": self._bjd_offset(first, True)})
         spans.sort(key=lambda s_: s_["first"])
         exact = bool(self._time_map[2]) if self._time_map else False
-        where = "; ".join(f"{s_['clock']} local time ({s_['utc']}) (BJD_TDB {s_['first']:.5f}–{s_['last']:.5f}, {s_['n']} point"
+        where = "; ".join(f"{s_['clock']} local time{' (' + s_['utc'] + ')' if s_['utc'] else ''} (BJD_TDB {s_['first']:.5f}–{s_['last']:.5f}, {s_['n']} point"
                           f"{'s' if s_['n'] != 1 else ''})" for s_ in spans)
         n = int(cut.sum())
         approx = "" if exact else " Local times are approximate (±8 min: the report's star position is not known)."
@@ -2223,7 +2223,8 @@ class TransitPage:
         text = (f"Trimmed: {where}{fl_text}. These {n} points are left out of the fit, the verdict, the rms, the comp "
                 f"check and the saved files; Clear trim puts them back.{approx}")
         note = ("SHOBS-P: trimmed (left out of the fit) " + "; ".join(
-            f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local time ({s_['utc_ascii']}), "
+            f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local time"
+            f"{' (' + s_['utc_ascii'] + ')' if s_['utc_ascii'] else ''}, "
             f"{s_['n']} points)"
             for s_ in spans))
         return {"spans": spans, "n": n, "n_flagged": n_flagged, "text": text, "report_note": note, "exact": exact,
@@ -2413,8 +2414,10 @@ class TransitPage:
         meta = dict(self.meta_for_files)
         meta["version"] = getattr(self.app, "app_version", "")
         st = self._target_status_shown()   # 2.2.21 (#32, item 14): for the fit summary (tc.fit_text)
-        meta["toi_status"] = (st.get("toi") or {}).get("text", "")
-        meta["toi_url"] = (st.get("toi") or {}).get("url", "")
+        toi = st.get("toi") or {}
+        # 2.2.21 review: only a real TOI answer goes into the files ("TOI status unknown" was a moment's outage)
+        meta["toi_status"] = toi.get("text", "") if toi.get("state") == "toi" else ""
+        meta["toi_url"] = toi.get("url", "") if toi.get("state") == "toi" else ""
         meta["exoclock_status"] = (st.get("exoclock") or {}).get("text", "")
         v = (self.result or {}).get("verdict")
         state = _state(v) if v else "detected"
@@ -2542,11 +2545,13 @@ class TransitPage:
             messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}")
             return
         app.log(f"Transit fit CSV: {fit_path} ({n} rows)")
-        app.status.set(f"Wrote {os.path.basename(path) + ' and ' if path else ''}{os.path.basename(fit_path)}")
-        # 2.2.21 (#44): the fit CSV is recorded in the series for its night, so Multi-night fit… finds it
+        # 2.2.21 (#44): the fit CSV is recorded in the series for its night, so Fit the series' nights… finds it
+        # (recorded first, so a series-file note goes on this save's own status line)
         if self._fit_nights():
             import multinight
             app._remember_report(multinight.FIT_CSV_KEY, self._fit_nights(), fit_path)
+        app.status.set(app._series_note(f"Wrote {os.path.basename(path) + ' and ' if path else ''}"
+                                        f"{os.path.basename(fit_path)}"))
         self._series_hint_after_save()
 
     def _write_png(self, path: str):
@@ -3202,7 +3207,7 @@ class PlannerWindow:
         ttk.Label(top, text=f"Transit planner: {planet.get('name', '')}", font=(core.UI_FONT, 15, "bold"),
                   style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Site {self.lat:.3f}, {self.lon:.3f}. Times are the site's local time (time zone "
-                             f"{site_time.zone_name() or 'of this computer'}; 2.2.21 #22). "
+                             f"{site_time.zone_name() or 'of this computer'}). "
                              "'full' = transit plus the baseline on both sides above the altitude limit in a dark sky; "
                              "'transit only' = no full baseline; 'partial' = part of the transit. ± is the ephemeris "
                              "uncertainty at that date. Planner times are good to about a minute."),

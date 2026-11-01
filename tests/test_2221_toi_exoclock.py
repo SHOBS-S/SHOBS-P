@@ -114,7 +114,7 @@ class TestTOIMatch(CacheDir):
         rows = [_row("175.01", "CP", per="3.6906759"), _row("175.02", "CP", per="7.4507305"),
                 _row("175.03", "PC", per="2.2531062")]
         self.assertEqual(ts.pick_toi_row(rows, {"name": "L 98-59 d", "period": 7.45})["toi"], "175.02")
-        self.assertEqual(ts.pick_toi_row(rows, {"name": "TOI-175 c"})["toi"], "175.02")
+        self.assertEqual(ts.pick_toi_row(rows, {"name": "TOI-175 c"})["toi"], "175.01")   # 2.2.21 review: no letter rule
         self.assertEqual(ts.pick_toi_row(rows, {"name": "x", "typed": "TOI-175.03"})["toi"], "175.03")
 
     def test_cache_fallback_with_date(self):

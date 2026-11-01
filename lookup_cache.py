@@ -117,7 +117,12 @@ def from_cache_note(service: str, when, reason: str = "") -> str:
 
 
 def clear() -> int:
-    """Remove every cached lookup (Settings → Clear cached catalogs). Returns files removed."""
+    """Remove every cached lookup (Credits page → Clear cached catalogs). Returns files removed."""
+    with _LOCK:   # 2.2.21 review: not mid-put
+        return _clear_locked()
+
+
+def _clear_locked() -> int:
     n = 0
     try:
         for name in os.listdir(cache_dir()):

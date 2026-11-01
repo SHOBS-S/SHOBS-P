@@ -3426,11 +3426,11 @@ def _simbad_failed(host: str) -> None:
     _SIMBAD_DOWN[host] = time.monotonic() + 600
 
 
-# 2.2.21 (#48, nit c): the same "a host that just failed is asked last for 10 minutes" for VizieR, so a dead CDS costs
-# one timeout per 10 minutes, not one per request. IDIA's VizieR does not carry some catalogs (B/vsx/vsx answers a
-# 302 "cannot process"), so it is not asked for them.
+# 2.2.21 (#48, nit c): the same "a host that just failed is asked last for 10 minutes" for VizieR, so while CDS is
+# down the working mirror is asked first. (When every host is down each still costs its timeout.) 2.2.21 review: IDIA
+# does carry B/vsx/vsx through asu-tsv (1 Nov 2026 it was the one VizieR answering), so no catalog is left out.
 _VIZIER_DOWN: dict = {}
-VIZIER_NOT_ON = {"https://vizier.idia.ac.za": ("B/vsx/vsx",)}
+VIZIER_NOT_ON: dict = {}
 
 
 def _vizier_hosts(source: str = ""):

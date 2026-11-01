@@ -102,7 +102,7 @@ def _letter_index(name: str):
 
 def pick_toi_row(rows: list, planet: dict | None = None, ra=None, dec=None) -> dict | None:
     """The TOI row that is this planet, from rows of one star (or one cone): within TOI_MATCH_ARCSEC when a position
-    is known; then a typed TOI-NNNN.NN, the period (within 1 %), or the planet letter (b -> .01); else the first."""
+    is known; then a typed TOI-NNNN.NN or the period (within 1 %); else the first."""
     p = planet or {}
     rows = [r for r in rows or [] if str(r.get("toi") or "").strip()]
     if ra is not None and dec is not None:
@@ -129,12 +129,7 @@ def pick_toi_row(rows: list, planet: dict | None = None, ra=None, dec=None) -> d
         bp = _f(best.get("pl_orbper"))
         if bp and abs(bp - per) <= 0.01 * per:
             return best
-    for n in names:
-        k = _letter_index(n)
-        if k:
-            hit = next((r for r in rows if str(r.get("toi")).strip().endswith(f".{k:02d}")), None)
-            if hit:
-                return hit
+    # 2.2.21 review: no planet-letter rule: TOI sub-numbers go by detection order, not letter (L 98-59: .01 = c)
     return rows[0]
 
 
@@ -214,6 +209,20 @@ def _download_feed(timeout: float = 45) -> dict:
     return data
 
 
+EXOCLOCK_KEEP = ("name", "priority", "total_observations", "total_observations_recent", "min_telescope_inches")
+
+
+def _slim_feed(feed: dict) -> dict:
+    """2.2.21 review: only the fields SHOBS-P shows are kept (about 60 kB instead of the whole 1.7 MB feed)."""
+    out = {}
+    for key, entry in (feed or {}).items():
+        if isinstance(entry, dict):
+            out[str(key)] = {k: entry.get(k) for k in EXOCLOCK_KEEP if k in entry}
+    if not out:
+        raise ValueError("ExoClock's planet list was empty")
+    return out
+
+
 def exoclock_feed(download=None, now=None):
     """(feed dict or None, cache note). The whole feed is downloaded at most once a (UTC) day; when ExoClock does not
     answer, yesterday's (or older) copy is used with "(from cache, fetched 12 Oct 2026)"."""
@@ -222,7 +231,7 @@ def exoclock_feed(download=None, now=None):
     if isinstance(cached, dict) and cached and when is not None and when.date() == now.date():
         return cached, ""
     try:
-        feed = (download or _download_feed)()
+        feed = _slim_feed((download or _download_feed)())
         lookup_cache.put("exoclock", "planets_json", feed)
         return feed, ""
     except Exception:

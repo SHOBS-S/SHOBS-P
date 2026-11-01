@@ -1,4 +1,4 @@
-"""2.2.21 (#44, nit g): Multi-night from the open Transits series (Output/Transit fit page's Multi-night fit…), the
+"""2.2.21 (#44, nit g): Multi-night from the open Transits series (Output/Transit fit page's Fit the series' nights…), the
 ephemeris used shown and kept in the saved files, the alternative ephemeris kept with the series, and the window's
 divider opening below the nights table (not at the very top)."""
 import math
@@ -223,7 +223,7 @@ class TestSeriesInApp(unittest.TestCase):
         tp.report = None
         tp._series_hint_after_save()
         self.assertIn("2 transit nights", tp.series_hint.get())
-        self.assertIn("Multi-night fit…", tp.series_hint.get())
+        self.assertIn("Fit the series' nights…", tp.series_hint.get())
 
     def test_saved_outputs_keep_ephemeris(self):
         """A joint fit of the series' nights: the timing CSV and the summary name the ephemeris used."""

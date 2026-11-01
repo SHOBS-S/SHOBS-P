@@ -147,7 +147,7 @@ remembered as yours (never those of someone else's frames, MicroObservatory's or
 SHOBS-P uses it, labeled like **Local time (UTC−5)**. Type part of a name (`Phoenix`, `Warsaw`) to narrow the list,
 then pick one. A name SHOBS-P does not know is not used: the status bar says so, and this computer's zone is used
 until you pick one from the list. A series file keeps its site's time zone; a series saved before version 2.2.21 has
-none and uses this computer's zone.
+none, so the box keeps the zone it already shows (the log says so).
 
 ## Press Scan folders
 

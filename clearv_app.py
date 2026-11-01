@@ -696,7 +696,7 @@ def notes_foreign_stars(notes: str, known, previous: str = "") -> list:
     hits = [(m.start(), m.group(0)) for m in _NOTE_STAR_RE.finditer(text)]
     hits += [(m.start(), m.group(0)) for m in _GCVS_RE.finditer(text)]   # 2.2.21 (nit 1): GCVS names too
     found = [h[1] for h in sorted(hits)]
-    prev =" ".join(str(previous or "").split())
+    prev = " ".join(str(previous or "").split())
     if prev and _star_key(prev) not in keys and not placeholder_star_name(prev):
         if _re.search(r"(?<![\w-])" + r"\s*".join(_re.escape(p) for p in prev.split()) + r"(?![\w-])", text,
                       _re.IGNORECASE):
@@ -1252,6 +1252,10 @@ class App(Tk):
         # 2.2.21 (#22): the site's time zone (IANA name) for every local time shown or typed. A settings file without
         # one (2.2.20 and older) starts from this computer's own zone, so nothing changes for an observer at home.
         self.site_tz = StringVar(value=str(self.settings.get("site_tz") or site_time.computer_zone_name()))
+        if not self.site_tz.get() and site_time.UNKNOWN_WINDOWS_ZONE:   # 2.2.21 review: why the box is empty
+            self.after(1500, lambda: self.log(
+                f"This computer's time zone ({site_time.UNKNOWN_WINDOWS_ZONE}) is not in SHOBS-P's list: pick the "
+                "site's zone in the Time zone box (Input page, Site).", keep_status=True))
         self._apply_site_tz()
         self.site_tz.trace_add("write", lambda *_a: self._site_tz_changed())
         # 2.2.18 (item 11): the same guards as the site (a series' or a borrowed setup is never saved as yours).
@@ -3008,7 +3012,7 @@ class App(Tk):
         self.status.set(self._series_note(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what "
                                           f"to pick is in {os.path.basename(info_path)})."))   # 2.2.21 (nit j)
         try:
-            tp._series_hint_after_save()   # 2.2.21 (#44): Multi-night fit… when the series has 2+ nights
+            tp._series_hint_after_save()   # 2.2.21 (#44): Fit the series' nights… when the series has 2+ nights
         except Exception:
             pass
         return path
@@ -14604,8 +14608,12 @@ class App(Tk):
                                  for k, v in meta["reports_sent"].items() if isinstance(v, list)}
         if meta.get("elevation"):
             self.elevation.set(str(meta["elevation"]))
-        # 2.2.21 (#22): the series' time zone; a series saved before 2.2.21 has none: this computer's zone
-        self.site_tz.set(str(meta.get("site_tz") or site_time.computer_zone_name()))
+        # 2.2.21 (#22): the series' time zone; a series saved before 2.2.21 has none: the box keeps its zone
+        if meta.get("site_tz"):
+            self.site_tz.set(str(meta["site_tz"]))
+        else:
+            self.log(f"This series has no time zone saved (older SHOBS-P); local times use the Time zone box "
+                     f"({self.site_tz.get() or 'this computer'}).", keep_status=True)
         if isinstance(meta.get("planet"), dict) and meta["planet"].get("period"):
             self.planet_info = dict(meta.get("planet_info") or {})
             self._planet_to_fields(meta["planet"])
@@ -14786,7 +14794,7 @@ class App(Tk):
         self.series_status.set(self.series_status_text())
         tp = getattr(self, "transit_page", None)
         if tp is not None and hasattr(tp, "update_series_button"):
-            tp.update_series_button()   # 2.2.21 (#44): Multi-night fit… follows the series' nights
+            tp.update_series_button()   # 2.2.21 (#44): Fit the series' nights… follows the series' nights
         # 2.2.16 (item 15): the Input and Output pages' Close series buttons are enabled together.
         for button in (getattr(self, "close_series_button", None), getattr(self, "close_series_button_out", None)):
             if button is None:

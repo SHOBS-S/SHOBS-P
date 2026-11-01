@@ -61,7 +61,7 @@ progress bar of its own: a running fit shows on the busy bar in the status strip
   *"✖ Fit failed."* or *"Canceled."*, and then the comp-check result (below).
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
-  PNG…**, **Save field image…** and **Multi-night fit…**, with **Variable View  ▶** at the right. **Multi-night
+  PNG…**, **Save field image…** and **Fit the series' nights…**, with **Variable View  ▶** at the right. **Multi-night
   fit…** is grayed unless a Transits series with two or more nights is open (see *Fit several nights together*
   below).
 - Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
@@ -326,7 +326,7 @@ notes. Chapter 19 describes every file and the upload sites.
 One night gives one transit time. Several nights of the same planet, fitted together, give a better shape, a time for
 every night, and a check of the ephemeris. There are two ways in:
 
-- **Multi-night fit…** (Results row) when a **Transits series** is open with two or more nights. The window opens
+- **Fit the series' nights…** (Results row) when a **Transits series** is open with two or more nights. The window opens
   with every night of the series already in the table, one row per night (*"series: night of 15–16 Oct 2026"*).
 - **Multi-night…** (tools row, under the fit options) for reports and fit CSVs, yours or other observers'.
 
@@ -335,7 +335,7 @@ Both open the same **multi-night transit analysis** window.
 ### From a Transits series
 
 A Transits series holds every night of one planet with one reduction: the same comps and apertures, each night with
-its own flats. **Multi-night fit…** (or **Use the series' nights** in the window) takes each night from the series'
+its own flats. **Fit the series' nights…** (or **Use the series' nights** in the window) takes each night from the series'
 own points: times put on BJD_TDB from the Input page's RA/Dec and your site, airmass, and the meridian-flip segment.
 You do not need to save a fit CSV for each night first.
 
@@ -348,13 +348,13 @@ from the series' own points."* The other nights load as usual. A night that cann
 RA/Dec or site, or too few points) is loaded from its file instead, or listed with **✖** and the reason.
 
 After you save a report, fit CSV or ExoClock file for a night of a series with two or more nights, the line under the
-plot says, for example, *"This series has 3 transit nights: fit them together with Multi-night fit… (Results row)."*
+plot says, for example, *"This series has 3 transit nights; Fit the series' nights… (Results row) fits them together."*
 
-A Variables-mode series never offers **Multi-night fit…**.
+A Variables-mode series never offers **Fit the series' nights…**.
 
 ### The steps
 
-1. Load the nights: **Multi-night fit…** for a Transits series (above), or **Add reports or fit CSVs…** for AAVSO
+1. Load the nights: **Fit the series' nights…** for a Transits series (above), or **Add reports or fit CSVs…** for AAVSO
    exoplanet reports (from SHOBS-P or EXOTIC, `.txt`) or SHOBS-P fit CSVs (`…_transit_fit.csv`). The night fitted on
    the Transit fit page joins them when **Include the Transit fit page's night** is ticked. (It is unticked when
    the series' nights are loaded, since that night is one of them.)
@@ -370,7 +370,7 @@ A Variables-mode series never offers **Multi-night fit…**.
    filled from the planet (a series keeps its planet's lookup; the line then ends *"(kept with the series)"*);
    **Look up (NASA Exoplanet Archive)** fetches it again. Optionally type an **Alternative ephemeris** (T0, P, their
    ±, and a source, for example Exoplanet Watch's or ExoClock's current one) and press **Apply**. With the series'
-   nights loaded, the alternative ephemeris is kept in the series file, so the next **Multi-night fit…** fills it in
+   nights loaded, the alternative ephemeris is kept in the series file, so the next **Fit the series' nights…** fills it in
    again and the O − C compares with the same one.
 4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
    The window's own busy bar, at the lower left, says what the fit is doing, for example *"Fitting 4 nights… MCMC

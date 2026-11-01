@@ -92,7 +92,7 @@ New in 2.2.21 (S = shared by every mode, T = Transits, V = Variables, D = Discov
      candidate) - consider uploading to ExoFOP-TESS (coordinate with TFOP SG1)", with a link to its ExoFOP page.
 - T  ExoClock priority: at planet lookup, "ExoClock: HIGH priority (2 recent observations)" or "Not on ExoClock's
      list", beside Save for ExoClock, with a link to the planet's ExoClock page.
-- T  Multi-night fit... [#44] on the Transit fit Results row: fits the open Transits series' nights together (2 or
+- T  Fit the series' nights... [#44] on the Transit fit Results row: fits the open Transits series' nights together (2 or
      more nights), built from the series' own points; the ephemeris used is shown and saved; a typed alternative
      ephemeris is kept with the series. The Multi-night window opens with its nights table showing.
 - T  Corner plot sizes itself to the window.

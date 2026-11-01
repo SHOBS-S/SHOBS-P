@@ -1268,7 +1268,7 @@ def corner_result(fit: dict, title: str = "") -> dict:
 # Upload-page key under which the Transit fit page's Save light-curve CSV… records a night's fit CSV in the series'
 # reports_saved (never an upload page: no Sent mark, no "already sent" question).
 FIT_CSV_KEY = "fitcsv"
-SERIES_BUTTON = "Multi-night fit…"
+SERIES_BUTTON = "Fit the series' nights…"
 
 
 def series_transit_nights(app) -> list:
@@ -1747,7 +1747,7 @@ class MultiNightWindow:
 
     def _keep_alt_in_series(self):
         """2.2.21 (#44): with the series' nights loaded, the typed (alternative) ephemeris is kept in the series
-        (saved with it when it has a file), so the next Multi-night fit… compares with the same one."""
+        (saved with it when it has a file), so the next Fit the series' nights… compares with the same one."""
         if not getattr(self, "_from_series", False) or not series_transit_nights(self.app):
             return
         typed = {k: v.get().strip() for k, v in self.alt_vars.items()} if self.eph_alt else None
@@ -1756,7 +1756,9 @@ class MultiNightWindow:
         self.app.multinight_alt_eph = typed
         if getattr(self.app, "series_path", ""):
             try:
-                self.app._write_series(self.app.series_path)
+                # 2.2.21 review: with the series' own site and observer (nit j), not the Input page's
+                override = self.app._report_series_override() if hasattr(self.app, "_report_series_override") else None
+                self.app._write_series(self.app.series_path, override)
             except Exception as exc:
                 self.app.log(f"Multi-night: the alternative ephemeris was not saved in the series ({exc}).")
 

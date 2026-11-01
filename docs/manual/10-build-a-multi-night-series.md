@@ -73,7 +73,7 @@ All of these are in the **Series** row on the Output page. When the series has a
 - **Remove night…** removes one night. The list shows each night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`. Type its number and confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
-In Transits mode, a series of one planet with two or more nights can be fitted together: **Multi-night fit…** on the
+In Transits mode, a series of one planet with two or more nights can be fitted together: **Fit the series' nights…** on the
 Transit fit page's Results row opens the Multi-night window with every night of the series (chapter 17). The series
 also remembers each night's saved fit CSV and AAVSO exoplanet report, and the alternative ephemeris you typed there.
 

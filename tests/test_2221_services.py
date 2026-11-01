@@ -108,10 +108,11 @@ class TestVsxCone(CacheDir):
         with self.assertRaises(ValueError):
             core.parse_vsx_api_list("<html>Just a moment...</html>")
 
-    def test_idia_skipped_for_vsx(self):
+    def test_idia_asked_for_vsx(self):
+        # 2.2.21 review: IDIA carries B/vsx/vsx (it was the one VizieR answering on 1 Nov 2026)
         hosts = core._vizier_hosts("B/vsx/vsx")
-        self.assertNotIn("https://vizier.idia.ac.za", hosts)
-        self.assertIn("https://vizier.idia.ac.za", core._vizier_hosts("I/259/tyc2"))
+        self.assertIn("https://vizier.idia.ac.za", hosts)
+        self.assertEqual(hosts[-1], "https://vizier.idia.ac.za")
 
     def test_vizier_failed_host_asked_last(self):
         asked = []
