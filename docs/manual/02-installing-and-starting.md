@@ -37,7 +37,7 @@ It takes about ten minutes, most of it waiting for downloads.
    - sets up SHOBS-P's own Python environment in `%LOCALAPPDATA%\SHOBS-P\python-env` (your own Python is left
      untouched);
    - says `Checking the Python packages SHOBS-P needs...` and downloads them (NumPy, SciPy, Matplotlib, Astropy,
-     photutils and ccdproc). This takes a few minutes.
+     photutils, ccdproc and tzdata, the time zone list). This takes a few minutes.
 6. When it says `Done. Start SHOBS-P from the Desktop icon or the Start menu.`, press any key to close the window.
 
 You now have a SHOBS-P icon on the Desktop and in the Start menu.

@@ -15,7 +15,17 @@ it, AAVSO reports show the airmass as `na`.
    - **Longitude (°, east +)**: decimal degrees, **east positive, west negative**. Observers in the Americas type a
      negative number (for example `-100.0`).
    - **Elevation (m)**: meters above sea level. It is used in exoplanet reports and for scintillation.
-3. That's all. SHOBS-P remembers these three values on this computer from now on.
+   - **Time zone**: the site's time zone, as a name such as `America/New_York` or `Europe/Madrid`. It starts as
+     this computer's own zone, so if the telescope is where the computer is, leave it alone. Change it when the
+     site is somewhere else (a remote or hosted telescope). Type part of a city name (for example `Phoenix`) to
+     narrow the list, then pick the zone.
+3. That's all. SHOBS-P remembers these values on this computer from now on.
+
+Every local time SHOBS-P shows (Blink, the Output page, the transit planning windows, the Trim boxes) is the
+site's clock time in this zone, with that night's daylight saving, and is labeled with its offset from UTC, for
+example **Local time (UTC−4)** before the US change on 1 Nov 2026 and **Local time (UTC−5)** after it. Times you type
+(**After**, **End by**, Trim **from** and **to**) are read as the site's clock too. UTC, JD and BJD times in reports
+and files do not depend on the time zone.
 
 > **Tip:** If your capture program writes the site into the FITS headers (keywords such as `SITELAT` and `SITELONG`),
 > SHOBS-P offers to fill the Site box from them when you press **Scan folders**. It always asks before saving a

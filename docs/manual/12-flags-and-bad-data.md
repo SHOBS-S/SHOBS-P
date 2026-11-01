@@ -81,7 +81,7 @@ Some variable-star targets host transiting planets (HD 219134, for example). Dur
 In Variables mode, after each run and after **Load series…**, SHOBS-P looks up the Star ID's transiting planets at the NASA Exoplanet Archive, in the background. If frames fall inside a predicted transit, it asks:
 
 > Tonight's run (…):
-> 5–6 Oct 2026: 9 frames fall in planet b's transit (frames 05:02–05:25 local; transit 05:17–06:14 ±1 min).
+> 5–6 Oct 2026: 9 frames fall in planet b's transit (frames 05:02–05:25 local time (UTC−4); transit 05:17–06:14 ±1 min).
 >
 > Leave those frames out (flagged "transit", like cloud)?
 
