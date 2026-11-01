@@ -92,7 +92,7 @@ New in 2.2.20 (S = shared by every mode, T = Transits, V = Variables; GitHub iss
      night labels in the margin; no overlapping ticks or clipped titles; a Corner plot of the joint fit.
 - T  Transit-fit CSV carries airmass and the flip segment [#45]; Multi-night warns when some nights have no
      airmass (their Tc may shift) and offers "Fit every night against time only"; the Single-night Tc column is
-     filled for CSV rows.
+     filled for CSV rows. Like the single-night fit, the multi-night fit does not fit a flip step.
 - T  Corner plot window: the title no longer clips or runs into the top panel.
 
 New in 2.2.19.1 (one addition; nothing on screen changes)

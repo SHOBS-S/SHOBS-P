@@ -1056,74 +1056,79 @@ class TransitPage:
                                                                         else "new photometry") + " (Cancel stops it).")
         if not self.app._start_job("Fitting the transit…"):
             return
-        self._pending_signature = self._signature()
-        steps = MCMC_CHOICES.get(self.mcmc.get(), 3000)
-        da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
-        # 2.2.13: the flip segment, and the flagged frames (left out and listed, or put back with doubled errors).
-        extra = dict(self._data_extra or {})
-        after = extra.get("after_flip")
-        fl = extra.get("flagged")
-        flagged_mask, excluded, label = None, None, "flagged"
-        if fl is not None and len(fl["t"]):
-            label = fl.get("label") or "flagged"
-            if with_flagged:
-                n0 = len(t)
-                t = np.concatenate([np.asarray(t, dtype=float), fl["t"]])
-                flux = np.concatenate([np.asarray(flux, dtype=float), fl["flux"]])
-                err = np.concatenate([np.asarray(err, dtype=float), fl["err"]])
-                am = np.concatenate([np.asarray(am, dtype=float), fl["airmass"]])
-                if after is not None or fl["after_flip"].any():
-                    base_after = after if after is not None else np.zeros(n0, dtype=bool)
-                    after = np.concatenate([base_after, fl["after_flip"]])
-                flagged_mask = np.r_[np.zeros(n0, dtype=bool), np.ones(len(fl["t"]), dtype=bool)]
-            else:
-                excluded = {"t": fl["t"], "jd": fl["jd"], "label": label}
-        if after is not None and not (np.any(after) and not np.all(after)):
-            after = None
-        # 2.2.16 (item 6): the same data and settings for the leave-one-comp-out check after the fit (photometry
-        # with 2+ comps only; a report has no per-comp data).
-        self._loo_pending = None
-        cmags = extra.get("comp_mags")
-        if self.report is None and cmags is not None and np.ndim(cmags) == 2 and np.shape(cmags)[1] >= 2:
-            if flagged_mask is not None:
-                fc = (fl or {}).get("comp_mags")
-                cmags = np.vstack([cmags, fc]) if fc is not None and np.shape(fc)[1:] == np.shape(cmags)[1:] else None
-            if cmags is not None and len(cmags) == len(t):
-                self._loo_pending = {"t": t, "flux": flux, "err": err, "am": am, "after": after,
-                                     "flagged_mask": flagged_mask, "comp_mags": cmags,
-                                     "names": list(extra.get("comp_names") or []), "planet": planet,
-                                     "da": da, "dt": dt}
-        flip_source = extra.get("flip_source", "")
-        # 2.2.20 (#45): the flip time (halfway across the flip gap) for the fit CSV's segment column and header
-        meta.pop("t_flip", None)
-        if after is not None:
-            try:
-                ta, af = np.asarray(t, dtype=float), np.asarray(after, dtype=bool)
-                meta["t_flip"] = 0.5 * (float(np.nanmax(ta[~af])) + float(np.nanmin(ta[af])))
-            except Exception:
-                pass
-        cancel = self.app._cancel
-        self.prog_text.set("")   # 2.2.20 (item 3): the steps are the busy bar's words
-        self.app._job_words("Fitting the transit: least-squares fit…")
-        self._fitting = True
-        self._show_progress()
-        app = self.app
+        try:   # 2.2.20 (review): an error before the worker starts must not leave the run lock or the bar stuck
+            self._pending_signature = self._signature()
+            steps = MCMC_CHOICES.get(self.mcmc.get(), 3000)
+            da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+            # 2.2.13: the flip segment, and the flagged frames (left out and listed, or put back with doubled errors).
+            extra = dict(self._data_extra or {})
+            after = extra.get("after_flip")
+            fl = extra.get("flagged")
+            flagged_mask, excluded, label = None, None, "flagged"
+            if fl is not None and len(fl["t"]):
+                label = fl.get("label") or "flagged"
+                if with_flagged:
+                    n0 = len(t)
+                    t = np.concatenate([np.asarray(t, dtype=float), fl["t"]])
+                    flux = np.concatenate([np.asarray(flux, dtype=float), fl["flux"]])
+                    err = np.concatenate([np.asarray(err, dtype=float), fl["err"]])
+                    am = np.concatenate([np.asarray(am, dtype=float), fl["airmass"]])
+                    if after is not None or fl["after_flip"].any():
+                        base_after = after if after is not None else np.zeros(n0, dtype=bool)
+                        after = np.concatenate([base_after, fl["after_flip"]])
+                    flagged_mask = np.r_[np.zeros(n0, dtype=bool), np.ones(len(fl["t"]), dtype=bool)]
+                else:
+                    excluded = {"t": fl["t"], "jd": fl["jd"], "label": label}
+            if after is not None and not (np.any(after) and not np.all(after)):
+                after = None
+            # 2.2.16 (item 6): the same data and settings for the leave-one-comp-out check after the fit (photometry
+            # with 2+ comps only; a report has no per-comp data).
+            self._loo_pending = None
+            cmags = extra.get("comp_mags")
+            if self.report is None and cmags is not None and np.ndim(cmags) == 2 and np.shape(cmags)[1] >= 2:
+                if flagged_mask is not None:
+                    fc = (fl or {}).get("comp_mags")
+                    cmags = np.vstack([cmags, fc]) if fc is not None and np.shape(fc)[1:] == np.shape(cmags)[1:] else None
+                if cmags is not None and len(cmags) == len(t):
+                    self._loo_pending = {"t": t, "flux": flux, "err": err, "am": am, "after": after,
+                                         "flagged_mask": flagged_mask, "comp_mags": cmags,
+                                         "names": list(extra.get("comp_names") or []), "planet": planet,
+                                         "da": da, "dt": dt}
+            flip_source = extra.get("flip_source", "")
+            # 2.2.20 (#45): the flip time (halfway across the flip gap) for the fit CSV's segment column and header
+            meta.pop("t_flip", None)
+            if after is not None:
+                try:
+                    ta, af = np.asarray(t, dtype=float), np.asarray(after, dtype=bool)
+                    meta["t_flip"] = 0.5 * (float(np.nanmax(ta[~af])) + float(np.nanmin(ta[af])))
+                except Exception:
+                    pass
+            cancel = self.app._cancel
+            self.prog_text.set("")   # 2.2.20 (item 3): the steps are the busy bar's words
+            self.app._job_words("Fitting the transit: least-squares fit…")
+            self._fitting = True
+            self._show_progress()
+            app = self.app
 
-        def progress(phase, done, total):
-            app.call_ui(self._progress, phase, done, total)
+            def progress(phase, done, total):
+                app.call_ui(self._progress, phase, done, total)
 
-        def work():
-            try:
-                result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
-                                        mcmc_steps=steps, progress=progress, cancel=cancel,
-                                        log=lambda m: app.call_ui(app.log, m), after_flip=after,
-                                        flip_source=flip_source, flagged_mask=flagged_mask, flagged_label=label,
-                                        excluded=excluded)
-                app.call_ui(self._fit_done, result, meta, None)
-            except Exception as exc:
-                app.call_ui(self._fit_done, None, meta, (str(exc), traceback.format_exc()))
+            def work():
+                try:
+                    result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
+                                            mcmc_steps=steps, progress=progress, cancel=cancel,
+                                            log=lambda m: app.call_ui(app.log, m), after_flip=after,
+                                            flip_source=flip_source, flagged_mask=flagged_mask, flagged_label=label,
+                                            excluded=excluded)
+                    app.call_ui(self._fit_done, result, meta, None)
+                except Exception as exc:
+                    app.call_ui(self._fit_done, None, meta, (str(exc), traceback.format_exc()))
 
-        threading.Thread(target=work, daemon=True).start()
+            threading.Thread(target=work, daemon=True).start()
+        except Exception:
+            self._fitting = False
+            self.app._end_job()
+            raise
 
     def _progress(self, phase, done, total):
         """2.2.12: the burn-in and the steps are counted separately ("MCMC burn-in 600 of 1,000", then

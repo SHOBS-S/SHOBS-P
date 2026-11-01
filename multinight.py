@@ -359,7 +359,10 @@ class JointProblem:
             amc = (am - float(np.mean(am))) if has_am else np.zeros_like(t)
             t_flip = n.get("t_flip")
             after = None
-            if t_flip is not None and (n["t"] < t_flip).any() and (n["t"] >= t_flip).any():
+            # 2.2.20 (review): the flip step is fitted only when the single-night fit fits one (transit_core
+            # FLIP_STEP_ENABLED, off since 2.2.13), so a night's joint Tc is made the same way as its single-night Tc.
+            if (tc.FLIP_STEP_ENABLED and t_flip is not None and (n["t"] < t_flip).any()
+                    and (n["t"] >= t_flip).any()):
                 after = (n["t"] >= t_flip).astype(float)
             d = {"t": t, "t_ref": t_ref, "flux": n["flux"], "err": n["err"].copy(), "am": amc,
                  "t_mid": float(np.mean(t)), "after": after, "group": n.get("group", self.groups[0])}
@@ -1714,14 +1717,19 @@ class MultiNightWindow:
         file. Needs the planet's period."""
         if getattr(self, "_closed", False) or not self.planet or not self.planet.get("period"):
             return
+        da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+        for n in nights:   # 2.2.20 (review): a quick fit made with other baseline choices is redone
+            if (n.get("single_from") == "a quick fit of this night alone" and not n.get("single_busy")
+                    and n.get("single_choice") != (da, dt)):
+                n["single_tc"], n["single_from"], n["single_why"] = None, "", ""
         todo = [n for n in nights if n.get("use") and not n.get("single_tc") and not n.get("single_busy")
                 and not n.get("single_why") and n.get("kind") == "csv" and len(n.get("t", [])) >= MIN_POINTS]
         if not todo:
             return
         planet = dict(self.planet, ld_band=_majority_filter(todo))
-        da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
         for n in todo:
             n["single_busy"] = True
+            n["single_choice"] = (da, dt)
         tok = self.busy.begin(f"Fitting {len(todo)} night{'s' if len(todo) != 1 else ''} alone for the "
                               "Single-night Tc column…")
         app = self.app
@@ -1790,12 +1798,18 @@ class MultiNightWindow:
                                 parent=self.win)
             return
         # 2.2.20 (busy bar): only this window's own bar shows (bar=False skips the main window's)
-        try:
-            started = self.app._start_job("Multi-night transit fit…", bar=False)
-        except TypeError:
-            started = self.app._start_job("Multi-night transit fit…")
-        if not started:
+        if not self.app._start_job("Multi-night transit fit…", bar=False):
             return
+        try:
+            self._start_fit_thread(use)
+        except Exception:
+            # 2.2.20 (review): nothing may leave the run lock or the busy bar stuck
+            self._running = False
+            self.busy.end(getattr(self, "_fit_tok", None))
+            self.app._end_job()
+            raise
+
+    def _start_fit_thread(self, use):
         self._running = True
         token = object()
         self._token = token

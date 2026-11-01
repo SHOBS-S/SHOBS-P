@@ -236,6 +236,7 @@ class TestNotesInApp(unittest.TestCase):
         flux = 1.0 + 0.001 * np.sin(np.arange(30))
         tp.result = {"t": core.convert_times(jd, "BJD_TDB", ra, dec, lat, lon), "flux": flux,
                      "err": np.full(30, 0.002), "err_scaled": np.full(30, 0.003), "summary": {},
+                     "flagged": np.arange(30) >= 28,
                      "planet": {"name": "TOI-2046 b"}}
         tp.meta_for_files = {"filter": "TG", "exposure": "60.0", "obscode": "JABA"}
         with mock.patch.object(tp, "_file_meta", return_value=dict(tp.meta_for_files, version="2.2.20")), \
@@ -245,9 +246,9 @@ class TestNotesInApp(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_info.txt")))
         with open(path) as fh:
             rows = [ln.split() for ln in fh if ln.strip() and not ln.startswith("#")]
-        self.assertEqual(len(rows), 30)
+        self.assertEqual(len(rows), 28)   # 2.2.20 review: put-back flagged frames are left out
         self.assertLess(abs(float(rows[0][0]) - jd[0]) * 86400, 0.1)
-        self.assertAlmostEqual(float(rows[0][2]), 0.003, places=6)
+        self.assertAlmostEqual(float(rows[0][2]), 0.002, places=6)   # measurement error, not the scaled one
         self.assertTrue(app.status.get().startswith("✔ Saved. On the form, pick Mid-exposure"))
         with mock.patch.object(ca.App, "open_link", return_value=True) as ol:
             app.open_exoclock()

@@ -132,7 +132,8 @@ ExoClock (exoclock.space) collects transit times to keep planets' ephemerides up
   spaces (as ExoClock spells it) and the UTC date of the first frame. A few header lines start with `#` (planet,
   time format, filter, exposure, observer code, number of frames). Then one line per frame with three columns: the
   time in **JD_UTC** at **mid-exposure**, the relative flux (divided by its median, not detrended; ExoClock fits its
-  own baseline) and its error. Only the frames the fit used are in it, as in the AAVSO report.
+  own baseline) and its measurement error (ExoClock scales the errors itself). Only the frames the fit used are in
+  it, as in the AAVSO report; flagged frames you put back with **Fit with flagged** are left out too.
 - `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
   **Time format** `JD_UTC`, **Time stamp** `Mid-exposure`, **Flux format** `Flux`, **Filter** (a color camera's `TG`
   is listed as Johnson V), **Exposure time** in seconds, and the upload page's address.

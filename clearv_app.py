@@ -2814,7 +2814,18 @@ class App(Tk):
             messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the times need the target's RA/Dec and your site's "
                                            f"latitude and longitude on the Input page ({exc}).")
             return ""
-        err = r.get("err_scaled", r.get("err"))
+        # 2.2.20 (review): the measurement errors (ExoClock rescales them itself), and flagged frames put back with
+        # "Fit with flagged" (errors doubled) are left out, as the file's header says.
+        err = np.asarray(r.get("err") if r.get("err") is not None else r.get("err_scaled"), float)
+        flux = np.asarray(r["flux"], float)
+        jd = np.asarray(jd, float)
+        fl = r.get("flagged")
+        if fl is not None and np.shape(fl) == np.shape(jd) and np.any(fl):
+            keep = ~np.asarray(fl, bool)
+            jd, flux, err = jd[keep], flux[keep], err[keep]
+        if not jd.size:
+            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: no frames are left once the flagged ones are out.")
+            return ""
         name = exoclock_name(planet, float(np.nanmin(jd)))
         path = self.output_path(name, title="Save for ExoClock", defaultextension=".txt",
                                 filetypes=[("Text", "*.txt")], parent=self)
@@ -2823,7 +2834,7 @@ class App(Tk):
         info_path = self._unique_path(os.path.join(os.path.dirname(path), "ExoClock_info.txt"))
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
-                fh.write(exoclock_upload_text(jd, r["flux"], err, planet, meta))
+                fh.write(exoclock_upload_text(jd, flux, err, planet, meta))
             with core.AsciiWriter(info_path, newline="\n") as fh:
                 fh.write(exoclock_info_text(planet, meta, os.path.basename(path)))
         except Exception as exc:

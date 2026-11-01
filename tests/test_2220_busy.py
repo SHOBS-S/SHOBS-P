@@ -161,7 +161,7 @@ class TestMainWindowBar(unittest.TestCase):
         finally:
             app.LOOKUP_GIVE_UP_S = old
         self.assertFalse(app.busy_bar.busy)
-        self.assertTrue(app.star_busy.get().startswith("✖ Nowhere: the SIMBAD and VSX did not answer"))
+        self.assertTrue(app.star_busy.get().startswith("✖ Nowhere: SIMBAD and VSX did not answer"))
         self.assertTrue(app.status.get().startswith("✖"))
         app._lookup_busy_show("star", "")
 
