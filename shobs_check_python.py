@@ -8,7 +8,7 @@ Written without f-strings so that an old Python 2 or 3.5 still reports its versi
 """
 import sys
 
-PACKAGES = ("numpy", "scipy", "matplotlib", "astropy", "photutils", "ccdproc")
+PACKAGES = ("numpy", "scipy", "matplotlib", "astropy", "photutils", "ccdproc", "tzdata")   # 2.2.21 (#22): tzdata
 
 
 def main():
