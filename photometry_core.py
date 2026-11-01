@@ -3387,7 +3387,13 @@ def lookup_target(name: str) -> dict:
         for key in ("period_days", "var_type", "auid", "epoch_jd"):   # 2.2.14 (item 13): epoch
             if vsx.get(key):
                 found[key] = vsx[key]
+        if vsx.get("cache_note"):
+            found["vsx_cache_note"] = vsx["cache_note"]
     found["in_vsx"] = vsx is not None   # 2.2.20 (item 4): VSX knows the star (with or without an AUID)
+    # 2.2.21 (#21): which parts came from the lookup cache (the live service did not answer), for the log and page.
+    notes = [n for n in (found.pop("cache_note", ""), found.pop("vsx_cache_note", "")) if n]
+    if notes:
+        found["cache_notes"] = list(dict.fromkeys(notes))
     return found
 
 
@@ -3420,23 +3426,85 @@ def _simbad_failed(host: str) -> None:
     _SIMBAD_DOWN[host] = time.monotonic() + 600
 
 
+# 2.2.21 (#48, nit c): the same "a host that just failed is asked last for 10 minutes" for VizieR, so a dead CDS costs
+# one timeout per 10 minutes, not one per request. IDIA's VizieR does not carry some catalogs (B/vsx/vsx answers a
+# 302 "cannot process"), so it is not asked for them.
+_VIZIER_DOWN: dict = {}
+VIZIER_NOT_ON = {"https://vizier.idia.ac.za": ("B/vsx/vsx",)}
+
+
+def _vizier_hosts(source: str = ""):
+    """VIZIER_HOSTS for this catalog: hosts that do not carry it left out, a host that just failed moved last."""
+    import time
+    now = time.monotonic()
+    hosts = [h for h in VIZIER_HOSTS if source not in VIZIER_NOT_ON.get(h, ())]
+    return sorted(hosts, key=lambda h: _VIZIER_DOWN.get(h, 0) > now)
+
+
+def _vizier_failed(host: str) -> None:
+    import time
+    _VIZIER_DOWN[host] = time.monotonic() + 600
+
+
+def service_error_text(exc) -> str:
+    """2.2.21 (#21): why a service did not answer, short: '503', 'timed out', 'no connection', 'blocked (403)'."""
+    import socket
+    import urllib.error
+    if isinstance(exc, VSPError):
+        if exc.kind == "http":
+            return str(exc.status)
+        if exc.kind == "blocked":
+            return f"blocked ({exc.status or 403})"
+        return "timed out" if exc.kind == "timeout" else "no connection"
+    if isinstance(exc, urllib.error.HTTPError):
+        return str(exc.code)
+    reason = getattr(exc, "reason", None)
+    if isinstance(exc, (socket.timeout, TimeoutError)) or isinstance(reason, (socket.timeout, TimeoutError)) \
+            or "timed out" in str(exc).lower():
+        return "timed out"
+    text = str(exc).lower()
+    m = _re.search(r"\b(5\d\d)\b", text)
+    if m and ("http" in text or "error" in text):
+        return m.group(1)
+    if isinstance(exc, (urllib.error.URLError, ConnectionError, OSError)):
+        return "no connection"
+    return (str(exc).splitlines()[0][:60] if str(exc) else exc.__class__.__name__)
+
+
+def _from_cache(service: str, key: str, exc):
+    """2.2.21 (#21): (cached value, plain note) when the live request failed, else (None, '')."""
+    import lookup_cache
+    value, when = lookup_cache.get(service, key)
+    if value is None:
+        return None, ""
+    return value, lookup_cache.from_cache_note(service, when, service_error_text(exc) if exc is not None else "")
+
+
 def _lookup_simbad(name: str) -> dict:
     import re
     import urllib.parse
 
     # 2.2.20: CDS first, then the IDIA (Cape Town) mirror (same answer format; CDS was down for days in Oct-Nov 2026,
     # as in SHOBS-FLUX and SHOBS-SCHED). A working CDS answers in a second or two, so it gets 15 s before the mirror.
+    import lookup_cache
     tail = "/simbad/sim-id?Ident=" + urllib.parse.quote(name.strip()) + "&output.format=ASCII"
     errors = []
+    cache_note = ""
+    key = lookup_cache.norm_key(name)
+    last = None
     for host, wait in _simbad_hosts():
         try:
             text = _http_get(host + tail, timeout=wait).decode("utf-8", errors="replace")
+            lookup_cache.put("simbad", key, text)   # 2.2.21 (#21): the raw answer, parsed again on a cache hit
             break
         except Exception as exc:
             _simbad_failed(host)
             errors.append(f"{host}: {exc}")
+            last = exc
     else:
-        raise ConnectionError("SIMBAD did not answer.\n" + "\n".join(errors))
+        text, cache_note = _from_cache("simbad", key, last)   # 2.2.21 (#21)
+        if text is None:
+            raise ConnectionError("SIMBAD did not answer.\n" + "\n".join(errors))
     if "identifier not found" in text.lower() or "no known catalog" in text.lower():
         raise ValueError(f"SIMBAD has no object called {name}")
     coord = re.search(r"Coordinates\(ICRS,ep=J2000.*?\):\s+([0-9.\s+-]+)", text)
@@ -3451,15 +3519,30 @@ def _lookup_simbad(name: str) -> dict:
     pm = re.search(r"Proper motions:\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)", text)
     if pm:
         ra_deg, dec_deg = _apply_pm(ra_deg, dec_deg, float(pm.group(1)), float(pm.group(2)))
-    return {"ra_hours": ra_deg / 15.0, "dec_deg": dec_deg, "name": name.strip(), "source": "SIMBAD"}
+    out = {"ra_hours": ra_deg / 15.0, "dec_deg": dec_deg, "name": name.strip(), "source": "SIMBAD"}
+    if cache_note:
+        out["cache_note"] = cache_note
+    return out
 
 
 def _lookup_vsx(name: str) -> dict:
     """AAVSO VSX object API. RA2000 and Declination2000 come back as decimal degrees."""
     import urllib.parse
 
+    import lookup_cache
     query = urllib.parse.urlencode({"view": "api.object", "ident": name.strip(), "format": "json"})
-    payload = json.loads(_http_get("https://vsx.aavso.org/index.php?" + query).decode("utf-8"))
+    key = lookup_cache.norm_key(name)
+    cache_note = ""
+    try:
+        payload = json.loads(_http_get("https://vsx.aavso.org/index.php?" + query).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("VSX answered in an unexpected form")
+        lookup_cache.put("vsx", key, payload)   # 2.2.21 (#21): "not in VSX" is kept too (in_vsx stays right)
+    except Exception as exc:
+        # 2.2.21 (#21): VSX did not answer (or a Cloudflare page came back instead of JSON): the last good answer.
+        payload, cache_note = _from_cache("vsx", key, exc)
+        if payload is None:
+            raise ConnectionError(f"VSX did not answer ({service_error_text(exc)})") from exc
     obj = payload.get("VSXObject") if isinstance(payload, dict) else None
     if not obj or not obj.get("RA2000") or not obj.get("Declination2000"):
         raise ValueError(f"VSX has no object called {name}")
@@ -3483,6 +3566,7 @@ def _lookup_vsx(name: str) -> dict:
         "var_type": obj.get("VariabilityType", ""),
         "auid": obj.get("AUID", ""),
         "epoch_jd": _vsx_epoch(obj.get("Epoch")),   # 2.2.14 (item 13): epoch of max/min for O-C (HJD in VSX)
+        **({"cache_note": cache_note} if cache_note else {}),   # 2.2.21 (#21)
     }
 
 
@@ -3597,12 +3681,16 @@ def _vsp_query(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: flo
     return urllib.parse.urlencode(params)
 
 
-def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0, **extra) -> dict:
+def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0,
+                      use_cache: bool = True, **extra) -> dict:
     """AAVSO Variable Star Plotter photometry table. RA is hours, Dec is degrees.
     2.2.19 (#11): one round (apps.aavso.org; app.aavso.org only when apps. cannot be reached or says 404); a failure
     raises VSPError with the HTTP status. A chart that answered a background retry (vsp_retry_in_background) for the
-    same request in the last hour is used at once. extra: more VSP parameters (e.g. orientation for #28's chart)."""
+    same request in the last hour is used at once. extra: more VSP parameters (e.g. orientation for #28's chart).
+    2.2.21 (#21): every answer is kept in the lookup cache; when VSP does not answer, the last good answer for the same
+    request comes back with "_cache_note" set (use_cache=False: never; the background retries and the chart picture)."""
     import time as _time
+    import lookup_cache
     query = _vsp_query(ra_hours, dec_deg, fov_arcmin, maglimit, **extra)
     late = _VSP_LATE.get(query)
     if late is not None and _time.monotonic() - late[0] < 3600.0:
@@ -3610,7 +3698,10 @@ def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglim
     first = None
     for base in VSP_HOSTS:
         try:
-            return json.loads(_http_get(base + "?" + query, timeout=VSP_TIMEOUT_S).decode("utf-8"))
+            payload = json.loads(_http_get(base + "?" + query, timeout=VSP_TIMEOUT_S).decode("utf-8"))
+            if isinstance(payload, dict):
+                lookup_cache.put("vsp", query, payload)   # 2.2.21 (#21)
+            return payload
         except Exception as exc:
             err = _vsp_error(exc, base)
             first = first or err
@@ -3618,6 +3709,12 @@ def fetch_aavso_chart(ra_hours: float, dec_deg: float, fov_arcmin: float, maglim
             # a block from apps. would come back the same way through app.'s redirect (and double the wait).
             if not (err.kind == "network" or (err.kind == "http" and err.status in (404, 410))):
                 break
+    if use_cache:
+        cached, note = _from_cache("vsp", query, first)   # 2.2.21 (#21)
+        if isinstance(cached, dict):
+            cached = dict(cached)
+            cached["_cache_note"] = note
+            return cached
     raise first
 
 
@@ -3640,7 +3737,7 @@ def vsp_retry_in_background(ra_hours: float, dec_deg: float, fov_arcmin: float, 
             tries += 1
             try:
                 _VSP_LATE.pop(query, None)
-                payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit)
+                payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit, use_cache=False)   # 2.2.21
             except Exception as exc:
                 err = exc if isinstance(exc, VSPError) else VSPError("network", detail=str(exc)[:120])
                 if not err.retryable:
@@ -3665,7 +3762,7 @@ def vsp_retry_in_background(ra_hours: float, dec_deg: float, fov_arcmin: float, 
 def vsp_chart_image(ra_hours: float, dec_deg: float, fov_arcmin: float, maglimit: float = 16.0) -> tuple[bytes, dict]:
     """2.2.19 (#28): the VSP chart picture for a field, oriented like a CCD image (N up, E left), with the chart's
     JSON (chartid, image_uri). Raises VSPError (or ValueError when the answer has no picture)."""
-    payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit, orientation="ccd")
+    payload = fetch_aavso_chart(ra_hours, dec_deg, fov_arcmin, maglimit, use_cache=False, orientation="ccd")
     uri = str(payload.get("image_uri") or "")
     if not uri:
         raise ValueError("the AAVSO chart answer holds no picture")
@@ -4041,9 +4138,15 @@ def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
     query = urllib.parse.urlencode(vizier_params(source, ra_deg, dec_deg, radius_deg, columns, sort, max_rows,
                                                  box_deg, constraints))
     errors = []
-    for host in VIZIER_HOSTS:   # 2.2.20: the IDIA mirror added last
+    for host in _vizier_hosts(source):   # 2.2.20: the IDIA mirror added last; 2.2.21 (#48): a failed host last
         try:
-            text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=timeout).decode("utf-8", errors="replace")
+            try:
+                text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=timeout).decode("utf-8", errors="replace")
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if not (isinstance(code, int) and 400 <= code < 500):
+                    _vizier_failed(host)   # 2.2.21 (nit c): asked last for 10 minutes
+                raise
             rows = CatalogRows(parse_vizier_tsv(text))
             rows.markers = vizier_markers(text)   # 2.2.16 (review): kept so an incomplete answer is never cached
             return rows
@@ -4595,6 +4698,10 @@ def fetch_comparison_stars(catalog: str, ra_hours: float, dec_deg: float, fov_ar
         star["catalog"] = "AAVSO"
         star["bright"] = star["mag"]
         star["service"] = "AAVSO VSP"
+    if payload.get("_cache_note"):
+        # 2.2.21 (#21): from the lookup cache (VSP did not answer); the chart ID is the cached chart's.
+        stars = CatalogRows(stars)
+        stars.cache_note = payload["_cache_note"]
     return stars, str(payload.get("chartid") or "")
 
 
@@ -5102,7 +5209,11 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
             info["times"][cat] = _time.monotonic() - t0
             if status is not None:
                 info["gaia"] = dict(status)
-            if gaia_halves:
+            if getattr(stars, "cache_note", ""):
+                # 2.2.21 (#21): an answer from the lookup cache: said in the log and on the page, never saved again
+                # as tonight's field (it would look new).
+                info.setdefault("from_cache", {})[cat] = stars.cache_note
+            elif gaia_halves:
                 if status and status.get("esa_cached") and status.get("deep_cached"):
                     info["cached"][cat] = True
                     tell(cat, "cached", len(stars))
@@ -6387,7 +6498,8 @@ def fetch_simbad_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> 
     text, errors = None, []
     for host, wait in _simbad_hosts():   # 2.2.20: CDS, then the IDIA mirror
         try:
-            text = _http_get(host + "/simbad/sim-tap/sync?" + query, timeout=max(wait, 30)).decode("utf-8", "replace")
+            # 2.2.21 (nit c): 20 s, not 30, for a host (a failed one is asked last for 10 minutes anyway)
+            text = _http_get(host + "/simbad/sim-tap/sync?" + query, timeout=max(wait, 20)).decode("utf-8", "replace")
             break
         except Exception as exc:
             _simbad_failed(host)
@@ -6405,23 +6517,71 @@ def fetch_simbad_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> 
     return out
 
 
+class CheckSources(list):
+    """2.2.21 (#48): the services that answered the variable check (a list of names, as before), with notes:
+    .notes (plain sentences: a VSX list from the cache or from AAVSO's API) and .vsx_error (why VSX was not reached)."""
+    notes: list = []
+    vsx_error = ""
+
+
+def check_sources_text(sources) -> str:
+    """2.2.21 (#48): 'VSX + SIMBAD', or 'SIMBAD; VSX not reached' when the check ran without VSX."""
+    names = [str(s) for s in (sources or [])]
+    text = " + ".join(names)
+    if names and "VSX" not in names:
+        text += "; VSX not reached"
+    return text
+
+
+def not_in_sources_text(sources) -> str:
+    """2.2.21 (#48): the Output page's VSX column for a star no catalog lists: 'not in VSX or SIMBAD', or
+    'VSX not reached' when VSX did not answer (so it never reads as if VSX had been checked)."""
+    names = [str(s) for s in (sources or ["VSX"])]
+    if "VSX" not in names:
+        return "VSX not reached"
+    return "not in " + " or ".join(names)
+
+
 def field_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> tuple[list[dict], list[str]]:
-    """Known and suspected variables from AAVSO VSX and SIMBAD. Returns (variables, sources that answered)."""
-    found, answered = [], []
-    try:
-        for v in fetch_vsx_cone(ra_deg, dec_deg, radius_deg):
+    """Known and suspected variables from AAVSO VSX and SIMBAD. Returns (variables, sources that answered).
+    2.2.21 (#48): the sources are a CheckSources (notes on cached / API answers, and why VSX was not reached).
+    2.2.21 (nit c): VSX and SIMBAD are asked at the same time, so a dead server costs one wait, not two in a row."""
+    import threading
+    answered = CheckSources()
+    answered.notes = []
+    got: dict = {}
+
+    def ask(name, fn):
+        try:
+            got[name] = ("ok", fn(ra_deg, dec_deg, radius_deg))
+        except Exception as exc:
+            got[name] = ("error", exc)
+
+    threads = [threading.Thread(target=ask, args=(n, f), daemon=True)
+               for n, f in (("VSX", fetch_vsx_cone), ("SIMBAD", fetch_simbad_variables))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    found = []
+    state, rows = got.get("VSX", ("error", ConnectionError("VSX not reached")))
+    if state == "ok":
+        for v in rows:
             per = f", P = {v['period']:g} d" if v.get("period") else ""
             found.append({"name": v["name"], "type": v.get("type", ""), "source": "VSX",
                           "desc": f"VSX {v.get('type', '') or 'variable'}{per}", "ra": v["ra"], "dec": v["dec"],
                           "period": v.get("period")})   # 2.2.19 (#19): for the period-range check
         answered.append("VSX")
-    except Exception:
-        pass
-    try:
-        found.extend(fetch_simbad_variables(ra_deg, dec_deg, radius_deg))
+        if getattr(rows, "cache_note", ""):
+            answered.notes.append(rows.cache_note)
+        elif getattr(rows, "via", ""):
+            answered.notes.append("VSX from AAVSO's VSX API (VizieR did not answer).")
+    else:
+        answered.vsx_error = str(rows).splitlines()[0][:200] if str(rows) else rows.__class__.__name__
+    state, rows = got.get("SIMBAD", ("error", None))
+    if state == "ok":
+        found.extend(rows)
         answered.append("SIMBAD")
-    except Exception:
-        pass
     return found, answered
 
 
@@ -7673,22 +7833,94 @@ def faint_limit(mag, expected, level: float = 0.25):
     return float(m0 + (level - e0) * (m1 - m0) / (e1 - e0)) if e1 > e0 else float(m1)
 
 
-def fetch_vsx_cone(ra_deg: float, dec_deg: float, radius_deg: float) -> list[dict]:
-    """Known variables near a position, from VizieR's copy of AAVSO VSX (B/vsx/vsx)."""
-    rows = _vizier_query(
-        "B/vsx/vsx", ra_deg, dec_deg, radius_deg,
-        ["Name", "Type", "Period", "max", "min", "RAJ2000", "DEJ2000"], "Name", 2000,
-    )
+# 2.2.21 (#48): AAVSO's own VSX list API, asked when VizieR's copy of VSX does not answer. vsx.aavso.org answers
+# scripts; www.aavso.org/vsx/ is behind a Cloudflare check (403), so it is only the second try.
+VSX_API_HOSTS = ("https://vsx.aavso.org/index.php", "https://www.aavso.org/vsx/index.php")
+VSX_CONE_TIMEOUT_S = 20.0   # 2.2.21 (nit c): per VizieR host for the variable check (CfA answers in a few seconds)
+
+
+def parse_vsx_api_list(payload) -> list[dict]:
+    """2.2.21 (#48): the VSX API's api.list answer ({"VSXObjects": {"VSXObject": [...]}}; {"VSXObjects": []} when
+    nothing is there; one object may come as a dict) as fetch_vsx_cone's rows. Anything else raises ValueError."""
+    if not isinstance(payload, dict) or "VSXObjects" not in payload:
+        raise ValueError("VSX answered in an unexpected form")
+    objs = payload.get("VSXObjects")
+    if isinstance(objs, dict):
+        objs = objs.get("VSXObject", [])
+    if isinstance(objs, dict):
+        objs = [objs]
+    if not isinstance(objs, list):
+        raise ValueError("VSX answered in an unexpected form")
     out = []
-    for row in rows:
-        try:
-            ra = _angle(row.get("RAJ2000", ""), hours=True)
-            dec = _angle(row.get("DEJ2000", ""), hours=False)
-        except (ValueError, IndexError):
+    for obj in objs:
+        if not isinstance(obj, dict):
             continue
-        out.append({"name": row.get("Name", ""), "type": row.get("Type", ""), "period": _num(row.get("Period")),
-                    "max": row.get("max", ""), "min": row.get("min", ""), "ra": ra, "dec": dec})
+        try:
+            ra = _angle(obj.get("RA2000", ""), hours=True)
+            dec = _angle(obj.get("Declination2000", ""), hours=False)
+        except (ValueError, IndexError, TypeError):
+            continue
+        out.append({"name": str(obj.get("Name") or ""), "type": str(obj.get("VariabilityType") or ""),
+                    "period": _num(obj.get("Period")), "max": str(obj.get("MaxMag") or ""),
+                    "min": str(obj.get("MinMag") or ""), "ra": ra, "dec": dec})
     return out
+
+
+def fetch_vsx_api_cone(ra_deg: float, dec_deg: float, radius_deg: float, timeout: float = VSX_CONE_TIMEOUT_S):
+    """2.2.21 (#48): known variables near a position from AAVSO's VSX API (not VizieR). Raises when no host answers
+    with VSX's JSON (a Cloudflare check page is HTML, so it counts as no answer)."""
+    import urllib.parse
+    query = urllib.parse.urlencode({"view": "api.list", "ra": f"{ra_deg:.5f}", "dec": f"{dec_deg:.5f}",
+                                    "radius": f"{radius_deg:.4f}", "format": "json"})
+    errors = []
+    for base in VSX_API_HOSTS:
+        try:
+            text = _http_get(f"{base}?{query}", timeout=timeout).decode("utf-8", errors="replace")
+            return parse_vsx_api_list(json.loads(text))
+        except Exception as exc:
+            errors.append(f"{base}: {service_error_text(exc)}")
+    raise ConnectionError("the VSX API did not answer (" + "; ".join(errors) + ")")
+
+
+def fetch_vsx_cone(ra_deg: float, dec_deg: float, radius_deg: float) -> list[dict]:
+    """Known variables near a position, from VizieR's copy of AAVSO VSX (B/vsx/vsx).
+    2.2.21 (#48, #21): when VizieR does not answer, AAVSO's VSX API; then the last good answer for this spot from the
+    lookup cache (the list then has .cache_note set). Raises ConnectionError("VSX not reached …") when all fail."""
+    import lookup_cache
+    key = lookup_cache.cone_key(ra_deg, dec_deg, radius_deg)
+    try:
+        rows = _vizier_query(
+            "B/vsx/vsx", ra_deg, dec_deg, radius_deg,
+            ["Name", "Type", "Period", "max", "min", "RAJ2000", "DEJ2000"], "Name", 2000, timeout=VSX_CONE_TIMEOUT_S,
+        )
+        out = CatalogRows()
+        for row in rows:
+            try:
+                ra = _angle(row.get("RAJ2000", ""), hours=True)
+                dec = _angle(row.get("DEJ2000", ""), hours=False)
+            except (ValueError, IndexError):
+                continue
+            out.append({"name": row.get("Name", ""), "type": row.get("Type", ""), "period": _num(row.get("Period")),
+                        "max": row.get("max", ""), "min": row.get("min", ""), "ra": ra, "dec": dec})
+        if not getattr(rows, "incomplete", ""):
+            lookup_cache.put("vsx_cone", key, list(out))
+        return out
+    except Exception as exc:
+        first = exc
+    try:
+        out = CatalogRows(fetch_vsx_api_cone(ra_deg, dec_deg, radius_deg))
+        out.via = "VSX API"
+        lookup_cache.put("vsx_cone", key, list(out))
+        return out
+    except Exception as exc:
+        second = exc
+    cached, note = _from_cache("vsx_cone", key, first)
+    if isinstance(cached, list):
+        out = CatalogRows(v for v in cached if isinstance(v, dict) and "ra" in v and "dec" in v)
+        out.cache_note = note
+        return out
+    raise ConnectionError(f"VSX not reached (VizieR: {service_error_text(first)}; VSX API: "
+                          f"{str(second).splitlines()[0][:160]})")
 
 
 def sky_separation_arcsec(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
@@ -8069,8 +8301,7 @@ def scan_candidate_kind(result: dict, i: int) -> tuple[str, str]:
         return "caution", "Check first: " + "; ".join(cautions)
     if vsx is None:
         return "unchecked", "no sky positions, so not checked against VSX/SIMBAD (solve the field first)"
-    sources = " or ".join(result.get("vsx_sources") or ["VSX"])
-    return "new", f"not in {sources}"
+    return "new", not_in_sources_text(result.get("vsx_sources"))   # 2.2.21 (#48): "VSX not reached" when it was not
 
 
 def scan_period_value(per: dict):

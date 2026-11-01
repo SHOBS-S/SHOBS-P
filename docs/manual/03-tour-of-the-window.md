@@ -142,6 +142,11 @@ published method SHOBS-P uses. The quoted sentences are the acknowledgements eac
 when you publish results made with SHOBS-P.
 
 - **Save credits as text…** saves the list as `SHOBS-P_credits.txt`.
+- **Clear cached catalogs** removes the catalog answers SHOBS-P has saved: the star catalogs for your fields and the
+  last answer from each lookup (SIMBAD, VSX, the AAVSO sequence, the NASA Exoplanet Archive). It asks **Yes/No**
+  first, and then says how many files were removed. Nothing else is touched (not your settings, site or data); the
+  catalogs are fetched again the next time they are needed. See "When a service is down" in
+  [24. Troubleshooting](24-troubleshooting.md).
 - **Back** returns to the step you came from.
 
 ## What SHOBS-P remembers, and what it does not
@@ -162,7 +167,9 @@ SHOBS-P keeps a small settings file in your user folder (`C:\Users\<you>\.shobs_
 - a monochrome **Filter** you picked by hand on the Calibrate page;
 - the Discovery period range and watch list (chapters 20 and 21);
 - header values you said **No** to (so SHOBS-P does not ask again);
-- the folder you last used for series files.
+- the folder you last used for series files;
+- the last answer from each online lookup and the star catalogs for your fields (see **Clear cached catalogs**
+  above), so a lookup or a solve still works while a service is down.
 
 **Not remembered between sessions** (they start empty or at their defaults each time):
 
