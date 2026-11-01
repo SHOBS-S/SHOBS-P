@@ -20,8 +20,10 @@ This chapter covers:
 2. On the Input page, fill in the **Site** box: **Latitude (°, north +)**, **Longitude (°, east +)** (west is
    negative) and **Elevation (m)**. You type these once; SHOBS-P remembers them. Both planning tools refuse to run
    without a latitude and longitude, and the transit fit needs them later for BJD times.
-3. Make sure the computer's clock and time zone are right. Every time in the planning windows is local time, in
-   the computer's time zone.
+3. Check **Time zone** in the same box: the site's time zone (it starts as this computer's own). Every time in the
+   planning windows is the site's local time in that zone, with that night's daylight saving, and is labeled with its
+   offset from UTC, for example **Local time (UTC−5)**. The times you type (**After**, **End by**) are read as the
+   site's clock too. Make sure the computer's clock is right.
 
 See [4. Before your first night](04-before-your-first-night.md) for the Site and Optics boxes.
 
@@ -101,7 +103,8 @@ Each row is one transit. The columns are **Planet**, **V**, **Depth (%)**, **T14
 is **Zenith** instead, and says **keyhole** when the star passes above 85° (see "Alt-az mounts: the zenith keyhole"
 below).
 
-The summary line next to the buttons says how many transits matched, when it is dark, how many planets were in
+The summary line next to the buttons starts with the zone of the times in the table, for example **Local time
+(UTC−4)**, then says how many transits matched, when it is dark, how many planets were in
 your magnitude and depth range, and how old the planet list is. The planet list is downloaded from the NASA
 Exoplanet Archive and refreshed once a week; **Refresh planet list** downloads it again now.
 
@@ -113,13 +116,14 @@ To use a planet from the list:
    closed, with a save offered first.
 
 SHOBS-P switches to Transits mode if needed, looks the planet up, opens the Input page, and the status bar says
-when the transit runs and when to start, for example *"Transit 22:10–00:35, start by 21:10."*
+when the transit runs and when to start, for example *"Transit 22:10–00:35, start by 21:10 local time (UTC−4)."*
 
 Other buttons in this window:
 
 - **Same search on Swarthmore…** opens the Swarthmore Transit Finder in your browser with the same site and limits,
   so you can compare.
-- **Export CSV…** saves the list as `transits_<date>.csv`.
+- **Export CSV…** saves the list as `transits_<date>.csv`. Its times are the site's local times; the last column,
+  `local_utc_offset`, gives their offset (for example `UTC-4`).
 
 If nothing matches, the table says *"No transits match. Loosen a limit (altitude, Sun, magnitude, depth, or the
 time window)."*
@@ -142,6 +146,8 @@ To plan the coming transits:
 
 ![The Transit planner window](img/16-transit-planner.png)
 
+The line above the table gives the zone of its times, for example **Local time (UTC−4)**, or **Local time (UTC−4 /
+UTC−5)** when the nights listed run across a daylight-saving change (each night's times use that night's offset).
 The table shows **Night of**, **Ingress**, **Mid**, **Egress**, **Altitude in / mid / out**, **Sun at mid**,
 **Moon (lit, distance)**, **± ephemeris** and **Coverage**:
 
@@ -154,7 +160,8 @@ when the star passes above 85° during the transit.
 
 **± ephemeris** is how uncertain the predicted time is on that date. If it is large (tens of minutes), take more
 baseline on both sides so the transit cannot slip out of your window. **Export CSV…** saves the list as
-`<planet>_transits.csv` (the planet's name without spaces, e.g. `TrES-3b_transits.csv`). With no observable transit in the range the table says *"No observable transits in this range."*
+`<planet>_transits.csv` (the planet's name without spaces, e.g. `TrES-3b_transits.csv`), with each night's UTC
+offset in its last column, `local_utc_offset`. With no observable transit in the range the table says *"No observable transits in this range."*
 
 ## How much baseline
 

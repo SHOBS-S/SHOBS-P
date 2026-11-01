@@ -193,13 +193,14 @@ flags did not catch it.
 To trim a stretch:
 
 1. Drag across the plot from the start to the end of the bad stretch. The **from** and **to** boxes fill with the
-   local times, and the status bar says how many points are inside.
-   Or type the times yourself: local clock time (`0042` or `00:42`), or a BJD_TDB. Leave **from** empty to trim
+   site's local times, and the status bar says how many points are inside.
+   Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
+   on the Input page), or a BJD_TDB. Leave **from** empty to trim
    from the start, or **to** empty to trim to the end.
 2. Click **Trim and refit** (or press Enter in either box).
 
 The trimmed points show as faint × in a gray band labeled *trimmed (not fitted)*. They are left out of the fit, the
-verdict, the rms, the comp check and every saved file, and the report's NOTES record the trimmed span. Each **Trim
+verdict, the rms, the comp check and every saved file, and the report's NOTES record the trimmed span (in BJD_TDB, with the site's local times and their UTC offset). Each **Trim
 and refit** adds another span; **Clear trim** puts every point back and refits.
 
 ![Dragging a trim span across the transit plot](img/17-trim.png)

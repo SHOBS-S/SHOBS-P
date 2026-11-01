@@ -136,9 +136,15 @@ where the frames point; a few arcminutes off is fine.
 ## Site and Optics
 
 These boxes are described in chapter 4, including the **Mount** choice. They are usually filled already: the site,
-telescope, focal length, pixel size and mount are remembered, and **Scan folders** fills empty boxes from your FITS
+time zone, telescope, focal length, pixel size and mount are remembered, and **Scan folders** fills empty boxes from your FITS
 headers. When you have not saved a focal length, pixel size or mount yet, the values from your own lights' headers are
 remembered as yours (never those of someone else's frames, MicroObservatory's or a loaded series).
+
+**Time zone** (in the Site box) is the site's time zone, for example `America/New_York`. Every local time in
+SHOBS-P uses it, labeled like **Local time (UTC−5)**. Type part of a name (`Phoenix`, `Warsaw`) to narrow the list,
+then pick one. A name SHOBS-P does not know is not used: the status bar says so, and this computer's zone is used
+until you pick one from the list. A series file keeps its site's time zone; a series saved before version 2.2.21 has
+none and uses this computer's zone.
 
 ## Press Scan folders
 
@@ -185,7 +191,9 @@ on. If the `OBJECT` names a different star in another place, it asks the same **
 
 **Frames from another site.** If the header's site is more than 50 km from yours, SHOBS-P asks whether to use the
 site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
-their setup; your own comes back automatically the next time you scan a folder of your own lights.
+their setup; your own comes back automatically the next time you scan a folder of your own lights. FITS headers do
+not say the site's time zone, so the log reminds you to check the **Time zone** box: pick the frames' site zone there
+so their local times are right.
 
 **Header values that differ from yours.** If the header's latitude, longitude, elevation, aperture, focal length or
 pixel size differs from your boxes, SHOBS-P lists the differences and asks **Use the header values?** **No** keeps
@@ -212,7 +220,8 @@ changing the box when this is your own telescope.
 
 **MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them. Newer
 MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
-their site, focal length and frame size. Their site and optics are never saved as yours.
+their site, focal length and frame size. Their site and optics are never saved as yours. Their time zone is set to
+`America/Phoenix` (Arizona, no daylight saving), and yours comes back with your own setup.
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself
 binned the color frames, the log notes it after calibration (chapter 7). Changing **Binning** after calibrating means

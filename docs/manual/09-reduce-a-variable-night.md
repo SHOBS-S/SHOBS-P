@@ -134,7 +134,7 @@ Click a row to zoom the light curve and check-star plot to that night. Click it 
 
 ### The four plots
 
-- **Top left, the light curve.** One color per night. Gray **×** are flagged points, left out. Points ringed **○** come after a meridian flip. If you choose a **Bin** (for example **Night** or **30 min**), black **◆** show the binned means. The **Time axis** box switches between **JD**, **UTC** and **Local time**. Hover over a point to see its details.
+- **Top left, the light curve.** One color per night. Gray **×** are flagged points, left out. Points ringed **○** come after a meridian flip. If you choose a **Bin** (for example **Night** or **30 min**), black **◆** show the binned means. The **Time axis** box switches between **JD**, **UTC** and **Local time**. Local time is the site's (the **Time zone** in the Site box), and the axis says its offset, for example **Local time (UTC−5)**. Hover over a point to see its details.
 - **Top right, the phase plot.** The used points folded on the best period from the periodogram. Its title says **Folded** only when the period is significant; otherwise it says **Best peak (not significant)**. Chapter 13 explains.
 - **Bottom left, the check star.** It should be flat. Its title gives its scatter and catalog magnitude.
 - **Bottom right, the periodogram** (Lomb-Scargle). See chapter 13.

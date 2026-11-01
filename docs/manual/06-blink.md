@@ -32,11 +32,12 @@ SHOBS-P reads frames ahead in the background, so after the first pass, blinking 
 
 The line above the picture describes the frame on screen, for example:
 
-    Frame 222  21:53:12   keep   (61 of 300 in the list, 3 rejected)   Light_SZ Lyn_120s_0222.fit  exp 120.0s
+    Frame 222  21:53:12 UTC−4   keep   (61 of 300 in the list, 3 rejected)   Light_SZ Lyn_120s_0222.fit  exp 120.0s
 
 - **Frame 222** is the frame's own number, taken from the digits at the end of its file name. The same number is used
   in the log and in the light-curve file, so you can find a frame again later.
-- **21:53:12** is the local time the exposure started.
+- **21:53:12 UTC−4** is the site's local time the exposure started, with its offset from UTC (the site's time zone
+  is set in the Site box on the Input page, chapter 4).
 - **keep** or **REJECTED** shows whether the frame will be used.
 - **(61 of 300 in the list, …)** is its place in the list and how many frames are rejected so far.
 
