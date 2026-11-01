@@ -256,6 +256,9 @@ class TransitPage:
         _rbutton(text="Save plot PNG…", command=self.save_png)
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
         _rbutton(text="Save field image…", command=app.save_field_image)
+        # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights)
+        self.multinight_series_button = _rbutton(text="Multi-night fit…", command=self.open_multinight_series)
+        self.multinight_series_button.state(["disabled"])
         try:
             rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
         except Exception:
@@ -278,6 +281,10 @@ class TransitPage:
         self.prog_text = StringVar(value="")
         self.prog_label = ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel")
         self.prog_label.pack(side=LEFT, padx=8)
+        # 2.2.21 (#44): after a report or fit CSV is saved in a series of 2 or more nights, where the joint fit is
+        self.series_hint = StringVar(value="")
+        self.series_hint_label = ttk.Label(prog, textvariable=self.series_hint, style="Hint.TLabel")
+        self.series_hint_label.pack(side=LEFT, padx=8)
         self._fitting = False
         self._show_progress()
 
@@ -433,6 +440,43 @@ class TransitPage:
         self._multinight = multinight.MultiNightWindow(self.app, self)
         return self._multinight
 
+    def open_multinight_series(self):
+        """2.2.21 (#44): Multi-night fit…: the Multi-night window with every night of the open Transits series."""
+        import multinight
+        if len(multinight.series_transit_nights(self.app)) < 2:
+            messagebox.showinfo("SHOBS-P", "Multi-night fit… needs a Transits series with at least two nights. "
+                                           "Multi-night… (above) takes reports and fit CSVs instead.")
+            return None
+        win = self.open_multinight()
+        win.load_series_nights()
+        return win
+
+    def update_series_button(self) -> int:
+        """2.2.21 (#44): Multi-night fit… enabled when the open Transits series has 2 or more nights."""
+        import multinight
+        n = len(multinight.series_transit_nights(self.app))
+        try:
+            self.multinight_series_button.state(["!disabled"] if n >= 2 else ["disabled"])
+        except Exception:
+            pass
+        if n < 2 and getattr(self, "series_hint", None) is not None:
+            self.series_hint.set("")
+        win = getattr(self, "_multinight", None)
+        if win is not None:
+            try:
+                win._series_state()
+            except Exception:
+                pass
+        return n
+
+    def _series_hint_after_save(self):
+        """2.2.21 (#44): after a save, a short line pointing at Multi-night fit… when the series has 2+ nights."""
+        n = self.update_series_button()
+        if n >= 2 and self.report is None:
+            text = f"This series has {n} transit nights: fit them together with Multi-night fit… (Results row)."
+            self.series_hint.set(text)
+            self.app.log(text)
+
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
         """List the nights and show the planet. shown=True when the page has just been opened: then a fit made
@@ -455,6 +499,7 @@ class TransitPage:
         self._check_stale(auto=shown)
         self._count_text()
         self._update_comp_buttons()
+        self.update_series_button()   # 2.2.21 (#44)
 
     def _target_status_shown(self) -> dict:
         """2.2.21 (#32, item 14): the App's TOI/ExoClock answer when it is for the planet this page fits, else {}."""
@@ -2484,6 +2529,11 @@ class TransitPage:
             return
         app.log(f"Transit fit CSV: {fit_path} ({n} rows)")
         app.status.set(f"Wrote {os.path.basename(path) + ' and ' if path else ''}{os.path.basename(fit_path)}")
+        # 2.2.21 (#44): the fit CSV is recorded in the series for its night, so Multi-night fit… finds it
+        if self._fit_nights():
+            import multinight
+            app._remember_report(multinight.FIT_CSV_KEY, self._fit_nights(), fit_path)
+        self._series_hint_after_save()
 
     def _write_png(self, path: str):
         import io
@@ -2590,6 +2640,7 @@ class TransitPage:
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
                               "the AAVSO Exoplanet Database (check its current instructions)")
+        self._series_hint_after_save()   # 2.2.21 (#44)
 
     def _write_settings(self, report_path: str, meta: dict) -> str:
         """2.2.19 (#40): <report stem>_settings.txt beside the report: the full settings block. Never costs the
