@@ -116,10 +116,26 @@ def _finish_night(n: dict) -> dict:
         if med > 0:
             n["flux"], n["err"] = n["flux"] / med, n["err"] / med
     n.setdefault("notes", [])
-    if am is None:
-        n["notes"].append(("info", "no airmass column: this night's baseline cannot follow airmass (tick time "
-                                   "slope if it drifts)"))
+    # 2.2.20 (#45): no "info" note for a missing airmass any more: check_nights says it (⚠) when the other nights
+    # have airmass, since only then does it change the fit.
     return n
+
+
+# 2.2.20 (#45): a night without airmass among nights with it (and airmass detrending on).
+NO_AIRMASS_WARN = ("⚠ No airmass in this file: its baseline is fitted against time only, unlike the other nights. "
+                   "Tc may shift.")
+TIME_ONLY_BUTTON = "Fit every night against time only"
+
+
+def mixed_airmass(nights: list, detrend_airmass: bool = True) -> list:
+    """2.2.20 (#45): the nights in use that have no airmass while other nights in use do (with airmass detrending on):
+    their baseline cannot follow airmass while the others' does, so their Tc may shift. [] when all nights are fitted
+    the same way."""
+    if not detrend_airmass:
+        return []
+    use = [n for n in nights if n.get("use")]
+    without = [n for n in use if n.get("airmass") is None]
+    return without if without and len(without) < len(use) else []
 
 
 def load_report(path: str, radec=None) -> dict:
@@ -173,7 +189,10 @@ def load_fit_csv(path: str, radec=None) -> dict:
         raise NightError("not a SHOBS-P transit-fit CSV (no rel_flux / rel_flux_err columns)")
     i_t, i_f, i_e = 0, low.index("rel_flux"), low.index("rel_flux_err")
     i_flag = low.index("flag") if "flag" in low else None
-    t, f, e = [], [], []
+    # 2.2.20 (#45): CSVs from 2.2.20 on carry airmass and the flip segment (older ones: neither)
+    i_am = low.index("airmass") if "airmass" in low else None
+    i_seg = low.index("segment") if "segment" in low else None
+    t, f, e, a, after = [], [], [], [], []
     for row in rows:
         if i_flag is not None and len(row) > i_flag and "trimmed" in row[i_flag]:
             continue
@@ -181,6 +200,9 @@ def load_fit_csv(path: str, radec=None) -> dict:
         if None in vals:
             continue
         t.append(vals[0]); f.append(vals[1]); e.append(vals[2])
+        av = _float(row[i_am]) if i_am is not None and len(row) > i_am else None
+        a.append(av if av is not None else np.nan)
+        after.append(i_seg is not None and len(row) > i_seg and row[i_seg].strip().lower() == "after flip")
     if not t:
         raise NightError("the CSV has no fitted rows")
     t_old = np.asarray(t)
@@ -190,6 +212,7 @@ def load_fit_csv(path: str, radec=None) -> dict:
     planet = filt = date = ""
     single = None
     verdict = ""
+    t_flip = None
     for c in comments:
         m = re.search(r"Transit fit: planet ([^;]*);\s*filter ([^;]*);\s*Tc ([0-9.]+) \+/- ([0-9.]+)", c)
         if m:
@@ -197,6 +220,14 @@ def load_fit_csv(path: str, radec=None) -> dict:
             single = (float(m.group(3)) + shift, float(m.group(4)))
             v = re.search(r"verdict (\w+)", c)
             verdict = v.group(1) if v else ""
+        m = re.search(r"Meridian flip at (?:BJD_TDB|JD_UTC|HJD_UTC)\s+([0-9.]+)", c)
+        if m:
+            t_flip = float(m.group(1)) + shift
+    aft = np.asarray(after, dtype=bool)
+    if t_flip is None and aft.any() and (~aft).any():
+        t_flip = 0.5 * (float(t_new[~aft].max()) + float(t_new[aft].min()))
+    am = np.asarray(a, dtype=float)
+    am = am if np.isfinite(am).all() else None
     m = FIT_CSV_NAME.match(os.path.basename(path))
     if m:
         planet = planet or m.group("planet")
@@ -204,7 +235,8 @@ def load_fit_csv(path: str, radec=None) -> dict:
         date = m.group("date").upper()
     night = {"kind": "csv", "path": path, "source": os.path.basename(path), "planet": planet, "host": "",
              "filter": filt or "", "obsdate": date, "software": "SHOBS-P", "t": t_new, "flux": f, "err": e,
-             "airmass": None, "t_flip": None, "single_tc": single, "time_note": note, "notes": []}
+             "airmass": am, "t_flip": t_flip, "single_tc": single, "single_from": "the CSV" if single else "",
+             "time_note": note, "notes": []}
     if verdict == "none":
         night.update(user_off=True, off_reason="its single-night fit found no transit")
     return _finish_night(night)
@@ -250,10 +282,11 @@ def night_label(n: dict) -> str:
     return n.get("source", "")
 
 
-def check_nights(nights: list, planet_name: str, eph: dict | None = None) -> None:
+def check_nights(nights: list, planet_name: str, eph: dict | None = None, detrend_airmass: bool = True) -> None:
     """Sets each night's "use" and "status" (level, text): ✖ another planet, the same night twice, too few points or
     no predicted transit in the data (left out); ⚠ a filter other than most nights' (depth and limb darkening may
-    differ). Nights the user left out by hand ("user_off") stay out."""
+    differ). Nights the user left out by hand ("user_off") stay out. 2.2.20 (#45): ⚠ a night with no airmass among
+    nights with it (airmass detrending on): see mixed_airmass."""
     want = norm_name(planet_name)
     kept = []
     for n in nights:
@@ -289,12 +322,17 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None) -> Non
                                                          + [t for lvl, t in n.get("notes", []) if lvl == "info"]) + ")")
         kept.append(n)
     # review (#18): the filter most of the nights in use have (left-out nights do not count)
-    filters = [str(n.get("filter") or "").upper() for n in kept]
-    main_filter = max(set(filters), key=filters.count) if filters else ""
+    # 2.2.20: a night whose filter is not known (an older fit CSV) neither votes nor counts as another filter
+    filters = [str(n.get("filter") or "").upper() for n in kept if str(n.get("filter") or "").strip()]
+    main_filter = max(sorted(set(filters)), key=filters.count) if filters else ""
     for n in kept:
-        if main_filter and str(n.get("filter") or "").upper() != main_filter:
+        if main_filter and str(n.get("filter") or "").strip() and str(n.get("filter") or "").upper() != main_filter:
             n["status"] = ("warn", f"⚠ filter {n.get('filter') or '?'} (most nights {main_filter}): depth and limb "
                                    "darkening may differ; consider Depth per filter")
+    # 2.2.20 (#45): never "✔ ready" for a night whose baseline is fitted differently from the others'
+    for n in mixed_airmass(kept, detrend_airmass):
+        prev = n["status"][1] if n["status"][0] == "warn" else ""
+        n["status"] = ("warn", NO_AIRMASS_WARN + ("; " + prev.lstrip("⚠ ") if prev else ""))
 
 
 # ---- Joint model ------------------------------------------------------------------------------------------------
@@ -631,6 +669,19 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "per_filter": per_filter}
 
 
+def quick_single_tc(n: dict, planet: dict, detrend_airmass: bool = True, detrend_time: bool = False) -> tuple:
+    """2.2.20 (#45): (Tc, sigma) of one night alone by least squares (transit_core.lsq_fit: Jacobian errors after the
+    usual rescaling), for the Single-night Tc column of a file that does not carry its own Tc. About a quarter of a
+    second per night."""
+    after = (n["t"] >= n["t_flip"]) if n.get("t_flip") is not None else None
+    am = n["airmass"] if n.get("airmass") is not None else np.full(len(n["t"]), np.nan)
+    s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, detrend_airmass, detrend_time, after_flip=after)
+    e = float(s["err"].get("tc", float("nan")))
+    if not math.isfinite(e) or e <= 0:
+        raise ValueError("no finite Tc error")
+    return float(s["p"]["tc"]), e
+
+
 def prescaled(night: dict) -> bool:
     """Review (#18): errors already scaled by a SHOBS-P single-night fit (SHOBS-P reports, fit CSVs, the page)."""
     return night.get("kind") in ("csv", "current") or str(night.get("software") or "").upper().startswith("SHOBS-P")
@@ -959,15 +1010,29 @@ OC_COLORS = {"input": "#1565c0", "alt": "#c2185b", "own": "#0b6e4f"}
 def draw(fig, fit: dict, a: dict, title: str = "") -> None:
     """O − C panels (one per ephemeris: input, alternative, the nights' own) on the left; the nights stacked with the
     joint model, and all nights folded and binned at the bottom, on the right. Sizes in points, so it reads at any
-    display scaling."""
+    display scaling.
+    2.2.20 (item 1, TOI-2046 b, 4 nights): few y ticks on the O − C panels (labels never overlap), titles that fit,
+    ONE legend for all panels below them (never over a point), the nights' offset set from their number, depth and
+    scatter so they never overlap, and each night's label in the right margin beside its own curve."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.ticker import MaxNLocator
+
     fig.clear()
+    # titles sized to the panels' width (an 8.5 pt character is about 4.7 pt wide): never clipped
+    fig_w_pt = float(fig.get_size_inches()[0]) * 72.0
+    oc_chars = max(int(fig_w_pt * 0.40 / 4.9), 18)
+    lc_chars = max(int(fig_w_pt * 0.44 / 4.9), 24)
     panels = [k for k in ("input", "alt", "own") if a.get(k)]
-    gs = fig.add_gridspec(max(len(panels), 1), 2, width_ratios=(1.0, 1.15))
+    # the bottom row holds the shared legend (outside every axes)
+    gs = fig.add_gridspec(max(len(panels), 1) + 1, 2, width_ratios=(1.0, 1.25),
+                          height_ratios=[1.0] * max(len(panels), 1) + [0.16])
     ep = np.asarray(a["epochs"], dtype=float)
     span = max(ep.max() - ep.min(), 1.0)
     xs = np.linspace(ep.min() - 0.08 * span, ep.max() + 0.08 * span, 200)
     flags = outlier_flags(a)
     ax0 = None
+    handles = {}
     for i, key in enumerate(panels):
         ax = fig.add_subplot(gs[i, 0], sharex=ax0)
         ax0 = ax0 or ax
@@ -977,49 +1042,65 @@ def draw(fig, fit: dict, a: dict, title: str = "") -> None:
         oc = np.array([r["oc_min"] for r in rows])
         fe = np.array([r["fit_err_min"] for r in rows])
         color = OC_COLORS[key]
+        band_drawn = False
         if key == "own":
             pred, psig = linear_prediction(eph, xs)
-            ax.fill_between(xs, -psig * 1440, psig * 1440, color=color, alpha=0.12, lw=0,
-                            label="ephemeris ±1σ")
+            ax.fill_between(xs, -psig * 1440, psig * 1440, color=color, alpha=0.12, lw=0)
+            band_drawn = True
             lab = "vs the nights' own ephemeris"
         else:
             if eph.get("t0_err") is not None or eph.get("period_err") is not None:
                 # the ephemeris's propagated ±1σ, in its own epoch count (an alternative counts from its own T0)
                 off = rows[0]["epoch"] - ep[0]
                 band = np.hypot(eph.get("t0_err") or 0.0, (xs + off) * (eph.get("period_err") or 0.0)) * 1440
-                ax.fill_between(xs, -band, band, color=color, alpha=0.12, lw=0, label="ephemeris ±1σ")
+                ax.fill_between(xs, -band, band, color=color, alpha=0.12, lw=0)
+                band_drawn = True
             lab = "vs " + ("input" if key == "input" else "alternative") + f": {eph.get('source', '')}"
         ax.axhline(0, color="#555", lw=0.8)
-        ax.errorbar(ep, oc, yerr=fe, fmt="o", color=color, ms=5, capsize=3, lw=1.2, label="Tc ± fit σ")
+        ax.errorbar(ep, oc, yerr=fe, fmt="o", color=color, ms=5, capsize=3, lw=1.2)
+        handles[f"pt:{key}"] = Line2D([], [], marker="o", ls="", color=color, ms=5,
+                                      label=("Tc ± fit σ, " + ("own" if key == "own" else key)))
+        if band_drawn:
+            handles["band"] = Patch(facecolor="#7a8a94", alpha=0.25, lw=0, label="ephemeris ±1σ (shaded)")
         if key == "own":
             for x_, y_, fl in zip(ep, oc, flags):
                 if fl:
                     ax.plot(x_, y_, "x", color="#c62828", ms=11, mew=2)
-        ax.set_title(_short(lab, 70), fontsize=9, loc="left")
-        ax.set_ylabel("O − C (min)", fontsize=9)
-        ax.tick_params(labelsize=8)
+                    handles["out"] = Line2D([], [], marker="x", ls="", color="#c62828", ms=8, mew=2,
+                                            label="outlier (> 3σ)")
+        # short title (a long ephemeris source no longer runs off the panel; the full one is in the summary)
+        ax.set_title(_short(lab, oc_chars), fontsize=8.5, loc="left", pad=3)
+        ax.set_ylabel("O − C (min)", fontsize=8.5)
+        ax.tick_params(labelsize=7.5)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4, symmetric=True, prune="both"))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=6, integer=True))
         lim = max(float(np.max(np.abs(oc) + fe)) * 1.3, 1.0)
         if key != "own" and eph.get("t0_err") is not None:
             off = rows[0]["epoch"] - ep[0]
             bmax = float(np.max(np.hypot(eph.get("t0_err") or 0.0, (xs + off) * (eph.get("period_err") or 0.0)))) * 1440
             lim = max(lim, min(1.1 * bmax, 3 * lim))
         ax.set_ylim(-lim, lim)
-        ax.legend(fontsize=7, loc="best", framealpha=0.8)
         if i < len(panels) - 1:
             ax.tick_params(labelbottom=False)
         else:
             ax.set_xlabel("Epoch (input ephemeris count)" if a.get("counted_from", "input") == "input" else
-                          "Epoch (counted from the first night)", fontsize=9)
+                          "Epoch (counted from the first night)", fontsize=8.5)
+    if handles:
+        lax = fig.add_subplot(gs[-1, 0])
+        lax.axis("off")
+        order = [h for k in ("pt:input", "pt:alt", "pt:own", "band", "out") for kk, h in handles.items() if kk == k]
+        lax.legend(handles=order, loc="center", ncol=min(len(order), 3), fontsize=7.5, frameon=False,
+                   handletextpad=0.4, columnspacing=1.2, borderaxespad=0.0)
     # Stacked light curves.
     axl = fig.add_subplot(gs[:, 1])
     nights = [fit["nights"][i] for i in a["order"]]
     g0 = fit["shape"][fit["groups"][0]]
     depth = g0["depth"][0]
-    rms = max(n["rms"] for n in nights)
-    step = max(1.6 * depth, 4 * rms, 0.005)
+    step = lc_offset(fit, nights)
     prob = fit["problem"]
     best = fit["best"]
     hours_all, flux_all = [], []
+    label_y = []
     for row, n in enumerate(nights + [None]):
         off = -row * step
         if n is None:
@@ -1035,8 +1116,7 @@ def draw(fig, fit: dict, a: dict, title: str = "") -> None:
             tc_rel = best[prob._in[j][0]]
             mod = prob.night_model(best, j, t=tc_rel + hh / 24.0, transit_only=True, exact=True)
             axl.plot(hh, mod + off, color="#c2185b", lw=1.6)
-            axl.text(1.0, 1.0 + off + 0.25 * step, "all nights, 5-min bins", transform=axl.get_yaxis_transform(),
-                     ha="right", va="bottom", fontsize=8, color="#0b6e4f")
+            label_y.append((1.0 + off - depth / 2, "all nights\n5-min bins", "#0b6e4f"))
             continue
         j = n["index"]
         h = (n["t"] - n["tc"][0]) * 24.0
@@ -1050,14 +1130,48 @@ def draw(fig, fit: dict, a: dict, title: str = "") -> None:
         mod = prob.night_model(best, j, t=tc_rel + hh / 24.0, transit_only=True, exact=True)
         axl.plot(hh, mod + off, color="#c2185b", lw=1.3)
         ep_i = int(a["epochs"][row])
-        axl.text(0.01, 1.0 + off + 0.25 * step, f"{n['label']} · epoch {ep_i} · {n.get('filter') or ''}",
-                 transform=axl.get_yaxis_transform(), ha="left", va="bottom", fontsize=8, color="#33424d")
-    axl.set_xlabel("Hours from each night's Tc", fontsize=9)
-    axl.set_ylabel("Detrended relative flux (offset per night)", fontsize=9)
-    axl.tick_params(labelsize=8)
+        label_y.append((1.0 + off - depth / 2, f"{n['label']}\nepoch {ep_i}" + (f" · {n.get('filter')}"
+                                                                                  if n.get("filter") else ""),
+                        "#33424d"))
+    # 2.2.20 (item 1): the labels in the right margin, each beside its own curve (outside the data)
+    for y, text, color in label_y:
+        axl.annotate(text, xy=(1.0, y), xycoords=("axes fraction", "data"), xytext=(4, 0),
+                     textcoords="offset points", ha="left", va="center", fontsize=7.5, color=color,
+                     annotation_clip=False)
+    axl.set_xlabel("Hours from each night's Tc", fontsize=8.5)
+    axl.set_ylabel("Detrended relative flux (offset per night)", fontsize=8.5)
+    axl.tick_params(labelsize=7.5)
     k = g0["k"]
-    axl.set_title(_short(title or "", 80) + (" — " if title else "") + f"joint: Rp/R* {k[0]:.4f} ± {k[1]:.4f}, "
-                  f"a/R* {fit['shape']['a_rs'][0]:.2f}, b {fit['shape']['b'][0]:.2f}", fontsize=9, loc="left")
+    head = (f"joint: Rp/R* {k[0]:.4f} ± {k[1]:.4f}, a/R* {fit['shape']['a_rs'][0]:.2f}, "
+            f"b {fit['shape']['b'][0]:.2f}")
+    full = ((_short(title, 30) + " — ") if title else "") + head
+    if len(full) > lc_chars:
+        full = ((_short(title, lc_chars) + "\n") if title else "") + _short(head, lc_chars)
+    axl.set_title(full, fontsize=8.5, loc="left", pad=3)
+    # room on the right for the night labels (constrained layout keeps annotations outside the axes in view)
+    try:
+        fig.get_layout_engine().set(w_pad=0.04, h_pad=0.04)
+    except Exception:
+        pass
+
+
+def lc_offset(fit: dict, nights: list) -> float:
+    """2.2.20 (item 1): the vertical step between stacked nights: the widest night's own spread (its lowest to its
+    highest point, 0.2-99.8 %, so one wild point does not push everything apart) plus a gap of a tenth of that, so a
+    night's lowest points never reach the next night's highest; at least the depth plus 4× the worst scatter, a
+    little more as the number of nights grows (fewer pixels per night), and never less than half a percent."""
+    g0 = fit["shape"][fit["groups"][0]]
+    depth = max(float(g0["depth"][0]), 0.0)
+    rms = max((float(n["rms"]) for n in nights), default=0.0)
+    spread = 0.0
+    for nt in nights:
+        d = np.asarray(nt.get("detrended", []), dtype=float)
+        d = d[np.isfinite(d)]
+        if d.size:
+            lo, hi = np.percentile(d, [0.2, 99.8])
+            spread = max(spread, float(hi - lo))
+    n = len(nights) + (1 if len(nights) >= 2 else 0)
+    return max(1.1 * spread, depth + 4.0 * rms, 1.6 * depth, 0.005) * (1.0 + 0.04 * max(n - 3, 0))
 
 
 def _short(text: str, n: int) -> str:
@@ -1083,7 +1197,9 @@ def _bin(x, y, width):
 # ---- The window (Transit fit page → Multi-night…) ---------------------------------------------------------------
 from tkinter import BOTH, END, LEFT, RIGHT, W, X, BooleanVar, StringVar, Text, Toplevel, filedialog, messagebox, ttk  # noqa: E402
 
+import transit_posterior as tpost  # noqa: E402
 import transit_ui as tui  # noqa: E402
+from busy_bar import BusyBar  # noqa: E402   2.2.20: the one delay indicator
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -1093,6 +1209,53 @@ except ImportError:      # pragma: no cover
     Figure = None
 
 LEVEL_COLORS = {"ok": "#2e7d32", "info": "#33424d", "warn": "#b35c00", "bad": "#c62828", "off": "#7a8a94"}
+
+
+def progress_words(n_nights: int, phase: str, done: int, total: int) -> str:
+    """2.2.20 (busy bar): the busy bar's words for each step of the joint fit, counts in the words."""
+    head = f"Fitting {n_nights} nights…"
+    if phase == "prep":
+        return f"{head} each night alone ({min(done + 1, total):,} of {total:,})" if done < total else \
+            f"{head} each night alone done"
+    if phase == "joint":
+        return f"{head} joint least-squares fit (a few seconds)"
+    if phase == "burn-in":
+        return f"{head} MCMC burn-in {done:,} of {total:,}"
+    if phase == "step":
+        return f"{head} step {done:,} of {total:,}"
+    return f"{head} {phase} {done:,} of {total:,}"
+
+
+def corner_result(fit: dict, title: str = "") -> dict:
+    """2.2.20 (item 5): the joint fit in the shape transit_posterior.corner_figure reads (as a single-night result):
+    the chain, the free parameter names ("k:all", "tc:0", …), each night's Tc reference day, plain labels ("Tc
+    15-OCT-2026", "Rp/R* SG" with depth per filter) and the prior-bound ⚠ flags (same rules as one night)."""
+    prob = fit["problem"]
+    labels, short, t_refs = {}, {}, {}
+    by_index = {n["index"]: n for n in fit["nights"]}
+    days = [str(n.get("label") or "")[:6] for n in fit["nights"]]
+    for nm in fit["free"]:
+        base, _sep, rest = nm.partition(":")
+        if base in ("tc", "c0", "c_am", "c_t", "step"):
+            j = int(rest)
+            lab = by_index.get(j, {}).get("label") or f"night {j + 1}"
+            labels[nm] = f"{tpost.LABELS.get(base, base)} {lab}"
+            # axes: "Tc 15-OCT" (the year only when two nights share a day and month)
+            day = lab[:6] if days.count(lab[:6]) == 1 and len(lab) > 6 else lab
+            short[nm] = f"{tpost.LABELS.get(base, base) if base == 'tc' else base} {day}"
+            if base == "tc":
+                t_refs[nm] = prob.nights[j]["t_ref"]
+        elif base in ("k", "q1", "q2"):
+            labels[nm] = tpost.LABELS.get(base, base) + ("" if rest == "all" else f" {rest}")
+    out = {"chain": fit["chain"], "free_params": list(fit["free"]), "labels": labels, "short_labels": short,
+           "t_refs": t_refs,
+           "planet": dict(fit.get("planet") or {}, name=title or (fit.get("planet") or {}).get("name") or ""),
+           "corner_title": f"joint MCMC posterior, {len(fit['nights'])} nights"}
+    try:
+        out["bound_flags"] = tpost.prior_bound_flags(prob, fit["chain"]["flat"], labels)
+    except Exception:
+        out["bound_flags"] = []
+    return out
 
 
 def _eph_from_planet(p: dict | None) -> dict | None:
@@ -1143,29 +1306,75 @@ class MultiNightWindow:
                                              command=self.refresh_nights)
         self.current_check.pack(side=LEFT, padx=(14, 0))
 
+        # 2.2.20 (item 1): the results row and the window's own busy bar (lower left; house rule) at the bottom, then
+        # everything else in two panes with a draggable divider: the tables and settings above, the plots below
+        # (the plots take the free height when the window grows).
+        bottom = ttk.Frame(top, style="Card.TFrame")
+        bottom.pack(fill=X, side="bottom", pady=(6, 0))
+        self.busy = BusyBar(bottom, label_style="Hint.TLabel", frame_style="Card.TFrame")
+        self.busy.pack(side=LEFT)
+        ttk.Label(bottom, text="Results", style="Hint.TLabel").pack(side=LEFT, padx=(0, 6))
+        ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton", command=self.save_csv).pack(side=LEFT)
+        ttk.Button(bottom, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
+        # 2.2.20 (item 5): the joint fit's corner plot (enabled once the nights are fitted)
+        self.corner_button = ttk.Button(bottom, text="Corner plot…", command=self.open_corner)
+        self.corner_button.pack(side=LEFT)
+        self.corner_button.state(["disabled"])
+        ttk.Button(bottom, text="Close", command=self.close).pack(side=RIGHT)
+        panes = ttk.PanedWindow(top, orient="vertical")
+        panes.pack(fill=BOTH, expand=True, pady=(6, 0))
+        self.panes = panes
+        upper = ttk.Frame(panes, style="Card.TFrame")
+        lower = ttk.Frame(panes, style="Card.TFrame")
+        panes.add(upper, weight=0)
+        panes.add(lower, weight=1)
+        self.upper = upper
+
         cols = ("use", "night", "source", "points", "filter", "single", "status")
-        self.tree = ttk.Treeview(top, columns=cols, show="headings", height=4, selectmode="extended")
+        tbox = ttk.Frame(upper, style="Card.TFrame")
+        tbox.pack(fill=X, pady=(0, 2))
+        self.tree = ttk.Treeview(tbox, columns=cols, show="headings", height=4, selectmode="extended")
         for col, label, width, stretch in (("use", "Use", 44, False), ("night", "Night", 110, False),
-                                           ("source", "File", 260, False), ("points", "Points", 60, False),
+                                           ("source", "File", 230, True), ("points", "Points", 60, False),
                                            ("filter", "Filter", 60, False),
                                            ("single", "Single-night Tc (BJD_TDB)", 190, False),
-                                           ("status", "Status", 320, True)):
+                                           ("status", "Status", 420, True)):
             tui._col(self.tree, col, label, width, stretch=stretch)
+        # 2.2.20 (item 1): the File and Status columns give way and stretch (Status was cut off); the sideways
+        # scroll bar reaches the rest, and the line under the table spells out every caution in full.
+        for col, least in (("source", 110), ("status", 200)):
+            try:
+                self.tree.column(col, minwidth=least)
+            except Exception:
+                pass
+        hbar = ttk.Scrollbar(tbox, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(xscrollcommand=hbar.set)
         for lvl, color in LEVEL_COLORS.items():
             self.tree.tag_configure(lvl, foreground=color)
-        self.tree.pack(fill=X, pady=(6, 4))
+        self.tree.pack(fill=X)
+        hbar.pack(fill=X)
         try:
             self.tree.bind("<Double-1>", lambda _e: self.toggle_selected())
         except Exception:
             pass
+        # 2.2.20 (#45): the nights' cautions in full, and the way to fit every night the same way
+        nbox = ttk.Frame(upper, style="Card.TFrame")
+        nbox.pack(fill=X, pady=(0, 2))
+        self.night_note = StringVar(value="")
+        self.night_note_label = ttk.Label(nbox, textvariable=self.night_note, style="Card.TLabel",
+                                          foreground=LEVEL_COLORS["warn"], justify=LEFT, wraplength=700)
+        self.night_note_label.pack(side=LEFT, anchor=W, fill=X, expand=True)
+        self.time_only_button = ttk.Button(nbox, text=TIME_ONLY_BUTTON, command=self.fit_time_only)
+        top.bind("<Configure>", lambda e: self.night_note_label.configure(wraplength=max(e.width - 300, 300)),
+                 add="+")
 
-        eph = ttk.Frame(top, style="Card.TFrame")
+        eph = ttk.Frame(upper, style="Card.TFrame")
         eph.pack(fill=X, pady=(2, 2))
         self.eph_text = StringVar(value="")
         ttk.Label(eph, text="Input ephemeris", style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).pack(side=LEFT)
         ttk.Label(eph, textvariable=self.eph_text, style="Card.TLabel").pack(side=LEFT, padx=(6, 6))
         ttk.Button(eph, text="Look up (NASA Exoplanet Archive)", command=self.lookup).pack(side=LEFT)
-        alt = ttk.Frame(top, style="Card.TFrame")
+        alt = ttk.Frame(upper, style="Card.TFrame")
         alt.pack(fill=X, pady=(2, 2))
         ttk.Label(alt, text="Alternative ephemeris", style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).pack(side=LEFT)
         self.alt_vars = {k: StringVar(value="") for k in ("t0", "t0_err", "period", "period_err", "source")}
@@ -1183,14 +1392,16 @@ class MultiNightWindow:
         self.alt_text = StringVar(value="Optional: e.g. Exoplanet Watch's or ExoClock's current ephemeris, typed or "
                                         "pasted; T0 as a full BJD_TDB (or reduced, BJD − 2,400,000); blank ± = not "
                                         "known.")
-        ttk.Label(top, textvariable=self.alt_text, style="Hint.TLabel").pack(anchor=W)
+        ttk.Label(upper, textvariable=self.alt_text, style="Hint.TLabel").pack(anchor=W)
 
-        opts = ttk.Frame(top, style="Card.TFrame")
+        opts = ttk.Frame(upper, style="Card.TFrame")
         opts.pack(fill=X, pady=(6, 2))
         self.detrend_airmass = BooleanVar(value=bool(page.detrend_airmass.get()) if page is not None else True)
         self.detrend_time = BooleanVar(value=bool(page.detrend_time.get()) if page is not None else False)
         ttk.Label(opts, text="Detrend", style="Card.TLabel").pack(side=LEFT)
-        ttk.Checkbutton(opts, text="airmass", variable=self.detrend_airmass).pack(side=LEFT, padx=(4, 0))
+        # 2.2.20 (#45): the nights' cautions follow the airmass box
+        ttk.Checkbutton(opts, text="airmass", variable=self.detrend_airmass,
+                        command=self.refresh_nights).pack(side=LEFT, padx=(4, 0))
         ttk.Checkbutton(opts, text="time slope", variable=self.detrend_time).pack(side=LEFT, padx=(6, 0))
         self.per_filter = BooleanVar(value=False)
         self.per_filter_check = ttk.Checkbutton(opts, text="Depth and limb darkening per filter",
@@ -1202,15 +1413,12 @@ class MultiNightWindow:
                      state="readonly").pack(side=LEFT)
         ttk.Button(opts, text="Fit nights", style="Accent.TButton", command=self.run_fit).pack(side=LEFT, padx=10)
         ttk.Button(opts, text="Cancel", command=self.cancel).pack(side=LEFT)
-        prog = ttk.Frame(top, style="Card.TFrame")
-        prog.pack(fill=X, pady=(4, 2))
-        self.bar = ttk.Progressbar(prog, length=280, mode="determinate", maximum=1)
-        self.bar.pack(side=LEFT)
+        # 2.2.20 (busy bar): the result line only (✔ / ✖ / counts); the delay itself shows in the busy bar below
         self.prog_text = StringVar(value="")
-        ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        ttk.Label(upper, textvariable=self.prog_text, style="Hint.TLabel").pack(anchor=W, pady=(4, 2))
 
         tcols = ("epoch", "night", "tc", "oc_in", "oc_alt", "oc_own", "flag")
-        self.ttree = ttk.Treeview(top, columns=tcols, show="headings", height=3)
+        self.ttree = ttk.Treeview(upper, columns=tcols, show="headings", height=3)
         for col, label, width, stretch in (("epoch", "Epoch", 60, False), ("night", "Night", 110, False),
                                            ("tc", "Tc (BJD_TDB) ± min", 190, False),
                                            ("oc_in", "O − C input (min, σ)", 170, False),
@@ -1221,7 +1429,7 @@ class MultiNightWindow:
         self.ttree.tag_configure("warn", foreground="#b35c00")
         self.ttree.pack(fill=X, pady=(4, 2))
         # The plain-words reading (on time / the ephemeris is out of date / outliers) right under the table.
-        rbox = ttk.Frame(top, style="Card.TFrame")
+        rbox = ttk.Frame(upper, style="Card.TFrame")
         rbox.pack(fill=X, pady=(2, 2))
         self.reading = Text(rbox, height=3, wrap="word", font=(core.UI_FONT, 10), relief="flat", bg="#ffffff")
         for lvl, color in LEVEL_COLORS.items():
@@ -1231,15 +1439,8 @@ class MultiNightWindow:
         rscroll.pack(side=RIGHT, fill="y")
         self.reading.pack(side=LEFT, fill=X, expand=True)
 
-        bottom = ttk.Frame(top, style="Card.TFrame")
-        bottom.pack(fill=X, side="bottom", pady=(6, 0))
-        ttk.Label(bottom, text="Results", style="Hint.TLabel").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton", command=self.save_csv).pack(side=LEFT)
-        ttk.Button(bottom, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
-        ttk.Button(bottom, text="Close", command=self.close).pack(side=RIGHT)
-        # Plots and the full summary (shape, the ephemerides each O − C column uses, notes) in two tabs, so the
-        # window fits a 1080-line screen at 150 % scaling.
-        tabs = ttk.Notebook(top)
+        # Plots and the full summary (shape, the ephemerides each O − C column uses, notes) in two tabs.
+        tabs = ttk.Notebook(lower)
         tabs.pack(fill=BOTH, expand=True, pady=(4, 0))
         self.tabs = tabs
         plot_tab = ttk.Frame(tabs, style="Card.TFrame")
@@ -1255,12 +1456,22 @@ class MultiNightWindow:
         self.summary.configure(yscrollcommand=sscroll.set)
         sscroll.pack(side=RIGHT, fill="y")
         self.summary.pack(fill=BOTH, expand=True)
+        # 2.2.20 (item 1): "Pop out" opens the plots in a window of their own (any size; several screens)
+        pbar = ttk.Frame(plot_tab, style="Card.TFrame")
+        pbar.pack(fill=X, side="top")
+        self.popout_button = ttk.Button(pbar, text="Pop out", command=self.pop_out)
+        self.popout_button.pack(side=RIGHT)
+        ttk.Label(pbar, text="Drag the bar above the tabs to give the plots more room, or pop them out.",
+                  style="Hint.TLabel").pack(side=LEFT)
         self.fig = None
+        self._popouts = []
         if Figure is not None:
             self.fig = Figure(figsize=(11, 5.4), dpi=100, facecolor="#ffffff", layout="constrained")
             self.canvas = FigureCanvasTkAgg(self.fig, master=plot_tab)
-            self.canvas.get_tk_widget().configure(width=520, height=300)
+            # 2.2.20 (item 1): only a small request; the canvas fills its tab and follows every resize
+            self.canvas.get_tk_widget().configure(width=520, height=280)
             self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+            follow_resize(self.canvas, self._draw)
             self._placeholder("Add nights, then Fit nights.")
         try:
             win.protocol("WM_DELETE_WINDOW", self.close)
@@ -1268,9 +1479,10 @@ class MultiNightWindow:
             pass
         self._show_planet()
         self.refresh_nights()
-        win.after_idle(lambda: tui.fit_to_content(win, 760, 560))
+        win.after_idle(self._first_size)
         if self.planet and not _eph_from_planet(self.planet):
             self.lookup()
+
 
     # ---- planet and ephemerides ---------------------------------------------------------------------------------
     def planet_name(self) -> str:
@@ -1301,7 +1513,7 @@ class MultiNightWindow:
             messagebox.showinfo("SHOBS-P", "Add a night first (its report names the planet), or enter the planet on "
                                            "the Input page.", parent=self.win)
             return
-        self.prog_text.set(f"Looking up {name} (NASA Exoplanet Archive)…")
+        self._lookup_tok = self.busy.begin(f"Looking up {name} at the NASA Exoplanet Archive…")
         app = self.app
 
         def work():
@@ -1314,6 +1526,9 @@ class MultiNightWindow:
         threading.Thread(target=work, daemon=True).start()
 
     def _looked_up(self, name, got, why):
+        if getattr(self, "_closed", False):
+            return
+        self.busy.end(getattr(self, "_lookup_tok", None))
         if got and got.get("period"):
             if self.planet and norm_name(self.planet.get("name")) == norm_name(got.get("name")) \
                     and self.planet.get("period"):
@@ -1435,17 +1650,35 @@ class MultiNightWindow:
 
     def refresh_nights(self):
         nights = self._all_nights()
-        check_nights(nights, self.planet_name(), self.eph_in())
+        da = bool(self.detrend_airmass.get())
+        check_nights(nights, self.planet_name(), self.eph_in(), da)
         self._shown = nights
         self.tree.delete(*self.tree.get_children())
         self._iids = {}
         for n in nights:
             single = n.get("single_tc")
+            if single:
+                stext = f"{single[0]:.5f} ± {single[1] * 1440:.2f} min"
+            elif n.get("single_busy"):
+                stext = "fitting…"
+            else:
+                stext = n.get("single_why", "")
             iid = self.tree.insert("", END, tags=(n["status"][0],), values=(
                 "✔" if n.get("use") else "—", night_label(n) if len(n.get("t", [])) else "",
-                n.get("source", ""), len(n.get("t", [])) or "", n.get("filter", ""),
-                f"{single[0]:.5f} ± {single[1] * 1440:.2f} min" if single else "", n["status"][1]))
+                n.get("source", ""), len(n.get("t", [])) or "", n.get("filter", ""), stext, n["status"][1]))
             self._iids[iid] = n
+        # 2.2.20 (#45): the caution in full under the table, with the choice to fit every night the same way
+        mixed = mixed_airmass(nights, da)
+        if mixed:
+            names = ", ".join(night_label(n) for n in mixed)
+            self.night_note.set(f"{NO_AIRMASS_WARN} ({names}.) Re-save those nights' fit CSVs with SHOBS-P 2.2.20 or "
+                                f"later (they then carry airmass), or press “{TIME_ONLY_BUTTON}”.")
+            if not self.time_only_button.winfo_manager():
+                self.time_only_button.pack(side=RIGHT, padx=(8, 0))
+        else:
+            self.night_note.set("")
+            self.time_only_button.pack_forget()
+        self._fill_single_tc(nights)
         try:
             self.tree.configure(height=min(max(len(nights), 3), 8))
         except Exception:
@@ -1460,8 +1693,63 @@ class MultiNightWindow:
             pass
         n_use = sum(1 for n in nights if n.get("use"))
         if not self._running:
-            self.prog_text.set(f"{n_use} night{'s' if n_use != 1 else ''} ready" + (": add at least two to fit."
-                                                                                     if n_use < 2 else "."))
+            if mixed and n_use >= 2:
+                # 2.2.20 (#45): not "ready" while nights are fitted differently
+                self.prog_text.set(f"⚠ {n_use} nights in use; {len(mixed)} with no airmass (see above).")
+            else:
+                self.prog_text.set(f"{n_use} night{'s' if n_use != 1 else ''} ready" + (": add at least two to fit."
+                                                                                         if n_use < 2 else "."))
+
+    def fit_time_only(self):
+        """2.2.20 (#45): every night's baseline against time only (airmass off, time slope on), so all nights match."""
+        self.detrend_airmass.set(False)
+        self.detrend_time.set(True)
+        self.app.log("Multi-night: airmass detrending off and time slope on for every night (some files have no "
+                     "airmass), so all nights are fitted the same way.")
+        self.refresh_nights()
+
+    def _fill_single_tc(self, nights):
+        """2.2.20 (#45): the Single-night Tc column for a file that does not carry one (an older fit CSV): a quick
+        least-squares fit of that night alone (in the background; the same baseline choices as the window), once per
+        file. Needs the planet's period."""
+        if getattr(self, "_closed", False) or not self.planet or not self.planet.get("period"):
+            return
+        todo = [n for n in nights if n.get("use") and not n.get("single_tc") and not n.get("single_busy")
+                and not n.get("single_why") and n.get("kind") == "csv" and len(n.get("t", [])) >= MIN_POINTS]
+        if not todo:
+            return
+        planet = dict(self.planet, ld_band=_majority_filter(todo))
+        da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+        for n in todo:
+            n["single_busy"] = True
+        tok = self.busy.begin(f"Fitting {len(todo)} night{'s' if len(todo) != 1 else ''} alone for the "
+                              "Single-night Tc column…")
+        app = self.app
+
+        def work():
+            out = []
+            for n in todo:
+                try:
+                    out.append((n, quick_single_tc(n, planet, da, dt), ""))
+                except Exception as exc:
+                    out.append((n, None, str(exc).splitlines()[0] if str(exc) else type(exc).__name__))
+            app.call_ui(self._single_done, tok, out)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _single_done(self, tok, out):
+        if getattr(self, "_closed", False):
+            return
+        self.busy.end(tok)
+        for n, single, why in out:
+            n["single_busy"] = False
+            if single is not None:
+                n["single_tc"] = single
+                n["single_from"] = "a quick fit of this night alone"
+            else:
+                n["single_why"] = "not fitted"
+                self.app.log(f"Multi-night: {n.get('source')}: the quick single-night fit failed ({why}).")
+        self.refresh_nights()
 
     def _selected(self) -> list:
         try:
@@ -1491,7 +1779,7 @@ class MultiNightWindow:
         if self._running:
             return
         nights = self._all_nights()
-        check_nights(nights, self.planet_name(), self.eph_in())
+        check_nights(nights, self.planet_name(), self.eph_in(), bool(self.detrend_airmass.get()))
         use = [n for n in nights if n.get("use")]
         if len(use) < 2:
             messagebox.showinfo("SHOBS-P", "A joint fit needs at least two usable nights of the same planet "
@@ -1501,7 +1789,12 @@ class MultiNightWindow:
             messagebox.showinfo("SHOBS-P", "The planet's period is not known yet: press Look up first.",
                                 parent=self.win)
             return
-        if not self.app._start_job("Multi-night transit fit…"):
+        # 2.2.20 (busy bar): only this window's own bar shows (bar=False skips the main window's)
+        try:
+            started = self.app._start_job("Multi-night transit fit…", bar=False)
+        except TypeError:
+            started = self.app._start_job("Multi-night transit fit…")
+        if not started:
             return
         self._running = True
         token = object()
@@ -1512,8 +1805,15 @@ class MultiNightWindow:
         planet = dict(self.planet, ld_band=filt)
         cancel = self.app._cancel
         app = self.app
-        self.bar.configure(value=0, maximum=len(use))
-        self.prog_text.set(f"Fitting each night alone (1 of {len(use)})…")
+        # 2.2.20 (busy bar): the words carry the step and the counts; the bar only goes back and forth
+        self._n_fit = len(use)
+        self.busy.end(getattr(self, "_fit_tok", None))
+        self._fit_tok = self.busy.begin(f"Fitting {len(use)} nights… each night alone first (1 of {len(use)})")
+        self.prog_text.set("")
+        try:
+            self.corner_button.state(["disabled"])
+        except Exception:
+            pass
         self._placeholder(f"Fitting {len(use)} nights together…")
 
         def progress(phase, done, total):
@@ -1532,21 +1832,8 @@ class MultiNightWindow:
     def _progress(self, token, phase, done, total):
         if token is not self._token or getattr(self, "_closed", False):
             return
-        if phase == "joint":
-            self.bar.configure(mode="indeterminate")
-            try:
-                self.bar.start(60)
-            except Exception:
-                pass
-            self.prog_text.set("Joint least-squares fit (a few seconds)…")
-            return
-        try:
-            self.bar.stop()
-        except Exception:
-            pass
-        self.bar.configure(mode="determinate", maximum=total, value=done)
-        label = {"prep": "Fitting each night alone", "burn-in": "MCMC burn-in", "step": "MCMC step"}.get(phase, phase)
-        self.prog_text.set(f"{label} {done:,} of {total:,}")
+        self.busy.words(getattr(self, "_fit_tok", None), progress_words(getattr(self, "_n_fit", 0), phase, done,
+                                                                        total))
 
     def cancel(self):
         if self._running:
@@ -1559,11 +1846,7 @@ class MultiNightWindow:
         self.app._end_job()
         if getattr(self, "_closed", False):
             return
-        try:
-            self.bar.stop()
-            self.bar.configure(mode="determinate")
-        except Exception:
-            pass
+        self.busy.end(getattr(self, "_fit_tok", None))
         if error is not None:
             if error[0] == "Canceled":
                 self.prog_text.set("Canceled.")
@@ -1574,7 +1857,11 @@ class MultiNightWindow:
                 self._placeholder("The joint fit failed: " + error[0])
             return
         self.fit = fit
-        self.prog_text.set(f"Done: {len(fit['nights'])} nights, MCMC acceptance {fit['chain']['acceptance']:.2f}.")
+        self.prog_text.set(f"✔ Done: {len(fit['nights'])} nights, MCMC acceptance {fit['chain']['acceptance']:.2f}.")
+        try:
+            self.corner_button.state(["!disabled"])     # 2.2.20 (item 5)
+        except Exception:
+            pass
         self.app.status.set("Multi-night transit fit done.")
         self._analyse()
 
@@ -1647,6 +1934,39 @@ class MultiNightWindow:
             self.canvas.draw_idle()
         except Exception:
             pass
+        for pop in list(self._popouts):
+            pop.redraw()
+
+    # ---- 2.2.20 (item 1): size, pop out; (item 5): corner plot -----------------------------------------------------
+    def _first_size(self):
+        """Open at the contents' size, then give the plots at least about 45 % of the window's height."""
+        win = self.win
+        tui.fit_to_content(win, 900, 700)
+        try:
+            win.update_idletasks()
+            h = int(win.winfo_height())
+            up = int(self.upper.winfo_reqheight())
+            self.panes.sashpos(0, max(min(up, int(0.55 * h)), 120))
+        except Exception:
+            pass
+
+    def pop_out(self):
+        """The plots in a window of their own, resizable (or maximized on a second screen); they follow every fit."""
+        if Figure is None:
+            return
+        self._popouts.append(PlotWindow(self))
+
+    def open_corner(self):
+        if not self.fit or (self.fit.get("chain") or {}).get("flat") is None:
+            messagebox.showinfo("SHOBS-P", "Fit the nights first: the corner plot shows that fit's MCMC samples.",
+                                parent=self.win)
+            return
+        try:
+            res = corner_result(self.fit, self.planet_name())
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"Could not make the corner plot: {exc}", parent=self.win)
+            return
+        MultiCornerWindow(self.app, res, self._stem(), self.win)
 
     # ---- files --------------------------------------------------------------------------------------------------
     def _stem(self) -> str:
@@ -1695,11 +2015,188 @@ class MultiNightWindow:
         if self._running:
             self.app.cancel_job()
         try:
+            self.busy.end_all()
+        except Exception:
+            pass
+        for pop in list(self._popouts):
+            pop.close()
+        try:
             self.win.destroy()
         except Exception:
             pass
         if self.page is not None and getattr(self.page, "_multinight", None) is self:
             self.page._multinight = None
+
+
+def follow_resize(canvas, redraw, delay_ms: int = 250) -> None:
+    """2.2.20 (item 1): the Tk canvas already resizes the figure with its widget (FigureCanvasTkAgg); this also redraws
+    the plots once a resize has settled, so titles and the legend are laid out for the new size."""
+    widget = canvas.get_tk_widget()
+    state = {"job": None, "size": None}
+
+    def settled():
+        state["job"] = None
+        try:
+            redraw()
+        except Exception:
+            pass
+
+    def on_configure(event):
+        size = (int(event.width), int(event.height))
+        if size == state["size"] or min(size) < 20:
+            return
+        state["size"] = size
+        try:
+            if state["job"] is not None:
+                widget.after_cancel(state["job"])
+            state["job"] = widget.after(delay_ms, settled)
+        except Exception:
+            pass
+    widget.bind("<Configure>", on_configure, add="+")
+
+
+class PlotWindow:
+    """2.2.20 (item 1): the Multi-night plots in a window of their own ("Pop out"): any size, the figure fills it and
+    follows every resize; redrawn after each fit; closed with its Multi-night window."""
+
+    def __init__(self, owner: "MultiNightWindow"):
+        self.owner = owner
+        win = Toplevel(owner.win)
+        self.win = win
+        name = owner.planet_name()
+        win.title(f"SHOBS-P — multi-night plots ({name})" if name else "SHOBS-P — multi-night plots")
+        top = ttk.Frame(win, style="Card.TFrame", padding=6)
+        top.pack(fill=BOTH, expand=True)
+        buttons = ttk.Frame(top, style="Card.TFrame")
+        buttons.pack(fill=X, side="bottom", pady=(4, 0))
+        ttk.Button(buttons, text="Save plot PNG…", command=owner.save_png).pack(side=LEFT)
+        ttk.Button(buttons, text="Close", command=self.close).pack(side=RIGHT)
+        self.fig = Figure(figsize=(12, 6.5), dpi=100, facecolor="#ffffff", layout="constrained")
+        self.canvas = FigureCanvasTkAgg(self.fig, master=top)
+        self.canvas.get_tk_widget().configure(width=640, height=360)
+        self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
+        follow_resize(self.canvas, self.redraw)
+        try:
+            win.protocol("WM_DELETE_WINDOW", self.close)
+        except Exception:
+            pass
+        self.redraw()
+        try:
+            sw, sh = int(win.winfo_screenwidth()), int(win.winfo_screenheight())
+            w, h = int(0.8 * sw), int(0.75 * sh)
+            win.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 4}")
+            win.minsize(480, 320)
+        except Exception:
+            pass
+
+    def redraw(self):
+        o = self.owner
+        try:
+            if o.fit and o.analysis:
+                draw(self.fig, o.fit, o.analysis, o.planet_name())
+            else:
+                self.fig.clear()
+                ax = self.fig.add_subplot(111)
+                ax.axis("off")
+                ax.text(0.5, 0.5, "Fit nights first; the plots show here after each fit.", ha="center",
+                        va="center", fontsize=11, color="#7a8a94", transform=ax.transAxes)
+            self.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def close(self):
+        if self in self.owner._popouts:
+            self.owner._popouts.remove(self)
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+
+
+class MultiCornerWindow:
+    """2.2.20 (item 5): the corner plot of the joint fit's MCMC samples, the same window as the single-night one
+    (transit_ui.CornerWindow): by default the shared shape (Rp/R*, a/R*, b) and each night's Tc; "Show all
+    parameters" adds the baselines and limb darkening; ⚠ marks a parameter set by its allowed range."""
+
+    def __init__(self, app, result: dict, stem: str, parent=None):
+        self.app = app
+        self.result = result
+        self.stem = stem
+        win = Toplevel(parent or app)
+        self.win = win
+        name = (result.get("planet") or {}).get("name") or "transit"
+        win.title(f"SHOBS-P — multi-night corner plot ({name})")
+        top = ttk.Frame(win, style="Card.TFrame", padding=10)
+        top.pack(fill=BOTH, expand=True)
+        buttons = ttk.Frame(top, style="Card.TFrame")
+        buttons.pack(fill=X, side="bottom", pady=(6, 0))
+        ttk.Button(buttons, text="Save PNG…", command=self.save).pack(side=LEFT)
+        self.show_all = BooleanVar(value=False)
+        ttk.Checkbutton(buttons, text="Show all parameters (baselines, limb darkening)", variable=self.show_all,
+                        command=self.redraw).pack(side=LEFT, padx=(12, 0))
+        ttk.Button(buttons, text="Close", command=win.destroy).pack(side=RIGHT)
+        intro = ttk.Label(top, text=("The joint fit's MCMC samples: histograms on the diagonal (median and 16/84 % "
+                                     "lines; the title gives the value and its error), pairs below it (1σ and 2σ "
+                                     "contours). Shown: the shared shape (Rp/R*, a/R*, b) and each night's Tc, in "
+                                     "minutes from its median. A round hump is a measurement; a histogram that piles "
+                                     "up against an edge (⚠) is set by the allowed range, not by the data."),
+                          style="Hint.TLabel", wraplength=700, justify=LEFT)
+        intro.pack(anchor=W, fill=X)
+        labels = [intro]
+        for bf in result.get("bound_flags") or []:
+            warn = bf.get("level", "warn") == "warn"
+            lab = ttk.Label(top, text=("⚠ " if warn else "• ") + bf["text"], style="Card.TLabel",
+                            foreground="#b35c00" if warn else "#33424d", wraplength=700, justify=LEFT)
+            lab.pack(anchor=W, fill=X, pady=(2, 0))
+            labels.append(lab)
+        top.bind("<Configure>", lambda e: [lb.configure(wraplength=max(e.width - 30, 300)) for lb in labels], add="+")
+        self.fig = None
+        if Figure is None:
+            tui.fit_to_content(win)
+            return
+        import sys
+        scroll_cls = getattr(sys.modules.get(type(app).__module__), "ScrollBody", None)
+        if scroll_cls is not None:
+            self.body = scroll_cls(top, horizontal=True)
+            self.body.outer.pack(fill=BOTH, expand=True, pady=(6, 0))
+            host = self.body.inner
+        else:
+            self.body, host = None, top
+        self.fig = Figure(dpi=100, facecolor="#ffffff")
+        self.canvas = FigureCanvasTkAgg(self.fig, master=host)
+        self.canvas.get_tk_widget().pack(anchor=W)
+        self.redraw()
+        tui.fit_to_content(win)
+
+    def _shape_only(self) -> bool:
+        return not self.show_all.get()
+
+    def redraw(self):
+        if self.fig is None:
+            return
+        n = len(tpost.corner_params(self.result, self._shape_only()))
+        tpost.corner_figure(self.result, self.fig, font=9.0 if n <= 6 else 8.0, shape_only=self._shape_only())
+        w_in, h_in = self.fig.get_size_inches()
+        try:
+            self.canvas.get_tk_widget().configure(width=int(w_in * self.fig.dpi), height=int(h_in * self.fig.dpi))
+        except Exception:
+            pass
+        self.canvas.draw_idle()
+        if self.body is not None:
+            self.body.fit()
+
+    def save(self):
+        path = self.app.output_path(self.stem + "_corner.png", title="Save corner plot PNG", defaultextension=".png",
+                                    filetypes=[("PNG", "*.png")], parent=self.win)
+        if not path:
+            return
+        try:
+            tpost.save_corner(self.result, path, shape_only=self._shape_only())
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            return
+        self.app.log(f"Multi-night corner plot PNG: {path}")
+        self.app.saved_notice(path)
 
 
 def save_figure(fig, path: str, fit: dict, a: dict, name: str, version: str = "") -> None:
@@ -1750,17 +2247,22 @@ def summary_lines(fit: dict, a: dict) -> list:
     out.append(("head", "Reading"))
     out += list(a.get("statements") or [])
     notes = []
+    # 2.2.20 (#45): nights fitted differently (some baselines follow airmass, some cannot) get a ⚠ line each
+    mixed = "airmass" in fit["detrend"] and any(n.get("airmass") for n in fit["nights"]) and \
+        any(not n.get("airmass") for n in fit["nights"])
     for n in fit["nights"]:
         bits = []
         bits.append(f"error bars ×{n['error_scale']:.2f} ({n.get('scale_rule', '')}; χ²ν {n['rchi2_raw']:.2f}, "
                     f"β {n['beta']:.2f})")
         if n.get("time_note"):
             bits.append(n["time_note"])
-        if not n.get("airmass") and "airmass" in fit["detrend"]:
+        if not n.get("airmass") and "airmass" in fit["detrend"] and not mixed:
             bits.append("no airmass in the file")
         if n.get("single_tc"):
             d = (n["tc"][0] - n["single_tc"][0]) * 86400
             bits.append(f"joint Tc {d:+.0f} s from the single-night fit")
+        if mixed and not n.get("airmass"):
+            notes.append(("warn", f"{n['label']}: {NO_AIRMASS_WARN} ({TIME_ONLY_BUTTON} makes all nights match.)"))
         if bits:
             notes.append(("info", f"{n['label']}: " + "; ".join(bits)))
     if notes:
