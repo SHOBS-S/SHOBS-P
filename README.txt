@@ -84,6 +84,8 @@ New in 2.2.20 (S = shared by every mode, T = Transits, V = Variables; GitHub iss
 - S  Linux and Mac setup [#33]: tries Python 3.13, 3.12, 3.11 before newer ones, installs ready-made packages only
      (no compiler prompt on a Mac), and moves on to the next Python when one has no ready-made packages yet;
      clearer messages when no Python works or the internet is down.
+- S  SIMBAD and VizieR lookups fall back to the IDIA (Cape Town) mirrors when CDS does not answer (as in SHOBS-FLUX
+     and SHOBS-SCHED); a SIMBAD that just failed is asked last for 10 minutes, so lookups stay quick.
 - V  No-AUID warning: when VSX knows the star but has no AUID, the Output page says WebObs will reject the report
      and how to request one.
 - T  Save for ExoClock and Go to ExoClock [#47] on the Transit fit page: the upload file (JD_UTC at mid-exposure,
@@ -1008,7 +1010,7 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
-2.2.20 One busy bar; field image as shot; New reduction notes (#46); Mac/Linux Python choice (#33); no-AUID
+2.2.20 One busy bar; field image as shot; New reduction notes (#46); Mac/Linux Python choice (#33); IDIA mirrors; no-AUID
        warning; ExoClock (#47); Multi-night plots, corner plot and airmass in the fit CSV (#45).
 2.2.19.1 On-sky log for SHOBS-FLUX (one JSON file per reduction in .shobs\onsky); shared shobs_profile.py.
 2.2.19 Donut (defocused) centring (#30); comp/check after a flip and reference from the first kept frame (#24);

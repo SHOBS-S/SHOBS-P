@@ -3399,12 +3399,44 @@ def _http_get(url: str, timeout: float = 45) -> bytes:
         return response.read()
 
 
+# 2.2.20: SIMBAD and VizieR hosts, CDS first, then the mirrors (IDIA = Cape Town); (host, seconds to wait).
+SIMBAD_HOSTS = (("https://simbad.cds.unistra.fr", 15), ("https://simbad.idia.ac.za", 30))
+VIZIER_HOSTS = ("https://vizier.cds.unistra.fr", "https://vizier.cfa.harvard.edu", "https://vizier.idia.ac.za")
+
+
+_SIMBAD_DOWN: dict = {}   # host -> time.monotonic() until which it is tried last (it did not answer)
+
+
+def _simbad_hosts():
+    """SIMBAD_HOSTS, with a host that just failed moved to the end for 10 minutes (so one dead CDS does not cost
+    15 s on every lookup and every alternative name)."""
+    import time
+    now = time.monotonic()
+    return sorted(SIMBAD_HOSTS, key=lambda hw: _SIMBAD_DOWN.get(hw[0], 0) > now)
+
+
+def _simbad_failed(host: str) -> None:
+    import time
+    _SIMBAD_DOWN[host] = time.monotonic() + 600
+
+
 def _lookup_simbad(name: str) -> dict:
     import re
     import urllib.parse
 
-    url = "https://simbad.cds.unistra.fr/simbad/sim-id?Ident=" + urllib.parse.quote(name.strip()) + "&output.format=ASCII"
-    text = _http_get(url).decode("utf-8", errors="replace")
+    # 2.2.20: CDS first, then the IDIA (Cape Town) mirror (same answer format; CDS was down for days in Oct-Nov 2026,
+    # as in SHOBS-FLUX and SHOBS-SCHED). A working CDS answers in a second or two, so it gets 15 s before the mirror.
+    tail = "/simbad/sim-id?Ident=" + urllib.parse.quote(name.strip()) + "&output.format=ASCII"
+    errors = []
+    for host, wait in _simbad_hosts():
+        try:
+            text = _http_get(host + tail, timeout=wait).decode("utf-8", errors="replace")
+            break
+        except Exception as exc:
+            _simbad_failed(host)
+            errors.append(f"{host}: {exc}")
+    else:
+        raise ConnectionError("SIMBAD did not answer.\n" + "\n".join(errors))
     if "identifier not found" in text.lower() or "no known catalog" in text.lower():
         raise ValueError(f"SIMBAD has no object called {name}")
     coord = re.search(r"Coordinates\(ICRS,ep=J2000.*?\):\s+([0-9.\s+-]+)", text)
@@ -4009,7 +4041,7 @@ def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
     query = urllib.parse.urlencode(vizier_params(source, ra_deg, dec_deg, radius_deg, columns, sort, max_rows,
                                                  box_deg, constraints))
     errors = []
-    for host in ("https://vizier.cds.unistra.fr", "https://vizier.cfa.harvard.edu"):
+    for host in VIZIER_HOSTS:   # 2.2.20: the IDIA mirror added last
         try:
             text = _http_get(f"{host}/viz-bin/asu-tsv?{query}", timeout=timeout).decode("utf-8", errors="replace")
             rows = CatalogRows(parse_vizier_tsv(text))
@@ -6352,7 +6384,16 @@ def fetch_simbad_variables(ra_deg: float, dec_deg: float, radius_deg: float) -> 
         f"AND otype IN ({types})"
     )
     query = urllib.parse.urlencode({"request": "doQuery", "lang": "adql", "format": "csv", "query": adql})
-    text = _http_get("https://simbad.cds.unistra.fr/simbad/sim-tap/sync?" + query, timeout=60).decode("utf-8", "replace")
+    text, errors = None, []
+    for host, wait in _simbad_hosts():   # 2.2.20: CDS, then the IDIA mirror
+        try:
+            text = _http_get(host + "/simbad/sim-tap/sync?" + query, timeout=max(wait, 30)).decode("utf-8", "replace")
+            break
+        except Exception as exc:
+            _simbad_failed(host)
+            errors.append(f"{host}: {exc}")
+    if text is None:
+        raise ConnectionError("SIMBAD did not answer.\n" + "\n".join(errors))
     out = []
     for row in csv.DictReader(io.StringIO(text)):
         ra, dec = _num(row.get("ra")), _num(row.get("dec"))

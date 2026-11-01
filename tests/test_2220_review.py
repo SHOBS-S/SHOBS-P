@@ -27,5 +27,32 @@ class TestJointFlipStep(unittest.TestCase):
             tc.FLIP_STEP_ENABLED = old
 
 
+class TestSimbadMirror(unittest.TestCase):
+    def test_falls_through_to_idia(self):
+        from unittest import mock
+        import photometry_core as core
+        core._SIMBAD_DOWN.clear()
+        asked = []
+        ans = ("Coordinates(ICRS,ep=J2000,eq=2000): 17 52 07.0184 +37 32 46.237 (Opt ) A\n")
+
+        def fake(url, timeout=45):
+            asked.append(url.split("/simbad/")[0])
+            if "cds.unistra" in url:
+                raise TimeoutError("timed out")
+            return ans.encode()
+        with mock.patch.object(core, "_http_get", fake):
+            t = core._lookup_simbad("TrES-3")
+            self.assertAlmostEqual(t["ra_hours"], 17.8686, places=3)
+            self.assertEqual(asked, ["https://simbad.cds.unistra.fr", "https://simbad.idia.ac.za"])
+            asked.clear()
+            core._lookup_simbad("TrES-3")   # CDS just failed: the mirror is asked first for a while
+            self.assertEqual(asked, ["https://simbad.idia.ac.za"])
+        core._SIMBAD_DOWN.clear()
+
+    def test_vizier_has_idia(self):
+        import photometry_core as core
+        self.assertEqual(core.VIZIER_HOSTS[-1], "https://vizier.idia.ac.za")
+
+
 if __name__ == "__main__":
     unittest.main()
