@@ -5686,6 +5686,9 @@ class App(Tk):
                     else:
                         line2.pack(side="bottom", fill=X, pady=(4, 0))
                     box.pack(in_=line2, side=RIGHT)
+                    # 2.2.20 (manual shots): line2 was made after the box, so it sat above it in the stacking order
+                    # and hid it (a blank band where the View box should be); raise the box over its new master.
+                    box.lift(line2)
                 else:
                     box.pack(in_=options, side=RIGHT, padx=(10, 0))
             except Exception:
