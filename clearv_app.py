@@ -2848,6 +2848,10 @@ class App(Tk):
             pass
         self.status.set(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what to pick is in "
                         f"{os.path.basename(info_path)}).")
+        try:
+            tp._series_hint_after_save()   # 2.2.21 (#44): Multi-night fit… when the series has 2+ nights
+        except Exception:
+            pass
         return path
 
     def open_exoclock(self):
@@ -14088,6 +14092,8 @@ class App(Tk):
         meta["reports_saved"] = self.reports_saved
         meta["reports_sent"] = self.reports_sent   # 2.2.18 (item 10): a new key; older versions ignore it
         meta["comp_coords"] = {k: list(v) for k, v in self.comp_coords.items()}
+        if getattr(self, "multinight_alt_eph", None):
+            meta["multinight_alt_eph"] = dict(self.multinight_alt_eph)   # 2.2.21 (#44): Multi-night's typed ephemeris
         planet = self.planet_from_fields()
         if planet:
             meta["planet"] = {k: v for k, v in planet.items() if isinstance(v, (int, float, str)) or v is None}
@@ -14240,6 +14246,8 @@ class App(Tk):
         if isinstance(meta.get("reports_saved"), dict):
             self.reports_saved = {str(k): list(v) for k, v in meta["reports_saved"].items() if isinstance(v, list)}
         self.reports_sent = {}   # 2.2.18 (item 10)
+        alt = meta.get("multinight_alt_eph")   # 2.2.21 (#44): the series' typed (alternative) ephemeris
+        self.multinight_alt_eph = dict(alt) if isinstance(alt, dict) else None
         if isinstance(meta.get("reports_sent"), dict):
             self.reports_sent = {str(k): [e for e in v if isinstance(e, dict)]
                                  for k, v in meta["reports_sent"].items() if isinstance(v, list)}
@@ -14416,6 +14424,9 @@ class App(Tk):
         if not hasattr(self, "series_status"):
             return
         self.series_status.set(self.series_status_text())
+        tp = getattr(self, "transit_page", None)
+        if tp is not None and hasattr(tp, "update_series_button"):
+            tp.update_series_button()   # 2.2.21 (#44): Multi-night fit… follows the series' nights
         # 2.2.16 (item 15): the Input and Output pages' Close series buttons are enabled together.
         for button in (getattr(self, "close_series_button", None), getattr(self, "close_series_button_out", None)):
             if button is None:
@@ -14463,6 +14474,7 @@ class App(Tk):
         self.active_comps = []
         self.reports_saved = {}
         self.reports_sent = {}       # 2.2.18 (item 10)
+        self.multinight_alt_eph = None   # 2.2.21 (#44)
         self.night_notes = {n: v for n, v in self.night_notes.items() if n == keep_night} if keep_night else {}
         self.highlight_night = None
         self._loss_report = {}

@@ -73,6 +73,10 @@ All of these are in the **Series** row on the Output page. When the series has a
 - **Remove night…** removes one night. The list shows each night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`. Type its number and confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
+In Transits mode, a series of one planet with two or more nights can be fitted together: **Multi-night fit…** on the
+Transit fit page's Results row opens the Multi-night window with every night of the series (chapter 17). The series
+also remembers each night's saved fit CSV and AAVSO exoplanet report, and the alternative ephemeris you typed there.
+
 If you load another series, close this one, switch modes, or close the SHOBS-P window while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open. When you close the window, it asks only if a series file has unsaved changes or a series of two or more nights has never been saved.
 
 ## Switching to another star

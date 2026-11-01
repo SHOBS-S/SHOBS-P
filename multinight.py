@@ -660,7 +660,8 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "rms_bin10": tc.binned_rms(d["t"], resid, 10.0), "n_points": len(d["t"]), "error_scale": scales[j],
             "rchi2_raw": rchis[j], "beta": betas[j], "chi2": chi2s[j], "group": d["group"], "scale_rule": rules[j],
             "airmass": n.get("airmass") is not None and prob._in[j][2] is not None,
-            "flip": prob._in[j][4] is not None, "time_note": n.get("time_note", ""), "index": j})
+            "flip": prob._in[j][4] is not None, "time_note": n.get("time_note", ""), "index": j,
+            "series_night": n.get("series_night", "")})   # 2.2.21 (#44)
         _ = itc
     n_data = sum(len(d["t"]) for d in prob.nights)
     say("  joint fit done: " + ", ".join(f"{o['label']} Tc {o['tc'][0]:.5f} ± {o['tc'][1]:.5f}" for o in out_nights))
@@ -976,6 +977,8 @@ def write_timing_csv(path: str, fit: dict, a: dict, meta: dict | None = None) ->
     if a.get("combined"):
         lines.append(f"# Comparison ephemeris, these nights + input T0 and P ({COMBINED_CAVEAT}): "
                      f"{lin_line(a['combined'])}")
+    if meta.get("series"):
+        lines.append(f"# Nights from the series {meta['series']}")   # 2.2.21 (#44)
     lines.append("# O-C sigma: oc_*_err_min = Tc error and the ephemeris's propagated error "
                  "sqrt(sigma_T0^2 + (n sigma_P)^2) in quadrature (oc_own: Tc error only)")
     lines = [core.ascii_safe(x) for x in lines]
@@ -1261,6 +1264,142 @@ def corner_result(fit: dict, title: str = "") -> dict:
     return out
 
 
+# ---- 2.2.21 (#44): the nights of the open Transits series --------------------------------------------------------
+# Upload-page key under which the Transit fit page's Save light-curve CSV… records a night's fit CSV in the series'
+# reports_saved (never an upload page: no Sent mark, no "already sent" question).
+FIT_CSV_KEY = "fitcsv"
+SERIES_BUTTON = "Multi-night fit…"
+
+
+def series_transit_nights(app) -> list:
+    """2.2.21 (#44): the night keys of the open series when it is a Transits series (Transits mode, every night a
+    transit night); [] otherwise (Variables-mode series, nothing open)."""
+    if getattr(app, "mode_key", "") != "transits":
+        return []
+    if getattr(app, "series_mode", "") not in ("", "transits"):
+        return []
+    obs = getattr(app, "observations", None) or []
+    return sorted({o.night for o in obs if getattr(o, "night", "")})
+
+
+def series_saved_files(app, night: str) -> dict:
+    """2.2.21 (#44): the newest fit CSV and AAVSO exoplanet report recorded in the series for a night:
+    {"fitcsv": path, "exoplanet": path} (only those recorded)."""
+    out = {}
+    for e in (getattr(app, "reports_saved", None) or {}).get(night, []) or []:
+        if not isinstance(e, dict) or e.get("to") not in (FIT_CSV_KEY, "exoplanet"):
+            continue
+        path = e.get("path") or ""
+        if path and os.path.isabs(str(path)):
+            out[e["to"]] = str(path)   # later entries are newer
+    return out
+
+
+def night_from_points(obs: list, radec, lat: float, lon: float, scint=None, planet: str = "",
+                      source: str = "") -> dict:
+    """2.2.21 (#44): one series night from its points, as the Transit fit page makes it (TransitPage._data): times
+    to BJD_TDB, magnitudes to relative flux with their errors (scintillation as set), airmass, and the flip segment
+    as t_flip (used only where FLIP_STEP_ENABLED lets the fit use it). The errors are the measured ones (not scaled
+    by a single-night fit), so the joint fit scales them with the single-night rule."""
+    if len(obs) < MIN_POINTS:
+        raise NightError(f"only {len(obs)} usable points in the series (needs {MIN_POINTS})")
+    if radec is None or lat is None or lon is None:
+        raise NightError("the star's RA/Dec or your site's latitude and longitude is not known (Input page), so "
+                         "its times cannot be put on BJD_TDB")
+    obs = sorted(obs, key=lambda o: o.jd)
+    jd = np.array([o.jd for o in obs], dtype=float)
+    t = np.asarray(core.convert_times(jd, "BJD_TDB", radec[0], radec[1], lat, lon), dtype=float)
+    mag = np.array([o.mag for o in obs], dtype=float)
+    merr = np.array([core.point_err(o, scint) for o in obs], dtype=float)
+    flux = 10 ** (-0.4 * (mag - np.median(mag)))
+    err = np.abs(flux * merr * 0.4 * math.log(10))
+    am = np.array([o.airmass if o.airmass is not None else np.nan for o in obs], dtype=float)
+    after = np.array([getattr(o, "segment", "") == "flip" for o in obs], dtype=bool)
+    t_flip = None
+    if after.any() and (~after).any():
+        t_flip = 0.5 * (float(t[~after].max()) + float(t[after].min()))
+    night = {"kind": "series", "path": "", "source": source, "planet": planet, "host": "",
+             "filter": getattr(obs[0], "filt", "") or "CV", "obsdate": "", "software": "",
+             "t": t, "flux": flux, "err": err, "airmass": am if np.isfinite(am).all() else None, "t_flip": t_flip,
+             "single_tc": None, "time_note": "", "notes": []}
+    return _finish_night(night)
+
+
+def nights_from_series(app) -> tuple:
+    """2.2.21 (#44): (nights, messages) for every night of the open Transits series. Each night comes from the
+    series' own points (one reduction: same comps and apertures). Its Single-night Tc comes from the fit CSV (or
+    else the AAVSO exoplanet report) recorded for it, when that file is still there. A night whose points cannot be
+    used (no RA/Dec or site, too few points) is loaded from that file instead. A recorded file that is no longer on
+    disk is named in the messages; the other nights load anyway."""
+    keys = series_transit_nights(app)
+    try:
+        radec = app.target_radec_deg()
+    except Exception:
+        radec = None
+    try:
+        lat, lon = float(app.lat.get()), float(app.lon.get())
+    except Exception:
+        lat = lon = None
+    try:
+        scint = app._scint_setup()
+    except Exception:
+        scint = None
+    try:
+        usable = app._usable()
+    except Exception:
+        usable = [o for o in app.observations if math.isfinite(o.mag)]
+    try:
+        planet = app.planet_name.get().strip()
+    except Exception:
+        planet = ""
+    nights, messages = [], []
+    for key in keys:
+        try:
+            label = app.night_label(key, short=True)
+        except Exception:
+            label = key
+        files = series_saved_files(app, key)
+        missing = [p for p in files.values() if not os.path.isfile(p)]
+        present = {k: p for k, p in files.items() if os.path.isfile(p)}
+        for p in missing:
+            messages.append(f"⚠ Night of {label}: {os.path.basename(p)} is not found (moved or deleted)"
+                            + ("; the night is loaded from the series' own points." if radec else "."))
+        pts = [o for o in usable if o.night == key]
+        try:
+            n = night_from_points(pts, radec, lat, lon, scint, planet, f"series: night of {label}")
+            n["series_night"] = key
+            for kind in (FIT_CSV_KEY, "exoplanet"):   # the single-night fit's Tc, for the Single-night Tc column
+                if kind in present:
+                    try:
+                        f = load_night(present[kind], radec)
+                        if f.get("single_tc"):
+                            n["single_tc"], n["single_from"] = f["single_tc"], os.path.basename(present[kind])
+                            break
+                    except Exception:
+                        pass
+        except NightError as exc:
+            n = None
+            for kind in (FIT_CSV_KEY, "exoplanet"):
+                if kind in present:
+                    try:
+                        n = load_night(present[kind], radec)
+                        n["series_night"] = key
+                        n["source"] = f"series: {os.path.basename(present[kind])}"
+                        messages.append(f"Night of {label}: {exc}; loaded from {os.path.basename(present[kind])}.")
+                        break
+                    except Exception:
+                        n = None
+            if n is None:
+                why = str(exc)
+                if missing:
+                    why += f", and its file {', '.join(os.path.basename(p) for p in missing)} is not found"
+                n = {"kind": "series", "path": "", "source": f"series: night of {label}", "error": why,
+                     "t": np.array([]), "notes": [], "planet": planet, "series_night": key}
+                messages.append(f"✖ Night of {label} not loaded: {why}.")
+        nights.append(n)
+    return nights, messages
+
+
 def _eph_from_planet(p: dict | None) -> dict | None:
     if not p or not p.get("t0") or not p.get("period"):
         return None
@@ -1295,12 +1434,14 @@ class MultiNightWindow:
         hint = ttk.Label(top, style="Hint.TLabel", justify=LEFT, wraplength=900, text=(
             "Fits several nights of one planet together: one transit shape, each night's own mid-transit time and "
             "baseline. Add AAVSO exoplanet reports (SHOBS-P or EXOTIC, .txt) or SHOBS-P transit-fit CSVs "
-            "(_transit_fit.csv); the night fitted on the Transit fit page can join them. Then Fit nights."))
+            "(_transit_fit.csv); the night fitted on the Transit fit page can join them. With a Transits series open, "
+            "Use the series' nights loads every night of the series. Then Fit nights."))
         hint.pack(anchor=W, fill=X, pady=(2, 6))
         top.bind("<Configure>", lambda e: hint.configure(wraplength=max(e.width - 30, 300)), add="+")
 
         row = ttk.Frame(top, style="Card.TFrame")
         row.pack(fill=X)
+        self.series_row = row
         ttk.Button(row, text="Add reports or fit CSVs…", command=self.add_files).pack(side=LEFT)
         ttk.Button(row, text="Leave out / put back", command=self.toggle_selected).pack(side=LEFT, padx=(6, 0))
         ttk.Button(row, text="Remove", command=self.remove_selected).pack(side=LEFT, padx=(6, 0))
@@ -1308,6 +1449,15 @@ class MultiNightWindow:
         self.current_check = ttk.Checkbutton(row, text="Include the Transit fit page's night", variable=self.use_current,
                                              command=self.refresh_nights)
         self.current_check.pack(side=LEFT, padx=(14, 0))
+        # 2.2.21 (#44): the open Transits series' nights, straight from the series (enabled with 2 or more nights)
+        self.series_button = ttk.Button(row, text="Use the series' nights", command=self.load_series_nights)
+        self.series_button.pack(side=LEFT, padx=(14, 0))
+        self.series_note = StringVar(value="")
+        self.series_note_label = ttk.Label(top, textvariable=self.series_note, style="Card.TLabel", justify=LEFT,
+                                           foreground=LEVEL_COLORS["warn"], wraplength=900)
+        top.bind("<Configure>", lambda e: self.series_note_label.configure(wraplength=max(e.width - 30, 300)),
+                 add="+")
+        self._series_state()
 
         # 2.2.20 (item 1): the results row and the window's own busy bar (lower left; house rule) at the bottom, then
         # everything else in two panes with a draggable divider: the tables and settings above, the plots below
@@ -1504,7 +1654,9 @@ class MultiNightWindow:
         if e:
             te = f" ± {e['t0_err'] * 1440:.2f} min" if e.get("t0_err") is not None else " (± not given)"
             pe = f" ± {e['period_err']:.7f}" if e.get("period_err") is not None else " (± not given)"
-            self.eph_text.set(f"T0 {e['t0']:.5f}{te}, P {e['period']:.7f}{pe} d — {e['source']}")
+            # 2.2.21 (#44): say where it came from (the open series keeps the planet's lookup with it)
+            kept = " (kept with the series)" if getattr(self, "_from_series", False) else ""
+            self.eph_text.set(f"T0 {e['t0']:.5f}{te}, P {e['period']:.7f}{pe} d — {e['source']}{kept}")
         elif self.planet and self.planet.get("period"):
             self.eph_text.set(f"P {self.planet['period']:.7f} d; no T0, so no O − C against it (Look up)")
         else:
@@ -1578,6 +1730,7 @@ class MultiNightWindow:
             self.alt_text.set(f"✖ Alternative ephemeris not used: {exc}.")
             return
         e = self.eph_alt
+        self._keep_alt_in_series()   # 2.2.21 (#44)
         self.alt_text.set("✔ Alternative ephemeris: " + eph_line(e).replace("+/-", "±") + f" — {e['source']}"
                           + (f" ({e['note']})" if e.get("note") else "")
                           + ("" if e.get("t0_err") is not None else "; no T0 ± given, so its O − C σ is the fit's only"))
@@ -1588,7 +1741,23 @@ class MultiNightWindow:
             var.set("")
         self.eph_alt = None
         self.alt_text.set("No alternative ephemeris.")
+        self._keep_alt_in_series()   # 2.2.21 (#44)
         self._analyse()
+
+    def _keep_alt_in_series(self):
+        """2.2.21 (#44): with the series' nights loaded, the typed (alternative) ephemeris is kept in the series
+        (saved with it when it has a file), so the next Multi-night fit… compares with the same one."""
+        if not getattr(self, "_from_series", False) or not series_transit_nights(self.app):
+            return
+        typed = {k: v.get().strip() for k, v in self.alt_vars.items()} if self.eph_alt else None
+        if typed == getattr(self.app, "multinight_alt_eph", None):
+            return
+        self.app.multinight_alt_eph = typed
+        if getattr(self.app, "series_path", ""):
+            try:
+                self.app._write_series(self.app.series_path)
+            except Exception as exc:
+                self.app.log(f"Multi-night: the alternative ephemeris was not saved in the series ({exc}).")
 
     # ---- nights -------------------------------------------------------------------------------------------------
     def _radec(self):
@@ -1633,6 +1802,46 @@ class MultiNightWindow:
         self.refresh_nights()
         if self.planet and not self.eph_in() and self.planet_name():
             self.lookup()
+
+    # ---- 2.2.21 (#44): the open Transits series --------------------------------------------------------------------
+    def _series_state(self):
+        """Enable "Use the series' nights" when a Transits series with 2 or more nights is open."""
+        n = len(series_transit_nights(self.app))
+        try:
+            self.series_button.state(["!disabled"] if n >= 2 else ["disabled"])
+        except Exception:
+            pass
+        return n
+
+    def load_series_nights(self):
+        """2.2.21 (#44): one row per night of the open Transits series (the series' own points; see
+        nights_from_series), replacing series rows loaded before. Files added by hand stay. The Transit fit page's
+        night is unticked (it is one of these nights)."""
+        if self._series_state() < 2:
+            messagebox.showinfo("SHOBS-P", "Open a Transits series with at least two nights first (Load series on "
+                                           "the Input or Output page).", parent=self.win)
+            return []
+        nights, messages = nights_from_series(self.app)
+        self.nights = [n for n in self.nights if n.get("kind") != "series" and not n.get("series_night")] + nights
+        self.use_current.set(False)
+        self._from_series = True
+        typed = getattr(self.app, "multinight_alt_eph", None)
+        if isinstance(typed, dict) and not self.eph_alt:   # the series' alternative ephemeris, typed last time
+            for k, var in self.alt_vars.items():
+                var.set(str(typed.get(k) or ""))
+            self.apply_alt()
+        self.series_note.set("\n".join(messages))
+        if messages and not self.series_note_label.winfo_manager():
+            self.series_note_label.pack(anchor=W, fill=X, pady=(0, 4), after=self.series_row)
+        elif not messages:
+            self.series_note_label.pack_forget()
+        for m in messages:
+            self.app.log("Multi-night: " + m.lstrip("⚠✖ "))
+        self._show_planet()
+        self.refresh_nights()
+        if self.planet and not self.eph_in() and self.planet_name():
+            self.lookup()
+        return nights
 
     def _all_nights(self) -> list:
         out = []
@@ -1722,8 +1931,9 @@ class MultiNightWindow:
             if (n.get("single_from") == "a quick fit of this night alone" and not n.get("single_busy")
                     and n.get("single_choice") != (da, dt)):
                 n["single_tc"], n["single_from"], n["single_why"] = None, "", ""
+        # 2.2.21 (#44): a series night with no fit CSV or report recorded gets the same quick fit
         todo = [n for n in nights if n.get("use") and not n.get("single_tc") and not n.get("single_busy")
-                and not n.get("single_why") and n.get("kind") == "csv" and len(n.get("t", [])) >= MIN_POINTS]
+                and not n.get("single_why") and n.get("kind") in ("csv", "series") and len(n.get("t", [])) >= MIN_POINTS]
         if not todo:
             return
         planet = dict(self.planet, ld_band=_majority_filter(todo))
@@ -1956,13 +2166,39 @@ class MultiNightWindow:
         """Open at the contents' size, then give the plots at least about 45 % of the window's height."""
         win = self.win
         tui.fit_to_content(win, 900, 700)
+        # 2.2.21 (nit g): the divider opened at the very top (the nights table and Fit nights hidden): sashpos set
+        # before the window was mapped is lost. Set it once the panes are on screen and have their height.
+        self._sash_tries = 0
+        self._place_sash()
         try:
-            win.update_idletasks()
-            h = int(win.winfo_height())
-            up = int(self.upper.winfo_reqheight())
-            self.panes.sashpos(0, max(min(up, int(0.55 * h)), 120))
+            self.panes.bind("<Map>", lambda _e: self.win.after_idle(self._place_sash), add="+")
         except Exception:
             pass
+
+    def _place_sash(self):
+        """2.2.21 (nit g): the divider under the nights table, timing table and reading (all of the upper part when
+        it fits in 55 % of the panes' height), the plots taking the rest. Retried until the panes have a height."""
+        if getattr(self, "_closed", False) or getattr(self, "_sash_placed", False):
+            return
+        try:
+            self.win.update_idletasks()
+            h = int(self.panes.winfo_height())
+            if h <= 1 or not self.panes.winfo_ismapped():
+                raise ValueError("not on screen yet")
+            up = int(self.upper.winfo_reqheight())
+            want = max(min(up, int(0.55 * h)), min(120, h // 2))
+            self.panes.sashpos(0, want)
+            if int(self.panes.sashpos(0)) >= min(want, 60):
+                self._sash_placed = True
+                return
+        except Exception:
+            pass
+        self._sash_tries = getattr(self, "_sash_tries", 0) + 1
+        if self._sash_tries < 40:
+            try:
+                self.win.after(50, self._place_sash)
+            except Exception:
+                pass
 
     def pop_out(self):
         """The plots in a window of their own, resizable (or maximized on a second screen); they follow every fit."""
@@ -1997,7 +2233,10 @@ class MultiNightWindow:
         if not path:
             return
         try:
-            n = write_timing_csv(path, self.fit, self.analysis, {"version": getattr(self.app, "app_version", "")})
+            meta = {"version": getattr(self.app, "app_version", "")}
+            if any(n.get("series_night") for n in self.fit["nights"]):   # 2.2.21 (#44)
+                meta["series"] = os.path.basename(getattr(self.app, "series_path", "") or "") or "open (not saved)"
+            n = write_timing_csv(path, self.fit, self.analysis, meta)
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the CSV: {exc}", parent=self.win)
             return
@@ -2217,16 +2456,34 @@ def save_figure(fig, path: str, fit: dict, a: dict, name: str, version: str = ""
     """The plot at a fixed 13 × 6.5 in, 130 dpi, with a DTG stamp, whatever its size on screen."""
     old = fig.get_size_inches().copy()
     draw(fig, fit, a, name)
-    mark = None
+    mark = eph_mark = None
     try:
         fig.set_size_inches(13, 6.5, forward=False)
         mark = fig.text(0.995, 0.002, f"Created {core.dtg()} · SHOBS-P {version}", fontsize=6, color="#7a8a94",
                         ha="right", va="bottom")
+        # 2.2.21 (#44): the ephemeris the O − C used, in the saved PNG too
+        eph_mark = fig.text(0.005, 0.002, _short(ephemeris_used_line(a), 150), fontsize=6, color="#7a8a94",
+                            ha="left", va="bottom")
         fig.savefig(path, dpi=130)
     finally:
         if mark is not None:
             mark.remove()
+        if eph_mark is not None:
+            eph_mark.remove()
         fig.set_size_inches(old, forward=False)
+
+
+def ephemeris_used_line(a: dict) -> str:
+    """2.2.21 (#44): one line naming the input ephemeris the O − C used: "Ephemeris used: T0 … ± … BJD_TDB, P … ± … d
+    — NASA Exoplanet Archive (Ivshina & Winn 2022)" (plus the alternative's source when one was typed)."""
+    e = (a.get("input") or {}).get("eph") if a else None
+    if not e:
+        return "Ephemeris used: none (no T0; epochs counted from the first night)"
+    out = "Ephemeris used: " + eph_line(e).replace("+/-", "±") + f" — {e.get('source') or 'source not known'}"
+    alt = (a.get("alt") or {}).get("eph")
+    if alt:
+        out += f"; alternative: {alt.get('source') or 'typed'}"
+    return out
 
 
 def summary_lines(fit: dict, a: dict) -> list:
@@ -2243,6 +2500,7 @@ def summary_lines(fit: dict, a: dict) -> list:
                         f"inc {sh['inc'][0]:.2f} ± {sh['inc'][1]:.2f}°; χ²ν {fit['rchi2']:.2f} over {fit['n_data']} "
                         f"points; detrending {', '.join(fit['detrend']) or 'none'}"))
     out.append(("head", "Ephemerides (O − C σ = Tc error and the ephemeris's propagated error in quadrature)"))
+    out.append(("info", ephemeris_used_line(a)))   # 2.2.21 (#44)
     if a.get("input"):
         e = a["input"]["eph"]
         out.append(("info", "O − C input: " + eph_line(e).replace("+/-", "±") + f" — {e.get('source', '')}"))
