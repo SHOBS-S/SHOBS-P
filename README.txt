@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.20
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.21
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -70,6 +70,32 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.2.21 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
+- S  Site time zone [#22]: every local time is shown in the observing site's own zone for that night, labelled
+     "Local time (UTC-5)", and typed local times are read in it. Existing settings keep the computer's zone.
+- S  When a service is down [#21]: SHOBS-P keeps the last good answer from SIMBAD, VSX, the AAVSO sequence (VSP), the
+     NASA Exoplanet Archive, the TESS TOI table and ExoClock, and uses it when the live service does not answer,
+     saying so plainly ("SIMBAD from cache (fetched 12 Oct 2026); the live service did not answer (503)."). Live
+     answers always win. "Clear cached catalogs" is on the Credits page.
+- S  VSX while CDS is down [#48]: the variable-star check asks VizieR (CDS, then CfA), then AAVSO's own VSX service,
+     then the cache; when VSX cannot be reached it says "VSX not reached" instead of leaving it out. VSX and SIMBAD
+     are asked at the same time, so a dead CDS costs one wait.
+- S  Saving a report no longer rewrites the series with the Input page's site and observer code: the series keeps its
+     own, and SHOBS-P asks when they differ; the status line says when the series file was updated.
+- S  Save field image refuses when the Photometry frame is not of the series' target (it used another star's frame).
+- S  Typing or pasting a folder path updates the file count (it took Browse before).
+- S  New reduction clears the old "Photometry done in ..." line; the notes check knows GCVS names (SZ Lyn, V1441 Cas).
+- V  After Save AAVSO report, a slow or timed-out AAVSO chart no longer replaces the "Saved ... upload to AAVSO WebObs"
+     line and the Open AAVSO WebObs offer.
+- T  TESS TOI status [#32]: at planet lookup, the planet's TOI and disposition, e.g. "TOI-1234.01 - PC (planet
+     candidate) - consider uploading to ExoFOP-TESS (coordinate with TFOP SG1)", with a link to its ExoFOP page.
+- T  ExoClock priority: at planet lookup, "ExoClock: HIGH priority (2 recent observations)" or "Not on ExoClock's
+     list", beside Save for ExoClock, with a link to the planet's ExoClock page.
+- T  Multi-night fit... [#44] on the Transit fit Results row: fits the open Transits series' nights together (2 or
+     more nights), built from the series' own points; the ephemeris used is shown and saved; a typed alternative
+     ephemeris is kept with the series. The Multi-night window opens with its nights table showing.
+- T  Corner plot sizes itself to the window.
 
 New in 2.2.20 (S = shared by every mode, T = Transits, V = Variables; GitHub issue numbers in brackets)
 - S  One busy bar for every wait: a green back-and-forth bar with words at the left end of the bottom status strip

@@ -38,7 +38,7 @@ Every text file SHOBS-P writes (reports, CSVs, fit notes) carries a line such as
 
 `# Created 121153Z OCT 26 by SHOBS-P`
 
-The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.20*
+The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.21*
 in the picture. The line tells you, and anyone you send the file to, when it was made and with which program.
 
 ## Result files by mode

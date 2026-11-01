@@ -168,7 +168,7 @@ To start fresh, press **Clear cached catalogs** on the Credits page (chapter 3).
 
 Problems and ideas go to the project's GitHub Issues page (github.com/SHOBS-S/SHOBS-P/issues). The forms ask for:
 
-- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.20**),
+- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.21**),
 - your computer's system (Windows, macOS or Linux, and which version),
 - your camera, and whether it is color or monochrome,
 - the mode and the step,

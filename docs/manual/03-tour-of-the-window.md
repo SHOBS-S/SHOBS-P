@@ -13,7 +13,7 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.20**).
+4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.21**).
 
 ## The three modes and their colors
 
