@@ -127,6 +127,29 @@ message above."*
 | The target marker is not placed, and the log says the target is not on this frame. | The first frames may miss the target; SHOBS-P looks at the next frames for it (chapter 8). If it cannot find it, reject the frames without the target in Blink and calibrate again. |
 | A lookup ends with *"✖ …: SIMBAD and VSX did not answer within 60 s …"*. | The service is slow or down, or the internet is. Type RA/Dec yourself, or press **Look up again** later; a late answer is still used. |
 | The solve or lookups fail at night. | The catalogs and lookups need the internet. Calibration and photometry do not. Catalog stars fetched for a field are kept for 30 days, which often lets the same field solve again without the internet. |
+| The log or status line says *"… from cache (fetched 12 Oct 2026); the live service did not answer (503)."* | A service was down, so SHOBS-P used its last good answer (see "When a service is down" below). Nothing to do; check the values look right, or try again later for a live answer. |
+| The variable-star check says *"VSX not reached"*. | VizieR (CDS, then CfA) and AAVSO's own VSX could not be reached, and no earlier answer for this field was saved. Only SIMBAD was checked, so a variable that is only in VSX is not marked. **Solve again** later. |
+
+### When a service is down
+
+SHOBS-P asks several online services: SIMBAD and VSX (Star ID lookup and the variable-star check), VizieR (catalogs),
+AAVSO's chart server (the sequence and chart ID), and the NASA Exoplanet Archive (planets). Every time one answers,
+SHOBS-P keeps that answer in your user folder (`.shobs_p_cache\lookups`, chapter 22). When a service does not answer
+later, SHOBS-P uses the kept answer for the same star, field or planet and says so in the log and on the page, for
+example *"AAVSO sequence from cache (fetched 12 Oct 2026); the live service did not answer (503)."* A live answer
+always wins and replaces the kept one.
+
+- **Star ID lookup**: RA/Dec, VSX period and AUID come from the kept answer; the status line ends with the note.
+- **AAVSO sequence**: the kept sequence and its chart ID are used, and the chart ID still goes in the AAVSO report.
+  The note is in the log and the status line only; the report itself is not changed (WebObs format).
+- **Variable-star check**: VizieR is asked first (CDS, then CfA; the Cape Town mirror does not carry VSX), then
+  AAVSO's own VSX, then the kept list. A server that just failed is asked last for the next 10 minutes, so a dead
+  server costs one wait, not one on every solve.
+- **Planet lookup**: the kept planet values are used; the line under the planet boxes ends with the note, and the
+  transit report's ephemeris line says *"from cache (fetched …)"*. A star with several planets still needs the live
+  Archive to list them.
+
+To start fresh, press **Clear cached catalogs** on the Credits page (chapter 3).
 
 ### Results
 

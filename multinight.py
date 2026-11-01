@@ -1539,6 +1539,7 @@ class MultiNightWindow:
                 self.planet.update({k: got.get(k) for k in ("t0", "t0_err", "period", "period_err", "ra", "dec",
                                                               "reference", "source") if got.get(k) is not None})
                 self.planet.pop("eph_source", None)
+                self.planet["from_cache"] = got.get("from_cache")   # 2.2.21 (#21): "from cache (fetched …)"
                 # review (#18): a planet from a report lacks Teff (limb darkening), b and the rest: fill what is
                 # missing from the lookup, never overwrite what the page or the report gave.
                 for k in ("teff", "logg", "b", "b_err", "k", "k_err", "t14", "a_rs", "a_rs_err", "inc", "host",

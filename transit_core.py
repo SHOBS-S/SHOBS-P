@@ -1187,7 +1187,8 @@ def ephemeris_source(planet: dict) -> str:
         ref = ref.split(":", 1)[1].strip()
     ref = ref.lstrip("; ").strip()
     base = planet.get("source") or "the planet's published values"
-    return base + (f" ({ref})" if ref else "")
+    cached = f", from cache (fetched {planet['from_cache']})" if planet.get("from_cache") else ""   # 2.2.21 (#21)
+    return base + (f" ({ref})" if ref else "") + cached
 
 
 def predicted_tc(tc_obs: float, t0: float, period: float, t0_err=None, period_err=None) -> dict:
@@ -2022,19 +2023,63 @@ def lookup_exofop_toi(name: str) -> dict:
 
 
 def lookup_planet(name: str) -> dict:
+    """The planet from the NASA Exoplanet Archive, else (a TOI) from ExoFOP.
+    2.2.21 (#21): every Archive answer is kept in the lookup cache under the typed name; when the Archive does not
+    answer (and ExoFOP has nothing live), the last good answer comes back with cache_note / from_cache set. A star with
+    several planets (PlanetChoice) and an Archive that says "no such planet" are always live."""
+    import lookup_cache
     errors = []
+    key = lookup_cache.norm_key(name)
+    no_answer = None
     try:
-        return lookup_nea(name)
+        planet = lookup_nea(name)
+        lookup_cache.put("nea", key, _json_ready(planet))
+        return planet
     except PlanetChoice:
         raise
     except Exception as exc:
         errors.append(f"NASA Exoplanet Archive: {exc}")
+        if not isinstance(exc, ValueError):
+            no_answer = exc   # not reached (timeout, no connection, 5xx), as opposed to "no planet called …"
     if "TOI" in name.upper():
         try:
             return lookup_exofop_toi(name)
         except Exception as exc:
             errors.append(f"ExoFOP: {exc}")
+    if no_answer is not None:
+        cached, when = lookup_cache.get("nea", key)
+        if isinstance(cached, dict) and cached.get("period"):
+            planet = dict(cached)
+            planet["from_cache"] = lookup_cache.fetched_text(when)
+            planet["cache_note"] = lookup_cache.from_cache_note("nea", when, _no_answer_reason(no_answer))
+            return planet
     raise ValueError("\n".join(errors))
+
+
+def _json_ready(planet: dict) -> dict:
+    """2.2.21 (#21): a planet dict with only JSON values (NaN/inf as None; sets as lists), for the lookup cache."""
+    out = {}
+    for k, v in planet.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            v = None
+        elif isinstance(v, (set, tuple)):
+            v = list(v)
+        elif hasattr(v, "item") and not isinstance(v, (list, dict, str)):
+            try:
+                v = v.item()
+            except Exception:
+                continue
+        out[str(k)] = v
+    return out
+
+
+def _no_answer_reason(exc) -> str:
+    """2.2.21 (#21): '503', 'timed out' or 'no connection' for the cache note."""
+    try:
+        import photometry_core
+        return photometry_core.service_error_text(exc)
+    except Exception:
+        return ""
 
 
 def exofop_ids(planet: dict | None, *names: str) -> tuple[str, str]:

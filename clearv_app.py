@@ -1879,6 +1879,8 @@ class App(Tk):
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(8, 0))
         ttk.Button(nav, text="Save credits as text…", command=self.save_credits).pack(side=LEFT)
+        # 2.2.21 (#21): the saved catalog and lookup answers (star fields, SIMBAD/VSX/AAVSO/Archive lookups)
+        ttk.Button(nav, text="Clear cached catalogs", command=self.clear_cached_catalogs).pack(side=LEFT, padx=(8, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(self._before_credits)).pack(side=RIGHT)
         box = Text(card, wrap="word", font=(core.UI_FONT, 10), bg="#ffffff", fg="#1c2b33", relief="flat", padx=8, pady=8)
         box.pack(fill=BOTH, expand=True, before=nav)
@@ -1906,6 +1908,33 @@ class App(Tk):
         self.credits_page.lift()
         for i, btn in enumerate(self.step_buttons):
             btn.configure(text=f"    {i + 1}   {STEPS[i]}")
+
+    def clear_cached_catalogs(self, ask: bool = True) -> int:
+        """2.2.21 (#21): remove the saved catalog answers: the star-field cache and the lookup cache (SIMBAD, VSX,
+        AAVSO sequence, NASA Exoplanet Archive...). Asks Yes/No first; says how many files were removed."""
+        import lookup_cache
+        if ask and not messagebox.askyesno(
+                APP_TITLE, "Remove the saved catalog answers (star fields, and SIMBAD, VSX, AAVSO and Exoplanet "
+                           "Archive lookups)?\n\nThey are fetched again the next time they are needed. Your "
+                           "settings, site and data are not touched."):
+            return 0
+        n = 0
+        try:
+            names = os.listdir(core.CATALOG_CACHE_DIR)
+        except OSError:
+            names = []
+        for name in names:
+            if name.endswith((".json", ".part")):
+                try:
+                    os.remove(os.path.join(core.CATALOG_CACHE_DIR, name))
+                    n += 1
+                except OSError:
+                    pass
+        n += lookup_cache.clear()
+        text = f"Cleared cached catalogs: {n} file{'s' if n != 1 else ''} removed."
+        self.log(text)
+        self.status.set(text)
+        return n
 
     def save_credits(self):
         path = self.output_path("SHOBS-P_credits.txt", title="Save credits", defaultextension=".txt",
@@ -3701,6 +3730,10 @@ class App(Tk):
             + (f"; star {mags}" if mags else "") + (f"; filled {' and '.join(filled)}" if filled else "")
             + (". a/R* derived from the duration." if p.get("a_rs_derived") else "."))
         self.status.set(f"✔ {p['name']}: P {p['period']:.6f} d.")
+        if p.get("cache_note"):   # 2.2.21 (#21): the Archive did not answer; the last good answer was used
+            self.planet_source.set(self.planet_source.get() + " " + p["cache_note"])
+            self.status.set(self.status.get() + " " + p["cache_note"])
+            self.log(f"{p['name']}: {p['cache_note']}")
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
         if "RA/Dec" in filled:
@@ -3876,7 +3909,8 @@ class App(Tk):
              "period": period, "t0": num(self.pl_t0), "k": num(self.pl_k), "a_rs": num(self.pl_a_rs),
              "b": num(self.pl_b), "teff": num(self.pl_teff), "source": info.get("source") or "Input page",
              "reference": info.get("reference", ""), "vmag": info.get("vmag"), "tmag": info.get("tmag"),
-             "ra": info.get("ra"), "dec": info.get("dec")}
+             "ra": info.get("ra"), "dec": info.get("dec"),
+             "from_cache": info.get("from_cache")}   # 2.2.21 (#21): "from cache (fetched …)" in the report
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)
@@ -4635,6 +4669,9 @@ class App(Tk):
             f"✔ {found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
+        for cache_note in found.get("cache_notes") or []:   # 2.2.21 (#21): a part of the lookup came from the cache
+            self.log(f"{found['name']}: {cache_note}")
+            self.status.set(self.status.get() + "   " + cache_note)
         # 2.2.15 (GitHub #3): the image was solved before the lookup answered: put the Target marker on it now.
         self._try_auto_target("lookup")
 
@@ -7434,7 +7471,7 @@ class App(Tk):
             lines.append(f"{sat} saturated on this frame (raw pixels; measured, not candidates).")   # 2.2.19 (#25)
         if self.field_check_sources:
             lines.append(f"{len(self.variable_marks)} known or suspected variables in the frame "
-                         f"({' + '.join(self.field_check_sources)}).")
+                         f"({core.check_sources_text(self.field_check_sources)}).")   # 2.2.21 (#48)
         self.disc_field_text.set("\n".join(lines))
 
     def _saturated_count(self):
@@ -10086,7 +10123,8 @@ class App(Tk):
                 style = "Hint.TLabel" if role == "target" else "Bad.TLabel"
             elif role != "target":
                 if checked and (star or xy is not None):
-                    parts.append("not a known or suspected variable (" + " + ".join(self.field_check_sources)
+                    parts.append("not a known or suspected variable (" + core.check_sources_text(
+                        self.field_check_sources)   # 2.2.21 (#48): "; VSX not reached"
                                  + ("" if star else ", checked by position") + ")")
                 elif not checked:
                     parts.append("variable check: Solve first")
@@ -10869,6 +10907,7 @@ class App(Tk):
                 self._chart_diag["catalogs"] = {c: len(v) for c, v in found.items()}
                 self._chart_diag["catalog_errors"] = failed
                 self._chart_diag["catalog_retrying"] = dict(cat_info.get("retrying") or {})   # 2.2.19 (#11)
+                self._chart_diag["catalog_from_cache"] = dict(cat_info.get("from_cache") or {})   # 2.2.21 (#21)
                 if not stars:
                     raise ValueError("No catalog returned stars for this field ("
                                      + "; ".join(f"{c}: {e}" for c, e in failed.items()) + ").")
@@ -10945,7 +10984,7 @@ class App(Tk):
                     # One VSX + SIMBAD query per field: known and suspected variables, to vet comps and spares.
                     key = (round(cone[0], 4), round(cone[1], 3), round(fov))
                     cache = vet_cache.get("field")
-                    if cache and cache[0] == key and cache[2]:
+                    if cache and cache[0] == key and "VSX" in cache[2]:   # 2.2.21 (#48): no VSX: ask again
                         variables, answered = cache[1], cache[2]
                     else:
                         variables, answered = core.field_variables(cone[0] * 15.0, cone[1], fov / 60.0 / 2.0 * 1.15)
@@ -11281,6 +11320,10 @@ class App(Tk):
                              "to retry.")
                 continue
             self.log(f"  {cat} did not answer ({err}); its stars are missing this time. Solve again to retry.")
+        cached_notes = list((diag.get("catalog_from_cache") or {}).values())   # 2.2.21 (#21)
+        for cache_note in cached_notes:
+            self.log(f"  {cache_note}" + (f" Chart {chart_id} (goes in the AAVSO report)." if chart_id
+                                          and cache_note.startswith("AAVSO") else ""))
         if sloan:
             # 2.2.17 (item 1): one Sloan band on a mono camera: the B-V / V-R color calibration does not apply.
             self.log(f"  Sloan {band} run: comps and reports use {band} magnitudes; the B-V / V-R color calibration "
@@ -11299,6 +11342,8 @@ class App(Tk):
                 "sequence stars)."
                 + (" Green rings: suggested comps near the target's brightness." if self.suggested_comps else "")
             )
+        if cached_notes:
+            self.status.set(self.status.get() + "   " + " ".join(cached_notes))   # 2.2.21 (#21)
 
     @staticmethod
     def _num(var, default=None):
@@ -11547,10 +11592,13 @@ class App(Tk):
         self.field_variables = variables
         self.field_check_sources = list(answered)
         flagged = sum(1 for _x, _y, st in self.chart_placed if st.get("variable"))
+        for check_note in getattr(answered, "notes", None) or []:   # 2.2.21 (#21, #48)
+            self.log(f"Variable-star check: {check_note}")
         if not answered:
             self.field_check_text.set("Variable-star check: VSX and SIMBAD could not be reached, so the comps were "
                                       "not checked. Solve again later.")
-            self.log("Variable-star check: VSX and SIMBAD could not be reached; comps and spares were not checked.")
+            self.log("Variable-star check: VSX and SIMBAD could not be reached; comps and spares were not checked."
+                     + (f" ({answered.vsx_error})" if getattr(answered, "vsx_error", "") else ""))
             return
         h, w = self.preview.shape
         try:
@@ -11559,14 +11607,19 @@ class App(Tk):
             self.variable_marks = [(x, y, v) for x, y, v in spots if 0 <= x < w and 0 <= y < h]
         except Exception:
             self.variable_marks = []
-        src = " + ".join(answered)
+        src = core.check_sources_text(answered)   # 2.2.21 (#48): "SIMBAD; VSX not reached" when VSX did not answer
+        no_vsx = "VSX" not in answered
         self.field_check_text.set(
             f"Variable-star check ({src}): {len(self.variable_marks)} known or suspected variables in the frame"
             f"; {flagged} of them are labeled stars (red circle), the rest are red × (Show variables). Comps and the "
             "check star are checked by position, whatever catalog you labeled with. Variables are never used as "
-            "spares or in the color fit. Hover to see what they are.")
+            "spares or in the color fit. Hover to see what they are."
+            + (" VSX was not reached, so VSX-only variables are not marked: Solve again later." if no_vsx else "")
+            + "".join(" " + n for n in (getattr(answered, "notes", None) or [])))
         self.log(f"Variable-star check ({src}): {len(self.variable_marks)} known or suspected variables in the frame; "
-                 f"{flagged} labeled star(s) flagged and left out of spares and the color fit.")
+                 f"{flagged} labeled star(s) flagged and left out of spares and the color fit."
+                 + (f" VSX not reached ({answered.vsx_error}); Solve again later to check against VSX."
+                    if no_vsx and getattr(answered, "vsx_error", "") else ""))
         self._scan_known_refresh()   # 2.2.19 (#14)
 
     # ---- Discovery mode ---------------------------------------------------------------
@@ -12084,13 +12137,17 @@ class App(Tk):
                     result["radec"] = [core.pixel_to_sky(x, y, solution) for x, y in result["xy"]]
                     try:
                         half_diag_deg = math.hypot(w, h) / 2.0 * solution["scale"] / 3600.0 * 1.1
-                        if field_known is not None and field_known[1]:
+                        if field_known is not None and "VSX" in field_known[1]:   # 2.2.21 (#48): else ask again
                             known, sources = field_known
                         else:
                             known, sources = core.field_variables(solution["ra_deg"], solution["dec_deg"], half_diag_deg)
                         if not sources:
                             raise ConnectionError("VSX and SIMBAD could not be reached")
                         result["vsx_sources"] = list(sources)
+                        if "VSX" not in sources:   # 2.2.21 (#48): say so, never "not in SIMBAD" as if VSX was asked
+                            self.call_ui(self.log, "  Variable-star check: VSX not reached"
+                                         + (f" ({sources.vsx_error})" if getattr(sources, "vsx_error", "") else "")
+                                         + "; only SIMBAD was checked.")
                         result["known"] = [k for k in known
                                            if 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[0] < w
                                            and 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[1] < h]
@@ -12127,7 +12184,7 @@ class App(Tk):
         n = len(result["candidates"])
         known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
         self.last_scan = result
-        src = " / ".join(result.get("vsx_sources") or ["VSX"])
+        src = core.check_sources_text(result.get("vsx_sources") or ["VSX"])   # 2.2.21 (#48)
         self.log(f"Field scan done: {len(result['labels'])} stars, {result['frames']} frames, {n} candidate(s)"
                  + (f", {known} already known ({src})" if result.get("vsx") is not None
                     else ", no sky positions (run Solve for the VSX/SIMBAD check)"))
@@ -19943,7 +20000,7 @@ class ScanView:
             elif vsx:
                 vsx_text = f"KNOWN ({vsx.get('source', 'VSX')}): {vsx['name']} {vsx['type']}".strip()
             else:
-                vsx_text = "not in " + (" or ".join(result.get("vsx_sources") or ["VSX"])) + (
+                vsx_text = core.not_in_sources_text(result.get("vsx_sources")) + (   # 2.2.21 (#48)
                     " (watched)" if rank == "W" else " (near miss: under the candidate level)"
                     if str(rank).startswith("~") else " — possible new variable")
             where = result["labels"][i]

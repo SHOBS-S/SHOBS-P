@@ -146,7 +146,7 @@ reached the candidate level. If none did, the ten nearest misses are listed as *
 | **Best period (d)** | The best Lomb-Scargle period. **no period (drift)** means the best peak sat at the long end of the search: a slow drift, not a period. **at the short end: search shorter** means it sat at the short end. |
 | **B−V** | Color, when measured. |
 | **Check first** | Reasons to doubt the candidate (below). |
-| **VSX** | **KNOWN (VSX): name type**, or **not in VSX or SIMBAD — possible new variable**. |
+| **VSX** | **KNOWN (VSX): name type**, or **not in VSX or SIMBAD — possible new variable**. When VSX could not be reached it reads **VSX not reached — possible new variable** (only SIMBAD was checked; solve and scan again later). |
 
 Click a row to draw that star. You can select several rows. Click the selected row again, or press **Esc**, to clear
 the selection.

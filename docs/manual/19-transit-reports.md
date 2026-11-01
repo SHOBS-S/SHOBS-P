@@ -63,7 +63,8 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 - times left in JD_UTC from a source report (see below),
 - SHOBS-P's processing bin (see above),
 - the O − C against the predicted Tc, for example `SHOBS-P O - C +5.38 +/- 11.15 min (+0.48 sigma; …) vs predicted Tc
-  … at epoch 2362; ephemeris from …` (not for "no transit", or for times left in JD_UTC),
+  … at epoch 2362; ephemeris from …` (not for "no transit", or for times left in JD_UTC); when the Archive was down
+  and SHOBS-P used its saved answer, the source ends `, from cache (fetched 12 Oct 2026)`,
 - one line of reduction settings, starting `SHOBS-P settings:` (aperture, comps, check, frames left out, trimmed
   frames, detrending, gain, calibration),
 - a parameter limited by its prior range (chapter 17, "The corner plot").

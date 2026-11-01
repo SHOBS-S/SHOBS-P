@@ -138,6 +138,7 @@ on hidden items (on a Mac, Cmd+Shift+period in Finder).
 | `.shobs_p.log` | Every line of the Log window, each with the date and time in front, and the full details of any error. Past 5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts. |
 | `.shobs_p_transit_catalog.csv` | The list of transiting planets for Tonight's transits, refreshed weekly. |
 | `.shobs_p_cache\catalogs\` | Star catalogs fetched for your fields, kept for 30 days so solving the same field again is faster. |
+| `.shobs_p_cache\lookups\` | The last good answer from each online lookup: `simbad.json` and `vsx.json` (Star ID lookups), `vsx_cone.json` (the variable-star check), `vsp.json` (AAVSO charts and sequences), `nea.json` (planet lookups), and more from other services. Used only when the service does not answer; a live answer always replaces it. Only public catalog values are kept, never your site, observer code or data. **Clear cached catalogs** (Credits page) empties this folder and `catalogs`. |
 | `.shiloh_photometry_exports.json` | Named setups from the **Export…** window. |
 | `.shiloh_photometry_colorcal.json` | The color term saved from a field color calibration, reused on later nights. |
 
