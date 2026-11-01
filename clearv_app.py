@@ -470,21 +470,69 @@ def nice_scale_bar(arcsec_per_px: float, width_px: int) -> tuple[float, str] | N
     return sec / arcsec_per_px, text
 
 
+def block_mean(img, f: int):
+    """2.2.20 (item 2c): the frame shrunk by f in each direction by averaging f x f blocks (NaN-aware), not by
+    taking every f-th pixel: a 26 Mpx frame cut to 2000 px keeps 1 pixel in 16 that way, all of its noise, and looked
+    like sandpaper. The ragged edge (rows/columns past a whole block) is dropped."""
+    a = np.asarray(img, dtype=np.float32)
+    if f <= 1:
+        return a
+    h, w = (a.shape[0] // f) * f, (a.shape[1] // f) * f
+    blocks = a[:h, :w].reshape(h // f, f, w // f, f)
+    with np.errstate(invalid="ignore"), __import__("warnings").catch_warnings():
+        __import__("warnings").simplefilter("ignore", RuntimeWarning)
+        return np.nanmean(blocks, axis=(1, 3)).astype(np.float32)
+
+
+FIELD_ASINH_B = 0.08      # 2.2.20 (item 2c): the field image's asinh softness (smaller = faint stars brighter)
+
+
+def field_display(img) -> np.ndarray:
+    """2.2.20 (item 2c): the field image's own gentle stretch (0..1), so one short frame no longer looks like
+    sandpaper: a light smoothing (Gaussian, 0.7 px), the black point under the sky (sky median - 1 sigma, so the sky
+    is an even dark gray, not salt and pepper), the white point at the 99.9th percentile but never closer than 100
+    sigma above the sky (so a field of faint stars never stretches the sky noise up to full scale), then asinh so
+    faint stars show without burning out the bright ones. The Photometry page's own stretch is not changed."""
+    a = np.asarray(img, dtype=np.float32)
+    finite = np.isfinite(a)
+    if not finite.any():
+        return np.zeros(a.shape, dtype=np.float32)
+    fill = float(np.nanmedian(a[finite][:: max(1, a[finite].size // 2_000_000)]))
+    a = np.where(finite, a, fill).astype(np.float32)
+    try:
+        from scipy import ndimage
+        a = ndimage.gaussian_filter(a, 0.7)
+    except Exception:
+        pass
+    step = max(1, int(math.ceil(math.sqrt(a.size / 1_000_000))))
+    sample = a[::step, ::step].ravel()
+    sky = float(np.median(sample))
+    sigma = float(1.4826 * np.median(np.abs(sample - sky))) or float(np.std(sample)) or 1.0
+    lo = sky - 1.0 * sigma
+    hi = max(float(np.percentile(sample, 99.9)), sky + 100.0 * sigma)
+    x = np.clip((a - np.float32(lo)) / np.float32(hi - lo), 0.0, 1.0)
+    x = np.arcsinh(x / np.float32(FIELD_ASINH_B)) / np.float32(math.asinh(1.0 / FIELD_ASINH_B))
+    return x.astype(np.float32)
+
+
 def draw_field_figure(img, info: dict, stretch=None):
-    """2.2.19 (#28): the annotated field: the frame stretched as on the Photometry page, turned N up / E left when
-    the solution says where north is (else labeled "orientation unknown"), the target, comps (sequence stars with
-    AUID and V) and check marked in the Photometry page's colors with the aperture and sky ring to scale, the AAVSO
-    sequence stars as thin dashed rings with their V label, an N/E compass and a scale bar. Returns a matplotlib
-    Figure (Agg; no window). info: {"title", "subtitle", "radius", "sky_in", "sky_out", "north", "east",
-    "arcsec_px", "marks": [(x, y, tag, color, label)], "seq": [(x, y, label)]}."""
+    """2.2.19 (#28): the annotated field: the target, comps (sequence stars with AUID and V) and check marked in the
+    Photometry page's colors with the aperture and sky ring to scale, the AAVSO sequence stars as thin dashed rings
+    with their V label, an N/E compass and a scale bar. Returns a matplotlib Figure (Agg; no window). info: {"title",
+    "subtitle", "radius", "sky_in", "sky_out", "north", "east", "arcsec_px", "marks": [(x, y, tag, color, label)],
+    "seq": [(x, y, label)]}.
+    2.2.20 (item 2): the frame is shown as shot (never turned; it fills the picture, no empty corners), and the
+    compass arrows show where N and E lie on it (from the solution; "orientation unknown" without one). The subtitle
+    wraps to the picture's width. The background uses field_display's gentle stretch (stretch is no longer used;
+    kept for callers)."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.patches import Circle
-    # Review: a full-size frame (26 Mpx) is cut to about 2000 px first: turning it at full size took seconds on the
-    # window's thread, and the PNG is 1100 px wide anyway. Positions, radii and the plate scale follow.
+    # Review: a full-size frame (26 Mpx) is cut to about 2000 px first: the PNG is 1100 px wide anyway. Positions,
+    # radii and the plate scale follow. 2.2.20 (item 2c): by averaging blocks (block_mean), not every f-th pixel.
     f = int(math.ceil(max(img.shape[:2]) / 2000.0))
     if f > 1:
-        img = img[::f, ::f]
+        img = block_mean(img, f)
         info = dict(info)
         info["marks"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, *rest) for x, y, *rest in info.get("marks") or []]
         info["seq"] = [((x + 0.5) / f - 0.5, (y + 0.5) / f - 0.5, lab) for x, y, lab in info.get("seq") or []]
@@ -492,29 +540,36 @@ def draw_field_figure(img, info: dict, stretch=None):
             info[k] = float(info.get(k) or 0) / f
         if info.get("arcsec_px"):
             info["arcsec_px"] = float(info["arcsec_px"]) * f
-    orient = field_orientation(info.get("north"), info.get("east"))
-    disp = core.stretch_display(img, stretch)
-    disp, move = orient_image(disp, orient)
+    # 2.2.20 (item 2a): the frame as shot (no turn, no mirror): it fills the picture; the arrows say where N and E are.
+    disp = field_display(img)
     h, w = disp.shape[:2]
     aspect = h / max(w, 1)
     fig_w = 10.0
-    fig = Figure(figsize=(fig_w, fig_w * aspect + 1.0), dpi=110, facecolor="#ffffff")
+    dpi = 110
+    # 2.2.20 (item 2b): the subtitle wraps to the picture's width (it ran off the right edge: "...to scale · AAVSO").
+    sub_lines = []
+    try:
+        from transit_ui import wrap_to_width
+        sub_lines = wrap_to_width(info.get("subtitle", ""), fig_w * dpi * 0.97, 8, "normal", dpi)
+    except Exception:
+        sub_lines = [info.get("subtitle", "")] if info.get("subtitle") else []
+    head_in = 0.48 + 0.16 * max(len(sub_lines), 1)
+    fig_h = fig_w * aspect * 0.98 + head_in + 0.1
+    fig = Figure(figsize=(fig_w, fig_h), dpi=dpi, facecolor="#ffffff")
     FigureCanvasAgg(fig)
-    top = 1.0 - 0.75 / (fig_w * aspect + 1.0)
-    ax = fig.add_axes([0.01, 0.01, 0.98, top - 0.02])
-    ax.imshow(disp, cmap="gray", origin="upper", vmin=0.0, vmax=1.0, interpolation="nearest")
+    ax = fig.add_axes([0.01, 0.05 / fig_h, 0.98, fig_w * aspect * 0.98 / fig_h])
+    ax.imshow(disp, cmap="gray", origin="upper", vmin=0.0, vmax=1.0, interpolation="antialiased")   # 2.2.20 (item 2c): no pixel sparkle
     ax.set_xlim(-0.5, w - 0.5)
     ax.set_ylim(h - 0.5, -0.5)
     ax.set_xticks([])
     ax.set_yticks([])
-    fig.text(0.01, 1.0 - 0.12 / (fig_w * aspect + 1.0), info.get("title", ""), fontsize=12, fontweight="bold",
-             va="top", color="#1c2b33")
-    fig.text(0.01, 1.0 - 0.42 / (fig_w * aspect + 1.0), info.get("subtitle", ""), fontsize=8, va="top", color="#5d6d76")
+    fig.text(0.01, 1.0 - 0.1 / fig_h, info.get("title", ""), fontsize=12, fontweight="bold", va="top", color="#1c2b33")
+    for i, line in enumerate(sub_lines):
+        fig.text(0.01, 1.0 - (0.42 + 0.16 * i) / fig_h, line, fontsize=8, va="top", color="#5d6d76")
     r, s_in, s_out = (float(info.get(k) or 0) for k in ("radius", "sky_in", "sky_out"))
     # A size in screen points that looks the same on a 650 px and a 3000 px frame.
     pt_per_px = fig_w * 72.0 * 0.98 / max(w, 1)
-    for x, y, label in info.get("seq") or []:
-        x, y = move(x, y)
+    for x, y, label in field_seq_shown(info.get("seq") or [], info.get("marks") or [], r, s_out, pt_per_px):
         if not (0 <= x < w and 0 <= y < h):
             continue
         ax.scatter([x], [y], s=SEQ_RING_MS ** 2, facecolors="none", edgecolors=SEQ_COLOR, linewidths=1.0,
@@ -522,7 +577,6 @@ def draw_field_figure(img, info: dict, stretch=None):
         ax.annotate(str(label), (x, y), xytext=(6, 5), textcoords="offset points", color=SEQ_COLOR, fontsize=7,
                     fontweight="bold", zorder=3)
     for x, y, tag, colour, label in info.get("marks") or []:
-        x, y = move(x, y)
         if r > 0:
             ax.add_patch(Circle((x, y), r, fill=False, color=colour, lw=1.3, zorder=5))
         if 0 < s_in < s_out:
@@ -542,32 +596,17 @@ def draw_field_figure(img, info: dict, stretch=None):
         halo = [patheffects.withStroke(linewidth=2.0, foreground="#000000", alpha=0.7)]
     except Exception:
         pass
-    if orient is not None:
-        n, e = np.array(info["north"], dtype=float), np.array(info["east"], dtype=float)
-        if orient["flip"]:
-            n[0], e[0] = -n[0], -e[0]
-        for _ in range(orient["k"]):
-            n, e = np.array([n[1], -n[0]]), np.array([e[1], -e[0]])
-        if abs(orient.get("residual") or 0.0) > 0.5:
-            n, e = _turn_vec(n, orient["residual"]), _turn_vec(e, orient["residual"])
-        base = (0.93, 0.86)
-        for vec, tag in ((n, "N"), (e, "E")):
-            dx, dy = float(vec[0]), -float(vec[1])
-            norm = math.hypot(dx, dy) or 1.0
-            dx, dy = dx / norm * 0.06, dy / norm * 0.06 / max(aspect, 0.2)
-            ax.annotate("", xy=(base[0] + dx, base[1] + dy), xycoords="axes fraction", xytext=base,
-                        textcoords="axes fraction", arrowprops=dict(arrowstyle="-|>", color="#ffd24a", lw=1.4))
-            ax.text(base[0] + dx * 1.35, base[1] + dy * 1.35, tag, transform=ax.transAxes, ha="center", va="center",
-                    fontsize=10, fontweight="bold", color="#ffd24a", path_effects=halo)
-        done = (["mirrored"] if orient["flip"] else []) \
-            + [f"turned {(90 * orient['k'] + orient['residual'] + 180) % 360 - 180:+.0f}°"
-               if (orient["k"] or abs(orient["residual"]) > 0.5) else ""]
-        done = [d for d in done if d]
-        words = "N up, E left" + (f" (frame {' and '.join(done)})" if done else "")
+    arrows = field_compass(info.get("north"), info.get("east"), w, h)
+    if arrows is not None:
+        # 2.2.20 (item 2a): N and E as they lie on this frame (image pixels, y down), from the plate solution.
+        for tag, (bx, by), (tx, ty), (lx, ly) in arrows:
+            ax.annotate("", xy=(tx, ty), xytext=(bx, by), arrowprops=dict(arrowstyle="-|>", color="#ffd24a", lw=1.6),
+                        zorder=8)
+            ax.text(lx, ly, tag, ha="center", va="center", fontsize=10, fontweight="bold", color="#ffd24a",
+                    path_effects=halo, zorder=8)
     else:
-        words = "Orientation unknown (the image is not solved)"
-    ax.text(0.99, 0.985, words, transform=ax.transAxes, ha="right", va="top", fontsize=7 if orient else 9,
-            color="#e8eef2" if orient else "#ffd24a", fontweight="normal" if orient else "bold", path_effects=halo)
+        ax.text(0.99, 0.985, "Orientation unknown (the image is not solved)", transform=ax.transAxes, ha="right",
+                va="top", fontsize=9, color="#ffd24a", fontweight="bold", path_effects=halo)
     bar = nice_scale_bar(info.get("arcsec_px") or 0, w)
     if bar is not None:
         length, text = bar
@@ -583,6 +622,169 @@ def draw_field_figure(img, info: dict, stretch=None):
     for t in ax.texts:
         t.set_clip_on(True)
     return fig
+
+
+def field_seq_shown(seq, marks, radius: float = 0.0, sky_out: float = 0.0, pt_per_px: float = 1.0) -> list:
+    """2.2.20 (item 2d): the AAVSO sequence stars the field image draws: not the ones inside a marked star's drawn
+    ring (the aperture, the sky ring, or the fixed 22-pt finder ring). HD 219134 is itself an AAVSO sequence star
+    (000-BCR-325, "56"); its catalog spot sat a few px off the defocused target's marker (beyond the old 2 px test),
+    so a small dashed cyan ring was drawn beside the target with its label hidden under the target's label: the
+    unexplained cyan "c". The marked star's own label already names it."""
+    reach = max(2.0, float(radius or 0), float(sky_out or 0) * 0.5, 11.0 / max(float(pt_per_px or 1.0), 1e-6))
+    pts = [(float(m[0]), float(m[1])) for m in marks]
+    return [s for s in seq if not any(math.hypot(s[0] - a, s[1] - b) <= reach for a, b in pts)]
+
+
+# ---- 2.2.20 (#46): star names in the Notes that are not in this reduction ----------------------------------------
+import re as _re
+
+_NOTE_STAR_RE = _re.compile(
+    r"\b(?:TYC\s*\d{1,4}-\d{1,5}-\d|HD\s*\d{1,6}|HIP\s*\d{1,6}|BD\s*[+-]\d{1,2}\s*\d{1,5}|TIC\s*\d{4,10}"
+    r"|Gaia\s*DR[23]\s*\d{6,20}|\d{3}-[A-Z]{3}-\d{3}|(?:WASP|HAT-P|TrES|KELT|XO|Qatar|TOI|K2)-\d{1,5})\b",
+    _re.IGNORECASE)
+
+
+def _star_key(name: str) -> str:
+    """Spaces and case ignored; a trailing planet letter after a number dropped ('HD 219134 b' -> 'hd219134')."""
+    k = "".join(str(name or "").split()).lower()
+    m = _re.fullmatch(r"(.*\d)[b-i]", k)
+    return m.group(1) if m else k
+
+
+def notes_foreign_stars(notes: str, known, previous: str = "") -> list:
+    """2.2.20 (#46): the star names in a report's notes that are not in this reduction: catalog-style names (TYC, HD,
+    HIP, BD, TIC, Gaia DR2/DR3, AAVSO AUIDs like 000-BCR-325, WASP-/HAT-P-/TrES-/KELT-/XO-/Qatar-/TOI-/K2-) and the
+    previous reduction's target, when they match none of `known` (this run's target, planet, comps, check and their
+    AUIDs; spaces, case and a planet letter ignored). In order of appearance, each once."""
+    text = str(notes or "")
+    keys = {_star_key(k) for k in known if k and str(k).strip()}
+    out = []
+    found = [m.group(0) for m in _NOTE_STAR_RE.finditer(text)]
+    prev = " ".join(str(previous or "").split())
+    if prev and _star_key(prev) not in keys and not placeholder_star_name(prev):
+        if _re.search(r"(?<![\w-])" + r"\s*".join(_re.escape(p) for p in prev.split()) + r"(?![\w-])", text,
+                      _re.IGNORECASE):
+            found.insert(0, prev)
+    for name in found:
+        key = _star_key(name)
+        if key in keys or any(_star_key(o) == key for o in out):
+            continue
+        out.append(" ".join(name.split()))
+    return out
+
+
+# ---- 2.2.20 (#47): Save for ExoClock (Transits) ---------------------------------------------------------------------
+EXOCLOCK_UPLOAD_URL = "https://www.exoclock.space/upload/"
+# AAVSO filter code -> what to pick in ExoClock's Filter list (a color camera's green channel is close to V).
+EXOCLOCK_FILTERS = {"TG": "Johnson V (green channel of a color camera, close to V)", "V": "Johnson V",
+                    "TB": "Johnson B (blue channel of a color camera, close to B)", "B": "Johnson B",
+                    "TR": "Cousins R (red channel of a color camera, close to R)", "R": "Cousins R", "RC": "Cousins R",
+                    "I": "Cousins I", "IC": "Cousins I", "CV": "Clear (no filter)", "CR": "Clear (no filter)",
+                    "CBB": "Clear (blue-blocking)", "SG": "Sloan g'", "SR": "Sloan r'", "SI": "Sloan i'",
+                    "SZ": "Sloan z'", "SU": "Sloan u'"}
+
+
+def exoclock_planet(name: str) -> str:
+    """2.2.20 (#47): a planet name as ExoClock spells it: no spaces ("TOI-2046 b" -> "TOI-2046b", "HD 219134 b" ->
+    "HD219134b")."""
+    return "".join(str(name or "").split())
+
+
+def exoclock_filter(code: str) -> str:
+    """2.2.20 (#47): ExoClock's Filter choice for an AAVSO filter code (the code itself when not in the table)."""
+    c = str(code or "").strip()
+    return EXOCLOCK_FILTERS.get(c.upper(), c or "Clear (no filter)")
+
+
+def exoclock_jd_utc(t, system: str = "BJD_TDB", ra_deg=None, dec_deg=None, lat=None, lon=None) -> np.ndarray:
+    """2.2.20 (#47): the fit's times as geocentric JD_UTC (ExoClock's Time format JD_UTC). The transit fit works in
+    BJD_TDB (photometry_core.convert_times from each frame's mid-exposure JD_UTC, photometry_core.mid_jd); this undoes
+    that: JD = BJD - (BJD(JD) - JD), iterated twice (the barycentric correction changes by well under 0.01 s over
+    the few minutes between the two, so this is exact for timing). JD_UTC times (an opened JD_UTC report) pass
+    through unchanged."""
+    t = np.asarray(t, dtype=float)
+    if system == "JD_UTC":
+        return t.copy()
+    jd = t.copy()
+    for _ in range(2):
+        jd = t - (core.convert_times(jd, "BJD_TDB", ra_deg, dec_deg, lat, lon) - jd)
+    return jd
+
+
+def exoclock_upload_text(jd_utc, flux, err, planet: str, meta: dict) -> str:
+    """2.2.20 (#47): ExoClock's upload file: '#' header lines, then three space-separated columns, one row per frame
+    in time order: JD_UTC at mid-exposure, relative flux (median 1, NOT detrended), flux error. Only the frames the
+    transit fit used (rejected, flagged or trimmed frames are left out, as in the AAVSO exoplanet report)."""
+    jd = np.asarray(jd_utc, dtype=float)
+    f = np.asarray(flux, dtype=float)
+    e = np.asarray(err, dtype=float)
+    keep = np.isfinite(jd) & np.isfinite(f) & np.isfinite(e)
+    order = np.argsort(jd[keep])
+    jd, f, e = jd[keep][order], f[keep][order], e[keep][order]
+    head = [f"# ExoClock upload file written by SHOBS-P {meta.get('version', '')}",
+            f"# Planet: {exoclock_planet(planet)}",
+            "# Time format: JD_UTC (geocentric), Time stamp: Mid-exposure",
+            "# Flux format: Flux (relative flux, not detrended)",
+            f"# Filter: {exoclock_filter(meta.get('filter', ''))}",
+            f"# Exposure time (s): {meta.get('exposure', '')}",
+            f"# Observer code: {meta.get('obscode', '')}",
+            f"# Frames: {len(jd)}",
+            "# Columns: JD_UTC rel_flux rel_flux_err"]
+    rows = [f"{a:.6f} {b:.6f} {c:.6f}" for a, b, c in zip(jd, f, e)]
+    return core.ascii_safe("\n".join(head + rows) + "\n")
+
+
+def exoclock_info_text(planet: str, meta: dict, upload_name: str) -> str:
+    """2.2.20 (#47): ExoClock_info.txt: what to pick on ExoClock's upload form for the file just saved."""
+    lines = [f"ExoClock upload form, for {upload_name} (SHOBS-P {meta.get('version', '')})",
+             "",
+             f"Planet: {exoclock_planet(planet)}   (ExoClock spells planet names with no space)",
+             "Time format: JD_UTC",
+             "Time stamp: Mid-exposure   (the form starts on \"Exposure start\": change it)",
+             "Flux format: Flux",
+             f"Filter: {exoclock_filter(meta.get('filter', ''))}",
+             f"Exposure time (seconds): {meta.get('exposure', '') or 'see your FITS headers (EXPTIME)'}",
+             "",
+             f"Upload page: {EXOCLOCK_UPLOAD_URL} (log in first)."]
+    return core.ascii_safe("\n".join(lines) + "\n")
+
+
+def exoclock_name(planet: str, jd_first: float) -> str:
+    """2.2.20 (#47): ExoClock_<planet, no spaces>_<YYYYMMDD of the first frame, UTC>.txt."""
+    from datetime import datetime, timezone
+    day = datetime.fromtimestamp((float(jd_first) - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
+    safe = "".join(ch if ch not in '<>:"/\\|?* ' else "_" for ch in exoclock_planet(planet)) or "planet"
+    return f"ExoClock_{safe}_{day}.txt"
+
+
+def field_compass(vec_n, vec_e, w: int, h: int):
+    """2.2.20 (item 2a): the field image's N and E arrows on the frame as shot: [(tag, base, tip, label center)] in
+    image pixels (x right, y down), from the unit vectors north and east (compass_vectors); None without them. The
+    arrows share one base in the top-right corner, placed so both arrows and both letters stay inside the frame
+    whichever way the solution points them."""
+    if vec_n is None or vec_e is None:
+        return None
+    side = float(min(w, h))
+    length = 0.08 * side
+    out = []
+    vecs = []
+    for tag, v in (("N", vec_n), ("E", vec_e)):
+        v = np.asarray(v, dtype=float)
+        norm = math.hypot(v[0], v[1])
+        if not math.isfinite(norm) or norm < 1e-9:
+            return None
+        vecs.append((tag, v / norm))
+    reach = 1.45 * length + 0.03 * side          # arrow plus its letter, and a margin
+    xs = [reach * v[0] for _t, v in vecs] + [0.0]
+    ys = [reach * v[1] for _t, v in vecs] + [0.0]
+    margin = 0.02 * side
+    bx = (w - 1) - margin - max(xs)
+    by = margin - min(ys)
+    for tag, v in vecs:
+        tip = (bx + length * v[0], by + length * v[1])
+        lab = (bx + 1.35 * length * v[0], by + 1.35 * length * v[1])
+        out.append((tag, (bx, by), tip, lab))
+    return out
 
 
 def image_fit_px(avail_w: float, avail_h: float, img_w: int, img_h: int, title_px: float = 0.0,
@@ -2513,7 +2715,67 @@ class App(Tk):
     # ---- 2.2.18 (item 10): "sent" marks, and the duplicate warning at the upload buttons -----------------------
     UPLOAD_PAGES = {"webobs": ("AAVSO WebObs", "AAVSO", "WebObs"),
                     "exoplanet": ("the AAVSO Exoplanet Database", "AAVSO", "AAVSO exo"),
-                    "exofop": ("ExoFOP", "ExoFOP", "ExoFOP")}
+                    "exofop": ("ExoFOP", "ExoFOP", "ExoFOP"),
+                    "exoclock": ("ExoClock", "ExoClock", "ExoClock")}   # 2.2.20 (#47)
+
+    # ---- 2.2.20 (#47): Save for ExoClock / Go to ExoClock (Transit fit page's Results row) ----------------------------
+    def save_exoclock(self) -> str:
+        """2.2.20 (#47): the shown transit fit as ExoClock's upload file (ExoClock_<planet>_<YYYYMMDD>.txt: JD_UTC at
+        mid-exposure, relative flux not detrended, error; the frames the fit used, as the AAVSO exoplanet report) and
+        ExoClock_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if none)."""
+        tp = getattr(self, "transit_page", None)
+        r = getattr(tp, "result", None) if tp is not None else None
+        if not r:
+            messagebox.showinfo(APP_TITLE, "Fit a transit first.")
+            return ""
+        if tp._still_checking("ExoClock file") or not tp._confirm_export():
+            return ""
+        meta = tp._file_meta()
+        planet = str((r.get("planet") or {}).get("name") or self.planet_name.get() or "")
+        report = getattr(tp, "report", None)
+        system = "JD_UTC" if (report or {}).get("date_type") == "JD_UTC" else "BJD_TDB"
+        try:
+            ra = dec = lat = lon = None
+            if system != "JD_UTC":
+                ra, dec = self.target_radec_deg(r.get("planet"))
+                lat, lon = float(self.lat.get()), float(self.lon.get())
+            jd = exoclock_jd_utc(r["t"], system, ra, dec, lat, lon)
+        except (ValueError, TypeError) as exc:
+            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the times need the target's RA/Dec and your site's "
+                                           f"latitude and longitude on the Input page ({exc}).")
+            return ""
+        err = r.get("err_scaled", r.get("err"))
+        name = exoclock_name(planet, float(np.nanmin(jd)))
+        path = self.output_path(name, title="Save for ExoClock", defaultextension=".txt",
+                                filetypes=[("Text", "*.txt")], parent=self)
+        if not path:
+            return ""
+        info_path = self._unique_path(os.path.join(os.path.dirname(path), "ExoClock_info.txt"))
+        try:
+            with core.AsciiWriter(path, newline="\n") as fh:
+                fh.write(exoclock_upload_text(jd, r["flux"], err, planet, meta))
+            with core.AsciiWriter(info_path, newline="\n") as fh:
+                fh.write(exoclock_info_text(planet, meta, os.path.basename(path)))
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"Could not save the ExoClock file:\n{exc}")
+            return ""
+        self.log(f"ExoClock file: {path} ({len(r['t'])} frames, JD_UTC mid-exposure, flux not detrended); "
+                 f"form notes: {info_path}")
+        try:
+            self._remember_report("exoclock", tp._fit_nights(), path)
+        except Exception:
+            pass
+        self.status.set(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what to pick is in "
+                        f"{os.path.basename(info_path)}).")
+        return path
+
+    def open_exoclock(self):
+        """2.2.20 (#47): ExoClock's upload page in the browser (as Open AAVSO WebObs…)."""
+        plan = self._upload_check("exoclock")
+        if plan is None:
+            return
+        if self.open_link(EXOCLOCK_UPLOAD_URL, "ExoClock's upload page (log in; pick Mid-exposure on the form)"):
+            self._mark_sent("exoclock", plan)
 
     @staticmethod
     def _report_id(entry: dict) -> str:
@@ -3523,6 +3785,16 @@ class App(Tk):
             if self.observations:
                 return False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        # 2.2.20 (#46): the Output page's Notes belong to the old star (they went into the next star's AAVSO report
+        # #NOTES); back to the camera's default note. Every "Start a new reduction?" path comes through here.
+        if old:
+            self._previous_target = old   # 2.2.20 (#46): for the notes check at report save
+        note = self.notes.get().strip()
+        default = self._default_note()
+        if note != default:
+            self.notes.set(default)
+            if note and note not in (OSC_NOTE, MONO_NOTE):
+                cleared.append("the Output page notes")
         reason = why or "New reduction pressed"
         self.clear_target(quiet=True, why=reason)
         self.log("New reduction" + (f" (was {old})" if old else "") + ": " + reason
@@ -4481,11 +4753,18 @@ class App(Tk):
         self._sync_camera_note()
         self._update_filter_hint()
 
+    def _default_note(self) -> str:
+        """2.2.20 (#46): the Notes box's default for this camera (as _sync_camera_note sets it)."""
+        try:
+            return MONO_NOTE if self.pattern.get() == core.MONO and not getattr(self, "_rgb_channel", None) else OSC_NOTE
+        except Exception:
+            return OSC_NOTE
+
     def _sync_camera_note(self):
         try:
             note = self.notes.get().strip()
             # 2.2.18 (item 1): color images run as MONO (no debayer) but are not from a monochrome camera
-            want = MONO_NOTE if self.pattern.get() == core.MONO and not getattr(self, "_rgb_channel", None) else OSC_NOTE
+            want = self._default_note()
             if note in (OSC_NOTE, MONO_NOTE, "") and note != want:
                 self.notes.set(want)
         except Exception:
@@ -16905,6 +17184,8 @@ class App(Tk):
                 return False
         if not self._name_report_check():
             return False
+        if not self._notes_check():   # 2.2.20 (#46)
+            return False
         scope = self._save_scope("AAVSO report")
         if scope is None:
             return False
@@ -17007,9 +17288,23 @@ class App(Tk):
         taken = [m[:2] for m in marks]
         seq = []
         if self.mode_key != "discovery":
+            # 2.2.20 (item 2d): a sequence star that IS the target (by sky position: HD 219134 is sequence star
+            # 000-BCR-325, and its high proper motion puts the chart's spot off the marker) or a marked comp/check (by
+            # AUID) is not drawn again as a small cyan ring beside its own marker.
+            try:
+                t_radec = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
+            except (TypeError, ValueError):
+                t_radec = None
+            marked_auids = {str(v) for v in (self.seq_auids or {}).values() if v}
             for x, y, st in self.chart_placed:
                 if st.get("seq") and 0 <= x < w and 0 <= y < h and not any(math.hypot(x - a, y - b) < 2.0
                                                                           for a, b in taken):
+                    if str(st["seq"].get("auid") or "") in marked_auids:
+                        continue
+                    if (self.target_xy is not None and t_radec is not None and st.get("ra") is not None
+                            and st.get("dec") is not None
+                            and core.sky_separation_arcsec(float(st["ra"]), float(st["dec"]), *t_radec) < 15.0):
+                        continue
                     seq.append((x, y, st["seq"].get("label") or st.get("label", "")))
         vec = self.compass_vectors((h, w))
         arcsec, exact = self._field_scale_arcsec()
@@ -17095,7 +17390,8 @@ class App(Tk):
             if not report_path:
                 messagebox.showerror(APP_TITLE, f"Could not save the field image:\n{exc}")
             return ""
-        orient = "N up, E left" if info.get("north") is not None else "orientation unknown (not solved)"
+        # 2.2.20 (item 2a): the frame as shot; the arrows show N and E
+        orient = "as shot, N/E arrows" if info.get("north") is not None else "orientation unknown (not solved)"
         self.log(f"Field image saved ({orient}): {path}")
         if not report_path:
             self.saved_notice(path, "Compare it with the AAVSO chart of the field (saved beside it when VSP answers).")
@@ -17133,6 +17429,37 @@ class App(Tk):
             traceback.print_exc()
             self.log(f"Field image not saved with the report ({type(exc).__name__}: {exc}).")
             return ""
+
+    def _reduction_star_names(self) -> list:
+        """2.2.20 (#46): every name this reduction's stars go by: the target (Star ID), the planet, the comps and check
+        (form, run and Use comps names), the names typed at report save and their AAVSO AUIDs."""
+        names = [self.star_id.get(), self.planet_name.get(), self.check_name.get(), self.check_used]
+        names += [getattr(self, f"{r}_name").get() for r in COMP_ROLES]
+        names += list(self.comps_used or []) + list(self.active_comps or [])
+        names += list((getattr(self, "report_names", {}) or {}).values())
+        names += list((self.seq_auids or {}).keys()) + list((self.seq_auids or {}).values())
+        info = getattr(self, "planet_info", None) or {}
+        names += [info.get("host"), info.get("name")]
+        return [str(n) for n in names if n and str(n).strip()]
+
+    def _notes_check(self, notes: str | None = None) -> bool:
+        """2.2.20 (#46): before a report is saved: when its notes name a star that is not in this reduction (left over
+        from the last star), ask. True when the save may go on."""
+        text = self.notes.get() if notes is None else notes
+        foreign = notes_foreign_stars(text, self._reduction_star_names(), getattr(self, "_previous_target", ""))
+        if not foreign:
+            return True
+        names = " and ".join(foreign[:3]) + (" …" if len(foreign) > 3 else "")
+        verb = "names" if len(foreign) == 1 else "name"
+        which = "is" if len(foreign) == 1 else "are"
+        if messagebox.askyesno(APP_TITLE, f"⚠ The notes name {names}, which {which} not in this reduction.\n\n"
+                                          f"Notes: “{' '.join(text.split())}”\n\nSave anyway?", default="no"):
+            self.log(f"Report saved with notes that {verb} {names} (not in this reduction; answered Yes).")
+            return True
+        self.log(f"Report not saved: the notes {verb} {names}, not in this reduction. Fix the Notes box (Output page) "
+                 "and save again.")
+        self.status.set("✖ Not saved: fix the Notes (Output page), then save again.")
+        return False
 
     def _name_report_check(self) -> bool:
         """2.2.14 (item 7): an AAVSO report must not go out with KNAME = "check" (13 Oct: the check marker never got

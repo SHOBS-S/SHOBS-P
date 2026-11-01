@@ -241,6 +241,9 @@ class TransitPage:
         _rbutton(text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet)
         _rbutton(text="Save ExoFOP package…", command=self.save_package)
         _rbutton(text="Open ExoFOP…", command=self.open_exofop)
+        # 2.2.20 (#47): ExoClock's upload file (+ ExoClock_info.txt) and its upload page (App.save_exoclock).
+        _rbutton(text="Save for ExoClock…", command=app.save_exoclock)
+        _rbutton(text="Go to ExoClock…", command=app.open_exoclock)
         # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
         _rbutton(text="Save light-curve CSV…", command=self.save_csv)
         # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
@@ -2513,6 +2516,8 @@ class TransitPage:
             return
         if not self._confirm_export():
             return
+        if self.report is None and not self.app._notes_check():   # 2.2.20 (#46): notes naming another star
+            return
         meta = self._file_meta()
         # 2.2.17 (item 9 nit): one number for the report, CSV and PNG of one fit.
         path = self.app.output_path(self.family_names()[0], title="Save AAVSO exoplanet report",
@@ -2632,6 +2637,8 @@ class TransitPage:
         if self._still_checking("ExoFOP package"):
             return
         if not self._confirm_export():
+            return
+        if self.report is None and not self.app._notes_check():   # 2.2.20 (#46)
             return
         folder = self.app.output_directory("Folder for the ExoFOP package", parent=self.app)
         if not folder:
