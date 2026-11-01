@@ -65,6 +65,34 @@ Things worth knowing about the lookup:
   Rp/R\* by more than 20%, SHOBS-P notes it and compares against (Rp/R\*)².
 - **Look up again** repeats the lookup, for example after a failed one.
 
+### TESS TOI status and ExoClock priority
+
+Right after the planet's values are filled in, SHOBS-P checks two more things in the background, so the lookup is
+not slowed. While it checks, the line under the box says *"Checking TESS TOI status and ExoClock…"*. Then two lines
+appear under the source line:
+
+- **TESS TOI status**, from the NASA Exoplanet Archive's TOI table (the TFOP Working Group's disposition). SHOBS-P
+  finds the TOI by the star's TIC number, else by a TOI number in the planet's names, else by the star's position
+  (within 10″). Many WASP, HAT-P and KELT planets are TOIs too.
+  - A candidate: *"TOI-1234.01 · PC (planet candidate) — consider uploading to ExoFOP-TESS (coordinate with TFOP
+    SG1)"*. **APC** (ambiguous planet candidate) reads the same way. Your transit of a candidate is real follow-up
+    science; coordinate with TFOP Sub Group 1 before you upload.
+  - A confirmed or known planet: *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* (or
+    **KP**, known planet).
+  - A false positive (**FP**), a false alarm (**FA**) or a planet that is not a TOI: no line.
+  - If the Archive does not answer: *"TOI status unknown (Archive did not answer)"*. It never says "not a TOI" when
+    it could not ask.
+
+  The TOI line is blue: click it to open the target's ExoFOP-TESS page.
+- **ExoClock priority**, from ExoClock's planet list (downloaded once a day), for example *"ExoClock: HIGH priority
+  (2 recent observations)"*. The priority is ALERT, HIGH, MEDIUM or LOW; ALERT and HIGH planets need timings most.
+  If your telescope (**Telescope aperture (mm)** in the Optics box) is smaller than ExoClock asks for, the line adds
+  *"(needs ≥ 5″ telescope)"*. A planet ExoClock does not follow says *"Not on ExoClock's list"*. Click the line to
+  open the planet's ExoClock page.
+
+When a service does not answer, SHOBS-P uses its last answer and says so, for example *"(from cache, fetched 12 Oct
+2026)"*. The same two lines are shown on the Transit fit page (chapter 17).
+
 If the lookup fails, the line under the box says *"Could not look up … Check the spelling and press Look up
 again, or type the values."*
 

@@ -260,6 +260,19 @@ class TransitPage:
             rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
         except Exception:
             pass
+        # 2.2.21 (#32, item 14): the planet's TESS TOI status (a link to its ExoFOP-TESS page) and ExoClock priority
+        # (a link to its ExoClock page), under the Results row; the App looks them up with the planet.
+        tstat = ttk.Frame(card, style="Card.TFrame")
+        tstat.pack(fill=X, side="bottom", before=results)
+        self.toi_line = StringVar(value="")
+        self.exoclock_line = StringVar(value="")
+        self._tstat_labels = {}
+        for which, var in (("toi", self.toi_line), ("exoclock", self.exoclock_line)):
+            lab = ttk.Label(tstat, textvariable=var, style="Hint.TLabel", justify=LEFT)
+            lab.pack(anchor=W, padx=(0, 0))
+            lab.bind("<Button-1>", lambda _e, w=which: app._open_target_status_link(w)
+                     if self._target_status_shown().get(w, {}).get("url") else None)
+            self._tstat_labels[which] = lab
         # 2.2.20 (item 3, house rule): no bar on this page; the fit's and the comp check's steps and counts are the
         # words of the main window's busy bar (status strip, lower left). This row keeps the result line only.
         self.prog_text = StringVar(value="")
@@ -436,11 +449,31 @@ class TransitPage:
             self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
+        self.show_target_status()   # 2.2.21 (#32, item 14)
         if self.report is None:
             self._trim_source_check()   # review: before the stale check, so the signature has no stale trim
         self._check_stale(auto=shown)
         self._count_text()
         self._update_comp_buttons()
+
+    def _target_status_shown(self) -> dict:
+        """2.2.21 (#32, item 14): the App's TOI/ExoClock answer when it is for the planet this page fits, else {}."""
+        st = getattr(self.app, "target_status", None) or {}
+        p = self.current_planet() or {}
+        return st if st and _norm(st.get("planet")) == _norm(p.get("name")) else {}
+
+    def show_target_status(self):
+        st = self._target_status_shown()
+        for which, var in (("toi", getattr(self, "toi_line", None)), ("exoclock", getattr(self, "exoclock_line", None))):
+            if var is None:
+                continue
+            part = st.get(which) or {}
+            var.set(part.get("text", ""))
+            try:
+                self._tstat_labels[which].configure(foreground="#1a5fb4" if part.get("url") else "#5d6d76",
+                                                    cursor="hand2" if part.get("url") else "")
+            except Exception:
+                pass
 
     def _night_picked(self):
         key = self._night_keys.get(self.night_label.get())
@@ -2320,6 +2353,10 @@ class TransitPage:
     def _file_meta(self) -> dict:
         meta = dict(self.meta_for_files)
         meta["version"] = getattr(self.app, "app_version", "")
+        st = self._target_status_shown()   # 2.2.21 (#32, item 14): for the fit summary (tc.fit_text)
+        meta["toi_status"] = (st.get("toi") or {}).get("text", "")
+        meta["toi_url"] = (st.get("toi") or {}).get("url", "")
+        meta["exoclock_status"] = (st.get("exoclock") or {}).get("text", "")
         v = (self.result or {}).get("verdict")
         state = _state(v) if v else "detected"
 
