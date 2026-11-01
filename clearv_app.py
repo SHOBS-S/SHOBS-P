@@ -43,6 +43,7 @@ from tkinter import (
 
 import numpy as np
 
+import busy_bar   # 2.2.20 (item 3)
 import photometry_core as core
 import transit_core as tcore
 
@@ -243,6 +244,28 @@ MODES = {
                   "hint": "#d8bfd6", "subtitle": "Every star in the field,\nlooking for variables",
                   "banner": "DISCOVERY  ·  measure every star in the field and flag the ones that vary"},
 }
+BUSY_GREEN = "#4caf50"   # 2.2.20 (item 3): the busy bar on the dark status strip
+
+
+def mix_color(c1: str, c2: str, f: float) -> str:
+    """2.2.20 (item 3): blend two #rrggbb colors: f = 0 gives c1, 1 gives c2 (as SHOBS-SCHED's style.mix)."""
+    f = min(1.0, max(0.0, float(f)))
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * f):02x}" for x, y in zip(a, b))
+
+
+def no_auid_warning_needed(mode: str, in_vsx: bool, auid: str, looked_up_name: str, star_name: str) -> bool:
+    """2.2.20 (item 4): the Output page's "No AUID" warning: Variables mode, and the Input lookup of this Star ID
+    found the star in VSX but VSX gave no AUID (and no series supplied one). Not when the star is not in VSX at all,
+    or the lookup was for another star."""
+    star = (star_name or "").strip()
+    return (mode == "variables" and bool(in_vsx) and bool(star) and (looked_up_name or "").strip() == star
+            and not str(auid or "").strip())
+
+
+NO_AUID_WARNING = ("⚠ No AUID: WebObs will reject this report. Request one in VSX (open the star's VSX page, "
+                   "Request AUID).")
 PERIOD_BIN_CHOICES = ("Every point", "5 min bins", "10 min bins", "30 min bins")
 BIN_CHOICES = ("None", "Night", "60 min", "30 min", "15 min", "10 min")
 STEPS = ("Input", "Blink", "Calibrate", "Photometry", "Output")
@@ -1231,19 +1254,54 @@ class App(Tk):
             pass
         self.after(50, self._drain_ui_queue)
 
-    def _start_job(self, label: str) -> bool:
+    def _start_job(self, label: str, bar: bool = True) -> bool:
+        """Take the run lock (self.busy). 2.2.20 (item 3): label shows on the main window's busy bar; bar=False for a
+        job whose own window (a dialog) shows its own bar."""
         if self.busy:
             messagebox.showinfo(APP_TITLE, "Another step is still running. Wait for it to finish.")
             return False
         self.busy = True
         self._cancel = threading.Event()
         self.config(cursor="watch")
-        self.status.set(label)
+        # 2.2.20 (item 3): the job's words go on the busy bar (not the status line, which keeps the last result
+        # line); a step or a count changes them (_job_words). The run lock (self.busy) is unchanged.
+        self.busy_end(getattr(self, "_job_tok", None))
+        self._job_tok = self.busy_begin(label) if bar else None
+        if bar:
+            self.status.set("")
         return True
 
     def _end_job(self):
         self.busy = False
         self.config(cursor="")
+        self.busy_end(getattr(self, "_job_tok", None))   # 2.2.20 (item 3)
+        self._job_tok = None
+
+    # ---- 2.2.20 (item 3): the busy bar (one indicator for every wait in the main window) --------------------------
+    def busy_begin(self, words: str):
+        """Show words on the status strip's busy bar; returns a token for busy_words / busy_end. Tk thread only."""
+        bar = getattr(self, "busy_bar", None)
+        return bar.begin(words) if bar is not None else None
+
+    def busy_words(self, tok, words: str):
+        bar = getattr(self, "busy_bar", None)
+        if bar is not None and tok is not None:
+            bar.words(tok, words)
+
+    def busy_end(self, tok, soon: bool = False):
+        """End that wait (idempotent). soon: at the next idle moment, so a follow-on step started meanwhile takes
+        over the same bar without it flickering off and on (multi-step lookups)."""
+        bar = getattr(self, "busy_bar", None)
+        if bar is None or tok is None:
+            return
+        if soon:
+            self.after_idle(lambda: bar.end(tok))
+        else:
+            bar.end(tok)
+
+    def _job_words(self, words: str):
+        """The running job's (_start_job's) bar words: a new step, or "… 12 of 38"."""
+        self.busy_words(getattr(self, "_job_tok", None), words)
 
     def _prune_rejected(self) -> int:
         """2.2.19 (#20): rejected frames belong to the Lights / Flat folder they were set aside in; frames of any other
@@ -1482,6 +1540,11 @@ class App(Tk):
         style.configure("Banner.TFrame", background=m["step"])
         style.configure("Banner.TLabel", background=m["step"], foreground="#ffffff", font=(core.UI_FONT, 11, "bold"))
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground=m["side"], font=(core.UI_FONT, 10, "bold"))
+        # 2.2.20 (item 3): the busy bar at the left end of the status strip: a green bar on the mode's dark status
+        # color, its trough a lighter mix of it (as SHOBS-SCHED); restyled with the mode like the strip.
+        style.configure("Status.Horizontal.TProgressbar", background=BUSY_GREEN,
+                        troughcolor=mix_color(m["status"], "#ffffff", 0.18), bordercolor=m["status"],
+                        lightcolor=BUSY_GREEN, darkcolor=BUSY_GREEN)
 
     def _build(self):
         outer = ttk.Frame(self)
@@ -1548,6 +1611,11 @@ class App(Tk):
         # gone with the next status message).
         status_row = ttk.Frame(status, style="Side.TFrame")
         status_row.pack(fill=X, padx=12, pady=(4, 0))
+        # 2.2.20 (item 3, house rule): THE one delay indicator of the main window, at the left end of the status strip
+        # (back-and-forth bar + words; counts in the words). Every page's waits show here and nowhere else.
+        self.busy_bar = busy_bar.BusyBar(status_row, label_style="Status.TLabel", frame_style="Side.TFrame",
+                                         bar_style="Status.Horizontal.TProgressbar")
+        self.busy_bar.pack(side=LEFT)
         self.status_label = ttk.Label(status_row, textvariable=self.status, style="Status.TLabel")
         self.status_label.pack(side=LEFT)
         self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
@@ -1719,6 +1787,7 @@ class App(Tk):
         self.mode_key = mode
         m = MODES[mode]
         self._apply_theme(mode)
+        self._update_no_auid()   # 2.2.20 (item 4): Variables mode only
         self.subtitle.set(m["subtitle"])
         self.banner_text.set(m["banner"])
         for key, btn in self.mode_buttons.items():
@@ -2471,10 +2540,11 @@ class App(Tk):
         self.log(f"Opened {url}")
         return True   # 2.2.18 (item 10): the upload buttons mark "sent" only after this
 
-    def offer_upload(self, path: str, button: str, url: str, where: str):
-        """After a report save: the status line names the saved file and offers the upload page."""
+    def offer_upload(self, path: str, button: str, url: str, where: str, note: str = ""):
+        """After a report save: the status line names the saved file and offers the upload page. note: a warning
+        said first (2.2.20, item 4: "⚠ No AUID…")."""
         # 2.2.15 review: short, and the button has its own slot on the right, so a long line never hides it.
-        text = f"Saved {os.path.basename(path)} — upload to {where}:"
+        text = (f"{note}   " if note else "") + f"Saved {os.path.basename(path)} — upload to {where}:"
         self.status.set(text)
         self._status_offer = (text, url)
         try:
@@ -2880,12 +2950,10 @@ class App(Tk):
                                                                                            padx=(8, 0))
         ttk.Label(target, text="J2000 frame, proper motion to today", style="Hint.TLabel").grid(
             row=4, column=1, columnspan=2, sticky=W)
-        # 2.2.19 (nit): a busy line while the Star ID is looked up (spinner, service, seconds), or why it failed.
+        # 2.2.19 (nit): why a Star ID lookup failed (✖ line). 2.2.20 (item 3): no spinner or bar here any more; the
+        # wait shows on the status strip's busy bar.
         self.star_busy = StringVar(value="")
         self._star_busy_row = ttk.Frame(target, style="Card.TFrame")
-        self._star_busy_bar = ttk.Progressbar(self._star_busy_row, mode="indeterminate",
-                                              length=max(40, int(48 * ui_scale(target))))
-        self._star_busy_bar.pack(side=LEFT, padx=(0, 6))
         self._star_busy_label = ttk.Label(self._star_busy_row, textvariable=self.star_busy, style="Hint.TLabel",
                                           wraplength=text_wrap_px(target, 70), justify=LEFT)
         self._star_busy_label.pack(side=LEFT, fill=X)
@@ -2922,8 +2990,6 @@ class App(Tk):
             planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
         ttk.Button(cell, text="Look up again", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
         ttk.Button(cell, text="Tonight's transits…", command=self._open_finder).pack(side=LEFT, padx=(6, 0))
-        # 2.2.19 (nit): spinner while the planet is looked up (shown only then).
-        self._planet_busy_bar = ttk.Progressbar(cell, mode="indeterminate", length=max(40, int(48 * ui_scale(pg))))
         self._planet_entries = []
         for i, (label, var, hint, label2, var2, hint2) in enumerate((
                 ("Period (d)", self.pl_period, "", "T0 (BJD_TDB)", self.pl_t0, ""),
@@ -3027,27 +3093,31 @@ class App(Tk):
         return "timed out" in text or "did not answer" in text
 
     def _lookup_busy_start(self, kind: str, name: str, service: str):
-        """Spinner and "⟳ Looking up K2-29 b at the NASA Exoplanet Archive… 8 s" (kind "star" or "planet"), ticking
-        every second on its line and the status bar; empty planet boxes show a gray "looking up…"."""
+        """2.2.20 (item 3): a Star ID ("star") or planet lookup shows on the status strip's busy bar ("Looking up
+        TOI-2046 at SIMBAD and VSX…", "Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"); after
+        LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer (a late answer is still used).
+        Empty planet boxes still show a gray "looking up…"."""
         import time as _time
         busy = self.__dict__.setdefault("_busy_lookups", {})
+        old = busy.get(kind)
         token = object()
-        busy[kind] = {"name": name, "service": service, "t0": _time.monotonic(), "token": token}
-        bar = getattr(self, "_planet_busy_bar" if kind == "planet" else "_star_busy_bar", None)
+        words = (f"Looking up {name} at {service}…" if kind == "star"
+                 else f"Looking up planet {name} at the {service}…")
+        busy[kind] = {"name": name, "service": service, "t0": _time.monotonic(), "token": token,
+                      "bar": self.busy_begin(words)}
+        if old is not None:
+            self.busy_end(old.get("bar"))   # a newer lookup of the same kind replaces it
+        if kind == "star":
+            self._lookup_busy_show("star", "")   # an old ✖ line goes
+        else:
+            self._planet_placeholders(True)
         try:
-            if kind == "planet" and bar is not None:
-                bar.pack(side=LEFT, padx=(6, 0))
-            elif kind == "star":
-                self._star_busy_row.grid()
-            if bar is not None:
-                bar.start(80)
+            self.after(int(self.LOOKUP_GIVE_UP_S * 1000), lambda: self._lookup_busy_tick(kind, token))
         except Exception:
             pass
-        if kind == "planet":
-            self._planet_placeholders(True)
-        self._lookup_busy_tick(kind, token)
 
     def _lookup_busy_show(self, kind: str, text: str, bad: bool = False):
+        """The ✖ line where the lookup failed (planet: its source line; star: the line under RA/Dec)."""
         if kind == "planet":
             self.planet_source.set(text)
             return
@@ -3064,43 +3134,31 @@ class App(Tk):
             pass
 
     def _lookup_busy_tick(self, kind: str, token):
+        """LOOKUP_GIVE_UP_S after the lookup began and still no answer: the bar goes, a ✖ line says so."""
         import time as _time
         info = self.__dict__.get("_busy_lookups", {}).get(kind)
         if not info or info["token"] is not token:
             return
         secs = int(_time.monotonic() - info["t0"])
-        if secs >= self.LOOKUP_GIVE_UP_S:
-            text = (f"✖ {info['name']}: the {info['service']} did not answer within {secs} s — "
-                    + ("type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
-            self._lookup_busy_stop(kind)
-            self._lookup_busy_show(kind, text, bad=True)
-            self.status.set(text)
-            return
-        text = f"⟳ Looking up {info['name']} at the {info['service']}… {secs} s"
-        self._lookup_busy_show(kind, text)
+        text = (f"✖ {info['name']}: the {info['service']} did not answer within {secs} s — "
+                + ("type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
+        self._lookup_busy_stop(kind)
+        self._lookup_busy_show(kind, text, bad=True)
         self.status.set(text)
-        self.after(1000, lambda: self._lookup_busy_tick(kind, token))
 
-    def _lookup_busy_stop(self, kind: str, name: str | None = None):
-        """End the busy indicator (the caller then says what came of the lookup). name: only when it is still the
-        lookup of that name (an older lookup's answer leaves a newer one's spinner alone)."""
+    def _lookup_busy_stop(self, kind: str, name: str | None = None, soon: bool = False):
+        """End the lookup's wait on the busy bar (the caller then says what came of the lookup). name: only when it
+        is still the lookup of that name (an older lookup's answer leaves a newer one's bar alone). soon: the words
+        go at the next idle moment, so a next step (the star's planets) takes over the bar without a flicker."""
         busy = self.__dict__.setdefault("_busy_lookups", {})
         info = busy.get(kind)
         if info is not None and name is not None and info["name"] != name:
             return
         busy.pop(kind, None)
-        bar = getattr(self, "_planet_busy_bar" if kind == "planet" else "_star_busy_bar", None)
-        try:
-            if bar is not None:
-                bar.stop()
-            if kind == "planet" and bar is not None:
-                bar.pack_forget()
-        except Exception:
-            pass
+        if info is not None:
+            self.busy_end(info.get("bar"), soon=soon)
         if kind == "planet":
             self._planet_placeholders(False)
-            if info is not None and self.planet_source.get().startswith("⟳"):
-                self.planet_source.set("")   # the caller says what came of it
         elif info is not None:
             self._lookup_busy_show("star", "")
 
@@ -3220,7 +3278,7 @@ class App(Tk):
             f"{p['name']}{aka} from {p.get('source', '')}" + (f" ({p['reference']})" if p.get("reference") else "")
             + (f"; star {mags}" if mags else "") + (f"; filled {' and '.join(filled)}" if filled else "")
             + (". a/R* derived from the duration." if p.get("a_rs_derived") else "."))
-        self.status.set(f"{p['name']}: P {p['period']:.6f} d.")
+        self.status.set(f"✔ {p['name']}: P {p['period']:.6f} d.")
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
         if "RA/Dec" in filled:
@@ -3242,16 +3300,20 @@ class App(Tk):
             except (TypeError, ValueError, KeyError):
                 pass
 
+        # 2.2.20 (item 3): the next step of the Star ID lookup, on the busy bar
+        tok = self.busy_begin(f"Looking up {star}'s planets at the NASA Exoplanet Archive…")
+
         def work():
             try:
                 res = tcore.star_planets(star)
             except Exception:
                 res = None
-            self.call_ui(self._planets_for_star_done, star, res)
+            self.call_ui(self._planets_for_star_done, star, res, tok)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _planets_for_star_done(self, star: str, res):
+    def _planets_for_star_done(self, star: str, res, tok=None):
+        self.busy_end(tok, soon=True)   # 2.2.20 (item 3): the planet's own lookup takes over the bar
         if star != self.star_id.get().strip():
             return
         if not res:
@@ -3453,6 +3515,7 @@ class App(Tk):
             self.log(f"Cleared the old field ({', '.join(what)}): {why}.")
         self.catalog_period = None
         self.target_auid = ""   # 2.2.19 (nit)
+        self.target_in_vsx = False   # 2.2.20 (item 4)
         self.target_var_type = ""   # 2.2.14 (item 19)
         self.catalog_epoch = None   # 2.2.14 (item 13)
         self.catalog_var_type = ""
@@ -3926,12 +3989,15 @@ class App(Tk):
                 self._object_checked = getattr(self, "_object_checked", set()) | {key}
                 pointing = pointings[use[0]] if use and pointings[use[0]] is not None else None
 
+                tok = self.busy_begin(f"Looking up {obj} (the lights' OBJECT) at SIMBAD and VSX…")   # 2.2.20 (item 3)
+
                 def work(obj=obj, pointing=pointing):
                     try:
                         found = core.lookup_target(re.sub(r"\s+[b-h]$", "", obj))
                         where = (found["ra_hours"] * 15.0, found["dec_deg"])
                     except Exception:
                         where = None
+                    self.call_ui(self.busy_end, tok)
                     self.call_ui(self._object_verdict, obj, name, target, where, pointing)
 
                 threading.Thread(target=work, daemon=True).start()
@@ -3997,8 +4063,7 @@ class App(Tk):
                 messagebox.showinfo(APP_TITLE, "Enter a Star ID or designation first.")
             return
         self._last_lookup_name = name
-        self.status.set(f"Looking up {name} in SIMBAD and VSX…")
-        self._lookup_busy_start("star", name, "SIMBAD and VSX")   # 2.2.19 (nit)
+        self._lookup_busy_start("star", name, "SIMBAD and VSX")   # 2.2.19 (nit); 2.2.20 (item 3): the busy bar
 
         def work():
             try:
@@ -4015,10 +4080,10 @@ class App(Tk):
         if name and name != self.star_id.get().strip():
             # The name changed while this lookup ran (typed again, or "Use it" on the spelling hint): look up the
             # name that is there now instead of reporting the old one.
-            self._lookup_busy_stop("star", name=name)   # 2.2.19 (nit)
+            self._lookup_busy_stop("star", name=name, soon=True)   # 2.2.19 (nit)
             self._auto_lookup()
             return
-        self._lookup_busy_stop("star", name=name)
+        self._lookup_busy_stop("star", name=name, soon=True)   # 2.2.20 (item 3): the planets step keeps the bar
         if error is not None:
             if self._lookup_no_answer(error):
                 # 2.2.19 (nit): SIMBAD/VSX did not answer: on the busy line and the status bar, no error box.
@@ -4030,7 +4095,7 @@ class App(Tk):
                 return
             if quiet:
                 # 2.2.5: an automatic lookup that fails says so quietly; RA/Dec can come from the plate solution.
-                self.status.set(f"Could not look up {name or 'the target'} ({error}). Type RA/Dec, or let the plate "
+                self.status.set(f"✖ Could not look up {name or 'the target'} ({error}). Type RA/Dec, or let the plate "
                                 "solution fill them, or press Look up again.")
                 self._last_lookup_name = None
                 return
@@ -4048,6 +4113,8 @@ class App(Tk):
         self.catalog_period = found.get("period_days")
         self.target_auid = str(found.get("auid") or "")   # 2.2.19 (nit): the Series box's Star line
         self.target_auid_name = name or self.star_id.get().strip()
+        self.target_in_vsx = bool(found.get("in_vsx") or found.get("source") == "VSX")   # 2.2.20 (item 4)
+        self._update_no_auid()
         self.target_var_type = str(found.get("var_type") or "")   # 2.2.14 (item 19)
         self.catalog_epoch = found.get("epoch_jd")   # 2.2.14 (item 13): for O-C on the Output page
         self.catalog_var_type = found.get("var_type") or ""
@@ -4062,7 +4129,7 @@ class App(Tk):
             self._prefetch_target_planets(self.star_id.get().strip())   # 2.2.18 (item 20): ready before Run
         note = f" ({found['note']})" if found.get("note") else ""
         self.status.set(
-            f"{found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
+            f"✔ {found['name']} from {found.get('source', 'catalog')}{note}: RA {found['ra_hours']:.5f} h, "
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
         # 2.2.15 (GitHub #3): the image was solved before the lookup answered: put the Target marker on it now.
@@ -5834,11 +5901,14 @@ class App(Tk):
             if cancel.is_set():
                 raise RuntimeError("Canceled")
             self.call_ui(self.log, text)
+            if str(text).startswith("Median-combining"):   # 2.2.20 (item 3): the step on the busy bar
+                self.call_ui(self._job_words, "Building calibration masters: m" + str(text)[1:] + "…")
 
         def work():
             try:
                 masters = core.prepare_masters(bias, dark, flat, binning, progress_log, flats_calibrated=flats_calibrated,
                                                files=files, save=True, rebuild=rebuild, version=APP_VERSION)
+                self.call_ui(self._job_words, "Calibrating the first light…")   # 2.2.20 (item 3)
                 path = lights[0]
                 data, header = core.read_fits(path)
                 data = core.bin_image(data, binning)
@@ -6196,7 +6266,8 @@ class App(Tk):
         nav.pack(fill=X, side="bottom", before=body, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_CAL)).pack(side=LEFT)
         ttk.Button(nav, text="Next: Output", command=lambda: self.show_step(STEP_OUTPUT)).pack(side=RIGHT)
-        # Live log (the same messages as the Calibrate page log) and a progress bar with an ETA.
+        # Live log (the same messages as the Calibrate page log). 2.2.20 (item 3): the run's count and time left are
+        # the busy bar's words on the status strip; this row keeps the last run's summary and the buttons.
         self.photo_logf = ttk.Frame(card, style="Card.TFrame")
         self.photo_log = Text(self.photo_logf, height=7, wrap="none", font=(core.MONO_FONT, 9), bg="#1e1e1e", fg="#dcdcdc",
                               insertbackground="#dcdcdc")
@@ -6204,10 +6275,8 @@ class App(Tk):
         self.photo_logf.pack(fill=X, side="bottom", before=body, pady=(4, 0))
         self.photo_prog_row = ttk.Frame(card, style="Card.TFrame")
         self.photo_prog_row.pack(fill=X, side="bottom", before=body, pady=(4, 0))
-        self.progress_bar = ttk.Progressbar(self.photo_prog_row, length=320, mode="determinate", maximum=1)
-        self.progress_bar.pack(side=LEFT)
-        self.progress_text = StringVar(value="Idle.")
-        ttk.Label(self.photo_prog_row, textvariable=self.progress_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        self.progress_text = StringVar(value="")
+        ttk.Label(self.photo_prog_row, textvariable=self.progress_text, style="Hint.TLabel").pack(side=LEFT)
         self.log_toggle = ttk.Button(self.photo_prog_row, text="Hide log", command=self.toggle_photo_log)
         self.log_toggle.pack(side=RIGHT)
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
@@ -7893,25 +7962,30 @@ class App(Tk):
         return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
     def _progress_start(self, total: int, label: str):
+        """2.2.20 (item 3): a counted job's words on the busy bar ("Photometry… 12 of 38, about 1:20 left"), the bar
+        still back-and-forth; no filling bar."""
         self._prog = {"t0": time.monotonic(), "n": max(int(total), 1), "label": label}
-        self.progress_bar.configure(maximum=self._prog["n"], value=0)
-        self.progress_text.set(f"{label}: starting, {total} frames")
+        self.progress_text.set("")
+        self._job_words(f"{label}… 0 of {total}")
+
+    @staticmethod
+    def _progress_words(label: str, done: int, n: int, elapsed: float) -> str:
+        """2.2.20 (item 3): "Photometry… 12 of 38, about 1:20 left" (the time left once a frame is done)."""
+        text = f"{label}… {done} of {n}"
+        if done and n > done:
+            text += f", about {App._clock(elapsed / done * (n - done))} left"
+        return text
 
     def _progress(self, done: int):
         p = self._prog
         if not p:
             return
-        elapsed = time.monotonic() - p["t0"]
-        left = elapsed / done * (p["n"] - done) if done else float("nan")
-        self.progress_bar.configure(value=done)
-        self.progress_text.set(f"{p['label']}: frame {done}/{p['n']}   elapsed {self._clock(elapsed)}   "
-                               f"about {self._clock(left)} left")
+        self._job_words(self._progress_words(p["label"], done, p["n"], time.monotonic() - p["t0"]))
 
     def _progress_end(self, text: str = ""):
         p = self._prog
         if not p:
             return
-        self.progress_bar.configure(value=p["n"])
         self.progress_text.set(f"{p['label']} done in {self._clock(time.monotonic() - p['t0'])}. {text}".strip())
         self._prog = None
 
@@ -9116,13 +9190,15 @@ class App(Tk):
         if not self.chart_solution:
             self._slot_not_solved(text, role)
             return
-        self._slot_say(role, f"Looking up {text} in SIMBAD and VSX…")
+        tok = self.busy_begin(f"Looking up {text} at SIMBAD and VSX…")   # 2.2.20 (item 3): on the busy bar
 
         def work():
             try:
                 found = core.lookup_target(text)
+                self.call_ui(self.busy_end, tok)
                 self.call_ui(self._place_slot_sky, role, text, found["ra_hours"] * 15.0, found["dec_deg"])
             except Exception as exc:
+                self.call_ui(self.busy_end, tok)
                 self.call_ui(self._slot_lookup_failed, role, text, exc)
 
         threading.Thread(target=work, daemon=True).start()
@@ -9785,16 +9861,18 @@ class App(Tk):
         if coords is not None:
             self._add_watch_sky(f"watch {coords[0]:.4f} {coords[1]:+.4f}", coords[0], coords[1], "", announce=True)
             return
-        self.status.set(f"Looking up {text} in SIMBAD and VSX…")
+        tok = self.busy_begin(f"Looking up {text} at SIMBAD and VSX…")   # 2.2.20 (item 3)
 
         def work():
             try:
                 found = core.lookup_target(text)
+                self.call_ui(self.busy_end, tok)
                 self.call_ui(self._add_watch_sky, text, found["ra_hours"] * 15.0, found["dec_deg"],
                              f"{found.get('source', 'SIMBAD')}" + (f" {found['var_type']}" if found.get("var_type") else ""),
                              True)
             except Exception as exc:
-                self.call_ui(self.status.set, f"Could not find {text}.")
+                self.call_ui(self.busy_end, tok)
+                self.call_ui(self.status.set, f"✖ Could not find {text}.")
                 self.call_ui(messagebox.showerror, APP_TITLE, f"Could not find {text}: {exc}")
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
@@ -10216,8 +10294,8 @@ class App(Tk):
         def work():
             try:
                 if len(stack_paths) >= 5 and stack_setup[0] is not None:
-                    self.call_ui(self.status.set, f"Only {len(sources)} stars on this frame: stacking "
-                                                  f"{len(stack_paths)} frames to find more…")
+                    self.call_ui(self._job_words, f"Solving: only {len(sources)} stars on this frame, stacking "
+                                                  f"{len(stack_paths)} frames to find more…")   # 2.2.20 (item 3)
                     masters_, pattern_, mode_, bin_ = stack_setup
                     frames = [preview_ref]   # the reference, so star positions stay on the preview's pixels
                     for path in stack_paths:
@@ -10320,8 +10398,8 @@ class App(Tk):
                     # The target marker may sit on a neighbor: try the detected stars near the click as the anchor.
                     near = sorted(sources, key=lambda p: math.hypot(p[0] - target_xy[0], p[1] - target_xy[1]))
                     near = [p for p in near if 1.5 < math.hypot(p[0] - target_xy[0], p[1] - target_xy[1]) < 120][:15]
-                    self.call_ui(self.status.set, f"No lock at the target marker; trying {len(near)} nearby stars as the "
-                                                  "target…")
+                    self.call_ui(self._job_words, f"Solving: no lock at the target marker, trying {len(near)} nearby "
+                                                  "stars as the target…")   # 2.2.20 (item 3)
                     best = None
                     for p in near:
                         trial = core.match_chart(sources, match_set, p, ra_hours * 15.0, dec, scale,
@@ -10335,7 +10413,7 @@ class App(Tk):
                         self._chart_diag["target"] = anchor
                     else:
                         # Last resort: solve the field from star patterns, then find the target by its RA/Dec.
-                        self.call_ui(self.status.set, "Solving the field from star patterns…")
+                        self.call_ui(self._job_words, "Solving the field from star patterns…")   # 2.2.20 (item 3)
                         fs = core.solve_field(sources, usable, ra_hours * 15.0, dec, scale, tolerance_px=tol,
                                               frame_shape=(height_px, width_px))   # 2.2.17 (item 1)
                         if fs is not None and fs["hits"] >= max(needed, 8):
@@ -10391,8 +10469,8 @@ class App(Tk):
             return
         prog = getattr(self, "_cat_progress", None) or {}
         parts = [f"{core.CATALOG_SHORT.get(c, c)}{'' if v == '…' else ' '}{v}" for c, v in prog.items()]
-        secs = getattr(self, "_cat_seconds", 0)
-        self.status.set("Catalogs: " + " ".join(parts) + (f" {secs} s" if secs else ""))
+        # 2.2.20 (item 3): the busy bar's words (no ticking seconds), the status line keeps its last result line
+        self._job_words("Solving: fetching catalogs: " + " ".join(parts))
 
     def _catalog_late(self, cat, d, same_lights):
         """2.2.16 (item 2; review): Gaia's deep half after the solve, worded by what really happened.
@@ -11319,9 +11397,7 @@ class App(Tk):
                                 chans[ch].append(crow[ch])
                     except Exception as exc:
                         self.call_ui(self.log, f"  scan skipped {os.path.basename(path)}: {exc}")
-                    self.call_ui(self._progress, i)
-                    if i % 10 == 0 or i == len(lights):
-                        self.call_ui(self.status.set, f"Field scan: {i}/{len(lights)} frames…")
+                    self.call_ui(self._progress, i)   # 2.2.20 (item 3): "Field scan… 12 of 38" on the busy bar
                 if len(rows) < 10:
                     raise ValueError(f"only {len(rows)} frames could be measured; a scan needs at least 10")
                 inst = np.vstack(rows)
@@ -12786,12 +12862,14 @@ class App(Tk):
             return
         if not user:   # (Planet transits… has said so already)
             self._planet_check_status(ctx)
+        tok = self.busy_begin(f"Looking up {star}'s planets at the NASA Exoplanet Archive…")   # 2.2.20 (item 3)
 
         def work():
             try:
                 planets = tcore.transiting_planet_ephemerides(star)
             except Exception:
                 planets = None   # offline or an unexpected reply: silent
+            self.call_ui(self.busy_end, tok)
             self.call_ui(self._campaign_planets_done, key, points, planets, user, ctx)
 
         threading.Thread(target=work, daemon=True).start()
@@ -12866,8 +12944,9 @@ class App(Tk):
         return base or folder
 
     def _planet_check_status(self, ctx: dict) -> None:
-        if ctx:
-            self.status.set(ctx["status"])
+        # 2.2.20 (item 3): the wait shows on the busy bar now (_check_planet_transits); the status line is left as
+        # it was, so the "Checking …" words never stay behind there.
+        return
 
     def _planet_check_stale(self, ctx) -> str:
         """Why the context of a planet check changed while the lookup ran ("" when it did not)."""
@@ -13052,7 +13131,7 @@ class App(Tk):
         nights = [n for n in all_nights if self._night_info(n).get("planet_transits")]
         if not nights:
             if all_nights and self.mode_key == "variables" and self.star_id.get().strip():
-                self.status.set("Planet transits: looking up the Star ID's planets and checking every night…")
+                self.status.set("")   # 2.2.20 (item 3): the busy bar says it
                 self._check_planet_transits(all_nights, user=True, source="series")
                 return
             messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs in "
@@ -13819,6 +13898,7 @@ class App(Tk):
         if meta.get("target_auid"):
             self.target_auid = str(meta["target_auid"])   # 2.2.19 (nit)
             self.target_auid_name = str(meta.get("star_id") or "").strip()
+            self._update_no_auid()   # 2.2.20 (item 4): the series supplies the AUID
         given = meta.get("report_names")   # 2.2.14 (item 7)
         self.report_names = {str(k): str(v) for k, v in given.items() if v} if isinstance(given, dict) else {}
         if isinstance(meta.get("night_notes"), dict):
@@ -14418,6 +14498,9 @@ class App(Tk):
         ttk.Button(series_row, text="Watch stars…", command=self.show_watch).pack(side=LEFT, padx=6)
         # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
         ttk.Button(series_row, text="Time of max/min…", command=self.show_extremum).pack(side=LEFT)
+        # 2.2.20 (item 4): "⚠ No AUID" under the Results row (Variables mode, VSX knows the star but gave no AUID).
+        self._no_auid_nav = nav
+        self.no_auid_label = ttk.Label(card, text=NO_AUID_WARNING, style="Warn.TLabel", justify=LEFT)
         ttk.Label(nav, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
         ttk.Button(nav, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso).pack(side=LEFT)
         # 2.2.15 (item 8): AAVSO's upload page for the saved report.
@@ -15079,6 +15162,7 @@ class App(Tk):
         auid = str(getattr(self, "target_auid", "") or "").strip()
         if getattr(self, "target_auid_name", "") != star_name:
             auid = ""   # an AUID looked up for another star
+        self._update_no_auid()   # 2.2.20 (item 4)
         if hasattr(self, "output_heading"):
             self.output_heading.set("Output – Variability" + (f": {star_name}" if star_name else ""))
         series_lines = [
@@ -16721,7 +16805,8 @@ class App(Tk):
         keys = list(dict.fromkeys(list(r.get("candidates") or [])[:40] + list((r.get("periods") or {}).keys())))
         self._disc_refit_gen = getattr(self, "_disc_refit_gen", 0) + 1
         gen = self._disc_refit_gen
-        self.status.set(f"Searching the candidates' periods over {rng[0]:g}–{rng[1]:g} d…")
+        # 2.2.20 (item 3): on the busy bar
+        tok = self.busy_begin(f"Searching the candidates' periods over {rng[0]:g}–{rng[1]:g} d…")
         jd = np.asarray(r["jd"], dtype=float)
         curves = np.asarray(r["light_curves"], dtype=float)
 
@@ -16735,6 +16820,7 @@ class App(Tk):
                     ls = None
                 if ls:
                     periods[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls}
+            self.call_ui(self.busy_end, tok)
             self.call_ui(self._disc_periods_done, r, gen, rng, periods)
 
         threading.Thread(target=work, daemon=True).start()
@@ -16760,7 +16846,7 @@ class App(Tk):
             except Exception:
                 traceback.print_exc()
         self.log(f"Field scan: candidates' periods searched again over {rng[0]:g}–{rng[1]:g} d.")
-        self.status.set(f"Period search {rng[0]:g}–{rng[1]:g} d done.")
+        self.status.set(f"✔ Period search {rng[0]:g}–{rng[1]:g} d done.")
 
     def refit_period(self):
         if not self.observations:
@@ -16934,8 +17020,34 @@ class App(Tk):
         self._field_image_with_report(path)   # 2.2.19 (#28)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
                                 "comparison magnitude.")
-        self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs")   # 2.2.15 (item 8)
+        # 2.2.20 (item 4): with no AUID the status line says so once, before the upload offer
+        warn = NO_AUID_WARNING if self._no_auid_needed() else ""
+        if warn:
+            self.log(warn)
+        self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs",
+                          note=warn)   # 2.2.15 (item 8)
         return True
+
+    # ---- 2.2.20 (item 4): no AUID from VSX -----------------------------------------------------------------------
+    def _no_auid_needed(self) -> bool:
+        return no_auid_warning_needed(self.mode_key, getattr(self, "target_in_vsx", False),
+                                      getattr(self, "target_auid", ""), getattr(self, "target_auid_name", ""),
+                                      self.star_id.get())
+
+    def _update_no_auid(self):
+        """Show or hide the Output page's "⚠ No AUID" line (under the Results row)."""
+        label, nav = getattr(self, "no_auid_label", None), getattr(self, "_no_auid_nav", None)
+        if label is None or nav is None:
+            return
+        try:
+            if self._no_auid_needed():
+                if not label.winfo_ismapped():
+                    label.pack(fill=X, side="bottom", before=nav, pady=(2, 0))
+                    label.configure(wraplength=max(nav.winfo_width() - int(20 * ui_scale(nav)), 400))
+            else:
+                label.pack_forget()
+        except Exception:
+            pass
 
     # ---- 2.2.19 (#28): annotated field image beside the AAVSO chart --------------------------------------------------
     def _field_scale_arcsec(self):
@@ -17102,6 +17214,7 @@ class App(Tk):
         if fetch_chart and info.get("center") is not None and info.get("fov_arcmin"):
             ra, dec = info["center"]
             fov = float(info["fov_arcmin"])
+            tok = self.busy_begin("Fetching the AAVSO chart of the field…")   # 2.2.20 (item 3)
 
             def work():
                 try:
@@ -17119,6 +17232,8 @@ class App(Tk):
                     why = exc.short() if isinstance(exc, core.VSPError) else str(exc)
                     self.call_ui(self.log, f"AAVSO chart not saved ({why}): the field image is saved alone. Save field "
                                            "image again later to fetch the chart.")
+                finally:
+                    self.call_ui(self.busy_end, tok)
 
             threading.Thread(target=work, daemon=True).start()
         elif fetch_chart:
@@ -17276,12 +17391,11 @@ class App(Tk):
             self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
         return path or ""
 
-    SPINNER = "◐◓◑◒"
-
     def _save_in_background(self, path: str, write, what: str):
         """2.2.19 (nit): run write() (no Tk, no on-screen figure) in a worker thread. A save that is done within a
-        moment finishes as before; a longer one shows "◐ Saving …" in the status bar until a done line. The file is
-        created at once, so the next save's numbering (_family_path) already sees it."""
+        moment finishes as before; a longer one shows "Saving the …" on the busy bar (2.2.20, item 3: no text
+        spinner) until a ✔ / ✖ line. The file is created at once, so the next save's numbering (_family_path)
+        already sees it."""
         try:
             open(path, "a").close()
         except OSError:
@@ -17304,6 +17418,7 @@ class App(Tk):
                 return
             state["reported"] = True
             pending.discard(path)
+            self.busy_end(state.get("tok"))   # 2.2.20 (item 3)
             if state["error"] is not None:
                 try:
                     if os.path.getsize(path) == 0:
@@ -17319,13 +17434,6 @@ class App(Tk):
             self.status.set(f"✔ Saved {os.path.basename(path)}, the {what}"
                             + (f" ({took:.0f} s)." if took >= 1.0 else "."))
 
-        def spin(k=0):
-            if state["done"] or state.get("reported"):
-                return
-            self.status.set(f"{self.SPINNER[k % len(self.SPINNER)]} Saving the {what}… "
-                            f"{time.monotonic() - state['t0']:.0f} s")
-            self.after(150, lambda: spin(k + 1))
-
         thread = threading.Thread(target=work, daemon=True)
         self._save_threads = [t for t in getattr(self, "_save_threads", []) if t.is_alive()] + [thread]
         thread.start()
@@ -17333,7 +17441,7 @@ class App(Tk):
         if state["done"]:
             finish()
         else:
-            spin()
+            state["tok"] = self.busy_begin(f"Saving the {what}…")   # 2.2.20 (item 3): the busy bar
 
     def wait_for_saves(self, timeout: float = 30.0):
         """Wait for background saves to finish (tests; quitting)."""

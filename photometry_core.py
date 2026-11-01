@@ -3387,6 +3387,7 @@ def lookup_target(name: str) -> dict:
         for key in ("period_days", "var_type", "auid", "epoch_jd"):   # 2.2.14 (item 13): epoch
             if vsx.get(key):
                 found[key] = vsx[key]
+    found["in_vsx"] = vsx is not None   # 2.2.20 (item 4): VSX knows the star (with or without an AUID)
     return found
 
 

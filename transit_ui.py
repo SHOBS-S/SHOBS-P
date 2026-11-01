@@ -98,6 +98,12 @@ def quality_text(r) -> str:
         parts.append(f"χ²ν {r['rchi2']:.2f} (raw errors)")
     return " · ".join(parts)
 
+
+def fit_progress_words(phase, done, total) -> str:
+    """2.2.20 (item 3): the transit fit's busy-bar words: "Fitting the transit: MCMC burn-in… 600 of 1,000", then
+    "Fitting the transit: MCMC step… 1,200 of 3,000" (the second count matches the MCMC menu, 2.2.12)."""
+    return f"Fitting the transit: MCMC {'burn-in' if phase == 'burn-in' else 'step'}… {int(done):,} of {int(total):,}"
+
 class TransitPage:
     """Output page in Transits mode."""
 
@@ -251,8 +257,8 @@ class TransitPage:
             rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
         except Exception:
             pass
-        self.bar = ttk.Progressbar(prog, length=320, mode="determinate", maximum=1)
-        self.bar.pack(side=LEFT)
+        # 2.2.20 (item 3, house rule): no bar on this page; the fit's and the comp check's steps and counts are the
+        # words of the main window's busy bar (status strip, lower left). This row keeps the result line only.
         self.prog_text = StringVar(value="")
         self.prog_label = ttk.Label(prog, textvariable=self.prog_text, style="Hint.TLabel")
         self.prog_label.pack(side=LEFT, padx=8)
@@ -666,6 +672,9 @@ class TransitPage:
         report. Runs in the background; the fit starts when it is done (if the report is still the one shown)."""
         planet = rep["planet"]
         app = self.app
+        # 2.2.20 (item 3): the wait on the main window's busy bar
+        tok = app.busy_begin(f"Looking up the ephemeris of {planet.get('name') or planet.get('host') or 'the planet'} "
+                             "at the NASA Exoplanet Archive…")
 
         def work():
             found, why = None, ""
@@ -682,6 +691,7 @@ class TransitPage:
                                                     planet.get("host", ""))
                 except Exception:
                     found = None
+            app.call_ui(app.busy_end, tok, True)   # the fit that follows takes over the bar
             app.call_ui(self._ephemeris_found, rep, found, why)
 
         threading.Thread(target=work, daemon=True).start()
@@ -1082,8 +1092,8 @@ class TransitPage:
                                      "da": da, "dt": dt}
         flip_source = extra.get("flip_source", "")
         cancel = self.app._cancel
-        self.bar.configure(value=0, maximum=1)
-        self.prog_text.set("Least-squares fit…")
+        self.prog_text.set("")   # 2.2.20 (item 3): the steps are the busy bar's words
+        self.app._job_words("Fitting the transit: least-squares fit…")
         self._fitting = True
         self._show_progress()
         app = self.app
@@ -1106,9 +1116,10 @@ class TransitPage:
 
     def _progress(self, phase, done, total):
         """2.2.12: the burn-in and the steps are counted separately ("MCMC burn-in 600 of 1,000", then
-        "MCMC step 1,200 of 3,000"), so the second count matches the MCMC menu."""
-        self.bar.configure(maximum=total, value=done)
-        self.prog_text.set(f"MCMC {'burn-in' if phase == 'burn-in' else 'step'} {done:,} of {total:,}")
+        "MCMC step 1,200 of 3,000"), so the second count matches the MCMC menu. 2.2.20 (item 3): in the busy bar's
+        words ("Fitting the transit: MCMC step… 1,200 of 3,000"), never a filling bar."""
+        if self._fitting:
+            self.app._job_words(fit_progress_words(phase, done, total))
 
     def _clear_progress(self):
         """A new source: the last fit's message no longer applies (unless a fit is still running). 2.2.16 (item 6,
@@ -1120,15 +1131,12 @@ class TransitPage:
             self._show_progress()
 
     def _show_progress(self):
-        """2.2.10 (John): the bar only while a fit runs; the row only while it has something to say."""
+        """2.2.10 (John): the row only while it has something to say. 2.2.20 (item 3): no bar here (the main
+        window's busy bar shows a running fit or comp check); the row shows the result line."""
         try:
-            self.bar.pack_forget()
             self.prog_label.pack_forget()
-            busy = self._fitting or getattr(self, "_checking", False)   # 2.2.16 (item 6): the comp check too
-            if busy:
-                self.bar.pack(side=LEFT)
-            if busy or self.prog_text.get():
-                self.prog_label.pack(side=LEFT, padx=8)
+            if self.prog_text.get():
+                self.prog_label.pack(side=LEFT)
                 self.prog_row.pack(fill=X, side="bottom", pady=(4, 0), before=self.results_row)
             else:
                 self.prog_row.pack_forget()
@@ -1168,8 +1176,7 @@ class TransitPage:
         self._loo_shown = True
         self._loo_done_text = self.prog_text.get()
         m = int(np.shape(job["comp_mags"])[1])
-        self.bar.configure(value=0, maximum=m)
-        self.prog_text.set(f"Checking comps (1 of {m})…")
+        self.app._job_words(f"Checking the comps… 1 of {m}")   # 2.2.20 (item 3): the busy bar's words
         self._show_progress()
         app = self.app
         cancel = app._cancel
@@ -1191,9 +1198,7 @@ class TransitPage:
 
     def _comp_progress(self, token, done, total):
         if token is getattr(self, "_loo_token", None) and getattr(self, "_checking", False):
-            self.bar.configure(maximum=total, value=done - 1)
-            if getattr(self, "_loo_shown", True):
-                self.prog_text.set(f"Checking comps ({done} of {total})…")
+            self.app._job_words(f"Checking the comps… {done} of {total}")   # 2.2.20 (item 3)
 
     def _comp_check_done(self, token, r, loo, error):
         if token is not getattr(self, "_loo_token", None):
@@ -1231,20 +1236,20 @@ class TransitPage:
             try:
                 # 2.2.16 (round-2 review): app.log sets the status line; end on a short summary instead.
                 if error == "Canceled":
-                    self.app.status.set("Transit fit done; comp check canceled.")
+                    self.app.status.set("✔ Transit fit done; comp check canceled.")
                 elif loo and r is self.result:
                     warned = any(lvl == "warn" for lvl, _x in loo["flags"])
-                    self.app.status.set("Transit fit done; comps checked"
+                    self.app.status.set("✔ Transit fit done; comps checked"
                                         + (" — see the caution in the notes." if warned else "."))
-                elif self.app.status.get() == "Checking the comps…":
-                    self.app.status.set("Transit fit done.")
+                elif self.app.status.get() in ("Checking the comps…", ""):
+                    self.app.status.set("✔ Transit fit done.")
             except Exception:
                 pass
             self._run_pending_refit()   # 2.2.17 (item 4): comps changed while the check ran
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
-            self.prog_text.set("Canceled." if error[0] == "Canceled" else "Fit failed.")
+            self.prog_text.set("Canceled." if error[0] == "Canceled" else "✖ Fit failed.")
             self._show_progress()     # before any dialog, so the bar is not left showing behind it
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
             if error[0] != "Canceled":
@@ -1300,11 +1305,11 @@ class TransitPage:
         self._fit_signature = getattr(self, "_pending_signature", None)
         self.meta_for_files = meta
         s = result["summary"]
-        self.prog_text.set(f"Done: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, Rp/R* {s['k'][0]:.4f} ± {s['k'][1]:.4f}, "
+        self.prog_text.set(f"✔ Done: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, Rp/R* {s['k'][0]:.4f} ± {s['k'][1]:.4f}, "
                            f"MCMC acceptance {result['chain']['acceptance']:.2f}")
         self.app.log(f"Transit fit: Tc {s['tc'][0]:.6f} ± {s['tc'][1]:.6f} BJD_TDB, Rp/R* {s['k'][0]:.4f} ± "
                      f"{s['k'][1]:.4f}, depth {s['depth'][0] * 100:.2f}%, b {s['b'][0]:.2f}, beta {result['beta']:.2f}")
-        self.app.status.set("Transit fit done.")
+        self.app.status.set("✔ Transit fit done.")
         self._fill_table()
         self._count_text()
         self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
