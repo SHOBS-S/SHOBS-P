@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Starts SHOBS-P on Linux (2.2.19, #23). Run it from a terminal:   ./run_linux.sh
-# The first time it finds a Python 3.11+ with Tkinter, gives SHOBS-P its own environment in
+# The first time it finds a Python 3.11+ with Tkinter (2.2.20 (#33): 3.13, 3.12, 3.11 first, then newer, until the
+# packages install ready-made), gives SHOBS-P its own environment in
 # ~/.local/share/SHOBS-P/python-env and installs the packages there (a few minutes); later starts reuse it.
 #   ./run_linux.sh --desktop    adds SHOBS-P to your applications menu (and Desktop), with its icon. No sudo needed.
 #   ./run_linux.sh --selftest   runs the self-test (same as ./run_selftest.sh).
