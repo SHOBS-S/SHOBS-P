@@ -20,6 +20,7 @@ import numpy as np
 import photometry_core as core
 import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
+import site_time   # 2.2.21 (#22): local times in the site's time zone
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -1539,7 +1540,8 @@ class TransitPage:
             ax.legend(fontsize=8, loc="lower left", frameon=False)
             try:
                 start = tc.jd_to_local(float(t.min())).strftime("%H:%M")
-                ax.set_xlabel(f"Hours from the first point ({start} local)")
+                # 2.2.21 (#22): the site's local time, with its UTC offset that night
+                ax.set_xlabel(f"Hours from the first point ({start} {site_time.tag(float(t.min()))})")
             except Exception:
                 ax.set_xlabel("Hours from the first point")
         else:
@@ -2040,6 +2042,15 @@ class TransitPage:
         off = float(np.interp(bjd, tmap[0], tmap[1])) if tmap is not None and len(tmap[0]) else 69.184 / 86400.0
         return tc.jd_to_local(bjd - off + 30.0 / 86400.0).strftime("%H:%M")   # nearest minute (review)
 
+    def _bjd_offset(self, bjd: float, ascii_only: bool = False) -> str:
+        """2.2.21 (#22): the site's UTC offset at that time ('UTC−7'), '' when it cannot be told."""
+        tmap = self._time_map
+        off = float(np.interp(bjd, tmap[0], tmap[1])) if tmap is not None and len(tmap[0]) else 69.184 / 86400.0
+        try:
+            return site_time.offset_at(bjd - off, ascii_only)
+        except (OverflowError, ValueError, OSError, TypeError):
+            return ""
+
     def _clock_to_bjd(self, text: str, tmap) -> float | None:
         """A trim box: local clock time (as parse_clock reads it) or a BJD_TDB number -> BJD_TDB; None when empty.
         A clock time is taken on the date that puts it nearest the middle of the data, so 00:42 on a night that
@@ -2060,8 +2071,8 @@ class TransitPage:
         mid = tc.jd_to_local(jd_mid)
         best = None
         for d in (-1, 0, 1):
-            local = _dt.datetime.combine(mid.date() + _dt.timedelta(days=d), _dt.time(h, m)).astimezone()
-            jd = local.timestamp() / 86400.0 + 2440587.5
+            # 2.2.21 (#22): a typed time is the site's clock time (its zone, that night's daylight saving)
+            jd = site_time.local_to_jd(mid.date() + _dt.timedelta(days=d), h, m)
             if best is None or abs(jd - jd_mid) < abs(best - jd_mid):
                 best = jd
         return best + float(np.interp(best, ts - off, off))
@@ -2120,10 +2131,12 @@ class TransitPage:
             if m.any():
                 first, last = float(t[m].min()), float(t[m].max())
                 spans.append({"first": first, "last": last, "n": int(m.sum()),
-                              "clock": f"{self._bjd_to_clock(first)}–{self._bjd_to_clock(last)}"})
+                              "clock": f"{self._bjd_to_clock(first)}–{self._bjd_to_clock(last)}",
+                              # 2.2.21 (#22): the site's UTC offset that night ("UTC−7"; ASCII for the report note)
+                              "utc": self._bjd_offset(first), "utc_ascii": self._bjd_offset(first, True)})
         spans.sort(key=lambda s_: s_["first"])
         exact = bool(self._time_map[2]) if self._time_map else False
-        where = "; ".join(f"{s_['clock']} local (BJD_TDB {s_['first']:.5f}–{s_['last']:.5f}, {s_['n']} point"
+        where = "; ".join(f"{s_['clock']} local time ({s_['utc']}) (BJD_TDB {s_['first']:.5f}–{s_['last']:.5f}, {s_['n']} point"
                           f"{'s' if s_['n'] != 1 else ''})" for s_ in spans)
         n = int(cut.sum())
         approx = "" if exact else " Local times are approximate (±8 min: the report's star position is not known)."
@@ -2132,7 +2145,8 @@ class TransitPage:
         text = (f"Trimmed: {where}{fl_text}. These {n} points are left out of the fit, the verdict, the rms, the comp "
                 f"check and the saved files; Clear trim puts them back.{approx}")
         note = ("SHOBS-P: trimmed (left out of the fit) " + "; ".join(
-            f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local, {s_['n']} points)"
+            f"BJD_TDB {s_['first']:.5f}-{s_['last']:.5f} ({s_['clock'].replace('–', '-')} local time ({s_['utc_ascii']}), "
+            f"{s_['n']} points)"
             for s_ in spans))
         return {"spans": spans, "n": n, "n_flagged": n_flagged, "text": text, "report_note": note, "exact": exact,
                 "t": t[cut], "flux": np.asarray(flux, dtype=float)[cut],
@@ -2161,13 +2175,13 @@ class TransitPage:
         if trim:
             # Review: short (no wrap needed at high DPI); the notes name every span.
             sp = trim["spans"]
-            self.trim_text.set(f"Trimmed: {sp[0]['clock']} ({sp[0]['n']} pts)" if len(sp) == 1 else
+            self.trim_text.set(f"Trimmed: {sp[0]['clock']} ({(sp[0].get('utc') + ', ') if sp[0].get('utc') else ''}{sp[0]['n']} pts)" if len(sp) == 1 else
                                f"Trimmed: {len(sp)} spans, {trim['n']} pts (see the notes)")
         elif self._trims:
             self.trim_text.set(f"{len(self._trims)} trimmed span{'s' if len(self._trims) != 1 else ''} set; "
                                "Fit transit applies it.")
         else:
-            self.trim_text.set("local time (HHMM or HH:MM) or BJD_TDB; or drag across the plot")
+            self.trim_text.set("site's local time (HHMM or HH:MM) or BJD_TDB; or drag across the plot")   # 2.2.21 (#22)
 
     def trim_and_refit(self):
         """Add the From–To span (an empty From = from the start, an empty To = to the end) to the trimmed spans and
@@ -2177,7 +2191,7 @@ class TransitPage:
             return
         a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
         if not a and not b:
-            messagebox.showinfo("SHOBS-P", "Type a From and/or To time (local, HHMM or HH:MM, or BJD_TDB), or drag "
+            messagebox.showinfo("SHOBS-P", "Type a From and/or To time (the site's local time, HHMM or HH:MM, or BJD_TDB), or drag "
                                            "across the plot, then Trim and refit.")
             return
         if self.report is None:
@@ -3097,7 +3111,8 @@ class PlannerWindow:
         top.pack(fill=BOTH, expand=True)
         ttk.Label(top, text=f"Transit planner: {planet.get('name', '')}", font=(core.UI_FONT, 15, "bold"),
                   style="Card.TLabel").pack(anchor=W)
-        ttk.Label(top, text=(f"Site {self.lat:.3f}, {self.lon:.3f}. Times are local (this computer's time zone). "
+        ttk.Label(top, text=(f"Site {self.lat:.3f}, {self.lon:.3f}. Times are the site's local time (time zone "
+                             f"{site_time.zone_name() or 'of this computer'}; 2.2.21 #22). "
                              "'full' = transit plus the baseline on both sides above the altitude limit in a dark sky; "
                              "'transit only' = no full baseline; 'partial' = part of the transit. ± is the ephemeris "
                              "uncertainty at that date. Planner times are good to about a minute."),
@@ -3118,6 +3133,9 @@ class PlannerWindow:
         ttk.Checkbutton(opts, text="full only", variable=self.full_only).pack(side=LEFT)
         ttk.Button(opts, text="Update", style="Accent.TButton", command=self.update).pack(side=LEFT, padx=10)
         ttk.Button(opts, text="Export CSV…", command=self.export).pack(side=LEFT)
+        # 2.2.21 (#22): "Local time (UTC−4)" over the times, with the offset of the nights listed
+        self.zone_text = StringVar(value=site_time.label())
+        ttk.Label(top, textvariable=self.zone_text, style="Card.TLabel").pack(anchor=W, pady=(6, 0))
         cols = ("date", "t1", "tc", "t4", "alt", "sun", "moon", "sigma", "status") + (("zenith",) if self.altaz else ())
         self.tree = ttk.Treeview(top, columns=cols, show="headings", height=18)
         for col, label, width in (("date", "Night of", 150), ("t1", "Ingress", 80), ("tc", "Mid", 80), ("t4", "Egress", 80),
@@ -3146,6 +3164,7 @@ class PlannerWindow:
         if self.full_only.get():
             events = [e for e in events if e["status"] == "full"]
         self.events = events
+        self.zone_text.set(site_time.label_span([e["tc_jd"] for e in events]) if events else site_time.label())
         self.tree.delete(*self.tree.get_children())
         for e in events:
             t1, tm, t4 = (tc.jd_to_local(e[k]) for k in ("t1_jd", "tc_jd", "t4_jd"))
@@ -3171,13 +3190,15 @@ class PlannerWindow:
             w.writerow([core.created_line()])
             w.writerow(["epoch", "ingress_local", "mid_local", "egress_local", "tc_bjd_tdb", "alt_in", "alt_mid",
                         "alt_out", "sun_alt_mid", "moon_illum", "moon_sep_deg", "sigma_min", "coverage"]
-                       + (["alt_max", "zenith_keyhole"] if self.altaz else []))   # 2.2.18 (item 8)
+                       + (["alt_max", "zenith_keyhole"] if self.altaz else [])   # 2.2.18 (item 8)
+                       + ["local_utc_offset"])   # 2.2.21 (#22): the site's offset that night (UTC-5)
             for e in self.events:
                 w.writerow([e["epoch"]] + [tc.jd_to_local(e[k]).strftime("%Y-%m-%d %H:%M") for k in ("t1_jd", "tc_jd", "t4_jd")]
                            + [f"{e['tc_bjd']:.5f}", f"{e['alt_t1']:.1f}", f"{e['alt_tc']:.1f}", f"{e['alt_t4']:.1f}",
                               f"{e['sun_tc']:.1f}", f"{e['moon_illum']:.2f}", f"{e['moon_sep']:.0f}",
                               f"{e['sigma_min']:.1f}", e["status"]]
-                           + ([f"{e['alt_max']:.1f}", int(bool(e.get("keyhole")))] if self.altaz else []))
+                           + ([f"{e['alt_max']:.1f}", int(bool(e.get("keyhole")))] if self.altaz else [])
+                           + [site_time.offset_at(e["tc_jd"], ascii_only=True)])
 
 
 def frame_number(path: str, fallback: int) -> int:
@@ -3506,13 +3527,14 @@ class FinderWindow:
         ttk.Label(top, text="Tonight's transits", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(top, text=(f"Site {self.lat:.4f}, {self.lon:.4f}. Every known transiting planet (NASA Exoplanet "
                              "Archive) whose whole transit, plus the baseline on both sides, is in the dark with the "
-                             "star above the altitude limit. Times are local. 'After' and 'End by' limit the window "
+                             "star above the altitude limit. Times are the site's local time. 'After' and 'End by' limit the window "
                              "(for example, after 2300 or 23:00 to finish another target first). Double-click a row to use "
                              "that planet."),
                   style="Hint.TLabel", wraplength=1450, justify=LEFT).pack(anchor=W, pady=(2, 6))
         row = ttk.Frame(top, style="Card.TFrame")
         row.pack(fill=X)
-        self.date = StringVar(value=_dt.date.today().isoformat())
+        # 2.2.21 (#22): today at the site, not on this computer
+        self.date = StringVar(value=site_time.to_local(_dt.datetime.now(_dt.timezone.utc)).date().isoformat())
         self.vars = {}
 
         def field(label, key, width, value):
@@ -3578,8 +3600,7 @@ class FinderWindow:
         if h is None:
             return None
         day = night + _dt.timedelta(days=1) if h < 12 else night
-        local = _dt.datetime.combine(day, _dt.time(h % 24, m)).astimezone()
-        return local.timestamp() / 86400.0 + 2440587.5
+        return site_time.local_to_jd(day, h, m)   # 2.2.21 (#22): the site's clock
 
     def _limits(self):
         v = {k: var.get().strip() for k, var in self.vars.items()}
@@ -3637,7 +3658,9 @@ class FinderWindow:
         dark = counts.get("dark")
         dark_text = (f"dark {tc.jd_to_local(dark[0]).strftime('%H:%M')}–{tc.jd_to_local(dark[1]).strftime('%H:%M')}"
                      if dark else "no dark time at this Sun limit")
-        self.summary.set(f"{len(events)} transit(s); {dark_text}; {counts.get('checked', 0)} planets in the magnitude "
+        # 2.2.21 (#22): the times in the table are the site's, labeled with that night's UTC offset
+        zone = site_time.label(dark[0]) if dark else site_time.label()
+        self.summary.set(f"{zone}. {len(events)} transit(s); {dark_text}; {counts.get('checked', 0)} planets in the magnitude "
                          f"and depth range; planet list: {note}.")
         if not events:
             self.tree.insert("", END, values=("No transits match. Loosen a limit (altitude, Sun, magnitude, depth, "
@@ -3671,7 +3694,8 @@ class FinderWindow:
         app.lookup_planet()
         app.show_step(0)
         app.status.set(f"{e['name']}: looking it up. Transit {tc.jd_to_local(e['t1']).strftime('%H:%M')}–"
-                       f"{tc.jd_to_local(e['t4']).strftime('%H:%M')}, start by {tc.jd_to_local(e['start']).strftime('%H:%M')}.")
+                       f"{tc.jd_to_local(e['t4']).strftime('%H:%M')}, start by {tc.jd_to_local(e['start']).strftime('%H:%M')} "
+                       f"{site_time.tag(e['t1'])}.")   # 2.2.21 (#22)
 
     def open_swarthmore(self):
         import webbrowser
@@ -3701,9 +3725,10 @@ class FinderWindow:
             w.writerow([core.created_line()])
             w.writerow(["planet", "V", "depth_pct", "T14_h", "start_local", "ingress_local", "mid_local", "egress_local",
                         "end_local", "alt_min", "alt_max", "moon_illum", "moon_sep_deg",
-                        "zenith_keyhole" if self.altaz else "meridian_flip"])
+                        "zenith_keyhole" if self.altaz else "meridian_flip", "local_utc_offset"])   # 2.2.21 (#22)
             for e in self.events:
                 w.writerow([e["name"], f"{e['vmag']:.2f}", f"{e['depth'] * 100:.3f}", f"{e['t14'] * 24:.3f}",
                             fmt(e["start"]), fmt(e["t1"]), fmt(e["tc"]), fmt(e["t4"]), fmt(e["end"]),
                             f"{e['alt_min']:.1f}", f"{e['alt_max']:.1f}", f"{e['moon_illum']:.2f}",
-                            f"{e['moon_sep']:.0f}", int(bool(e.get("keyhole"))) if self.altaz else int(e["meridian"])])
+                            f"{e['moon_sep']:.0f}", int(bool(e.get("keyhole"))) if self.altaz else int(e["meridian"]),
+                            site_time.offset_at(e["tc"], ascii_only=True)])

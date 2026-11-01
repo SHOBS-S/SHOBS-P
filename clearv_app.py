@@ -44,6 +44,7 @@ from tkinter import (
 import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
+import site_time   # 2.2.21 (#22): local times in the site's time zone
 import photometry_core as core
 import transit_core as tcore
 
@@ -1236,6 +1237,11 @@ class App(Tk):
         self.elevation = StringVar(value=str(self.settings.get("site_elevation", "")))
         for _key, _var in (("site_lat", self.lat), ("site_lon", self.lon), ("site_elevation", self.elevation)):
             _var.trace_add("write", lambda *_a, k=_key, v=_var: self._remember_site(k, v))
+        # 2.2.21 (#22): the site's time zone (IANA name) for every local time shown or typed. A settings file without
+        # one (2.2.20 and older) starts from this computer's own zone, so nothing changes for an observer at home.
+        self.site_tz = StringVar(value=str(self.settings.get("site_tz") or site_time.computer_zone_name()))
+        self._apply_site_tz()
+        self.site_tz.trace_add("write", lambda *_a: self._site_tz_changed())
         # 2.2.18 (item 11): the same guards as the site (a series' or a borrowed setup is never saved as yours).
         for _key, _var in (("focal_mm", self.focal_mm), ("pixel_um", self.pixel_um), ("observer_code", self.observer)):
             _var.trace_add("write", lambda *_a, k=_key, v=_var: self._remember_own_value(k, v))
@@ -2141,6 +2147,50 @@ class App(Tk):
         if self.settings.get(key, "") != value:
             self.settings[key] = value
             self._save_settings()
+
+    def _apply_site_tz(self, warn: bool = True) -> bool:
+        """2.2.21 (#22): use the Time zone box's zone for local times. A name that cannot be loaded leaves this
+        computer's zone in use, said once in the Log. Returns True when the name loads (or is empty)."""
+        name = self.site_tz.get().strip()
+        msg = site_time.set_zone(name)
+        self.__dict__.setdefault("_blink_times", {}).clear()   # Blink's clock times were worked out in the old zone
+        if msg and warn:
+            log_to_file(msg)
+            try:
+                self.after_idle(lambda: self.log(msg) if getattr(self, "log_box", None) is not None else None)
+            except Exception:
+                pass
+        return not name or site_time.is_valid(name)
+
+    def _site_tz_changed(self):
+        """2.2.21 (#22): the Time zone box changed (typed, picked, a series or a borrowed site). A half-typed name
+        is not used (nor warned about) until it names a zone; a whole one is remembered like the site."""
+        name = self.site_tz.get().strip()
+        if name and not site_time.is_valid(name):
+            return
+        self._apply_site_tz()
+        self._remember_site("site_tz", self.site_tz)
+
+    def _site_tz_done(self, _event=None):
+        """2.2.21 (#22): leaving the Time zone box (or Enter): an unknown name is said once; this computer's zone is
+        used meanwhile."""
+        self.site_tz_values()
+        if not self._apply_site_tz():
+            self.status.set(f"Time zone '{self.site_tz.get().strip()}' is not known: this computer's zone is used. "
+                            "Pick one from the list.")
+
+    def site_tz_values(self, _event=None):
+        """2.2.21 (#22): the Time zone list, narrowed to the names holding what is typed (all of them when empty)."""
+        box = getattr(self, "site_tz_box", None)
+        if box is None:
+            return
+        typed = self.site_tz.get().strip().lower()
+        zones = site_time.available_zones()
+        hits = [z for z in zones if typed in z.lower()] if typed and not site_time.is_valid(typed) else zones
+        try:
+            box.configure(values=hits or zones)
+        except Exception:
+            pass
 
     OPTICS_DEFAULTS = {"focal_mm": 2900.0, "pixel_um": 3.76}   # 2.2.18 (item 11): until your own are known
 
@@ -3300,6 +3350,16 @@ class App(Tk):
         self._field(site, 0, "Latitude (°, north +)", self.lat, width=12)
         self._field(site, 1, "Longitude (°, east +)", self.lon, width=12, hint="west is negative")
         self._field(site, 2, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation")
+        # 2.2.21 (#22): the site's time zone; type part of a name (Phoenix, Warsaw) to narrow the list
+        ttk.Label(site, text="Time zone", style="Card.TLabel").grid(row=3, column=0, sticky=W, padx=(0, 10), pady=3)
+        self.site_tz_box = ttk.Combobox(site, textvariable=self.site_tz, values=site_time.available_zones(), width=22)
+        self.site_tz_box.grid(row=3, column=1, sticky="ew", pady=3)
+        self.site_tz_box.bind("<KeyRelease>", self.site_tz_values)
+        self.site_tz_box.bind("<FocusOut>", self._site_tz_done)
+        self.site_tz_box.bind("<Return>", self._site_tz_done)
+        self.site_tz_box.bind("<<ComboboxSelected>>", self._site_tz_done)
+        ttk.Label(site, text="the site's, for local times", style="Hint.TLabel").grid(
+            row=3, column=2, sticky=W, padx=(8, 0))
         site.columnconfigure(1, weight=1)
         optics = self._group(right, "Optics")
         optics.pack(fill=X, pady=(10, 0))
@@ -4904,6 +4964,7 @@ class App(Tk):
         self.lon.set(f"{lon:.4f}")
         if elev:
             self.elevation.set(f"{elev:.0f}")
+        self.site_tz.set("America/Phoenix")   # 2.2.21 (#22): Arizona (no daylight saving); yours comes back with yours
         self.focal_mm.set(focal)
         self.pixel_um.set(round(pixel, 2))
         self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
@@ -4914,7 +4975,8 @@ class App(Tk):
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
     _SETUP_NAMES = ("lat", "lon", "elevation", "focal_mm", "pixel_um", "aperture_mm", "pattern", "debayer_mode",
-                    "sat_limit", "binning", "telescope_name")   # 2.2.16 (item 5): telescope_name
+                    "sat_limit", "binning", "telescope_name",   # 2.2.16 (item 5): telescope_name
+                    "site_tz")   # 2.2.21 (#22): set aside and brought back with your own site
 
     def _setup_value(self, name: str):
         """A Site/Optics/camera box's value; "" when a number box is empty (real Tk raises TclError on .get())."""
@@ -4997,6 +5059,9 @@ class App(Tk):
             self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
                      + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
                      + (f"; {got}" if got else "") + ". Your own setup comes back when you scan your own lights.")
+            # 2.2.21 (#22): the header names no time zone; local times use the Time zone box until it is set
+            self.log(f"  Check the Time zone box (Input page, Site): local times use {self.site_tz.get() or 'this computer'}"
+                     "'s zone until you pick the frames' site zone.")
             self.status.set("Lights from another site: their site and optics are in use.")
             return
         # Your own frames (or no site in the header): any borrowed setup goes back first.
@@ -5393,7 +5458,8 @@ class App(Tk):
         # "2015-01-25T19:39:40.386-0700", DATE-OBS + TIME-OBS); the exposure start is mid-exposure minus half of it.
         try:
             jd = core.mid_jd(header) - core.header_exptime(header) / 2.0 / 86400.0
-            return f"{core.jd_to_datetime_utc(float(jd)).astimezone():%H:%M:%S}"
+            local = site_time.jd_to_local(float(jd))   # 2.2.21 (#22): the site's clock, with its UTC offset
+            return f"{local:%H:%M:%S} {site_time.offset_text(local)}"
         except Exception:
             pass
         try:   # without astropy's Time: DATE-OBS read here, its UTC offset (if any) applied
@@ -5407,12 +5473,13 @@ class App(Tk):
             if m:
                 off = (1 if m.group(1) == "+" else -1) * timedelta(hours=int(m.group(2)), minutes=int(m.group(3)))
                 text = text[: m.start(1)]
-            return f"{(core._parse_iso(text) - off).astimezone():%H:%M:%S}"
+            local = site_time.to_local(core._parse_iso(text) - off)   # 2.2.21 (#22)
+            return f"{local:%H:%M:%S} {site_time.offset_text(local)}"
         except Exception:
             return ""
 
     def _frame_words(self, path) -> str:
-        """'frame 222 (21:53:12)': the frame's number and local time, as Blink shows it."""
+        """'frame 222 (21:53:12 UTC−4)': the frame's number and the site's local time, as Blink shows it."""
         t = self._frame_time(path)
         return f"frame {self.frame_label(path)}" + (f" ({t})" if t else "")
 
@@ -7720,7 +7787,8 @@ class App(Tk):
             if planet is None:
                 return True
             try:
-                when = f" (mid-transit about {tcore.jd_to_local(chk['tc']).strftime('%H:%M')} local)"
+                when = (f" (mid-transit about {tcore.jd_to_local(chk['tc']).strftime('%H:%M')} "
+                        f"{site_time.tag(chk['tc'])})")   # 2.2.21 (#22)
             except Exception:
                 when = ""
             name = planet.get("name") or "the planet"
@@ -13279,7 +13347,7 @@ class App(Tk):
     @staticmethod
     def _local_hm(jd) -> str:
         try:
-            return f"{core.jd_to_datetime_utc(float(jd) + 0.5 / 1440).astimezone():%H:%M}"   # to the nearest minute
+            return f"{site_time.jd_to_local(float(jd) + 0.5 / 1440):%H:%M}"   # to the nearest minute (2.2.21 #22: site)
         except (OverflowError, ValueError, OSError, TypeError):
             return ""
 
@@ -13291,7 +13359,7 @@ class App(Tk):
         f0, f1 = (hit.get("jd") or [None, None])[:2]
         a, b = self._local_hm(f0), self._local_hm(f1)
         if a and b:
-            parts.append(f"frames {a}–{b} local")
+            parts.append(f"frames {a}–{b} {site_time.tag(f0)}")   # 2.2.21 (#22): 'local time (UTC−5)'
         t1, t4 = self._local_hm(hit.get("t1")), self._local_hm(hit.get("t4"))
         if t1 and t4:
             unc = float(hit.get("unc") or 0.0) * 1440
@@ -13719,9 +13787,9 @@ class App(Tk):
         parts = []
         for e in eps:
             try:
-                a = core.jd_to_datetime_utc(e["jd"][0]).astimezone()
-                b = core.jd_to_datetime_utc(e["jd"][1]).astimezone()
-                when = f"{a:%H:%M}–{b:%H:%M}"
+                a = site_time.jd_to_local(e["jd"][0])   # 2.2.21 (#22): the site's clock
+                b = site_time.jd_to_local(e["jd"][1])
+                when = f"{a:%H:%M}–{b:%H:%M} {site_time.tag(e['jd'][0])}"
             except (OverflowError, ValueError, OSError):
                 when = f"JD {e['jd'][0]:.3f}–{e['jd'][1]:.3f}"
             parts.append(f"{when}, down to {e['max_depth']:.2f} mag")
@@ -14083,6 +14151,7 @@ class App(Tk):
         meta["night_binning"] = self.night_bin
         meta["legacy_mixed_nights"] = sorted(self.legacy_mixed)
         meta["elevation"] = self.elevation.get()
+        meta["site_tz"] = self.site_tz.get().strip()   # 2.2.21 (#22): the site's time zone (older versions ignore it)
         if getattr(self, "_rgb_channel", None):
             meta["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): for information (the night setup has it)
         meta["reports_saved"] = self.reports_saved
@@ -14245,6 +14314,8 @@ class App(Tk):
                                  for k, v in meta["reports_sent"].items() if isinstance(v, list)}
         if meta.get("elevation"):
             self.elevation.set(str(meta["elevation"]))
+        # 2.2.21 (#22): the series' time zone; a series saved before 2.2.21 has none: this computer's zone
+        self.site_tz.set(str(meta.get("site_tz") or site_time.computer_zone_name()))
         if isinstance(meta.get("planet"), dict) and meta["planet"].get("period"):
             self.planet_info = dict(meta.get("planet_info") or {})
             self._planet_to_fields(meta["planet"])
@@ -15043,7 +15114,7 @@ class App(Tk):
 
         stamps = [core.jd_to_datetime_utc(j) for j in jd]
         if choice == "Local time":
-            stamps = [t.astimezone() for t in stamps]
+            stamps = [site_time.to_local(t) for t in stamps]   # 2.2.21 (#22): the site's zone
         # date2num works on naive datetimes; strip the zone after converting.
         return np.array(date2num([t.replace(tzinfo=None) for t in stamps]))
 
@@ -15100,8 +15171,9 @@ class App(Tk):
         except AttributeError:
             pass
         try:
-            local = core.jd_to_datetime_utc(t0).astimezone()
-            ax.set_xlabel(f"Hours from the night's first point ({local:%H:%M} local, {local:%b} {local.day})")
+            local = site_time.jd_to_local(t0)   # 2.2.21 (#22)
+            ax.set_xlabel(f"Hours from the night's first point ({local:%H:%M} {site_time.tag(t0)}, "
+                          f"{local:%b} {local.day})")
         except (OverflowError, ValueError, OSError):
             ax.set_xlabel("Hours from the night's first point")
 
@@ -15123,8 +15195,8 @@ class App(Tk):
         if choice == "UTC":
             ax.set_xlabel("UTC")
         else:
-            zone = core.jd_to_datetime_utc(self.observations[0].jd).astimezone().tzname() if self.observations else ""
-            ax.set_xlabel(f"Local time ({zone})")
+            # 2.2.21 (#22): "Local time (UTC−5)", the site's offset (both when the series spans a DST change)
+            ax.set_xlabel(site_time.label_span(sorted({o.jd for o in self.observations if math.isfinite(o.jd)})))
 
     def draw_output(self):
         self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
@@ -15776,7 +15848,7 @@ class App(Tk):
             used = [k for k in idx if not excluded[k]]
             first = min((obs_list[k].jd for k in idx if math.isfinite(obs_list[k].jd)), default=float("nan"))
             try:
-                local = core.jd_to_datetime_utc(first).astimezone()
+                local = site_time.jd_to_local(first)   # 2.2.21 (#22)
                 date = f"{local:%b} {local.day}"
             except (OverflowError, ValueError, OSError):
                 date = ""
@@ -15953,8 +16025,8 @@ class App(Tk):
 
     def _time_text(self, jd: float) -> str:
         try:
-            local = core.jd_to_datetime_utc(jd).astimezone()
-            return f"JD {jd:.5f} ({local.strftime('%b %d %H:%M')} local)"
+            local = site_time.jd_to_local(jd)   # 2.2.21 (#22)
+            return f"JD {jd:.5f} ({local.strftime('%b %d %H:%M')} {site_time.tag(jd)})"
         except (OverflowError, ValueError, OSError):
             return f"JD {jd:.5f}"
 

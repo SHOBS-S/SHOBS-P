@@ -1662,8 +1662,8 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
 
 def excluded_baseline_text(excluded, t1, t4, pre_short, post_short, pre_min, post_min) -> str:
     """2.2.13: when a side's baseline is short and flagged frames left out of the fit lie there, say so:
-    'No usable baseline after egress: the 31 frames there (00:44–01:20) were flagged cloud.' Times are local
-    (from the frames' JD UTC); minutes from the fitted contact when no JD is given."""
+    'No usable baseline after egress: the 31 frames there (00:44–01:20) were flagged cloud.' Times are the
+    site's local time (from the frames' JD UTC; 2.2.21 (#22): labeled 'local time (UTC−5)'); minutes from the fitted contact when no JD is given."""
     if not excluded:
         return ""
     t = np.atleast_1d(np.asarray(excluded.get("t", []), dtype=float))
@@ -1680,6 +1680,8 @@ def excluded_baseline_text(excluded, t1, t4, pre_short, post_short, pre_min, pos
             if jd is not None and len(jd) == len(t):
                 span = (f"{jd_to_local(float(jd[mask].min())).strftime('%H:%M')}–"
                         f"{jd_to_local(float(jd[mask].max())).strftime('%H:%M')}")
+                import site_time   # 2.2.21 (#22): the site's zone, named
+                span += " " + site_time.tag(float(jd[mask].min()))
             else:
                 ref = t1 if name == "before ingress" else t4
                 span = (f"{(t[mask].min() - ref) * 1440:+.0f} to {(t[mask].max() - ref) * 1440:+.0f} min from "
@@ -2234,8 +2236,10 @@ def plan_transits(planet: dict, ra_deg: float, dec_deg: float, lat: float, lon: 
 
 
 def jd_to_local(jd: float) -> datetime:
-    """A JD (UTC) as a local, timezone-aware datetime (the computer's time zone, with daylight saving)."""
-    return datetime.fromtimestamp((jd - 2440587.5) * 86400.0, tz=timezone.utc).astimezone()
+    """A JD (UTC) as a local, timezone-aware datetime in the site's time zone, with that night's daylight saving.
+    2.2.21 (#22): the site's zone (site_time), no longer the computer's."""
+    import site_time
+    return site_time.jd_to_local(jd)
 
 
 def now_jd() -> float:
@@ -2700,10 +2704,9 @@ def _csv_cell(value) -> str:
 def night_window(date_local, lat: float, lon: float, sun_alt: float = PLAN_SUN_ALT):
     """Dark interval (JD UTC) for the night that starts on the local calendar date: from local noon to the next
     local noon, the stretch with the Sun below sun_alt. Returns (start, end) or None (no dark time)."""
-    from datetime import datetime, time as dtime
+    import site_time
 
-    noon = datetime.combine(date_local, dtime(12, 0)).astimezone()
-    jd0 = noon.timestamp() / 86400.0 + 2440587.5
+    jd0 = site_time.local_to_jd(date_local, 12, 0)   # 2.2.21 (#22): the site's local noon, not the computer's
     grid = jd0 + np.arange(0, 1.0, 2.0 / 1440)
     salt = altitude(*sun_radec(grid)[:2], lat, lon, grid)
     dark = np.where(salt <= sun_alt)[0]
