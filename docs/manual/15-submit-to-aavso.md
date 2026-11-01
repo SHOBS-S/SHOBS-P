@@ -21,7 +21,16 @@ The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the 
 
 Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame as shot, with yellow **N** and **E**
 arrows showing where north and east lie, and the target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
-saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars.
+saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars. The chart is fetched in
+the background after the report is saved; whatever happens to it goes into the log only, so the status line keeps
+**Saved AAVSO_….txt — upload to AAVSO WebObs:** and its **Open AAVSO WebObs…** button. If the chart server does not
+answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; press **Save field image** later
+to fetch it.
+
+When a series file is open, saving the report also notes it in the series (for the **Sent** column), so the series
+file is rewritten: the status line ends with **Series file updated: SZ_Lyn.cvseries.** The series keeps its own site
+and observer code. If the Input page's latitude, longitude, elevation or observer code differ from the series', you
+are asked first (see chapter 10, "Report saves and the series file").
 
 ### The AUID: when the star has none
 

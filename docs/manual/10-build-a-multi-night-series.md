@@ -83,6 +83,31 @@ As a last guard, a **Use comps…** choice whose stars were never measured on a 
 
 When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another. If it cannot tell from the positions whether the two names are the same star, it asks; **No** (the default) keeps what is marked.
 
+## Report saves and the series file
+
+Saving a report while a series file is open (**Save AAVSO report**, an AAVSO exoplanet report, **Save for ExoClock**,
+an ExoFOP package, or marking nights sent) notes the report in the series, so the series file is rewritten. This is
+never silent: the log says *"Series file updated: …"*, and the save's status line ends with **Series file updated:
+SZ_Lyn.cvseries.**
+
+The series keeps its own site (latitude, longitude, elevation) and AAVSO observer code; a report save does not
+replace them with the Input page's. When the two differ (for example after you switched to another profile), SHOBS-P
+asks once:
+
+> This series was observed from 35.37, -81.96, 300 m, observer JABA; the Input page has 40, -100, 500 m, no observer
+> code. Keep the series' site?
+
+**Yes** (usually right) keeps the series' site and observer code in the file. **No** writes the Input page's into the
+series. The answer is kept for the rest of the session for that series. **Save series** always writes what the Input
+page shows.
+
+## The field image of a loaded series
+
+**Save field image** draws the frame on the Photometry page, so it needs a reduction of the series' own star. After
+**Load series…** of another star than the one you last reduced (or with no frame at all), it does not draw the other
+star's field under this series' name; it says *"Reduce a night of SZ Lyn first; the field image comes from a
+reduction (the Photometry page's frame)."* Calibrate a night of the series' star, then save the field image.
+
 ## The backup copy (`_prev`)
 
 Every save replaces the series file. To protect you from a mistake, the first time SHOBS-P writes a series file in a session (whether you pressed **Save series** or it saved on its own), it first renames the old file to the same name with `_prev` added, for example `SZ_Lyn_prev.cvseries`. Later saves in the same session leave that copy alone.

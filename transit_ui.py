@@ -2738,7 +2738,8 @@ class TransitPage:
                     self._stale_parts = getattr(self, "_stale_parts", set()) | {os.path.normcase(os.path.abspath(out))}
                 self.app.log(f"ExoFOP package unchanged: {last['folder']} (same fit and files; nothing new written)")
                 self.app._remember_report("exofop", self._fit_nights(), last["folder"])   # 2.2.18 (item 10)
-                self.app.status.set(f"ExoFOP package unchanged: {os.path.basename(last['folder'])}")
+                self.app.status.set(self.app._series_note(   # 2.2.21 (nit j): "Series file updated: <name>."
+                    f"ExoFOP package unchanged: {os.path.basename(last['folder'])}"))
                 return
         except Exception:
             shutil.rmtree(out, ignore_errors=True)
@@ -2767,6 +2768,7 @@ class TransitPage:
         self.app.log(f"ExoFOP package folder: {out}")
         # 2.2.17 (item 9): no AAVSO report copy inside (John); Save AAVSO exoplanet report writes that one.
         self.app.saved_notice(out, "Package folder: light curve (CSV), fit and ExoFOP notes (text), and the plot.")
+        self.app._series_note("")   # 2.2.21 (nit j): the series note was shown by saved_notice; not carried further
 
     def _write_package_files(self, out, base, r, meta, planet):
         """2.2.16 (item 4): the package's files in folder out; returns (paths, the plot's PNG bytes without its DTG
@@ -3322,8 +3324,28 @@ class CornerWindow:
         self.fig = Figure(dpi=100, facecolor="#ffffff")
         self.canvas = FigureCanvasTkAgg(self.fig, master=host)
         self.canvas.get_tk_widget().pack(anchor=W)
+        self._drawn_px = None
+        # 2.2.21 (nit 2): when Tk gives the canvas another size than asked (screen scaling, a small screen), the plot
+        # is laid out again at the size it really has, so nothing is clipped.
+        self.canvas.get_tk_widget().bind("<Configure>", lambda _e: win.after_idle(self._relayout), add="+")
         self.redraw()
         fit_to_content(win)
+
+    def _relayout(self):
+        if self.fig is None:
+            return
+        try:
+            w_in, h_in = self.fig.get_size_inches()
+            px = (int(round(w_in * self.fig.dpi)), int(round(h_in * self.fig.dpi)))
+        except Exception:
+            return
+        if self._drawn_px is None or abs(px[0] - self._drawn_px[0]) <= 2 and abs(px[1] - self._drawn_px[1]) <= 2:
+            return
+        n = len(tpost.corner_params(self.result, self._shape_only()))
+        tpost.corner_figure(self.result, self.fig, font=9.0 if n <= 6 else 8.0, shape_only=self._shape_only(),
+                            keep_size=True)
+        self._drawn_px = px
+        self.canvas.draw_idle()
 
     def _shape_only(self) -> bool:
         return not self.show_all.get()
@@ -3339,6 +3361,7 @@ class CornerWindow:
             self.canvas.get_tk_widget().configure(width=int(w_in * self.fig.dpi), height=int(h_in * self.fig.dpi))
         except Exception:
             pass
+        self._drawn_px = (int(round(w_in * self.fig.dpi)), int(round(h_in * self.fig.dpi)))
         self.canvas.draw_idle()
         if self.body is not None:
             self.body.fit()

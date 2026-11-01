@@ -29,7 +29,9 @@ To choose your frames:
 3. Optionally, choose an **Output** folder (see below).
 4. Press **Scan folders**.
 
-You can also type or paste a path into the box.
+You can also type or paste a path into the box. The count updates by itself a moment after you stop typing (and at
+once when you press Enter or leave the box), just as after **Browse**. While the path does not name an existing
+folder yet, the count says **no such folder**.
 
 What the counts mean:
 
@@ -101,7 +103,8 @@ you had just started SHOBS-P: the open series is closed (you are offered a save 
 comparison stars, check star, watch stars, **Use comps** choice, VSX period and rejected frames are cleared. The
 **Notes** box on the Output page goes back to its default, **OSC reduced; not transformed** (or **Monochrome camera;
 not transformed**), so the old star's notes cannot end up in the new star's report; if you had typed your own notes,
-the log lists "the Output page notes" among what was cleared. The frame folders, site and optics stay. SHOBS-P asks
+the log lists "the Output page notes" among what was cleared. The last run's line on the Photometry page ("Photometry
+done in …") is cleared too. The frame folders, site and optics stay. SHOBS-P asks
 first: **Start a new reduction?** Then type the new name and press Enter.
 
 This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's

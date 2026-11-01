@@ -86,7 +86,8 @@ Beside the report, SHOBS-P writes:
   N/E arrows): …"*. When the AAVSO's chart server answers, the AAVSO chart of the same field and size is saved next
   to it as `…_aavso_chart.png`. That chart is north up and east left, so use the arrows to match the two. If the
   chart server does not answer, the log says so and **Save field image…** fetches it again later. No field image is
-  made for an opened EXOTIC report's fit.
+  made for an opened EXOTIC report's fit, nor from another star's frame after **Load series…** (the log says
+  *"Reduce a night of … first; the field image comes from a reduction …"*; chapter 10).
 
 > **Caution:** The AAVSO's exoplanet section sets its own rules for what it accepts. Check its current
 > instructions before your first upload.
