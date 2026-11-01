@@ -3402,7 +3402,9 @@ class App(Tk):
         if not info or info["token"] is not token:
             return
         secs = int(_time.monotonic() - info["t0"])
-        text = (f"✖ {info['name']}: the {info['service']} did not answer within {secs} s — "
+        svc = str(info['service'])
+        svc = svc if svc.startswith("SIMBAD") else "the " + svc   # 2.2.20: "SIMBAD and VSX", "the NASA Exoplanet Archive"
+        text = (f"✖ {info['name']}: {svc} did not answer within {secs} s — "
                 + ("type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
         self._lookup_busy_stop(kind)
         self._lookup_busy_show(kind, text, bad=True)

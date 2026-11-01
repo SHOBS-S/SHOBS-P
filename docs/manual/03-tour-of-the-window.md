@@ -95,7 +95,7 @@ When the job ends, the bar and its words go, and the status line says how it wen
 sign:
 
 - **✔** it worked, for example *✔ TOI-2046 from SIMBAD: RA … h, Dec …°*;
-- **✖** it did not, for example *✖ TOI-2046: the SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look
+- **✖** it did not, for example *✖ TOI-2046: SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look
   up again.*;
 - **⚠** it worked, but look at something.
 

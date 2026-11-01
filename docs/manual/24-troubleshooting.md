@@ -125,7 +125,7 @@ message above."*
 | The image is too small to click stars. | Wheel to zoom, drag to pan, or **Pop out** the image into its own window. At 125–150 % display scaling a small frame (MicroObservatory) can stay small even after the log shrinks; the line **⚠ Small image? …** under the image has a **Pop out** button, and **Hide log** gives more room. |
 | The AAVSO sequence is missing (*"AAVSO sequence did not answer (…)"* in the log). | The AAVSO chart server (VSP, apps.aavso.org) was slow or down. SHOBS-P asks again in the background; if the log later says it answered, press **Solve again**. Otherwise **Solve again** later. |
 | The target marker is not placed, and the log says the target is not on this frame. | The first frames may miss the target; SHOBS-P looks at the next frames for it (chapter 8). If it cannot find it, reject the frames without the target in Blink and calibrate again. |
-| A lookup ends with *"✖ …: the SIMBAD and VSX did not answer within 60 s …"*. | The service is slow or down, or the internet is. Type RA/Dec yourself, or press **Look up again** later; a late answer is still used. |
+| A lookup ends with *"✖ …: SIMBAD and VSX did not answer within 60 s …"*. | The service is slow or down, or the internet is. Type RA/Dec yourself, or press **Look up again** later; a late answer is still used. |
 | The solve or lookups fail at night. | The catalogs and lookups need the internet. Calibration and photometry do not. Catalog stars fetched for a field are kept for 30 days, which often lets the same field solve again without the internet. |
 
 ### Results
