@@ -1,11 +1,13 @@
-# SHOBS-P User's Manual (version 2.2.20)
+# SHOBS-P User's Manual (version 2.2.21)
 
 > November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
 > defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20
 > (one busy bar for every wait; the field image as shot with N/E arrows; New reduction resets the Output page notes,
 > and a report whose notes name another star asks first; the No-AUID warning; Save for ExoClock; a roomier
 > Multi-night window with its own corner plot; airmass in the transit-fit CSV; a simpler Linux and Mac setup that
-> prefers Python 3.13), checked against the program. Screenshots of the pages that 2.2.20 changed were retaken on 2.2.20.
+> prefers Python 3.13) and for 2.2.21 (the site's time zone; TOI status and ExoClock priority at planet lookup; a
+> saved copy of each lookup for when a service is down, with Clear cached catalogs; Fit the series' nights…; report
+> saves that keep the series' own site), checked against the program. Screenshots were retaken on 2.2.21.
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
@@ -61,4 +63,4 @@
 26. **[Credits and how to cite SHOBS-P](26-credits-and-citing.md)** — the Copy button, DOI, CITATION.cff.
 
 ---
-*Screenshots are from SHOBS-P 2.2.17–2.2.20 on Windows; every page that 2.2.20 changed was retaken on 2.2.20.*
+*Screenshots are from SHOBS-P 2.2.17–2.2.21 on Windows; every window that shows the version, and every page that 2.2.21 changed, was retaken on 2.2.21.*

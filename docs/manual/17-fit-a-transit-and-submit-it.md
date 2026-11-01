@@ -404,7 +404,7 @@ plot PNG…**, **Corner plot…** and **Close**.
 
 ![The Multi-night window after a fit](img/17-multinight-window.png)
 
-*The Multi-night window after a joint fit of four nights: nights table above the divider, plots below.*
+*The Multi-night window after a joint fit of three nights: nights table above the divider, plots below.*
 
 The joint fit uses one transit shape (Rp/R\*, a/R\*, b and limb darkening) for all nights, with each night's own
 mid-transit time, baseline and detrending. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
@@ -443,7 +443,7 @@ against its prior range gets the same ⚠ as on a single night. **Save PNG…** 
 
 ![The corner plot of a multi-night fit](img/17-multinight-corner.png)
 
-*The joint corner plot of four nights: the shared shape, and one Tc panel per night.*
+*The joint corner plot of three nights: the shared shape, and one Tc panel per night.*
 
 ---
 
