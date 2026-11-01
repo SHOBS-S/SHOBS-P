@@ -2529,8 +2529,14 @@ def fit_text(result: dict, meta: dict) -> str:
              + (f"from {result['eph_source']}" if result.get("eph_source") else
                 "none available (no O − C)" if result.get("tc_pred") is None else
                 f"published values from {pl.get('source', '')} {pl.get('reference', '')}".rstrip()),
-             f"Shape priors   from {pl.get('source', '')}", "",
-             "Fitted values (MCMC median and 68% interval):"]
+             f"Shape priors   from {pl.get('source', '')}"]
+    # 2.2.21 (#32, item 14): TESS TOI status (with its ExoFOP-TESS page) and ExoClock priority, when looked up.
+    if meta.get("toi_status"):
+        lines.append(f"TESS TOI       {meta['toi_status'].replace(' · ', ' ')}"   # the file is ASCII: no middle dot
+                     + (f"  {meta['toi_url']}" if meta.get("toi_url") else ""))
+    if meta.get("exoclock_status"):
+        lines.append(f"ExoClock       {meta['exoclock_status'].replace('ExoClock: ', '')}")
+    lines += ["", "Fitted values (MCMC median and 68% interval):"]
     for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t", "step"):
         if name in s:
             label = {"tc": "Tc (BJD_TDB)", "k": "Rp/R*", "depth": "Depth", "a_rs": "a/R*", "b": "b", "inc": "inc (deg)",

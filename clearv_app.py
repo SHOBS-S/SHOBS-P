@@ -1270,6 +1270,11 @@ class App(Tk):
         self.planet_source = StringVar(value="Type the planet's name and press Enter (NASA Exoplanet Archive; "
                                              "TOIs also from ExoFOP), or type the values.")
         self._last_planet_lookup = None   # 2.2.14 (item 2): the planet name last looked up (auto lookup on Enter)
+        # 2.2.21 (#32, item 14): the planet's TESS TOI status and ExoClock priority (target_status.py), shown under the
+        # planet box and on the Transit fit page; {"planet", "toi": {...}, "exoclock": {...}} or {}.
+        self.target_status = {}
+        self.toi_text = StringVar(value="")
+        self.exoclock_text = StringVar(value="")
 
         self.masters = None
         self.calibrated = None
@@ -3279,9 +3284,14 @@ class App(Tk):
             self._planet_entries += [(e1, var), (e2, var2)]   # 2.2.19 (nit): "looking up…" while looked up
         ttk.Label(pg, textvariable=self.planet_source, style="Hint.TLabel", wraplength=560, justify=LEFT).grid(
             row=5, column=0, columnspan=4, sticky=W, pady=(4, 0))
+        # 2.2.21 (#32, item 14): TOI status (a link to the target's ExoFOP-TESS page) and ExoClock priority.
+        status_row = ttk.Frame(pg, style="Card.TFrame")
+        status_row.grid(row=6, column=0, columnspan=4, sticky=W)
+        self.toi_label_input = self._status_link_label(status_row, self.toi_text, "toi")
+        self.exoclock_label_input = self._status_link_label(status_row, self.exoclock_text, "exoclock")
         self.report_note = StringVar(value="")
         ttk.Label(pg, textvariable=self.report_note, style="Warn.TLabel", wraplength=560, justify=LEFT).grid(
-            row=6, column=0, columnspan=4, sticky=W, pady=(2, 0))
+            row=7, column=0, columnspan=4, sticky=W, pady=(2, 0))
         pg.columnconfigure(1, weight=1)
         pg.columnconfigure(3, weight=1)
         self.planet_group.pack(fill=X, pady=(10, 0))
@@ -3460,6 +3470,7 @@ class App(Tk):
             return
         self._last_planet_lookup = name   # 2.2.14 (item 2)
         self._lookup_busy_start("planet", name, "NASA Exoplanet Archive")   # 2.2.19 (nit)
+        self._show_target_status({})   # 2.2.21 (#32, item 14): the last planet's TOI/ExoClock lines go
 
         def work():
             try:
@@ -3558,6 +3569,69 @@ class App(Tk):
             self.transit_page.refresh()
         if "RA/Dec" in filled:
             self._try_auto_target("lookup")   # 2.2.15 (review): the image may be solved already
+        self._start_target_status(p, name)   # 2.2.21 (#32, item 14)
+
+    # ---- 2.2.21 (#32, item 14): TOI status and ExoClock priority at planet lookup -----------------------------------
+    def _status_link_label(self, parent, var, which: str):
+        """A hint line that opens its page when clicked (blue while it has a link); hidden while empty."""
+        lab = ttk.Label(parent, textvariable=var, style="Hint.TLabel", wraplength=560, justify=LEFT)
+        lab.bind("<Button-1>", lambda _e: self._open_target_status_link(which))
+
+        def shown(*_):
+            url = ((self.target_status or {}).get(which) or {}).get("url")
+            try:
+                if var.get():
+                    lab.configure(foreground="#1a5fb4" if url else "#5d6d76", cursor="hand2" if url else "")
+                    lab.pack(anchor=W, pady=(2, 0))
+                else:
+                    lab.pack_forget()
+            except Exception:
+                pass
+        var.trace_add("write", shown)
+        return lab
+
+    def _open_target_status_link(self, which: str):
+        url = ((self.target_status or {}).get(which) or {}).get("url")
+        if url:
+            self.open_link(url, "ExoFOP-TESS" if which == "toi" else "ExoClock")
+
+    def _start_target_status(self, p: dict, name: str = ""):
+        """Ask the Exoplanet Archive's TOI table and ExoClock's planet list in a worker thread; the planet's own
+        lookup is done already, so it is not slowed. The answer is shown only if the planet is still the same."""
+        try:
+            import target_status as ts
+        except Exception:
+            return
+        planet = dict(p or {})
+        self._show_target_status({})
+        self.toi_text.set("Checking TESS TOI status and ExoClock…")
+        try:
+            aperture = float(self.aperture_mm.get())
+        except (TypeError, ValueError, AttributeError):
+            aperture = None
+
+        def work():
+            try:
+                res = ts.target_status(planet, *[n for n in (name,) if n], aperture_mm=aperture)
+            except Exception:
+                res = {"planet": planet.get("name"), "toi": ts.unknown_status(), "exoclock": {}}
+            self.call_ui(self._target_status_done, res)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _target_status_done(self, res: dict):
+        import lookup_cache
+        if lookup_cache.norm_key(res.get("planet")) != lookup_cache.norm_key((self.planet_info or {}).get("name")):
+            return   # another planet was looked up meanwhile
+        self._show_target_status(res)
+
+    def _show_target_status(self, res: dict):
+        self.target_status = dict(res or {})
+        self.toi_text.set(((res or {}).get("toi") or {}).get("text", ""))
+        self.exoclock_text.set(((res or {}).get("exoclock") or {}).get("text", ""))
+        page = getattr(self, "transit_page", None)
+        if page is not None and hasattr(page, "show_target_status"):
+            page.show_target_status()
 
     def _planets_for_star(self, star: str, found: dict):
         """2.2.7 (Transits): a Star ID lookup also finds the star's planets: one transiting planet is looked up and
@@ -3908,6 +3982,7 @@ class App(Tk):
                 var.set("")
             self.planet_info = {}
             self._last_planet_lookup = None
+            self._show_target_status({})   # 2.2.21 (#32, item 14)
             self.planet_source.set("Type the planet's name and press Enter (NASA Exoplanet Archive; TOIs also from "
                                    "ExoFOP), or type the values.")
         self._last_lookup_name = None

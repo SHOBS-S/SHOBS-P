@@ -8196,7 +8196,8 @@ CREDITS = [
          "\"This research has made use of the SIMBAD database, CDS, Strasbourg Astronomical Observatory, France.\" "
          "Wenger, M. et al. 2000, A&AS 143, 9.", "https://simbad.cds.unistra.fr"),
         ("NASA Exoplanet Archive", "Planet lookup in Transits mode: period, T0, duration, depth, Rp/R*, a/R*, impact "
-         "parameter, host star (Planetary Systems Composite table, TAP service).",
+         "parameter, host star (Planetary Systems Composite table, TAP service); the planet's TESS TOI status "
+         "(TOI table, TFOPWG disposition; 2.2.21).",
          "\"This research has made use of the NASA Exoplanet Archive, which is operated by the California Institute of "
          "Technology, under contract with the National Aeronautics and Space Administration under the Exoplanet "
          "Exploration Program.\" Akeson, R. L. et al. 2013, PASP 125, 989.",
@@ -8207,6 +8208,11 @@ CREDITS = [
          "website, which is operated by the California Institute of Technology, under contract with the National "
          "Aeronautics and Space Administration under the Exoplanet Exploration Program.\"",
          "https://exofop.ipac.caltech.edu/tess/"),
+        # 2.2.21 (item 14): ExoClock's planet list (priority, recent observations, smallest telescope).
+        ("ExoClock", "The planet's ExoClock priority and recent observations at planet lookup (planet list, read "
+         "once a day); the Save for ExoClock file is laid out for its upload form.",
+         "Kokori, A. et al. 2023, ApJS 265, 4 (ExoClock Project III); Kokori, A. et al. 2022, ApJS 258, 40 (II); "
+         "Kokori, A. et al. 2022, Experimental Astronomy 53, 547 (I).", "https://www.exoclock.space"),
         ("VizieR (CDS)", "Access to APASS, Tycho-2, Gaia DR3, and VSX.",
          "\"This research has made use of the VizieR catalogue access tool, CDS, Strasbourg Astronomical Observatory, "
          "France (DOI : 10.26093/cds/vizier).\" Ochsenbein, F. et al. 2000, A&AS 143, 23.",

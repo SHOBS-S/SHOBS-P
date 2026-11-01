@@ -62,6 +62,10 @@ progress bar of its own: a running fit shows on the busy bar in the status strip
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
   PNG…** and **Save field image…**, with **Variable View  ▶** at the right.
+- Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
+  (chapter 16), for example *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* and
+  *"ExoClock: LOW priority (24 recent observations)"*. Click the TOI line to open the target's ExoFOP-TESS page, and
+  the ExoClock line to open the planet's ExoClock page. They help you choose where to send the result (below).
 
 ## Read the verdict
 
@@ -245,7 +249,10 @@ When the verdict is "detected" and you are happy with the fit:
    Database…**.
 3. Click **Open AAVSO Exoplanet Database…** and upload the report there, following the AAVSO's current
    instructions.
-4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**.
+4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**. The TOI line under the Results row
+   tells you whether ExoFOP-TESS wants it: a **PC** or **APC** (planet candidate) is follow-up science there
+   (coordinate with TFOP Sub Group 1 first); for a **CP** or **KP** (confirmed or known planet), AAVSO and Exoplanet
+   Watch are the right home.
 5. Click **Save plot PNG…** for your own records. The corner plot is saved beside it, as `…_corner.png`.
 6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
    (the same as on the Variables Output page) and a fit CSV beside it, named like
@@ -272,6 +279,8 @@ the AAVSO chart of the field when it answers) beside it. Chapter 19 describes th
 
 ExoClock collects transit times of known planets to keep their ephemerides up to date, so the Ariel space mission
 knows when to look. Any timed transit is welcome there, TESS target or not. Uploading needs an ExoClock account.
+The ExoClock line under the Results row says how much ExoClock needs this planet (ALERT and HIGH most), how many
+recent observations it has, and whether it asks for a bigger telescope than yours.
 
 1. Click **Save for ExoClock…**. SHOBS-P writes two files:
    - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt` (the planet without spaces,

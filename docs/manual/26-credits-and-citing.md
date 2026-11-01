@@ -14,7 +14,8 @@ To see every source SHOBS-P uses:
 3. Read the list under it. It has three parts:
    - **SOFTWARE**: Astropy, photutils, ccdproc, NumPy, SciPy and Matplotlib.
    - **CATALOGS AND SERVICES**: Gaia DR3, APASS, Tycho-2, AAVSO VSX, the AAVSO Variable Star Plotter, SIMBAD,
-     the NASA Exoplanet Archive, ExoFOP and VizieR.
+     the NASA Exoplanet Archive (planet values and TESS TOI status), ExoFOP, ExoClock (planet priorities) and
+     VizieR.
    - **METHODS**: the published methods behind the period search, the color transformations, the transit model,
      the MCMC sampler, the red-noise estimate, the error bars, the timing methods and more.
 
@@ -36,7 +37,7 @@ Include the quoted acknowledgement and reference of each source your result actu
   which catalog each magnitude came from);
 - a light curve with comparison stars from the AAVSO sequence: the AAVSO Variable Star Plotter;
 - a transit fit: the NASA Exoplanet Archive (for the planet's parameters) and the transit and limb-darkening
-  methods;
+  methods; ExoClock too if you used its priority list or ephemeris;
 - a field scan: VSX and SIMBAD (for the known-variable check).
 
 When in doubt, include the whole list from the saved text file in an appendix or a data note.
