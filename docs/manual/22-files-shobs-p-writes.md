@@ -38,7 +38,7 @@ Every text file SHOBS-P writes (reports, CSVs, fit notes) carries a line such as
 
 `# Created 121153Z OCT 26 by SHOBS-P`
 
-The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.19*
+The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.20*
 in the picture. The line tells you, and anyone you send the file to, when it was made and with which program.
 
 ## Result files by mode
@@ -50,7 +50,7 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. |
 | **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
-| **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame, north up and east left, with the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. |
+| **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
 | **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. |
 | **Watch stars…** → **Export watch light curves CSV…** | `watch_stars.csv` |
@@ -66,12 +66,14 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 | **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png`, and the corner plot `…_transit_corner.png` beside it |
 | **Corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png` |
 | **Save field image…** | `<star>_<filter>_<date>_SHOBS-P_field.png`, named after the Star ID (the host star), with `…_aavso_chart.png` |
-| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag` (trimmed points flagged `trimmed`). Comment lines starting with `#` under the Created line give the planet, filter, Tc, verdict and O − C. It gets the same number as the report and plot. |
+| **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag`, `airmass`, `segment` (trimmed points flagged `trimmed`; `segment` is `before flip` / `after flip` on a night with a meridian flip). `rel_flux` is the raw relative flux, not detrended. Comment lines starting with `#` under the Created line give the planet, filter, Tc, verdict and O − C, a `# Columns:` line saying what the columns hold, and `# Meridian flip at BJD_TDB …` when there was a flip. It gets the same number as the report and plot. |
 | **Save ExoFOP package…** | A folder `ExoFOP_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` holding `…_lightcurve.csv`, `…_fit.txt` and `…_plot.png`. |
+| **Save for ExoClock…** | `ExoClock_<planet>_<YYYYMMDD>.txt` (for example `ExoClock_TOI-2046b_20261027.txt`; the planet without spaces, the UTC date of the first frame): `#` header lines, then JD_UTC at mid-exposure, relative flux (not detrended) and error, one line per frame the fit used. Beside it, `ExoClock_info.txt`: what to pick on ExoClock's upload form. Both get `_2`, `_3` … when the name is taken. |
 | **Tonight's transits…** → **Export CSV…** | `transits_<date>.csv` |
 | **Transit planner…** → **Export CSV…** | `<planet>_transits.csv` |
 | **Multi-night…** → **Save timing CSV…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight_timings.csv`: one row per epoch (mid-time in BJD_TDB with its error, O − C against each ephemeris), with the joint shape and the ephemerides in `#` header lines |
 | **Multi-night…** → **Save plot PNG…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight.png` |
+| **Multi-night…** → **Corner plot…** → **Save PNG…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight_corner.png` |
 
 See [19. Reports](19-transit-reports.md).
 
@@ -154,6 +156,14 @@ have one).
 
 SHOBS-P's own Python environment is not in the program folder either: it is in `%LOCALAPPDATA%\SHOBS-P` on Windows,
 `~/.local/share/SHOBS-P` on Linux and `~/Library/Application Support/SHOBS-P` on a Mac (chapter 2). See [24. Troubleshooting](24-troubleshooting.md).
+
+## The setup log (Mac and Linux)
+
+On a Mac or Linux, the first start sets up SHOBS-P's own Python environment and downloads the packages it needs.
+What the installer (pip) said is kept in `pip_log.txt` in that same SHOBS-P environment folder:
+`~/Library/Application Support/SHOBS-P` on a Mac, `~/.local/share/SHOBS-P` on Linux. If setup fails, attach this
+file to your problem report. To start the setup afresh, delete that SHOBS-P folder; it is set up again on the next
+start.
 
 ---
 

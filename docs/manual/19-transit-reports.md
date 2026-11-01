@@ -4,6 +4,7 @@ This chapter covers the files the Transit fit page writes and where they go:
 
 - the AAVSO exoplanet report, for the AAVSO Exoplanet Database,
 - the ExoFOP package, for TESS targets,
+- the ExoClock upload file, for ExoClock,
 - the plot PNG, the corner plot and the light-curve CSV,
 - the settings file and the field image saved with a report,
 - opening an EXOTIC report to compare its fit with SHOBS-P's.
@@ -27,7 +28,8 @@ See [22. Files SHOBS-P writes](22-files-shobs-p-writes.md) for the full list of 
 To save and upload it:
 
 1. Fill in **Observer code** on the Input page (**AAVSO report** box). It goes in the report's `#OBSCODE` line.
-2. Optionally type a note in **Notes** (in Variable View); it goes in the report's NOTES.
+2. Optionally type a note in **Notes** (in Variable View); it goes in the report's NOTES. If the notes name a star
+   that is not in this reduction, SHOBS-P asks before saving (chapter 17, "Notes that name another star").
 3. Click **Save AAVSO exoplanet report…**.
    The file is called `AAVSO_<planet>_<DD-MON-YYYY>_SHOBS-P.txt`, for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`.
 4. The status bar says *"Saved … — upload to the AAVSO Exoplanet Database (check its current instructions):"* with
@@ -74,10 +76,17 @@ Beside the report, SHOBS-P writes:
   measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames left out** (by flag and frame
   number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and the dark's exposure) and the **Gain**
   with where it came from. With it, you (or anyone you send it to) can reduce the night again the same way.
-- `…_field.png`: the reference frame, turned north up and east left, with a compass, a scale bar, and the target,
-  comps and check star marked with their apertures to scale. When the AAVSO's chart server answers, the AAVSO chart
-  of the same field and size is saved next to it as `…_aavso_chart.png`; if it does not, the log says so and **Save
-  field image…** fetches it again later. No field image is made for an opened EXOTIC report's fit.
+- `…_field.png`: the reference frame exactly as shot (never turned or mirrored), filling the picture on a smooth
+  dark-gray background. The target, comps and check star are marked with their apertures to scale, with a scale
+  bar at the bottom right. Yellow **N** and **E** arrows in the top-right corner show where north and east lie on
+  the frame, from the plate solution. On a frame that is not solved, the corner says *"Orientation unknown (the
+  image is not solved)"* instead. The line under the title (frame name, size, plate scale, apertures, chart ID)
+  wraps onto a second line when it is long. When the target is itself an AAVSO sequence star (HD 219134 is one),
+  only its own marker is drawn, with no extra sequence ring beside it. The log says *"Field image saved (as shot,
+  N/E arrows): …"*. When the AAVSO's chart server answers, the AAVSO chart of the same field and size is saved next
+  to it as `…_aavso_chart.png`. That chart is north up and east left, so use the arrows to match the two. If the
+  chart server does not answer, the log says so and **Save field image…** fetches it again later. No field image is
+  made for an opened EXOTIC report's fit.
 
 > **Caution:** The AAVSO's exoplanet section sets its own rules for what it accepts. Check its current
 > instructions before your first upload.
@@ -114,6 +123,29 @@ To upload it:
 As with the AAVSO pages, opening ExoFOP marks the night of the package you saved last as sent, and warns first if
 it was already sent in another package.
 
+## The ExoClock file
+
+ExoClock (exoclock.space) collects transit times to keep planets' ephemerides up to date for the Ariel mission.
+**Save for ExoClock…** writes two files:
+
+- `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt`: the planet's name with no
+  spaces (as ExoClock spells it) and the UTC date of the first frame. A few header lines start with `#` (planet,
+  time format, filter, exposure, observer code, number of frames). Then one line per frame with three columns: the
+  time in **JD_UTC** at **mid-exposure**, the relative flux (divided by its median, not detrended; ExoClock fits its
+  own baseline) and its error. Only the frames the fit used are in it, as in the AAVSO report.
+- `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
+  **Time format** `JD_UTC`, **Time stamp** `Mid-exposure`, **Flux format** `Flux`, **Filter** (a color camera's `TG`
+  is listed as Johnson V), **Exposure time** in seconds, and the upload page's address.
+
+> **Caution:** ExoClock's form starts on **Exposure start**. Change it to **Mid-exposure**, or every time is off by
+> half an exposure. The status line reminds you: *"✔ Saved. On the form, pick Mid-exposure (…; what to pick is in
+> ExoClock_info.txt)."*
+
+**Go to ExoClock…** opens the upload page (https://www.exoclock.space/upload/) in your browser; log in and upload the
+`ExoClock_…txt` file. As with the other upload pages, the night of the file you saved last is marked sent (**Sent**
+shows `ExoClock` and the date), and SHOBS-P warns first if that night was already sent. Chapter 17 walks through the
+form.
+
 
 ## The plot PNG and the light-curve CSV
 
@@ -128,12 +160,18 @@ it was already sent in another package.
   It is in magnitudes, not the transit fit's relative flux.
 - With a fit shown, the same button also writes the **fit CSV** beside it:
   `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`, with the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`,
-  `residual` and `flag`. Trimmed points are included and flagged `trimmed`. Without an Output folder it is named after
+  `residual`, `flag`, `airmass` and `segment`. `rel_flux` is the raw relative flux (not detrended); `segment` says
+  `before flip` or `after flip` on a night with a meridian flip. Trimmed points are included and flagged `trimmed`. Without an Output folder it is named after
   the light-curve CSV you chose (for example `mine.csv` and `mine_transit_fit.csv`). For a report fit only the fit CSV
   is written; if the report's times stayed in JD_UTC, the first column is `JD_UTC`. For the detrended flux, use the
   CSV in the ExoFOP package. Under the `# Created` line, comment lines starting with `#` give the planet, filter,
-  fitted Tc and verdict, and the O − C. **Multi-night…** reads the night back from them (chapter 17).
+  fitted Tc and verdict, the O − C, what the columns hold, and the time of the meridian flip if there was one.
+  **Multi-night…** reads the night back from them (chapter 17).
 - **Save field image…** saves the field image on its own (see above).
+
+![A field image as saved](img/19-field-image.png)
+
+*The field image of HD 219134: the frame as shot, with N and E arrows at the top right and the stars marked.*
 
 ## Compare with an EXOTIC report
 

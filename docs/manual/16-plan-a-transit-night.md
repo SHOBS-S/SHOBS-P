@@ -34,10 +34,12 @@ To enter a planet:
 
 1. In the **Planet (Transits)** box, type the name in **Planet**, for example `TrES-3 b`, `KOI-217 b`,
    `TOI-2046 b` or `EPIC 220504338 b`.
-2. Press **Enter** (or Tab out of the box). The lookup starts by itself; the line under the box says
-   *⟳ Looking up … at the NASA Exoplanet Archive…* with the seconds counting (and a moving bar beside the box), and
-   then where the values came from. If the archive does not answer, the line says so in red; type the values or
-   press **Look up again** later.
+2. Press **Enter** (or Tab out of the box). The lookup starts by itself. While it runs, the busy bar at the left
+   end of the bottom status strip says *"Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"*, and the
+   empty boxes show a gray *looking up…*. When it is done, the line under the box says where the values came from.
+   If the archive does not answer within 60 seconds, that line says so in red, for example *"✖ TOI-2046 b: the NASA
+   Exoplanet Archive did not answer within 60 s — type the values or Look up again."* Type the values, or press
+   **Look up again** later.
 3. Check the filled boxes: **Period (d)**, **T0 (BJD_TDB)**, **Duration T14 (h)**, **Depth (%)**, **Rp/R\***,
    **a/R\***, **Impact parameter b** and **Star Teff (K)** (used for limb darkening).
 

@@ -10,7 +10,7 @@ This chapter covers:
 - the comparison-star checks on this page (leave-one-comp-out, **Comp health…**, **Use comps…**),
 - leaving out a bad stretch with **Trim**,
 - the corner plot of the fit's uncertainties,
-- saving and submitting the result,
+- saving and submitting the result (AAVSO, ExoFOP and ExoClock),
 - fitting several nights of one planet together (**Multi-night…**).
 
 ## Get to the fit
@@ -21,8 +21,11 @@ This chapter covers:
 3. When photometry ends, SHOBS-P opens the Output step. The fit starts by itself when there are at least 20 usable
    points and a planet is known. Press **Cancel** if you want to change a setting first.
 
-The fit has three stages, shown in the progress line under the plot: a least-squares fit, then an MCMC run
-(*"MCMC step 1,200 of 3,000"*), then a comparison-star check (*"Checking comps (1 of 3)…"*). How long it takes
+The fit has three stages. The busy bar at the left end of the bottom status strip names each one as it goes: a
+least-squares fit (*"Fitting the transit: least-squares fit…"*), then an MCMC run (*"Fitting the transit: MCMC
+burn-in… 600 of 1,000"*, then *"Fitting the transit: MCMC step… 1,200 of 3,000"*), then a comparison-star check
+(*"Checking the comps… 2 of 5"*). The bar moves back and forth; it never fills, so read the counts in its words. When
+it is all done, the bar goes and the status line says *"✔ Transit fit done; comps checked."* How long it takes
 depends on the number of frames and comps.
 
 > **Caution:** The fit needs your site's latitude and longitude for BJD times. Without them it stops with
@@ -30,7 +33,8 @@ depends on the number of frames and comps.
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 
-In 2.2.19 the legend sits under the residual panel, and the tools row has **Multi-night…** and **Corner plot…**.
+In 2.2.20 the Results row has two new buttons, **Save for ExoClock…** and **Go to ExoClock…**, and the page has no
+progress bar of its own: a running fit shows on the busy bar in the status strip.
 
 ## The page, top to bottom
 
@@ -53,9 +57,11 @@ In 2.2.19 the legend sits under the residual panel, and the tools row has **Mult
 - **Corner plot…** and the **credible bands** box (below).
 - **Trim** row (below).
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
+- A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
+  *"✖ Fit failed."* or *"Canceled."*, and then the comp-check result (below).
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
-  package…**, **Open ExoFOP…**, **Save light-curve CSV…**, **Save plot PNG…** and **Save field image…**, with
-  **Variable View  ▶** at the right.
+  package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
+  PNG…** and **Save field image…**, with **Variable View  ▶** at the right.
 
 ## Read the verdict
 
@@ -164,7 +170,7 @@ that is a central transit, and the note says to read b as an upper limit.
 A bad comparison star can make or hide a transit. The page checks this in three ways.
 
 **Leave-one-comp-out.** With two or more comps, after every fit SHOBS-P refits once with each comp left out. The
-progress line then reads, for example, *"Comps checked: depth spread 0.12 %, Tc spread 45 s"*. If leaving one comp
+result line then adds, for example, *"Comps checked: depth spread 0.12 %, Tc spread 45 s"*. If leaving one comp
 out moves the depth or Tc by more than its statistical error, the notes name that comp in orange, with a link to
 Comp health. Wait for this check to finish (a few seconds) before saving: saves made while it runs are refused, so
 that the files carry its result.
@@ -244,22 +250,64 @@ When the verdict is "detected" and you are happy with the fit:
 6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
    (the same as on the Variables Output page) and a fit CSV beside it, named like
    `TrES-3b_TG_05-OCT-2026_SHOBS-P_transit_fit.csv`. The fit CSV has the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`,
-   `model`, `residual` and `flag`, one row per point in time order. Trimmed points are rows too, flagged `trimmed`,
-   with no error, model or residual. With an **Output** folder set, both files get the same number as the report and
-   plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved. Under its first line, the fit
-   CSV has comment lines starting with `#`: the planet, filter, fitted Tc and verdict, and the O − C line.
+   `model`, `residual`, `flag`, `airmass` and `segment`, one row per point in time order. `rel_flux` is the raw
+   relative flux (divided by its median, not detrended); the baseline is in `model`. `segment` says `before flip` or
+   `after flip` on a night with a meridian flip, and is blank otherwise. Trimmed points are rows too, flagged
+   `trimmed`, with no error, model, residual or airmass. With an **Output** folder set, both files get the same number
+   as the report and plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved. Under its
+   first line, the fit CSV has comment lines starting with `#`: the planet, filter, fitted Tc and verdict, the O − C
+   line, what the columns hold, and the time of the meridian flip when there was one.
+
+**Notes that name another star.** Before it saves the AAVSO exoplanet report or the ExoFOP package of your own
+photometry, SHOBS-P reads the **Notes** box (in Variable View). If the notes name a star that is not in this
+reduction (often a leftover from the last star), it asks, for example *"⚠ The notes name HD 219134, which is not in this reduction. … Save anyway?"*. **No** (the default)
+saves nothing and the status line says *"✖ Not saved: fix the Notes (Output page), then save again."* The target,
+planet, comps and check star never set it off. A new reduction puts the notes back to *"OSC reduced; not
+transformed"* (or *"Monochrome camera; not transformed"*).
 
 Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
 the AAVSO chart of the field when it answers) beside it. Chapter 19 describes them.
 
-**Uploading twice.** **Open AAVSO Exoplanet Database…** and **Open ExoFOP…** work like **Open AAVSO WebObs…** in
-chapter 15: when the page opens, the night of the report (or package) you saved last is marked sent, and the night
-table's **Sent** column shows it (for example `✓ AAVSO exo 2026-10-06` or `✓ ExoFOP 2026-10-06`). If that night was
-already sent in another report, SHOBS-P asks before opening the page. Double-click the night in the night table to
+### Send it to ExoClock
+
+ExoClock collects transit times of known planets to keep their ephemerides up to date, so the Ariel space mission
+knows when to look. Any timed transit is welcome there, TESS target or not. Uploading needs an ExoClock account.
+
+1. Click **Save for ExoClock…**. SHOBS-P writes two files:
+   - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt` (the planet without spaces,
+     and the UTC date of the first frame). This is the file you upload. It has three columns: the time in JD_UTC at
+     mid-exposure, the relative flux (not detrended), and its error. Only the frames the fit used are in it.
+   - `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file.
+
+   The status line says *"✔ Saved. On the form, pick Mid-exposure (ExoClock_TOI-2046b_20261027.txt; what to pick is
+   in ExoClock_info.txt)."*
+2. Click **Go to ExoClock…**. The upload page opens in your browser. Log in.
+3. Fill in the form from `ExoClock_info.txt`:
+   - **Planet**: the name with no space, for example `TOI-2046b`.
+   - **Time format**: **JD_UTC**.
+   - **Time stamp**: **Mid-exposure**. The form starts on **Exposure start**, so change it. This is the one most
+     easily missed: left on Exposure start, every time is off by half an exposure.
+   - **Flux format**: **Flux**.
+   - **Filter**: as the info file says. A color camera's green channel (`TG`) is listed as **Johnson V**.
+   - **Exposure time**: in seconds, as the info file says.
+4. Upload the `ExoClock_…txt` file.
+
+![The Results row with the ExoClock buttons](img/17-exoclock-buttons.png)
+
+*The Results row on the Transit fit page, with **Save for ExoClock…** and **Go to ExoClock…** after **Open ExoFOP…**.*
+
+The times need the target's RA/Dec and your site's latitude and longitude, as for every BJD time. Without them,
+SHOBS-P says *"ExoClock file not saved: …"*.
+
+**Uploading twice.** **Open AAVSO Exoplanet Database…**, **Open ExoFOP…** and **Go to ExoClock…** work like **Open
+AAVSO WebObs…** in chapter 15: when the page opens, the night of the report (or package, or file) you saved last is
+marked sent, and the night table's **Sent** column shows it (for example `✓ AAVSO exo 2026-10-06`, `✓ ExoFOP
+2026-10-06` or `✓ ExoClock 2026-10-27`). If that night was already sent in another report, SHOBS-P asks before
+opening the page. Double-click the night in the night table to
 unmark it.
 
 If the verdict is "inconclusive" or "none", SHOBS-P asks before saving a report and writes the verdict into its
-notes. Chapter 19 describes every file and both upload sites.
+notes. Chapter 19 describes every file and the upload sites.
 
 ## Fit several nights together (Multi-night…)
 
@@ -272,11 +320,45 @@ every night, and a check of the ephemeris. **Multi-night…** opens the **multi-
 2. Check the list. The **Status** column says **✔ ready** for each usable night. A night of another planet, the same
    night twice, fewer than 20 points, or no transit predicted during the data is left out (**✖** and the reason). A
    night in another filter than most gets a ⚠; consider **Depth and limb darkening per filter**. **Leave out / put
-   back** (or a double-click) and **Remove** change the list.
+   back** (or a double-click) and **Remove** change the list. If the table is wider than the window, use the
+   sideways scroll bar under it. The **Single-night Tc (BJD_TDB)** column gives each night's own Tc. For a fit CSV
+   that does not carry one, SHOBS-P fits that night alone in the background: the column says *fitting…* until it is
+   done, or *not fitted* if the quick fit fails.
 3. Check the **Input ephemeris** (filled from the planet; **Look up (NASA Exoplanet Archive)** fetches it). Optionally
    type an **Alternative ephemeris** (T0, P, their ±, and a source, for example Exoplanet Watch's or ExoClock's
    current one) and press **Apply**.
 4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
+   The window's own busy bar, at the lower left, says what the fit is doing, for example *"Fitting 4 nights… MCMC
+   burn-in 300 of 500"*. When it is done, the line under the fit options says *"✔ Done: 4 nights, MCMC acceptance
+   0.31."*
+
+### Nights with no airmass
+
+Fit CSVs saved by SHOBS-P 2.2.20 or later carry each point's airmass. Older fit CSVs do not. With **airmass**
+ticked, a night with no airmass among nights that have it is fitted against time only, unlike the others, and its
+Tc may shift. SHOBS-P marks such a night with *"⚠ No airmass in this file: its baseline is fitted against time only,
+unlike the other nights. Tc may shift."* in its **Status**, in a line under the table (with the nights' dates) and in
+the Summary. The line under the fit options says, for example, *"⚠ 4 nights in use; 1 with no airmass (see
+above)."*
+
+You have two ways out:
+
+- Open those nights again in SHOBS-P 2.2.20 or later and save their fit CSVs again (**Save light-curve CSV…**). They
+  then carry airmass.
+- Press **Fit every night against time only** (beside the line under the table). It unticks **airmass** and ticks
+  **time slope**, so every night is fitted the same way.
+
+### The window's layout
+
+The window opens at least 900 × 700 and has two parts with a divider between them. Above it: the nights table, the
+ephemerides, the fit options, the result line, the timing table and the reading in plain words. Below it: the
+**Plots** and **Summary and ephemerides** tabs, which take any extra height when you make the window bigger. Drag
+the divider up to give the plots more room. The **Results** row along the bottom holds **Save timing CSV…**, **Save
+plot PNG…**, **Corner plot…** and **Close**.
+
+![The Multi-night window after a fit](img/17-multinight-window.png)
+
+*The Multi-night window after a joint fit of four nights: nights table above the divider, plots below.*
 
 The joint fit uses one transit shape (Rp/R\*, a/R\*, b and limb darkening) for all nights, with each night's own
 mid-transit time, baseline and detrending. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
@@ -288,13 +370,29 @@ the same amount, and that offset is within what the input ephemeris can predict 
 is *"most likely the ephemeris, not the data"*. (A constant offset can also come from a clock or time-system error.)
 A current ephemeris, typed as the alternative, settles it.
 
-The **Plots** tab shows the O − C diagrams and the nights stacked with the joint model; the **Summary and
-ephemerides** tab gives the joint shape, each ephemeris (the updated one with its uncertainties and their
-covariance) and notes per night. It also lists a combined ephemeris of these nights with the input T0 and P. That
+The **Plots** tab shows the O − C diagrams and the nights stacked with the joint model. One legend sits below the
+O − C panels: *Tc ± fit σ* (input, alternative, own), *ephemeris ±1σ (shaded)* and *outlier (> 3σ)*. Each night is
+labeled in the right margin with its date, epoch and filter, and the bottom curve is *all nights, 5-min bins*.
+**Pop out** (top right of the tab) opens the plots in a window of their own, **SHOBS-P — multi-night plots
+(planet)**, which you can make any size or move to another screen. It has its own **Save plot PNG…** and **Close**.
+
+The **Summary and ephemerides** tab gives the joint shape, each ephemeris (the updated one with its uncertainties
+and their covariance) and notes per night. It also lists a combined ephemeris of these nights with the input T0 and P. That
 one is *for comparison only*: it is not valid if the input ephemeris already includes these nights.
 
 **Save timing CSV…** writes one row per epoch (mid-time in BJD_TDB with its error, the three O − C, the flag) with
 the ephemerides in its header lines, ready for ExoClock. **Save plot PNG…** saves the plots.
+
+**Corner plot…** (grayed until the nights are fitted) opens **SHOBS-P — multi-night corner plot (planet)**: the
+corner plot of the joint fit, read the same way as the single-night one above. Its title reads, for example, *"TOI-2046
+b: joint MCMC posterior, 4 nights"*. It shows Rp/R\*, a/R\*, b and one **Tc** panel per night (headed with the
+night's date). Tick **Show all parameters (baselines, limb darkening)** for the rest. A parameter that piles up
+against its prior range gets the same ⚠ as on a single night. **Save PNG…** saves it as
+`<planet>_<first night>_to_<last night>_SHOBS-P_multinight_corner.png`.
+
+![The corner plot of a multi-night fit](img/17-multinight-corner.png)
+
+*The joint corner plot of four nights: the shared shape, and one Tc panel per night.*
 
 ---
 

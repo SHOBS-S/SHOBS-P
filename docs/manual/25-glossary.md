@@ -94,6 +94,10 @@ number of periods since T0. The predicted mid-transit is T0 + epoch × period.
 **EXOTIC** — The transit-fitting program of NASA's Exoplanet Watch project. SHOBS-P reads and writes the same
 AAVSO exoplanet report format.
 
+**ExoClock** — A project (exoclock.space) that collects transit times of known planets from small telescopes to
+keep their **ephemerides** up to date for ESA's Ariel space mission. **Save for ExoClock…** writes its upload file;
+**Go to ExoClock…** opens its upload page.
+
 **ExoFOP (ExoFOP-TESS)** — The website where follow-up observations of TESS targets (TOIs) are collected.
 
 **FAP (false-alarm probability)** — The chance that noise alone would produce a peak as high as the one found in a
@@ -114,6 +118,9 @@ the total duration from first to last contact. Tc is the time of mid-transit.
 **JD, HJD** — Julian Date, a running day count used in astronomy (JD 2461000 is in 2025). HJD is the time the light
 would have reached the Sun's center. AAVSO variable-star reports use JD; timing work uses HJD or **BJD_TDB**.
 
+**JD_UTC** — A Julian Date counted in UTC, the clock time at your telescope, with no correction for where the Earth
+is. ExoClock's upload file uses it; SHOBS-P converts its **BJD_TDB** times back to JD_UTC for that file.
+
 **Limb darkening** — A star looks darker near its edge than at its center, which rounds the bottom of a transit.
 SHOBS-P sets it from the star's temperature and the filter.
 
@@ -128,6 +135,9 @@ combinations near the best fit. **Quick**, **Standard** and **Thorough** set how
 
 **Meridian flip** — On a German equatorial mount, the telescope swings to the other side of the pier when the
 target crosses the meridian. The field ends up rotated 180° on the sensor. One set of flats still covers both sides.
+
+**Mid-exposure** — The middle of a frame's exposure: its start time plus half the exposure time. SHOBS-P always
+times a frame at mid-exposure. On ExoClock's upload form, set **Time stamp** to **Mid-exposure**.
 
 **NEB (nearby eclipsing binary)** — A faint eclipsing binary star close to the target that can fake a transit in a
 low-resolution survey such as TESS. The NEB check measures the neighbors to rule them out.
