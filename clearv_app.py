@@ -666,6 +666,16 @@ _NOTE_STAR_RE = _re.compile(
     r"|Gaia\s*DR[23]\s*\d{6,20}|\d{3}-[A-Z]{3}-\d{3}|(?:WASP|HAT-P|TrES|KELT|XO|Qatar|TOI|K2)-\d{1,5})\b",
     _re.IGNORECASE)
 
+# 2.2.21 (nit 1): GCVS-style variable-star names ("SZ Lyn", "V1441 Cas", "XX Cyg", "R Leo"): R-Z, or two letters (no
+# J), or V and a number, then one of the 88 IAU constellation abbreviations (case as written: "Cas", not "cas").
+IAU_CONSTELLATIONS = (
+    "And Ant Aps Aqr Aql Ara Ari Aur Boo Cae Cam Cnc CVn CMa CMi Cap Car Cas Cen Cep Cet Cha Cir Col Com CrA CrB Crv "
+    "Crt Cru Cyg Del Dor Dra Equ Eri For Gem Gru Her Hor Hya Hyi Ind Lac Leo LMi Lep Lib Lup Lyn Lyr Men Mic Mon Mus "
+    "Nor Oct Oph Ori Pav Peg Per Phe Pic PsA Psc Pup Pyx Ret Sge Sgr Sco Scl Sct Ser Sex Tau Tel TrA Tri Tuc UMa UMi "
+    "Vel Vir Vol Vul").split()
+_GCVS_RE = _re.compile(r"(?<![\w-])(?:[R-Z]|[A-IK-Z][A-IK-Z]|V\d{1,4})\s+(?:"
+                       + "|".join(IAU_CONSTELLATIONS) + r")(?![\w-])")
+
 
 def _star_key(name: str) -> str:
     """Spaces and case ignored; a trailing planet letter after a number dropped ('HD 219134 b' -> 'hd219134')."""
@@ -682,8 +692,10 @@ def notes_foreign_stars(notes: str, known, previous: str = "") -> list:
     text = str(notes or "")
     keys = {_star_key(k) for k in known if k and str(k).strip()}
     out = []
-    found = [m.group(0) for m in _NOTE_STAR_RE.finditer(text)]
-    prev = " ".join(str(previous or "").split())
+    hits = [(m.start(), m.group(0)) for m in _NOTE_STAR_RE.finditer(text)]
+    hits += [(m.start(), m.group(0)) for m in _GCVS_RE.finditer(text)]   # 2.2.21 (nit 1): GCVS names too
+    found = [h[1] for h in sorted(hits)]
+    prev =" ".join(str(previous or "").split())
     if prev and _star_key(prev) not in keys and not placeholder_star_name(prev):
         if _re.search(r"(?<![\w-])" + r"\s*".join(_re.escape(p) for p in prev.split()) + r"(?![\w-])", text,
                       _re.IGNORECASE):
@@ -2056,8 +2068,9 @@ class App(Tk):
             pass
         messagebox.showerror(APP_TITLE, f"Something went wrong:\n{val}\n\nDetails were written to {LOG_FILE}.")
 
-    def log(self, text: str):
-        """Main thread only. Worker threads use self.call_ui(self.log, text)."""
+    def log(self, text: str, keep_status: bool = False):
+        """Main thread only. Worker threads use self.call_ui(self.log, text). keep_status: the Log only, the status
+        line keeps what it says (2.2.21 nit b: a report's "Saved … upload to …" line and its upload button)."""
         log_to_file(text)   # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
         for box in (self.log_box, getattr(self, "photo_log", None)):
             if box is None:
@@ -2066,13 +2079,21 @@ class App(Tk):
             if int(box.index("end-1c").split(".")[0]) > 6000:
                 box.delete("1.0", "1001.0")
             box.see(END)
+        if keep_status:
+            return
         self.status.set(text.strip().splitlines()[0] if text.strip() else "")
 
     def _folder_row(self, parent, label, variable, key):
         row = ttk.Frame(parent, style="Card.TFrame")
         row.pack(fill=X, pady=4)
         ttk.Label(row, text=label, width=12, style="Card.TLabel").pack(side=LEFT, padx=(0, 6))
-        ttk.Entry(row, textvariable=variable).pack(side=LEFT, fill=X, expand=True)
+        entry = ttk.Entry(row, textvariable=variable)
+        entry.pack(side=LEFT, fill=X, expand=True)
+        # 2.2.21 (nit a): a path typed or pasted into the box counts its files as Browse does: ~400 ms after the last
+        # key, and at once on Enter or leaving the box.
+        variable.trace_add("write", lambda *_a, v=variable, k=key: self._folder_typed(v, k))
+        for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
+            entry.bind(seq, lambda _e, v=variable, k=key: self._folder_typed(v, k, now=True), add="+")
         ttk.Button(row, text="Browse", command=lambda: self._browse(variable, key)).pack(side=LEFT, padx=(6, 0))
         if key in ("Bias", "Dark", "Flat"):
             # 2.2.8: a calibration entry can also be one SHOBS-P master file.
@@ -2087,7 +2108,15 @@ class App(Tk):
         path = filedialog.askdirectory(title=f"Select {key} folder")
         if not path:
             return
+        self._folder_job_cancel(key)
         variable.set(path)
+        self._folder_job_cancel(key)   # the set above started a typed-path timer: Browse counts now instead
+        self._folder_chosen(variable, key)
+
+    def _folder_chosen(self, variable, key):
+        """A folder chosen with Browse, or typed into the box (2.2.21 nit a): the same count and checks."""
+        path = variable.get().strip()
+        self.__dict__.setdefault("_folder_counted", {})[key] = path
         if key == "Output":
             self._output_changed()
             return
@@ -2095,6 +2124,46 @@ class App(Tk):
         self.status.set(f"{key}: {self._counts[key].get()}")
         if key in ("Lights", "Dark"):
             self.after(50, lambda k=key: self._frames_folder_picked(k))   # 2.2.19 (#20)
+
+    def _folder_job_cancel(self, key):
+        jobs = self.__dict__.setdefault("_folder_jobs", {})
+        job = jobs.pop(key, None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+
+    def _folder_typed(self, variable, key, now: bool = False):
+        """2.2.21 (nit a): the box's text changed (typed, pasted) or the user pressed Enter / left the box: count the
+        folder ~400 ms after the last change (at once with now=True), only when the text names an existing folder
+        (or master file) other than the one counted last, so a half-typed path never logs or asks anything."""
+        self.__dict__.setdefault("_folder_counted", {})
+        self._folder_job_cancel(key)
+        if getattr(self, "_loading_meta", False):
+            return
+
+        def go():
+            self._folder_jobs.pop(key, None)
+            path = variable.get().strip()
+            if path == self._folder_counted.get(key):
+                return
+            if key == "Output":
+                self._folder_counted[key] = path   # _output_typed already shows "in use"; nothing to count
+                return
+            if not path:
+                self._folder_counted[key] = ""
+                self._counts[key].set("0 files")
+                return
+            if not (os.path.isdir(path) or (key in ("Bias", "Dark", "Flat") and os.path.isfile(path))):
+                self._counts[key].set("no such folder")
+                return
+            self._folder_chosen(variable, key)
+
+        if now:
+            go()
+        else:
+            self._folder_jobs[key] = self.after(400, go)
 
     def _count_text(self, key, path) -> str:
         """'51 files', '51 files + master', or 'master file' (2.2.8: saved masters are not counted as frames)."""
@@ -2117,6 +2186,8 @@ class App(Tk):
             self._calibration_failed(problem)   # 2.2.18 (item 22): logged, same wording as at Build masters
             return
         variable.set(path)
+        self._folder_job_cancel(key)   # 2.2.21 (nit a): counted here, not again by the typed-path timer
+        self.__dict__.setdefault("_folder_counted", {})[key] = path
         self._counts[key].set("master file")
         self.status.set(f"{key}: SHOBS-P master {os.path.basename(path)}")
         if key == "Dark":
@@ -2124,6 +2195,8 @@ class App(Tk):
 
     def _clear_folder(self, variable, key):
         variable.set("")
+        self._folder_job_cancel(key)   # 2.2.21 (nit a)
+        self.__dict__.setdefault("_folder_counted", {})[key] = ""
         if key == "Output":
             self._output_changed()
             return
@@ -2720,10 +2793,11 @@ class App(Tk):
         without one, the usual dialog."""
         if self.output_dir.get().strip():
             folder = os.path.basename(os.path.dirname(path)) or os.path.dirname(path)
-            self.status.set(f"Saved {os.path.basename(path)} to {folder}." + (f" {advice}" if advice else ""))
+            self.status.set(self._series_note(f"Saved {os.path.basename(path)} to {folder}."
+                                              + (f" {advice}" if advice else ""), keep=True))   # 2.2.21 (nit j)
             self.log(f"Saved {path}")
         else:
-            self.status.set(f"Saved {path}")
+            self.status.set(self._series_note(f"Saved {path}", keep=True))   # 2.2.21 (nit j)
             messagebox.showinfo(APP_TITLE, f"Saved\n{path}" + (f"\n\n{advice}" if advice else ""))
 
     # ---- upload links (2.2.15, item 8) -------------------------------------------------------
@@ -2747,6 +2821,7 @@ class App(Tk):
         said first (2.2.20, item 4: "⚠ No AUID…")."""
         # 2.2.15 review: short, and the button has its own slot on the right, so a long line never hides it.
         text = (f"{note}   " if note else "") + f"Saved {os.path.basename(path)} — upload to {where}:"
+        text = self._series_note(text)   # 2.2.21 (nit j): "Series file updated: <name>."
         self.status.set(text)
         self._status_offer = (text, url)
         try:
@@ -2846,8 +2921,8 @@ class App(Tk):
             self._remember_report("exoclock", tp._fit_nights(), path)
         except Exception:
             pass
-        self.status.set(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what to pick is in "
-                        f"{os.path.basename(info_path)}).")
+        self.status.set(self._series_note(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what "
+                                          f"to pick is in {os.path.basename(info_path)})."))   # 2.2.21 (nit j)
         return path
 
     def open_exoclock(self):
@@ -2866,6 +2941,73 @@ class App(Tk):
             return os.path.normcase(os.path.abspath(str(path)))
         return str(entry.get("file") or "")
 
+    # ---- 2.2.21 (nit j): a report save that rewrites the open series ------------------------------------------------
+    _SERIES_SITE_KEYS = ("lat", "lon", "elevation", "observer")
+
+    @staticmethod
+    def _site_words(site: dict) -> str:
+        """'35.37, -81.96, 300 m, observer JABA' (what is known of a site and observer code)."""
+        where = ", ".join(v for v in (site.get("lat", ""), site.get("lon", "")) if v) or "an unknown site"
+        if site.get("elevation"):
+            where += f", {site['elevation']} m"
+        return where + (f", observer {site['observer']}" if site.get("observer") else ", no observer code")
+
+    @staticmethod
+    def _site_same(a: str, b: str) -> bool:
+        try:
+            return abs(float(a) - float(b)) < 1e-6
+        except (TypeError, ValueError):
+            return str(a or "").strip().upper() == str(b or "").strip().upper()
+
+    def _report_series_override(self) -> dict | None:
+        """2.2.21 (nit j): the site and observer a report save writes into the open series: the series' own (as loaded or
+        last saved), not the Input page's. When the Input page's differ, ask once per series and site pair (Yes, the
+        default: keep the series'; No: the Input page's go into the series). None: the Input page's are used."""
+        own = getattr(self, "_series_site", None) or {}
+        if not any(own.values()):
+            return None   # an old file without a site: nothing to keep
+        page = {k: str(getattr(self, k).get() or "").strip() for k in self._SERIES_SITE_KEYS}
+        if all(self._site_same(own.get(k, ""), page[k]) for k in self._SERIES_SITE_KEYS if own.get(k)):
+            return None
+        key = (os.path.normcase(os.path.abspath(self.series_path or "")), tuple(sorted(page.items())))
+        answers = self.__dict__.setdefault("_series_site_answers", {})
+        if key not in answers:
+            answers[key] = messagebox.askyesno(
+                APP_TITLE, f"This series was observed from {self._site_words(own)}; the Input page has "
+                           f"{self._site_words(page)}.\n\nKeep the series' site?\n\nYes: the series file keeps its own "
+                           "site and observer code. No: the Input page's go into the series file.")
+            self.log(f"{os.path.basename(self.series_path or '')}: series site {self._site_words(own)}; Input page "
+                     f"{self._site_words(page)}; " + ("kept the series' site." if answers[key]
+                                                      else "the Input page's site goes into the series."))
+        if not answers[key]:
+            return None
+        return {k: own[k] for k in self._SERIES_SITE_KEYS if own.get(k)}
+
+    def _report_series_write(self) -> bool:
+        """2.2.21 (nit j): a report save (or a "sent" mark) rewrites the open series to note it: with the series' own
+        site and observer, and never silently: the Log says so, and the status line says "Series file updated: <name>"
+        after the save's own words (see _series_note). True when the file was written."""
+        if not self.series_path:
+            return False
+        try:
+            done = self._write_series(self.series_path, self._report_series_override()) is not None
+        except OSError as exc:
+            self.log(f"Series file not updated ({exc}).")
+            return False
+        if done:
+            name = os.path.basename(self.series_path)
+            self.log(f"Series file updated: {self.series_path} (the report is noted for its nights).")
+            self._series_note_pending = f"Series file updated: {name}."
+        return done
+
+    def _series_note(self, text: str, keep: bool = False) -> str:
+        """2.2.21 (nit j): text with the pending "Series file updated: <name>." after it. keep: leave it pending for the
+        save's last status line (saved_notice, followed by offer_upload after an AAVSO report)."""
+        note = getattr(self, "_series_note_pending", "")
+        if not keep:
+            self._series_note_pending = ""
+        return f"{text}   {note}" if note else text
+
     def _remember_report(self, page: str, nights, path: str) -> None:
         """A report (or ExoFOP package) just saved for an upload page: noted for its nights in reports_saved (kept in
         the series), so opening that page later, in this session or the next, marks them sent."""
@@ -2877,11 +3019,7 @@ class App(Tk):
             have = self.reports_saved.setdefault(night, [])
             if not any(e.get("to", "webobs") == page and self._report_id(e) == rid for e in have):
                 have.append(dict(entry))
-        if self.series_path:
-            try:
-                self._write_series(self.series_path)
-            except OSError:
-                pass
+        self._report_series_write()   # 2.2.21 (nit j): the series' own site; said on the status line
 
     def _last_report(self, page: str) -> dict | None:
         """The last report saved for an upload page, from reports_saved: {"id", "file", "nights"}; None if none."""
@@ -2960,10 +3098,8 @@ class App(Tk):
 
     def _sent_changed(self) -> None:
         if self.series_path:
-            try:
-                self._write_series(self.series_path)
-            except OSError:
-                pass
+            if self._report_series_write():   # 2.2.21 (nit j)
+                self.status.set(self._series_note(self.status.get()))
         else:   # round 2: no series file yet, so the mark lasts only for this session
             self.log("The sent mark is kept in the series file: save the series (Output page) to keep it after "
                      "SHOBS-P closes.")
@@ -3861,6 +3997,11 @@ class App(Tk):
             if self.observations:
                 return False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        # 2.2.21 (nit h): the last run's "Photometry done in 2:08. 240 points." (or field scan / aperture test) line on
+        # the Photometry page belongs to the old star. The Calibrate page's preview line stays: the frames stay.
+        if hasattr(self, "progress_text"):
+            self.progress_text.set("")
+        self._prog = None
         # 2.2.20 (#46): the Output page's Notes belong to the old star (they went into the next star's AAVSO report
         # #NOTES); back to the camera's default note. Every "Start a new reduction?" path comes through here.
         if old:
@@ -4399,6 +4540,8 @@ class App(Tk):
         self.target_auid = str(found.get("auid") or "")   # 2.2.19 (nit): the Series box's Star line
         self.target_auid_name = name or self.star_id.get().strip()
         self.target_in_vsx = bool(found.get("in_vsx") or found.get("source") == "VSX")   # 2.2.20 (item 4)
+        # 2.2.21 (nit 1): the catalog's own name for the target (VSX/SIMBAD), an alias the notes check never flags
+        self._target_lookup_names = {self.target_auid_name, str(found.get("name") or "")}
         self._update_no_auid()
         self.target_var_type = str(found.get("var_type") or "")   # 2.2.14 (item 19)
         self.catalog_epoch = found.get("epoch_jd")   # 2.2.14 (item 13): for O-C on the Output page
@@ -4432,6 +4575,8 @@ class App(Tk):
             n = len(core.calibration_source(var.get())[0]) if key != "Lights" else len(core.list_fits(var.get()))
             other = core.unreadable_files(var.get()) if not os.path.isfile(var.get().strip()) else []
             self._counts[key].set(self._count_text(key, var.get()) + (f" ({len(other)} unreadable)" if other else ""))
+            self._folder_job_cancel(key)   # 2.2.21 (nit a): counted here; the typed-path timer has nothing to add
+            self.__dict__.setdefault("_folder_counted", {})[key] = var.get().strip()
             if other and not n:
                 self.log(f"The {key} folder holds {len(other)} file(s) SHOBS-P cannot read (for example "
                          f"{other[0]}). It reads FITS and XISF: save or export them in one of those.")
@@ -6254,6 +6399,7 @@ class App(Tk):
         self.masters_binning = binning
         self.calibrated = calibrated
         self._forget_target_search()   # 2.2.19 (#9): a new reference frame
+        self._preview_foreign = ""   # 2.2.21 (nit f): a new frame, of the target now on the Input page
         self._raw_cache = None   # 2.2.19 (#16)
         self.preview = calibrated
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
@@ -7052,6 +7198,7 @@ class App(Tk):
         self.preview_header = header
         self.preview_path = path
         self._raw_cache = None
+        self._preview_foreign = ""   # 2.2.21 (nit f)
         self.apply_debayer(auto=True)   # a new reference image: solved again, the Target marker placed on it
 
     def _pick_chosen_by_user(self):
@@ -14204,6 +14351,9 @@ class App(Tk):
         self._series_check = (self.check_used, str(meta.get("check_mag") or ""))   # 2.2.8
         # 2.2.16 (item 11, review): the comp and check names this series' file holds (kept by _meta's rule).
         self._series_names = {name_key(meta.get(f"{r}_name")) for r in list(COMP_ROLES) + ["check"]} - {""}
+        # 2.2.21 (nit j): the series' own site and observer code (a report save keeps them)
+        self._series_site = {k: str(meta.get(k) if meta.get(k) is not None else "").strip()
+                             for k in self._SERIES_SITE_KEYS}
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
@@ -14282,7 +14432,7 @@ class App(Tk):
                      f"{name} dropped from the watch list.")
         self.watch_list = keep
 
-    def _write_series(self, path: str):
+    def _write_series(self, path: str, meta_override: dict | None = None):
         # 2.2.14 (item 17): keep one version back. The first write to a file in a session (Save series, or the
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
@@ -14297,7 +14447,14 @@ class App(Tk):
             return None
         part = path + ".part"
         meta = self._meta()
+        if meta_override:
+            meta.update(meta_override)   # 2.2.21 (nit j): a report save keeps the series' own site and observer
         core.save_series(part, meta, self.observations)
+        # 2.2.21 (nit j): the site and observer the series is known by: set by Load series and by Save series (the user
+        # chose to write the Input page's), or by the first write of a new series; an automatic save (a night added,
+        # comps changed) does not change them, so a later report save still asks about a different Input page site.
+        if getattr(self, "_explicit_save", False) or not any((getattr(self, "_series_site", None) or {}).values()):
+            self._series_site = {k: str(meta.get(k) or "").strip() for k in self._SERIES_SITE_KEYS}
         # 2.2.16 (item 11, review): the names now in the file are the series' own from here on.
         self._series_names = {name_key(meta.get(f"{r}_name")) for r in list(COMP_ROLES) + ["check"]} - {""}
         prev = series_prev_path(path)
@@ -14472,6 +14629,7 @@ class App(Tk):
                             if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
         self._series_check = ("", "")
         self._series_names = set()   # 2.2.16 (item 11, review)
+        self._series_site = {}   # 2.2.21 (nit j)
         self._zp_caution_cache = None
         self._series_saved_fp = None
         self.extremum_csv = self.extremum_csv_star = ""
@@ -14630,6 +14788,9 @@ class App(Tk):
             for role in COMP_ROLES + ("check",):
                 if getattr(self, f"{role}_xy", None) is not None:
                     kept_marked[role] = (getattr(self, f"{role}_name").get(), getattr(self, f"{role}_mag").get())
+        # 2.2.21 (nit f): the Photometry page's frame (a reduction of another star) is not this series' field.
+        self._preview_foreign = (str(meta.get("star_id") or "").strip()
+                                 if self.preview is not None and why and sure else "")
         if why and sure:
             self.clear_target(quiet=True, why=f"{os.path.basename(path)} is {why}")
         watch_before = {w.get("name") for w in self.watch_list}
@@ -17499,6 +17660,14 @@ class App(Tk):
         PNG of the Photometry page's frame with the target, comps and check marked (draw_field_figure), and, in the
         background, AAVSO's VSP chart of the same field and size saved next to it. Offline (or VSP down) the field
         image is still saved and the log says the chart is missing. Returns the field PNG's path ('' if none)."""
+        why = self._field_frame_problem()
+        if why:
+            # 2.2.21 (nit f): never another star's frame under this target's name.
+            if report_path:
+                self.log(f"Field image not saved with the report: {why}")
+            else:
+                messagebox.showinfo(APP_TITLE, why)
+            return ""
         info = self.field_image_info()
         if info is None:
             if report_path:
@@ -17527,6 +17696,9 @@ class App(Tk):
             ra, dec = info["center"]
             fov = float(info["fov_arcmin"])
             tok = self.busy_begin("Fetching the AAVSO chart of the field…")   # 2.2.20 (item 3)
+            # 2.2.21 (nit b): with a report, the chart's answer (saved, or a time-out) goes to the Log only: the
+            # report's "Saved … upload to AAVSO WebObs" line and its Open … button stay on the status line.
+            quiet = bool(report_path)
 
             def work():
                 try:
@@ -17539,11 +17711,11 @@ class App(Tk):
                     with open(target, "wb") as fh:
                         fh.write(data)
                     self.call_ui(self.log, f"AAVSO chart {payload.get('chartid') or ''} of the same field "
-                                           f"({fov:.0f}′, N up, E left) saved beside it: {target}")
+                                           f"({fov:.0f}′, N up, E left) saved beside it: {target}", quiet)
                 except Exception as exc:
                     why = exc.short() if isinstance(exc, core.VSPError) else str(exc)
                     self.call_ui(self.log, f"AAVSO chart not saved ({why}): the field image is saved alone. Save field "
-                                           "image again later to fetch the chart.")
+                                           "image again later to fetch the chart.", quiet)
                 finally:
                     self.call_ui(self.busy_end, tok)
 
@@ -17551,6 +17723,30 @@ class App(Tk):
         elif fetch_chart:
             self.log("AAVSO chart not fetched: the field's position is unknown (Solve, or the target's RA/Dec).")
         return path
+
+    def _field_frame_problem(self) -> str:
+        """2.2.21 (nit f): why the Photometry page's frame cannot be this target's field image ("" when it can): a
+        series is open and the frame is missing, or the frame is a reduction of another star (Load series of another
+        star after reducing one, or the frame pointing well away from the target's RA/Dec)."""
+        star = self.star_id.get().strip() or self.planet_name.get().strip()
+        msg = (f"Reduce a night of {star or 'the series target'} first; the field image comes from a reduction "
+               "(the Photometry page's frame).")
+        if self.preview is None:
+            return msg if self.observations else ""
+        if getattr(self, "_preview_foreign", ""):
+            return msg
+        try:
+            t = (float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
+        except (TypeError, ValueError):
+            return ""
+        pointing = core.frame_pointing(self.preview_header or {})
+        if pointing is None or not all(map(math.isfinite, t)):
+            return ""
+        h, w = self.preview.shape[:2]
+        arcsec, _exact = self._field_scale_arcsec()
+        half_diag = math.hypot(w, h) / 2.0 * arcsec / 3600.0 if arcsec else 0.5
+        sep = core.sky_separation_arcsec(t[0], t[1], float(pointing[0]), float(pointing[1])) / 3600.0
+        return msg if sep > max(1.0, 2.0 * half_diag) else ""
 
     def _field_image_with_report(self, report_path: str) -> str:
         """2.2.19 (#28): the field image saved with a variable or transit report; never stops the report."""
@@ -17571,6 +17767,8 @@ class App(Tk):
         names += list((self.seq_auids or {}).keys()) + list((self.seq_auids or {}).values())
         info = getattr(self, "planet_info", None) or {}
         names += [info.get("host"), info.get("name")]
+        if (self.star_id.get().strip() in (getattr(self, "_target_lookup_names", None) or ())):
+            names += list(self._target_lookup_names)   # 2.2.21 (nit 1): the target's catalog alias
         return [str(n) for n in names if n and str(n).strip()]
 
     def _notes_check(self, notes: str | None = None) -> bool:
@@ -17701,11 +17899,7 @@ class App(Tk):
             self.reports_saved.setdefault(night, []).append(
                 {"file": os.path.basename(path), "date": stamp, "scope": scope, "to": "webobs",
                  "path": os.path.abspath(path), "stamp": time.time()})
-        if self.series_path:
-            try:
-                self._write_series(self.series_path)
-            except OSError:
-                pass
+        self._report_series_write()   # 2.2.21 (nit j)
 
     def save_csv(self):
         if not self.observations:

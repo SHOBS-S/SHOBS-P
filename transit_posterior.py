@@ -313,11 +313,13 @@ def _contour_levels(h, fracs=(0.393, 0.865)):
     return [lv for lv in levels if lv > 0]
 
 
-def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float = 8.0, shape_only: bool = False):
+def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float = 8.0, shape_only: bool = False,
+                  keep_size: bool = False):
     """2.2.19 (#31): the corner plot of the MCMC samples on a matplotlib Figure (made here when fig is None, Agg).
     Diagonal: each fitted parameter's histogram with the median and 16/84 % lines, value +err/−err in the title
     (⚠ and an orange title when the parameter piles up against its allowed range). Below the diagonal: 2-D density
-    with the 1σ and 2σ contours. Tc is shown in minutes from its median."""
+    with the 1σ and 2σ contours. Tc is shown in minutes from its median. keep_size: lay out at the figure's present
+    size (a window's canvas resized it) instead of setting it from the number of parameters."""
     if fig is None:
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -328,7 +330,12 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
     names = corner_params(result, shape_only)
     n = len(names)
     side = min(max(1.25 * n + 0.9, 5.0), 12.5)
-    fig.set_size_inches(side, side, forward=False)
+    if not keep_size:
+        fig.set_size_inches(side, side, forward=False)
+    # 2.2.21 (nit 2): everything below is laid out from the figure's actual size (a canvas may have resized it, or
+    # set_size_inches may round), not from the size asked for, so the titles and tick labels never clip.
+    fig_w, fig_h = (float(v) for v in fig.get_size_inches())
+    fig_w, fig_h = max(fig_w, 1.0), max(fig_h, 1.0)
     fig.clear()
     rng = np.random.default_rng(5)
     flat = np.asarray(chain, dtype=float)
@@ -348,13 +355,17 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
     # 2.2.20 (item 1b): headroom in inches (whatever the figure's size) for the main title (wrapped, up to two
     # lines), the ⚠ line under it, and the top panel's own two-line title (K2-29 b: the Tc title ran into the main
     # title).
-    main_title = _corner_title(result, side, font)
+    main_title = _corner_title(result, fig_w, font)
     n_title = main_title.count("\n") + 1
-    warn_line = wrap_to(WARN_LINE, side * 72.0 * 0.96, font) if flagged else ""
+    warn_line = wrap_to(WARN_LINE, fig_w * 72.0 * 0.96, font) if flagged else ""
     n_warn = warn_line.count("\n") + 1 if warn_line else 0
     head_in = 0.12 + n_title * (font + 2) * 1.3 / 72.0 + n_warn * font * 1.3 / 72.0 + 2 * font * 1.3 / 72.0 + 0.22
-    top = max(1.0 - head_in / side, 0.55)
-    gs = fig.add_gridspec(n, n, hspace=0.08, wspace=0.08, left=0.09, right=0.98, bottom=0.08, top=top)
+    top = max(1.0 - head_in / fig_h, 0.55)
+    # 2.2.21 (nit 2): room for the rotated tick labels and the axis names in inches, whatever the figure's size
+    left = min(max(0.09, (0.45 + 2.6 * font / 72.0) / fig_w), 0.3)
+    bottom = min(max(0.08, (0.4 + 3.2 * font / 72.0) / fig_h), 0.3)
+    gs = fig.add_gridspec(n, n, hspace=0.08, wspace=0.08, left=left, right=1.0 - 0.15 / fig_w, bottom=bottom,
+                          top=top)
     green, orange = "#0b6e4f", "#b35c00"
     for i, pi in enumerate(names):
         for j, pj in enumerate(names[: i + 1]):
@@ -416,10 +427,10 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
                 ax.yaxis.set_major_locator(_locator())
     # 2.2.20 (item 1b): the title wrapped to the figure's width (it was clipped left and right), centered at the top;
     # the ⚠ line under it; both above the top panel's own title.
-    y_top = 1.0 - 0.12 / side
+    y_top = 1.0 - 0.12 / fig_h
     fig.suptitle(main_title, fontsize=font + 2, y=y_top, va="top")
     if warn_line:
-        y = y_top - n_title * (font + 2) * 1.3 / 72.0 / side
+        y = y_top - n_title * (font + 2) * 1.3 / 72.0 / fig_h
         fig.text(0.5, y, warn_line, ha="center", va="top", fontsize=font, color=orange)
     return fig
 
