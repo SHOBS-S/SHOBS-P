@@ -1081,6 +1081,14 @@ class TransitPage:
                                      "names": list(extra.get("comp_names") or []), "planet": planet,
                                      "da": da, "dt": dt}
         flip_source = extra.get("flip_source", "")
+        # 2.2.20 (#45): the flip time (halfway across the flip gap) for the fit CSV's segment column and header
+        meta.pop("t_flip", None)
+        if after is not None:
+            try:
+                ta, af = np.asarray(t, dtype=float), np.asarray(after, dtype=bool)
+                meta["t_flip"] = 0.5 * (float(np.nanmax(ta[~af])) + float(np.nanmin(ta[af])))
+            except Exception:
+                pass
         cancel = self.app._cancel
         self.bar.configure(value=0, maximum=1)
         self.prog_text.set("Least-squares fit…")
@@ -2740,42 +2748,70 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
     """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
     the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
     flagged "trimmed", with no error, model or residual (they were left out of the fit); frames put back from a flag
-    (Fit with flagged) carry that flag ("trimmed cloud" when also trimmed). Returns the number of data rows."""
+    (Fit with flagged) carry that flag ("trimmed cloud" when also trimmed). Returns the number of data rows.
+    2.2.20 (#45): two more columns after the old six (so older readers still work): airmass (blank when the data had
+    none, and on trimmed rows) and segment ("before flip" / "after flip" on a night with a meridian flip, else blank);
+    the flip time and what rel_flux is (raw, not detrended) in the header comments."""
     t = np.asarray(r["t"], dtype=float)
     flux = np.asarray(r["flux"], dtype=float)
     err = np.asarray(r.get("err_scaled", r.get("err")), dtype=float)
     model = np.asarray(r["model"], dtype=float)
     resid = np.asarray(r["residuals"], dtype=float)
+    am = r.get("airmass")
+    am = np.asarray(am, dtype=float) if am is not None and len(am) == len(t) else np.full(len(t), np.nan)
     fmask = r.get("flagged")
     fmask = np.asarray(fmask, dtype=bool) if fmask is not None and len(fmask) == len(t) else np.zeros(len(t), bool)
     label = str((r.get("with_flagged") or {}).get("label") or "flagged")
-    rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "") for k in range(len(t))]
+    nan = float("nan")
+    rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "", am[k]) for k in range(len(t))]
     trim = r.get("trim") or {}
     med = float(r.get("flux_median") or 1.0)
     tt = np.asarray(trim.get("t", []), dtype=float)
     if tt.size:
         # review: trimmed rows have no error either (the fit never weighted them)
         ft = np.asarray(trim.get("flux", []), dtype=float) / med
-        rows += [(tt[k], ft[k], float("nan"), float("nan"), float("nan"), "trimmed") for k in range(tt.size)]
+        rows += [(tt[k], ft[k], nan, nan, nan, "trimmed", nan) for k in range(tt.size)]
     fc = trim.get("flagged_cut") or {}
     if r.get("with_flagged") and len(fc.get("t", [])):
         # review: frames both flagged (put back with Fit with flagged) and trimmed: "trimmed" first, then the flag
         ff = np.asarray(fc["flux"], dtype=float) / med
-        rows += [(float(fc["t"][k]), ff[k], float("nan"), float("nan"), float("nan"), f"trimmed {fc.get('label')}")
+        rows += [(float(fc["t"][k]), ff[k], nan, nan, nan, f"trimmed {fc.get('label')}", nan)
                  for k in range(len(fc["t"]))]
     rows.sort(key=lambda row: row[0])
+    t_flip = fit_csv_flip_time(r, meta)
 
     def num(v, fmt):
         return fmt.format(v) if v is not None and math.isfinite(v) else ""
+
+    def seg(tk):
+        if t_flip is None:
+            return ""
+        return "after flip" if tk >= t_flip else "before flip"
     with open(path, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow([core.created_line()])
         for line in fit_csv_comments(r, meta, jd_utc):     # 2.2.19 (#29, #18): unquoted, so each starts with "#"
             fh.write(line + "\r\n")
-        w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag"])
+        w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag",
+                    "airmass", "segment"])
         for row in rows:
-            w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5]])
+            w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5], num(row[6], "{:.4f}"),
+                                                                                          seg(row[0])])
     return len(rows)
+
+
+def fit_csv_flip_time(r: dict, meta: dict | None = None):
+    """2.2.20 (#45): the meridian flip time of the fitted night (BJD_TDB, or the file's times), or None: the fit's own
+    flip step when it has one, else the flip the page knew from the data (meta "t_flip")."""
+    flip = (r or {}).get("flip") or {}
+    v = flip.get("t_flip")
+    if v is None:
+        v = (meta or {}).get("t_flip")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) -> list:
@@ -2792,7 +2828,18 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     o = tc.oc_summary(r or {})
     if o is not None and not jd_utc:
         out.append("# " + tc.oc_text(o, ascii_only=True))
-    return out
+    # 2.2.20 (#45): what the columns are, so a multi-night analysis (or another program) fits this night the same way
+    # as the others: rel_flux is raw (only divided by its median), never detrended; the baseline is in "model".
+    am = (r or {}).get("airmass")
+    has_am = am is not None and bool(np.isfinite(np.asarray(am, dtype=float)).any())
+    det = ", ".join((r or {}).get("detrend") or []) or "none"
+    out.append(f"# Columns: rel_flux is the raw relative flux (divided by its median, NOT detrended); model = transit "
+               f"x baseline (detrend: {det}); residual = rel_flux - model; airmass per point"
+               + ("" if has_am else " (none in these data: blank)") + "; segment = before / after the meridian flip")
+    t_flip = fit_csv_flip_time(r, meta)
+    if t_flip is not None:
+        out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")
+    return [core.ascii_safe(x) for x in out]
 
 
 # The DTG stamp lines only: "# Created 151200Z OCT 26 by SHOBS-P" (CSV, reports) and "Created        151200Z OCT 26"

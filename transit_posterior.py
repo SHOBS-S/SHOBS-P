@@ -39,18 +39,38 @@ ORDER = ("tc", "k", "a_rs", "b", "step", "c0", "c_am", "c_t", "q1", "q2")
 FLAG_PARAMS = ("tc", "k", "a_rs", "b", "step")
 
 
+def _base(name: str) -> str:
+    """2.2.20 (item 5): the kind of a parameter: "tc" for the multi-night "tc:2", "k" for "k:all" (single-night names
+    have no ":")."""
+    return str(name).partition(":")[0]
+
+
 def param_bounds(prob, k_med: float | None = None) -> dict:
     """The hard limits the MCMC uses (TransitProblem.in_bounds), per free parameter, in the units the chain holds:
     Tc within the data span ± 0.2 d; 0.005 < Rp/R* < 0.6; 1.2 < a/R* < 200; 0 ≤ b < 1 + Rp/R*; |step| < 0.5;
     0 < q1, q2 < 1. The baseline terms (c0, airmass and time slopes) have no hard limit in the MCMC. SHOBS-P puts no
     window prior on Tc (unlike a prior box around the prediction) and only Gaussian priors on a/R* and b."""
     k = 0.1 if k_med is None else k_med
-    out = {"tc": (float(prob.t.min()) - 0.2, float(prob.t.max()) + 0.2), "k": (0.005, 0.6), "a_rs": (1.2, 200.0),
-           "b": (0.0, 1.0 + k), "step": (-0.5, 0.5), "q1": (0.0, 1.0), "q2": (0.0, 1.0)}
-    return {name: out[name] for name in prob.free if name in out}
+    out = {"k": (0.005, 0.6), "a_rs": (1.2, 200.0), "b": (0.0, 1.0 + k), "step": (-0.5, 0.5), "q1": (0.0, 1.0),
+           "q2": (0.0, 1.0)}
+    nights = getattr(prob, "nights", None)
+    res = {}
+    for name in prob.free:
+        base, _sep, j = name.partition(":")
+        if base == "tc":
+            if nights is not None:
+                # 2.2.20 (item 5): multi-night (multinight.JointProblem): each night's own window, as its in_bounds
+                d = nights[int(j)]
+                res[name] = (float(d["t"][0]) - 0.2, float(d["t"][-1]) + 0.2)
+            else:
+                res[name] = (float(prob.t.min()) - 0.2, float(prob.t.max()) + 0.2)
+        elif base in out:
+            res[name] = out[base]
+    return res
 
 
 def _edge_text(name: str, edge: float, side: str) -> str:
+    name = _base(name)
     if name == "tc":
         return ("the start of the allowed window (data start − 0.2 d)" if side == "lo"
                 else "the end of the allowed window (data end + 0.2 d)")
@@ -61,20 +81,25 @@ def _edge_text(name: str, edge: float, side: str) -> str:
     return f"{edge:g}"
 
 
-def prior_bound_flags(prob, flat) -> list:
+def prior_bound_flags(prob, flat, labels: dict | None = None) -> list:
     """2.2.19 (#31): parameters whose MCMC samples pile up against an edge of their allowed range (see param_bounds).
     [{"name", "label", "sides": ["lo"/"hi"], "edges", "frac", "text"}], one per parameter. Such an error bar describes
-    the range, not the data."""
+    the range, not the data. 2.2.20 (item 5): also the multi-night problem ("tc:0", "k:all", …); labels names them
+    ("Tc 15-OCT-2026")."""
     flat = np.asarray(flat, dtype=float)
     if flat.ndim != 2 or flat.shape[0] < 50:
         return []
-    k_med = float(np.median(flat[:, prob.free.index("k")])) if "k" in prob.free else None
+    free = list(prob.free)
+    ks = [i for i, nm in enumerate(free) if _base(nm) == "k"]
+    # b < 1 + Rp/R* for every shape set: the smallest Rp/R* sets b's upper edge
+    k_med = min(float(np.median(flat[:, i])) for i in ks) if ks else None
     bounds = param_bounds(prob, k_med)
     out = []
-    for name in FLAG_PARAMS:
+    names = [nm for base in FLAG_PARAMS for nm in free if _base(nm) == base]
+    for name in names:
         if name not in bounds:
             continue
-        x = flat[:, prob.free.index(name)]
+        x = flat[:, free.index(name)]
         x = x[np.isfinite(x)]
         if x.size < 50 or np.ptp(x) <= 0:
             continue
@@ -90,7 +115,7 @@ def prior_bound_flags(prob, flat) -> list:
                 sides.append((side, edge, frac))
         if not sides:
             continue
-        label = LABELS.get(name, name)
+        label = (labels or {}).get(name) or LABELS.get(_base(name), name)
         level = "warn"
         if name == "b" and len(sides) == 1 and sides[0][0] == "lo":
             # 2.2.19 review: a central transit (published b ≈ 0) is a measurement with a one-sided error, not a
@@ -100,7 +125,7 @@ def prior_bound_flags(prob, flat) -> list:
             text = (f"b sits against 0, the lower end of its range (a central transit): read b as an upper limit "
                     f"(b < {q95:.2f}, 95%), not value ± error.")
         elif len(sides) == 2:
-            where = ("its whole allowed window (data span ± 0.2 d)" if name == "tc" else
+            where = ("its whole allowed window (data span ± 0.2 d)" if _base(name) == "tc" else
                      f"its whole allowed range ({_edge_text(name, lo, 'lo')} to {_edge_text(name, hi, 'hi')})")
             text = (f"{label} is limited by its prior range: its MCMC samples spread over {where}, so the error bar "
                     "is not a measurement.")
@@ -232,6 +257,7 @@ def both_detrend_text(check: dict, threshold: float = 10.0) -> str:
 # ---- Corner plot ---------------------------------------------------------------------------------------------------
 
 def _transform(name: str, x, tc_med: float):
+    name = _base(name)
     if name == "tc":
         return (x - tc_med) * 1440.0
     if name == "step":
@@ -242,12 +268,31 @@ def _transform(name: str, x, tc_med: float):
 SHAPE_PARAMS = ("tc", "k", "a_rs", "b", "step")
 
 
+# 2.2.20 (item 5): the multi-night corner plot's default: the shared shape, then each night's Tc.
+MULTI_ORDER = ("k", "a_rs", "b", "tc", "step", "c0", "c_am", "c_t", "q1", "q2")
+MULTI_SHAPE = ("k", "a_rs", "b", "tc")
+
+
 def corner_params(result: dict, shape_only: bool = False) -> list:
     """The fitted (free) parameters in corner-plot order; parameters held fixed are left out. shape_only: Tc, Rp/R*,
-    a/R*, b and the flip step (the Corner plot window's default; review: ten parameters on a laptop were unreadable)."""
+    a/R*, b and the flip step (the Corner plot window's default; review: ten parameters on a laptop were unreadable).
+    2.2.20 (item 5): multi-night names ("k:all", "tc:0", …): Rp/R*, a/R*, b, then each night's Tc by default."""
     free = list(result.get("free_params") or [])
+    if any(":" in p for p in free):
+        order = MULTI_ORDER
+        out = [p for base in order for p in free if _base(p) == base]
+        out += [p for p in free if p not in out]
+        return [p for p in out if _base(p) in MULTI_SHAPE] if shape_only else out
     out = [p for p in ORDER if p in free] + [p for p in free if p not in ORDER]
     return [p for p in out if p in SHAPE_PARAMS] if shape_only else out
+
+
+def param_label(result: dict, name: str, short: bool = False) -> str:
+    """2.2.20 (item 5): a parameter's name for the plot ("Tc 15-OCT-2026" in a multi-night plot; short, for the axes:
+    "Tc 15-OCT")."""
+    if short and (result.get("short_labels") or {}).get(name):
+        return result["short_labels"][name]
+    return (result.get("labels") or {}).get(name) or LABELS.get(_base(name), name)
 
 
 def _fmt(v: float, e: float) -> str:
@@ -290,8 +335,9 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
     if flat.shape[0] > max_samples:
         flat = flat[rng.choice(flat.shape[0], max_samples, replace=False)]
     t_ref = float(result.get("t_ref", 0.0))
-    tc_med = float(np.median(flat[:, free.index("tc")])) if "tc" in free else 0.0
-    data = {p: _transform(p, flat[:, free.index(p)], tc_med) for p in names}
+    t_refs = result.get("t_refs") or {}      # 2.2.20 (item 5): multi-night: each Tc's own reference day
+    tc_meds = {p: float(np.median(flat[:, free.index(p)])) for p in free if _base(p) == "tc"}
+    data = {p: _transform(p, flat[:, free.index(p)], tc_meds.get(p, 0.0)) for p in names}
     flagged = {f["name"] for f in (result.get("bound_flags") or []) if f.get("level", "warn") == "warn"}
     upper = {f["name"]: f.get("upper") for f in (result.get("bound_flags") or []) if f.get("level") == "info"}
     ranges = {}
@@ -299,7 +345,16 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
         lo, hi = np.percentile(data[p], [0.2, 99.8])
         pad = 0.08 * (hi - lo) if hi > lo else (abs(lo) * 0.01 or 1e-6)
         ranges[p] = (lo - pad, hi + pad)
-    gs = fig.add_gridspec(n, n, hspace=0.08, wspace=0.08, left=0.09, right=0.98, bottom=0.08, top=0.93)
+    # 2.2.20 (item 1b): headroom in inches (whatever the figure's size) for the main title (wrapped, up to two
+    # lines), the ⚠ line under it, and the top panel's own two-line title (K2-29 b: the Tc title ran into the main
+    # title).
+    main_title = _corner_title(result, side, font)
+    n_title = main_title.count("\n") + 1
+    warn_line = wrap_to(WARN_LINE, side * 72.0 * 0.96, font) if flagged else ""
+    n_warn = warn_line.count("\n") + 1 if warn_line else 0
+    head_in = 0.12 + n_title * (font + 2) * 1.3 / 72.0 + n_warn * font * 1.3 / 72.0 + 2 * font * 1.3 / 72.0 + 0.22
+    top = max(1.0 - head_in / side, 0.55)
+    gs = fig.add_gridspec(n, n, hspace=0.08, wspace=0.08, left=0.09, right=0.98, bottom=0.08, top=top)
     green, orange = "#0b6e4f", "#b35c00"
     for i, pi in enumerate(names):
         for j, pj in enumerate(names[: i + 1]):
@@ -312,9 +367,12 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
                 for q, ls in ((q16, "--"), (q50, "-"), (q84, "--")):
                     ax.axvline(q, color=green, ls=ls, lw=1.0)
                 warn = pi in flagged
-                label = LABELS.get(pi, pi)
-                if pi == "tc":
-                    title = f"Tc = {tc_med + t_ref:.5f}\n+{q84 - q50:.1f} / −{q50 - q16:.1f} min"
+                label = param_label(result, pi)
+                if _base(pi) == "tc":
+                    ref = float(t_refs.get(pi, t_ref))
+                    # 2.2.20 (item 5): a night's Tc ("Tc 15-OCT-2026") on a line of its own, so it fits its panel
+                    sep = "\n" if pi != "tc" else " = "
+                    title = f"{label}{sep}{tc_meds[pi] + ref:.5f}\n+{q84 - q50:.1f} / −{q50 - q16:.1f} min"
                 elif upper.get(pi) is not None:
                     title = f"{label} < {upper[pi]:.2f} (95 %)\nagainst 0: upper limit"
                 else:
@@ -345,23 +403,43 @@ def corner_figure(result: dict, fig=None, max_samples: int = 20000, font: float 
             if i < n - 1:
                 ax.set_xticklabels([])
             else:
-                ax.set_xlabel(LABELS.get(pj, pj) + (" (min)" if pj == "tc" else ""), fontsize=font)
+                ax.set_xlabel(param_label(result, pj, short=True) + (" (min)" if _base(pj) == "tc" else ""),
+                              fontsize=font)
             if j > 0 or i == 0:
                 if i != j:
                     ax.set_yticklabels([])
             else:
-                ax.set_ylabel(LABELS.get(pi, pi) + (" (min)" if pi == "tc" else ""), fontsize=font)
+                ax.set_ylabel(param_label(result, pi, short=True) + (" (min)" if _base(pi) == "tc" else ""),
+                              fontsize=font)
             ax.xaxis.set_major_locator(_locator())
             if i != j:
                 ax.yaxis.set_major_locator(_locator())
+    # 2.2.20 (item 1b): the title wrapped to the figure's width (it was clipped left and right), centered at the top;
+    # the ⚠ line under it; both above the top panel's own title.
+    y_top = 1.0 - 0.12 / side
+    fig.suptitle(main_title, fontsize=font + 2, y=y_top, va="top")
+    if warn_line:
+        y = y_top - n_title * (font + 2) * 1.3 / 72.0 / side
+        fig.text(0.5, y, warn_line, ha="center", va="top", fontsize=font, color=orange)
+    return fig
+
+
+WARN_LINE = "⚠ set by its allowed range, not by the data: that error bar is not a measurement"
+
+
+def _corner_title(result: dict, side: float, font: float) -> str:
     name = (result.get("planet") or {}).get("name") or "Transit"
     ch = result["chain"]
-    fig.suptitle(f"{name}: MCMC posterior ({ch['walkers']} walkers × {ch['steps']} steps; median and 16/84 % lines)",
-                 fontsize=font + 2, y=0.985)
-    if flagged:
-        fig.text(0.98, 0.955, "⚠ set by its allowed range, not by the data: that error bar is not a measurement",
-                 ha="right", va="top", fontsize=font, color=orange)
-    return fig
+    what = result.get("corner_title") or "MCMC posterior"     # 2.2.20 (item 5): "joint MCMC posterior, 4 nights"
+    return wrap_to(f"{name}: {what} ({ch['walkers']} walkers × {ch['steps']} steps; median and 16/84 % lines)",
+                   side * 72.0 * 0.96, font + 2)
+
+
+def wrap_to(text: str, width_pt: float, font_pt: float) -> str:
+    """2.2.20 (item 1b): text wrapped so each line fits width_pt (an average character is ~0.55 of the font size)."""
+    import textwrap
+    chars = max(int(width_pt / (0.55 * font_pt)), 20)
+    return "\n".join(textwrap.wrap(str(text), chars)) or str(text)
 
 
 def _locator():
