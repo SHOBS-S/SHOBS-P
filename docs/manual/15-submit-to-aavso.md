@@ -9,7 +9,7 @@ On the Input page, in the **AAVSO report** box:
 - **Observer code**: your AAVSO observer code. Without it the report says `na`, and WebObs will not accept it under your name.
 - **Chart ID**: the AAVSO chart your comparison magnitudes come from. When any comp or the check star is an AAVSO sequence star, SHOBS-P fills in the chart ID from the solve. If you typed one yourself, it is left alone. Use `na` for comps not from an AAVSO chart.
 
-In the Output page's **Notes** box, the default note is **OSC reduced; not transformed** for a color camera, or **Monochrome camera; not transformed** for a mono camera. It goes into every line of the report. Add anything AAVSO's reviewers should know, but keep it short.
+In the Output page's **Notes** box, the default note is **OSC reduced; not transformed** for a color camera, or **Monochrome camera; not transformed** for a mono camera. It goes into every line of the report. Add anything AAVSO's reviewers should know, but keep it short. **New reduction** on the Input page puts the note back to this default, so one star's notes do not travel to the next star's report.
 
 ## Save the report
 
@@ -19,11 +19,42 @@ In the Output page's **Notes** box, the default note is **OSC reduced; not trans
 
 The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the filter code, and the UTC date (or a date range such as `16-SEP-2026_to_06-OCT-2026` for several nights). With an Output folder, an existing file is never overwritten; a new copy gets `_2`, `_3` and so on.
 
-Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame turned north up and east left, with the
-target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
+Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame as shot, with yellow **N** and **E**
+arrows showing where north and east lie, and the target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
 saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars.
 
+### The AUID: when the star has none
+
+WebObs files every observation under the star's **AUID**, the AAVSO's own ID for it. SHOBS-P gets it from VSX when you
+look the star up on the Input page. Some stars are in VSX but have no AUID yet, often newly found variables such as
+`ASASSN-V J185009.93+281035.4`. WebObs rejects a report for such a star.
+
+SHOBS-P tells you before you get that far. In Variables mode, when VSX knows the star but gave no AUID, an orange line
+appears on the Output page, just under the **Results** row:
+
+> ⚠ No AUID: WebObs will reject this report. Request one in VSX (open the star's VSX page, Request AUID).
+
+You can still save the report: the status line then starts with the same **⚠ No AUID: …** warning before **Saved
+AAVSO_….txt — upload to AAVSO WebObs:**, and the warning goes into the log too. Request the AUID first: open the star's
+page in VSX, press **Request AUID**, and wait for the AAVSO to assign one. Then look the star up again on the Input page
+and save the report again.
+
+The line does not appear when the star is not in VSX at all (then there is nothing to request in VSX).
+
+![The Output page with the orange No AUID line under the Results row](img/15-no-auid.png)
+*The No AUID warning, here for ASASSN-V J185009.93+281035.4.*
+
 ### Questions before saving
+
+**⚠ The notes name HD 219134, which is not in this reduction.**
+The **Notes** box names a star that is not your target, planet, comps or check star, most likely left over from the
+star you reduced before. The question shows the notes and asks **Save anyway?** The default is **No**: the report is
+not saved, and the status line says **✖ Not saved: fix the Notes (Output page), then save again.** Correct the Notes
+box and press **Save AAVSO report** again. Answer **Yes** only if you meant to name that star (for example, a nearby
+star you mention on purpose). The same question comes before an AAVSO exoplanet report or an ExoFOP package.
+
+![The notes question before a report is saved](img/15-notes-question.png)
+*The notes name a star that is not in this reduction.*
 
 **The Star ID is “hd219134”. AAVSO spells it “HD 219134” … Use “HD 219134” in the report?**
 Answer **Yes**. WebObs may not match another spelling to the star. The report and its file name use the AAVSO
@@ -89,7 +120,7 @@ If nothing is left, you see **No usable points to report for that choice.**
 
 ## What is in the file
 
-The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=SHOBS-P 2.2.18`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
+The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=Shiloh Hill Observatory – Photometry (SHOBS-P) 2.2.20`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
 
 | Field | What SHOBS-P writes |
 |---|---|
@@ -110,7 +141,7 @@ Stars from the AAVSO sequence appear under their **AUID**. Other stars appear un
 
 ## Upload with WebObs
 
-After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…**. The same button is in the **Results** row of the Output page. Either one checks for nights already sent and marks the report's nights as sent (see "The duplicate warning" above).
+After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…** (after the **⚠ No AUID** warning, if the star has no AUID). The same button is in the **Results** row of the Output page. Either one checks for nights already sent and marks the report's nights as sent (see "The duplicate warning" above).
 
 1. Press **Open AAVSO WebObs…**. AAVSO's photometry submission page opens in your browser.
 2. Log in with your AAVSO account.

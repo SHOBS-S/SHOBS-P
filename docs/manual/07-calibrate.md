@@ -20,8 +20,11 @@ light so you can see it, and then moves on to the Photometry page by itself.
    The two gray lines to the right say what will be reported, for example "AAVSO filter code TG" and "Green
    channel, V comps". Chapter 4 explains the choices.
 3. Press **Build masters and calibrate**.
-4. Watch the log. Building masters from scratch can take a few minutes for a hundred full frames; reusing saved
-   masters takes seconds. The window stays usable meanwhile.
+4. Watch the log, and the busy bar at the bottom of the window (chapter 3). Its words follow the steps:
+   **Building calibration masters…**, then for example **Building calibration masters: median-combining 40 bias
+   frames…** (and the same for the darks and flats), then **Calibrating the first light…**. Building masters from
+   scratch can take a few minutes for a hundred full frames; reusing saved masters takes seconds. The window stays
+   usable meanwhile.
 5. When it is done, SHOBS-P switches to the **Photometry** page by itself and starts solving the image. The status
    bar says **Calibrated and debayered. The image is being solved; …**
 

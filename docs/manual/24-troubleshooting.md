@@ -3,7 +3,7 @@
 This chapter covers:
 
 - the self-test, which checks that SHOBS-P and its Python packages work on your computer,
-- the log file, where error details go,
+- the log file, where error details go (and `pip_log.txt`, for setup problems on Linux and the Mac),
 - typical problems and their fixes,
 - how to report a problem.
 
@@ -58,6 +58,18 @@ The program's **own log** (the dark box on the Calibrate page, and under the ima
 different: it records everything SHOBS-P did in this session, step by step. Read it whenever a result looks odd. Its
 lines are also written to `.shobs_p.log`, as above.
 
+## pip_log.txt (Linux and Mac setup)
+
+On Linux and the Mac, the first start downloads SHOBS-P's Python packages with pip. The Terminal shows only a short
+line per package; pip's own detailed messages go to **pip_log.txt**, next to SHOBS-P's environment:
+
+- Mac: `~/Library/Application Support/SHOBS-P/pip_log.txt`
+- Linux: `~/.local/share/SHOBS-P/pip_log.txt`
+
+Each setup attempt starts with a line `=== <date> <the Python used>`. When the setup fails, the Terminal names this
+file. Attach it to your problem report. (On a Mac, the `Library` folder is hidden in Finder: in Finder choose **Go →
+Go to Folder…** and paste `~/Library/Application Support/SHOBS-P`.)
+
 ## Starting with the console
 
 **run_windows.bat** in the program folder starts SHOBS-P with a console window. It checks the Python packages first,
@@ -81,8 +93,12 @@ message above."*
 | Linux: *"These Pythons are missing Tkinter, the window toolkit"* | Install the package it names (Debian, Ubuntu, Mint: `sudo apt install python3-tk`; Fedora: `sudo dnf install python3-tkinter`; Arch: `sudo pacman -S tk`), then run `./run_linux.sh` again. |
 | Linux: *"SHOBS-P could not make its own environment …"* and a line about the venv package | Debian, Ubuntu, Mint: `sudo apt install python3-venv`, then try again. |
 | Linux: *"This is a Wayland session without XWayland (DISPLAY is not set) …"* or *"No screen found (DISPLAY is not set) …"* | Tk needs X to draw its windows. Install XWayland (package `xwayland`) or log in with an "on Xorg" session; or start SHOBS-P from your desktop session, not over a plain SSH login. |
-| Mac: macOS refuses to open **Start SHOBS-P.command** (a file from an unidentified developer, or one Apple could not check). | Right-click (or Control-click) it, choose **Open**, then **Open** again. Once is enough. If newer macOS offers no **Open**, press **Open Anyway** in System Settings → Privacy & Security, or type `xattr -d com.apple.quarantine "Start SHOBS-P.command"` in Terminal in the SHOBS-P folder. |
-| Mac: *"SHOBS-P could not find a Python it can use."* | Install Python from python.org (it includes Tk) and double-click again. A Homebrew Python needs its Tk package; the message names it (for example `brew install python-tk@3.13`). |
+| Mac: macOS refuses to open **Start SHOBS-P.command** (a file from an unidentified developer, or one Apple could not check). | Right-click (or Control-click) it, choose **Open**, then **Open** again. Once is enough. On macOS 15 and newer, if there is no **Open**, press **Open Anyway** in System Settings → Privacy & Security. Or type `xattr -d com.apple.quarantine *.command *.sh` in Terminal in the SHOBS-P folder; that clears every start file at once (also **Run self-test.command**). |
+| Mac: *"✖ SHOBS-P could not find a Python it can use …"* | Install Python 3.13 from python.org/downloads/macos (it includes Tk) and double-click again. A Homebrew Python needs its Tk package; the message names it (for example `brew install python-tk@3.13`). |
+| Linux or Mac: *"⚠ Some packages SHOBS-P needs have no ready-made copy for Python 3.15.x yet …"* | Not an error: that Python is too new for some packages. SHOBS-P tries the next Python by itself. If it was the only one, install Python 3.13 (Mac: from python.org; Linux: 3.13, 3.12 or 3.11 with Tkinter) and start again. You do not need to remove the newer Python. |
+| Linux or Mac: *"✖ SHOBS-P could not set up its packages with any Python on this computer …"* | Read the lines above it: each Python tried is listed with the reason. Usually installing Python 3.13 fixes it. If not, report the problem with `pip_log.txt` attached (see above). |
+| Linux or Mac: *"✖ The packages could not be downloaded. Check the internet connection and try again."* | Check the internet connection (and any proxy or firewall), then start again. |
+| Mac: a window asks to install Apple's "command line developer tools". | SHOBS-P 2.2.20 and newer never compile anything, so this should not happen. If you see it while SHOBS-P sets up, choose **Cancel**, install Python 3.13 from python.org, delete the `SHOBS-P` folder in `~/Library/Application Support` and start again. Report it with `pip_log.txt`. |
 | Mac: SHOBS-P closed when you closed the Terminal window. | Keep the Terminal window open while SHOBS-P runs. |
 | *"SHOBS-P is being set up in another window …"* (Linux, Mac) | A second start while the first setup was still running. Wait for it to finish, then start again. |
 | The install seems broken after an update or a Python upgrade. | Start afresh: delete SHOBS-P's own environment folder and start again (chapter 2, "Starting afresh"). Your settings are kept. |
@@ -109,6 +125,7 @@ message above."*
 | The image is too small to click stars. | Wheel to zoom, drag to pan, or **Pop out** the image into its own window. At 125–150 % display scaling a small frame (MicroObservatory) can stay small even after the log shrinks; the line **⚠ Small image? …** under the image has a **Pop out** button, and **Hide log** gives more room. |
 | The AAVSO sequence is missing (*"AAVSO sequence did not answer (…)"* in the log). | The AAVSO chart server (VSP, apps.aavso.org) was slow or down. SHOBS-P asks again in the background; if the log later says it answered, press **Solve again**. Otherwise **Solve again** later. |
 | The target marker is not placed, and the log says the target is not on this frame. | The first frames may miss the target; SHOBS-P looks at the next frames for it (chapter 8). If it cannot find it, reject the frames without the target in Blink and calibrate again. |
+| A lookup ends with *"✖ …: the SIMBAD and VSX did not answer within 60 s …"*. | The service is slow or down, or the internet is. Type RA/Dec yourself, or press **Look up again** later; a late answer is still used. |
 | The solve or lookups fail at night. | The catalogs and lookups need the internet. Calibration and photometry do not. Catalog stars fetched for a field are kept for 30 days, which often lets the same field solve again without the internet. |
 
 ### Results
@@ -128,13 +145,14 @@ message above."*
 
 Problems and ideas go to the project's GitHub Issues page (github.com/SHOBS-S/SHOBS-P/issues). The forms ask for:
 
-- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.19**),
+- the SHOBS-P version (bottom of the sidebar, for example **Version 2.2.20**),
 - your computer's system (Windows, macOS or Linux, and which version),
 - your camera, and whether it is color or monochrome,
 - the mode and the step,
 - what you expected and what happened,
 - a screenshot,
-- `selftest_log.txt` from the self-test, and `.shobs_p.log` from your user folder.
+- `selftest_log.txt` from the self-test, and `.shobs_p.log` from your user folder,
+- for a setup problem on Linux or a Mac, `pip_log.txt` (see above).
 
 A copy of the program's own log (from the Calibrate page) around the time of the problem helps too.
 

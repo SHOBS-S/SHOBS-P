@@ -2,8 +2,9 @@
 
 SHOBS-P talks to you in four places:
 
-- **The status bar** at the bottom of the window: the latest news, one line. After a report save it also holds a
-  button for the upload page.
+- **The status bar** at the bottom of the window: the latest news, one line. While SHOBS-P works, the busy bar at its
+  left end says what it is doing (chapter 3); when the job ends, the line says how it went, starting with ✔ (done),
+  ✖ (failed) or ⚠ (done, but look). After a report save it also holds a button for the upload page.
 - **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**). Every
   status line goes here too, often with more detail. When something looks wrong, read the log first.
 - **Message boxes**: a question (Yes / No, sometimes Cancel) when SHOBS-P needs a decision, a warning when it found a
@@ -14,6 +15,19 @@ SHOBS-P talks to you in four places:
 
 Most questions have a default that is the safe choice; just read the whole message before you answer. The messages
 below are the ones new users meet most often, grouped by step. "…" stands for the names and numbers filled in.
+
+## Starting on Linux or a Mac
+
+These appear in the Terminal window the first time SHOBS-P starts (chapter 2).
+
+| Message | What it means | What to do |
+|---|---|---|
+| *Looking for a Python that can run SHOBS-P...* then *Trying …* and *usable: Python 3.13.x* or *not usable: …* | SHOBS-P checks each Python it finds, 3.13, 3.12 and 3.11 first. | Nothing; it picks the first one that works. |
+| *⚠ Some packages SHOBS-P needs have no ready-made copy for Python 3.15.x yet (they would have to be compiled, and SHOBS-P never compiles).* *Trying the next Python.* | A brand-new Python has no ready-made packages yet. | Nothing, if another Python follows. Otherwise install Python 3.13. |
+| *✔ SHOBS-P is set up with Python 3.13.x.* | The setup worked. | Nothing; SHOBS-P opens. |
+| *✖ SHOBS-P could not find a Python it can use (each one tried is listed above, with the reason).* | No Python 3.11 or newer with Tkinter was found. | Mac: install Python 3.13 from python.org. Linux: install Python and its Tkinter package (the message names it). |
+| *✖ SHOBS-P could not set up its packages with any Python on this computer (each one is listed above).* | None of the Pythons could install the packages, often because the only one is too new. | Do what the next lines say (Mac: install Python 3.13 from python.org; your other Pythons can stay). pip's own words are in `pip_log.txt` (chapter 24). |
+| *✖ The packages could not be downloaded. Check the internet connection and try again.* | No internet, or the download was blocked. | Check the connection, then start again. |
 
 ## Anywhere
 
@@ -29,12 +43,13 @@ below are the ones new users meet most often, grouped by step. "…" stands for 
 
 | Message | What it means | What to do |
 |---|---|---|
-| *Could not look up … (…). Type RA/Dec, or let the plate solution fill them, or press Look up again.* | SIMBAD and VSX did not find the name, or there is no internet. | Check the spelling (the Input page may suggest the AAVSO spelling: **Use it**), or type RA/Dec. |
+| *✖ Could not look up … (…). Type RA/Dec, or let the plate solution fill them, or press Look up again.* | SIMBAD and VSX did not find the name, or there is no internet. | Check the spelling (the Input page may suggest the AAVSO spelling: **Use it**), or type RA/Dec. |
 | *The … folder holds N file(s) SHOBS-P cannot read … It reads FITS and XISF* | Camera RAW, TIFF or JPEG files. | Save the frames as FITS or XISF in your capture program. |
 | *This Lights folder holds frames pointing at more than one place: … Use only the N frames near the Input target …?* | Two fields in one folder. | **Yes** sets the other field aside (Blink can bring frames back). |
 | *These frames are DY Peg, not BL Cam. … Start a new reduction? …* | The lights' pointing (or their OBJECT keyword) says they are another star than the Input page's. | **Yes** starts a new reduction: the open series is closed (save offered), the old star's target, planet, comps, check and watch stars are cleared, and the frames' star is looked up. **No** keeps yours. See [5. Input](05-input.md). |
-| *Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …* | You pressed **New reduction**. | **Yes** to start over for another star; folders, site and optics stay. |
+| *Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …* | You pressed **New reduction**. | **Yes** to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists *the Output page notes* among what was cleared when you had typed your own). |
 | *✖ …: SIMBAD and VSX did not answer (…) — type RA/Dec, or Look up again.* | The lookup services did not answer (no connection, or the service is down). | Type RA/Dec, or press **Look up again** later. The planet lookup says the same about the NASA Exoplanet Archive. |
+| *✖ TOI-2046: the SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look up again.* (under RA/Dec and on the status bar) | The lookup has waited 60 seconds with no answer; the busy bar stops. | Type RA/Dec, or press **Look up again** later. If the answer still comes in, it is used. For a planet the line is under the planet boxes and says *… the NASA Exoplanet Archive did not answer within 60 s — type the values or Look up again.* |
 | *⚠ Darks 60 s, lights 120 s: the master dark is scaled ×2 …* (under the Frames box) | The darks' exposure differs from the lights'. ✖ in red when it would be scaled more than 3 times. | Point **Dark** at darks of the lights' exposure if you have them. |
 | *These lights were taken at latitude …, longitude …, N km from your site.* | The frames come from another observatory (shared or downloaded data). | **Yes** uses their site and optics for these frames only; your own come back with your own frames. |
 | *… is not a master SHOBS-P built.* | A master from other software was chosen. | Choose the folder of raw frames instead; SHOBS-P builds and reuses its own master. |
@@ -96,6 +111,9 @@ below are the ones new users meet most often, grouped by step. "…" stands for 
 | *… frames of … lost light …, but every measured star … faded by the same amount …: transmission loss (dew/haze?), not cloud. Use these points in the light curve …, or leave them out?* | Dew or haze, not cloud. | **Leave them out** (the default) leaves them flagged; **Use these points** keeps them. See [12. Flags and bad data](12-flags-and-bad-data.md). |
 | *…: N frames fall in planet b's transit … Leave those frames out …?* | A known planet transits the variable during your frames. | **Yes** (the default) follows the campaign rule. |
 | *Before you upload: • AAVSO observer code is empty …* | The report is missing something AAVSO needs. | Fix the listed items and save again. |
+| *⚠ No AUID: WebObs will reject this report. Request one in VSX (open the star's VSX page, Request AUID).* (orange, under the **Results** row; also on the status line after a save, and in the log) | VSX knows the star but has not given it an AUID yet, and WebObs files reports by AUID. | Open the star's page in VSX and press **Request AUID**. When it has one, look the star up again on the Input page and save the report again. See [15. Submit to AAVSO](15-submit-to-aavso.md). |
+| *⚠ The notes name …, which is not in this reduction. Notes: "…" Save anyway?* | The **Notes** box names a star that is not the target, planet, comps or check: usually a leftover from the last star. Also asked before an AAVSO exoplanet report or ExoFOP package. | **No** (the default) and fix the Notes box. **Yes** only if you meant to name that star. |
+| *✖ Not saved: fix the Notes (Output page), then save again.* | You answered **No** to the notes question. | Correct the **Notes** box on the Output page and save again. |
 | *Night … was already sent on … (in …); AAVSO will hold duplicates. Open anyway?* | Asked by **Open AAVSO WebObs…** (and the exoplanet and ExoFOP upload buttons): the report you saved last holds a night already sent. | Upload only the nights not sent yet. If that night was never really sent, double-click it in the night table to unmark it. See [15. Submit to AAVSO](15-submit-to-aavso.md). |
 | ⚠ *No reliable period …* / *No significant period …* | The best peak does not pass the significance tests. | See [13. Look for a period](13-look-for-a-period.md). |
 | *This night's meridian-flip step is … mag ⚠ … Save … with this night now?* | The flip step looks like an aperture problem, not the star. | **No** keeps the file on disk unchanged; **Save series** keeps the night later. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md). |

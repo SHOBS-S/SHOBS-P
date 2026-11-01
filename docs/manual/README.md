@@ -1,18 +1,21 @@
-# SHOBS-P User's Manual (version 2.2.19)
+# SHOBS-P User's Manual (version 2.2.20)
 
-> Draft, October 2026. Written for SHOBS-P 2.2.18 and updated for 2.2.19 (Linux and Mac start files, New reduction,
-> defocused stars, the linear limit, the corner plot and multi-night transit timing, among others), checked against
-> the program. Screenshots are from 2.2.17 and 2.2.18; where 2.2.19 looks different, the text says so.
+> Draft, November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
+> defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20
+> (one busy bar for every wait; the field image as shot with N/E arrows; New reduction resets the Output page notes,
+> and a report whose notes name another star asks first; the No-AUID warning; Save for ExoClock; a roomier
+> Multi-night window with its own corner plot; airmass in the transit-fit CSV; a simpler Linux and Mac setup that
+> prefers Python 3.13), checked against the program. Screenshots of pages that 2.2.20 changed are being retaken.
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
 
 1. **[Welcome](01-welcome.md)** — what SHOBS-P is, who it is for, what it does not do.
-2. **[Installing and starting](02-installing-and-starting.md)** — Python, the release zip, shortcuts, first launch, Linux and Mac start files, the self-test, starting afresh.
+2. **[Installing and starting](02-installing-and-starting.md)** — Python, the release zip, shortcuts, first launch, Linux and Mac start files (which Python, what the first start says, pip_log.txt), the self-test, starting afresh.
 3. **[A tour of the window](03-tour-of-the-window.md)**
    - The three modes and their colors: Variables (navy), Transits (green), Discovery (plum).
    - The five steps: Input → Blink → Calibrate → Photometry → Output.
-   - Page titles, the status bar, warnings and cautions, the Credits page.
+   - Page titles, the status bar and the busy bar, warnings and cautions, the Credits page.
    - Where settings are kept, and what is never saved (for example your site, unless you enter it).
 4. **[Before your first night](04-before-your-first-night.md)**
    - Your site and optics (Input page Site and Optics boxes), including the mount (German equatorial or alt-az).
@@ -35,7 +38,7 @@
 12. **[Flags and bad data](12-flags-and-bad-data.md)** — saturation, cloud, dew/haze (the Keep question), planet transits in a variable's frames, pier side.
 13. **[Look for a period](13-look-for-a-period.md)** — the periodogram, what "significant" means here, aliases, the airmass check.
 14. **[Time a maximum or minimum](14-time-a-maximum-or-minimum.md)** — Time of max/min, O − C.
-15. **[Submit to AAVSO](15-submit-to-aavso.md)** — the Extended report, AUIDs, single-night vs series reports, uploading with WebObs, the duplicate warning and the Sent column.
+15. **[Submit to AAVSO](15-submit-to-aavso.md)** — the Extended report, AUIDs, single-night vs series reports, uploading with WebObs, the duplicate warning and the Sent column, the No-AUID warning, the notes check.
 
 ## Part 4 — Transits mode
 
@@ -53,9 +56,9 @@
 
 22. **[Files SHOBS-P writes](22-files-shobs-p-writes.md)** — names, folders, the "Created" line, series files.
 23. **[Messages explained](23-messages-explained.md)** — common warnings and cautions, what they mean, what to do.
-24. **[Troubleshooting](24-troubleshooting.md)** — the self-test, the log file, typical problems.
+24. **[Troubleshooting](24-troubleshooting.md)** — the self-test, the log file, pip_log.txt, typical problems.
 25. **[Glossary](25-glossary.md)** — comp, check, ensemble, AUID, BJD_TDB, O − C, scintillation, superpixel, and more.
 26. **[Credits and how to cite SHOBS-P](26-credits-and-citing.md)** — the Copy button, DOI, CITATION.cff.
 
 ---
-*Screenshots are from SHOBS-P 2.2.17–2.2.18 on Windows; some are still placeholders.*
+*Screenshots are from SHOBS-P 2.2.17–2.2.20 on Windows; those of pages 2.2.20 changed are being retaken, and some are still placeholders.*

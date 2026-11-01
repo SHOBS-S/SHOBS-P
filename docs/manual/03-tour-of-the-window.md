@@ -13,7 +13,7 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.19**).
+4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.20**).
 
 ## The three modes and their colors
 
@@ -76,6 +76,35 @@ The bottom of the window has two lines:
   message that opens the matching upload page (for example the AAVSO's). It goes away with the next message.
 - **The credits line** (dimmer) names the libraries and catalogs SHOBS-P is built on.
 
+### The busy bar
+
+Whenever SHOBS-P is working on something, a green bar slides back and forth at the left end of the status line,
+with words beside it saying what it is doing. This is the one sign that SHOBS-P is busy, on every page. For example:
+
+- *Looking up TOI-2046 at SIMBAD and VSX…* (a Star ID lookup on the Input page)
+- *Building calibration masters: median-combining 40 bias frames…*
+- *Solving: fetching catalogs: AAVSO ✓ APASS ✓ Tycho ✓ Gaia…*
+- *Photometry… 12 of 38, about 1:20 left*
+- *Fitting the transit: MCMC step… 1,200 of 3,000*
+
+A job with several steps keeps the same bar and changes the words. When SHOBS-P can count, the count is in the
+words; the bar itself never fills up, it just keeps moving so you can see the program is alive. Jobs that take
+less than about a quarter of a second never show the bar at all.
+
+When the job ends, the bar and its words go, and the status line says how it went. Most result lines start with a
+sign:
+
+- **✔** it worked, for example *✔ TOI-2046 from SIMBAD: RA … h, Dec …°*;
+- **✖** it did not, for example *✖ TOI-2046: the SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look
+  up again.*;
+- **⚠** it worked, but look at something.
+
+The moving bar is always green; its track and the strip around it take the mode's color (navy, green or plum). (The **Multi-night…** window of Transits mode has
+its own bar in its lower left, chapter 17.)
+
+![The status bar while photometry runs: the busy bar and its words at the left end](img/03-busy-bar.png)
+*The busy bar during a photometry run.*
+
 ## The log
 
 The Calibrate page has a large dark log box, and the Photometry page has a smaller copy of it (**Hide log** /
@@ -102,8 +131,9 @@ SHOBS-P tells you about problems in a few ways, from mild to serious:
 
 ![A caution in a message window, with the same text in the log and status line](img/23-edge-caution.png)
 
-While a job runs (calibration, photometry, a solve), the cursor shows that the program is busy, but the window stays
-live. Starting a second job meanwhile gives **Another step is still running. Wait for it to finish.**
+While a job runs (calibration, photometry, a solve), the busy bar (above) says what it is doing and the cursor shows
+that the program is busy, but the window stays live. Starting a second job meanwhile gives **Another step is still
+running. Wait for it to finish.**
 
 ## The Credits page
 

@@ -13,8 +13,10 @@ If you want to add this night to nights you already have, load the series *befor
 ## Set the target
 
 1. On the Input page, type the star's name in **Star ID**, for example `SZ Lyn`.
-2. Press **Enter** (or click into another box). SHOBS-P looks the star up in SIMBAD and VSX. The status bar shows where it found it, its RA and Dec, and its VSX period and type when VSX has them.
-3. If the lookup failed (no internet, unusual name), press **Look up again**, or type RA/Dec yourself. You can also go on without them: the plate solution can fill them in later.
+2. Press **Enter** (or click into another box). SHOBS-P looks the star up in SIMBAD and VSX; the busy bar at the bottom of the window says **Looking up SZ Lyn at SIMBAD and VSX…** meanwhile (chapter 3). Then the status bar shows where it found the star (**✔ SZ Lyn from SIMBAD: …**), its RA and Dec, and its VSX period and type when VSX has them.
+3. If the lookup failed (no internet, unusual name, or no answer within 60 s), press **Look up again**, or type RA/Dec yourself. You can also go on without them: the plate solution can fill them in later.
+
+> **Tip:** Reducing a different star than last time? Press **New reduction** on the Input page first (chapter 5). It clears the old star's comps, check star and other settings, and puts the Output page's **Notes** back to the default (**OSC reduced; not transformed**), so the old star's notes do not slip into this star's report.
 
 > **Tip:** If an amber line appears under Star ID saying how AAVSO spells the name (for example **AAVSO spells this “HD 219134”**), press **Use it**. WebObs matches reports to stars by name, so the AAVSO spelling saves trouble later.
 
@@ -74,7 +76,7 @@ SHOBS-P may ask a few questions before it starts. The ones you will meet most in
 - **Run in Transits mode instead?**, if your target hosts a known transiting planet (from the **Planet (Transits)** box, or looked up in the NASA Exoplanet Archive after the Star ID lookup) and a transit is predicted during your frames. You do not need to have used Transits mode first. For variable-star work, answer **No** (run in Variables mode anyway).
 - A ⚠ line in the log saying a marker is some pixels **from the center of the star**. See chapter 8.
 
-Chapter 8 lists the other checks. The progress bar shows each frame as it is measured, and you can stop with **Cancel run**. Nothing is added to a series if you cancel.
+Chapter 8 lists the other checks. The busy bar at the bottom of the window counts the frames as they are measured (for example **Photometry… 12 of 38, about 1:20 left**), and you can stop with **Cancel run**. Nothing is added to a series if you cancel.
 
 After the run, SHOBS-P may ask more questions:
 
@@ -149,11 +151,11 @@ On a single night, the fold and periodogram are often grayed with a note that on
 
 The **Results** row has:
 
-- **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page.
-- **Save light-curve CSV**: every point, including flagged ones with their flag word. A long series can take a few seconds; the CSV is written in the background and the status bar shows a turning ◐ and the seconds until it says **✔ Saved …**.
+- **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page. When VSX knows your star but has no AUID for it, an orange line under this row says **⚠ No AUID: WebObs will reject this report. …** (chapter 15).
+- **Save light-curve CSV**: every point, including flagged ones with their flag word. A long series can take a few seconds; the CSV is written in the background, the busy bar says, for example, **Saving the light-curve CSV (412 points)…**, and then the status bar says **✔ Saved …**.
 - **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns.
 - **Save plot PNG**: the four plots with the summary boxes and cautions above them.
-- **Save field image**: a picture of the reference frame, turned north up and east left, with a compass, a scale bar, and the target, comps and check star marked with their apertures. The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report.
+- **Save field image**: a picture of the reference frame as shot (not turned), with yellow **N** and **E** arrows showing where north and east lie, a scale bar, and the target, comps and check star marked with their apertures. (On an unsolved image the arrows are replaced by "Orientation unknown (the image is not solved)".) The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report.
 - **Refit period**: runs the period search again.
 
 If you set an **Output** folder on the Input page, these files go there without a dialog, and the report, CSV, plot and field image of one set of results share a number so they belong together. Without an Output folder, the save dialog opens in the folder you last saved to (this session) with the next free name already filled in. A name typed with a number after the extension (such as `…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`, and never overwrites a file. Chapter 22 lists every file SHOBS-P writes.

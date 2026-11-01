@@ -8,7 +8,8 @@ It takes about ten minutes, most of it waiting for downloads.
 - Windows 10 or 11, a Mac (macOS 12 Monterey or newer), or Linux. The Windows steps come first; Linux and the Mac have their own sections
   below.
 - An internet connection (for the install, and later for star and catalog lookups).
-- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works.
+- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works. On Linux and
+  the Mac, Python 3.13 is the best choice (see below).
 
 ## Install Python (Windows)
 
@@ -25,7 +26,7 @@ It takes about ten minutes, most of it waiting for downloads.
 
 1. Open the SHOBS-P releases page at
    [github.com/SHOBS-S/SHOBS-P/releases](https://github.com/SHOBS-S/SHOBS-P/releases).
-2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.19.zip`).
+2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.20.zip`).
 3. Unzip it somewhere permanent, for example `C:\Astro`. Avoid your Downloads folder: the shortcuts point at this
    folder, so it should not move.
 4. Open the folder the zip made. It holds files such as `clearv_app.py`, `Create shortcuts.bat`,
@@ -55,8 +56,8 @@ place.
 
 ## Install on Linux
 
-1. Install Python 3.11 or newer with Tkinter, the window toolkit. Most distributions already have Python; add
-   Tkinter (and, on Debian-based systems, the venv package) with your package manager:
+1. Install Python with Tkinter, the window toolkit. Python 3.13, 3.12 or 3.11 is best. Most distributions already
+   have Python; add Tkinter (and, on Debian-based systems, the venv package) with your package manager:
    - Debian, Ubuntu, Mint: `sudo apt install python3-tk python3-venv`
    - Fedora: `sudo dnf install python3-tkinter`
    - Arch: `sudo pacman -S tk`
@@ -64,29 +65,78 @@ place.
 3. Open a terminal in that folder and type `./run_linux.sh`.
    The first start finds a Python that works, makes SHOBS-P's own environment in
    `~/.local/share/SHOBS-P/python-env` (your own Python is left untouched) and downloads the packages. This takes a
-   few minutes. Later starts skip the download, unless a new version needs other packages.
+   few minutes. The messages are the same as on a Mac (see "What the first start says" below). Later starts skip the
+   download, unless a new version needs other packages.
 4. For an entry in your applications menu, type `./run_linux.sh --desktop` once. It needs no `sudo`. It also puts
    an icon on your Desktop, if you have one. Run it again if you move the SHOBS-P folder.
 5. To check the install, type `./run_selftest.sh` (see the self-test below).
 
-If the terminal says `SHOBS-P could not find a Python it can use.`, every Python it tried is listed with the reason.
-When Tkinter is missing, it names the package to install. Install it and run `./run_linux.sh` again.
+If the terminal says `✖ SHOBS-P could not find a Python it can use`, every Python it tried is listed above that line
+with the reason. When Tkinter is missing, it names the package to install. Install it and run `./run_linux.sh` again.
 
 ## Install on a Mac
 
-1. Install Python from [python.org/downloads](https://www.python.org/downloads/). It includes Tk, the window
-   toolkit. (A Homebrew Python works too, with `brew install python-tk@3.13` for a Python 3.13.)
+1. Install **Python 3.13** from [python.org/downloads/macos](https://www.python.org/downloads/macos/). It includes
+   Tk, the window toolkit. Pick 3.13 even if a newer Python is offered: a brand-new Python often does not have
+   ready-made copies of all the packages SHOBS-P needs yet (see below). (A Homebrew Python works too, with
+   `brew install python-tk@3.13` for a Python 3.13.)
 2. Unzip SHOBS-P somewhere permanent, for example in Documents.
 3. Double-click **Start SHOBS-P.command**. The first time, macOS may refuse to open a file from an unidentified
    developer. Right-click (or Control-click) the file, choose **Open**, then **Open** again. You only do this once.
-   (If newer macOS offers no **Open**, use **Open Anyway** in System Settings → Privacy & Security. Or, in Terminal in
-   the SHOBS-P folder, `xattr -d com.apple.quarantine "Start SHOBS-P.command"` does the same.)
+   On macOS 15 and newer there may be no **Open**: then go to System Settings → Privacy & Security, scroll down and
+   press **Open Anyway**. Or, in Terminal in the SHOBS-P folder, type
+   `xattr -d com.apple.quarantine *.command *.sh`; that clears every SHOBS-P start file at once.
 4. The first start makes SHOBS-P's own environment in `~/Library/Application Support/SHOBS-P/python-env` and
    downloads the packages, which takes a few minutes. Keep the Terminal window open while SHOBS-P runs; closing it
    closes the program.
 5. To check the install, double-click **Run self-test.command**.
 
-If no suitable Python is found, install Python from python.org and double-click **Start SHOBS-P.command** again.
+### What the first start says (Linux and Mac)
+
+The Terminal window tells you what it is doing. A first start looks like this (your paths and version numbers will
+differ):
+
+    Looking for a Python that can run SHOBS-P...
+      Trying /Library/Frameworks/Python.framework/Versions/3.13/bin/python3...
+        usable: Python 3.13.1
+
+    Setting up SHOBS-P's own Python environment with Python 3.13.1 (/Library/Frameworks/...)
+    in /Users/you/Library/Application Support/SHOBS-P/python-env
+    (that Python itself is left untouched). The first time this downloads the packages: a few minutes...
+    Installing the Python packages SHOBS-P needs...
+        getting numpy
+        getting scipy
+        ...
+    ✔ SHOBS-P is set up with Python 3.13.1.
+    Using Python: /Users/you/Library/Application Support/SHOBS-P/python-env/bin/python3
+
+Then the SHOBS-P window opens. A Python that cannot be used says `not usable:` and why, and SHOBS-P tries the next one.
+
+**Which Python SHOBS-P picks.** It tries the Pythons it finds in the order 3.13, 3.12, 3.11, then newer ones. It only
+installs ready-made copies of the packages, so it never has to compile anything, and a Mac never asks you to install
+Apple's developer tools. A brand-new Python (for example 3.15) often has no ready-made copies yet. Then SHOBS-P says:
+
+    ⚠ Some packages SHOBS-P needs have no ready-made copy for Python 3.15.0 yet
+      (they would have to be compiled, and SHOBS-P never compiles).
+      Trying the next Python.
+
+That is not an error. SHOBS-P simply moves on. If you also have 3.13 (or 3.12 or 3.11), it uses that one. If the
+new Python was the only one, the window ends with:
+
+    ✖ SHOBS-P could not set up its packages with any Python on this computer (each one is listed above).
+      Python 3.15.0 has no ready-made copies of some packages yet.
+
+and says what to do: on a Mac, install Python 3.13 from python.org and double-click again (your other Pythons can
+stay); on Linux, install Python 3.13, 3.12 or 3.11 with Tkinter. Nothing else needs to change.
+
+**When something fails.**
+
+- `✖ SHOBS-P could not find a Python it can use` means none of the Pythons found has Tkinter or is new enough
+  (3.11 or newer). Each one is listed above that line with the reason. On a Mac, install Python 3.13 from python.org.
+- `✖ The packages could not be downloaded. Check the internet connection and try again.` means just that.
+- pip, the tool that downloads the packages, writes its own detailed messages to **pip_log.txt** next to the
+  environment: `~/Library/Application Support/SHOBS-P/pip_log.txt` on a Mac, `~/.local/share/SHOBS-P/pip_log.txt` on
+  Linux. If you report a setup problem, attach this file. Chapter 24 has more.
 
 ## Check the install with the self-test
 
@@ -175,7 +225,7 @@ update does not lose them. Chapter 3 lists what is remembered.
   `.shobs_p.log` in your user folder (`C:\Users\<you>` on Windows, your home folder `~` on Linux and the Mac).
 - `.shobs_p.log` also holds every line of the Log window, each with the date and time in front. When it grows past
   5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts.
-- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.19**).
+- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.20**).
 - To report a problem, open an Issue on the SHOBS-P GitHub page and attach `selftest_log.txt` and `.shobs_p.log`,
   with a screenshot.
 

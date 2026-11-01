@@ -19,7 +19,9 @@ From top to bottom:
   After a run, a gray line under it says what the photometry was measured with (see "Apertures" below).
 - **The step strip**: what is done and what to do next.
 - **The image** on the left, with a legend under it, and the **Stars** and **Watch stars** panels on the right.
-- **The progress row**: a progress bar, **Cancel run**, and **Hide log** / **Show log**, with the log under it.
+- **The run row**: a gray line with the last run's summary (for example "Photometry done in 1:52. 38 points."),
+  **Cancel run**, and **Hide log** / **Show log**, with the log under it. While a run is going, its progress is on the
+  busy bar at the bottom of the window (chapter 3).
 - **Back** and **Next: Output** at the bottom.
 
 In Discovery mode the page is called **Photometry: field scan**, the left of the tools row reads **Click a star to**
@@ -37,9 +39,12 @@ SHOBS-P:
 3. checks the field against VSX and SIMBAD for known and suspected variables;
 4. places the **Target** marker on your target, if the Input page gives its position.
 
-While it works, the status bar shows each catalog as it answers, for example "Catalogs: AAVSO ✓ APASS ✓ Tycho ✓
-Gaia…". You can start marking stars once the AAVSO sequence and APASS are in; Gaia's faint stars finish in the
-background.
+While it works, the busy bar at the bottom of the window (chapter 3) says what the solve is doing. It starts with,
+for example, **Solving: fetching AAVSO, Gaia, APASS and Tycho stars (…′ field, V band)…**, then ticks off each catalog
+as it answers: **Solving: fetching catalogs: AAVSO ✓ APASS ✓ Tycho ✓ Gaia…**. On a hard field you may also see
+**Solving: only N stars on this frame, stacking M frames to find more…**, **Solving: no lock at the target marker,
+trying N nearby stars as the target…** or **Solving the field from star patterns…**. You can start marking stars once
+the AAVSO sequence and APASS are in; Gaia's faint stars finish in the background.
 
 The first label of the step strip shows how it went: **1 Solving…**, **✓ 1 Solved** or **1 Not solved**.
 
@@ -58,7 +63,8 @@ Solve again to use it.** Press **Solve again**; the sequence is used at once, wi
 
 **When the target is not on the first frame.** Sometimes the first frames miss the target, for example while the
 telescope was still settling. If the plate solution puts the target off the first frame, SHOBS-P looks at the next
-frames (up to 10) for the first one that holds it, without solving each one. That frame becomes the reference: the
+frames (up to 10) for the first one that holds it, without solving each one (the busy bar says, for example,
+**Looking for SZ Lyn on the next frames… 3 of 10**). That frame becomes the reference: the
 image is solved again and the Target marker placed. The log says, for example, "Target: SZ Lyn is on frame 6 (…), not
 on frames 1–5. Frame 6 is the reference now; the run skips the 5 frames without SZ Lyn and lists every frame that
 misses it." If it cannot find the target, the log says to reject the frames without it in Blink and calibrate again.
@@ -154,8 +160,7 @@ a warning if it is a known variable.
 
 Suggested comps and AAVSO sequence stars are easy to mix up on a busy field, so a small key on the image itself (in the
 corner beside the compass) shows the two: **S1, S2 …  suggested comp** and **91 = V 9.1  AAVSO sequence**. Like the
-compass, it follows **Show labels**. (In 2.2.19 the sequence rings are dashed and the suggested rings thicker and
-labeled, so they look a little different from the screenshots here.)
+compass, it follows **Show labels**.
 
 ## The step strip
 
@@ -299,7 +304,8 @@ In-focus fields are measured exactly as before.
    for example "Clear winner: r = 4.8 …" or "No clear winner: … Keep the suggested r = 5.8". The test needs at least
    one comp, and ideally a check star. Without a check star it judges on the target, and says so ("⚠ No check star:
    judging on the target, which may truly vary …"). In Discovery, which has no comps, it uses bright, isolated,
-   unsaturated field stars instead.
+   unsaturated field stars instead. While the test runs, the busy bar counts the frames, for example **Aperture
+   test… 12 of 30**.
 4. Press **Use these aperture sizes**. The boxes are filled and the window closes.
 
 ![The Suggested apertures window after a 30-frame test](img/08-suggest-apertures.png)
@@ -330,8 +336,10 @@ work out color terms. It makes the run slower; leave it off unless you need colo
 1. Check the step strip says **Ready: Run photometry.**
 2. Press **Run photometry**.
 3. Answer any questions (below).
-4. Watch the progress bar: "Photometry: frame 120/300   elapsed 2:10   about 3:15 left". The log shows one line per
-   frame with the target's magnitude, the star size and how far the frame moved.
+4. Watch the busy bar at the bottom of the window. It says **Photometry on 300 lights…**, then counts the frames
+   with the time left, for example **Photometry… 120 of 300, about 3:15 left**. The log shows one line per frame with
+   the target's magnitude, the star size and how far the frame moved. When the run ends, the gray line beside
+   **Cancel run** says how long it took, for example **Photometry done in 1:52. 38 points.**
 
 Every frame is calibrated, lined up with the first one (through shifts, small rotations and meridian flips), and
 measured. On an alt-az mount (the **Mount** box on the Input page, or clear evidence in the headers) there are no
@@ -345,7 +353,8 @@ and check apertures land on their stars again. If the frame you marked the stars
 kept frame becomes the reference (chapter 6). Frames that miss the target are skipped and listed at the end, for
 example "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames were skipped."
 
-To stop, press **Cancel run**. Nothing is added: the progress line says "Canceled; nothing was added."
+To stop, press **Cancel run**. Nothing is added: the gray line beside **Cancel run** says, for example, "Photometry
+done in 0:12. Canceled; nothing was added."
 
 ### Questions it may ask
 

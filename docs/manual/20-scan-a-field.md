@@ -98,13 +98,16 @@ check** caution.
 
 The **Period search (days)** range is Discovery's own; it does not change the Variables Output page's range. After a
 scan, change a box and press **Enter** (or click into another box): the candidates' periods are searched again over
-the new range, without scanning again. Before a scan, the range is kept for the next one.
+the new range, without scanning again. The busy bar says **Searching the candidates' periods over 0.02–20 d…**
+meanwhile, and the status bar then says **✔ Period search 0.02–20 d done.** Before a scan, the range is kept for the
+next one.
 
 ## Run the scan
 
 1. Press **Scan field** (top right).
-2. Wait. The progress line counts the frames. Each frame is calibrated, aligned and every star measured, so a scan
-   takes about as long as a photometry run with many stars. **Cancel run** stops it.
+2. Wait. The busy bar at the bottom of the window (chapter 3) says **Scanning 412 stars in 38 frames…**, then
+   counts the frames, for example **Field scan… 12 of 38, about 1:20 left**. Each frame is calibrated, aligned and
+   every star measured, so a scan takes about as long as a photometry run with many stars. **Cancel run** stops it.
 3. When the scan ends, SHOBS-P opens the Output step, now the **Output – Field scan** page, and the status bar says
    *"Field scan: N candidate variable(s)."*
 

@@ -77,14 +77,17 @@ In Variables and Transits mode, the **Target** box names the star you observed.
 1. Click in **Star ID** and type the star's name, for example `SZ Lyn` or `HD 219134`.
 2. Press **Enter** (or just click somewhere else). SHOBS-P looks the star up in SIMBAD and the AAVSO's VSX.
 3. **RA (hours)** and **Dec (degrees)** fill in, with the same position in hours-minutes-seconds beside them. The
-   status bar shows where they came from and, for a known variable, its VSX period and type.
+   status bar shows where they came from and, for a known variable, its VSX period and type, for example
+   **✔ SZ Lyn from SIMBAD: RA … h, Dec …° …**.
 
 Things to know:
 
 - The lookup happens only when you press Enter or leave the box, not as you type.
-- While it runs, a line under the boxes shows a moving bar and counts the seconds, for example **⟳ Looking up SZ Lyn
-  at the SIMBAD and VSX… 4 s**. If SIMBAD and VSX do not answer, the line turns red and says so (after 60 seconds at
-  most): type RA and Dec yourself, or press **Look up again** later.
+- While it runs, the busy bar at the bottom of the window says **Looking up SZ Lyn at SIMBAD and VSX…** (chapter 3,
+  "The busy bar"). In Transits mode it goes on to the star's planets at the NASA Exoplanet Archive. If SIMBAD and VSX
+  have not answered within 60 seconds, a red line under RA/Dec says so, for example **✖ SZ Lyn: the SIMBAD and VSX
+  did not answer within 60 s — type RA/Dec, or Look up again.** Type RA and Dec yourself, or press **Look up again**
+  later. (If the answer still comes in after that, it is used.)
 - If the name is only spelled a little differently from the AAVSO's version (spaces or capitals), an orange line
   appears, such as **AAVSO spells this "HD 219134"**, with a **Use it** button. Using the AAVSO spelling keeps your
   reports matching the AAVSO's records.
@@ -95,8 +98,11 @@ Things to know:
 
 **Changing to another target.** Press **New reduction** on the series line. It starts over for another star, as if
 you had just started SHOBS-P: the open series is closed (you are offered a save first), and the target, planet,
-comparison stars, check star, watch stars, **Use comps** choice, VSX period and rejected frames are cleared. The frame
-folders, site and optics stay. SHOBS-P asks first: **Start a new reduction?** Then type the new name and press Enter.
+comparison stars, check star, watch stars, **Use comps** choice, VSX period and rejected frames are cleared. The
+**Notes** box on the Output page goes back to its default, **OSC reduced; not transformed** (or **Monochrome camera;
+not transformed**), so the old star's notes cannot end up in the new star's report; if you had typed your own notes,
+the log lists "the Output page notes" among what was cleared. The frame folders, site and optics stay. SHOBS-P asks
+first: **Start a new reduction?** Then type the new name and press Enter.
 
 This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's
 night. **Clear target** still empties only the Star ID, RA and Dec and the comparison and check stars.
@@ -106,7 +112,8 @@ night. **Clear target** still empties only the Star ID, RA and Dec and the compa
 In Transits mode, a **Planet (Transits)** box appears under the Target. Type the planet's name under any of its names
 (for example `TrES-3 b`, `TOI-2046 b` or `KELT-16 b`) and press Enter. SHOBS-P fills in the period, the transit time,
 duration, depth and shape from the NASA Exoplanet Archive, and also the host star's name and position. While it
-looks the planet up, a moving bar runs beside the box and the empty boxes say "looking up…". Chapter 16 covers this
+looks the planet up, the busy bar says, for example, **Looking up planet K2-29 b at the NASA Exoplanet Archive…**,
+and the empty boxes say "looking up…" in gray. Chapter 16 covers this
 box and **Tonight's transits…** in detail.
 
 If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
@@ -165,8 +172,8 @@ and more than the frame's own size), SHOBS-P asks as soon as you choose the Ligh
 > Start a new reduction? …
 
 **Yes** starts a new reduction (see "Changing to another target" above): the open series is closed (with a save
-offered), the old star's target, planet, comps, check and watch stars are cleared, and the star named in the frames'
-`OBJECT` keyword is looked up. Rejected frames of the new Lights folder are kept. Answer **No** if you meant it (for
+offered), the old star's target, planet, comps, check and watch stars are cleared, the Output page notes go back to
+their default, and the star named in the frames' `OBJECT` keyword is looked up. Rejected frames of the new Lights folder are kept. Answer **No** if you meant it (for
 example, the target is near the edge of a wide field); you will not be asked again for that pair. If `OBJECT` names
 the Input page's own star but the frames point elsewhere, SHOBS-P asks nothing and the log suggests checking the RA
 and Dec instead.
