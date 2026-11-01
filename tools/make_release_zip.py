@@ -7,7 +7,7 @@ Unix permissions with each file, so the Linux and Mac launchers (*.sh, *.command
 unpacked with Archive Utility on a Mac or unzip on Linux (0755 for those, 0644 for the rest). Windows ignores them.
 
 What goes in: the files git tracks (git is required), minus what is for developers only:
-docs/, tools/, .github/, .gitignore, .gitattributes, README.md (GitHub's page; README.txt is the one in the zip),
+docs/, tools/, tests/ (unit tests, 2.2.20), .github/, .gitignore, .gitattributes, README.md (GitHub's page; README.txt is the one in the zip),
 CITATION.cff, and run-time leftovers (__pycache__, *.pyc, selftest_log.txt, selftest_reports/, settings, logs).
 The list of files is printed, so check it against the previous release before attaching the zip. It refuses to build
 when an app file (*.py, *.sh, *.command, *.ps1, *.bat, requirements.txt) in the top folder is not tracked by git: a new
@@ -23,7 +23,7 @@ import sys
 import time
 import zipfile
 
-TOP_DIRS_OUT = {"docs", "tools", ".github", ".git", "selftest_reports", "__pycache__"}
+TOP_DIRS_OUT = {"docs", "tools", "tests", ".github", ".git", "selftest_reports", "__pycache__"}  # 2.2.20: + tests
 FILES_OUT = {".gitignore", ".gitattributes", "README.md", "CITATION.cff", "selftest_log.txt", ".shobs_p_settings.json"}
 PATTERNS_OUT = ("*.pyc", "*.log", "*.zip", "*~", ".DS_Store")
 EXECUTABLE = ("*.sh", "*.command")

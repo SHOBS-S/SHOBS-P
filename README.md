@@ -100,14 +100,22 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
 
 ### Mac
 
-1. Install Python from [python.org](https://www.python.org/downloads/macos/) (it includes Tk). Homebrew's Python also
-   works with `brew install python-tk@3.13`.
+1. Install **Python 3.13** from [python.org](https://www.python.org/downloads/macos/) (it includes Tk). Homebrew's
+   Python also works with `brew install python-tk@3.13`.
 2. Unzip SHOBS-P, for example into Documents.
 3. Double-click **Start SHOBS-P.command**. The first time macOS may refuse a file from an unidentified developer:
-   right-click (or Control-click) it, choose **Open**, then **Open** again (once only). The first start sets up
-   SHOBS-P's own environment in `~/Library/Application Support/SHOBS-P/python-env` and downloads the packages; keep
-   the Terminal window open while SHOBS-P runs.
+   right-click (or Control-click) it, choose **Open**, then **Open** again (once only; on macOS 15 and newer use
+   **System Settings → Privacy & Security → Open Anyway**). Or run `xattr -d com.apple.quarantine *.command *.sh` in
+   Terminal in the SHOBS-P folder. The first start sets up SHOBS-P's own environment in
+   `~/Library/Application Support/SHOBS-P/python-env` and downloads the packages; keep the Terminal window open
+   while SHOBS-P runs.
 4. Double-click **Run self-test.command** to check the install.
+
+**Which Python (Linux and Mac, since 2.2.20).** The first start tries the Pythons it finds in the order 3.13, 3.12,
+3.11, then newer ones, and installs ready-made packages only, so it never asks to compile anything (no "developer
+tools" prompt on a Mac). A brand-new Python (such as 3.15) often has no ready-made packages yet: SHOBS-P says so and
+moves on to the next Python. If none works, it says what to install. pip's own messages are in `pip_log.txt` next to
+the environment.
 
 To start afresh on Linux or a Mac, delete that SHOBS-P folder; the next start sets everything up again.
 

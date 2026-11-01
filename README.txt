@@ -45,16 +45,21 @@ app's ID, so the pin keeps the SHOBS-P icon and name. The shortcut starts the ap
 window; any error message is shown in the app and written to .shobs_p.log in your user folder. Run it again if you
 move the folder. run_windows.bat still works and shows the console, which is handy when something goes wrong.
 
-Run on Linux or a Mac (2.2.19)
+Run on Linux or a Mac (2.2.19; Python choice 2.2.20)
 Linux: install Python 3.11+ with Tkinter (Debian/Ubuntu: sudo apt install python3-tk python3-venv; Fedora: sudo dnf
 install python3-tkinter; Arch: sudo pacman -S tk), unzip SHOBS-P in your home folder, open a terminal there and type
 ./run_linux.sh (the first start sets up SHOBS-P's own environment in ~/.local/share/SHOBS-P and downloads the
 packages; later starts skip that). ./run_linux.sh --desktop adds an applications-menu entry; ./run_selftest.sh checks
 the install.
-Mac: install Python from python.org (it includes Tk), unzip SHOBS-P, and double-click "Start SHOBS-P.command". The
-first time macOS may refuse a file from an unidentified developer: right-click it, Open, Open. Keep the Terminal
-window open while SHOBS-P runs. "Run self-test.command" checks the install. SHOBS-P's environment lives in
-~/Library/Application Support/SHOBS-P.
+Mac: install Python 3.13 from python.org (it includes Tk), unzip SHOBS-P, and double-click "Start SHOBS-P.command".
+The first time macOS may refuse a file from an unidentified developer: right-click (or Control-click) it, Open, Open
+(macOS 15 and newer: System Settings > Privacy & Security > Open Anyway). Or, in Terminal, in the SHOBS-P folder:
+xattr -d com.apple.quarantine *.command *.sh. Keep the Terminal window open while SHOBS-P runs. "Run
+self-test.command" checks the install. SHOBS-P's environment lives in ~/Library/Application Support/SHOBS-P.
+Which Python (2.2.20): SHOBS-P tries the Pythons it finds in the order 3.13, 3.12, 3.11, then newer ones, and only
+installs ready-made packages, so it never asks to compile anything (no "developer tools" prompt on a Mac). A
+brand-new Python (e.g. 3.15) often has no ready-made packages yet; SHOBS-P then says so and moves on to the next
+Python. If none works it says what to install. pip's own messages are in pip_log.txt next to the environment.
 Starting afresh: delete that SHOBS-P folder (Linux or Mac) and the next start sets everything up again.
 
 Modes (2.0)
