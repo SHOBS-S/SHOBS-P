@@ -61,16 +61,6 @@ class TestLabels(_Zone):
         self.assertEqual(tc.jd_to_local(jd).strftime("%H:%M"), "23:34")
         self.assertEqual(site_time.label(jd), "Local time (UTC−7)")
 
-    def test_night_window_uses_the_site_noon(self):
-        """The planner's night runs from the site's local noon (Phoenix), not Warsaw's."""
-        site_time.set_zone("America/Phoenix")
-        win = tc.night_window(dt.date(2026, 10, 1), 33.0, -111.0)
-        self.assertIsNotNone(win)
-        noon = site_time.jd_to_local(win[2] + 1.0 / 86400)
-        self.assertEqual((noon.date(), noon.hour, noon.minute), (dt.date(2026, 10, 1), 12, 0))
-        dark0 = site_time.jd_to_local(win[0])
-        self.assertTrue(19 <= dark0.hour <= 20, dark0)   # astronomical dark begins in the evening, Arizona time
-
     def test_bad_zone_falls_back_once(self):
         msg = site_time.set_zone("Mars/Olympus_Mons")
         self.assertIn("could not be loaded", msg)
@@ -91,13 +81,6 @@ class TestTypedTimes(_Zone):
                                places=7)
         site_time.set_zone("America/New_York")   # after the change: 23:00 EST = 04:00 UTC
         self.assertAlmostEqual(site_time.local_to_jd(dt.date(2026, 11, 1), 23, 0), jd_of(2026, 11, 2, 4), places=7)
-
-    def test_tonights_after_box(self):
-        import transit_ui
-        site_time.set_zone("America/Phoenix")
-        f = transit_ui.FinderWindow.__new__(transit_ui.FinderWindow)
-        self.assertAlmostEqual(f._clock_jd("2300", dt.date(2026, 10, 1)), jd_of(2026, 10, 2, 6), places=7)
-        self.assertAlmostEqual(f._clock_jd("0130", dt.date(2026, 10, 1)), jd_of(2026, 10, 2, 8, 30), places=7)
 
     def test_trim_box_and_back(self):
         import transit_ui

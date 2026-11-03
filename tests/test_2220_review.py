@@ -13,9 +13,14 @@ class TestJointFlipStep(unittest.TestCase):
                 "t_flip": float(t[30]), "group": "g"}
 
     def test_no_step_when_disabled(self):
-        self.assertFalse(tc.FLIP_STEP_ENABLED)
-        jp = multinight.JointProblem([self._night()], 1.5, {}, {}, ["g"], {})
-        self.assertFalse(any(n.startswith("step:") for n in jp.free))
+        # 2.3.0 (#8): enabled (BIC-gated) since 2.3.0; switched off here to test the switch
+        old = tc.FLIP_STEP_ENABLED
+        tc.FLIP_STEP_ENABLED = False
+        try:
+            jp = multinight.JointProblem([self._night()], 1.5, {}, {}, ["g"], {})
+            self.assertFalse(any(n.startswith("step:") for n in jp.free))
+        finally:
+            tc.FLIP_STEP_ENABLED = old
 
     def test_step_when_enabled(self):
         old = tc.FLIP_STEP_ENABLED

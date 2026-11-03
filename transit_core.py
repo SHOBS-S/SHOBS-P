@@ -1,5 +1,5 @@
 """Transit tools for SHOBS-P (2.1): model, fit (least squares + MCMC), red noise, checks, ephemeris lookups,
-planner, nearby-eclipsing-binary arithmetic, and report files.
+nearby-eclipsing-binary arithmetic, and report files.
 
 NumPy only, plus SciPy's least_squares for the starting fit. No Astropy here, so everything in this
 module also runs on a report loaded from disk (an EXOTIC / AAVSO exoplanet file) without frames.
@@ -161,7 +161,14 @@ PARAM_LABELS = {"tc": "Mid-transit Tc (BJD_TDB)", "k": "Rp/R*", "a_rs": "a/R*", 
 # validated on synthetic nights and on KOI-217 b, but a TrES-3 b night with a 55-minute cut at the bottom (only 16 min
 # of baseline after the cut) did not reproduce the untouched Tc (3.8 sigma). fit_transit(flip_step=True) still runs
 # it for tests.
-FLIP_STEP_ENABLED = False
+# 2.3.0 (#8): ON again, but gated: on a night with a flip the fit is made with and without the step (least squares,
+# same noise-scaled errors) and the step is kept only when it lowers the BIC by at least FLIP_STEP_DBIC (the same
+# "strong evidence" bar as a detection, so the step cannot soak up noise; one extra parameter costs ln(n), so the step
+# must also beat that). Otherwise the night is fitted with no step term at all, exactly as before. The TrES-3 b case
+# above is still covered by the baseline-on-each-side rule (FLIP_NO_BASELINE_VERDICT) when the step is kept.
+# fit_transit(flip_step=True) fits the step without the gate (tests); flip_step=False never fits it.
+FLIP_STEP_ENABLED = True
+FLIP_STEP_DBIC = 10.0         # 2.3.0 (#8): ΔBIC (no step minus with step) needed to keep the flip step
 FLIP_MIN_OOT_MIN = 30.0       # out-of-transit baseline needed on EACH side of the flip to trust the depth (minutes)
 FLIP_MIN_OOT_FRAMES = 15      # ... and at least this many out-of-transit frames on each side
 FLIP_CORR_WARN = 0.9          # |corr(step, depth)| above this: the night cannot separate the two
@@ -691,6 +698,7 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
     dur = total_duration(period, a0, min(b0, 0.99), k0)
     starts = [{"tc": tc_rel + d} for d in (-0.25 * dur, 0.25 * dur)] + [{"k": k0 * 1.2}, {"k": k0 * 0.8}]
     # 2.2.13: the flip time, from the data: halfway between the last frame before the flip and the first after it.
+    # 2.3.0 (#8): flip_step None = the BIC gate decides (flip_step_test), True = always fit it, False = never.
     use_step = FLIP_STEP_ENABLED if flip_step is None else bool(flip_step)
     t_flip = flip_gap = None
     if use_step and aflip.any() and (~aflip).any():
@@ -705,7 +713,64 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
             "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "step"), "ld": (u1g, u2g, 0.1),
             "cadence": cadence, "starts": starts, "t_flip": t_flip, "flip_gap_min": flip_gap, "n": n,
             "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "tc_start": tc_start, "eph_err_known": eph_err_known,
-            "has_eph": bool(tc0)}
+            "has_eph": bool(tc0), "flip_gated": flip_step is None}
+
+
+def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False) -> dict | None:
+    """2.3.0 (#8): on a night with a meridian flip (S from _setup_fit, with S["t_flip"]), fit the light curve with
+    and without the flip step (least squares) on the same errors, scaled as for the MCMC (reduced chi-square and red
+    noise of the fit WITH the step, the fuller model), and compare the BICs. kept: ΔBIC >= FLIP_STEP_DBIC.
+    Returns {"t_flip" (BJD), "step": (value, error), "dbic", "kept", "threshold", "gap_min", "error_scale"} or None
+    without a flip. The step is relative flux (after = before × (1 + step))."""
+    if S.get("t_flip") is None:
+        return None
+    t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
+    starts = S["starts"]
+    prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
+                          detrend_time, S["ld"], S["t_flip"])
+    if prob.t_flip is None:
+        return None
+    x, chi2 = best_fit(prob, starts)
+    rchi = chi2 / max(len(t) - len(prob.free), 1)
+    beta = red_noise_beta(t, flux - prob.model(prob.full(x)), S["cadence"])
+    scale = math.sqrt(max(rchi, 1.0)) * beta
+    p1 = prob.full(x)
+    # Without the step: from the usual starts, and from the stepped fit's values.
+    prob_ns = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], S["start"],
+                             detrend_airmass, detrend_time, S["ld"], None)
+    x_ns, chi2_ns = best_fit(prob_ns, [s for s in starts if "step" not in s]
+                             + [{k: v for k, v in p1.items() if k != "step"}])
+    p_ns = prob_ns.full(x_ns)
+    # With the step: from the stepped fit, and from the no-step fit with step 0 (so it can never fit worse).
+    prob_ws = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], p1, detrend_airmass,
+                             detrend_time, S["ld"], S["t_flip"])
+    x_ws, chi2_ws = best_fit(prob_ws, [dict(p_ns, step=0.0)])
+    e_ws = lsq_errors(prob_ws)
+    n = len(t)
+    dbic = (chi2_ns + len(prob_ns.free) * math.log(n)) - (chi2_ws + len(prob_ws.free) * math.log(n))
+    i = prob_ws.free.index("step")
+    return {"t_flip": prob_ws.t_flip + S["t_ref"], "step": (float(prob_ws.full(x_ws)["step"]), float(e_ws[i])),
+            "dbic": float(dbic), "kept": bool(dbic >= FLIP_STEP_DBIC), "threshold": FLIP_STEP_DBIC,
+            "gap_min": S.get("flip_gap_min"), "error_scale": float(scale), "chi2_step": float(chi2_ws),
+            "chi2_nostep": float(chi2_ns)}
+
+
+def _apply_flip_gate(S: dict, detrend_airmass, detrend_time, say=None) -> dict | None:
+    """2.3.0 (#8): run the gate when S asks for it; a step that is not needed is taken out of S (no t_flip, no step
+    starts), so the rest of the fit is the plain one. Returns the test (or None)."""
+    if S.get("t_flip") is None or not S.get("flip_gated"):
+        return None
+    test = flip_step_test(S, detrend_airmass, detrend_time)
+    if test is None:
+        return None
+    if say:
+        say(f"  meridian flip: step {test['step'][0] * 1000:+.1f} ± {test['step'][1] * 1000:.1f} ppt, ΔBIC "
+            f"{test['dbic']:.1f} (kept at {FLIP_STEP_DBIC:g} or more): "
+            + ("kept, fitted with the transit" if test["kept"] else "not needed, fitted without a step"))
+    if not test["kept"]:
+        S["t_flip"] = None
+        S["starts"] = [s for s in S["starts"] if "step" not in s]
+    return test
 
 
 def flip_sides(t, t_flip: float, tc: float, t14: float, cadence: float, tc_pred: float | None = None) -> dict:
@@ -781,6 +846,7 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
     rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step.
     2.2.16 (item 6): flagged_mask (flagged frames put back, error bars doubled) as in fit_transit."""
     S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
+    flip_test = _apply_flip_gate(S, detrend_airmass, detrend_time)   # 2.3.0 (#8): the step only when BIC wants it
     t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
     prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
                           detrend_time, S["ld"], S["t_flip"])
@@ -795,7 +861,7 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
     p = prob_s.full(x_s)
     out = {"p": dict(p, tc=p["tc"] + S["t_ref"]), "err": dict(zip(prob_s.free, map(float, e))), "chi2": chi2_s,
            "error_scale": scale, "rchi_raw": float(rchi), "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
-           is not None else None, "cadence": S["cadence"], "t": S["t_abs"]}
+           is not None else None, "cadence": S["cadence"], "t": S["t_abs"], "flip_test": flip_test}
     out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
     out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
     if prob_s.t_flip is not None:
@@ -824,6 +890,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     """
     say = log or (lambda _m: None)
     S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
+    # 2.3.0 (#8): with a flip, fit with and without the step first; the step stays only when ΔBIC >= FLIP_STEP_DBIC.
+    flip_test = _apply_flip_gate(S, detrend_airmass, detrend_time, say)
     t, t_abs, t_ref, flux, err, am = S["t"], S["t_abs"], S["t_ref"], S["flux"], S["err"], S["am"]
     period, priors, free, ld, cadence, starts = S["period"], S["priors"], S["free"], S["ld"], S["cadence"], S["starts"]
     t_flip = S["t_flip"]
@@ -911,6 +979,7 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
                                           ("time", detrend_time)) if on],
         # 2.2.13
         "flip": flip, "flagged": fmask,
+        "flip_test": flip_test,   # 2.3.0 (#8): the with/without-step BIC test (None: no flip, or not gated)
         "with_flagged": ({"n": int(fmask.sum()), "label": flagged_label, "factor": FLAGGED_ERR_FACTOR}
                          if fmask.any() else None),
         "excluded": excluded if excluded and len(np.atleast_1d(excluded.get("t", []))) else None,
@@ -1025,7 +1094,7 @@ def _odd_one_out(shifts) -> int | None:
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
                        detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
-                       cancel=None, log=None) -> dict | None:
+                       cancel=None, log=None, flip_step=None) -> dict | None:
     """2.2.16 (item 6): refit the light curve once per comp with that comp left out of the ensemble.
 
     flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
@@ -1046,8 +1115,9 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     names = [str(n) for n in names][:m] + [f"comp {k + 1}" for k in range(len(names), m)]
     flux = np.asarray(flux, dtype=float)
     err = np.asarray(err, dtype=float)
+    # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), so every refit uses the same model
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
-              flagged_mask=flagged_mask)
+              flagged_mask=flagged_mask, flip_step=flip_step)
     with np.errstate(invalid="ignore"):
         ens_all = np.mean(cm, axis=1)
     try:
@@ -1623,13 +1693,21 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                                   f"({dd * 100:+.2f}%){ld_text}. A clear-filter depth can differ a little from "
                                   f"TESS's red band; a large difference: {why}."))
     # 2.2.13: the meridian flip step, and flagged frames put back in.
+    ft = r.get("flip_test")
+    if ft and not ft.get("kept"):
+        # 2.3.0 (#8): the step was tested (BIC) and left out: the fit has no step term.
+        rel_h = (ft["t_flip"] - best["tc"]) * 24
+        flags.append(("info", f"Meridian flip at BJD_TDB {ft['t_flip']:.5f} ({rel_h:+.2f} h from mid-transit): "
+                              + flip_step_line(r) + f". The step is kept only at ΔBIC {FLIP_STEP_DBIC:g} or more, so "
+                              "this fit has no step term."))
     if flip:
         rel_h = (flip["t_flip"] - best["tc"]) * 24
         st, se = flip["step"]
         ns = flip.get("nostep")
         text = (f"Meridian flip at BJD_TDB {flip['t_flip']:.5f} ({rel_h:+.2f} h from mid-transit; "
                 f"{flip.get('source') or 'from the data'}): a baseline step there was fitted together with the "
-                f"transit: step {st * 100:+.2f} ± {se * 100:.2f}%.")
+                f"transit: step {st * 1000:+.1f} ± {se * 1000:.1f} ppt"   # 2.3.0 (#8): ppt, and the BIC gate
+                + (f" (kept: ΔBIC {ft['dbic']:.0f}, at least {FLIP_STEP_DBIC:g} needed)." if ft else "."))
         if ns:
             text += (f" Without the step the depth would be {ns['depth'] * 100:.2f} ± {ns['depth_err'] * 100:.2f}% "
                      f"(least squares); ΔBIC {ns['dbic']:+.0f} "
@@ -2144,21 +2222,13 @@ def complete_planet(p: dict) -> dict:
     return p
 
 
-# ---- Planner (low-precision astronomy, good to a minute or two) -----------------------------------
+# ---- Approximate times (low-precision astronomy, good to a few seconds) -------------------------------
+# 2.3.0 (#52): the transit planner and Tonight's transits are gone; these remain for the alt-az zenith-keyhole
+# note (clearv_app) and the approximate BJD of a report that has no site.
 
-# 2.2.18 (item 17): the transit planner and Tonight's transits share one set of default limits (the planner used
-# 25° and -12° before): the star at least PLAN_MIN_ALT high, the Sun below PLAN_SUN_ALT (astronomical dark).
-PLAN_MIN_ALT = 30.0
-PLAN_SUN_ALT = -18.0
-PLAN_BASELINE_MIN = 60.0
 # 2.2.18 (item 8): an alt-az mount cannot follow a star through the zenith smoothly: near it the azimuth speed (and
 # the field rotation) grow without bound, so a star passing above this altitude crosses the "zenith keyhole".
 ZENITH_KEYHOLE_ALT = 85.0
-
-
-def _gmst_deg(jd: np.ndarray) -> np.ndarray:
-    d = np.asarray(jd) - 2451545.0
-    return (280.46061837 + 360.98564736629 * d) % 360.0
 
 
 def sun_radec(jd):
@@ -2174,53 +2244,10 @@ def sun_radec(jd):
     return ra, dec, dist
 
 
-def moon_radec(jd):
-    """Low-precision Moon (about 0.3 degrees): RA, Dec in degrees, and illuminated fraction."""
-    d = np.asarray(jd) - 2451545.0
-    L = np.radians((218.316 + 13.176396 * d) % 360)
-    M = np.radians((134.963 + 13.064993 * d) % 360)
-    F = np.radians((93.272 + 13.229350 * d) % 360)
-    lam = L + np.radians(6.289) * np.sin(M)
-    beta = np.radians(5.128) * np.sin(F)
-    eps = np.radians(23.439)
-    ra = np.degrees(np.arctan2(np.sin(lam) * np.cos(eps) - np.tan(beta) * np.sin(eps), np.cos(lam))) % 360
-    dec = np.degrees(np.arcsin(np.sin(beta) * np.cos(eps) + np.cos(beta) * np.sin(eps) * np.sin(lam)))
-    sra, sdec, _ = sun_radec(jd)
-    elong = _sep_deg(ra, dec, sra, sdec)
-    illum = (1 - np.cos(np.radians(elong))) / 2
-    return ra, dec, illum
-
-
-def _sep_deg(ra1, dec1, ra2, dec2):
-    r1, d1, r2, d2 = map(np.radians, (ra1, dec1, ra2, dec2))
-    c = np.sin(d1) * np.sin(d2) + np.cos(d1) * np.cos(d2) * np.cos(r1 - r2)
-    return np.degrees(np.arccos(np.clip(c, -1, 1)))
-
-
-def altitude(ra_deg, dec_deg, lat_deg, lon_deg, jd):
-    lst = (_gmst_deg(jd) + lon_deg) % 360
-    ha = np.radians(lst - ra_deg)
-    lat, dec = math.radians(lat_deg), np.radians(dec_deg)
-    s = np.sin(lat) * np.sin(dec) + np.cos(lat) * np.cos(dec) * np.cos(ha)
-    return np.degrees(np.arcsin(np.clip(s, -1, 1)))
-
-
-def peak_altitude(ra_deg, dec_deg, lat_deg, lon_deg, jd_grid) -> tuple[float, bool]:
-    """2.2.18 (item 8): (highest altitude over the times in jd_grid, does the star cross the meridian there). When it
-    culminates between two grid times, the culmination altitude (90° - |lat - dec|) counts, not the grid's."""
-    grid = np.asarray(jd_grid, dtype=float)
-    alt = altitude(ra_deg, dec_deg, lat_deg, lon_deg, grid)
-    ha = ((_gmst_deg(grid) + lon_deg - ra_deg + 180.0) % 360.0) - 180.0
-    crosses = bool(np.any(np.diff(np.sign(ha)) > 0))
-    top = float(np.max(alt))
-    if crosses:
-        top = max(top, 90.0 - abs(lat_deg - dec_deg))
-    return top, crosses
-
-
 def bjd_minus_jd_days(jd, ra_deg, dec_deg) -> np.ndarray:
     """Approximate BJD_TDB − JD_UTC (days): Roemer delay from the Earth's position plus TDB − UTC.
-    Good to a few seconds; used by the planner only (fits use Astropy's exact conversion)."""
+    Good to a few seconds; used only where no site is known (a report's times; fits use Astropy's exact
+    conversion). 2.3.0 (#52): the planner that also used it is gone."""
     sra, sdec, dist = sun_radec(jd)
     # Earth's heliocentric vector is minus the Sun's geocentric vector.
     ex = -dist * np.cos(np.radians(sdec)) * np.cos(np.radians(sra))
@@ -2230,54 +2257,6 @@ def bjd_minus_jd_days(jd, ra_deg, dec_deg) -> np.ndarray:
     ny = math.cos(math.radians(dec_deg)) * math.sin(math.radians(ra_deg))
     nz = math.sin(math.radians(dec_deg))
     return ((ex * nx + ey * ny + ez * nz) * 499.004784 + 69.184) / 86400.0
-
-
-def plan_transits(planet: dict, ra_deg: float, dec_deg: float, lat: float, lon: float, start_jd: float,
-                  days: float = 30.0, min_alt: float = PLAN_MIN_ALT, sun_alt: float = PLAN_SUN_ALT,
-                  baseline_min: float = PLAN_BASELINE_MIN) -> list[dict]:
-    """Transits in a date range, with the target's altitude and the sky darkness at ingress, mid, and egress.
-    2.2.18: also the highest altitude over the window ("alt_max"), "meridian" (crosses it: a German mount flips) and
-    "keyhole" (above ZENITH_KEYHOLE_ALT: an alt-az mount's zenith keyhole).
-
-    'full' means ingress through egress plus the baseline on both sides are all above min_alt in the dark;
-    'transit only' means the transit is but the baseline is not; 'partial' means part of the transit is."""
-    period, t0 = planet["period"], planet["t0"]
-    t14 = planet.get("t14") or total_duration(period, planet.get("a_rs") or 10, min(planet.get("b") or 0.3, 0.99),
-                                              planet.get("k") or 0.1)
-    n0 = math.ceil((start_jd - t0) / period)
-    n1 = math.floor((start_jd + days - t0) / period)
-    events = []
-    for n in range(n0, n1 + 1):
-        tc_bjd = t0 + n * period
-        tc = tc_bjd - float(bjd_minus_jd_days(tc_bjd, ra_deg, dec_deg))
-        sig = math.hypot(planet.get("t0_err") or 0.0, abs(n) * (planet.get("period_err") or 0.0)) * 1440
-        base = baseline_min / 1440.0
-        grid = np.linspace(tc - t14 / 2 - base, tc + t14 / 2 + base, 61)
-        alt = altitude(ra_deg, dec_deg, lat, lon, grid)
-        salt = altitude(*sun_radec(grid)[:2], lat, lon, grid)
-        ok = (alt >= min_alt) & (salt <= sun_alt)
-        in_tr = (grid >= tc - t14 / 2) & (grid <= tc + t14 / 2)
-        if ok.all():
-            status = "full"
-        elif ok[in_tr].all():
-            status = "transit only"
-        elif ok[in_tr].any():
-            status = "partial"
-        else:
-            continue
-        mra, mdec, illum = moon_radec(tc)
-        top, crosses = peak_altitude(ra_deg, dec_deg, lat, lon, grid)   # 2.2.18 (item 8)
-        events.append({
-            "epoch": n, "tc_bjd": tc_bjd, "tc_jd": tc, "t1_jd": tc - t14 / 2, "t4_jd": tc + t14 / 2,
-            "alt_t1": float(altitude(ra_deg, dec_deg, lat, lon, tc - t14 / 2)),
-            "alt_tc": float(altitude(ra_deg, dec_deg, lat, lon, tc)),
-            "alt_t4": float(altitude(ra_deg, dec_deg, lat, lon, tc + t14 / 2)),
-            "sun_tc": float(altitude(*sun_radec(tc)[:2], lat, lon, tc)),
-            "moon_illum": float(illum), "moon_sep": float(_sep_deg(mra, mdec, ra_deg, dec_deg)),
-            "status": status, "sigma_min": sig, "t14": t14,
-            "alt_max": top, "meridian": crosses, "keyhole": top >= ZENITH_KEYHOLE_ALT,
-        })
-    return events
 
 
 def jd_to_local(jd: float) -> datetime:
@@ -2441,6 +2420,7 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
         f"#EXOPLANET_NAME={pl.get('name', '')}", f"#BINNING={meta.get('binning', '1x1')}",
         f"#EXPOSURE_TIME={meta.get('exposure', '')}", f"#OBSLAT={meta.get('lat', '')}", f"#OBSLON={meta.get('lon', '')}",
         f"#OBSELEV={meta.get('elev', '')}", f"#NOTES={meta.get('notes', '')}",
+        # 2.3.0 (#8): a kept flip step is not a data column, so it is said in #NOTES (flip_report_note), not here.
         "#DETREND_PARAMETERS=" + (", ".join(d.upper() for d in result["detrend"]) or "NONE"),
         "#MEASUREMENT_TYPE=Rnflux", f"#FILTER={meta.get('filter', 'CV')}",
         "#PRIORS=" + ",".join(priors), "#RESULTS=" + ",".join(results),
@@ -2611,7 +2591,8 @@ def fit_text(result: dict, meta: dict) -> str:
               + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
               + f", reduced chi-square {result['rchi2']:.2f}, "
               f"red-noise beta {result['beta']:.2f}, error bars x{result['error_scale']:.2f}",
-              "Detrending       " + (", ".join(result["detrend"]) or "none"),
+              "Detrending       " + (", ".join(result["detrend"] + (["meridian flip step"] if result.get("flip")
+                                                                  else [])) or "none"),   # 2.3.0 (#8)
               f"MCMC             {ch['walkers']} walkers, {ch['burn']} burn-in + {ch['steps']} steps, "
               f"acceptance {ch['acceptance']:.2f}"]
     ff = result.get("free_fit")
@@ -2634,14 +2615,44 @@ def fit_text(result: dict, meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def flip_step_line(result: dict, ascii_only: bool = False) -> str:
+    """2.3.0 (#8): one line on the BIC-gated flip step: "Flip step fitted: +16.2 ± 1.1 ppt (ΔBIC 85), kept" or
+    "Flip step not needed: +0.4 ± 0.9 ppt (ΔBIC −6; kept only at 10 or more)"; "" on a night without a flip (or a fit
+    that was not gated)."""
+    ft = (result or {}).get("flip_test")
+    if not ft:
+        flip = (result or {}).get("flip")
+        if not flip:
+            return ""
+        st, se = flip["step"]
+        text = f"Flip step fitted: {st * 1000:+.1f} ± {se * 1000:.1f} ppt (not gated)"
+    else:
+        st, se = (result.get("flip") or {}).get("step") or ft["step"]
+        if ft.get("kept"):
+            text = f"Flip step fitted: {st * 1000:+.1f} ± {se * 1000:.1f} ppt (ΔBIC {ft['dbic']:.0f}), kept"
+        else:
+            text = (f"Flip step not needed: {ft['step'][0] * 1000:+.1f} ± {ft['step'][1] * 1000:.1f} ppt "
+                    f"(ΔBIC {ft['dbic']:.0f}; kept only at {FLIP_STEP_DBIC:g} or more)")
+    if ascii_only:
+        text = text.replace("±", "+/-").replace("Δ", "d").replace("−", "-")
+    return text
+
+
 def flip_lines(result: dict) -> list:
-    """2.2.13: the flip step in plain lines (fit text, ExoFOP notes): [] without a flip."""
+    """2.2.13: the flip step in plain lines (fit text, ExoFOP notes): [] without a flip. 2.3.0 (#8): a step the BIC
+    gate left out gives its one line (time, size, ΔBIC)."""
     flip = (result or {}).get("flip")
+    ft = (result or {}).get("flip_test")
+    if not flip and ft:
+        return [f"at BJD_TDB {ft['t_flip']:.5f}; " + flip_step_line(result, ascii_only=True)
+                + "; fitted without a step"]
     if not flip:
         return []
     st, se = flip["step"]
     out = [f"at BJD_TDB {flip['t_flip']:.5f} ({flip.get('source') or 'from the data'}); baseline step fitted jointly "
            f"with the transit: {st * 100:+.2f} +/- {se * 100:.2f}%"]
+    if ft:
+        out.append(flip_step_line(result, ascii_only=True))   # 2.3.0 (#8)
     c = flip.get("corr")
     if c is not None and math.isfinite(c):
         out.append(f"step-depth correlation {c:+.2f} (MCMC)"
@@ -2665,10 +2676,17 @@ def flip_report_note(result: dict) -> str:
     BJD_TDB 2461326.63467") that report_flip_time() reads back, so a report SHOBS-P wrote can be refitted with
     the step."""
     flip = (result or {}).get("flip")
+    ft = (result or {}).get("flip_test")
+    if not flip and ft:
+        # 2.3.0 (#8): the flip time is written either way, so a later fit (or another program) uses the same time.
+        return (f"SHOBS-P: meridian flip at BJD_TDB {ft['t_flip']:.5f}; " + flip_step_line(result, ascii_only=True)
+                + ", no step in this fit")
     if not flip:
         return ""
     st, se = flip["step"]
     text = f"SHOBS-P: meridian flip at BJD_TDB {flip['t_flip']:.5f}; baseline step {st * 100:+.2f}+/-{se * 100:.2f}%"
+    if ft:
+        text += f" (kept, dBIC {ft['dbic']:.0f})"   # 2.3.0 (#8)
     if flip.get("corr") is not None and math.isfinite(flip["corr"]):
         text += f", step-depth corr {flip['corr']:+.2f}"
     if flip.get("nostep"):
@@ -2695,153 +2713,3 @@ def flip_from_gap(t, min_gap_min: float = FLIP_GAP_MIN_MIN) -> float | None:
         return None
     return float(t[k] + dt[k] / 2)
 
-
-# ---- Tonight's transits (finder) ----------------------------------------------------------------------
-
-CATALOG_FILE = __import__("os").path.join(__import__("os").path.expanduser("~"), ".shobs_p_transit_catalog.csv")
-CATALOG_COLUMNS = "pl_name,hostname,pl_orbper,pl_tranmid,pl_trandur,pl_trandep,pl_ratror,ra,dec,sy_vmag,sy_tmag"
-
-
-def load_transit_catalog(refresh: bool = False, max_age_days: float = 7.0) -> tuple[list[dict], str]:
-    """Every known transiting planet with an ephemeris, from the NASA Exoplanet Archive (Planetary Systems
-    Composite table). Kept in a local file and refreshed weekly. Returns (planets, note)."""
-    import csv
-    import io
-    import os
-    import time as _time
-
-    text, note = None, ""
-    fresh = os.path.exists(CATALOG_FILE) and (_time.time() - os.path.getmtime(CATALOG_FILE)) < max_age_days * 86400
-    if refresh or not fresh:
-        try:
-            text = "\n".join(
-                [",".join(CATALOG_COLUMNS.split(","))]
-                + [",".join(_csv_cell(r.get(c, "")) for c in CATALOG_COLUMNS.split(","))
-                   for r in _nea_query(f"select {CATALOG_COLUMNS} from pscomppars where pl_tranmid is not null "
-                                       "and pl_orbper is not null")])
-            with open(CATALOG_FILE, "w", encoding="utf-8") as fh:
-                fh.write(text)
-            note = "downloaded today from the NASA Exoplanet Archive"
-        except Exception as exc:
-            if not os.path.exists(CATALOG_FILE):
-                raise ValueError(f"could not download the planet list ({exc}) and there is no saved copy")
-            note = f"the Archive could not be reached ({exc}); using the saved copy"
-            text = None
-    if text is None:
-        with open(CATALOG_FILE, encoding="utf-8") as fh:
-            text = fh.read()
-        if not note:
-            age = (_time.time() - os.path.getmtime(CATALOG_FILE)) / 86400
-            note = f"saved copy from {age:.0f} day(s) ago"
-    planets = []
-    for row in csv.DictReader(io.StringIO(text)):
-        p = {"name": row.get("pl_name", ""), "host": row.get("hostname", ""), "period": _f(row.get("pl_orbper")),
-             "t0": _f(row.get("pl_tranmid")), "t14": (_f(row.get("pl_trandur")) or 0) / 24.0 or None,
-             "depth": (_f(row.get("pl_trandep")) or 0) / 100.0 or None, "k": _f(row.get("pl_ratror")),
-             "ra": _f(row.get("ra")), "dec": _f(row.get("dec")), "vmag": _f(row.get("sy_vmag")),
-             "tmag": _f(row.get("sy_tmag"))}
-        if p["k"]:
-            p["depth"] = p["k"] ** 2      # 2.2.13: (Rp/R*)², as everywhere else (see published_depth)
-        if p["period"] and p["t0"] and p["ra"] is not None and p["dec"] is not None:
-            planets.append(p)
-    return planets, note
-
-
-def _csv_cell(value) -> str:
-    text = str(value if value is not None else "")
-    return '"' + text.replace('"', '""') + '"' if ("," in text or '"' in text) else text
-
-
-def night_window(date_local, lat: float, lon: float, sun_alt: float = PLAN_SUN_ALT):
-    """Dark interval (JD UTC) for the night that starts on the local calendar date: from local noon to the next
-    local noon, the stretch with the Sun below sun_alt. Returns (start, end) or None (no dark time)."""
-    import site_time
-
-    jd0 = site_time.local_to_jd(date_local, 12, 0)   # 2.2.21 (#22): the site's local noon, not the computer's
-    grid = jd0 + np.arange(0, 1.0, 2.0 / 1440)
-    salt = altitude(*sun_radec(grid)[:2], lat, lon, grid)
-    dark = np.where(salt <= sun_alt)[0]
-    if dark.size == 0:
-        return None
-    return float(grid[dark[0]]), float(grid[dark[-1]]), jd0
-
-
-def find_transits(planets: list[dict], date_local, lat: float, lon: float, min_alt: float = PLAN_MIN_ALT,
-                  sun_alt: float = PLAN_SUN_ALT, baseline_min: float = PLAN_BASELINE_MIN, vmin: float = 9.0,
-                  vmax: float = 13.5, min_depth: float = 0.005, min_moon_deg: float = 0.0,
-                  after_jd: float | None = None, before_jd: float | None = None, avoid_meridian: bool = False,
-                  avoid_keyhole: bool = False) -> tuple[list[dict], dict]:
-    """Transits on one night that can be observed whole: the window (ingress minus baseline to egress plus
-    baseline) inside astronomical dark (or the sun_alt chosen), after/before the times asked, with the star
-    above min_alt throughout, V in [vmin, vmax], depth at least min_depth. Returns (events, counts)."""
-    win = night_window(date_local, lat, lon, sun_alt)
-    counts = {"planets": len(planets), "no_duration": 0, "checked": 0}
-    if win is None:
-        return [], counts
-    dark0, dark1, jd_noon = win
-    lo = max(dark0, after_jd) if after_jd else dark0
-    hi = min(dark1, before_jd) if before_jd else dark1
-    base = baseline_min / 1440.0
-    events = []
-    mra, mdec, illum = moon_radec(0.5 * (dark0 + dark1))
-    for p in planets:
-        v = p.get("vmag")
-        if v is None or not (vmin <= v <= vmax):
-            continue
-        if not p.get("depth") or p["depth"] < min_depth:
-            continue
-        t14 = p.get("t14")
-        if not t14:
-            counts["no_duration"] += 1
-            continue
-        counts["checked"] += 1
-        corr = float(bjd_minus_jd_days(jd_noon + 0.5, p["ra"], p["dec"]))
-        n0 = math.ceil((lo - t14 / 2 - base + corr - p["t0"]) / p["period"])
-        n1 = math.floor((hi + t14 / 2 + base + corr - p["t0"]) / p["period"])
-        for n in range(n0, n1 + 1):
-            tc = p["t0"] + n * p["period"] - corr
-            start, end = tc - t14 / 2 - base, tc + t14 / 2 + base
-            if start < lo or end > hi:
-                continue
-            grid = np.linspace(start, end, 25)
-            alt = altitude(p["ra"], p["dec"], lat, lon, grid)
-            if alt.min() < min_alt:
-                continue
-            sep = float(_sep_deg(mra, mdec, p["ra"], p["dec"]))
-            if min_moon_deg and sep < min_moon_deg:
-                continue
-            ha = ((_gmst_deg(grid) + lon - p["ra"] + 180.0) % 360.0) - 180.0
-            flips = bool(np.any(np.diff(np.sign(ha)) > 0))
-            if avoid_meridian and flips:
-                continue
-            # 2.2.18 (item 8): an alt-az mount's zenith keyhole (the culmination between grid times counts too)
-            top = max(float(alt.max()), 90.0 - abs(lat - p["dec"])) if flips else float(alt.max())
-            keyhole = top >= ZENITH_KEYHOLE_ALT
-            if avoid_keyhole and keyhole:
-                continue
-            events.append({"name": p["name"], "host": p.get("host", ""), "vmag": v, "depth": p["depth"],
-                           "t14": t14, "start": start, "t1": tc - t14 / 2, "tc": tc, "t4": tc + t14 / 2, "end": end,
-                           "alt_min": float(alt.min()), "alt_max": float(alt.max()), "moon_sep": sep,
-                           "moon_illum": float(illum), "meridian": flips, "epoch": n,
-                           "keyhole": keyhole, "alt_peak": top})
-    events.sort(key=lambda e: e["start"])
-    counts["dark"] = (dark0, dark1)
-    return events, counts
-
-
-def swarthmore_url(lat: float, lon: float, min_alt: float = PLAN_MIN_ALT, baseline_hrs: float = 1.0, min_depth_ppt: float = 5.0,
-                   vmax: float = 13.5, twilight: int = -18, days: int = 1, start_date: str = "today") -> str:
-    """A link to the Swarthmore Transit Finder (E. Jensen, Tapir) with this site and these limits filled in."""
-    import time as _time
-    import urllib.parse
-
-    std_hours = -_time.timezone / 3600.0
-    zones = {-5: "EST5EDT", -6: "CST6CDT", -7: "MST7MDT", -8: "PST8PDT", -10: "HST", -9: "AKST9AKDT"}
-    tz = zones.get(int(round(std_hours)))
-    params = {"single_object": 0, "observatory_string": "Specified_Lat_Long", "use_utc": 0 if tz else 1,
-              "observatory_latitude": f"{lat:.5f}", "observatory_longitude": f"{lon % 360.0:.5f}",
-              "timezone": tz or "UTC", "start_date": start_date, "days_to_print": days, "days_in_past": 0,
-              "minimum_start_elevation": f"{min_alt:g}", "and_vs_or": "and", "minimum_end_elevation": f"{min_alt:g}",
-              "baseline_hrs": f"{baseline_hrs:g}", "show_unc": 1, "minimum_depth": f"{min_depth_ppt:g}",
-              "maximum_V_mag": f"{vmax:g}", "print_html": 1, "twilight": int(twilight), "max_airmass": 2.4}
-    return "https://astro.swarthmore.edu/transits/print_transits.cgi?" + urllib.parse.urlencode(params)

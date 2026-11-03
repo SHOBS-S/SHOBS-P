@@ -64,7 +64,7 @@ FIT_CSV_NAME = re.compile(r"^(?P<planet>.+?)_(?P<filter>[^_]+)_(?P<date>\d{1,2}-
 def to_bjd_tdb(t, date_type: str, radec=None, lat=None, lon=None):
     """(times in BJD_TDB, note) from a file's time system. Reuses the single-night page's rules (transit_ui
     _report_time_system): HJD_UTC + 69.184 s (TDB − UTC; the helio/bary difference is a few seconds); JD_UTC needs
-    the star's RA/Dec (Astropy's conversion with the file's site when given, else the planner's approximation, good
+    the star's RA/Dec (Astropy's conversion with the file's site when given, else the low-precision approximation, good
     to a few seconds). Raises NightError when the conversion is impossible, so a night is never fitted in the wrong
     time system."""
     t = np.asarray(t, dtype=float)
@@ -264,7 +264,8 @@ def night_from_result(result: dict, meta: dict | None = None, label: str = "curr
              "host": (r.get("planet") or {}).get("host", ""), "filter": meta.get("filter") or "",
              "obsdate": meta.get("obsdate", ""), "software": "SHOBS-P", "t": np.asarray(r["t"], dtype=float),
              "flux": np.asarray(r["flux"], dtype=float), "err": np.asarray(r.get("err_scaled", r["err"]), dtype=float),
-             "airmass": am, "t_flip": flip.get("t_flip"),
+             # 2.3.0 (#8): the flip time also when the night's BIC test left the step out (the joint fit tests it again)
+             "airmass": am, "t_flip": flip.get("t_flip") or (r.get("flip_test") or {}).get("t_flip"),
              "single_tc": tuple(r["summary"]["tc"]) if "tc" in (r.get("summary") or {}) else None, "time_note": "",
              "notes": []}
     return _finish_night(night)
@@ -361,8 +362,9 @@ class JointProblem:
             after = None
             # 2.2.20 (review): the flip step is fitted only when the single-night fit fits one (transit_core
             # FLIP_STEP_ENABLED, off since 2.2.13), so a night's joint Tc is made the same way as its single-night Tc.
-            if (tc.FLIP_STEP_ENABLED and t_flip is not None and (n["t"] < t_flip).any()
-                    and (n["t"] >= t_flip).any()):
+            # 2.3.0 (#8): and only on a night whose own BIC test kept it (joint_fit sets "flip_step" False otherwise).
+            if (tc.FLIP_STEP_ENABLED and t_flip is not None and n.get("flip_step") is not False
+                    and (n["t"] < t_flip).any() and (n["t"] >= t_flip).any()):
                 after = (n["t"] >= t_flip).astype(float)
             d = {"t": t, "t_ref": t_ref, "flux": n["flux"], "err": n["err"].copy(), "am": amc,
                  "t_mid": float(np.mean(t)), "after": after, "group": n.get("group", self.groups[0])}
@@ -567,6 +569,10 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
         singles.append(s)
         if progress is not None:
             progress("prep", i + 1, len(use))
+    # 2.3.0 (#8): each night's flip step is kept in the joint fit only when that night's own BIC test kept it (the
+    # single-night rule, transit_core.flip_step_test); the nights handed in are not changed.
+    use = [dict(n, flip_step=bool((s.get("flip_test") or {}).get("kept"))) if s.get("flip_test") else n
+           for n, s in zip(use, singles)]
     ks = [s["p"]["k"] for s in singles]
     start = {"a_rs": float(np.median([s["p"]["a_rs"] for s in singles])),
              "b": float(np.median([s["p"]["b"] for s in singles]))}
@@ -661,6 +667,9 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "rchi2_raw": rchis[j], "beta": betas[j], "chi2": chi2s[j], "group": d["group"], "scale_rule": rules[j],
             "airmass": n.get("airmass") is not None and prob._in[j][2] is not None,
             "flip": prob._in[j][4] is not None, "time_note": n.get("time_note", ""), "index": j,
+            # 2.3.0 (#8): the night's flip step (joint MCMC) when kept, and its own with/without-step test
+            "flip_step": summ.get(f"step:{j}") if prob._in[j][4] is not None else None,
+            "flip_test": singles[j].get("flip_test"),
             "series_night": n.get("series_night", "")})   # 2.2.21 (#44)
         _ = itc
     n_data = sum(len(d["t"]) for d in prob.nights)
@@ -1299,7 +1308,7 @@ def night_from_points(obs: list, radec, lat: float, lon: float, scint=None, plan
                       source: str = "") -> dict:
     """2.2.21 (#44): one series night from its points, as the Transit fit page makes it (TransitPage._data): times
     to BJD_TDB, magnitudes to relative flux with their errors (scintillation as set), airmass, and the flip segment
-    as t_flip (used only where FLIP_STEP_ENABLED lets the fit use it). The errors are the measured ones (not scaled
+    as t_flip (fitted where FLIP_STEP_ENABLED and the night's own BIC test keep it, 2.3.0 #8). The errors are the measured ones (not scaled
     by a single-night fit), so the joint fit scales them with the single-night rule."""
     if len(obs) < MIN_POINTS:
         raise NightError(f"only {len(obs)} usable points in the series (needs {MIN_POINTS})")
@@ -2533,6 +2542,12 @@ def summary_lines(fit: dict, a: dict) -> list:
             bits.append(n["time_note"])
         if not n.get("airmass") and "airmass" in fit["detrend"] and not mixed:
             bits.append("no airmass in the file")
+        ft = n.get("flip_test")
+        if ft and n.get("flip_step"):
+            st, se = n["flip_step"]
+            bits.append(f"flip step fitted: {st * 1000:+.1f} ± {se * 1000:.1f} ppt (ΔBIC {ft['dbic']:.0f}), kept")
+        elif ft:
+            bits.append(f"flip step not needed (ΔBIC {ft['dbic']:.0f}; kept only at {tc.FLIP_STEP_DBIC:g} or more)")
         if n.get("single_tc"):
             d = (n["tc"][0] - n["single_tc"][0]) * 86400
             bits.append(f"joint Tc {d:+.0f} s from the single-night fit")

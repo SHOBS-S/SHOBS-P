@@ -8485,12 +8485,11 @@ CREDITS = [
          "Goodman, J. & Weare, J. 2010, Comm. App. Math. Comp. Sci. 5, 65; Foreman-Mackey, D. et al. 2013, PASP 125, 306.", ""),
         ("Red noise (time-averaging beta)", "Transit error bars scaled for correlated noise.",
          "Pont, F., Zucker, S. & Queloz, D. 2006, MNRAS 373, 231; Winn, J. N. et al. 2008, ApJ 683, 1076.", ""),
-        ("Sun and Moon positions", "Transit planner: darkness, Moon phase and distance (low-precision formulae).",
+        # 2.3.0 (#52): the Swarthmore Transit Finder link and the Moon went with Tonight's transits and the planner;
+        # the low-precision Sun stays for the approximate BJD of a report with no site.
+        ("Sun position", "Approximate BJD_TDB of a report's times when the report has no site (low-precision "
+         "formulae).",
          "U.S. Naval Observatory & HM Nautical Almanac Office, The Astronomical Almanac (low-precision formulae).", ""),
-        ("Swarthmore Transit Finder (Tapir)", "A button opens it with your site and search limits, to compare with "
-         "SHOBS-P's own Tonight's transits list.",
-         "Jensen, E. 2013, Tapir: A web interface for transit/eclipse observability, Astrophysics Source Code "
-         "Library ascl:1306.007.", "https://astro.swarthmore.edu/transits/"),
         ("EXOTIC and Exoplanet Watch", "SHOBS-P reads EXOTIC's AAVSO exoplanet reports to compare fits, and writes "
          "the same report format (and uses its filter names, e.g. SI for Sloan i'). No EXOTIC code is used.",
          "Zellem, R. T. et al. 2020, PASP 132, 054401. EXOTIC is developed by Exoplanet Watch, a citizen science project "
@@ -9817,7 +9816,7 @@ def resolve_mount(detected: dict | None, choice: str | None) -> tuple[str, str]:
                             f"Mount: {mount_label(choice)} (the headers agree: {d.get('why')}).")
         return d["mount"], (f"Mount: {mount_label(d['mount'])} from the headers ({d.get('why')}); the Mount box "
                             f"says {mount_label(choice)} and is kept for other lights. If this is your own "
-                            f"telescope, set Mount to {mount_label(d['mount'])} so the transit planners use it.")
+                            f"telescope, set Mount to {mount_label(d['mount'])}.")
     if d.get("mount") and d["mount"] != choice:
         return choice, (f"Mount: {mount_label(choice)} as chosen in the Optics box, but {d.get('why')}. If this "
                         f"is an {mount_label(d['mount']).lower()} mount, set Mount to {mount_label(d['mount'])}.")

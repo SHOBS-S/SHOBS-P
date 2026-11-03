@@ -11,7 +11,7 @@ one window.
 | Mode | What it does |
 |---|---|
 | **Variables** | Light curves, Lomb-Scargle period search with day-alias and leave-one-night-out checks, color terms, comparison-star health, multi-night series, AAVSO Extended reports |
-| **Transits** | Exoplanet lookup (NASA Exoplanet Archive), MCMC transit fit with a detected / inconclusive / none verdict, transit planner, AAVSO exoplanet reports |
+| **Transits** | Exoplanet lookup (NASA Exoplanet Archive), MCMC transit fit with a detected / inconclusive / none verdict, AAVSO exoplanet reports |
 | **Discovery** | Scans the whole field for stars that vary |
 
 All three share the same steps: **Input → Blink → Calibrate → Photometry → Output**.
@@ -32,8 +32,7 @@ report** ready to submit.
 
 **Transits mode** is for catching an exoplanet crossing its star. Type the planet's name, in any of its catalog
 spellings (KOI, Kepler, TOI, TIC…), or just the host star. SHOBS-P pulls its period, timing, depth and shape from
-the NASA Exoplanet Archive, choosing the most precise published ephemeris. **Tonight's transits** lists every
-transit visible from your site tonight, complete with its baseline before and after, and SHOBS-P warns you if your
+the NASA Exoplanet Archive, choosing the most precise published ephemeris, and SHOBS-P warns you if your
 frames don't actually cover a predicted transit.
 
 After photometry, the **transit fit** detrends for airmass and runs an MCMC fit, guided by the planet's published

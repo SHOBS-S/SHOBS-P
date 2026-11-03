@@ -239,8 +239,8 @@ MODES = {
                   "hint": "#b7c7d1", "subtitle": "Light curves, periods,\nand AAVSO reports",
                   "banner": "VARIABLES  ·  light curves, periods, color, and AAVSO reports"},
     "transits": {"name": "Transits", "side": "#1d4a2f", "step": "#2a6340", "active": "#357a50", "status": "#133321",
-                 "hint": "#bcd6c4", "subtitle": "Exoplanet transits:\nfit, planner, ExoFOP",
-                 "banner": "TRANSITS  ·  transit fit (MCMC), planner, nearby-binary check, and ExoFOP package"},
+                 "hint": "#bcd6c4", "subtitle": "Exoplanet transits:\nfit, NEB check, ExoFOP",
+                 "banner": "TRANSITS  ·  transit fit (MCMC), nearby-binary check, and ExoFOP package"},
     "discovery": {"name": "Discovery", "side": "#4a1d47", "step": "#63295f", "active": "#7a3576", "status": "#331331",
                   "hint": "#d8bfd6", "subtitle": "Every star in the field,\nlooking for variables",
                   "banner": "DISCOVERY  ·  measure every star in the field and flag the ones that vary"},
@@ -1742,7 +1742,6 @@ class App(Tk):
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
-        style.configure("Placeholder.TEntry", foreground="#8a979e")   # 2.2.19 (nit): "looking up…" in a box
         style.configure("Box.TLabel", background="#ffffff", foreground="#1c2b33", font=(core.MONO_FONT, 9))
         # 2.2.15 (GitHub #3): the Photometry page's step hint.
         style.configure("StepOn.TLabel", background="#c47a2c", foreground="#ffffff", font=(core.UI_FONT, 9, "bold"),
@@ -2595,7 +2594,7 @@ class App(Tk):
         if d.get("sure") and (info["mount"] == core.MOUNT_ALTAZ or info["mount"] != self._mount_choice_key()):
             hint = f"These lights: {core.mount_label(info['mount'])} from the headers ({d.get('why')})."
             if info["mount"] != self._mount_choice_key():
-                hint += f" Set Mount to {core.mount_label(info['mount'])} so the transit planners use it."
+                hint += f" Set Mount to {core.mount_label(info['mount'])} if this is your own telescope."
         elif d.get("mount") and d["mount"] != info["mount"]:
             hint = f"Headers: {d.get('why')}; set Mount if that is right."
         else:
@@ -3490,7 +3489,6 @@ class App(Tk):
         for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
             planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
         ttk.Button(cell, text="Look up again", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
-        ttk.Button(cell, text="Tonight's transits…", command=self._open_finder).pack(side=LEFT, padx=(6, 0))
         self._planet_entries = []
         for i, (label, var, hint, label2, var2, hint2) in enumerate((
                 ("Period (d)", self.pl_period, "", "T0 (BJD_TDB)", self.pl_t0, ""),
@@ -3504,7 +3502,7 @@ class App(Tk):
             ttk.Label(pg, text=label2, style="Card.TLabel").grid(row=r, column=2, sticky=W, padx=(14, 10), pady=3)
             e2 = ttk.Entry(pg, textvariable=var2, width=16)
             e2.grid(row=r, column=3, sticky="ew", pady=3)
-            self._planet_entries += [(e1, var), (e2, var2)]   # 2.2.19 (nit): "looking up…" while looked up
+            self._planet_entries += [(e1, var), (e2, var2)]
         ttk.Label(pg, textvariable=self.planet_source, style="Hint.TLabel", wraplength=560, justify=LEFT).grid(
             row=5, column=0, columnspan=4, sticky=W, pady=(4, 0))
         # 2.2.21 (#32, item 14): TOI status (a link to the target's ExoFOP-TESS page) and ExoClock priority.
@@ -3576,7 +3574,7 @@ class App(Tk):
     # ---- planet (Transits) ---------------------------------------------------------------
     def _auto_planet_lookup(self):
         """2.2.14 (item 2): look the planet up when its name changed since the last lookup (not on every keystroke).
-        Names set by the planet chooser or Tonight's transits were looked up already, so they count as done."""
+        Names set by the planet chooser were looked up already, so they count as done."""
         name = self.planet_name.get().strip()
         if not name or name == getattr(self, "_last_planet_lookup", None):
             return
@@ -3591,7 +3589,6 @@ class App(Tk):
 
     # ---- 2.2.19 (nit): busy indicator for the Input page's Star ID and planet lookups ------------------------------
     LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (a late answer is still used)
-    PLANET_PLACEHOLDER = "looking up…"
 
     @staticmethod
     def _lookup_no_answer(error) -> bool:
@@ -3612,12 +3609,16 @@ class App(Tk):
         """2.2.20 (item 3): a Star ID ("star") or planet lookup shows on the status strip's busy bar ("Looking up
         TOI-2046 at SIMBAD and VSX…", "Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"); after
         LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer (a late answer is still used).
-        Empty planet boxes still show a gray "looking up…"."""
+        2.3.0 (#51): the planet boxes no longer show "looking up…": the busy bar is the only working signal and the
+        boxes are blank until the values come. kind "planets" is the Star ID's planet list (Transits), "Looking up
+        TrES-3's planets at the NASA Exoplanet Archive…"; it ends only once the planet's own lookup (kind "planet")
+        has begun, so the bar runs without a gap from the star name to the filled boxes."""
         import time as _time
         busy = self.__dict__.setdefault("_busy_lookups", {})
         old = busy.get(kind)
         token = object()
         words = (f"Looking up {name} at {service}…" if kind == "star"
+                 else f"Looking up {name}'s planets at the {service}…" if kind == "planets"   # 2.3.0 (#51)
                  else f"Looking up planet {name} at the {service}…")
         busy[kind] = {"name": name, "service": service, "t0": _time.monotonic(), "token": token,
                       "bar": self.busy_begin(words)}
@@ -3625,8 +3626,8 @@ class App(Tk):
             self.busy_end(old.get("bar"))   # a newer lookup of the same kind replaces it
         if kind == "star":
             self._lookup_busy_show("star", "")   # an old ✖ line goes
-        else:
-            self._planet_placeholders(True)
+        # 2.3.0 (#51): planet boxes get no "looking up…" placeholder any more; an empty box stays blank until the
+        # answer fills it, and a value already there (typed, or from the planet-transit check) stays until then.
         try:
             self.after(int(self.LOOKUP_GIVE_UP_S * 1000), lambda: self._lookup_busy_tick(kind, token))
         except Exception:
@@ -3634,7 +3635,7 @@ class App(Tk):
 
     def _lookup_busy_show(self, kind: str, text: str, bad: bool = False):
         """The ✖ line where the lookup failed (planet: its source line; star: the line under RA/Dec)."""
-        if kind == "planet":
+        if kind in ("planet", "planets"):
             self.planet_source.set(text)
             return
         if not hasattr(self, "star_busy"):
@@ -3659,7 +3660,8 @@ class App(Tk):
         svc = str(info['service'])
         svc = svc if svc.startswith("SIMBAD") else "the " + svc   # 2.2.20: "SIMBAD and VSX", "the NASA Exoplanet Archive"
         text = (f"✖ {info['name']}: {svc} did not answer within {secs} s — "
-                + ("type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
+                + ("type the planet's name, or Look up again on the Star ID." if kind == "planets" else
+                   "type the values or Look up again." if kind == "planet" else "type RA/Dec, or Look up again."))
         self._lookup_busy_stop(kind)
         self._lookup_busy_show(kind, text, bad=True)
         self.status.set(text)
@@ -3675,24 +3677,8 @@ class App(Tk):
         busy.pop(kind, None)
         if info is not None:
             self.busy_end(info.get("bar"), soon=soon)
-        if kind == "planet":
-            self._planet_placeholders(False)
-        elif info is not None:
+        if kind == "star" and info is not None:
             self._lookup_busy_show("star", "")
-
-    def _planet_placeholders(self, on: bool):
-        """Gray "looking up…" in the empty planet boxes while the planet is looked up (never left behind)."""
-        for entry, var in getattr(self, "_planet_entries", []):
-            try:
-                if on and not str(var.get()).strip():
-                    var.set(self.PLANET_PLACEHOLDER)
-                    entry.configure(style="Placeholder.TEntry")
-                elif not on and str(var.get()) == self.PLANET_PLACEHOLDER:
-                    var.set("")
-                if not on:
-                    entry.configure(style="TEntry")
-            except Exception:
-                pass
 
     def lookup_planet(self, quiet: bool = False):
         name = self.planet_name.get().strip()
@@ -3886,31 +3872,43 @@ class App(Tk):
             except (TypeError, ValueError, KeyError):
                 pass
 
-        # 2.2.20 (item 3): the next step of the Star ID lookup, on the busy bar
-        tok = self.busy_begin(f"Looking up {star}'s planets at the NASA Exoplanet Archive…")
+        # 2.2.20 (item 3): the next step of the Star ID lookup, on the busy bar. 2.3.0 (#51): a lookup of its own
+        # (kind "planets"), so it has the other lookups' give-up line, and the bar runs on until the planet's own
+        # lookup has taken over (_planets_for_star_done).
+        self.planet_source.set("")
+        self._lookup_busy_start("planets", star, "NASA Exoplanet Archive")
 
         def work():
             try:
                 res = tcore.star_planets(star)
             except Exception:
                 res = None
-            self.call_ui(self._planets_for_star_done, star, res, tok)
+            self.call_ui(self._planets_for_star_done, star, res)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _planets_for_star_done(self, star: str, res, tok=None):
-        self.busy_end(tok, soon=True)   # 2.2.20 (item 3): the planet's own lookup takes over the bar
+    def _planets_for_star_done(self, star: str, res):
+        info = self.__dict__.get("_busy_lookups", {}).get("planets")
+        if info is None or info.get("name") != star:
+            return   # 2.3.0 (#51): given up already (its ✖ line says so), or another star is being looked up now
         if star != self.star_id.get().strip():
+            self._lookup_busy_stop("planets", name=star)
             return
         if not res:
-            self.planet_source.set(f"No known planets for {star} in the NASA Exoplanet Archive (type the planet's name "
-                                   "if it has another).")
+            self._lookup_busy_stop("planets", name=star)
+            # 2.3.0 (#51): a clear failure line (star_planets cannot tell "none listed" from "no answer")
+            self.planet_source.set(f"✖ No planets found for {star} at the NASA Exoplanet Archive (none listed under "
+                                   "that name, or the Archive did not answer). Type the planet's name, or press Look "
+                                   "up again on the Star ID.")
+            self.status.set(self.planet_source.get())
             return
         tr = [n for n in res["planets"] if n in res["transiting"]]
         if len(tr) == 1 or (len(res["planets"]) == 1):
             self.planet_name.set(tr[0] if tr else res["planets"][0])
-            self.lookup_planet()
+            self.lookup_planet()   # its bar starts before this one ends, so the bar never goes off in between
+            self._lookup_busy_stop("planets", name=star)
         else:
+            self._lookup_busy_stop("planets", name=star)
             self.planet_source.set(f"{res['system']}: choose a planet.")
             self._choose_planet(res["system"], res["planets"], res["transiting"])
 
@@ -3956,10 +3954,6 @@ class App(Tk):
         put(self.pl_a_rs, p.get("a_rs"), "{:.3f}")
         put(self.pl_b, p.get("b"), "{:.3f}")
         put(self.pl_teff, p.get("teff"), "{:.0f}")
-
-    def _open_finder(self):
-        import transit_ui
-        transit_ui.FinderWindow(self)
 
     def planet_from_fields(self) -> dict | None:
         """The planet as typed on the Input page; uncertainties come from the last lookup when a value is unchanged."""
@@ -4122,7 +4116,7 @@ class App(Tk):
 
     def _switch_star(self, why: str, keep_planet: bool = False) -> bool:
         """2.2.19 (#20; TrES-3 b then WASP-10 b, beta tester): another star chosen on the Input page (a planet of
-        another host, the transit planner): a new reduction, so the old star's series, Use comps choice and comp slots
+        another host): a new reduction, so the old star's series, Use comps choice and comp slots
         never reach the new field (they marked the new night "nocomp"). keep_planet: the planet just chosen stays.
         If the series save question is canceled, only the old field's stars are cleared (and a run then refuses the
         old Use comps choice, see _photometry_done). True when a new reduction was made; None when the open series'

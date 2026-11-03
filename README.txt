@@ -1294,14 +1294,9 @@ Red noise (time-averaging beta)
   Used for: Transit error bars scaled for correlated noise.
   Pont, F., Zucker, S. & Queloz, D. 2006, MNRAS 373, 231; Winn, J. N. et al. 2008, ApJ 683, 1076.
 
-Sun and Moon positions
-  Used for: Transit planner: darkness, Moon phase and distance (low-precision formulae).
+Sun position
+  Used for: Approximate BJD_TDB of a report's times when the report has no site (low-precision formulae).
   U.S. Naval Observatory & HM Nautical Almanac Office, The Astronomical Almanac (low-precision formulae).
-
-Swarthmore Transit Finder (Tapir)
-  Used for: A button opens it with your site and search limits, to compare with SHOBS-P's own Tonight's transits list.
-  Jensen, E. 2013, Tapir: A web interface for transit/eclipse observability, Astrophysics Source Code Library ascl:1306.007.
-  https://astro.swarthmore.edu/transits/
 
 EXOTIC and Exoplanet Watch
   Used for: SHOBS-P reads EXOTIC's AAVSO exoplanet reports to compare fits, and writes the same report format (and uses its filter names, e.g. SI for Sloan i'). No EXOTIC code is used.

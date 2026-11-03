@@ -1,4 +1,4 @@
-"""Transits mode (2.1): the Transit fit page, the planner, the nearby-eclipsing-binary check, and the
+"""Transits mode (2.1): the Transit fit page, the nearby-eclipsing-binary check, and the
 ExoFOP package. Built by the App in clearv_app.py; everything here reaches the App through `app`."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import shutil
 import sys
 import threading
 import traceback
-from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, W, X, Y, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
+from tkinter import BOTH, END, LEFT, RIGHT, W, X, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
     filedialog, messagebox, ttk
 
 import numpy as np
@@ -165,9 +165,9 @@ class TransitPage:
 
         row4 = ttk.Frame(card, style="Card.TFrame")
         row4.pack(fill=X, pady=(2, 2))
-        ttk.Button(row4, text="Tonight's transits…", command=lambda: FinderWindow(app)).pack(side=LEFT)
-        ttk.Button(row4, text="Transit planner…", command=lambda: PlannerWindow(app)).pack(side=LEFT, padx=(6, 0))
-        ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT, padx=6)
+        # 2.3.0 (#52): Tonight's transits and the Transit planner are gone; the NEB check leads the row.
+        ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT,
+                                                                                                    padx=(0, 6))
         # 2.2.19 (#18): several nights of the planet fitted together; timing per epoch and an updated ephemeris.
         ttk.Button(row4, text="Multi-night…", command=self.open_multinight).pack(side=LEFT)
         # 2.2.17 (item 4): Variable View's comp windows here too; a Use comps change refits the transit.
@@ -175,11 +175,11 @@ class TransitPage:
         self.comp_health_button.pack(side=LEFT, padx=(12, 0))
         self.use_comps_button = ttk.Button(row4, text="Use comps…", command=self.open_use_comps)
         self.use_comps_button.pack(side=LEFT, padx=(6, 0))
-        # 2.2.19 (#31): the MCMC posterior: corner plot window, and credible bands on the plot (on by default).
-        ttk.Button(row4, text="Corner plot…", command=self.open_corner).pack(side=LEFT, padx=(12, 0))
+        # 2.2.19 (#31): credible bands on the plot (on by default). 2.3.0 (John): the corner plot button is now
+        # "Save corner plot…" in the Results row, before Save field image….
         self.show_bands = BooleanVar(value=True)
         ttk.Checkbutton(row4, text="credible bands", variable=self.show_bands,
-                        command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(6, 0))
+                        command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(12, 0))
         self.comp_hint = StringVar(value="")
         self.comp_hint_label = ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel",
                                          justify=LEFT)   # 2.2.19 (r2: nit): wraps at the row's width (_flow_row4)
@@ -255,6 +255,9 @@ class TransitPage:
         _rbutton(text="Save light-curve CSV…", command=self.save_csv)
         # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
         _rbutton(text="Save plot PNG…", command=self.save_png)
+        # 2.3.0 (John): the corner plot window (it has its own Save PNG…), moved here from the tools row and named
+        # like the other Save… buttons.
+        _rbutton(text="Save corner plot…", command=self.open_corner)
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
         _rbutton(text="Save field image…", command=app.save_field_image)
         # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights)
@@ -1282,6 +1285,9 @@ class TransitPage:
                 loo = tc.leave_one_comp_out(job["t"], job["flux"], job["err"], job["am"], job["comp_mags"],
                                             job["names"], job["planet"], summary, detrend_airmass=job["da"],
                                             detrend_time=job["dt"], after_flip=job["after"],
+                                            # 2.3.0 (#8): the main fit's flip-step decision, for every refit
+                                            flip_step=bool(r.get("flip")) if r.get("flip_test") or r.get("flip")
+                                            else None,
                                             flagged_mask=job["flagged_mask"],
                                             progress=lambda j, n: app.call_ui(self._comp_progress, token, j, n),
                                             cancel=cancel, log=lambda msg: app.call_ui(app.log, msg))
@@ -1404,6 +1410,10 @@ class TransitPage:
                            f"MCMC acceptance {result['chain']['acceptance']:.2f}")
         self.app.log(f"Transit fit: Tc {s['tc'][0]:.6f} ± {s['tc'][1]:.6f} BJD_TDB, Rp/R* {s['k'][0]:.4f} ± "
                      f"{s['k'][1]:.4f}, depth {s['depth'][0] * 100:.2f}%, b {s['b'][0]:.2f}, beta {result['beta']:.2f}")
+        fline = tc.flip_step_line(result)   # 2.3.0 (#8): the flip step's BIC verdict, on the result line too
+        if fline:
+            self.prog_text.set(self.prog_text.get() + "; " + fline)
+            self.app.log("Transit fit: " + fline)
         self.app.status.set("✔ Transit fit done.")
         self._fill_table()
         self._count_text()
@@ -1728,12 +1738,20 @@ class TransitPage:
                                             if math.isfinite(o["nsigma"]) else f"{o['oc_min']:+.2f}") if o else "", "",
                             f"0 ± {o['pred_err_min']:.2f} (ephemeris)" if o else "0", ""))
             flip = r.get("flip")
+            ft = r.get("flip_test")
+            if ft and not flip:
+                # 2.3.0 (#8): the step was tested and left out (ΔBIC below the bar): one line says so.
+                rows.append(("Flip step", f"not needed (ΔBIC {ft['dbic']:.0f}; test step {ft['step'][0] * 1000:+.1f} "
+                                          f"± {ft['step'][1] * 1000:.1f} ppt)", "", "", ""))
             if flip:
                 # 2.2.13: the flip step, the depth without it, and how much the two trade off.
                 ns = flip.get("nostep") or {}
                 c = flip.get("corr")
-                step_txt = (f"{s['step'][0] * 100:+.2f} ± {s['step'][1] * 100:.2f}" if "step" in s else "")
-                rows += [("Flip step (%)", step_txt, num(ff.get("step"), "{:+.2f}", 100), "", ""),
+                # 2.3.0 (#8): in ppt (mmag-sized steps), with the BIC test that kept it
+                step_txt = (f"{s['step'][0] * 1000:+.1f} ± {s['step'][1] * 1000:.1f}" if "step" in s else "")
+                if ft:
+                    step_txt += f" (ΔBIC {ft['dbic']:.0f}, kept)"
+                rows += [("Flip step (ppt)", step_txt, num(ff.get("step"), "{:+.1f}", 1000), "", ""),
                          ("Depth without step (%)", (f"{ns['depth'] * 100:.2f} ± {ns['depth_err'] * 100:.2f} (LSQ)"
                                                      if ns else ""), "", "", ""),
                          ("Step–depth correlation", f"{c:+.2f}" if c is not None and math.isfinite(c) else "", "", "",
@@ -1745,7 +1763,7 @@ class TransitPage:
                      ("Points", str(r["n_points"]), "", "", str(len(self.report["t"])) if self.report else "")]
         warn_names = set()
         if r and r.get("flip") and not r["flip"].get("depth_ok", True):
-            warn_names.update({"Depth (%)", "Rp/R*", "Flip step (%)", "Step–depth correlation"})
+            warn_names.update({"Depth (%)", "Rp/R*", "Flip step (ppt)", "Step–depth correlation"})
         for _lvl, text in (r or {}).get("flags", []):
             for key, label in (("a/R* =", "a/R*"), ("b =", "Impact parameter b"), ("Grazing", "Rp/R*"),
                                ("shape left free", "Rp/R*")):
@@ -1909,8 +1927,15 @@ class TransitPage:
             xf = (flip["t_flip"] - best["tc"]) * 24
             for a_ in (ax, axr):
                 a_.axvline(xf, color="#7b1fa2", ls="-.", lw=1.0)
-            ax.text(xf, 0.99, f" flip: step {flip['step'][0] * 100:+.1f} ± {flip['step'][1] * 100:.1f}%",
+            ax.text(xf, 0.99, f" flip: step {flip['step'][0] * 1000:+.1f} ± {flip['step'][1] * 1000:.1f} ppt",
                     transform=ax.get_xaxis_transform(), ha="left", va="top", fontsize=8, color="#7b1fa2")
+        elif r.get("flip_test"):
+            # 2.3.0 (#8): the flip time, and that the BIC test left the step out
+            xf = (r["flip_test"]["t_flip"] - best["tc"]) * 24
+            for a_ in (ax, axr):
+                a_.axvline(xf, color="#7b1fa2", ls=":", lw=0.9)
+            ax.text(xf, 0.99, " flip: no step needed", transform=ax.get_xaxis_transform(), ha="left", va="top",
+                    fontsize=8, color="#7b1fa2")
         trim_x = self._draw_trim(r, best, x)   # 2.2.17 (item 5)
         ax.set_ylabel("Relative flux")
         ax.grid(alpha=0.3)
@@ -3154,148 +3179,6 @@ def _bin(x, y, width):
     return out
 
 
-def _altaz(app) -> bool:
-    """2.2.18 (item 8): is the user's mount alt-az (the Optics box's Mount choice)? Planning is for the user's own
-    telescope, so the choice counts here, not the headers of whatever lights are loaded."""
-    try:
-        return app._mount_choice_key() == core.MOUNT_ALTAZ
-    except Exception:
-        return False
-
-
-def _plan_limits(app) -> dict:
-    """2.2.18 (item 17): the limits both planners start from: the ones remembered from Tonight's transits, else the
-    shared defaults (tc.PLAN_MIN_ALT, PLAN_SUN_ALT, PLAN_BASELINE_MIN)."""
-    out = {"min_alt": tc.PLAN_MIN_ALT, "sun_alt": tc.PLAN_SUN_ALT, "baseline": tc.PLAN_BASELINE_MIN}
-    saved = (getattr(app, "settings", None) or {}).get("finder") or {}
-    for key in out:
-        try:
-            value = float(saved[key])
-            if math.isfinite(value):
-                out[key] = value
-        except (KeyError, TypeError, ValueError):
-            continue
-    return out
-
-
-class PlannerWindow:
-    """Upcoming transits seen from the site: times, altitudes, darkness, Moon."""
-
-    def __init__(self, app):
-        self.app = app
-        planet = app.planet_from_fields()
-        if not planet or not planet.get("period") or not planet.get("t0"):
-            messagebox.showinfo("SHOBS-P", "The planner needs the planet's period and T0: enter the planet on the "
-                                           "Input page and press Enter.")
-            return
-        if not (app.lat.get().strip() and app.lon.get().strip()):
-            messagebox.showinfo("SHOBS-P", "Enter your site's latitude and longitude on the Input page first.")
-            return
-        try:
-            self.ra, self.dec = app.target_radec_deg(planet)
-            self.lat, self.lon = float(app.lat.get()), float(app.lon.get())
-        except Exception as exc:
-            messagebox.showinfo("SHOBS-P", f"The planner needs the target's RA/Dec and the site: {exc}")
-            return
-        self.planet = planet
-        win = Toplevel(app)
-        self.win = win
-        win.title(f"SHOBS-P — transit planner: {planet.get('name', '')}")
-        win.after_idle(lambda: fit_to_content(win))
-        top = ttk.Frame(win, style="Card.TFrame", padding=10)
-        top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text=f"Transit planner: {planet.get('name', '')}", font=(core.UI_FONT, 15, "bold"),
-                  style="Card.TLabel").pack(anchor=W)
-        ttk.Label(top, text=(f"Site {self.lat:.3f}, {self.lon:.3f}. Times are the site's local time (time zone "
-                             f"{site_time.zone_name() or 'of this computer'}). "
-                             "'full' = transit plus the baseline on both sides above the altitude limit in a dark sky; "
-                             "'transit only' = no full baseline; 'partial' = part of the transit. ± is the ephemeris "
-                             "uncertainty at that date. Planner times are good to about a minute."),
-                  style="Hint.TLabel", wraplength=1350, justify=LEFT).pack(anchor=W, pady=(2, 6))
-        opts = ttk.Frame(top, style="Card.TFrame")
-        opts.pack(fill=X)
-        self.days = DoubleVar(value=30)
-        lim = _plan_limits(app)   # 2.2.18 (item 17): one set of limits with Tonight's transits
-        self.min_alt = DoubleVar(value=lim["min_alt"])
-        self.sun_alt = DoubleVar(value=lim["sun_alt"])
-        self.baseline = DoubleVar(value=lim["baseline"])
-        self.altaz = _altaz(app)   # 2.2.18 (item 8): alt-az: warn about the zenith keyhole
-        self.full_only = BooleanVar(value=False)
-        for label, var, width in (("Days ahead", self.days, 6), ("Min altitude (°)", self.min_alt, 6),
-                                  ("Sun below (°)", self.sun_alt, 6), ("Baseline each side (min)", self.baseline, 6)):
-            ttk.Label(opts, text=label, style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
-            ttk.Entry(opts, textvariable=var, width=width).pack(side=LEFT, padx=(0, 12))
-        ttk.Checkbutton(opts, text="full only", variable=self.full_only).pack(side=LEFT)
-        ttk.Button(opts, text="Update", style="Accent.TButton", command=self.update).pack(side=LEFT, padx=10)
-        ttk.Button(opts, text="Export CSV…", command=self.export).pack(side=LEFT)
-        # 2.2.21 (#22): "Local time (UTC−4)" over the times, with the offset of the nights listed
-        self.zone_text = StringVar(value=site_time.label())
-        ttk.Label(top, textvariable=self.zone_text, style="Card.TLabel").pack(anchor=W, pady=(6, 0))
-        cols = ("date", "t1", "tc", "t4", "alt", "sun", "moon", "sigma", "status") + (("zenith",) if self.altaz else ())
-        self.tree = ttk.Treeview(top, columns=cols, show="headings", height=18)
-        for col, label, width in (("date", "Night of", 150), ("t1", "Ingress", 80), ("tc", "Mid", 80), ("t4", "Egress", 80),
-                                  ("alt", "Altitude in / mid / out", 190), ("sun", "Sun at mid", 100),
-                                  ("moon", "Moon (lit, distance)", 170), ("sigma", "± ephemeris", 110),
-                                  ("status", "Coverage", 140), ("zenith", "Zenith keyhole", 150))[:len(cols)]:
-            _col(self.tree, col, label, width, stretch=(col == "status"))
-        self.tree.tag_configure("full", foreground="#2e7d32")
-        self.tree.tag_configure("transit only", foreground="#1c2b33")
-        self.tree.tag_configure("partial", foreground="#b35c00")
-        scroll = ttk.Scrollbar(top, orient=VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side=LEFT, fill=BOTH, expand=True, pady=(8, 0))
-        scroll.pack(side=LEFT, fill=Y, pady=(8, 0))
-        self.events = []
-        self.update()
-
-    def update(self):
-        try:
-            events = tc.plan_transits(self.planet, self.ra, self.dec, self.lat, self.lon, tc.now_jd() - 0.25,
-                                      float(self.days.get()), float(self.min_alt.get()), float(self.sun_alt.get()),
-                                      float(self.baseline.get()))
-        except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Planner: {exc}", parent=self.win)
-            return
-        if self.full_only.get():
-            events = [e for e in events if e["status"] == "full"]
-        self.events = events
-        self.zone_text.set(site_time.label_span([e["tc_jd"] for e in events]) if events else site_time.label())
-        self.tree.delete(*self.tree.get_children())
-        for e in events:
-            t1, tm, t4 = (tc.jd_to_local(e[k]) for k in ("t1_jd", "tc_jd", "t4_jd"))
-            evening = tc.jd_to_local(e["tc_jd"] - 0.5)
-            self.tree.insert("", END, tags=(e["status"],), values=(
-                evening.strftime("%a %d %b %Y"), t1.strftime("%H:%M"), tm.strftime("%H:%M"), t4.strftime("%H:%M"),
-                f"{e['alt_t1']:.0f}° / {e['alt_tc']:.0f}° / {e['alt_t4']:.0f}°", f"{e['sun_tc']:.0f}°",
-                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°", f"{e['sigma_min']:.1f} min", e["status"])
-                + ((f"KEYHOLE: up to {e['alt_max']:.0f}°" if e.get("keyhole") else "",) if self.altaz else ()))
-        if not events:
-            self.tree.insert("", END, values=("No observable transits in this range.", "", "", "", "", "", "", "", "")
-                             + (("",) if self.altaz else ()))
-
-    def export(self):
-        if not self.events:
-            return
-        path = self.app.output_path(f"{(self.planet.get('name') or 'planet').replace(' ', '')}_transits.csv", title="Save CSV", defaultextension=".csv",
-                                            filetypes=[("CSV", "*.csv")], parent=self.win)
-        if not path:
-            return
-        with open(path, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh)
-            w.writerow([core.created_line()])
-            w.writerow(["epoch", "ingress_local", "mid_local", "egress_local", "tc_bjd_tdb", "alt_in", "alt_mid",
-                        "alt_out", "sun_alt_mid", "moon_illum", "moon_sep_deg", "sigma_min", "coverage"]
-                       + (["alt_max", "zenith_keyhole"] if self.altaz else [])   # 2.2.18 (item 8)
-                       + ["local_utc_offset"])   # 2.2.21 (#22): the site's offset that night (UTC-5)
-            for e in self.events:
-                w.writerow([e["epoch"]] + [tc.jd_to_local(e[k]).strftime("%Y-%m-%d %H:%M") for k in ("t1_jd", "tc_jd", "t4_jd")]
-                           + [f"{e['tc_bjd']:.5f}", f"{e['alt_t1']:.1f}", f"{e['alt_tc']:.1f}", f"{e['alt_t4']:.1f}",
-                              f"{e['sun_tc']:.1f}", f"{e['moon_illum']:.2f}", f"{e['moon_sep']:.0f}",
-                              f"{e['sigma_min']:.1f}", e["status"]]
-                           + ([f"{e['alt_max']:.1f}", int(bool(e.get("keyhole")))] if self.altaz else [])
-                           + [site_time.offset_at(e["tc_jd"], ascii_only=True)])
-
-
 def frame_number(path: str, fallback: int) -> int:
     """2.2.19 (#40): a light's frame number from the digits at the end of its file name (..._0042.fit -> 42), else
     fallback (its place in the night)."""
@@ -3612,239 +3495,3 @@ class NebWindow:
         self.app.status.set(f"Watching {added} neighbor(s). They are measured from the next photometry run; fit the "
                             "transit on that night, then open the NEB check again.")
         self.update()
-
-
-class FinderWindow:
-    """Tonight's transits: every known transiting planet that can be observed whole on one night."""
-
-    # 2.2.18 (item 17): altitude, Sun and baseline from the shared planner defaults (transit_core)
-    DEFAULTS = {"min_alt": tc.PLAN_MIN_ALT, "sun_alt": tc.PLAN_SUN_ALT, "baseline": tc.PLAN_BASELINE_MIN,
-                "vmin": 9.0, "vmax": 13.5, "depth": 0.5, "moon": 0.0, "after": "", "before": "",
-                "avoid_meridian": False, "avoid_keyhole": False}
-
-    def __init__(self, app):
-        import datetime as _dt
-
-        self.app = app
-        try:
-            self.lat, self.lon = float(app.lat.get()), float(app.lon.get())
-        except (TypeError, ValueError):
-            messagebox.showinfo("SHOBS-P", "Enter your site's latitude and longitude on the Input page first.")
-            return
-        saved = dict(self.DEFAULTS)
-        saved.update({k: v for k, v in ((app.settings or {}).get("finder") or {}).items()
-                      if k not in ("after", "before")})   # the time window is for one night only
-        win = Toplevel(app)
-        self.win = win
-        win.title("SHOBS-P — tonight's transits")
-        win.after_idle(lambda: fit_to_content(win))
-        top = ttk.Frame(win, style="Card.TFrame", padding=10)
-        top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Tonight's transits", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
-        ttk.Label(top, text=(f"Site {self.lat:.4f}, {self.lon:.4f}. Every known transiting planet (NASA Exoplanet "
-                             "Archive) whose whole transit, plus the baseline on both sides, is in the dark with the "
-                             "star above the altitude limit. Times are the site's local time. 'After' and 'End by' limit the window "
-                             "(for example, after 2300 or 23:00 to finish another target first). Double-click a row to use "
-                             "that planet."),
-                  style="Hint.TLabel", wraplength=1450, justify=LEFT).pack(anchor=W, pady=(2, 6))
-        row = ttk.Frame(top, style="Card.TFrame")
-        row.pack(fill=X)
-        # 2.2.21 (#22): today at the site, not on this computer
-        self.date = StringVar(value=site_time.to_local(_dt.datetime.now(_dt.timezone.utc)).date().isoformat())
-        self.vars = {}
-
-        def field(label, key, width, value):
-            ttk.Label(row, text=label, style="Card.TLabel").pack(side=LEFT, padx=(0, 3))
-            var = StringVar(value=str(value))
-            ttk.Entry(row, textvariable=var, width=width).pack(side=LEFT, padx=(0, 10))
-            self.vars[key] = var
-
-        ttk.Label(row, text="Night of", style="Card.TLabel").pack(side=LEFT, padx=(0, 3))
-        ttk.Entry(row, textvariable=self.date, width=11).pack(side=LEFT, padx=(0, 10))
-        field("After", "after", 6, saved["after"])
-        field("End by", "before", 6, saved["before"])
-        field("Min alt (°)", "min_alt", 5, f"{saved['min_alt']:g}")
-        field("Sun below (°)", "sun_alt", 5, f"{saved['sun_alt']:g}")
-        field("Baseline (min)", "baseline", 5, f"{saved['baseline']:g}")
-        field("V from", "vmin", 5, f"{saved['vmin']:g}")
-        field("to", "vmax", 5, f"{saved['vmax']:g}")
-        field("Min depth (%)", "depth", 5, f"{saved['depth']:g}")
-        field("Moon ≥ (°)", "moon", 4, f"{saved['moon']:g}")
-        self.avoid_meridian = BooleanVar(value=bool(saved["avoid_meridian"]))
-        self.avoid_keyhole = BooleanVar(value=bool(saved.get("avoid_keyhole")))
-        self.altaz = _altaz(app)   # 2.2.18 (item 8): an alt-az mount never flips; its trouble is the zenith keyhole
-        if self.altaz:
-            ttk.Checkbutton(row, text=f"no zenith keyhole (above {tc.ZENITH_KEYHOLE_ALT:g}°)",
-                            variable=self.avoid_keyhole).pack(side=LEFT, padx=(0, 10))
-        else:
-            ttk.Checkbutton(row, text="no meridian flip", variable=self.avoid_meridian).pack(side=LEFT, padx=(0, 10))
-        row2 = ttk.Frame(top, style="Card.TFrame")
-        row2.pack(fill=X, pady=(6, 0))
-        ttk.Button(row2, text="Search", style="Accent.TButton", command=self.search).pack(side=LEFT)
-        ttk.Button(row2, text="Refresh planet list", command=lambda: self.search(refresh=True)).pack(side=LEFT, padx=6)
-        ttk.Button(row2, text="Same search on Swarthmore…", command=self.open_swarthmore).pack(side=LEFT)
-        ttk.Button(row2, text="Export CSV…", command=self.export).pack(side=LEFT, padx=6)
-        self.summary = StringVar(value="")
-        ttk.Label(row2, textvariable=self.summary, style="Hint.TLabel").pack(side=LEFT, padx=10)
-        cols = ("name", "v", "depth", "dur", "start", "t1", "tc", "t4", "end", "alt", "moon", "flip")
-        self.tree = ttk.Treeview(top, columns=cols, show="headings", height=20)
-        for col, label, width in (("name", "Planet", 170), ("v", "V", 55), ("depth", "Depth (%)", 85),
-                                  ("dur", "T14 (h)", 70), ("start", "Start (with baseline)", 150),
-                                  ("t1", "Ingress", 75), ("tc", "Mid", 70), ("t4", "Egress", 70),
-                                  ("end", "End (with baseline)", 140), ("alt", "Altitude min–max", 130),
-                                  ("moon", "Moon (lit, distance)", 150),
-                                  ("flip", "Zenith" if self.altaz else "Meridian", 90)):
-            _col(self.tree, col, label, width, stretch=(col == "name"))
-        scroll = ttk.Scrollbar(top, orient=VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side=LEFT, fill=BOTH, expand=True, pady=(8, 0))
-        scroll.pack(side=LEFT, fill=Y, pady=(8, 0))
-        self.tree.bind("<Double-1>", self.use_selected)
-        self.events = []
-        self.rows = {}
-        self.search()
-
-    # ---- inputs --------------------------------------------------------------------------------
-    def _night(self):
-        import datetime as _dt
-        return _dt.date.fromisoformat(self.date.get().strip())
-
-    def _clock_jd(self, text, night):
-        """'23:30' on this night (hours before noon belong to the next morning) -> JD UTC, or None."""
-        import datetime as _dt
-        h, m = parse_clock(text)
-        if h is None:
-            return None
-        day = night + _dt.timedelta(days=1) if h < 12 else night
-        return site_time.local_to_jd(day, h, m)   # 2.2.21 (#22): the site's clock
-
-    def _limits(self):
-        v = {k: var.get().strip() for k, var in self.vars.items()}
-        return {"min_alt": float(v["min_alt"]), "sun_alt": float(v["sun_alt"]), "baseline": float(v["baseline"]),
-                "vmin": float(v["vmin"]), "vmax": float(v["vmax"]), "depth": float(v["depth"]),
-                "moon": float(v["moon"] or 0), "after": v["after"], "before": v["before"],
-                "avoid_meridian": bool(self.avoid_meridian.get()), "avoid_keyhole": bool(self.avoid_keyhole.get())}
-
-    # ---- search ---------------------------------------------------------------------------------
-    def search(self, refresh=False):
-        try:
-            night = self._night()
-            lim = self._limits()
-            after = self._clock_jd(lim["after"], night)
-            before = self._clock_jd(lim["before"], night)
-        except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Check the search fields: {exc}", parent=self.win)
-            return
-        self.app.settings["finder"] = lim
-        self.app._save_settings()
-        self.summary.set("Loading the planet list…")
-        app = self.app
-
-        def work():
-            try:
-                planets, note = tc.load_transit_catalog(refresh=refresh)
-                events, counts = tc.find_transits(
-                    planets, night, self.lat, self.lon, min_alt=lim["min_alt"], sun_alt=lim["sun_alt"],
-                    baseline_min=lim["baseline"], vmin=lim["vmin"], vmax=lim["vmax"], min_depth=lim["depth"] / 100.0,
-                    min_moon_deg=lim["moon"], after_jd=after, before_jd=before,
-                    avoid_meridian=lim["avoid_meridian"] and not self.altaz,   # 2.2.18 (item 8)
-                    avoid_keyhole=lim["avoid_keyhole"] and self.altaz)
-                app.call_ui(self._show, events, counts, note, None)
-            except Exception as exc:
-                app.call_ui(self._show, [], {}, "", exc)
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _show(self, events, counts, note, error):
-        if error is not None:
-            self.summary.set("Search failed.")
-            messagebox.showerror("SHOBS-P", f"Tonight's transits: {error}", parent=self.win)
-            return
-        self.events = events
-        self.tree.delete(*self.tree.get_children())
-        self.rows = {}
-        fmt = lambda jd: tc.jd_to_local(jd).strftime("%H:%M")
-        for e in events:
-            item = self.tree.insert("", END, values=(
-                e["name"], f"{e['vmag']:.1f}", f"{e['depth'] * 100:.2f}", f"{e['t14'] * 24:.2f}", fmt(e["start"]),
-                fmt(e["t1"]), fmt(e["tc"]), fmt(e["t4"]), fmt(e["end"]), f"{e['alt_min']:.0f}°–{e['alt_max']:.0f}°",
-                f"{e['moon_illum'] * 100:.0f}%, {e['moon_sep']:.0f}°",
-                ("keyhole" if e.get("keyhole") else "") if self.altaz else ("flip" if e["meridian"] else "")))
-            self.rows[item] = e
-        dark = counts.get("dark")
-        dark_text = (f"dark {tc.jd_to_local(dark[0]).strftime('%H:%M')}–{tc.jd_to_local(dark[1]).strftime('%H:%M')}"
-                     if dark else "no dark time at this Sun limit")
-        # 2.2.21 (#22): the times in the table are the site's, labeled with that night's UTC offset
-        zone = site_time.label(dark[0]) if dark else site_time.label()
-        self.summary.set(f"{zone}. {len(events)} transit(s); {dark_text}; {counts.get('checked', 0)} planets in the magnitude "
-                         f"and depth range; planet list: {note}.")
-        if not events:
-            self.tree.insert("", END, values=("No transits match. Loosen a limit (altitude, Sun, magnitude, depth, "
-                                              "or the time window).",) + ("",) * 11)
-
-    # ---- actions --------------------------------------------------------------------------------
-    def use_selected(self, _event=None):
-        sel = self.tree.selection()
-        e = self.rows.get(sel[0]) if sel else None
-        if not e:
-            return
-        app = self.app
-        if getattr(app, "busy", False):
-            # 2.2.19 (r2: S9): a star change waits for the running job (its stars must not be cleared under it)
-            app.status.set(f"{e['name']}: wait for the current step to finish (or cancel it), then choose it again.")
-            return
-        if app.mode_key != "transits":
-            app.set_mode("transits")
-        app.planet_name.set(e["name"])
-        app._last_planet_lookup = e["name"]   # 2.2.14 (item 2): looked up below; the box's auto lookup skips it
-        if not app.star_id.get().strip() or messagebox.askyesno(
-                "SHOBS-P", f"Use {e['name']} as the planet, and clear the Input page's target ({app.star_id.get()}) "
-                           "and RA/Dec so the lookup fills them?", parent=self.win):
-            # 2.2.16 (item 11): the old target's whole field goes (comps, check, spares, session watch stars).
-            if app.star_id.get().strip() and not core.same_object_name(app.star_id.get(), e["name"]):
-                # 2.2.19 (#20): a new reduction (the old series and its Use comps choice go too); the planet stays.
-                app._switch_star(f"{e['name']} chosen in the transit planner", keep_planet=True)
-            app.star_id.set("")
-            app.ra_hours.set("")
-            app.dec_deg.set("")
-        app.lookup_planet()
-        app.show_step(0)
-        app.status.set(f"{e['name']}: looking it up. Transit {tc.jd_to_local(e['t1']).strftime('%H:%M')}–"
-                       f"{tc.jd_to_local(e['t4']).strftime('%H:%M')}, start by {tc.jd_to_local(e['start']).strftime('%H:%M')} "
-                       f"{site_time.tag(e['t1'])}.")   # 2.2.21 (#22)
-
-    def open_swarthmore(self):
-        import webbrowser
-        try:
-            lim = self._limits()
-            night = self._night()
-        except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Check the search fields: {exc}", parent=self.win)
-            return
-        url = tc.swarthmore_url(self.lat, self.lon, min_alt=lim["min_alt"], baseline_hrs=lim["baseline"] / 60.0,
-                                min_depth_ppt=lim["depth"] * 10.0, vmax=lim["vmax"],
-                                twilight=int(min([-1, -6, -12, -18], key=lambda t: abs(t - lim["sun_alt"]))),
-                                start_date=night.strftime("%m-%d-%Y"))
-        webbrowser.open(url)
-        self.app.log("Opened the Swarthmore Transit Finder with this site and these limits (E. Jensen, Tapir).")
-
-    def export(self):
-        if not self.events:
-            return
-        path = self.app.output_path(f"transits_{self.date.get().strip()}.csv", title="Save CSV", defaultextension=".csv",
-                                            filetypes=[("CSV", "*.csv")], parent=self.win)
-        if not path:
-            return
-        fmt = lambda jd: tc.jd_to_local(jd).strftime("%Y-%m-%d %H:%M")
-        with open(path, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh)
-            w.writerow([core.created_line()])
-            w.writerow(["planet", "V", "depth_pct", "T14_h", "start_local", "ingress_local", "mid_local", "egress_local",
-                        "end_local", "alt_min", "alt_max", "moon_illum", "moon_sep_deg",
-                        "zenith_keyhole" if self.altaz else "meridian_flip", "local_utc_offset"])   # 2.2.21 (#22)
-            for e in self.events:
-                w.writerow([e["name"], f"{e['vmag']:.2f}", f"{e['depth'] * 100:.3f}", f"{e['t14'] * 24:.3f}",
-                            fmt(e["start"]), fmt(e["t1"]), fmt(e["tc"]), fmt(e["t4"]), fmt(e["end"]),
-                            f"{e['alt_min']:.1f}", f"{e['alt_max']:.1f}", f"{e['moon_illum']:.2f}",
-                            f"{e['moon_sep']:.0f}", int(bool(e.get("keyhole"))) if self.altaz else int(e["meridian"]),
-                            site_time.offset_at(e["tc"], ascii_only=True)])
