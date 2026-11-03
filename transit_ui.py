@@ -1011,6 +1011,11 @@ class TransitPage:
             cal += f"; dark EXPTIME {dexp:g} s"
         rep["calibration"] = cal
         rep["gain"] = meta["gain"]
+        stack = setup.get("stack") if isinstance(setup.get("stack"), dict) else None
+        if stack and int(stack.get("n") or 1) > 1:   # 2.3.0 (#54): the points are stacks of N frames
+            import stack_core
+            rep["stack"] = stack_core.stack_words(stack)
+            meta["stack"] = dict(stack)
         meta["repro"] = rep
 
     def settings_lines(self, meta: dict | None = None, result: dict | None = None) -> list:
@@ -1026,6 +1031,8 @@ class TransitPage:
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        if rep.get("stack"):   # 2.3.0 (#54)
+            lines.append(f"Stacking: {rep['stack']} (sigma-clipped mean, whole-pixel shifts, never across a flip)")
         wf = r.get("with_flagged")
         if wf:
             lines.append(f"Flagged frames put back: {wf['n']} {wf['label']} (error bars x{wf['factor']:g})")
@@ -1056,6 +1063,9 @@ class TransitPage:
         if tr:
             parts.append("trimmed " + tr)
         parts.append("detrend " + (", ".join(r.get("detrend") or []) or "none"))
+        if rep.get("stack"):   # 2.3.0 (#54): "points are stacks of N frames (effective exposure X s)"
+            import stack_core
+            parts.append(stack_core.report_note(meta.get("stack")))
         gain = str(rep.get("gain", "") or "")
         if "(header EGAIN)" not in gain:
             gain = gain.split(" (")[0]

@@ -81,7 +81,7 @@ def frame_record(obs, reg=None) -> dict:
 def scan_record(path: str, jd: float, exp: float, reg: dict | None, rotator=None) -> dict:
     """The planner's record for a Discovery scan frame (no per-frame magnitude: every scanned frame is kept)."""
     return {"path": str(path), "jd": float(jd), "exp": float(exp or 0), "segment": "" if rotator is None else
-            f"rot{round(float(rotator) / 5.0) * 5:g}", "keep": reg is not None, "why": "" if reg else "not aligned",
+            f"rot{round(float(rotator) / 45.0) * 45 % 360:g}", "keep": reg is not None, "why": "" if reg else "not aligned",
             "dx": float(reg["dx"]) if reg else 0.0, "dy": float(reg["dy"]) if reg else 0.0,
             "angle": float(reg.get("angle", 0.0)) if reg else 0.0, "flipped": bool(reg.get("flipped")) if reg else False,
             "raw_peak": float("nan"), "raw_peaks": {}}

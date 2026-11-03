@@ -596,6 +596,30 @@ class StackMixin:
             except OSError as exc:
                 self.log(f"Could not auto-save the series: {exc}")
 
+    # ---- Discovery: the scan on the stacks -------------------------------------------------------------------
+    def _stack_scan_done(self, result):
+        """_scan_done: a per-frame scan becomes the source of stacks; a scan on stacks is kept beside it."""
+        run = getattr(self, "_scan_stack_run", None)
+        self._scan_stack_run = None
+        if run is None:
+            self._stack_after_scan(result)
+            return
+        self._stack_run_ctx = None
+        result["stack"] = dict(run["summary"])
+        self._stack_sets["scan"] = {"scan": True, "frame": run["src"]["scan"], "stack": result,
+                                    "meta": run["summary"], "paths": list(run["paths"])}
+        self.points_choice.set("stack")
+        self._stack_ui_update()
+        self.log(f"Field scan on the stacks ({stack_core.stack_words(run['summary'])}). Points: Per frame (beside the "
+                 "View box) shows the per-frame scan again.")
+
+    def _stack_test_paths(self):
+        """The stacks, for Suggest…'s aperture test, while Points: Stacked is chosen; else None (the lights)."""
+        src = self._stack_source_live() if hasattr(self, "_stack_row") else None
+        if src and self.points_choice.get() == "stack" and self._stack_set_live(src["night"]):
+            return list(self._stack_sets[src["night"]].get("paths") or []) or None
+        return None
+
     # ---- reports ---------------------------------------------------------------------------------------------
     def stack_report_note(self, points, lead: bool = True) -> str:
         """The AAVSO report notes part: '; points are stacks of 40 frames (effective exposure 30 s)' when the

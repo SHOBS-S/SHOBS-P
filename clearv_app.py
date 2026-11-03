@@ -47,6 +47,8 @@ import busy_bar   # 2.2.20 (item 3)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 import photometry_core as core
 import transit_core as tcore
+import stack_core   # 2.3.0 (#54)
+from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1159,7 +1161,9 @@ def display_scaling_text(widget) -> str:
         return ""
 
 
-class App(Tk):
+class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py)
+    STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
+
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
@@ -6806,6 +6810,7 @@ class App(Tk):
         self._page_zoom_shown = True
         self.popout_button = ttk.Button(zoom, text="Pop out", command=self.photo_pop_toggle)
         self.popout_button.pack(side=LEFT, padx=(10, 0))
+        self._stack_build_ui(card, options, view_box)   # 2.3.0 (#54): Stack row and the Points switch
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
             _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
@@ -8301,7 +8306,7 @@ class App(Tk):
     def test_apertures(self, fwhm: float, window, frames: int = 30):
         """Measure 4 apertures on up to 30 (or 60) frames and report the check star's and target's scatter for each,
         with uncertainties and how often the lowest stays lowest when the frames are resampled."""
-        lights = self._lights()
+        lights = self._stack_test_paths() or self._lights()   # 2.3.0 (#54): the stacks with Points: Stacked
         if not lights or self.masters is None:
             messagebox.showinfo(APP_TITLE, "Calibrate first; the test measures real frames.", parent=window.win)
             return
@@ -8381,8 +8386,9 @@ class App(Tk):
                     if cancel.is_set():
                         raise RuntimeError("Canceled")
                     try:
-                        raw, header = core.read_fits(path)
-                        data = core.debayer(core.calibrate_frame(core.bin_image(raw, binning), header, masters), pattern, mode)
+                        raw, header, cal = stack_load_frame(path, binning, masters)   # 2.3.0 (#54): or a stack
+                        data = core.debayer(cal, pattern, mode)
+                        del cal
                         src = core.detect_sources(data, max_sources=80)
                         if altaz:   # 2.2.18 (item 8)
                             reg = core.register_rotating(ref_sources, src, data.shape, last["sources"], last["reg"])
@@ -11763,8 +11769,10 @@ class App(Tk):
 
         return test
 
-    def scan_field(self):
-        lights = self._lights(log_skips=True)
+    def scan_field(self, stack_run=None):
+        # 2.3.0 (#54): stack_run (Discovery's Stack step) = the same scan on the stacks
+        self._scan_stack_run = stack_run
+        lights = list(stack_run["paths"]) if stack_run else self._lights(log_skips=True)
         if not lights or self.masters is None or self.preview is None or not self.preview_is_debayered:
             messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). The scan uses the same frames, "
                                            "calibration, alignment, and aperture as photometry.")
@@ -11972,6 +11980,7 @@ class App(Tk):
                 ref_sources = core.detect_sources(ref, max_sources=80)
                 last = {"sources": None, "reg": None}
                 rows, jds = [], []
+                frame_recs = []   # 2.3.0 (#54): each measured frame's time and drift, for the Stack step
                 frame_side = []
                 peaks = []
                 raw_peaks, clips = [], []   # 2.2.19 (#25)
@@ -11980,8 +11989,7 @@ class App(Tk):
                     if cancel.is_set():
                         raise RuntimeError("Canceled")
                     try:
-                        raw, header = core.read_fits(path)
-                        cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
+                        raw, header, cal = stack_load_frame(path, binning, masters)   # 2.3.0 (#54): or a stack
                         img = core.debayer(cal, pattern, mode)
                         if img.shape != ref.shape:
                             raise ValueError("frame size differs from the reference")
@@ -12034,6 +12042,7 @@ class App(Tk):
                         # fails half-way can never leave the lists out of step (2.2.1).
                         rows.append(row)
                         jds.append(frame_jd)
+                        frame_recs.append(stack_core.scan_record(path, frame_jd, exp, reg, side[1]))   # 2.3.0 (#54)
                         frame_side.append(side)
                         peaks.append(peak_row)
                         raw_peaks.append(raw_row)
@@ -12094,6 +12103,7 @@ class App(Tk):
                     "watched": watched, "names": cat_name,
                     "blended": list(blended), "clipped_some": clipped_some,   # 2.2.19 (#25, #26)
                     "ref_path": ref_path,   # 2.2.19 (#14): the frame the positions belong to
+                    "stack_frames": frame_recs,   # 2.3.0 (#54)
                 }
                 too_faint = set()
                 limit = mag_limit
@@ -12260,6 +12270,10 @@ class App(Tk):
         n = len(result["candidates"])
         known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
         self.last_scan = result
+        try:   # 2.3.0 (#54): the scan on the stacks keeps the per-frame scan for the Points switch
+            self._stack_scan_done(result)
+        except Exception as exc:
+            self.log(f"  (stacking step skipped: {type(exc).__name__}: {exc})")
         src = core.check_sources_text(result.get("vsx_sources") or ["VSX"])   # 2.2.21 (#48)
         self.log(f"Field scan done: {len(result['labels'])} stars, {result['frames']} frames, {n} candidate(s)"
                  + (f", {known} already known ({src})" if result.get("vsx") is not None
@@ -12488,10 +12502,12 @@ class App(Tk):
                 self.update_star_panel()
         return True
 
-    def run_photometry(self):
+    def run_photometry(self, stack_run=None):
+        """2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
+        checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
-        lights = self._lights(log_skips=True)
+        lights = list(stack_run["paths"]) if stack_run else self._lights(log_skips=True)
         if not lights:
             messagebox.showerror(APP_TITLE, "No light frames left after the blink reject.")
             return
@@ -12502,9 +12518,10 @@ class App(Tk):
             return
         if not self._markers_in_order():
             return
-        if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
+        if stack_run is None and not self._mode_guard(lights):   # 2.2.14 (item 19): incl. the 2.2.9 transit check
             return
-        self._sequence_note()
+        if stack_run is None:
+            self._sequence_note()
         try:
             binning = max(int(self.binning.get()), 1)
             if self.masters_binning is not None and binning != self.masters_binning:
@@ -12575,7 +12592,7 @@ class App(Tk):
         # ensemble rule is about variable-star reports.
         if len(comps) > 1 and check is None and self.mode_key == "transits":
             self.log("No check star marked: fine for a transit fit (a check star only shows whether trends are shared).")
-        elif len(comps) > 1 and check is None:
+        elif len(comps) > 1 and check is None and stack_run is None:   # 2.3.0 (#54): answered for the frames
             if not messagebox.askyesno(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
                                                   "requires a check star for ensemble reports. Continue without one?"):
                 return
@@ -12732,7 +12749,7 @@ class App(Tk):
             watch.append(core.Star(name=name, x=cx if moved <= radius else wx, y=cy if moved <= radius else wy))
         # 2.2.14 (item 19): the mode check when a night would go into the open series. The series file records its
         # mode; a series from before that has none, and is not checked.
-        if self.observations and self.series_mode and self.series_mode != self.mode_key \
+        if self.observations and self.series_mode and self.series_mode != self.mode_key and stack_run is None \
                 and not self.series_mode_unknown and not getattr(self, "_series_mode_answered", False):
             name = os.path.basename(self.series_path) if self.series_path else "The open series"
             answer = messagebox.askyesnocancel(
@@ -12750,12 +12767,15 @@ class App(Tk):
                 self._rerun_in_mode(self.series_mode)
                 return
         self._series_mode_answered = False
-        if not self._start_job(f"Photometry on {len(lights)} lights…"):
+        if not self._start_job(f"Photometry on {len(lights)} {'stacks' if stack_run else 'lights'}…"):
             self._restore_series_catalog()
             return
         self.photo_bring_back()   # 2.2.16 (item 16): the run's progress and results show on the page
+        # 2.3.0 (#54): a stack run ends in _stack_done; its stacks carry their frames' records
+        done_cb = self._stack_done if stack_run else self._photometry_done
+        stack_meta = stack_run["meta"] if stack_run else None
         # 2.2.19.1: what the on-sky log for SHOBS-FLUX needs from this run (written when the points are made)
-        self._onsky_ctx = {
+        self._onsky_ctx = None if stack_run else {
             "run_id": onsky_log.new_run_id() if onsky_log else "", "target": target, "comps": list(comps),
             "check": check, "spares": list(spares), "radius": radius, "sky_in": sky_in, "sky_out": sky_out,
             "binning": binning, "pattern": pattern, "debayer": mode, "precalibrated": bool(precalibrated),
@@ -12845,6 +12865,9 @@ class App(Tk):
         turns = []   # 2.2.18 (item 8): each aligned frame's rotation against the reference (not flipped)
         if len(ref_sources) < 3:
             self.log("Warning: too few stars found on the reference frame to align frames. Positions will not follow drift.")
+        if stack_run is not None:   # 2.3.0 (#54): the series' comp layout is put back when the stacks are done
+            stack_run["saved"] = {"prev_stars": getattr(self, "_prev_stars", ([], "")),
+                                  "comps_used": list(self.comps_used), "check_used": self.check_used}
         self._prev_stars = (list(self.comps_used), self.check_used)
         self.comps_used = [comp.name for comp in comps]
         self.check_used = check.name if check is not None else ""
@@ -12869,7 +12892,11 @@ class App(Tk):
         # beside a 42-frame list)
         here = os.path.normcase(os.path.abspath(self.light_dir.get().strip() or "."))
         n_rej = sum(1 for p in self.rejected if os.path.normcase(os.path.abspath(os.path.dirname(p))) == here)
-        self.log(f"Photometry on {len(lights)} lights, {n_rej} rejected, aperture {radius:.1f} px, {mode} channel")
+        if stack_run:   # 2.3.0 (#54)
+            self.log(f"Photometry on {len(lights)} stacks ({stack_core.stack_words(stack_run['summary'])}), aperture "
+                     f"{radius:.1f} px, {mode} channel")
+        else:
+            self.log(f"Photometry on {len(lights)} lights, {n_rej} rejected, aperture {radius:.1f} px, {mode} channel")
         rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
             self.log(f"Rejected frames ({len(rej_lights)}): "
@@ -12904,9 +12931,9 @@ class App(Tk):
             if rebase_from is not None and lights:
                 # 2.2.19 (#24): carry the markers to the first kept frame and use it as the reference.
                 try:
-                    raw0, head0 = core.read_fits(lights[0])
-                    new_ref = core.debayer(core.calibrate_frame(core.bin_image(raw0, binning), head0, masters),
-                                           pattern, mode)
+                    raw0, head0, cal0 = stack_load_frame(lights[0], binning, masters)   # 2.3.0 (#54): or a stack
+                    new_ref = core.debayer(cal0, pattern, mode)
+                    del cal0
                     del raw0
                     if new_ref.shape != ref_shape:
                         raise ValueError("it has another size")
@@ -12960,8 +12987,8 @@ class App(Tk):
                     self.call_ui(self._progress, i)
                     continue
                 try:
-                    raw, header = core.read_fits(path)
-                    cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
+                    # 2.3.0 (#54): a stack is read as it is (calibrated, binned; raw comes back empty)
+                    raw, header, cal = stack_load_frame(path, binning, masters)
                     data = core.debayer(cal, pattern, mode)
                     core.seed_field_defocus(data, defocus if donut else False)   # 2.2.19 (#30): the run's decision
                     header = dict(header)
@@ -13101,6 +13128,10 @@ class App(Tk):
                         )
                     else:
                         shift_text = ""
+                    obs._stack_reg = reg   # 2.3.0 (#54): the frame's drift, for the Stack step (not saved)
+                    if stack_meta and path in stack_meta:
+                        # 2.3.0 (#54): a stack's raw peaks and pier side are its frames'
+                        stack_core.apply_member_peaks(obs, stack_meta[path]["members"])
                     night_points.append(obs)
                     self.call_ui(
                         self.log,
@@ -13114,12 +13145,13 @@ class App(Tk):
                     self.call_ui(self.log, f"  skipped {os.path.basename(path)}: {exc}")
                 self.call_ui(self._progress, i)
             if cancelled:
-                self.call_ui(self._photometry_done, [], mode, None, True)
+                self.call_ui(done_cb, [], mode, None, True)
                 return
             # 2.2.19 (#9, #30, #24, #16): what the run found about the target's frames, centring and peaks
             try:
-                for line in self._run_star_notes(night_points, target, comps, check, target_off, lights,
-                                                 radius, donut, linear_limit, ref_label):
+                # 2.3.0 (#54): not again on the stacks (their values are sums, not raw counts; the frames had them)
+                for line in ([] if stack_run else self._run_star_notes(night_points, target, comps, check, target_off,
+                                                                       lights, radius, donut, linear_limit, ref_label)):
                     self.call_ui(self.log, line)
             except Exception as exc:
                 self.call_ui(self.log, f"  (centring and peak notes skipped: {type(exc).__name__}: {exc})")
@@ -13167,7 +13199,7 @@ class App(Tk):
                     self.call_ui(self.log, f"Color calibration: color fit failed: {type(exc).__name__}: {exc} — "
                                            "continuing without the color term.")
                     color_info = None
-            self.call_ui(self._photometry_done, night_points, mode, color_info)
+            self.call_ui(done_cb, night_points, mode, color_info)
 
         def work():
             # 2.2.16 (item 3): whatever goes wrong in the worker, the job ends (buttons back, cursor back).
@@ -13175,7 +13207,7 @@ class App(Tk):
                 work_inner()
             except Exception as exc:
                 traceback.print_exc()
-                self.call_ui(self._photometry_done, [], mode, None, True, f"{type(exc).__name__}: {exc}")
+                self.call_ui(done_cb, [], mode, None, True, f"{type(exc).__name__}: {exc}")
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
@@ -13407,6 +13439,10 @@ class App(Tk):
         self._log_zero_point_check(night)   # 2.2.14 (item 10)
         self._noise_note(night_points)
         self._warn_edges(night, night_points)
+        try:
+            self._stack_after_run(night, night_points)   # 2.3.0 (#54): noise check, Stack row
+        except Exception as exc:
+            self.log(f"  (stacking check skipped: {type(exc).__name__}: {exc})")
         self.draw_output()
         self.show_step(STEP_OUTPUT)
         nights = sorted({obs.night for obs in self.observations})
@@ -15141,6 +15177,9 @@ class App(Tk):
         view.pack(fill=X, pady=(2, 0))
         ttk.Checkbutton(view, text="Airmass-corrected night means (plot only, never in reports)",
                         variable=self.airmass_view, command=self.draw_output).pack(side=LEFT)
+        # 2.3.0 (#54): which point set the results use (the Points switch on the Photometry page); empty until stacked
+        self.out_points_label = ttk.Label(view, text="", style="Hint.TLabel")
+        self.out_points_label.pack(side=RIGHT)
         host = ttk.Frame(card, style="Card.TFrame")
         host.pack(fill=BOTH, expand=True, pady=6)
         if Figure is None:
@@ -17617,7 +17656,8 @@ class App(Tk):
             check,
             self.chart.get(),
             software=f"{APP_TITLE} {APP_VERSION}",
-            notes=self.notes.get() + self._sloan_report_note(points),   # 2.2.17 (item 1): '' unless Sloan
+            notes=self.notes.get() + self._sloan_report_note(points)   # 2.2.17 (item 1): '' unless Sloan
+            + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points))),
             filt=self._filter_code(),
             scint=self._scint_setup(),
         )
