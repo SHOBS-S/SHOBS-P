@@ -991,8 +991,34 @@ class TransitPage:
         rep["bin"] = (f"camera {meta.get('binning', '?')}; " + str(meta.get("processing_bin") or f"processing bin {pbin}"))
         comps = list(app.active_comps or setup.get("comps") or app.comps_used)
         rep["comps"] = ", ".join(comps) if comps else "none recorded"
+        # 2.3.0 (item 10): 'measured:' is what this night really measured (not the series' comp list, which can name
+        # comps of other nights), with comps measured as spares and comps missing from some frames (#50).
+        try:
+            measured = app.measured_comps_text(night)
+        except Exception:
+            measured = ", ".join(setup.get("comps") or app.comps_used)
         if app.active_comps:
-            rep["comps"] += f" (Use comps choice; measured: {', '.join(setup.get('comps') or app.comps_used)})"
+            rep["comps"] += f" (Use comps choice; measured: {measured})"
+        elif measured and measured != rep["comps"]:
+            rep["comps"] += f" (measured: {measured})"
+        # 2.3.0 (#50): frames the photometry run skipped, and why (before only in the log)
+        skips = setup.get("skipped") or []
+        if skips:
+            by_why = {}
+            for s in skips:
+                by_why.setdefault(core.skip_reason_word(s.get("why", "")), []).append(s.get("frame", ""))
+
+            def labs_text(labs):
+                try:
+                    return frame_ranges([int(str(x).lstrip("#")) for x in labs])
+                except ValueError:
+                    return ", ".join(str(x) for x in labs)
+            rep["skipped"] = "; ".join(f"{why}: {labs_text(labs)}" for why, labs in by_why.items())
+        flips = setup.get("flip_like") or []
+        if flips:
+            rep["flip_like"] = "; ".join(f"field turned {fl['turn']:.0f} deg between frames {fl['before']} and "
+                                         f"{fl['after']} on an alt-az night (a meridian flip? check Mount)"
+                                         for fl in flips)
         check = setup.get("check") if "check" in setup else app.check_used
         rep["check"] = check or "none"
         # Frame numbers: the number at the end of each light's file name (as Blink shows it), else the frame's place
@@ -1025,10 +1051,13 @@ class TransitPage:
             return []
         lines = [f"Source: {meta.get('source', '')}", f"Aperture: {rep.get('aperture', 'not recorded')}",
                  f"Binning: {rep.get('bin', '')}", f"Comps: {rep.get('comps', '')}", f"Check: {rep.get('check', '')}",
+                 f"Frames skipped at photometry (reason: frame numbers): {rep.get('skipped', 'none')}",   # 2.3.0 (#50)
                  f"Frames left out (flag: frame numbers): {rep.get('left_out', 'none')}",
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        if rep.get("flip_like"):
+            lines.append(f"Warning: {rep['flip_like']}")   # 2.3.0 (item 10)
         wf = r.get("with_flagged")
         if wf:
             lines.append(f"Flagged frames put back: {wf['n']} {wf['label']} (error bars x{wf['factor']:g})")

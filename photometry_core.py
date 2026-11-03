@@ -1929,6 +1929,50 @@ class Obs:
     # limit, so the aligned position was measured) and "lc" (distance from the measured position to the star's light
     # centroid inside the aperture, px).
     cen: dict = field(default_factory=dict)
+    # 2.3.0 (#50): comps left out of this frame and why ({name: reason}; their comp_insts entry is NaN), and why the
+    # check star was not measured here ("" = it was). Saved with the series when not empty.
+    comp_drop: dict = field(default_factory=dict)
+    check_lost: str = ""
+
+
+class CompsLostError(ValueError):
+    """2.3.0 (#50): every comp was lost in a frame (off the frame edge, clipped, or no flux), so the frame cannot be
+    measured. names: the comps, reasons: {name: reason}."""
+
+    def __init__(self, text: str, reasons: dict):
+        super().__init__(text)
+        self.reasons = dict(reasons)
+        self.names = list(reasons)
+
+
+# 2.3.0 (#50): a comp (or the check star) is measured in a frame only when its whole aperture is on the frame and at
+# least this share of its sky ring is; otherwise it is left out of that frame (a half-clipped aperture read 0.25 mag
+# too faint on TrES-3 b, 5 Jul 2025, and its frames went into the transit fit).
+SKY_RING_MIN_ON_FRAME = 0.5
+
+
+def aperture_clip_reason(shape, x: float, y: float, radius: float, sky_inner: float, sky_outer: float) -> str:
+    """2.3.0 (#50): '' when a star at (x, y) can be measured on a frame of this shape, else why not: 'off the frame
+    edge' (part of the aperture, with 1 px to spare, is off the frame) or 'sky ring mostly off the frame edge' (less
+    than SKY_RING_MIN_ON_FRAME of the sky ring is on it)."""
+    h, w = int(shape[0]), int(shape[1])
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return "off the frame edge"
+    m = float(radius) + 1.0
+    if not (m <= x <= w - 1 - m and m <= y <= h - 1 - m):
+        return "off the frame edge"
+    so = float(sky_outer)
+    if so <= x <= w - 1 - so and so <= y <= h - 1 - so:
+        return ""
+    xs = np.arange(math.floor(x - so), math.ceil(x + so) + 1)
+    ys = np.arange(math.floor(y - so), math.ceil(y + so) + 1)
+    d2 = (xs[None, :] - x) ** 2 + (ys[:, None] - y) ** 2
+    ring = (d2 >= float(sky_inner) ** 2) & (d2 <= so ** 2)
+    inside = ((xs >= 0) & (xs < w))[None, :] & ((ys >= 0) & (ys < h))[:, None]
+    total = int(ring.sum())
+    if total and (ring & inside).sum() < SKY_RING_MIN_ON_FRAME * total:
+        return "sky ring mostly off the frame edge"
+    return ""
 
 
 def light_centroid(img: np.ndarray, x: float, y: float, window: float, sky_in: float | None = None,
@@ -3450,6 +3494,8 @@ def reduce_frame(
     comp_fluxes = []
     comp_mag_var = []
     comp_peak = float("-inf")
+    comp_drop = {}   # 2.3.0 (#50): {name: reason} for the comps left out of this frame
+    nan = float("nan")
     for comp in comps:
         cx, cy, c_shift = recenter(img, comp.x, comp.y, radius)
         ux, uy = cx, cy
@@ -3457,9 +3503,23 @@ def reduce_frame(
             cx, cy = comp.x, comp.y
         cen["c"].append(_cen(comp.x, comp.y, ux, uy, cx, cy, c_shift > jump_limit))
         comp_pos.append([round(float(cx), 2), round(float(cy), 2)])
-        measured = measure_aperture(img, cx, cy, radius, sky_inner, sky_outer)
-        if measured["flux"] <= 0:
-            raise ValueError(f"{comp.name} has no flux above sky in this frame")
+        # 2.3.0 (#50): a comp off the edge (or clipped, or with no flux) is left out of this frame only; the frame is
+        # measured with the other comps (before, the whole frame was thrown away: TrES-3 b lost 64 of 206 frames).
+        why = aperture_clip_reason(img.shape, cx, cy, radius, sky_inner, sky_outer)
+        measured = None
+        if not why:
+            try:
+                measured = measure_aperture(img, cx, cy, radius, sky_inner, sky_outer)
+            except ValueError:
+                why = "aperture or sky ring falls outside the frame"
+        if not why and not (math.isfinite(measured["flux"]) and measured["flux"] > 0):
+            why = "no flux above sky in this frame"
+        if why:
+            comp_drop[comp.name] = why
+            comp_inst.append(nan)
+            comp_mag_var.append(nan)
+            cen["c"][-1] = None   # not measured: no centring record (the jitter note skips it)
+            continue
         comp_inst.append(inst_mag(measured["flux"], exp))
         comp_fluxes.append(measured["flux"])
         # 2.2.17 (item 8): photon noise in electrons
@@ -3468,21 +3528,34 @@ def reduce_frame(
         _, _, cpeak = shape_metrics(img, cx, cy, radius, measured["sky"])
         if math.isfinite(cpeak):
             comp_peak = max(comp_peak, cpeak)
-    c_inst = float(np.mean(comp_inst))
-    c_cat = float(np.mean([comp.catalog_mag for comp in comps]))
+    kept = [k for k, comp in enumerate(comps) if comp.name not in comp_drop]
+    if not kept:
+        raise CompsLostError("every comp was lost in this frame (" + "; ".join(f"{n}: {r}" for n, r in comp_drop.items())
+                             + ")", comp_drop)
+    # The comps present in this frame. 2.3.0 (#50): when one is missing, the run re-derives the frame from the
+    # comps present on the night's scale (recompute_with_comps / night_ensemble), so the light curve has no step.
+    c_inst = float(np.mean([comp_inst[k] for k in kept]))
+    c_cat = float(np.mean([comps[k].catalog_mag for k in kept]))
     # Error of a mean of n independent comp magnitudes.
-    c_var = float(np.sum(comp_mag_var)) / len(comps) ** 2
+    c_var = float(np.sum([comp_mag_var[k] for k in kept])) / len(kept) ** 2
 
     chk = None
     k_pos = None
+    check_lost = ""
     if check is not None:
         kx, ky, k_shift = recenter(img, check.x, check.y, radius)
         ux, uy = kx, ky
         if k_shift > jump_limit:
             kx, ky = check.x, check.y
         cen["k"] = _cen(check.x, check.y, ux, uy, kx, ky, k_shift > jump_limit)
-        chk = measure_aperture(img, kx, ky, radius, sky_inner, sky_outer)
         k_pos = [round(float(kx), 2), round(float(ky), 2)]
+        # 2.3.0 (#50): the check star off the edge: no check value for this frame; the frame is kept.
+        check_lost = aperture_clip_reason(img.shape, kx, ky, radius, sky_inner, sky_outer)
+        if not check_lost:
+            try:
+                chk = measure_aperture(img, kx, ky, radius, sky_inner, sky_outer)
+            except ValueError:
+                check_lost = "aperture or sky ring falls outside the frame"
 
     v_inst = inst_mag(var["flux"], exp)
     mag = c_cat + (v_inst - c_inst)
@@ -3494,6 +3567,7 @@ def reduce_frame(
     kmag = inst_mag(chk["flux"], exp) if chk is not None else None
     if kmag is not None and not math.isfinite(kmag):
         kmag = None
+        check_lost = check_lost or "no flux above sky in this frame"
     check_std = None
     if kmag is not None and check is not None and check.catalog_mag is not None and math.isfinite(check.catalog_mag):
         check_std = c_cat + (kmag - c_inst)
@@ -3547,12 +3621,14 @@ def reduce_frame(
         comp_insts=[float(v) for v in comp_inst],
         target_var=float(t_var),
         comp_vars=[float(v) for v in comp_mag_var],
-        n_comps=len(comps),
+        n_comps=len(kept),
         e_model=0 if electrons is None else 1,   # 2.2.17 (item 8)
         target_inst=float(v_inst),
         comp_cat=c_cat,
         pos={"t": [round(float(use_x), 2), round(float(use_y), 2)], "c": comp_pos, "k": k_pos},
         cen=cen,
+        comp_drop=comp_drop,
+        check_lost=check_lost,
     )
 
 
@@ -6465,45 +6541,228 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
     return math.sqrt(obs.target_var + total / len(selection) ** 2 + floor)
 
 
+# 2.3.0 (#50): a comp measured in fewer frames of a night than this cannot be tied to the other comps (its own offset
+# from them is not known well enough), so it is left out of that whole night; the night's level then comes from the
+# other comps.
+COMP_TIE_MIN_FRAMES = 5
+COMP_NIGHT_SHARE = 0.5   # measured in fewer than this share of a night's frames: left out of that whole night
+
+
+def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str], aliases: dict | None = None,
+                   absent_out: bool = False, min_frames: int = COMP_TIE_MIN_FRAMES) -> dict:
+    """2.3.0 (#50): the comp ensemble frame by frame for ONE night, when a comp is missing from some frames (off the
+    frame edge, clipped, no flux).
+
+    A frame with every chosen comp keeps the plain mean of their instrumental magnitudes. A frame without some of
+    them gets the mean the full set would have had: each comp j is put on the night's scale by its own offset a_j
+    (its median, over the night, above the frame's level P_f), the frame's level P_f is the mean of (inst - a_j) over
+    the comps present, and the ensemble is P_f + mean(a_j). So the ensemble (and the light curve) has no step when a
+    comp leaves or comes back; only the noise grows a little. A full frame gives exactly mean(inst) whatever the a_j.
+
+    Comps with no measurement on the night are "absent" (absent_out False: every frame of the night is left without
+    a comparison, as before #50; True: treated like the untied comps below). Comps measured in fewer than min_frames
+    frames are "out": left out of the whole night (too few frames to tie them).
+    Returns {"ens": [ensemble inst mag per point, NaN = no comp], "present": [[names used per point]],
+    "use": [the comps the night's ensemble stands on], "out": [...], "absent": [...]}."""
+    n = len(points)
+    sel = list(dict.fromkeys(selection))
+    m = np.array([[star_inst(o, name, comp_names, aliases) for name in sel] for o in points], dtype=float)
+    m = m.reshape(n, len(sel))
+    counts = np.isfinite(m).sum(axis=0) if n else np.zeros(len(sel), dtype=int)
+    absent = [name for name, c in zip(sel, counts) if c == 0]
+    # The rule: out of the whole night when measured in fewer than min_frames frames, or in fewer than half of them
+    # (missing for most of the night, the comp would only add a seam; the night stands on the others throughout).
+    out = [name for name, c in zip(sel, counts) if 0 < c and (c < min(min_frames, n) or c < COMP_NIGHT_SHARE * n)]
+    if absent and not absent_out:
+        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent}
+    keep = [j for j, name in enumerate(sel) if name not in absent and name not in out]
+    if not keep:
+        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent}
+    mk = m[:, keep]
+    ok = np.isfinite(mk)
+    a = np.zeros(len(keep))
+    full = ok.all(axis=1)
+    with np.errstate(invalid="ignore"):
+        for _ in range(12):
+            level = np.array([float(np.mean(mk[f, ok[f]] - a[ok[f]])) if ok[f].any() else np.nan for f in range(n)])
+            new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
+            new_a -= new_a.mean()
+            if np.allclose(new_a, a, atol=1e-7):
+                a = new_a
+                break
+            a = new_a
+    ens = []
+    present = []
+    for f in range(n):
+        names = [sel[keep[j]] for j in range(len(keep)) if ok[f, j]]
+        present.append(names)
+        if not ok[f].any():
+            ens.append(float("nan"))
+        elif full[f]:
+            ens.append(float(np.mean(mk[f])))
+        else:
+            ens.append(float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean()))
+    return {"ens": ens, "present": present, "use": [sel[j] for j in keep], "out": out, "absent": absent}
+
+
 def recompute_with_comps(observations: list[Obs], selection: list[str], comp_names: list[str],
-                         catalog: dict[str, float], aliases: dict | None = None) -> dict:
+                         catalog: dict[str, float], aliases: dict | None = None, absent_out: bool = False) -> dict:
     """Re-derive every magnitude (and the check star) from the chosen comps.
 
     selection: names of the comps / spares to use as the ensemble.
     catalog: catalog magnitude for each name, in the band measured.
-    A frame missing any chosen star gets mag NaN and the flag 'nocomp'.
-    Returns {"done": n, "missing": n, "missing_nights": [...]}.
+    2.3.0 (#50): night by night (night_ensemble). A frame missing some chosen comps (off the frame edge, clipped) is
+    derived from the comps present, put on the night's scale, so no step appears; a frame with none of them, or a
+    night where a chosen star was never measured (another field's comp; absent_out=True treats it as left out of the
+    night instead), gets mag NaN and the flag 'nocomp'. A chosen comp measured in fewer than COMP_TIE_MIN_FRAMES
+    frames of a night is left out of that night.
+    Returns {"done": n, "missing": n, "missing_nights": [...], "partial": frames derived from fewer comps,
+    "night_out": {night: [comps left out of the whole night]}}.
     """
     if not selection:
         raise ValueError("Choose at least one comparison star")
     for name in selection:
         if catalog.get(name) is None or not math.isfinite(catalog[name]):
             raise ValueError(f"{name} has no catalog magnitude")
-    ens_cat = float(np.mean([catalog[n] for n in selection]))
-    done = missing = 0
+    done = missing = partial = 0
     missing_nights = set()
+    night_out = {}
+    by_night: dict = {}
     for obs in observations:
-        words = [w for w in obs.flag.split() if w != "nocomp"]
-        insts = [star_inst(obs, n, comp_names, aliases) for n in selection]
-        if not math.isfinite(obs.target_inst) or not all(math.isfinite(v) for v in insts):
-            obs.mag = float("nan")
-            words.append("nocomp")
-            missing += 1
-            missing_nights.add(obs.night)
-        else:
-            ens = float(np.mean(insts))
-            obs.mag = ens_cat + obs.target_inst - ens
-            obs.cmag = ens
-            obs.comp_cat = ens_cat
-            obs.n_comps = len(selection)
-            new_err = ensemble_merr(obs, selection, comp_names, aliases)
-            if math.isfinite(new_err):
-                obs.merr = new_err
-            if obs.kmag is not None and math.isfinite(obs.kmag):
-                obs.check_std = ens_cat + obs.kmag - ens
-            done += 1
-        obs.flag = " ".join(words)
-    return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights)}
+        by_night.setdefault(obs.night, []).append(obs)
+    for night, pts in by_night.items():
+        ne = night_ensemble(pts, selection, comp_names, aliases, absent_out=absent_out)
+        if ne["out"] or (absent_out and ne["absent"]):
+            night_out[night] = list(ne["out"]) + (list(ne["absent"]) if absent_out else [])
+        use = ne["use"]
+        ens_cat = float(np.mean([catalog[n] for n in use])) if use else float("nan")
+        for obs, ens, names in zip(pts, ne["ens"], ne["present"]):
+            words = [w for w in obs.flag.split() if w != "nocomp"]
+            if not math.isfinite(obs.target_inst) or not math.isfinite(ens):
+                obs.mag = float("nan")
+                words.append("nocomp")
+                missing += 1
+                missing_nights.add(obs.night)
+            else:
+                obs.mag = ens_cat + obs.target_inst - ens
+                obs.cmag = ens
+                obs.comp_cat = ens_cat
+                obs.n_comps = len(names)
+                if len(names) < len(use):
+                    partial += 1
+                new_err = ensemble_merr(obs, names, comp_names, aliases)
+                if math.isfinite(new_err):
+                    obs.merr = new_err
+                if obs.kmag is not None and math.isfinite(obs.kmag):
+                    obs.check_std = ens_cat + obs.kmag - ens
+                else:
+                    obs.check_std = None   # 2.3.0 (#50): no check value in a frame without the check star
+                done += 1
+            obs.flag = " ".join(words)
+    return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights), "partial": partial,
+            "night_out": night_out}
+
+
+def comp_drop_summary(points: list[Obs], labels: list[str] | None = None) -> dict:
+    """2.3.0 (#50): which comps were left out of which frames in a run, and why. points: the night's points as
+    measured (Obs.comp_drop); labels: each point's frame label (default: its place, 1 …).
+    Returns {name: {"frames": [labels], "reasons": {reason: count}}}, plus "check" for the check star when it was
+    missing in some frames ({"frames", "reasons"})."""
+    labels = list(labels) if labels is not None else [str(k + 1) for k in range(len(points))]
+    out: dict = {}
+    for o, lab in zip(points, labels):
+        for name, why in (getattr(o, "comp_drop", None) or {}).items():
+            rec = out.setdefault(name, {"frames": [], "reasons": {}})
+            rec["frames"].append(lab)
+            rec["reasons"][why] = rec["reasons"].get(why, 0) + 1
+        lost = getattr(o, "check_lost", "")
+        if lost:
+            rec = out.setdefault("check", {"frames": [], "reasons": {}})
+            rec["frames"].append(lab)
+            rec["reasons"][lost] = rec["reasons"].get(lost, 0) + 1
+    return out
+
+
+def fill_comp_flux(points: list[Obs], comp_names: list[str], catalog: dict) -> int:
+    """2.3.0 (#50): a frame measured without some of its comps carries the light of the comps present only
+    (Obs.flux_comp), which the cloud check would read as lost light. Here flux_comp becomes the light the full set
+    would have given: each missing comp's instrumental magnitude estimated as catalog - (frame's zero point) on the
+    night's scale (cmag and comp_cat from recompute_with_comps). Returns the points changed."""
+    changed = 0
+    for o in points:
+        if not getattr(o, "comp_drop", None) or not math.isfinite(o.cmag) or not math.isfinite(o.comp_cat):
+            continue
+        exp = o.exptime if o.exptime and o.exptime > 0 else 1.0
+        zp = o.comp_cat - o.cmag   # catalog minus instrumental, on the night's ensemble scale
+        total = 0.0
+        for k, name in enumerate(comp_names):
+            v = o.comp_insts[k] if k < len(o.comp_insts) else float("nan")
+            if not math.isfinite(v):
+                cat = catalog.get(name)
+                if cat is None or not math.isfinite(float(cat)):
+                    continue
+                v = float(cat) - zp
+            total += exp * 10 ** (-0.4 * v)
+        if total > 0:
+            o.flux_comp = float(total)
+            changed += 1
+    return changed
+
+
+def skip_reason_word(why: str) -> str:
+    """2.3.0 (#50): a skipped frame's reason in a few words, so frames with the same cause group together ('target
+    not on the frame', 'every comp lost', 'could not align', else the reason itself without numbers)."""
+    import re
+    w = str(why or "")
+    if "is not on this frame" in w:
+        return "target not on the frame"
+    if w.startswith("every comp was lost"):
+        return "every comp lost (" + ", ".join(sorted({r for r in re.findall(r": ([^;)]+)", w)})) + ")"
+    if w.startswith("could not align"):
+        return "could not align"
+    return re.sub(r"\s*\([^)]*\d[^)]*\)", "", w).strip() or "skipped"
+
+
+# 2.3.0 (item 10): on an alt-az night, a turn of the field between two frames closer than this to 180° is a meridian
+# flip (a German equatorial mount set as Alt-az), not field rotation: a real alt-az field turns smoothly.
+FLIP_LIKE_TURN_DEG = 150.0
+
+
+FLIP_LIKE_EXCESS_DEG = 90.0   # ... and this much more than the night's own rotation rate explains for that gap
+
+
+def flip_like_turns(angles: list[float], labels: list[str], times: list[float] | None = None,
+                    min_turn: float = FLIP_LIKE_TURN_DEG, excess: float = FLIP_LIKE_EXCESS_DEG) -> list[dict]:
+    """2.3.0 (item 10): the gaps between consecutive aligned frames where the field turned by about 180° at once.
+
+    The rule: the turn in one gap (wrapped to ±180°) is at least min_turn degrees, AND it is at least `excess` degrees
+    more than the night's own field rotation explains for that gap (the median rate of the other gaps, in degrees per
+    day, times the gap's length; times = each frame's JD, in the same order as angles). A real alt-az field turns
+    smoothly (well under a degree per frame; tens of degrees only over long gaps or right at the zenith), so a
+    half-turn in one gap that its neighbours do not share is a meridian flip. The frames are sorted by time when times
+    are given (ASIAIR restarts its numbering after a flip). Returns [{"before": label, "after": label, "turn": deg}]."""
+    n = min(len(angles), len(labels))
+    idx = list(range(n))
+    have_t = times is not None and len(times) >= n and all(t is not None and math.isfinite(t) for t in times[:n])
+    if have_t:
+        idx.sort(key=lambda k: times[k])
+    steps = []
+    for p, q in zip(idx[:-1], idx[1:]):
+        a, b = angles[p], angles[q]
+        if a is None or b is None or not (math.isfinite(a) and math.isfinite(b)):
+            continue
+        d = ((float(b) - float(a) + 180.0) % 360.0) - 180.0
+        dt = float(times[q] - times[p]) if have_t else 1.0
+        steps.append((p, q, d, dt))
+    out = []
+    for k, (p, q, d, dt) in enumerate(steps):
+        if abs(d) < min_turn:
+            continue
+        rates = [abs(s[2]) / s[3] for j, s in enumerate(steps) if j != k and s[3] > 0 and abs(s[2]) < min_turn]
+        expected = float(np.median(rates)) * dt if rates else 0.0
+        if abs(d) - expected >= excess:
+            out.append({"before": labels[p], "after": labels[q], "turn": abs(d)})
+    return out
 
 
 def remap_night_comps(points: list[Obs], night_comps: list[str], series_comps: list[str]) -> int:
@@ -7203,6 +7462,15 @@ def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = Non
 
 
 def obs_to_dict(obs: Obs) -> dict:
+    out = _obs_to_dict(obs)
+    if getattr(obs, "comp_drop", None):
+        out["comp_drop"] = {str(k): str(v) for k, v in obs.comp_drop.items()}   # 2.3.0 (#50)
+    if getattr(obs, "check_lost", ""):
+        out["check_lost"] = str(obs.check_lost)
+    return out
+
+
+def _obs_to_dict(obs: Obs) -> dict:
     return {
         "jd": obs.jd,
         "mag": obs.mag,
@@ -7288,6 +7556,8 @@ def obs_from_dict(raw: dict) -> Obs:
         n_comps=int(raw.get("n_comps") or 0),
         e_model=int(raw.get("e_model") or 0),   # 2.2.17 (item 8): missing = before 2.2.17
         raw_peaks={str(k): _float_or_nan(v) for k, v in (raw.get("raw_peaks") or {}).items()},   # 2.2.19 (#16)
+        comp_drop={str(k): str(v) for k, v in (raw.get("comp_drop") or {}).items()},   # 2.3.0 (#50)
+        check_lost=str(raw.get("check_lost") or ""),
     )
 
 
@@ -8154,6 +8424,11 @@ def channel_inst_mags(img: np.ndarray, stars: list["Star"], radius: float, sky_i
     for star in stars:
         try:
             x, y, _ = recenter(img, star.x, star.y, radius)
+            if aperture_clip_reason(img.shape, x, y, radius, sky_inner, sky_outer):
+                # 2.3.0 (#50, #34): a spare or watch star off the edge (or clipped) is not measured in this frame (a
+                # clipped value could later become a comp's through Use comps); it never stops the frame.
+                out.append(float("nan"))
+                continue
             m = measure_aperture(img, x, y, radius, sky_inner, sky_outer)
             out.append(inst_mag(m["flux"], exptime))
         except Exception:

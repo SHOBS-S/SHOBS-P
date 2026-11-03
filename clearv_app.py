@@ -6837,6 +6837,19 @@ class App(Tk):
                   add="+")   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
+        # 2.3.0 (#50, item 10): frames the last run skipped (and why), comps left out of some frames, a flip on an
+        # alt-az night; with 'Measure skipped frames' when Use comps dropped the comp that caused skips.
+        self.skip_text = StringVar(value="")
+        self.skip_line = ttk.Frame(card, style="Card.TFrame")
+        self.skip_button = ttk.Button(self.skip_line, text="Measure skipped frames",
+                                      command=self.measure_skipped_frames)
+        self.skip_label = ttk.Label(self.skip_line, textvariable=self.skip_text, style="Warn.TLabel", justify=LEFT,
+                                    wraplength=700)
+        self.skip_label.pack(side=LEFT, fill=X, expand=True)
+        self._skip_button_side = {"side": RIGHT, "padx": (6, 0), "before": self.skip_label}
+        self.skip_line.bind("<Configure>", lambda e: self.skip_label.configure(
+            wraplength=max(e.width - (self.skip_button.winfo_reqwidth() if self.skip_button.winfo_ismapped() else 0)
+                           - 20, 300)), add="+")
         # 2.2.19 (r2: S2): the measurement settings in small groups that wrap like text (_flow_meas) when the row is
         # narrow (125 % on a 1366-px screen cut "Also measure R and B" off after "linear ADU" was added).
         meas = ttk.Frame(options, style="Card.TFrame")
@@ -7806,6 +7819,66 @@ class App(Tk):
                 parts.append(f"{start}" if start == prev else f"{start}–{prev}")
                 start = prev = n
         return ", ".join(parts)
+
+    @staticmethod
+    def flip_like_text(fl: dict) -> str:
+        """2.3.0 (item 10): the warning for a ~180° field turn in one frame gap on an alt-az night."""
+        return (f"The field turned by {fl['turn']:.0f}° between frames {fl['before']} and {fl['after']} — that looks "
+                "like a meridian flip. Is the Mount set right (German equatorial)? An alt-az field turns smoothly, not "
+                "by half a turn between two frames. If it was a flip, set Mount to German equatorial in the Optics "
+                "box (Input page) and run photometry again, so the frames after the flip are treated as after it.")
+
+    def comp_skip_text(self, night: str = "") -> str:
+        """2.3.0 (#50): the Photometry page's line about this night's measurement: frames skipped (how many and why),
+        comps left out of some frames, and, when Use comps no longer uses a comp that caused skips, that those frames
+        can be measured now. '' when nothing was skipped or left out."""
+        info = self._night_info(night) if night else {}
+        if not night:
+            obs = [o for o in self.observations if math.isfinite(getattr(o, "jd", float("nan")))]
+            if not obs:
+                return ""
+            night = max(obs, key=lambda o: o.jd).night
+            info = self._night_info(night)
+        parts = []
+        skips = info.get("skipped") or []
+        if skips:
+            by_why: dict = {}
+            for s in skips:
+                by_why.setdefault(core.skip_reason_word(s.get("why", "")), []).append(s.get("frame", ""))
+            parts.append(f"⚠ {len(skips)} frame{'s' if len(skips) != 1 else ''} skipped: " + "; ".join(
+                f"{why} (frames {self._frame_ranges(labs)})" for why, labs in by_why.items()) + ".")
+        drops = info.get("comp_drops") or {}
+        for name, rec in drops.items():
+            label = "check star" if name == "check" else name
+            what = ", ".join(rec.get("reasons") or {}) or "off the frame edge"
+            n = len(rec.get("frames") or [])
+            whole = name in (info.get("night_out") or [])
+            parts.append(f"{label} left out of {n} frame{'s' if n != 1 else ''} ({what}; frames "
+                         f"{self._frame_ranges(rec.get('frames') or [])})"
+                         + ("; out of the whole night (missing in most frames)" if whole else
+                            "; those frames use the other comps" if name != "check" else "; no check value there")
+                         + ".")
+        recover = self.recoverable_skips(night)
+        if recover:
+            for name, frames in recover.items():
+                parts.append(f"⚠ {len(frames)} frame{'s' if len(frames) != 1 else ''} were skipped because of {name}, "
+                             "which is no longer a comp — Run photometry again to measure them.")
+        return "\n".join(parts)
+
+    def recoverable_skips(self, night: str) -> dict:
+        """2.3.0 (#50): {comp name: [frame paths]} for this night's frames skipped only because of comps that the
+        current Use comps choice no longer uses."""
+        info = self._night_info(night) if night else {}
+        in_use = set(self.active_comps or [])
+        if not in_use:
+            return {}
+        out: dict = {}
+        for s in info.get("skipped") or []:
+            names = list(s.get("comps") or [])
+            if s.get("target") or not names or any(n in in_use for n in names):
+                continue
+            out.setdefault(", ".join(names), []).append(s.get("path", ""))
+        return out
 
     def _run_star_notes(self, night_points, target, comps, check, target_off, lights, radius, donut,
                         linear_limit=None, ref_label="") -> list:
@@ -12600,10 +12673,16 @@ class App(Tk):
                 self.update_star_panel()
         return True
 
-    def run_photometry(self):
+    def run_photometry(self, only=None, night: str = ""):
+        """only (2.3.0 #50): measure just these frames (Measure skipped frames) and add them to `night`; the mode,
+        series and check-star questions were answered by the night's own run."""
+        self._remeasure = None
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
-        lights = self._lights(log_skips=True)
+        lights = self._lights(log_skips=only is None)
+        if only is not None:
+            keep = set(only)
+            lights = [p for p in lights if p in keep]
         if not lights:
             messagebox.showerror(APP_TITLE, "No light frames left after the blink reject.")
             return
@@ -12614,9 +12693,12 @@ class App(Tk):
             return
         if not self._markers_in_order():
             return
-        if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
-            return
-        self._sequence_note()
+        if only is None:
+            if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
+                return
+            self._sequence_note()
+        else:
+            self._series_mode_answered = True   # 2.3.0 (#50): the frames go into the open night, in its mode
         try:
             binning = max(int(self.binning.get()), 1)
             if self.masters_binning is not None and binning != self.masters_binning:
@@ -12685,7 +12767,9 @@ class App(Tk):
             return
         # 2.2.14 (GitHub #4): a check star is not usual in transit work, so Transits mode does not ask; the AAVSO
         # ensemble rule is about variable-star reports.
-        if len(comps) > 1 and check is None and self.mode_key == "transits":
+        if only is not None:
+            pass   # 2.3.0 (#50): the night's run asked already
+        elif len(comps) > 1 and check is None and self.mode_key == "transits":
             self.log("No check star marked: fine for a transit fit (a check star only shows whether trends are shared).")
         elif len(comps) > 1 and check is None:
             if not messagebox.askyesno(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
@@ -12732,7 +12816,7 @@ class App(Tk):
         if n_cal_found < 5:
             cal_stars = []
         # Warn before the run, not after it, when color is ticked but cannot be calibrated.
-        if measure_color and not cal_stars and (saved_cal is None or cat_bv is None):
+        if only is None and measure_color and not cal_stars and (saved_cal is None or cat_bv is None):
             reasons = [f"only {n_cal_found} labeled stars have catalog B and V (5 are needed for a field fit)"]
             if saved_cal is None:
                 reasons.append("no color term has been saved from an earlier night")
@@ -12865,6 +12949,8 @@ class App(Tk):
         if not self._start_job(f"Photometry on {len(lights)} lights…"):
             self._restore_series_catalog()
             return
+        if only is not None:
+            self._remeasure = {"night": night or self._latest_night()}   # 2.3.0 (#50): _photometry_done adds them
         self.photo_bring_back()   # 2.2.16 (item 16): the run's progress and results show on the page
         # 2.2.19.1: what the on-sky log for SHOBS-FLUX needs from this run (written when the points are made)
         self._onsky_ctx = {
@@ -12955,6 +13041,9 @@ class App(Tk):
             self.log(mount_info["note"])   # review: a mere name hint once per folder
             seen.add((folder, mount_info["note"]))
         turns = []   # 2.2.18 (item 8): each aligned frame's rotation against the reference (not flipped)
+        turn_paths, turn_jd = [], []   # 2.3.0 (item 10): each angle's frame and time
+        skipped = []      # 2.3.0 (#50): [{"path", "why", "comps", "target"}]
+        self._run_skipped, self._run_night_out, self._run_flip_like = [], {}, []
         if len(ref_sources) < 3:
             self.log("Warning: too few stars found on the reference frame to align frames. Positions will not follow drift.")
         self._prev_stars = (list(self.comps_used), self.check_used)
@@ -13106,6 +13195,11 @@ class App(Tk):
                         last_good["reg"] = reg
                         if not reg.get("flipped"):
                             turns.append(float(reg.get("angle", 0.0)))
+                            turn_paths.append(path)   # 2.3.0 (item 10): which frame each angle belongs to
+                            try:
+                                turn_jd.append(float(core.mid_jd(header)))
+                            except Exception:
+                                turn_jd.append(float("nan"))
                     f_target = core.move_star(target, reg, data.shape)
                     fh, fw = data.shape[:2]
                     if not (edge_margin <= f_target.x < fw - edge_margin and edge_margin <= f_target.y < fh - edge_margin):
@@ -13125,13 +13219,15 @@ class App(Tk):
                     # Saturation is judged on the raw frame, where binning cannot hide a clipped core.
                     total_bin = binning * (1 if pattern == core.MONO else 2)
                     obs.raw_peak = core.raw_peak_near(raw, f_target, radius, total_bin)
-                    comp_raws = [core.raw_peak_near(raw, c, radius, total_bin) for c in f_comps]
-                    comp_raw = max(comp_raws)
+                    # 2.3.0 (#50): a comp left out of this frame (off the edge) has no peak here
+                    comp_raws = [core.raw_peak_near(raw, c, radius, total_bin) if c.name not in obs.comp_drop
+                                 else float("nan") for c in f_comps]
+                    comp_raw = max([v for v in comp_raws if math.isfinite(v)], default=float("nan"))
                     if not precalibrated:
                         # 2.2.19 (#16): each star's raw peak, for the linear-limit count (Comp health, log)
                         obs.raw_peaks = {target.name: obs.raw_peak}
                         obs.raw_peaks.update({c.name: v for c, v in zip(comps, comp_raws)})
-                        if f_check is not None:
+                        if f_check is not None and not obs.check_lost:
                             obs.raw_peaks[check.name] = core.raw_peak_near(raw, f_check, radius, total_bin)
                     flags = [f for f in obs.flag.split() if f not in ("sat", "compsat")]
                     if precalibrated:
@@ -13145,7 +13241,8 @@ class App(Tk):
                         if core.flat_topped_core(raw, f_target, radius, total_bin, cfa=is_cfa):
                             flags.insert(0, "sat")
                             obs.saturated = True
-                        if any(core.flat_topped_core(raw, c, radius, total_bin, cfa=is_cfa) for c in f_comps):
+                        if any(core.flat_topped_core(raw, c, radius, total_bin, cfa=is_cfa) for c in f_comps
+                               if c.name not in obs.comp_drop):
                             flags.insert(0, "compsat")
                             obs.saturated = True
                     if math.isfinite(comp_raw) and comp_raw >= sat_limit:
@@ -13228,10 +13325,34 @@ class App(Tk):
                     )
                 except Exception as exc:
                     self.call_ui(self.log, f"  skipped {os.path.basename(path)}: {exc}")
+                    # 2.3.0 (#50): every skipped frame and why, for the Photometry page and the settings file
+                    skipped.append({"path": path, "why": str(exc),
+                                    "comps": list(getattr(exc, "names", []) or []),
+                                    "target": path in target_off})
                 self.call_ui(self._progress, i)
             if cancelled:
                 self.call_ui(self._photometry_done, [], mode, None, True)
                 return
+            for p in known_missing:
+                if p in lights and not any(s["path"] == p for s in skipped):
+                    skipped.append({"path": p, "why": f"{target.name} is not on this frame", "comps": [],
+                                    "target": True})
+            self._run_skipped = sorted(skipped, key=lambda s: lights.index(s["path"]) if s["path"] in lights else 0)
+            if any(o.comp_drop for o in night_points):
+                # 2.3.0 (#50): frames measured without some of their comps are put on the night's ensemble scale
+                # (each comp to its own median offset; night_ensemble), so the light curve has no step there.
+                try:
+                    names = [c.name for c in comps]
+                    cat = {c.name: float(c.catalog_mag) for c in comps}
+                    no_std = [o.check_std is None for o in night_points]   # a check without catalog V stays so
+                    res = core.recompute_with_comps(night_points, names, names, cat)
+                    for o, none in zip(night_points, no_std):
+                        if none:
+                            o.check_std = None
+                    core.fill_comp_flux(night_points, names, cat)
+                    self._run_night_out = (res.get("night_out") or {})
+                except Exception as exc:
+                    self.call_ui(self.log, f"  (comps left out of some frames: re-derivation skipped: {exc})")
             # 2.2.19 (#9, #30, #24, #16): what the run found about the target's frames, centring and peaks
             try:
                 for line in self._run_star_notes(night_points, target, comps, check, target_off, lights,
@@ -13239,11 +13360,22 @@ class App(Tk):
                     self.call_ui(self.log, line)
             except Exception as exc:
                 self.call_ui(self.log, f"  (centring and peak notes skipped: {type(exc).__name__}: {exc})")
+            flip_like = []
+            if turns and altaz:
+                # 2.3.0 (item 10): a ~180° turn in one frame gap on an "alt-az" night is a meridian flip (HD 189733 b,
+                # 23 Jul: Mount left at Alt-az, 180.7° between 314a and 1b, every point called 'no flip').
+                labs = core.frame_labels_for(list(turn_paths))
+                flip_like = core.flip_like_turns(list(turns), labs, list(turn_jd))   # sorted by time inside
+                self._run_flip_like = flip_like
+                for fl in flip_like:
+                    self.call_ui(self.log, "⚠ " + self.flip_like_text(fl))
             if turns:
                 # 2.2.18 (item 8): how far the field turned on the sensor through the night.
                 unwrapped = np.degrees(np.unwrap(np.radians(turns)))   # review: a turn across ±180° is not 360°
                 spread = float(unwrapped.max() - unwrapped.min())
-                if altaz and spread > 1.0:
+                if altaz and flip_like:
+                    pass   # 2.3.0 (item 10): said above; a flip is not field rotation
+                elif altaz and spread > 1.0:
                     self.call_ui(self.log, f"  Field rotation: the field turned by {spread:.1f}° on the sensor "
                                            "through the night (alt-az mount); the apertures followed it.")
                 elif not altaz and spread > 5.0:
@@ -13333,6 +13465,11 @@ class App(Tk):
 
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
         self._end_job()
+        remeasure, self._remeasure = getattr(self, "_remeasure", None), None   # 2.3.0 (#50)
+        if cancelled and remeasure is not None:
+            self._onsky_ctx = None
+            if getattr(self, "_prev_stars", None) is not None:
+                self.comps_used, self.check_used = list(self._prev_stars[0]), self._prev_stars[1]
         if cancelled:
             if error:   # 2.2.16 (item 3): the worker hit an error outside the per-frame guard
                 self._progress_end("Stopped by an error; nothing was added.")
@@ -13344,11 +13481,14 @@ class App(Tk):
             self._restore_series_catalog(stars=True)   # 2.2.14 (item 11, review)
             return
         self._progress_end(f"{len(night_points)} points.")
+        if remeasure is not None:
+            return self._remeasure_done(remeasure, night_points, mode)   # 2.3.0 (#50)
         if not night_points:
             self._restore_series_catalog(stars=True)
             messagebox.showerror(APP_TITLE, "No frames produced a magnitude. The Calibrate page log says why each frame was skipped.")
             return
         night = f"JD{math.floor(night_points[0].jd)}"
+        self._run_comps = list(self.comps_used)   # 2.3.0 (item 10): the run's own comps, before any series layout
         # 2.2.7: new photometry is what the Transit fit page should show: drop an EXOTIC report left loaded there.
         if getattr(self, "transit_page", None) is not None and self.transit_page.report is not None:
             self.transit_page.close_report(quiet=True)
@@ -13501,6 +13641,7 @@ class App(Tk):
         if night_mount == core.MOUNT_ALTAZ:
             self.night_bin[night]["mount"] = night_mount   # GEM nights stay as saved before
         self.night_bin[night]["pier"] = self._night_pier(night_points, night_mount)   # 2.2.14 (item 20)
+        self._store_run_skips(night, night_points)   # 2.3.0 (#50, item 10)
         self._update_aperture_state()   # 2.2.19 (#41)
         if (self.comp_band_sources or {}).get("band") == filt:
             # 2.2.17 (round 2): the night's Sloan comp/check sources go with the series (report notes after Load).
@@ -13523,6 +13664,7 @@ class App(Tk):
         self._log_zero_point_check(night)   # 2.2.14 (item 10)
         self._noise_note(night_points)
         self._warn_edges(night, night_points)
+        self._warn_run_skips(night)   # 2.3.0 (#50, item 10): on screen, not only in the log
         self.draw_output()
         self.show_step(STEP_OUTPUT)
         nights = sorted({obs.night for obs in self.observations})
@@ -13920,6 +14062,230 @@ class App(Tk):
             self._set_transit_flags(night, flag)
             self._after_transit_flags()
 
+    # ---- 2.3.0 (#50, item 10): skipped frames, comps left out of frames, a flip on an "alt-az" night ------------------
+    def _store_run_skips(self, night: str, night_points: list):
+        """2.3.0 (#50, item 10): keep with the night (saved in the series) the frames the run skipped and why, the
+        comps (and check star) left out of some frames, the comps left out of the whole night, and any ~180° field
+        turn on an alt-az night."""
+        info = self._night_info(night, create=True)
+        skipped = list(getattr(self, "_run_skipped", None) or [])
+        labs = core.frame_labels_for([s["path"] for s in skipped]) if skipped else []
+        info["skipped"] = [{"frame": lab or os.path.basename(s["path"]), "path": s["path"], "why": s.get("why", ""),
+                            "comps": list(s.get("comps") or []), "target": bool(s.get("target"))}
+                           for s, lab in zip(skipped, labs)]
+        pts = sorted(night_points, key=lambda o: o.jd)
+        drops = core.comp_drop_summary(pts, core.frame_labels_for([o.path for o in pts])) if any(
+            o.comp_drop or o.check_lost for o in pts) else {}
+        info["comp_drops"] = drops
+        out = getattr(self, "_run_night_out", None) or {}
+        info["night_out"] = sorted({n for v in out.values() for n in v})
+        info["flip_like"] = list(getattr(self, "_run_flip_like", None) or [])
+        for key in ("skipped", "comp_drops", "night_out", "flip_like"):
+            if not info[key]:
+                info.pop(key)
+        # 2.3.0 (item 10): what this run really measured as comps (the comp box) and which of the series' comps (or
+        # comps Use comps moved out, #34) it measured as spares, for the settings file's 'measured:'.
+        run_comps = list(getattr(self, "_run_comps", None) or info.get("comps") or [])
+        could_be = set(getattr(self, "_prev_stars", ([], ""))[0] or []) | set(getattr(self, "_comps_under", None) or {}) \
+            | set(self.active_comps or [])
+        as_spares = []
+        for o in pts:
+            for n, v in (o.spare_insts or {}).items():
+                if n in could_be and n not in run_comps and n not in as_spares and math.isfinite(v):
+                    as_spares.append(n)
+        info["measured"] = {"comps": run_comps, "spares": as_spares}
+
+    def _warn_run_skips(self, night: str):
+        """2.3.0 (#50, item 10): say on screen (and in the log) what the run left out: skipped frames with their
+        reason, comps left out of some frames, and a ~180° turn on an alt-az night."""
+        info = self._night_info(night)
+        text = self.comp_skip_text(night)
+        if text:
+            for line in text.splitlines():
+                self.log(f"{night}: {line}")
+        flips = info.get("flip_like") or []
+        if not flips and not text:
+            return
+        body = ["⚠ " + self.flip_like_text(fl) for fl in flips] + ([text] if text else [])
+        messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}:\n\n" + "\n\n".join(body)
+                               + "\n\nThe Photometry page shows this under the settings row.")
+
+    def _update_skip_line(self):
+        """2.3.0 (#50): the Photometry page's line about skipped frames and comps left out (shown only with text),
+        with 'Measure skipped frames' when Use comps no longer uses the comp that caused the skips."""
+        line = getattr(self, "skip_line", None)
+        if line is None:
+            return
+        try:
+            text = self.comp_skip_text()
+        except Exception:
+            text = ""
+        flips = []
+        try:
+            obs = [o for o in self.observations if math.isfinite(getattr(o, "jd", float("nan")))]
+            if obs:
+                flips = self._night_info(max(obs, key=lambda o: o.jd).night).get("flip_like") or []
+        except Exception:
+            flips = []
+        text = "\n".join([("⚠ " + self.flip_like_text(fl)) for fl in flips] + ([text] if text else []))
+        self.skip_text.set(text)
+        recover = bool(text) and "no longer a comp" in text
+        try:
+            if recover:
+                self.skip_button.pack(**self._skip_button_side)
+            else:
+                self.skip_button.pack_forget()
+            shown = getattr(self, "_skip_line_shown", False)
+            anchor = self.aperture_state_label if getattr(self, "_aperture_state_shown", False) else self._view_options
+            if text and not shown:
+                line.pack(anchor=W, fill=X, padx=6, pady=(0, 4), after=anchor)
+                self._skip_line_shown = True
+            elif not text and shown:
+                line.pack_forget()
+                self._skip_line_shown = False
+        except Exception:
+            pass
+
+    def measured_comps_text(self, night: str) -> str:
+        """2.3.0 (item 10): the comps this night's photometry actually measured, for the settings file: the run's comps,
+        the series comps it measured as spares ('as spare'), and the frames a comp was missing from. From the night's
+        record (2.3.0 runs) and its points (every comp or spare with a value in at least one frame), so a comp that
+        was never measured that night is not listed."""
+        info = self._night_info(night) if night else {}
+        pts = [o for o in self.observations if o.night == night]
+        aliases = self._star_aliases()
+        rec = info.get("measured") or {}
+        names = list(rec.get("comps") or info.get("comps") or self.comps_used or [])
+        spares = list(rec.get("spares") or [])
+        if not rec:
+            # Before 2.3.0: the comps in use measured as spares that night count too ("as spare").
+            spares = [n for n in (self.active_comps or []) if n not in names]
+        n_all = len(pts)
+        drops = info.get("comp_drops") or {}
+        out = []
+        for n in names + [s for s in spares if s not in names]:
+            have = sum(1 for o in pts if math.isfinite(core.star_inst(o, n, self.comps_used, aliases)))
+            if pts and not have:
+                continue
+            words = []
+            if n in spares and n not in names:
+                words.append("as spare")
+            if n in drops:
+                words.append(f"missing in {len(drops[n].get('frames') or [])} frames: "
+                             + ", ".join(drops[n].get("reasons") or {}))
+            elif pts and have < n_all:
+                words.append(f"in {have} of {n_all} frames")
+            if n in (info.get("night_out") or []):
+                words.append("left out of the night")
+            out.append(n + (f" ({'; '.join(words)})" if words else ""))
+        return ", ".join(out)
+
+    def _latest_night(self) -> str:
+        obs = [o for o in self.observations if math.isfinite(getattr(o, "jd", float("nan")))]
+        return max(obs, key=lambda o: o.jd).night if obs else ""
+
+    def measure_skipped_frames(self):
+        """2.3.0 (#50): measure again only the frames the run skipped because of comps the Use comps choice no longer
+        uses (with the comps in use, as Run photometry would), and put them into the night. Falls back to telling the
+        user to run photometry again when the frames are not in the Lights folder or the image is not loaded."""
+        night = self._latest_night()
+        recover = self.recoverable_skips(night) if night else {}
+        paths = [p for v in recover.values() for p in v]
+        if not paths:
+            messagebox.showinfo(APP_TITLE, "There are no skipped frames to measure with the comps in use.")
+            return
+        try:
+            here = set(self._lights())
+        except Exception:
+            here = set()
+        found = [p for p in paths if p in here]
+        if not found or self.preview is None:
+            messagebox.showinfo(APP_TITLE, f"The {len(paths)} skipped frames of {self.label_nights(night)} are not in "
+                                           "the Lights folder on the Input page now (or no image is loaded), so they "
+                                           "cannot be measured on their own. Open that night's frames and press Run "
+                                           "photometry to measure the whole night again.")
+            return
+        if len(found) < len(paths):
+            self.log(f"Measure skipped frames: {len(paths) - len(found)} of the {len(paths)} frames are no longer in the "
+                     "Lights folder (or are rejected in Blink) and stay skipped.")
+        self.run_photometry(only=found, night=night)
+
+    def _remeasure_done(self, remeasure: dict, new_points: list, mode: str):
+        """2.3.0 (#50): frames measured again by Measure skipped frames go into their night (the series' comp
+        layout), the night is re-derived with the comps in use, and the night's skip list is brought up to date."""
+        self._onsky_ctx = None   # a few frames: the night's on-sky log stays the full run's
+        night = remeasure["night"]
+        prev_comps, prev_check = getattr(self, "_prev_stars", ([], ""))
+        run_comps = list(self.comps_used)
+        self.comps_used, self.check_used = list(prev_comps or run_comps), prev_check
+        if not new_points:
+            self.log("Measure skipped frames: none of the frames produced a magnitude (see the log for why).")
+            self._update_skip_line()
+            return
+        filt = self._filter_code()
+        layout = list(self.comps_used) + [n for n in run_comps if n not in self.comps_used]
+        if layout != run_comps:
+            core.remap_night_comps(new_points, run_comps, layout)
+        self.comps_used = layout
+        for o in new_points:
+            o.night, o.filt = night, filt
+        self.observations = core.merge_nights(self.observations, new_points)
+        night_pts = [o for o in self.observations if o.night == night]
+        try:
+            core.recompute_with_comps(night_pts, self.active_comps or self.comps_used, self.comps_used,
+                                      self._comp_catalog(), self._star_aliases())
+        except ValueError as exc:
+            self.log(f"Measure skipped frames: could not re-derive {night} with the comps in use: {exc}")
+        info = self._night_info(night, create=True)
+        done = {os.path.normcase(os.path.abspath(o.path)) for o in new_points}
+        still = list(getattr(self, "_run_skipped", None) or [])
+        labs = core.frame_labels_for([s["path"] for s in still]) if still else []
+        new_skips = {os.path.normcase(os.path.abspath(s["path"])): {
+            "frame": lab or os.path.basename(s["path"]), "path": s["path"], "why": s.get("why", ""),
+            "comps": list(s.get("comps") or []), "target": bool(s.get("target"))} for s, lab in zip(still, labs)}
+        kept = []
+        for s in info.get("skipped") or []:
+            key = os.path.normcase(os.path.abspath(s.get("path", "")))
+            if key in done:
+                continue
+            kept.append(new_skips.pop(key, s))
+        kept += list(new_skips.values())
+        if kept:
+            info["skipped"] = kept
+        else:
+            info.pop("skipped", None)
+        pts = sorted(night_pts, key=lambda o: o.jd)
+        if any(o.comp_drop or o.check_lost for o in new_points):
+            drops = dict(info.get("comp_drops") or {})
+            add = core.comp_drop_summary(sorted(new_points, key=lambda o: o.jd),
+                                         core.frame_labels_for([o.path for o in sorted(new_points, key=lambda o: o.jd)]))
+            for name, rec in add.items():
+                old = drops.setdefault(name, {"frames": [], "reasons": {}})
+                old["frames"] = list(old.get("frames") or []) + rec["frames"]
+                for why, n in rec["reasons"].items():
+                    old.setdefault("reasons", {})[why] = old["reasons"].get(why, 0) + n
+            info["comp_drops"] = drops
+        self.log(f"Measure skipped frames: {len(new_points)} frame(s) measured and added to {night} with the comps in "
+                 f"use ({', '.join(self.active_comps or self.comps_used)}); the night now has {len(pts)} points"
+                 + (f"; {len(kept)} frame(s) still skipped." if kept else "."))
+        self._refresh_period()
+        self._update_aperture_state()
+        self.draw_output()
+        saved = ""
+        if self.series_path:
+            try:
+                saved = (f" Saved to {os.path.basename(self.series_path)}."
+                         if self._write_series(self.series_path) is not None else "")
+            except OSError as exc:
+                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+        self.status.set(f"{len(new_points)} skipped frame(s) measured and added to {night}.{saved}")
+        tp = getattr(self, "transit_page", None)
+        if self.mode_key == "transits" and tp is not None:
+            try:
+                tp.comps_changed()   # the shown fit is stale: refit with the night's new points
+            except Exception:
+                traceback.print_exc()
+
     def _warn_edges(self, night: str, night_points: list):
         """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat)."""
         shape = getattr(self.preview, "shape", None) if self.preview is not None else None
@@ -14036,6 +14402,7 @@ class App(Tk):
                 self._aperture_state_shown = False
         except Exception:
             pass
+        self._update_skip_line()   # 2.3.0 (#50)
 
     def _night_setup(self) -> dict:
         """2.2.3: what a night's reduction used, stored per night in the series so later nights can be compared."""
@@ -17127,10 +17494,14 @@ class App(Tk):
                                                   "(their comp magnitudes were not saved) and would be left out. Continue?"):
                 return False
         trial = []
+        # 2.3.0 (#50): a frame missing only some of the chosen stars is derived from the others (night_ensemble);
+        # only frames with none of them, or nights that never measured one, are flagged nocomp.
+        by_night: dict = {}
         for o in self.observations:
-            if not math.isfinite(o.target_inst) or not all(
-                    math.isfinite(core.star_inst(o, n, self.comps_used, aliases)) for n in selection):
-                trial.append(o.night)
+            by_night.setdefault(o.night, []).append(o)
+        for night, pts in by_night.items():
+            ens = core.night_ensemble(pts, selection, self.comps_used, aliases)["ens"]
+            trial += [night for o, e in zip(pts, ens) if not math.isfinite(o.target_inst) or not math.isfinite(e)]
         if trial:
             nights = sorted(set(trial))
             if not messagebox.askyesno(
@@ -17150,7 +17521,22 @@ class App(Tk):
         self.draw_output()
         used = ", ".join(selection)
         self.log(f"Comps in use: {used}. {result['done']} points re-derived"
+                 + (f" ({result['partial']} of them from the comps present in that frame)" if result.get("partial")
+                    else "")
                  + (f", {result['missing']} flagged nocomp." if result["missing"] else "."))
+        for night, names in sorted((result.get("night_out") or {}).items()):
+            # 2.3.0 (#50): the rule said once: a comp measured in fewer than half a night's frames is not used there
+            self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} left out of the whole night "
+                     f"(measured in fewer than half its frames); the night uses the other comps.")
+        # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page)
+        recover = {}
+        for night in sorted({o.night for o in self.observations}):
+            for name, frames in self.recoverable_skips(night).items():
+                recover.setdefault(name, []).extend(frames)
+        for name, frames in recover.items():
+            self.log(f"⚠ {len(frames)} frames were skipped because of {name}, which is no longer a comp — Run "
+                     "photometry again to measure them (or Measure skipped frames on the Photometry page).")
+        self._update_skip_line()
         self._log_zero_point_check()   # 2.2.14 (item 10)
         saved = ""
         if self.series_path:
@@ -17159,7 +17545,9 @@ class App(Tk):
                          if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
-        self.status.set(f"Comps in use: {used}.{saved}")
+        n_rec = sum(len(v) for v in recover.values())
+        self.status.set(f"Comps in use: {used}.{saved}"
+                        + (f"  ⚠ {n_rec} skipped frames can be measured now (Photometry page)." if n_rec else ""))
         # 2.2.17 (item 4): in Transits mode the transit fit follows the new comps (refits on its page); after the status
         # line, so "Refitting…" is what it says (review).
         tp = getattr(self, "transit_page", None)
