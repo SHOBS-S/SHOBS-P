@@ -44,6 +44,7 @@ except Exception:   # pragma: no cover - astropy is a requirement of the app
 STACK_VERSION = 1
 CLIP_SIGMA = 3.0          # per-pixel clip, in units of the (trimmed, bias-corrected) scatter of that pixel
 MIN_CLIP_FRAMES = 5       # below this, a plain mean (too few values to tell an outlier)
+SIGNAL_SPAN = 2.0         # starlight may differ from its pixel's reference by this x its signal unclipped (seeing)
 COMP_SHARE = 0.5          # the default rule: a stack's comp noise at most 1/2 of the target's noise in one frame
 TRANSIT_CAP_FRACTION = 1.0 / 5.0     # of the ingress / egress duration
 VARIABLE_CAP_FRACTION = 1.0 / 50.0   # of the period
@@ -439,15 +440,16 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
         if c >= min_clip:
             kfac[cnt == c] = clip_sigma * (1.0 + 1.5 / math.sqrt(c - 2))
     # (3) Starlight is never clipped for changing with the seeing or the sky's transparency: a value may differ from
-    # the pixel's reference by as much as the pixel's own signal above the frame's sky level (median over the frame),
-    # i.e. between no signal and twice the signal, before the sigma clip applies. On the sky (no signal) that adds
-    # nothing, so cosmic rays, trails and hot pixels there go; on a star the clip catches only hits brighter than the
-    # star itself. (Measured on synthetic stars whose seeing changes by 2x within a stack: without this the clip added
-    # noise comparable to the photon noise; with it, under 1/10 of it.)
+    # the pixel's reference by twice the pixel's own signal above the frame's sky level (median over the frame),
+    # i.e. anywhere from no signal to three times the signal, before the sigma clip applies (a star's peak pixel in a
+    # frame of 1.5x sharper seeing is 2.25x its usual value). On the sky (no signal) that adds nothing, so cosmic
+    # rays, trails and hot pixels there go; on a star the clip catches only hits much brighter than the star itself,
+    # where a missed hit is a small part of the light anyway. (Synthetic stars whose seeing changes by 1.7x within a
+    # stack of 6: without this the clip added noise comparable to the star's photon noise; with it, none measurable.)
     sky_level = float(np.nanmedian(ref[clippable])) if np.any(clippable) else 0.0
     signal = np.abs(ref - np.float32(sky_level)) if math.isfinite(sky_level) else np.zeros_like(ref)
     # A pixel whose values are all equal has no scatter: only exactly-equal values are kept there.
-    tol = (kfac * sig + signal + 1e-6 * np.abs(ref)).astype(np.float32)
+    tol = (kfac * sig + SIGNAL_SPAN * signal + 1e-6 * np.abs(ref)).astype(np.float32)
     del kfac, signal
     K = np.zeros(cnt.shape, dtype=np.float64)
     KC = np.zeros(cnt.shape, dtype=np.int32)

@@ -14866,6 +14866,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         series. Watch stars and AUIDs that came from a loaded series go (except into a new series started from tonight's
         run, which used them); ones added this session stay."""
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9): a pending planet check is stale
+        self.after_idle(self._stack_ui_update)   # 2.3.0 (#54): a series set aside takes its stacks' switch with it
         self._hold_autosave = None   # 2.2.19 (#24): a held night belongs to the series set aside
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
