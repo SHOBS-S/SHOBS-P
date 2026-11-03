@@ -28,7 +28,7 @@ period near 1 day, or one whose frequency differs from the true one by 1 per day
 SHOBS-P puts it in AAVSO reports when a comp or check star comes from the AAVSO sequence.
 
 **Baseline** — In transit work, the out-of-transit light curve before ingress and after egress. The fit learns the
-star's level and trends from it. See [16. Plan a transit night](16-plan-a-transit-night.md).
+star's level and trends from it. See [16. Prepare for a transit night](16-plan-a-transit-night.md).
 
 **Bayer pattern, OSC, MONO** — A one-shot-color (OSC) camera has a mosaic of red, green and blue filters over its
 pixels in a pattern such as RGGB. A monochrome camera has none (SHOBS-P calls it **MONO**) and uses a filter wheel.

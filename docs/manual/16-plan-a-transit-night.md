@@ -1,29 +1,32 @@
-# 16. Plan a transit night
+# 16. Prepare for a transit night
 
 A transit night is decided before you open the dome. You need a planet whose whole transit, plus a stretch of
-steady baseline on both sides, happens in the dark with the star well above the horizon. SHOBS-P has two tools
-for this: **Tonight's transits…** finds every suitable planet for one night, and **Transit planner…** lists the
-coming transits of one planet you have already chosen.
+steady baseline on both sides, happens in the dark with the star well above the horizon. This chapter is about
+getting SHOBS-P ready for that night, and about the choices that make the transit fit work later.
 
 This chapter covers:
 
-- entering a planet under any of its names,
-- finding tonight's transits,
-- planning the coming transits of one planet,
-- how much baseline to take,
+- entering a planet under any of its names (or by its host star),
+- the TESS TOI status and ExoClock priority lines,
+- choosing the night and how much baseline to take,
 - what to do about a meridian flip (or, on an alt-az mount, the zenith keyhole).
+
+SHOBS-P 2.3.0 no longer has the **Tonight's transits…** and **Transit planner…** windows. SHOBS-P does not predict
+the coming transits for you: choose the night with the planning resource you normally use, and then use this chapter
+to set SHOBS-P up for it.
 
 ## Before you start
 
 1. Click **Transits** in the sidebar (under **MODE**). The window turns green and the Input page shows the
    **Planet (Transits)** box.
 2. On the Input page, fill in the **Site** box: **Latitude (°, north +)**, **Longitude (°, east +)** (west is
-   negative) and **Elevation (m)**. You type these once; SHOBS-P remembers them. Both planning tools refuse to run
-   without a latitude and longitude, and the transit fit needs them later for BJD times.
-3. Check **Time zone** in the same box: the site's time zone (it starts as this computer's own). Every time in the
-   planning windows is the site's local time in that zone, with that night's daylight saving, and is labeled with its
-   offset from UTC, for example **Local time (UTC−5)**. The times you type (**After**, **End by**) are read as the
-   site's clock too. Make sure the computer's clock is right.
+   negative) and **Elevation (m)**. You type these once; SHOBS-P remembers them. The transit fit needs them for BJD
+   times, and the airmass and scintillation in the error bars come from them too.
+3. Check **Time zone** in the same box: the site's time zone (it starts as this computer's own). The times SHOBS-P
+   shows for your night (for example the **Trim** boxes in chapter 17) are the site's local times in that zone. Make
+   sure the computer's clock is right.
+4. In the **Optics** box, set **Mount** to **German equatorial** or **Alt-az**. SHOBS-P uses it to handle a meridian
+   flip (below) and the field rotation of an alt-az mount.
 
 See [4. Before your first night](04-before-your-first-night.md) for the Site and Optics boxes.
 
@@ -37,8 +40,9 @@ To enter a planet:
 1. In the **Planet (Transits)** box, type the name in **Planet**, for example `TrES-3 b`, `KOI-217 b`,
    `TOI-2046 b` or `EPIC 220504338 b`.
 2. Press **Enter** (or Tab out of the box). The lookup starts by itself. While it runs, the busy bar at the left
-   end of the bottom status strip says *"Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"*, and the
-   empty boxes show a gray *looking up…*. When it is done, the line under the box says where the values came from.
+   end of the bottom status strip says *"Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"*. The boxes
+   stay as they are until the answer comes: an empty box stays blank, and a value already in a box stays until the
+   lookup replaces it. When it is done, the line under the box says where the values came from.
    If the archive does not answer within 60 seconds, that line says so in red, for example *"✖ TOI-2046 b: the NASA
    Exoplanet Archive did not answer within 60 s — type the values or Look up again."* Type the values, or press
    **Look up again** later.
@@ -49,7 +53,24 @@ The lookup also fills the Star ID and RA/Dec of the host star when they are empt
 
 ![The Planet (Transits) box after a lookup](img/16-planet-box.png)
 
-Things worth knowing about the lookup:
+### Start from the host star instead
+
+You can also start from the star. Type the host star in **Star ID** (in the Target box), for example `TrES-3`, and
+press **Enter**. The busy bar then stays on the whole time, in three steps:
+
+1. *"Looking up TrES-3 at SIMBAD and VSX…"* (the star's position),
+2. *"Looking up TrES-3's planets at the NASA Exoplanet Archive…"*,
+3. *"Looking up planet TrES-3 b at the NASA Exoplanet Archive…"*.
+
+The bar goes when the planet boxes are filled. A star with several planets opens a chooser instead (see below).
+
+If the Archive lists no planet for the star, or did not answer, the line under the Planet box says in red: *"✖ No
+planets found for TrES-3 at the NASA Exoplanet Archive (none listed under that name, or the Archive did not answer).
+Type the planet's name, or press Look up again on the Star ID."* If the planet list gets no answer within 60 seconds,
+it says *"✖ TrES-3: the NASA Exoplanet Archive did not answer within 60 s — type the planet's name, or Look up again
+on the Star ID."*
+
+### Things worth knowing about the lookup
 
 - **The ephemeris.** SHOBS-P compares every published ephemeris for the planet and keeps the one with the smallest
   predicted uncertainty for tonight. The source line names it, for example *"most precise of 4 published
@@ -98,111 +119,41 @@ When a service does not answer, SHOBS-P uses its last answer and says so, for ex
 If the lookup fails, the line under the box says *"Could not look up … Check the spelling and press Look up
 again, or type the values."*
 
-## Find tonight's transits
+## Choose the night
 
-**Tonight's transits…** searches every known transiting planet for transits you can observe whole on one night.
+A good transit night has:
 
-To find tonight's transits:
+- the whole transit (ingress to egress, **Duration T14 (h)**) in astronomical darkness,
+- the star well above the horizon the whole time, baseline included (30° or more is a good rule),
+- a baseline before ingress and after egress (next section),
+- the Moon not too close to the star, for a faint target.
 
-1. Click **Tonight's transits…**. It is beside **Look up again** in the Planet box, and also on the Transit fit
-   page (Output step).
-2. Check the search fields across the top of the window:
-   - **Night of**: the date the night starts (today by default), as `YYYY-MM-DD`.
-   - **After** and **End by**: optional clock times that limit the window, for example `2300` or `23:00` if you
-     want to finish another target first. Hours before 12 count as the next morning.
-   - **Min alt (°)**: the lowest altitude the star may reach during the run, baseline included (default 30).
-   - **Sun below (°)**: how dark it must be (default −18, astronomical darkness).
-   - **Baseline (min)**: the out-of-transit time you want before ingress and after egress (default 60).
-   - **V from** … **to**: the brightness range your telescope handles (default 9 to 13.5).
-   - **Min depth (%)**: the shallowest transit worth trying (default 0.5).
-   - **Moon ≥ (°)**: the smallest distance from the Moon you accept (default 0, no limit).
-   - **no meridian flip**: tick it to list only transits during which the star does not cross the meridian. With
-     **Mount** set to **Alt-az** on the Input page, this box is **no zenith keyhole (above 85°)** instead: tick it to
-     hide transits during which the star climbs above 85°.
-3. Click **Search**.
+The predicted mid-transit times follow from the boxes the lookup filled: a transit happens at **T0 (BJD_TDB)** plus
+a whole number of **Period (d)**. BJD_TDB differs from a plain Julian date in UTC by at most about 9½ minutes (the
+light's travel time across the Earth's orbit, plus about a minute), so for planning, T0 + n × P read as a UTC Julian
+date is close enough; take a few minutes' more baseline on each side to cover it. Add the ephemeris's
+uncertainty (the *"±… min now"* in the source line) to both ends of your run.
 
-The limits (not **After** and **End by**) are remembered for next time.
-
-![The Tonight's transits window](img/16-tonights-transits.png)
-
-Each row is one transit. The columns are **Planet**, **V**, **Depth (%)**, **T14 (h)**, **Start (with baseline)**,
-**Ingress**, **Mid**, **Egress**, **End (with baseline)**, **Altitude min–max**, **Moon (lit, distance)** and
-**Meridian** (it says **flip** when the star crosses the meridian during the run). On an alt-az mount the last column
-is **Zenith** instead, and says **keyhole** when the star passes above 85° (see "Alt-az mounts: the zenith keyhole"
-below).
-
-The summary line next to the buttons starts with the zone of the times in the table, for example **Local time
-(UTC−4)**, then says how many transits matched, when it is dark, how many planets were in
-your magnitude and depth range, and how old the planet list is. The planet list is downloaded from the NASA
-Exoplanet Archive and refreshed once a week; **Refresh planet list** downloads it again now.
-
-To use a planet from the list:
-
-1. Double-click its row.
-2. If the Input page already has a target, SHOBS-P asks whether to clear it (and its RA/Dec) so the lookup can fill
-   them. Answer **Yes** for a new field. For another star this is a new reduction (chapter 5): an open series is
-   closed, with a save offered first.
-
-SHOBS-P switches to Transits mode if needed, looks the planet up, opens the Input page, and the status bar says
-when the transit runs and when to start, for example *"Transit 22:10–00:35, start by 21:10 local time (UTC−4)."*
-
-Other buttons in this window:
-
-- **Same search on Swarthmore…** opens the Swarthmore Transit Finder in your browser with the same site and limits,
-  so you can compare.
-- **Export CSV…** saves the list as `transits_<date>.csv`. Its times are the site's local times; the last column,
-  `local_utc_offset`, gives their offset (for example `UTC-4`).
-
-If nothing matches, the table says *"No transits match. Loosen a limit (altitude, Sun, magnitude, depth, or the
-time window)."*
-
-## Plan the coming transits of one planet
-
-**Transit planner…** lists the next transits of the planet on the Input page, as seen from your site.
-
-To plan the coming transits:
-
-1. Enter the planet on the Input page (see above). The planner needs its period, T0 and RA/Dec.
-2. Go to the Output step (the Transit fit page) and click **Transit planner…**.
-3. Set **Days ahead** (default 30), **Min altitude (°)** (30), **Sun below (°)** (−18) and **Baseline each side
-   (min)** (60). Tick **full only** to hide nights that cannot give a full baseline.
-4. Click **Update**.
-
-> **Tip:** The planner and Tonight's transits share their limits. The planner starts from the altitude, Sun and
-> baseline limits you last used in Tonight's transits (30°, −18° and 60 minutes until you change them), so the two
-> windows agree.
-
-![The Transit planner window](img/16-transit-planner.png)
-
-The line above the table gives the zone of its times, for example **Local time (UTC−4)**, or **Local time (UTC−4 /
-UTC−5)** when the nights listed run across a daylight-saving change (each night's times use that night's offset).
-The table shows **Night of**, **Ingress**, **Mid**, **Egress**, **Altitude in / mid / out**, **Sun at mid**,
-**Moon (lit, distance)**, **± ephemeris** and **Coverage**:
-
-- **full** (green): the transit and the baseline on both sides fit in a dark sky above the altitude limit.
-- **transit only**: the transit fits, but not the whole baseline.
-- **partial** (orange): only part of the transit is observable.
-
-On an alt-az mount the table has one more column, **Zenith keyhole**, which says, for example, **KEYHOLE: up to 87°**
-when the star passes above 85° during the transit.
-
-**± ephemeris** is how uncertain the predicted time is on that date. If it is large (tens of minutes), take more
-baseline on both sides so the transit cannot slip out of your window. **Export CSV…** saves the list as
-`<planet>_transits.csv` (the planet's name without spaces, e.g. `TrES-3b_transits.csv`), with each night's UTC
-offset in its last column, `local_utc_offset`. With no observable transit in the range the table says *"No observable transits in this range."*
+When you run photometry later, SHOBS-P checks whether your frames cover a predicted transit of the planet. If they do
+not, it says so before it runs, and offers Variables mode if the run looks like variability work instead (chapter 8).
 
 ## How much baseline
 
 The baseline is the light curve before ingress and after egress. The fit uses it to learn the star's level and any
 airmass trend, so a transit with no baseline on one side can be faked or distorted by a slow trend.
 
-- Aim for at least an hour on each side (the default). Half an hour on each side is a workable minimum.
+- Aim for at least an hour on each side. Half an hour on each side is a workable minimum.
 - Equal amounts on both sides are better than a long stretch on one side only.
 - If the ephemeris is uncertain, add that uncertainty to both ends.
 - Start a few minutes early: the first frames often go to focus and settling.
 
 When the fit later finds less than about 20 minutes of baseline on a side, it warns you and may judge the depth
 unreliable (see [18. When the fit says "inconclusive" or "none"](18-inconclusive-or-none.md)).
+
+**Faint comps?** If the field's comparison stars are much fainter than the target, their noise can swamp the
+transit in single frames. SHOBS-P can stack frames after the run to fix that (see "Stacking when comps are weak" in
+[8. Photometry page basics](08-photometry-basics.md)), but a stack hides anything faster than itself. Short
+exposures are fine; just take enough of them.
 
 ## Meridian flips
 
@@ -211,20 +162,28 @@ data, and the star lands on a different part of the sensor, which can leave a sm
 
 What SHOBS-P does:
 
-- **Tonight's transits** marks such nights with **flip** in the **Meridian** column, and **no meridian flip** hides
-  them.
+- With **Mount** set to **German equatorial**, SHOBS-P finds the flip from the frames' headers (ROTATOR or PIERSIDE)
+  or from the image itself, and splits the night there.
 - During photometry, frames on both sides of the flip are aligned and measured as usual; the alignment of each
   flipped frame is checked on up to 15 stars' own centers, so the comp and check apertures land on their stars. The
   Calibrate log notes where the flip happened (*"Meridian flip before frame …"*). If you reject the frames before the
   flip in Blink, the first kept frame becomes the reference (chapter 6).
-- The transit fit tests whether a plain jump at the largest gap in the data explains the dip as well as a transit
-  does. If it does, the verdict becomes "inconclusive" rather than "detected".
+- The transit fit tests a **flip step**: a jump in the star's level at the flip. It fits the night with and without
+  the step, and keeps the step only when it improves the fit clearly (ΔBIC 10 or more, the same bar as a detection).
+  A kept step is fitted together with the transit, so its uncertainty is part of the depth's. See "A meridian flip in
+  the night" in [17. Fit a transit and submit it](17-fit-a-transit-and-submit-it.md).
+- If **Mount** is left on **Alt-az** but the field turns by about 180° between two frames, the photometry run warns
+  you: *"⚠ The field turned by 180° between frames … — that looks like a meridian flip. Is the Mount set right
+  (German equatorial)? …"*. Set **Mount** to **German equatorial** and run photometry again, so the frames after the
+  flip are treated as after it.
 
 How to plan for it:
 
 1. Prefer a transit with no flip, if you have the choice.
 2. If a flip cannot be avoided, put it in the baseline, well away from ingress and egress, and keep a good stretch
-   of baseline (30 minutes or more) on each side of it.
+   of baseline (30 minutes or more) on each side of it. This matters more now that the fit can fit a step at the
+   flip: with too little baseline on one side, the step and the transit cannot be told apart, and the verdict is
+   "inconclusive".
 3. Keep the flip short, so the gap is short.
 
 **You do not need a second set of flats for a meridian flip.** After a flip the camera sits in the same place on the
@@ -235,23 +194,23 @@ Calibrate page warns about it. See [7. Calibrate](07-calibrate.md).
 
 ### Alt-az mounts: the zenith keyhole
 
-An alt-az mount never flips, so none of the above applies to it. Its trouble spot is the zenith: above about 85° the
-mount's azimuth speed and the field rotation get extreme, and frames there can trail or smear. With **Mount** set to
-**Alt-az** in the Optics box (Input page), Tonight's transits shows a **Zenith** column instead of **Meridian** (and
-can hide such transits), and the Transit planner adds a **Zenith keyhole** column. Their CSV exports get a
-`zenith_keyhole` column too. The planning windows always use the **Mount** box, not the headers of any lights you have loaded.
+An alt-az mount never flips, so the flip step does not apply to it. Its trouble spot is the zenith: above about 85°
+the mount's azimuth speed and the field rotation get extreme, and frames there can trail or smear. When you choose
+the night, avoid transits during which the star climbs above 85°, or keep that stretch in the baseline.
+
+When you scan the folders of such a night, with **Mount** set to **Alt-az** in the Optics box (Input page), the log
+says, for example, *"Zenith keyhole: the field reached altitude 87.2° (above 85°), … Check them on the Blink page."*
 
 ## Checklist for the night
 
 - Planet entered on the Input page, with period, T0 and duration filled in.
-- Start time = **Start (with baseline)**, end time = **End (with baseline)**, plus any ephemeris uncertainty.
+- **Mount** in the Optics box set to your mount.
+- Start and end times that cover the transit, at least 30–60 minutes of baseline on each side, plus any ephemeris
+  uncertainty.
 - Flats for the camera angle you will use (one set covers both sides of a flip).
-- Bias and darks that match the lights' exposure.
+- Bias (or dark flats) and darks that match the lights' exposure (chapter 4).
 - Comparison stars of similar brightness and color in the field (the Photometry page suggests them; see
   [8. Photometry page basics](08-photometry-basics.md)).
-
-If you later run photometry on frames that do not cover a predicted transit, SHOBS-P says so before it runs, and
-offers Variables mode if the run looks like variability work instead.
 
 ---
 

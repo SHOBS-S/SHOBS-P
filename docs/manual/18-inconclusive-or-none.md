@@ -66,7 +66,7 @@ a re-centering, a cloud), and a simple step in brightness at that gap explains t
 A flip, a camera rotation or a guiding re-acquisition can all shift the star on the sensor and leave such a step.
 
 - If the gap is a meridian flip, the next time put the flip in the baseline, or choose a night with no flip (see
-  [16. Plan a transit night](16-plan-a-transit-night.md)).
+  [16. Prepare for a transit night](16-plan-a-transit-night.md)).
 - Check **Comp health…** in the one-night view: a comp that jumps at the flip is a common cause. Replace it with
   **Use comps…**.
 - Tc may still be usable; the depth is not.

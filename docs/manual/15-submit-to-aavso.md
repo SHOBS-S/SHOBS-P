@@ -163,4 +163,4 @@ Before uploading, check three things in the file: your observer code, the chart 
 
 ---
 
-Previous: [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md) · Next: [16. Plan a transit night](16-plan-a-transit-night.md)
+Previous: [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md) · Next: [16. Prepare for a transit night](16-plan-a-transit-night.md)

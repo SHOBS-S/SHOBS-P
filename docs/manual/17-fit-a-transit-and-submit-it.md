@@ -15,7 +15,7 @@ This chapter covers:
 
 ## Get to the fit
 
-1. In Transits mode, enter the planet on the Input page (see [16. Plan a transit night](16-plan-a-transit-night.md)).
+1. In Transits mode, enter the planet on the Input page (see [16. Prepare for a transit night](16-plan-a-transit-night.md)).
 2. Work through Input, Blink and Calibrate, then mark the target and comparison stars and press **Run photometry**
    (see [8. Photometry page basics](08-photometry-basics.md)). A check star is optional for a transit.
 3. When photometry ends, SHOBS-P opens the Output step. The fit starts by itself when there are at least 20 usable
@@ -447,4 +447,4 @@ against its prior range gets the same ⚠ as on a single night. **Save PNG…** 
 
 ---
 
-Previous: [16. Plan a transit night](16-plan-a-transit-night.md) · Next: [18. When the fit says "inconclusive" or "none"](18-inconclusive-or-none.md)
+Previous: [16. Prepare for a transit night](16-plan-a-transit-night.md) · Next: [18. When the fit says "inconclusive" or "none"](18-inconclusive-or-none.md)
