@@ -270,7 +270,8 @@ class StackMixin:
         goal = self._stack_goal_value()
         sug = stack_core.suggest_n(noise, cadence, cap, len(kept), goal)
         if mode == "discovery":
-            sug["n"] = max(1, min(sug["n_cap"] or 1, len(kept) or 1))   # no comps to judge: up to the cap
+            # no comps to judge: up to the cap, leaving at least MIN_POINTS stacks (a scan needs 10 frames)
+            sug["n"] = max(1, min(sug["n_cap"] or 1, len(kept) // stack_core.MIN_POINTS or 1))
             sug["n_stacks"] = int(math.ceil(len(kept) / sug["n"])) if kept else 0
             sug["span_s"] = sug["n"] * cadence if math.isfinite(cadence) else float("nan")
         text, warn = stack_core.suggest_text(mode, noise, sug, cap, len(kept), goal)
@@ -293,7 +294,8 @@ class StackMixin:
                          f"comp ensemble {noise['sig_c'] * 1000:.1f} mmag (SNR {noise['snr_c']:.0f}; each comp "
                          + ", ".join(f"{s:.0f}" for s in noise["comp_snr"]) + ") over "
                          f"{noise['n']} frames; comp noise {noise['ratio']:.2f}× the target's.")
-            self.log(text.replace("⚠ ", "⚠ Stacking: ", 1) if warn else "Stacking: " + text)
+            self.log(text.replace("⚠ ", "⚠ Stacking: ", 1) if warn else
+                     (text if text.startswith("Stacking") else "Stacking: " + text))
         return sug
 
     # ---- Stack -----------------------------------------------------------------------------------------------
@@ -339,6 +341,10 @@ class StackMixin:
                                               "signal.\n\nStack anyway?"):
                 return
         groups = stack_core.plan_groups(recs, n, cadence)
+        if src.get("scan") and len(groups) < stack_core.MIN_POINTS:
+            messagebox.showerror(TITLE, f"That makes only {len(groups)} stacks; a field scan needs at least "
+                                        f"{stack_core.MIN_POINTS}. Use a smaller N.")
+            return
         if src["mode"] == "transits" and len(groups) < 20:
             if not messagebox.askyesno(TITLE, f"That makes only {len(groups)} stacked points; the transit fit needs "
                                               "20 or more.\n\nStack anyway?"):
@@ -505,14 +511,16 @@ class StackMixin:
             r = float(self.radius.get())
         except (TypeError, ValueError):
             r = float("nan")
-        prop = core.suggest_apertures(f_stack)
-        text = (f"Aperture check on the stacks: star FWHM {f_stack:.1f} px (one frame: {f_ref:.1f} px); the suggested "
-                f"aperture for the stacks is r {prop['radius']:g} px")
-        if math.isfinite(r) and abs(prop["radius"] - r) > 0.15 * r:
-            text = ("⚠ " + text + f", the run used r {r:g}. Suggest… (with Points: Stacked) tests apertures on the "
-                    "stacks; with a new aperture, Stack again (the stacks are reused).")
+        prop, prop1 = core.suggest_apertures(f_stack), core.suggest_apertures(f_ref)
+        text = (f"Aperture check on the stacks: star FWHM {f_stack:.1f} px (one frame: {f_ref:.1f} px), so the "
+                f"suggestion is r {prop['radius']:g} px on the stacks, r {prop1['radius']:g} px on one frame")
+        if f_stack > 1.15 * f_ref:
+            text = ("⚠ " + text + f". The stacks' stars are {f_stack / f_ref - 1:.0%} wider (drift or seeing inside a "
+                    f"stack). Suggest… (with Points: Stacked) tests apertures on the stacks"
+                    + (f" (this run used r {r:g})" if math.isfinite(r) else "")
+                    + "; with a new aperture, press Stack again (the stacks are reused, only the photometry is redone).")
         else:
-            text += f"; r {r:g} px fits."
+            text += "; the aperture chosen for the frames suits the stacks."
         self.log(text)
 
     # ---- the Points switch -----------------------------------------------------------------------------------

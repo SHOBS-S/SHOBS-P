@@ -51,6 +51,7 @@ VARIABLE_CAP_FRACTION = 1.0 / 50.0   # of the period
 DISCOVERY_CAP_S = 300.0              # 5 min
 DEFAULT_TRANSIT_CAP_S = 120.0        # no ingress/egress known: conservative
 DEFAULT_VARIABLE_CAP_S = 300.0       # no period known: conservative
+MIN_POINTS = 10           # a suggestion never leaves the night fewer points than this (a scan needs 10 frames)
 GAP_CADENCES = 3.0        # a gap longer than this many frame spacings ends a stack
 # Flags that keep a frame out of a stack (every flag the run sets that means "not a good measurement").
 LEAVE_OUT = ("sat", "compsat", "drift", "noflux", "nocomp", "cloud", "cloudedge", "haze", "edge", "offedge")
@@ -221,6 +222,7 @@ def suggest_n(noise: dict | None, cadence_s: float, cap: dict, n_frames: int, go
     scintillation, sig_point / sqrt(N)) meets it. Cap: the stack may not last longer than cap["seconds"].
     Returns {"n", "n_rule", "n_goal", "n_cap", "capped", "goal_met", "dominate", "n_stacks", "span_s", "snr_c"}."""
     out = {"n": 1, "n_rule": 1, "n_goal": None, "n_cap": None, "capped": False, "goal_met": None, "dominate": False,
+           "few_points": False,
            "n_stacks": n_frames, "span_s": cadence_s, "snr_c": float("nan"), "point_ppt": float("nan")}
     if noise:
         out["dominate"] = noise["ratio"] > 1.0
@@ -239,6 +241,9 @@ def suggest_n(noise: dict | None, cadence_s: float, cap: dict, n_frames: int, go
     out["n_cap"] = n_cap
     if n > n_cap:
         n, out["capped"] = n_cap, True
+    most = max(1, n_frames // MIN_POINTS)
+    if n > most:
+        n, out["few_points"] = most, True   # never fewer than MIN_POINTS points from the night
     n = max(1, min(n, max(n_frames, 1)))
     out["n"] = n
     if out["n_goal"] is not None:
@@ -255,7 +260,7 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
     """(the line's text, warn?) for the Photometry page's Stack row."""
     n = sug["n"]
     span = _dur(sug["span_s"]) if math.isfinite(sug.get("span_s", float("nan"))) else "?"
-    tail = f"; {n_kept} frames → {sug['n_stacks']} points"
+    tail = f"; {n_kept} frames → {sug['n_stacks']} point{'s' if sug['n_stacks'] != 1 else ''}"
     cap_note = ""
     if sug["capped"]:
         want = max(sug["n_rule"], sug["n_goal"] or 1)
@@ -264,12 +269,14 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
                     + f" wanted {want}.")
     elif not cap.get("known"):
         cap_note = f" Time cap: {cap['text']}."
+    if sug.get("few_points"):
+        cap_note += f" Kept to {n} frames so the night still has at least {MIN_POINTS} points."
     if sug.get("goal_met") is False:
         cap_note += f" The {goal_ppt:g} ppt goal is not met (about {sug['point_ppt']:.1f} ppt per point)."
     if mode == "discovery" or noise is None:
         if mode == "discovery":
-            return (f"Stacking (optional): stacks of {n} frames ({span} each){tail}. A stack hides events faster "
-                    f"than itself (cap {cap['text']}).", False)
+            return (f"Stacking (optional): stacks of {n} frames ({span} each){tail}. Time cap "
+                    f"{_dur(cap['seconds'])}: a stack hides events faster than itself.{cap_note}", False)
         return (f"Stacking: the noise could not be judged from this run (too few good frames). Stacks of {n} "
                 f"frames ({span} each){tail}.{cap_note}", False)
     goal_needs = goal_ppt and (sug["n_goal"] or 1) > 1

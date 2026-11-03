@@ -35,14 +35,17 @@ FIELD = [(20, 20, 40000), (140, 25, 30000), (30, 100, 35000), (130, 95, 45000), 
          (15, 60, 20000), (145, 60, 22000), (60, 105, 28000)]
 TARGET = (80.0, 60.0, 60000.0)
 COMPS = [(50.0, 45.0, 6000.0), (110.0, 75.0, 6000.0)]
+_r = np.random.default_rng(230)
+RICH = FIELD + [(float(x), float(y), float(f)) for x, y, f in zip(_r.uniform(22, 138, 30), _r.uniform(22, 98, 30),
+                                                                   _r.uniform(15000, 60000, 30))]   # a scan needs 8+
 
 
 def render(rng, dx=0.0, dy=0.0, flipped=False, seeing=1.8, sky=200.0, rn=10.0, gain=1.0, target_scale=1.0,
-           noise=True):
+           noise=True, field=None):
     """One calibrated frame in ADU (gain e-/ADU): Gaussian stars, Poisson + read noise."""
     yy, xx = np.mgrid[0:H, 0:W]
     img = np.full((H, W), sky * gain, dtype=np.float64)
-    stars = FIELD + [(TARGET[0], TARGET[1], TARGET[2] * target_scale)] + COMPS
+    stars = (field or FIELD) + [(TARGET[0], TARGET[1], TARGET[2] * target_scale)] + COMPS
     for x, y, f in stars:
         if flipped:
             x, y = W - 1 - x, H - 1 - y
@@ -93,7 +96,7 @@ class TestRules(unittest.TestCase):
     def test_weak_comps_suggest_n(self):
         # target noise 2 mmag, comp ensemble 10 mmag per frame: comps dominate, N = (10 / (0.5 * 2))^2 = 100
         pts = [FakeObs(jd=2460000.0 + i * 3 / 86400, target_var=0.002 ** 2, comp_vars=[0.01414 ** 2, 0.01414 ** 2])
-               for i in range(400)]
+               for i in range(2000)]
         noise = sc.noise_check(pts)
         self.assertAlmostEqual(noise["sig_c"], 0.01, delta=2e-4)
         self.assertAlmostEqual(noise["ratio"], 5.0, delta=0.1)
@@ -106,13 +109,18 @@ class TestRules(unittest.TestCase):
         self.assertEqual(sug["n_rule"], 100)
         self.assertEqual(sug["n"], 100)
         self.assertFalse(sug["capped"])
-        self.assertEqual(sug["n_stacks"], 4)
+        self.assertEqual(sug["n_stacks"], 20)
         self.assertAlmostEqual(sug["snr_c"], noise["snr_c"] * 10, places=6)
         text, warn = sc.suggest_text("variables", noise, sug, cap, len(pts), None)
         self.assertTrue(warn)
         self.assertTrue(text.startswith("⚠ Comps are weak"))
         self.assertIn("Stack 100 frames", text)
-        self.assertIn("400 frames → 4 points", text)
+        self.assertIn("2000 frames → 20 points", text)
+        # never fewer than 10 points from a night: 400 frames -> at most 40 per stack, and the line says why
+        s40 = sc.suggest_n(noise, cad, cap, 400)
+        self.assertEqual(s40["n"], 40)
+        self.assertTrue(s40["few_points"])
+        self.assertIn("at least 10 points", sc.suggest_text("variables", noise, s40, cap, 400, None)[0])
         # the time cap stops it: 1/50 of a 0.1-d period = 172.8 s = 57 frames, and the line says so
         cap2 = sc.time_cap("variables", None, 0.1)
         sug2 = sc.suggest_n(noise, cad, cap2, len(pts))
@@ -335,12 +343,15 @@ class TestStackInApp(unittest.TestCase):
         cls.cache = tempfile.mkdtemp()
         cls._old_cache = sc.STACK_CACHE_DIR
         sc.STACK_CACHE_DIR = os.path.join(cls.cache, "stacks")
+        cls._onsky = ca.onsky_log
+        ca.onsky_log = None   # no on-sky log files from the test runs
         cls.app = ca.App()
         cls.app.withdraw()
 
     @classmethod
     def tearDownClass(cls):
         cls.app.destroy()
+        cls.ca.onsky_log = cls._onsky
         sc.STACK_CACHE_DIR = cls._old_cache
         shutil.rmtree(cls.cache, ignore_errors=True)
 
@@ -444,21 +455,95 @@ class TestStackInApp(unittest.TestCase):
                               app.stack_report_note(pts, lead=False))
                 self.assertIn("stacks of 5", app._report_text(pts))
                 self.assertEqual(app.out_points_label.cget("text"), "Results use: Stacked (5 frames)")
-                # switch back: per-frame points, line follows
+                # a transit fit made on the stacks (a real fit result stands in for one)
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from test_2220_multinight import single_fit
+                tp = app.transit_page
+                tp.refresh()
+                tp.night.set(night)
+                fit = single_fit(100, 1)
+                tp.result, tp._fit_signature, tp.meta_for_files = fit, tp._signature(), {}
+                # switch back: per-frame points, line follows; the stacks' fit is put aside (not shown for frames)
                 app.points_choice.set("frame")
                 app._points_switched()
                 self.assertEqual(app.results_use.get(), "Results use: Per frame")
                 self.assertEqual(len([o for o in app.observations if o.night == night]), n_pts)
                 self.assertIsNone(app.stack_meta(night))
                 self.assertEqual(app.stack_report_note([o for o in app.observations], lead=False), "")
+                self.assertIsNot(tp.result, fit)
                 app.points_choice.set("stack")
                 app._points_switched()
                 self.assertEqual(app.results_use.get(), "Results use: Stacked (5 frames)")
                 self.assertEqual(len([o for o in app.observations if o.night == night]), 12)
+                self.assertIs(tp.result, fit)   # the cached fit is back at once, no refit
         finally:
             with mock.patch.object(app, "_offer_series_save", return_value=True):
                 if app.observations:
                     app.close_series(asked=True)
+            app.update()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_discovery_scan_on_stacks(self):
+        """Discovery: Scan field, then Stack: the scan runs on the stacks; Points switches the scan shown."""
+        ca, app = self.ca, self.app
+        tmp = tempfile.mkdtemp()
+        lights = os.path.join(tmp, "lights")
+        os.makedirs(lights)
+        rng = np.random.default_rng(8)
+        exp, cad = 2.0, 3.0
+        t0 = 2460960.6
+        for i in range(60):
+            img = render(rng, dx=0.02 * i, dy=0.01 * i, field=RICH)
+            hdr = fits.Header()
+            hdr["EXPTIME"] = exp
+            hdr["DATE-OBS"] = Time(t0 + i * cad / 86400 - exp / 2 / 86400, format="jd", scale="utc").isot
+            fits.PrimaryHDU(np.clip(img + 500, 0, 65535).astype(np.uint16), header=hdr).writeto(
+                os.path.join(lights, f"light_{i:04d}.fits"))
+        old_mode = app.mode_key
+        try:
+            with mock.patch.object(ca.messagebox, "askyesno", return_value=True), \
+                    mock.patch.object(ca.messagebox, "askyesnocancel", return_value=False), \
+                    mock.patch.object(ca.messagebox, "showinfo"), mock.patch.object(ca.messagebox, "showwarning"), \
+                    mock.patch.object(ca.messagebox, "showerror") as err, \
+                    mock.patch.object(app, "label_aavso"):
+                app.set_mode("discovery")
+                app.light_dir.set(lights)
+                app.pattern.set(core.MONO)
+                app.binning.set(1)
+                app.masters = core.Masters()
+                app.masters_binning = 1
+                first = os.path.join(lights, "light_0000.fits")
+                raw, head = core.read_fits(first)
+                app.preview = raw.astype(np.float32)
+                app.preview_header, app.preview_path, app.preview_is_debayered = head, first, True
+                app.calibrated = app.preview
+                app.radius.set(4.0)
+                app.sky_in.set(8.0)
+                app.sky_out.set(13.0)
+                app.scan_field()
+                self.assertTrue(self.pump_until(lambda: not app.busy and getattr(app, "last_scan", None) is not None
+                                                and app._stack_shown), "per-frame scan")
+                self.assertFalse(err.called, err.call_args)
+                frame_scan = app.last_scan
+                self.assertEqual(frame_scan["frames"], 60)
+                self.assertIn("a stack hides events faster than itself", app.stack_line.get())
+                self.assertEqual(app.stack_n.get(), "6")   # up to the 5-min cap, but at least 10 stacks
+                app.stack_n.set("6")
+                app._stack_n_typed = True
+                app.start_stack()
+                self.assertTrue(self.pump_until(lambda: not app.busy and app.points_choice.get() == "stack"
+                                                and app.last_scan is not frame_scan, 180), "stacked scan")
+                self.assertFalse(err.called, err.call_args)
+                self.assertEqual(app.last_scan["frames"], 10)
+                self.assertEqual(app.last_scan["stack"]["n"], 6)
+                self.assertEqual(app.results_use.get(), "Results use: Stacked (6 frames)")
+                app.points_choice.set("frame")
+                app._points_switched()
+                self.assertIs(app.last_scan, frame_scan)
+                self.assertEqual(app.results_use.get(), "Results use: Per frame")
+        finally:
+            with mock.patch.object(ca.messagebox, "askyesno", return_value=True):
+                app.set_mode(old_mode)
             app.update()
             shutil.rmtree(tmp, ignore_errors=True)
 
