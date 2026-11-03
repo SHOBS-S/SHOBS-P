@@ -74,7 +74,10 @@ class StackMixin:
         self.points_stack_button = ttk.Radiobutton(row, text="Stacked", value="stack", variable=self.points_choice,
                                                    command=self._points_switched)
         self.points_stack_button.pack(side=LEFT, padx=(8, 0))
-        ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel").pack(side="top", anchor=W, pady=(2, 0))
+        use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
+        use.pack(side="top", anchor=W, pady=(2, 0))
+        # the line wraps at the switch's own width, so the box never needs more room than the two buttons
+        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), 100)), add="+")
         self._points_box, self._points_view_box = box, view_box
         options.bind("<Configure>", lambda _e: self.after_idle(self._stack_place_points_box), add="+")
         # The Stack row: shown under the settings once a run has points.
