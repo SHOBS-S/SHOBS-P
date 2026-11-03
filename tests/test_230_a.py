@@ -475,6 +475,18 @@ class TestStackInApp(unittest.TestCase):
                               app.stack_report_note(pts, lead=False))
                 self.assertIn("stacks of 5", app._report_text(pts))
                 self.assertEqual(app.out_points_label.cget("text"), "Results use: Stacked (5 frames)")
+                # the transit settings record and the report's NOTES say so too
+                meta = {"binning": "1x1"}
+                app.transit_page._repro_meta(meta, pts, night, np.array([o.jd for o in pts]))
+                self.assertIn("stacks of 5 frames", meta["repro"]["stack"])
+                lines = app.transit_page.settings_lines(meta, {})
+                self.assertTrue(any(line.startswith("Stacking: stacks of 5 frames") for line in lines), lines)
+                self.assertIn("points are stacks of 5 frames (effective exposure 10 s)",
+                              app.transit_page.settings_note(meta, {}))
+                # the series file carries the stack size
+                app._write_series(os.path.join(tmp, "series.json"))
+                saved_meta, _pts = core.load_series(os.path.join(tmp, "series.json"))
+                self.assertEqual(int(saved_meta["night_binning"][night]["stack"]["n"]), 5)
                 # a transit fit made on the stacks (a real fit result stands in for one)
                 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
                 from test_2220_multinight import single_fit
