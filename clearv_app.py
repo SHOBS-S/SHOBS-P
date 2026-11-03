@@ -62,14 +62,14 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.2.21"
+APP_VERSION = "2.3.0"
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
 # 2.2.18 (item 15): how to cite SHOBS-P (Credits page). The concept DOI resolves to the newest Zenodo release; the
 # authors follow CITATION.cff. ASCL_ID: the Astrophysics Source Code Library ID once it is assigned (e.g. "2610.012");
 # when filled it is added to the citation as "ascl:<ID>".
-CITATION_DOI = "10.5281/zenodo.23417064"
+CITATION_DOI = "10.5281/zenodo.23417063"
 ASCL_ID = ""
 
 

@@ -49,12 +49,12 @@ An AAVSO report or an ExoFOP upload does not need these credits; they are for pu
 SHOBS-P is archived on Zenodo. Each release has its own DOI, so you can cite the exact version you used. One DOI
 always points to the latest version:
 
-**DOI: [10.5281/zenodo.23417064](https://doi.org/10.5281/zenodo.23417064)**
+**DOI: [10.5281/zenodo.23417063](https://doi.org/10.5281/zenodo.23417063)**
 
 The suggested citation, exactly as the Credits page shows it (and copies with **Copy**):
 
 > Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.2.20, Zenodo,
-> doi:10.5281/zenodo.23417064
+> doi:10.5281/zenodo.23417063
 
 The version in it is always the one you are running.
 
@@ -67,8 +67,8 @@ In BibTeX:
   version   = {2.2.20},
   year      = {2026},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.23417064},
-  url       = {https://doi.org/10.5281/zenodo.23417064}
+  doi       = {10.5281/zenodo.23417063},
+  url       = {https://doi.org/10.5281/zenodo.23417063}
 }
 ```
 

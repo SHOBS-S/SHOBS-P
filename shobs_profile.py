@@ -31,7 +31,8 @@ import tempfile
 import time
 from datetime import datetime
 
-SHOBS_PROFILE_VERSION = "1.0.0"          # of this file; raise on every change (the apps' tests check it)
+SHOBS_PROFILE_VERSION = "1.1.0"          # of this file; raise on every change (the apps' tests check it)
+# 1.1.0 (FLUX 0.5.1): save_profile works worked-out values out again (rederive) so they never go stale.
 
 FORMAT_VERSION = 1
 CAMERA_FORMAT = "shobs-camera-profile"
@@ -288,10 +289,55 @@ def write_json(path: str, doc: dict) -> None:
     _atomic_write(path, dumps(doc))
 
 
+LINEAR_FRACTION_NOTE = "% of saturation until a bench run measures it"
+
+
+def _num_words(v: float) -> str:
+    return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:g}"
+
+
+def rederive(doc: dict) -> list[str]:
+    """Work out again, from the values in the profile now, every value that is only worked out from others, so a
+    worked-out value never goes stale when one of its inputs changes (0.5.0 kept the Andor's full well at
+    65,535 × 1 e⁻ after its gain was typed as 1.89). A measured, typed, header or spec value is never touched.
+    Camera profiles: full well (source 'derived') = (saturation − bias) × gain, or saturation × gain while the bias
+    is not known; the linear-limit estimate (80 % of saturation) follows the saturation. Changes doc in place;
+    returns the keys it changed."""
+    if not isinstance(doc, dict) or doc.get("format") != CAMERA_FORMAT or not isinstance(doc.get("values"), dict):
+        return []
+    vals = doc["values"]
+    changed = []
+    gain, sat, bias = (value_of(vals.get(k)) for k in ("gain_e_per_adu", "saturation_adu", "bias_level_adu"))
+    fw = vals.get("full_well_e")
+    if is_record(fw) and fw.get("source") == "derived" and _finite(gain) and _finite(sat):
+        b = _finite(bias)
+        new = round((sat - (b or 0.0)) * gain)
+        note = (f"(saturation − bias) × gain: ({_num_words(sat)} − {_num_words(b)}) × {gain:g}" if b is not None
+                else f"saturation × gain: {_num_words(sat)} × {gain:g}")
+        if new > 0 and (fw.get("value") != new or fw.get("note") != note):
+            fw.update(record(new, fw.get("unit") or "e-", "derived", date=fw.get("date"), note=note))
+            changed.append("full_well_e")
+    ll = vals.get("linear_limit_adu")
+    if (is_record(ll) and ll.get("source") == "estimate" and LINEAR_FRACTION_NOTE in str(ll.get("note") or "")
+            and _finite(sat)):
+        m = re.match(r"\s*(\d+(?:\.\d+)?)\s*%", str(ll.get("note")))
+        frac = float(m.group(1)) / 100.0 if m else 0.8
+        new = round(frac * sat)
+        if ll.get("value") != new:
+            ll["value"] = new
+            changed.append("linear_limit_adu")
+    return changed
+
+
 def save_profile(doc: dict, written_by: str = "") -> str:
     """Save a camera or system profile (or a spec) in its folder. When a different version is already there, the old
-    one goes to history/ first and the revision goes up by one; saving identical content changes nothing. Returns the
-    path. ProfileError when the profile does not validate."""
+    one goes to history/ first and the revision goes up by one; saving identical content changes nothing. Values
+    worked out from others are worked out again first (rederive). Returns the path. ProfileError when the profile
+    does not validate."""
+    if doc.get("format") == CAMERA_FORMAT and isinstance(doc.get("values"), dict):
+        doc = dict(doc)
+        doc["values"] = {k: (dict(v) if isinstance(v, dict) else v) for k, v in doc["values"].items()}
+        rederive(doc)
     problems = validate(doc)
     if problems:
         raise ProfileError("the profile is not valid: " + "; ".join(problems[:5]))

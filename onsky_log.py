@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 import shobs_profile as sp
 
 # the shobs_profile.py this SHOBS-P was built against (its self-test checks the copy matches)
-NEEDS_PROFILE_VERSION = "1.0.0"
+NEEDS_PROFILE_VERSION = "1.1.0"
 FORMAT_VERSION = 1
 
 
