@@ -581,7 +581,9 @@ class StackMixin:
         if tp is not None and getattr(tp, "report", None) is None:
             cached = self._stack_fit_cache.get(which)
             try:
-                tp.refresh()
+                on_screen = bool(getattr(self, "transit_page_on_screen", lambda: False)())
+                # a set without a cached fit is fitted at once while the Transit fit page is on screen
+                tp.refresh(shown=on_screen and cached is None)
                 if cached is not None and cached[0] is not None and tp._signature() == cached[0] \
                         and tp.night.get() == night:
                     import transit_core as tc

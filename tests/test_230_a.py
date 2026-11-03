@@ -241,6 +241,26 @@ class TestCombine(unittest.TestCase):
         sh2, _, _ = sc.group_shifts(recs, 2)
         self.assertTrue(all(a % 2 == 0 and b % 2 == 0 for a, b in sh2))
 
+    def test_color_camera_stack_keeps_bayer_and_flux(self):
+        """OSC: frames are stacked on the mosaic (2-px shifts), then debayered; each channel's flux = the frames'."""
+        rng = np.random.default_rng(4)
+        resp = np.array([[0.8, 1.0], [1.0, 0.6]], dtype=np.float32)   # RGGB response
+        drifts = [(0.0, 0.0), (1.0, 0.0), (2.0, -1.0), (1.0, 1.0), (3.0, 2.0)]   # in superpixels
+        frames, recs = {}, []
+        for i, (dx, dy) in enumerate(drifts):
+            sp = render(rng, dx=dx, dy=dy, noise=False)                       # the superpixel scene
+            frames[f"f{i}"] = (np.kron(sp, np.ones((2, 2), dtype=np.float32)) * np.tile(resp, sp.shape)).astype(np.float32)
+            recs.append({"path": f"f{i}", "dx": dx, "dy": dy, "angle": 0.0})
+        shifts, anchor, _ = sc.group_shifts(recs, 2)
+        out, _ = sc.combine(lambda p: frames[p], recs, shifts)
+        ax, ay = drifts[anchor]
+        for ch in ("red", "green", "blue"):
+            st = core.debayer(out, "RGGB", ch)
+            f_stack = core.measure_aperture(st, TARGET[0] + ax, TARGET[1] + ay, 6.0, 10.0, 15.0)["flux"]
+            f_sum = sum(core.measure_aperture(core.debayer(frames[f"f{i}"], "RGGB", ch), TARGET[0] + dx, TARGET[1] + dy,
+                                              6.0, 10.0, 15.0)["flux"] for i, (dx, dy) in enumerate(drifts))
+            self.assertAlmostEqual(f_stack / f_sum, 1.0, delta=1e-5, msg=ch)
+
 
 @unittest.skipIf(fits is None, "needs astropy")
 class TestStackPhotometry(unittest.TestCase):

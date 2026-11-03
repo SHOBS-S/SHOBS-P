@@ -1976,6 +1976,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.page_frames[index].lift()
         if index == STEP_PHOTO:
             self._update_aperture_state()   # 2.2.19 (#41): a loaded or closed series changes what was measured
+            try:   # 2.3.0 (#54): the Stack row follows the series and the Input page (a planet or period typed since)
+                self._stack_ui_update()
+                self._stack_refresh_line(fill_n=True)
+            except Exception:
+                pass
         if index == STEP_BLINK and self._blink_folder() != self._blink_loaded_from:
             self.load_blink_list()
         elif index == STEP_BLINK:
