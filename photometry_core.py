@@ -873,6 +873,11 @@ class Masters:
     dark: np.ndarray | None = None
     flat: np.ndarray | None = None
     dark_exptime: float = 1.0
+    # 2.3.0 (item 11): the master dark flat (the flats' exposure, no light), taken off the flats. With no bias it is
+    # also the zero-exposure pedestal of the lights and darks: then `bias` holds it and pedestal == "darkflat".
+    darkflat: np.ndarray | None = None
+    darkflat_exptime: float | None = None
+    pedestal: str = ""          # what `bias` holds: "bias", "darkflat", or "" (nothing)
     notes: list[str] = field(default_factory=list)
     used: dict = field(default_factory=dict)      # 2.2.8: where each master came from (for the log and the night)
     headers: dict = field(default_factory=dict)   # 2.2.8: each master's header, for the checks against the lights
@@ -937,13 +942,14 @@ MASTER_PREFIX = "SHOBS-P_master_"
 # that take "every FITS in the folder" (TransitLab debayered SHOBS-P_master_bias_bin2.fits with the raw bias frames
 # on 13 Oct, and EXOTIC crashed on the half-size master) then never see them.
 MASTER_DIR = "SHOBS-P masters"
-MASTER_KINDS = ("bias", "dark", "flat")
+MASTER_KINDS = ("bias", "dark", "flat", "darkflat")   # 2.3.0 (item 11): + dark flat
 
 
 def master_file_name(kind: str, binning: int, exptime: float | None = None) -> str:
-    """SHOBS-P_master_flat_bin2.fits, SHOBS-P_master_dark_bin2_0.75s.fits, SHOBS-P_master_bias_bin2.fits."""
-    if kind == "dark":
-        return f"{MASTER_PREFIX}dark_bin{int(binning)}_{float(exptime or 0):g}s.fits"
+    """SHOBS-P_master_flat_bin2.fits, SHOBS-P_master_dark_bin2_0.75s.fits, SHOBS-P_master_bias_bin2.fits,
+    SHOBS-P_master_darkflat_bin2_0.5s.fits (2.3.0)."""
+    if kind in ("dark", "darkflat"):
+        return f"{MASTER_PREFIX}{kind}_bin{int(binning)}_{float(exptime or 0):g}s.fits"
     return f"{MASTER_PREFIX}{kind}_bin{int(binning)}.fits"
 
 
@@ -994,7 +1000,7 @@ def _master_cards(kind: str, binning: int, paths: list[str], headers: list[dict]
     first = headers[0] if headers else {}
     cards = {"SHOBSP": (str(version), "built by SHOBS-P (Shiloh Hill Observatory - Photometry)"),
              "MASTTYPE": (kind.upper(), "SHOBS-P master type"),
-             "IMAGETYP": (f"Master {kind.title()}", ""),
+             "IMAGETYP": ("Master Dark Flat" if kind == "darkflat" else f"Master {kind.title()}", ""),
              "SHBIN": (int(binning), "binning applied when stacking"),
              "NFRAMES": (len(paths), "raw frames median-combined"),
              "FPRINT": (frames_fingerprint(paths), "fingerprint of the raw frames (names, sizes, times)"),
@@ -1044,7 +1050,7 @@ def master_stamp(header: dict) -> str | None:
     if not header or not str(header.get("SHOBSP") or "").strip():
         return None
     kind = str(header.get("MASTTYPE") or "").strip().upper()
-    return kind if kind in ("BIAS", "DARK", "FLAT") else None
+    return kind if kind in ("BIAS", "DARK", "FLAT", "DARKFLAT") else None
 
 
 def check_master_file(path: str, kind: str) -> str:
@@ -1059,8 +1065,130 @@ def check_master_file(path: str, kind: str) -> str:
                 "are not used, because how they were scaled and normalized is not known. Choose the folder of raw "
                 f"{kind} frames instead (SHOBS-P builds its master there and reuses it).")
     if stamp != kind.upper():
-        return f"{os.path.basename(path)} is a master {stamp.lower()}, not a master {kind}."
+        return (f"{os.path.basename(path)} is a {MASTER_WORDS.get(stamp.lower(), 'master ' + stamp.lower())}, not a "
+                f"{MASTER_WORDS.get(kind, 'master ' + kind)}.")
     return ""
+
+
+MASTER_WORDS = {"bias": "master bias", "dark": "master dark", "flat": "master flat",
+                "darkflat": "master dark flat"}   # 2.3.0 (item 11)
+
+
+# ---- 2.3.0 (item 11): dark flats ---------------------------------------------------------------------------------
+# A dark flat is a dark at the flats' exposure: flat - dark flat takes off the pedestal AND the flats' dark current,
+# with no bias. Observers without usable bias frames take them (Matthew, 2 Nov). Before 2.3.0 they had to go in the
+# Bias box (Bias <- dark flats); that still works and is noted.
+EXPOSURE_MATCH = 0.02     # exposures within 2% count as the same (nothing scaled)
+
+
+def is_dark_flat_type(text) -> bool:
+    """IMAGETYP 'Dark Flat', 'DARKFLAT', 'Flat Dark', 'FLATDARK', 'Dark-Flat', 'dark_flat', 'Flat-Dark' (any case)."""
+    squashed = str(text or "").lower().replace(" ", "").replace("_", "").replace("-", "")
+    return "darkflat" in squashed or "flatdark" in squashed
+
+
+def frame_is_dark_flat(path: str, header: dict | None = None) -> bool:
+    """A frame that says it is a dark flat: its IMAGETYP / FRAMETYP / FRAME keyword, else its file name."""
+    if header is None:
+        try:
+            header = read_header(path)
+        except Exception:
+            header = {}
+    kind = " ".join(str((header or {}).get(k) or "") for k in ("IMAGETYP", "FRAMETYP", "FRAME")).strip()
+    if kind:
+        return is_dark_flat_type(kind)
+    return is_dark_flat_type(os.path.basename(path or ""))
+
+
+def split_dark_flats(paths: list[str]) -> tuple[list[str], list[str]]:
+    """(flats, dark flats) of a Flat folder: some capture programs save the dark flats beside the flats, and a dark
+    flat stacked into the master flat would dim it."""
+    flats, dflats = [], []
+    for p in paths:
+        (dflats if frame_is_dark_flat(p) else flats).append(p)
+    return flats, dflats
+
+
+def exposures_match(a, b, tol: float = EXPOSURE_MATCH) -> bool | None:
+    """True / False when both exposures are known (within 2% = the same), None otherwise."""
+    try:
+        a, b = float(a), float(b)
+    except (TypeError, ValueError):
+        return None
+    if not (a > 0 and b > 0 and math.isfinite(a + b)):
+        return None
+    return abs(a / b - 1.0) <= tol
+
+
+def calibration_plan(have_bias: bool, have_dark: bool, have_flat: bool, have_darkflat: bool,
+                     dark_exp=None, light_exp=None, flat_exp=None, darkflat_exp=None,
+                     darkflats_in_bias: bool = False, flats_calibrated: bool = False) -> dict:
+    """2.3.0 (item 11): how the lights and flats are calibrated from the boxes given, in plain words for the Log.
+    {"lights": text, "flats": text ('' without flats), "pedestal": "bias" / "darkflat" / "", "notes": [...],
+    "warnings": [...]}.
+    - A bias is the pedestal of the lights and darks (as always).
+    - No bias, dark flats given: the dark flats are the pedestal: L - DF - (D - DF) t_L / t_D, which is L - D exactly
+      when the darks match the lights' exposure (no bias needed, no warning).
+    - The dark flats always win for the flats: F - DF.
+    - No bias and no dark flats: a dark scaled to another exposure scales the pedestal it holds too (ccdproc
+      scale=True): the lights (and the flats) keep a wrong part of the offset. Warned."""
+    notes, warns = [], []
+    pedestal = "bias" if have_bias else ("darkflat" if have_darkflat else "")
+    lights_scaled = have_dark and exposures_match(dark_exp, light_exp) is False
+    if darkflats_in_bias:
+        notes.append("The Bias box holds dark flats (their IMAGETYP says so). They are used as the bias, as before "
+                     "2.3.0; the Dark flats box is now the place for them, and the Bias box can then stay empty.")
+    if have_dark and have_bias:
+        lights = ("light − bias − (dark − bias) scaled to the lights' exposure" if lights_scaled
+                  else "light − bias − (dark − bias)")
+    elif have_dark and have_darkflat:
+        if lights_scaled:
+            lights = "light − dark flat − (dark − dark flat) × t_light / t_dark (the dark flats stand in for the bias)"
+            notes.append(f"No bias: the dark flats are used as the zero-exposure pedestal, so only the darks' own "
+                         f"signal is scaled ({dark_exp:g} s darks to {light_exp:g} s lights)"
+                         + (f"; the dark flats' own {darkflat_exp:g} s of dark current counts as pedestal (tiny on a "
+                            "cooled camera)." if darkflat_exp else "."))
+        else:
+            lights = "light − dark (the darks match the lights' exposure, so no bias is needed)"
+    elif have_dark:
+        lights = "light − dark" + (" scaled ×{:.3g}".format(light_exp / dark_exp) if lights_scaled else "")
+        if lights_scaled:
+            warns.append(f"Darks can't be scaled correctly without bias or dark flats. The darks ({dark_exp:g} s) are "
+                         f"scaled ×{light_exp / dark_exp:.3g} to the lights ({light_exp:g} s), and the camera's offset "
+                         "(pedestal) inside them is scaled too, so the lights keep a wrong offset. The sky ring takes "
+                         "most of it out in photometry, but the flat correction and the photon-noise check do not. Add "
+                         f"bias frames or dark flats, or use {light_exp:g} s darks.")
+    elif have_bias:
+        lights = "light − bias"
+    elif have_darkflat:
+        lights = "light − dark flat (the dark flats stand in for the bias; no darks)"
+    else:
+        lights = "nothing subtracted (no bias, darks or dark flats)"
+    flats = ""
+    if have_flat and flats_calibrated:
+        flats = "used as they are (already calibrated)"
+    elif have_flat and have_darkflat:
+        flats = "flat − dark flat"
+        if exposures_match(darkflat_exp, flat_exp) is False:
+            warns.append(f"The dark flats are {darkflat_exp:g} s and the flats {flat_exp:g} s. Dark flats should match "
+                         "the flats' exposure; they are taken off as they are (the offset still comes off; the flats' "
+                         f"dark current is a little off). Take dark flats at {flat_exp:g} s.")
+        if have_bias:
+            notes.append("Bias and dark flats are both given: the dark flats are taken off the flats; the bias is used "
+                         "for the lights and darks.")
+    elif have_flat and have_bias:
+        flats = "flat − bias" + (" − dark scaled to the flats' exposure" if have_dark else "")
+    elif have_flat and have_dark:
+        fm = exposures_match(dark_exp, flat_exp)
+        flats = "flat − dark" + (" scaled to the flats' exposure" if fm is False else "")
+        if fm is False:
+            warns.append(f"The flats ({flat_exp:g} s) get the master dark ({dark_exp:g} s) scaled ×"
+                         f"{flat_exp / dark_exp:.3g}, and with no bias that scales the camera's offset too, so the "
+                         "wrong amount of offset comes off and the master flat is wrong. Put dark flats (darks at the flats' "
+                         "exposure) in the Dark flats box, or add bias frames.")
+    elif have_flat:
+        flats = "nothing subtracted from the flats (no bias, darks or dark flats)"
+    return {"lights": lights, "flats": flats, "pedestal": pedestal, "notes": notes, "warnings": warns}
 
 
 def find_saved_master(paths: list[str], kind: str, binning: int, depends: dict, exptime: float | None = None):
@@ -1112,6 +1240,7 @@ def master_mismatches(master_header: dict, kind: str, light_header: dict, light_
                       derotator: bool = False) -> tuple[list[str], list[str]]:
     """(errors that make the master unusable, warnings) comparing a master with the lights."""
     errors, warns = [], []
+    kind = "dark flat" if kind == "darkflat" else kind   # 2.3.0 (item 11): in the words below
     if tuple(master_shape) != tuple(light_shape):
         errors.append(f"master {kind} is {master_shape[1]}x{master_shape[0]} px but the binned lights are "
                       f"{light_shape[1]}x{light_shape[0]} px")
@@ -1169,23 +1298,29 @@ def master_summary(header: dict) -> str:
 
 def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: list[str], binning: int = 1,
                     log=None, flats_calibrated: bool = False, files: dict | None = None, save: bool = True,
-                    rebuild: bool = False, version: str = "") -> Masters:
+                    rebuild: bool = False, version: str = "", darkflat_paths: list[str] | None = None) -> Masters:
     """2.2.8: build_masters, but each master is saved into the folder its raw frames came from and reused on later
     runs while the raw frames, binning, and the bias/dark it was built with are unchanged. files: {"bias": path,
-    "dark": path, "flat": path} for SHOBS-P masters picked directly. Masters.used describes each master's source;
-    Masters.headers keeps each master's header for the checks against the lights."""
+    "dark": path, "flat": path, "darkflat": path} for SHOBS-P masters picked directly. Masters.used describes each
+    master's source; Masters.headers keeps each master's header for the checks against the lights.
+    2.3.0 (item 11): darkflat_paths (or files["darkflat"]): the master dark flat is taken off the flats instead of
+    bias + scaled dark (F - DF). With no bias it is also the pedestal for the darks and lights (masters.bias = the
+    dark flat, masters.pedestal "darkflat"): L - DF - (D - DF) t_L / t_D, which is L - D when the exposures match."""
     log = log or (lambda *_: None)
     files = files or {}
     masters = Masters()
     masters.used = {}
     masters.headers = {}
 
+    def word(kind):
+        return "dark flat" if kind == "darkflat" else kind   # 2.3.0 (item 11)
+
     def load(kind, path, header, how):
         data, _h = read_fits(path)
         masters.headers[kind] = header
         summary = master_summary(header)
-        masters.used[kind] = f"{how} SHOBS-P master {kind}" + (f" {summary}" if summary else "")
-        log(f"Using {how} master {kind} {summary}".rstrip() + f": {os.path.basename(path)}")
+        masters.used[kind] = f"{how} SHOBS-P master {word(kind)}" + (f" {summary}" if summary else "")
+        log(f"Using {how} master {word(kind)} {summary}".rstrip() + f": {os.path.basename(path)}")
         return np.asarray(data, dtype=np.float32)
 
     def save_it(kind, data, paths, headers, extra, exptime=None):
@@ -1197,10 +1332,10 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
             os.makedirs(folder, exist_ok=True)
             write_master(path, data, _master_cards(kind, binning, paths, headers, version, extra))
             masters.headers[kind] = read_header(path)
-            log(f"Saved master {kind} in the {kind} folder's '{MASTER_DIR}' subfolder: {os.path.basename(path)} "
-                "(reused next time while these frames are unchanged)")
+            log(f"Saved master {word(kind)} in the {word(kind)} folder's '{MASTER_DIR}' subfolder: "
+                f"{os.path.basename(path)} (reused next time while these frames are unchanged)")
         except Exception as exc:
-            log(f"Could not save the master {kind} in {folder} ({exc}); continuing without saving it.")
+            log(f"Could not save the master {word(kind)} in {folder} ({exc}); continuing without saving it.")
 
     def stack(paths, prep=None):
         headers = []
@@ -1228,6 +1363,40 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
             masters.used["bias"] = f"bias built from {len(bias_paths)} frames"
             save_it("bias", masters.bias, bias_paths, hs, {})
         masters.notes.append(f"bias n={len(bias_paths)} " + ("saved master" if found else "batched median"))
+    if masters.bias is not None:
+        masters.pedestal = "bias"
+
+    # 2.3.0 (item 11): Dark flat (raw stack: it holds the pedestal, like the flats it is taken off)
+    darkflat_paths = list(darkflat_paths or [])
+    dflat_fp = "none"
+    if files.get("darkflat"):
+        h = read_header(files["darkflat"])
+        masters.darkflat = load("darkflat", files["darkflat"], h, "chosen")
+        masters.darkflat_exptime = header_exptime(h)
+        dflat_fp = str(h.get("FPRINT", "file"))
+        masters.notes.append(f"dark flat: chosen master exp={masters.darkflat_exptime:.3g}s")
+    elif darkflat_paths:
+        exps = [header_exptime(read_header(path)) for path in darkflat_paths]
+        exptime = float(np.median(exps)) if exps else 1.0
+        dflat_fp = frames_fingerprint(darkflat_paths)
+        found, hdr = ((None, "rebuild asked") if rebuild
+                      else find_saved_master(darkflat_paths, "darkflat", binning, {}, exptime))
+        if found:
+            masters.darkflat = load("darkflat", found, hdr, "saved")
+        else:
+            log(f"Median-combining {len(darkflat_paths)} dark flat frames")
+            masters.darkflat, hs = stack(darkflat_paths)
+            masters.used["darkflat"] = f"dark flat built from {len(darkflat_paths)} frames"
+            save_it("darkflat", masters.darkflat, darkflat_paths, hs, {"EXPTIME": (exptime, "dark flat exposure, s")},
+                    exptime)
+        masters.darkflat_exptime = exptime
+        masters.notes.append(f"dark flat n={len(darkflat_paths)} exp={exptime:.3g}s" + (" saved master" if found else ""))
+    if masters.bias is None and masters.darkflat is not None:
+        # No bias: the dark flat is the zero-exposure pedestal for the darks and the lights.
+        masters.bias = masters.darkflat
+        masters.pedestal = "darkflat"
+        bias_fp = "DF:" + dflat_fp   # a saved dark built on the dark flats is not reused with a real bias, and back
+        masters.notes.append("dark flat used as the pedestal (no bias)")
 
     # Dark
     dark_fp = "none"
@@ -1279,6 +1448,13 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     def prep_flat(data, header):
         if flats_calibrated:
             return np.asarray(data, dtype=np.float32)
+        if masters.darkflat is not None:
+            # 2.3.0 (item 11): dark flats win for the flats: F - DF (pedestal and the flats' dark current, exactly)
+            if masters.darkflat.shape != np.shape(data):
+                raise ValueError(f"The master dark flat is {masters.darkflat.shape[1]}x{masters.darkflat.shape[0]} px "
+                                 f"but the flats are {np.shape(data)[1]}x{np.shape(data)[0]} px: pick dark flats "
+                                 "taken with the flats' camera settings.")
+            return (np.asarray(data, dtype=np.float32) - masters.darkflat).astype(np.float32)
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1294,7 +1470,11 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
         masters.notes.append("flat: chosen master")
     elif flat_paths:
         deps = {"BIASFP": bias_fp, "DARKFP": dark_fp, "FLATCAL": bool(flats_calibrated)}
+        if masters.darkflat is not None and not flats_calibrated:
+            deps["DFLATFP"] = dflat_fp   # 2.3.0 (item 11): a flat built with dark flats is reused only with them
         found, hdr = (None, "rebuild asked") if rebuild else find_saved_master(flat_paths, "flat", binning, deps)
+        if found and "DFLATFP" not in deps and str(hdr.get("DFLATFP", "none")) not in ("", "none"):
+            found = None   # 2.3.0 (item 11): built with dark flats that are no longer given
         if found:
             masters.flat = load("flat", found, hdr, "saved")
         else:
@@ -1304,7 +1484,8 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
             masters.used["flat"] = f"flat built from {len(flat_paths)} frames"
             save_it("flat", masters.flat, flat_paths, hs,
                     {"NORMFLAT": (True, "normalized to 1 at the median"), "BIASFP": (bias_fp, "bias set used"),
-                     "DARKFP": (dark_fp, "dark set used"), "FLATCAL": (bool(flats_calibrated), "flats were pre-calibrated")})
+                     "DARKFP": (dark_fp, "dark set used"), "FLATCAL": (bool(flats_calibrated), "flats were pre-calibrated"),
+                     "DFLATFP": (deps.get("DFLATFP", "none"), "dark flat set used")})
         masters.notes.append(f"flat n={len(flat_paths)}" + (" (already calibrated)" if flats_calibrated else "")
                              + (" saved master" if found else ""))
     return masters
@@ -3036,9 +3217,10 @@ def electrons_per_unit(e_per_adu: float, binning: int, pattern: str, mode: str, 
     A final pixel is sum_j w_j * raw_j / f_j over camera pixels j (b x b binning averages, then the superpixel
     weights w_j), so its photon variance in image units is value * sum_j (w_j^2 / (b^2 f_j)) / EGAIN when the colors
     carry similar signal. k = EGAIN / that sum. Mono, Bin 1, no flat: k = EGAIN. TG at Bin 2: 8 * EGAIN * f_green.
-    EGAIN is taken as the gain of the pixels in the file: with camera binning (XBINNING > 1) NINA and ASIAIR write the
-    camera's value for its binned pixels, which is what is used; the sky cross-check (photon_noise_setup) catches a
-    gain that does not fit the stored values (12/14-bit data scaled to 16 bits, or a binned frame summed in software)."""
+    e_per_adu is the gain of the STORED values. 2.3.0 (#53): with camera binning (XBINNING > 1) EGAIN is the native
+    pixel's gain; a camera that averages its binned pixels (ZWO RAW16) stores cam_bin^2 x EGAIN electrons per ADU.
+    photon_noise_setup works that out (from the sky's noise) and scales the result; the sky cross-check there also
+    catches 12/14-bit data scaled to 16 bits."""
     b = max(int(binning or 1), 1)
     weights = debayer_weights(pattern, mode)
     if flat is None:
@@ -3137,9 +3319,39 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
     if gain is not None:
         k = electrons_per_unit(gain, b, pattern, mode, flat)
         at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
-        note = (f"Photon noise: camera gain {gain:.3g} e-/ADU (EGAIN) = about {at:.3g} electrons per image unit "
+        # 2.3.0 (#53): camera binning. EGAIN is the camera's gain for its native pixels (NINA writes the driver's
+        # value, the same at every binning). A camera that SUMS its binned pixels (CCD charge binning) keeps that
+        # many electrons per stored ADU; one that AVERAGES them (ZWO's RAW16 binning) stores ADU worth cam_bin^2 times
+        # as many electrons. Before 2.3.0 EGAIN was always used as is, so averaged bin-3 frames (Matthew's ASI2600MM)
+        # counted 9x too few electrons and the photon error bars came out ~2x the real scatter. The sky's own noise
+        # (a lower limit on the electrons per unit) tells the two apart: above the geometric middle of the two
+        # candidates (cam_bin x the summed value) the camera averaged, and EGAIN x cam_bin^2 is used.
+        cam_bin = camera_binning("", header or {})[0] if header else 1
+        cam_note = ""
+        binned = ""
+        if cam_bin > 1:
+            avg_at = at * cam_bin * cam_bin
+            if bias_removed and math.isfinite(sky_k) and sky_k > cam_bin * at:
+                k = k * float(cam_bin * cam_bin)
+                at = avg_at
+                binned = "averaged"
+                cam_note = (f" The camera binned {cam_bin}x{cam_bin} and averaged the binned pixels (the sky's noise "
+                            f"says so), so each stored ADU holds {cam_bin * cam_bin} x EGAIN electrons: about "
+                            f"{at:.3g} electrons per image unit.")
+            elif bias_removed and math.isfinite(sky_k) and sky_k > 0:
+                binned = "summed"
+                cam_note = (f" The camera binned {cam_bin}x{cam_bin} and summed the binned pixels (the sky's noise "
+                            "says so): EGAIN is used as it is.")
+            else:
+                binned = "unknown"
+                cam_note = (f" The camera binned {cam_bin}x{cam_bin}; with no sky estimate SHOBS-P cannot tell whether "
+                            f"it summed (EGAIN as it is, used) or averaged ({cam_bin * cam_bin} x EGAIN) the binned "
+                            "pixels. If the Transit fit's reduced chi-square is well under 1, the camera averaged.")
+        note = (f"Photon noise: camera gain {gain:.3g} e-/ADU (EGAIN) = about "
+                f"{(at / (cam_bin * cam_bin) if binned == 'averaged' else at):.3g} electrons per image unit "
                 f"after Bin {b}" + ("" if (pattern or "").upper() == MONO else ", the superpixel")
-                + (" and the flat" if flat is not None else "") + ".")
+                + (" and the flat" if flat is not None else "") + "." + cam_note)
+        stored_gain = gain * cam_bin * cam_bin if binned == "averaged" else gain
         warning = ""
         if bias_removed and math.isfinite(sky_k) and sky_k > 0:
             note += f" The sky's own noise gives {sky_k:.3g} (a lower limit)."
@@ -3154,7 +3366,10 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                            "EGAIN may be per native ADU of 12/14-bit data stored as 16-bit, or for unsummed binning. "
                            "Error bars may be too small; check the Transit fit's reduced chi-square.")
         return {"electrons": k, "e_per_adu": gain, "source": "EGAIN", "note": note, "k_median": at,
-                "sky_k": sky_k, "warning": warning}
+                "sky_k": sky_k, "warning": warning,
+                # 2.3.0 (#53): the camera's binning, how it combined the binned pixels, and the e-/ADU of the stored
+                # values that was used (EGAIN x cam_bin^2 when averaged)
+                "camera_bin": cam_bin, "camera_bin_mode": binned, "e_per_stored_adu": stored_gain}
     why = ("the frames are pre-calibrated (their values may not be camera ADU)" if precalibrated
            else "the headers give no EGAIN (camera gain in e-/ADU)")
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:

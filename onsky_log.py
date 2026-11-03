@@ -11,6 +11,25 @@ side, sensor temperature, FWHM, sky, and for every measured star its flux (SHOBS
 instrumental magnitude, brightest raw pixel (ADU) and position. Pre-calibrated frames are marked so FLUX skips them.
 The site is never written (each app keeps its own).
 
+Format version 2 (SHOBS-P 2.3.0, GitHub #55): the scale from SHOBS-P image units to electrons, so FLUX never has to
+guess it (version 1 logs leave it out: FLUX must treat their flux scale as not known).
+  frames[].stars[name].e_per_unit   electrons per SHOBS-P image unit AT THAT STAR: the median of SHOBS-P's
+                                    electrons_per_unit map (photometry_core) over the star's aperture. It includes
+                                    the camera gain (EGAIN, x camera_bin^2 when the camera averaged its binned
+                                    pixels), the software binning (b^2), the superpixel debayer (OSC: 8 x EGAIN at
+                                    TG Bin 2) and the master flat's value at the star (the flat is normalized at the
+                                    mosaic median; green sits ~1.3 above it on an OSC flat). Electrons in the
+                                    aperture = flux x e_per_unit. Null when no gain is known (see below).
+  measurement.e_per_unit_median     the median of that map over the whole frame (null when no gain is known).
+  measurement.e_per_unit_source     "EGAIN" (header gain), "sky" (the sky's own noise: a LOWER limit on the true
+                                    value, so electrons from it are too few), "assumed" (no gain known: 1 e-/ADU was
+                                    used for the error bars only; e_per_unit is then null), or null.
+  measurement.e_per_unit_note       why the value is null, or how it was worked out, in a sentence.
+  measurement.flat_applied          true when a master flat divided the frames (its factor is in e_per_unit).
+  measurement.camera_bin_mode       "summed" / "averaged" / "unknown" with camera binning (XBINNING > 1), else null.
+For the luminance (CV) channel e_per_unit is the photon-noise equivalent (variance = flux / e_per_unit), which is
+what SHOBS-P's error bars use; for one color channel (TG, TR, TB) and for mono it is the plain electrons per unit.
+
 Writing happens in a background thread after the night's points are made; any problem is logged and never stops or
 slows the reduction. Set SHOBS_ONSKY_OFF=1 to turn it off."""
 from __future__ import annotations
@@ -25,7 +44,7 @@ import shobs_profile as sp
 
 # the shobs_profile.py this SHOBS-P was built against (its self-test checks the copy matches)
 NEEDS_PROFILE_VERSION = "1.1.0"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2   # 2.3.0 (#55): + e_per_unit (per star) and measurement.e_per_unit_* / flat_applied
 
 
 def _f(v, nd=None):
@@ -75,6 +94,67 @@ def _header_extras(path: str) -> dict:
     return out
 
 
+def _sig(v, digits: int = 5):
+    """A finite float to `digits` significant figures, or None."""
+    x = _f(v)
+    if x is None or x == 0:
+        return x
+    return float(f"{x:.{digits}g}")
+
+
+def electron_scale(noise: dict | None) -> dict:
+    """2.3.0 (#55): what the log says about electrons per image unit, from the run's photometry_core.
+    photon_noise_setup result: {"map": number or 2-D array or None, "median", "source", "note", "camera_bin_mode"}.
+    No gain known (1 e-/ADU assumed for the error bars), or no setup at all: map None and a note saying why."""
+    noise = noise or {}
+    src = noise.get("source")
+    el = noise.get("electrons")
+    out = {"map": None, "median": None, "source": src or None, "note": "", "camera_bin_mode": None}
+    if noise.get("camera_bin", 1) and int(noise.get("camera_bin") or 1) > 1:
+        out["camera_bin_mode"] = noise.get("camera_bin_mode") or "unknown"
+    if src == "assumed":
+        out["note"] = ("no camera gain known (no EGAIN in the headers and no usable sky estimate): 1 e-/ADU was "
+                       "assumed for the error bars only, so the electrons per unit are not known")
+        return out
+    if src not in ("EGAIN", "sky") or el is None:
+        out["source"] = None
+        out["note"] = ("the photon noise was not worked out in electrons for this run (pre-calibrated frames or an "
+                       "error), so the electrons per unit are not known")
+        return out
+    out["map"] = el
+    out["median"] = _sig(noise.get("k_median"))
+    out["note"] = ("from the header EGAIN" if src == "EGAIN" else
+                   "from the sky's own noise (no EGAIN): a lower limit, so electrons from it are too few")
+    if out["camera_bin_mode"] == "averaged":
+        out["note"] += "; the camera averaged its binned pixels, so EGAIN x camera_bin^2 per stored ADU"
+    return out
+
+
+def e_per_unit_at(emap, x, y, radius) -> float | None:
+    """2.3.0 (#55): the median of the electrons-per-unit map over a circular aperture at (x, y) (a number: itself)."""
+    if emap is None:
+        return None
+    try:
+        import numpy as np
+        if np.ndim(emap) == 0:
+            return _sig(float(emap))
+        if x is None or y is None:
+            return None
+        h, w = emap.shape
+        r = max(float(radius or 1.0), 1.0)
+        x0, x1 = max(0, int(math.floor(x - r))), min(w, int(math.ceil(x + r)) + 1)
+        y0, y1 = max(0, int(math.floor(y - r))), min(h, int(math.ceil(y + r)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        inside = (xx - x) ** 2 + (yy - y) ** 2 <= r * r
+        vals = emap[y0:y1, x0:x1][inside]
+        vals = vals[np.isfinite(vals)]
+        return _sig(float(np.median(vals))) if vals.size else None
+    except Exception:
+        return None
+
+
 def night_of(jd: float) -> str:
     """The observing night's date: UTC date of the mid-exposure minus 12 hours (an evening's frames and the next
     morning's share one date anywhere west of about 100° E)."""
@@ -101,6 +181,18 @@ def build(ctx: dict, points: list, app_version: str, header_reads: bool = True) 
         stars.append({"name": check.name, "role": "check", "catalog_mag": _f(check.catalog_mag, 4)})
     stars += [{"name": s.name, "role": "spare", "catalog_mag": _f(s.catalog_mag, 4)} for s in spares]
     precal = bool(ctx.get("precalibrated"))
+    scale = electron_scale(ctx.get("noise"))   # 2.3.0 (#55)
+    emap, e_radius = scale["map"], ctx.get("radius")
+    e_cache = {}
+
+    def e_at(xy):
+        if emap is None or not xy:
+            return None
+        key = (round(float(xy[0]), 1), round(float(xy[1]), 1))
+        if key not in e_cache:
+            e_cache[key] = e_per_unit_at(emap, key[0], key[1], e_radius)
+        return e_cache[key]
+
     frames_out = []
     for o in points:
         exp = _f(getattr(o, "exptime", None))
@@ -114,7 +206,8 @@ def build(ctx: dict, points: list, app_version: str, header_reads: bool = True) 
                 return
             flux = exp * 10 ** (-0.4 * m) if exp and exp > 0 else None
             meas[name] = {"flux": _f(flux, 2), "inst_mag": round(m, 5), "peak_adu": _f(peaks.get(name), 1),
-                          "x": _f(xy[0], 1) if xy else None, "y": _f(xy[1], 1) if xy else None}
+                          "x": _f(xy[0], 1) if xy else None, "y": _f(xy[1], 1) if xy else None,
+                          "e_per_unit": e_at(xy)}   # 2.3.0 (#55): electrons per image unit at this star
 
         if target is not None:
             put(target.name, getattr(o, "target_inst", None), pos.get("t"))
@@ -178,6 +271,12 @@ def build(ctx: dict, points: list, app_version: str, header_reads: bool = True) 
             "sky_inner_px": _f(ctx.get("sky_in"), 3),
             "sky_outer_px": _f(ctx.get("sky_out"), 3),
             "flux_units": "SHOBS-P image units summed in the aperture, sky subtracted (calibrated frames)",
+            # 2.3.0 (#55): electrons = flux x stars[].e_per_unit (see the module docstring)
+            "e_per_unit_median": scale["median"],
+            "e_per_unit_source": scale["source"],
+            "e_per_unit_note": scale["note"],
+            "flat_applied": bool(ctx.get("flat_applied")) and not precal,
+            "camera_bin_mode": scale["camera_bin_mode"],
         },
         "precalibrated": precal,
         "stars": stars,

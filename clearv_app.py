@@ -63,6 +63,9 @@ except ImportError:
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
 APP_VERSION = "2.3.0"
+# 2.3.0 (item 11): the Input page's calibration boxes (a folder of raw frames or one SHOBS-P master each)
+CAL_KEYS = ("Bias", "Dark", "Dark flats", "Flat")
+CAL_KIND = {"Bias": "bias", "Dark": "dark", "Dark flats": "darkflat", "Flat": "flat"}
 OSC_NOTE = "OSC reduced; not transformed"
 MONO_NOTE = "Monochrome camera; not transformed"
 APP_SHORT = "SHOBS-P"
@@ -1179,6 +1182,7 @@ class App(Tk):
 
         self.bias_dir = StringVar()
         self.dark_dir = StringVar()
+        self.darkflat_dir = StringVar()   # 2.3.0 (item 11): dark flats (optional, like Bias)
         self.flat_dir = StringVar()
         self.light_dir = StringVar()
         self.output_dir = StringVar()
@@ -1448,7 +1452,7 @@ class App(Tk):
         self.debayer_mode.trace_add("write", lambda *_: self._update_filter_hint())
         self.pattern.trace_add("write", lambda *_: self._pattern_changed())
         self._pattern_changed()
-        for var in (self.bias_dir, self.dark_dir, self.flat_dir, self.light_dir):
+        for var in (self.bias_dir, self.dark_dir, self.darkflat_dir, self.flat_dir, self.light_dir):
             var.trace_add("write", lambda *_: self._folders_changed())
         self.light_dir.trace_add("write", lambda *_: self._clear_marks())
         self._update_filter_hint()
@@ -2139,7 +2143,7 @@ class App(Tk):
         for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
             entry.bind(seq, lambda _e, v=variable, k=key: self._folder_typed(v, k, now=True), add="+")
         ttk.Button(row, text="Browse", command=lambda: self._browse(variable, key)).pack(side=LEFT, padx=(6, 0))
-        if key in ("Bias", "Dark", "Flat"):
+        if key in CAL_KEYS:
             # 2.2.8: a calibration entry can also be one SHOBS-P master file.
             ttk.Button(row, text="Master file…", command=lambda: self._browse_master(variable, key)).pack(
                 side=LEFT, padx=(4, 0))
@@ -2168,6 +2172,8 @@ class App(Tk):
         self.status.set(f"{key}: {self._counts[key].get()}")
         if key in ("Lights", "Dark"):
             self.after(50, lambda k=key: self._frames_folder_picked(k))   # 2.2.19 (#20)
+        elif key in ("Bias", "Dark flats", "Flat"):
+            self.after(50, self._update_dark_exposure_note)   # 2.3.0 (item 11): the calibration note
 
     def _folder_job_cancel(self, key):
         jobs = self.__dict__.setdefault("_folder_jobs", {})
@@ -2199,7 +2205,7 @@ class App(Tk):
                 self._folder_counted[key] = ""
                 self._counts[key].set("0 files")
                 return
-            if not (os.path.isdir(path) or (key in ("Bias", "Dark", "Flat") and os.path.isfile(path))):
+            if not (os.path.isdir(path) or (key in CAL_KEYS and os.path.isfile(path))):
                 self._counts[key].set("no such folder")
                 return
             self._folder_chosen(variable, key)
@@ -2211,7 +2217,7 @@ class App(Tk):
 
     def _count_text(self, key, path) -> str:
         """'51 files', '51 files + master', or 'master file' (2.2.8: saved masters are not counted as frames)."""
-        if key in ("Bias", "Dark", "Flat"):
+        if key in CAL_KEYS:
             frames, master = core.calibration_source(path)
             if master:
                 return "master file"
@@ -2221,11 +2227,12 @@ class App(Tk):
         return f"{len(core.list_fits(path))} files"
 
     def _browse_master(self, variable, key):
-        path = filedialog.askopenfilename(title=f"Select a SHOBS-P master {key.lower()}",
+        kind = CAL_KIND.get(key, key.lower())   # 2.3.0 (item 11): "Dark flats" -> a master dark flat
+        path = filedialog.askopenfilename(title=f"Select a SHOBS-P {core.MASTER_WORDS.get(kind, 'master ' + kind)}",
                                           filetypes=[("FITS", "*.fits *.fit *.fts"), ("All files", "*.*")])
         if not path:
             return
-        problem = core.check_master_file(path, key.lower())
+        problem = core.check_master_file(path, kind)
         if problem:
             self._calibration_failed(problem)   # 2.2.18 (item 22): logged, same wording as at Build masters
             return
@@ -2236,6 +2243,8 @@ class App(Tk):
         self.status.set(f"{key}: SHOBS-P master {os.path.basename(path)}")
         if key == "Dark":
             self.after(50, lambda: self._frames_folder_picked("Dark"))   # 2.2.19 (#20)
+        elif key in ("Bias", "Dark flats", "Flat"):
+            self.after(50, self._update_dark_exposure_note)   # 2.3.0 (item 11)
 
     def _clear_folder(self, variable, key):
         variable.set("")
@@ -2245,10 +2254,10 @@ class App(Tk):
             self._output_changed()
             return
         self._counts[key].set("0 files")
-        self.status.set(f"{key} folder cleared." + (" Calibration will skip it." if key in ("Bias", "Dark", "Flat")
+        self.status.set(f"{key} folder cleared." + (" Calibration will skip it." if key in CAL_KEYS
                                                      else ""))
-        if key in ("Lights", "Dark"):
-            self._update_dark_exposure_note()   # 2.2.19 (#20)
+        if key in ("Lights", "Dark", "Bias", "Dark flats", "Flat"):
+            self._update_dark_exposure_note()   # 2.2.19 (#20); 2.3.0 (item 11): + Bias, Dark flats, Flat
 
     def _remember_site(self, key: str, var):
         """2.2.4: latitude, longitude and elevation are remembered between sessions (settings file only)."""
@@ -3399,12 +3408,18 @@ class App(Tk):
         frames.pack(fill=X)
         self._folder_row(frames, "Bias", self.bias_dir, "Bias")
         self._folder_row(frames, "Dark", self.dark_dir, "Dark")
+        self._folder_row(frames, "Dark flats", self.darkflat_dir, "Dark flats")   # 2.3.0 (item 11)
         self._folder_row(frames, "Flat", self.flat_dir, "Flat")
         self._folder_row(frames, "Lights", self.light_dir, "Lights")
         self._folder_row(frames, "Output", self.output_dir, "Output")
         ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, packages). Leave "
                                "it empty to be asked each time. Files already there are never overwritten; a new "
                                "copy gets _2, _3 ….", style="Hint.TLabel", wraplength=1100, justify=LEFT).pack(anchor=W)
+        # 2.3.0 (item 11)
+        ttk.Label(frames, text="Dark flats (optional, like Bias): darks taken at the flats' exposure. They are taken "
+                               "off the flats, and with no bias they also stand in for it, so Bias can stay empty. "
+                               "Leave it empty if you have none.", style="Hint.TLabel", wraplength=1100,
+                  justify=LEFT).pack(anchor=W)
         # 2.2.19 (#20): darks and lights of different exposures, said here before Calibrate.
         self.dark_exposure_note = StringVar(value="")
         self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
@@ -4305,6 +4320,43 @@ class App(Tk):
         except Exception:
             return None
 
+    def _bias_holds_dark_flats(self) -> bool:
+        """2.3.0 (item 11): the Bias box points at dark flats (the pre-2.3.0 trick): its first frame's IMAGETYP (or
+        name) says dark flat."""
+        if not self.bias_dir.get().strip():
+            return False
+        try:
+            frames, master = core.calibration_source(self.bias_dir.get())
+            if master or not frames:
+                return False
+            return core.frame_is_dark_flat(frames[0])
+        except Exception:
+            return False
+
+    def _darkflat_notes(self, light_exp, dark_exp) -> list[str]:
+        """2.3.0 (item 11): the Input page's dark-flat lines: darks scaled with no bias and no dark flats (wrong
+        offset), and dark flats whose exposure differs from the flats'."""
+        out = []
+        have_bias = bool(self.bias_dir.get().strip())
+        have_df = bool(self.darkflat_dir.get().strip())
+        if (dark_exp and light_exp and not have_bias and not have_df
+                and core.exposures_match(dark_exp, light_exp) is False):
+            out.append(f"⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats "
+                       f"({dark_exp:g} s darks to {light_exp:g} s lights scales the camera's offset too). Add bias "
+                       "frames or dark flats, or use darks at the lights' exposure.")
+        if have_df and self.flat_dir.get().strip():
+            df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
+            try:   # the first real flat (dark flats saved in the Flat folder are not counted)
+                frames, master = core.calibration_source(self.flat_dir.get())
+                first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
+                flat_exp = self._header_exposure(core.read_header(first)) if first else None
+            except Exception:
+                flat_exp = None
+            if core.exposures_match(df_exp, flat_exp) is False:
+                out.append(f"⚠ Dark flats {df_exp:g} s, flats {flat_exp:g} s: dark flats should match the flats' "
+                           f"exposure. Take dark flats at {flat_exp:g} s.")
+        return out
+
     def _update_dark_exposure_note(self) -> str:
         """2.2.19 (#20): the Input page says when the darks' exposure differs from the lights' before Calibrate: ✖ when
         the master dark would be scaled more than 3x (Calibrate then asks), ⚠ for a smaller difference (scaled to the
@@ -4329,6 +4381,12 @@ class App(Tk):
             else:
                 text = (f"⚠ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g} to the "
                         f"lights' exposure. Fine for a cooled camera; {light_exp:g} s darks are better.")
+        # 2.3.0 (item 11): no bias and no dark flats under scaled darks; dark flats that do not match the flats
+        extra = self._darkflat_notes(light_exp, dark_exp)
+        if extra:
+            text = "\n".join([t for t in (text,) if t] + extra)
+            if style == "Hint.TLabel":
+                style = "Warn.TLabel"
         self.dark_exposure_note.set(text)
         try:
             self.dark_exposure_label.configure(style=style)
@@ -4749,6 +4807,7 @@ class App(Tk):
         for key, var in (
             ("Bias", self.bias_dir),
             ("Dark", self.dark_dir),
+            ("Dark flats", self.darkflat_dir),   # 2.3.0 (item 11)
             ("Flat", self.flat_dir),
             ("Lights", self.light_dir),
         ):
@@ -5005,10 +5064,10 @@ class App(Tk):
         """2.2.18 (review M1): the camera's bias level for the lights' sky test: the median of a SHOBS-P master bias or
         the first raw bias frame, else the first raw dark frame (bias plus a little dark current). None when there is
         neither (the test then needs a bright sky to call a camera monochrome)."""
-        for var, kind in ((self.bias_dir, "bias"), (self.dark_dir, "dark")):
-            try:
+        for var, kind in ((self.bias_dir, "bias"), (self.darkflat_dir, "darkflat"), (self.dark_dir, "dark")):
+            try:   # 2.3.0 (item 11): dark flats hold the pedestal like a bias
                 frames, master = core.calibration_source(var.get())
-                path = frames[0] if frames else (master if kind == "bias" else None)
+                path = frames[0] if frames else (master if kind in ("bias", "darkflat") else None)
                 if not path:
                     continue
                 data = np.asarray(core.read_fits(path)[0], dtype=np.float64)
@@ -5508,6 +5567,14 @@ class App(Tk):
         self.blink_paths = [f for f in core.list_fits(folder) if not core.is_shobsp_master_name(f)]  # 2.2.8
         if self.blink_source.get() == "lights":
             self.blink_paths = core.split_lights(self.blink_paths)[0]
+        else:
+            # 2.3.0 (item 11): dark flats saved beside the flats are not flats; and say when the dark flats' exposure
+            # differs from the flats'
+            self.blink_paths, in_flats = core.split_dark_flats(self.blink_paths)
+            notes = self._darkflat_notes(None, None)
+            if in_flats or notes:
+                self.status.set(" ".join(([f"{len(in_flats)} dark flat(s) in the Flat folder are not shown (they are "
+                                           "not flats)."] if in_flats else []) + notes))
         self.blink_index = min(self.blink_index, max(0, len(self.blink_paths) - 1))
         self._blink_labels = dict(zip(self.blink_paths, core.frame_labels_for(self.blink_paths)))   # 2.2.17 (round 2)
         self._start_blink_preload()
@@ -6290,7 +6357,7 @@ class App(Tk):
                     self.log(f"Darks left out: {dark_exp:g} s darks for {light_exp:g} s lights would be scaled "
                              f"x{light_exp / dark_exp:.3g}. Bias only for this run.")
                     dark = []
-                    if not bias:
+                    if not bias and not self.darkflat_dir.get().strip():   # 2.3.0 (item 11): dark flats stand in
                         self.log("  Note: there are no bias frames either, so the pedestal stays in; the sky annulus "
                                  "removes it in photometry, but the flat is a little less exact.")
                 else:
@@ -6399,6 +6466,34 @@ class App(Tk):
             prev, prev_pier = rot, pier
         return "; ".join(flips), "; ".join(moves)
 
+    def _calibration_plan_lines(self, bias, dark, dark_file, flat, dflat, dflat_file, lights,
+                                flats_calibrated=False) -> list[str]:
+        """2.3.0 (item 11): the Log's calibration summary before the masters are built: what the lights and the flats
+        lose (core.calibration_plan), with its notes and ⚠ warnings (dark flats vs the flats' exposure; darks scaled
+        with no bias and no dark flats)."""
+        def exp_of(paths, file_):
+            try:
+                path = file_ or (paths[0] if paths else None)
+                return self._header_exposure(core.read_header(path)) if path else None
+            except Exception:
+                return None
+        flat_paths = flat if isinstance(flat, list) else []
+        flat_file = flat if isinstance(flat, str) else None
+        try:
+            light_exp = self._header_exposure(core.read_header(lights[0])) if lights else None
+        except Exception:
+            light_exp = None
+        plan = core.calibration_plan(
+            bool(bias), bool(dark or dark_file), bool(flat), bool(dflat or dflat_file),
+            dark_exp=exp_of(dark, dark_file), light_exp=light_exp, flat_exp=exp_of(flat_paths, flat_file),
+            darkflat_exp=exp_of(dflat, dflat_file), darkflats_in_bias=self._bias_holds_dark_flats(),
+            flats_calibrated=flats_calibrated)
+        lines = [f"Calibration: lights = {plan['lights']}" + (f"; flats = {plan['flats']}" if plan["flats"] else "")
+                 + "."]
+        lines += [f"  {n}" for n in plan["notes"]]
+        lines += [f"⚠ {w}" for w in plan["warnings"]]
+        return lines
+
     def run_calibration(self):
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
@@ -6406,7 +6501,18 @@ class App(Tk):
         dark, dark_file = core.calibration_source(self.dark_dir.get())
         flat, flat_file = core.calibration_source(self.flat_dir.get())
         flat = [path for path in flat if path not in self.rejected]
-        files = {"bias": bias_file, "dark": dark_file, "flat": flat_file}
+        # 2.3.0 (item 11): the Dark flats box (optional)
+        dflat, dflat_file = core.calibration_source(self.darkflat_dir.get())
+        flat, in_flats = core.split_dark_flats(flat)
+        if in_flats:   # dark flats saved beside the flats: never stacked into the master flat
+            if not (dflat or dflat_file):
+                dflat = in_flats
+                self.log(f"{len(in_flats)} dark flat{'s' if len(in_flats) != 1 else ''} found in the Flat folder "
+                         "(IMAGETYP or name): used as the dark flats, and left out of the master flat.")
+            else:
+                self.log(f"{len(in_flats)} dark flat{'s' if len(in_flats) != 1 else ''} in the Flat folder left out "
+                         "of the master flat (the Dark flats box is used).")
+        files = {"bias": bias_file, "dark": dark_file, "flat": flat_file, "darkflat": dflat_file}
         for kind, path in files.items():
             if path:
                 problem = core.check_master_file(path, kind)
@@ -6416,6 +6522,7 @@ class App(Tk):
         lights = self._lights(log_skips=True)
         unreadable = []
         for key, var, found in (("Bias", self.bias_dir, bias or bias_file), ("Dark", self.dark_dir, dark or dark_file),
+                                ("Dark flats", self.darkflat_dir, dflat or dflat_file),
                                 ("Flat", self.flat_dir, flat or flat_file), ("Lights", self.light_dir, lights)):
             other = core.unreadable_files(var.get()) if var.get().strip() and not found else []
             if other:
@@ -6477,8 +6584,8 @@ class App(Tk):
             if bias or dark or flat or any(files.values()):
                 self.log("These lights are color images (already debayered and calibrated): the bias, dark and flat "
                          "entries are not used for them.")
-            bias, dark, flat = [], [], []
-            files = {"bias": None, "dark": None, "flat": None}
+            bias, dark, flat, dflat = [], [], [], []
+            files = {"bias": None, "dark": None, "flat": None, "darkflat": None}
         elif signs:
             reasons = "\n  • ".join(signs)
             if bias or dark or flat or any(files.values()):
@@ -6491,10 +6598,13 @@ class App(Tk):
                     "judged from flat-topped star cores instead.",
                 )
                 if skip:
-                    bias, dark, flat = [], [], []
-                    files = {"bias": None, "dark": None, "flat": None}
+                    bias, dark, flat, dflat = [], [], [], []
+                    files = {"bias": None, "dark": None, "flat": None, "darkflat": None}
                 else:
                     self.precalibrated = False
+        if flats_calibrated and (dflat or files.get("darkflat")):
+            self.log("The dark flats are not used: the flats are already calibrated.")   # 2.3.0 (item 11)
+            dflat, files["darkflat"] = [], None
         if not self.precalibrated:
             # The checks read headers: a chosen master file stands in for its frames (it carries their keywords).
             checked = self._calibration_checks(bias or ([bias_file] if files["bias"] else []),
@@ -6512,10 +6622,17 @@ class App(Tk):
             self.log("Lights are pre-calibrated: no bias, dark, or flat applied; saturation judged from flat-topped "
                      "star cores, not the raw level. ("
                      + "; ".join(signs) + ")")
+        have_df = bool(dflat or files.get("darkflat"))
+        # 2.3.0 (item 11): with dark flats given, an empty Bias box is not missing (the dark flats stand in for it)
         missing = [name for name, paths in (("bias", bias), ("dark", dark), ("flat", flat))
-                   if not paths and not files.get(name)]
+                   if not paths and not files.get(name) and not (name == "bias" and have_df)]
         if missing:
             self.log("Note: no " + ", ".join(missing) + " frames. That step is skipped.")
+        if not self.precalibrated:
+            for line in self._calibration_plan_lines(bias or files.get("bias"), dark, files.get("dark"),
+                                                     flat or files.get("flat"), dflat, files.get("darkflat"), lights,
+                                                     flats_calibrated):
+                self.log(line)
         self.log("Building calibration masters. The window stays live; this can take several minutes for 100 full frames.")
 
         cancel = self._cancel
@@ -6534,17 +6651,18 @@ class App(Tk):
         def work():
             try:
                 masters = core.prepare_masters(bias, dark, flat, binning, progress_log, flats_calibrated=flats_calibrated,
-                                               files=files, save=True, rebuild=rebuild, version=APP_VERSION)
+                                               files=files, save=True, rebuild=rebuild, version=APP_VERSION,
+                                               darkflat_paths=dflat)   # 2.3.0 (item 11)
                 self.call_ui(self._job_words, "Calibrating the first light…")   # 2.2.20 (item 3)
                 path = lights[0]
                 data, header = core.read_fits(path)
                 data = core.bin_image(data, binning)
                 # 2.2.8: a saved or chosen master must match the lights before it is used.
                 problems, cautions = [], []
-                for kind in ("bias", "dark", "flat"):
+                for kind in ("bias", "dark", "flat", "darkflat"):
                     arr = getattr(masters, kind)
-                    if arr is None:
-                        continue
+                    if arr is None or (kind == "bias" and masters.pedestal == "darkflat"):
+                        continue   # 2.3.0 (item 11): the dark flat standing in for the bias is checked as itself
                     errs, warns = core.master_mismatches(masters.headers.get(kind) or {}, kind, header, data.shape,
                                                          arr.shape, binning, mount=mount,
                                                          derotator=derotated)
@@ -12878,6 +12996,10 @@ class App(Tk):
         noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
                                                [target] + comps, radius, sky_in, sky_out)
         electrons = noise_setup.get("electrons")
+        if getattr(self, "_onsky_ctx", None) is not None:
+            # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
+            self._onsky_ctx["noise"] = noise_setup
+            self._onsky_ctx["flat_applied"] = getattr(masters, "flat", None) is not None and not precalibrated
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
@@ -13851,6 +13973,10 @@ class App(Tk):
                                                                   "the pre-2.2.17 error model is used."}
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
+        if setup.get("camera_bin", 1) > 1:   # 2.3.0 (#53): camera binning and how it combined the pixels
+            self._noise_model.update({"camera_bin": setup.get("camera_bin"),
+                                      "camera_bin_mode": setup.get("camera_bin_mode"),
+                                      "e_per_stored_adu": setup.get("e_per_stored_adu")})
         self.log(setup.get("note", ""))
         if setup.get("warning"):
             self.log("⚠ " + setup["warning"])
@@ -13954,7 +14080,9 @@ class App(Tk):
             out["rgb_channel"] = self._rgb_channel   # 2.2.18 (review S4): color images, the channel measured
         used = getattr(self.masters, "used", None) if self.masters is not None else None
         if used:
-            out["masters"] = [used[k] for k in ("bias", "dark", "flat") if used.get(k)]   # 2.2.8
+            out["masters"] = [used[k] for k in ("bias", "darkflat", "dark", "flat") if used.get(k)]   # 2.2.8; 2.3.0 + darkflat
+            if getattr(self.masters, "pedestal", "") == "darkflat":
+                out["masters"].append("dark flat used as the bias (no bias frames)")   # 2.3.0 (item 11)
         model = getattr(self, "_noise_model", None)
         if model and model.get("source"):
             out["photon_noise"] = dict(model)   # 2.2.17 (item 8): how the photon noise was converted to electrons
