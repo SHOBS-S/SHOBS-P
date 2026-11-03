@@ -3220,6 +3220,15 @@ def gain_note(pn: dict | None) -> str:
     pn = pn or {}
     src = pn.get("source")
     if src == "EGAIN" and pn.get("e_per_adu"):
+        cb, how = pn.get("camera_bin") or 1, pn.get("camera_bin_mode") or ""
+        if cb > 1 and how == "averaged" and pn.get("e_per_stored_adu"):   # 2.3.0 (#53)
+            return (f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN); camera bin {cb}x{cb} averaged, so "
+                    f"{pn['e_per_stored_adu']:.3g} e- per stored ADU used (from the sky's noise)")
+        if cb > 1 and how == "summed":
+            return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN); camera bin {cb}x{cb} summed, EGAIN used as is"
+        if cb > 1:
+            return (f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN) used as is; camera bin {cb}x{cb}, summed or "
+                    "averaged not known (no sky estimate)")
         return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN)"
     if src == "sky" and pn.get("k"):
         return (f"Gain from the sky's own noise, {pn['k']:.3g} e- per image unit (no EGAIN in the headers; a lower "
