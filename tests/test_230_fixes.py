@@ -590,3 +590,42 @@ class TestStackFixesInApp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCompsWeakRule(unittest.TestCase):
+    """Run-through (John, HD 189733 b 0723): comps 1.1x the target's photon noise, both ~4x below scintillation,
+    must not be called weak; clearly noisier comps that set a point's error still are."""
+
+    def _noise(self, sig_t, sig_c, sig_point):
+        return {"sig_t": sig_t, "sig_c": sig_c, "ratio": sig_c / sig_t, "snr_t": 1.0857362 / sig_t,
+                "snr_c": 1.0857362 / sig_c, "comp_snr": [1.0857362 / sig_c], "sig_point": sig_point, "n": 392}
+
+    def test_hd189733_not_weak(self):
+        noise = self._noise(0.00053, 0.00060, 0.0021)   # target 0.5, comps 0.6 mmag, scintillation ~2 mmag
+        cap = dict(sc.time_cap("discovery"), seconds=204.0, known=True, text="τ/5")
+        sug = sc.suggest_n(noise, 34.0, cap, 392)
+        self.assertFalse(sug["dominate"])
+        self.assertEqual(sug["n"], 1)
+        text, warn = sc.suggest_text("transits", noise, sug, cap, 392, None)
+        self.assertFalse(warn)
+        self.assertIn("Comps are fine per frame", text)
+        self.assertNotIn("weak", text)
+
+    def test_ratio_high_but_scintillation_dominates(self):
+        noise = self._noise(0.0002, 0.0006, 0.0030)   # 3x the target, but only 1/5 of a point's error
+        self.assertFalse(sc.dominates(noise))
+
+    def test_real_weak_comps_still_warn(self):
+        noise = self._noise(0.001, 0.003, 0.0032)
+        self.assertTrue(sc.dominates(noise))
+        cap = dict(sc.time_cap("discovery"), seconds=3600.0, known=True, text="1 h")
+        sug = sc.suggest_n(noise, 10.0, cap, 2000)
+        text, warn = sc.suggest_text("variables", noise, sug, cap, 2000, None)
+        self.assertTrue(warn)
+        self.assertTrue(text.startswith("⚠ Comps are weak"))
+
+    def test_goal_still_stacks_fine_comps(self):
+        noise = self._noise(0.00053, 0.00060, 0.0021)
+        cap = dict(sc.time_cap("discovery"), seconds=3600.0, known=True, text="1 h")
+        sug = sc.suggest_n(noise, 34.0, cap, 392, goal_ppt=1.0)
+        self.assertGreater(sug["n"], 1)

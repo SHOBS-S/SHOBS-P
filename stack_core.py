@@ -46,6 +46,8 @@ CLIP_SIGMA = 3.0          # per-pixel clip, in units of the (trimmed, bias-corre
 MIN_CLIP_FRAMES = 5       # below this, a plain mean (too few values to tell an outlier)
 SIGNAL_SPAN = 2.0         # starlight may differ from its pixel's reference by this x its signal unclipped (seeing)
 COMP_SHARE = 0.5          # the default rule: a stack's comp noise at most 1/2 of the target's noise in one frame
+COMP_DOMINATE = 2.0       # 2.3.0 run-through: the comps "dominate" (⚠ line) only at comp noise >= 2x the target's...
+COMP_POINT_SHARE = 0.5    # ...and when the comp noise is at least 1/2 of a point's whole error (incl. scintillation)
 TRANSIT_CAP_FRACTION = 1.0 / 5.0     # of the ingress / egress duration
 VARIABLE_CAP_FRACTION = 1.0 / 50.0   # of the period
 DISCOVERY_CAP_S = 300.0              # 5 min
@@ -218,6 +220,18 @@ def _period_words(days: float) -> str:
 
 
 # ---- the suggested N -----------------------------------------------------------------------------------------
+def dominates(noise: dict | None) -> bool:
+    """True when the comps set the noise floor: comp-ensemble noise >= COMP_DOMINATE x the target's per frame AND
+    >= COMP_POINT_SHARE of a point's whole error (photon + scintillation). Otherwise stacking gains nothing over
+    the per-frame points and the Stack row says the comps are fine."""
+    if not noise:
+        return False
+    sig_c, sig_p = noise.get("sig_c", float("nan")), noise.get("sig_point", float("nan"))
+    if not (math.isfinite(sig_c) and noise.get("ratio", 0) >= COMP_DOMINATE):
+        return False
+    return not math.isfinite(sig_p) or sig_p <= 0 or sig_c >= COMP_POINT_SHARE * sig_p
+
+
 def suggest_n(noise: dict | None, cadence_s: float, cap: dict, n_frames: int, goal_ppt: float | None = None,
               cap_frames_override: int | None = None) -> dict:
     """The stack size N for the Suggest line.
@@ -233,13 +247,15 @@ def suggest_n(noise: dict | None, cadence_s: float, cap: dict, n_frames: int, go
            "few_points": False,
            "n_stacks": n_frames, "span_s": cadence_s, "snr_c": float("nan"), "point_ppt": float("nan")}
     if noise:
-        out["dominate"] = noise["ratio"] > 1.0
+        # 2.3.0 run-through (John, HD 189733 b): comps 1.1x the target's photon noise, both ~4x below scintillation,
+        # was called "weak". Only a real comp floor counts: clearly noisier comps whose noise is a real share of a point.
+        out["dominate"] = dominates(noise)
         need = (noise["sig_c"] / (COMP_SHARE * noise["sig_t"])) ** 2 if noise["sig_t"] > 0 else float("inf")
         out["n_rule"] = max(1, int(math.ceil(need - 1e-9))) if math.isfinite(need) else 10 ** 6
     if goal_ppt and goal_ppt > 0 and noise:
         goal_mag = 1.0857362e-3 * goal_ppt
         out["n_goal"] = max(1, int(math.ceil((noise["sig_point"] / goal_mag) ** 2 - 1e-9)))
-    n = max(out["n_rule"], out["n_goal"] or 1)
+    n = max(out["n_rule"] if out["dominate"] else 1, out["n_goal"] or 1)   # comps fine: no stacking unless a goal
     if cap_frames_override:
         n_cap = int(cap_frames_override)
     elif math.isfinite(cadence_s) and cadence_s > 0:
@@ -288,10 +304,10 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
         return (f"Stacking: the noise could not be judged from this run (too few good frames). Stacks of {n} "
                 f"frames ({span} each){tail}.{cap_note}", False)
     goal_needs = goal_ppt and (sug["n_goal"] or 1) > 1
-    if noise["ratio"] > 1.0 and n > 1:
+    if sug.get("dominate") and n > 1:
         return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame). Stack {n} frames "
                 f"({span} each) → comps SNR ~{sug['snr_c']:.0f}{tail}?{cap_note}", True)
-    if noise["ratio"] > 1.0:
+    if sug.get("dominate"):
         # 2.3.0 review fix: say what really kept N at 1 (the time cap, or the 10-point minimum of a short night)
         if sug.get("capped") and (sug.get("n_cap") or 1) <= 1:
             why = f"the time resolution allows no stacking ({cap['text']})"
@@ -305,6 +321,9 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
     if goal_needs and n > 1:
         return (f"⚠ Per-frame points are about {noise['sig_point'] / 1.0857362e-3:.1f} ppt; your {goal_ppt:g} ppt goal "
                 f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", True)
+    if noise["ratio"] > 1.0:
+        return (f"Comps are fine per frame (comp noise {noise['ratio']:.1f}× the target's, a small part of each "
+                f"point's error): stacking is not needed. Type N to stack anyway.", False)
     return (f"Comps are fine per frame (comp noise {noise['ratio']:.0%} of the target's): stacking is not needed. "
             f"Type N to stack anyway.", False)
 
