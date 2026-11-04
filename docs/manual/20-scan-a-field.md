@@ -115,6 +115,21 @@ Before measuring each star's scatter, SHOBS-P lines its light curve up across an
 so a flip cannot pass for a variable star. On an alt-az mount there are no flips: the frames are aligned following
 the field rotation.
 
+### Scan stacks of frames (optional)
+
+After a scan, the Photometry page shows the same **Stack row** as the other modes (chapter 8, "Stacking when comps
+are weak"). Discovery has no comps, so its line is never orange; it only offers stacking, for example *"Stacking
+(optional): stacks of 6 frames (18 s each); 60 frames → 10 points. Time cap 5.0 min: a stack hides events faster than
+itself."* Stacking lets fainter stars into the scan, but a stack of 5 minutes cannot show an eclipse or flare shorter
+than that.
+
+To scan the stacks, set **Stack N** and press **Stack**. SHOBS-P makes the stacks, then runs the field scan on them
+instead of the single frames. A scan needs at least 10 stacks; with fewer, **Stack** says *"That makes only K stacks;
+a field scan needs at least 10. Use a smaller N."* The per-frame scan is kept: the **Points** box (**Per frame** /
+**Stacked**) beside the View box switches between the two scans.
+
+![The Discovery Photometry page with the optional Stacking line](img/20-discovery-stack-row.png)
+
 ## Read the Field scan page
 
 The hint under the title sums up the scan: the number of stars and frames, how the magnitudes were calibrated (for

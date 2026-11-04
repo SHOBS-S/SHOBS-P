@@ -46,7 +46,8 @@ Why several comps? With two or more, SHOBS-P averages them into an *ensemble*. O
 
 What to aim for:
 
-- Within about 1 magnitude of the target. A ⚠ note in the panel tells you when a comp is much brighter or fainter.
+- Within about 1 magnitude of the target. A ⚠ note in the panel tells you when a comp is much brighter or fainter. If the field has only much fainter comps, see "Stacking when comps are weak" in chapter 8.
+- Not too close to the frame edge. A comp that drifts off the edge is left out of those frames only (chapter 8, "Comps near the frame edge"), but a comp missing in most frames is left out of the whole night.
 - Similar color (B−V within about 0.5). A comp of another color dims differently with airmass and leaves a slow trend.
 - Not a known variable. If you click one, SHOBS-P asks whether to use it anyway. Answer **No** unless you have a good reason.
 
@@ -83,9 +84,12 @@ After the run, SHOBS-P may ask more questions:
 - **Add these N points as the night of …** appears only if a series is open. See chapter 10.
 - A question about dew or haze, or about frames during a planet transit. See chapter 12, [Flags and bad data](12-flags-and-bad-data.md).
 - A warning that a comp or the check is near the frame edge or a weak part of the flat. It says how far in a star must be to be safe. Consider other stars next time.
+- A warning box listing frames skipped, or comps left out of some frames because they went off the frame edge. The same lines stay in orange on the Photometry page. See chapter 8, "Comps near the frame edge".
 - **This night's meridian-flip step is … mag ⚠ …** appears only when a series is open and saves itself, and the night has a large step at the flip that looks like an aperture problem rather than the star: the check star steps too, or the comp and check apertures jumped together at the flip (or, with no check star, the step is far beyond the night's scatter). **Yes** saves the night into the series file. **No** keeps the night on screen but leaves the file on disk as it was; no automatic save writes it later either. Press **Save series** to keep it, or **Remove night…** to take it out. Chapter 12 explains flip steps.
 
 Then the **Output – Variability** page opens.
+
+**Weak comps?** The Photometry page now shows a Stack row with a suggestion line. When it says *"⚠ Comps are weak …"*, you can press **Stack** there and measure stacks of frames instead of single frames. The **Points** box beside the View box then switches between **Per frame** and **Stacked**, and a **Results use: …** line says which set the Output page, the period search and the reports use. Chapter 8 explains it, under "Stacking when comps are weak". A stack hides changes faster than itself, so SHOBS-P keeps a stack to 1/50 of the VSX period.
 
 ## Read the Output page
 
@@ -96,7 +100,7 @@ The page heading names the star, for example **Output – Variability: SZ Lyn**.
 1. **Three summary boxes**: **Series**, **Period** and **Color**.
 2. **The night table**, one row per night.
 3. **Cautions**, in amber, each starting with ⚠.
-4. **Three rows of settings** (period search, quality control, tools) and one view switch.
+4. **Three rows of settings** (period search, quality control, tools) and one view switch. After a night is stacked, the row with **Airmass-corrected night means** ends with **Results use: Stacked (N frames)** or **Results use: Per frame** (see chapter 8).
 5. **Four plots**.
 6. **Two button rows**: **Series** and, under it, **Results**.
 
