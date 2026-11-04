@@ -12197,6 +12197,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 frame_side = []
                 peaks = []
                 raw_peaks, clips = [], []   # 2.2.19 (#25)
+                meas = []   # 2.3.0 review: per frame (or stack), how many frames' raw cores each count stands on
+                # 2.3.0 review fix (#54): a stack has no raw pixels; its stars' peaks, raw cores and clipped counts
+                # are its member frames' (kept from the per-frame scan for the same star list)
+                stack_meta = stack_run["meta"] if stack_run else None
+                xy_key = hash(tuple(np.round(xy0, 1).ravel().tolist()))
                 chans = {"green": [], "red": [], "blue": []} if color else None
                 for i, path in enumerate(lights, 1):
                     if cancel.is_set():
@@ -12229,7 +12234,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         row = core.detected_mags(flux, exp, noise)
                         peak_row = core.peak_values(img, pos, radius)
                         # 2.2.19 (#25): each star's raw core on this frame (clipped -> True).
-                        if precal:
+                        members = (stack_meta.get(path) or {}).get("members") if stack_meta else None
+                        if members is not None:
+                            # 2.3.0 review fix (#54): the stack's member frames' values (highest peak, highest raw
+                            # core, how many of them clipped), as Variables/Transits do (apply_member_peaks)
+                            mp = [m.get("scan_peaks") for m in members]
+                            mp = [d for d in mp if d and d.get("key") == xy_key and len(d.get("peak", ())) == len(pos)]
+                            with np.errstate(all="ignore"):
+                                if mp:
+                                    peak_row = np.nanmax(np.array([d["peak"] for d in mp], dtype=float), axis=0)
+                                    raw_row = np.nanmax(np.array([d["raw"] for d in mp], dtype=float), axis=0)
+                                    clip_row = np.sum([d["clip"] for d in mp], axis=0).astype(int)
+                                    meas_row = np.sum([d["meas"] for d in mp], axis=0).astype(int)
+                                else:   # star list changed since the per-frame scan: one frame's share of the peak
+                                    peak_row = peak_row / max(len(members), 1)
+                                    raw_row = np.full(len(pos), np.nan)
+                                    clip_row = np.zeros(len(pos), dtype=int)
+                                    meas_row = np.zeros(len(pos), dtype=int)
+                        elif precal:
                             raw_row = np.full(len(pos), np.nan)
                             clip_row = np.zeros(len(pos), dtype=bool)
                             with np.errstate(all="ignore"):
@@ -12242,6 +12264,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             raw_row = core.raw_peaks_many(raw, pos, radius, total_bin)
                             with np.errstate(invalid="ignore"):
                                 clip_row = raw_row >= raw_limit
+                        if members is None:
+                            meas_row = (np.ones(len(pos), dtype=int) if precal
+                                        else np.isfinite(raw_row).astype(int))
                         frame_jd = core.mid_jd(header)
                         side = (bool(reg.get("flipped")), core.header_rotator(header))
                         crow = {}
@@ -12255,11 +12280,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         # fails half-way can never leave the lists out of step (2.2.1).
                         rows.append(row)
                         jds.append(frame_jd)
-                        frame_recs.append(stack_core.scan_record(path, frame_jd, exp, reg, side[1]))   # 2.3.0 (#54)
+                        rec = stack_core.scan_record(path, frame_jd, exp, reg, side[1])   # 2.3.0 (#54)
+                        if members is None:   # 2.3.0 review: what a stack of this frame needs for saturation
+                            rec["scan_peaks"] = {"key": xy_key, "peak": np.asarray(peak_row, float).tolist(),
+                                                 "raw": np.asarray(raw_row, float).tolist(),
+                                                 "clip": np.asarray(clip_row).astype(int).tolist(),
+                                                 "meas": np.asarray(meas_row).astype(int).tolist()}
+                        frame_recs.append(rec)
                         frame_side.append(side)
                         peaks.append(peak_row)
                         raw_peaks.append(raw_row)
                         clips.append(clip_row)
+                        meas.append(meas_row)
                         if color:
                             for ch in ("green", "red", "blue"):
                                 chans[ch].append(crow[ch])
@@ -12284,10 +12316,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "curve lined up across them before measuring its scatter.")
                 # 2.2.19 (#25): saturated = raw core clipped on 2 or more frames (or saturated on the reference, as
                 # before); clipped on one frame only (cosmic ray, hot pixel) = a caution on the candidate.
-                clip_stack = np.vstack(clips)
-                raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0),
-                                                        np.isfinite(np.vstack(raw_peaks)).sum(axis=0)
-                                                        if not precal else np.full(clip_stack.shape[1], len(clips)))
+                # 2.3.0 review: counted in frames (a stack counts its member frames)
+                clip_stack = np.vstack(clips).astype(int)
+                raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0), np.vstack(meas).sum(axis=0))
                 ref_only = len(saturated - raw_sat)
                 saturated.update(raw_sat)
                 clipped_some = {i: int(clip_stack[:, i].sum()) for i in raw_some if i not in saturated}

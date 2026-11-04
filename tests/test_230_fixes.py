@@ -311,6 +311,71 @@ class TestStackFixesInApp(unittest.TestCase):
             fits.PrimaryHDU(np.clip(img + 500, 0, 65535).astype(np.uint16), header=hdr).writeto(
                 os.path.join(lights, f"light_{i:04d}.fits"))
 
+    def test_discovery_stacks_flag_saturation_from_members(self):
+        """Fix 11c: a star whose raw core clips in the second half of the night (not on the reference) is saturated
+        in the scan on the stacks too (from the member frames' raw cores), and the stacks' summed peaks do not make
+        every bright star 'near saturation'."""
+        ca, app = self.ca, self.app
+        tmp = tempfile.mkdtemp()
+        lights = os.path.join(tmp, "lights")
+        os.makedirs(lights)
+        rng = np.random.default_rng(8)
+        exp, cad, t0, limit = 2.0, 3.0, 2460960.6, 6000
+        for i in range(60):
+            img = T.render(rng, dx=0.02 * i, dy=0.01 * i, field=T.RICH, target_scale=1.0 if i < 30 else 3.0)
+            hdr = fits.Header()
+            hdr["EXPTIME"] = exp
+            hdr["DATE-OBS"] = Time(t0 + i * cad / 86400 - exp / 2 / 86400, format="jd", scale="utc").isot
+            fits.PrimaryHDU(np.clip(img + 500, 0, limit).astype(np.uint16), header=hdr).writeto(
+                os.path.join(lights, f"light_{i:04d}.fits"))
+        old_mode, old_sat = app.mode_key, app.sat_limit.get()
+        try:
+            with mock.patch.object(ca.messagebox, "askyesno", return_value=True), \
+                    mock.patch.object(ca.messagebox, "askyesnocancel", return_value=False), \
+                    mock.patch.object(ca.messagebox, "showinfo"), mock.patch.object(ca.messagebox, "showwarning"), \
+                    mock.patch.object(ca.messagebox, "showerror") as err, \
+                    mock.patch.object(app, "label_aavso"):
+                app.set_mode("discovery")
+                app.light_dir.set(lights)
+                app.pattern.set(core.MONO)
+                app.binning.set(1)
+                app.sat_limit.set(str(limit))
+                app.masters = core.Masters()
+                app.masters_binning = 1
+                first = os.path.join(lights, "light_0000.fits")
+                raw, head = core.read_fits(first)
+                app.preview = raw.astype(np.float32)
+                app.preview_header, app.preview_path, app.preview_is_debayered = head, first, True
+                app.calibrated = app.preview
+                app.radius.set(4.0)
+                app.sky_in.set(8.0)
+                app.sky_out.set(13.0)
+                app.last_scan = None
+                app.scan_field()
+                self.assertTrue(self.pump_until(lambda: not app.busy and getattr(app, "last_scan", None) is not None
+                                                and app._stack_shown), "per-frame scan")
+                self.assertFalse(err.called, err.call_args)
+                frame_scan = app.last_scan
+                xy = np.asarray(frame_scan["xy"], dtype=float)
+                k = int(np.argmin(np.hypot(xy[:, 0] - T.TARGET[0], xy[:, 1] - T.TARGET[1])))
+                self.assertIn(k, frame_scan["saturated"])
+                app.stack_n.set("6")
+                app._stack_n_typed = True
+                app.start_stack()
+                self.assertTrue(self.pump_until(lambda: not app.busy and app.points_choice.get() == "stack"
+                                                and app.last_scan is not frame_scan, 180), "stacked scan")
+                self.assertFalse(err.called, err.call_args)
+                st = app.last_scan
+                self.assertIn(k, st["saturated"])
+                self.assertEqual(set(st["saturated"]), set(frame_scan["saturated"]))
+                self.assertLessEqual(len(st["near_sat"]), len(frame_scan["near_sat"]) + 1)
+        finally:
+            app.sat_limit.set(old_sat)
+            with mock.patch.object(ca.messagebox, "askyesno", return_value=True):
+                app.set_mode(old_mode)
+            app.update()
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_wrap_floors_scale_with_display(self):
         """Fix 10: the Stack line's and the skip line's wrap floors follow the display scaling (200 % here)."""
         app = self.app
