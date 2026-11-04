@@ -11,7 +11,8 @@ that everything fits together.
 From top to bottom:
 
 - **The series line**, with **New reduction**, **Load series…** and **Close series** on the right.
-- **Frames**: five rows, **Bias**, **Dark**, **Flat**, **Lights** and **Output**.
+- **Frames**: six rows, **Bias**, **Dark**, **Dark flats**, **Flat**, **Lights** and **Output**, with hint lines under
+  them.
 - On the left: **Target** (Variables and Transits), **Planet (Transits)** (Transits only), or **Field center (only
   needed when the headers do not say)** (Discovery, only when needed).
 - On the right: **AAVSO report**, **Site** and **Optics**.
@@ -25,7 +26,7 @@ on the right.
 To choose your frames:
 
 1. Press **Browse** on the **Bias** row and pick the folder of bias frames.
-2. Do the same for **Dark**, **Flat** and **Lights**.
+2. Do the same for **Dark**, **Flat** and **Lights**, and for **Dark flats** if you took them (see below).
 3. Optionally, choose an **Output** folder (see below).
 4. Press **Scan folders**.
 
@@ -53,10 +54,23 @@ the lights' exposure. Fine for a cooled camera; 120 s darks are better.** When t
 times, the line is red (✖) and Calibrate will ask about it. Once you have chosen at Calibrate to scale these darks,
 the line turns gray (✔).
 
-Any of Bias, Dark and Flat may be left empty. That step is simply skipped. Press **✕** to empty a row; the status bar
-says, for example, **Dark folder cleared. Calibration will skip it.**
+Any of Bias, Dark, Dark flats and Flat may be left empty. That step is simply skipped. Press **✕** to empty a row; the
+status bar says, for example, **Dark folder cleared. Calibration will skip it.**
 
-**Using a saved master.** Bias, Dark and Flat each have a **Master file…** button. Use it to pick one master file that
+**Dark flats.** The **Dark flats** row sits between **Dark** and **Flat** and works like the others (**Browse**,
+**Master file…**, **✕** and a file count). It is optional, like Bias. A hint line under the Frames box says: *"Dark
+flats (optional, like Bias): darks taken at the flats' exposure. They are taken off the flats, and with no bias they
+also stand in for it, so Bias can stay empty. Leave it empty if you have none."* If you have bias, darks and flats,
+leave it empty: nothing changes. Like the other frame folders it starts empty every time SHOBS-P starts, and it is not
+saved in a series. Chapter 7 says how the dark flats are used.
+
+Two more lines can appear in the same place as the dark-exposure line:
+
+- **⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights
+  scales the camera's offset too). Add bias frames or dark flats, or use darks at the lights' exposure.**
+- **⚠ Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.**
+
+**Using a saved master.** Bias, Dark, Dark flats and Flat each have a **Master file…** button. Use it to pick one master file that
 SHOBS-P built on an earlier night (they are in the `SHOBS-P masters` subfolder of your calibration folders). Masters
 from other programs are refused with a message explaining why.
 
@@ -115,9 +129,10 @@ night. **Clear target** still empties only the Star ID, RA and Dec and the compa
 In Transits mode, a **Planet (Transits)** box appears under the Target. Type the planet's name under any of its names
 (for example `TrES-3 b`, `TOI-2046 b` or `KELT-16 b`) and press Enter. SHOBS-P fills in the period, the transit time,
 duration, depth and shape from the NASA Exoplanet Archive, and also the host star's name and position. While it
-looks the planet up, the busy bar says, for example, **Looking up planet K2-29 b at the NASA Exoplanet Archive…**,
-and the empty boxes say "looking up…" in gray. Chapter 16 covers this
-box and **Tonight's transits…** in detail.
+looks the planet up, the busy bar says, for example, **Looking up planet K2-29 b at the NASA Exoplanet Archive…**;
+the boxes stay as they are until the values come. You can also type the host star in **Star ID** and press Enter: the
+busy bar then looks up the star, its planets and the planet in turn, for example **Looking up TrES-3's planets at the
+NASA Exoplanet Archive…**. Chapter 16 covers this box in detail.
 
 If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
 reduction. **No** keeps the old star and its series; check the planet's name.

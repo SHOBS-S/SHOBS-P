@@ -140,8 +140,8 @@ here. Frames taken through them are reported as clear (CV) with V comparison mag
 
 ## Calibration frames
 
-SHOBS-P uses bias, darks and flats. Each is optional (a missing one is skipped, and the log says so), but a good flat
-matters most for precise photometry.
+SHOBS-P uses bias, darks, dark flats and flats. Each is optional (a missing one is skipped, and the log says so), but a
+good flat matters most for precise photometry.
 
 **Bias frames**
 - The shortest exposure your camera allows, with the same gain, offset and temperature as your lights.
@@ -159,11 +159,20 @@ matters most for precise photometry.
 - Taken through the same optics, the same filter, the same focus, and **with the camera in the same rotation on the
   telescope** as the lights.
 - Exposed to roughly a third to half of full scale, not saturated.
-- 20 to 50 frames. You do not need separate darks for the flats: SHOBS-P takes the bias (and the dark, scaled to
-  the flats' exposure) out of each flat before combining them.
+- 20 to 50 frames. You do not need separate darks for the flats if you have bias frames: SHOBS-P takes the bias (and
+  the dark, scaled to the flats' exposure) out of each flat before combining them.
 - Fresh is best. Dust moves. SHOBS-P adds a caution to the log when a saved master flat is more than 30 days from the
   lights.
 
+**Dark flats** (optional)
+- Darks taken at the **flats' exposure** (same gain, offset and temperature), with the telescope covered.
+- Many capture programs offer them instead of bias frames. Put them in the **Dark flats** row on the Input page
+  (chapter 5): SHOBS-P takes them off the flats, and with no bias frames they also stand in for the bias (the camera's
+  offset), so the **Bias** row can stay empty.
+- With no bias and no dark flats, a dark scaled to another exposure scales the camera's offset too, and the
+  calibration is off. SHOBS-P warns about this. Either add bias frames or dark flats, or take darks at the lights'
+  exposure.
+- 10 to 30 frames.
 ### Flats and the camera's rotation
 
 Dust shadows and vignetting from the optics in front of the camera turn with the camera. A flat taken with the camera

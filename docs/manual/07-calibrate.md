@@ -1,8 +1,8 @@
 # 7. Calibrate
 
 Calibration removes the camera's own signature from your lights: the bias pedestal, dark current, and the uneven
-illumination and dust shadows that the flat records. SHOBS-P builds a master bias, dark and flat, calibrates the first
-light so you can see it, and then moves on to the Photometry page by itself.
+illumination and dust shadows that the flat records. SHOBS-P builds a master bias, dark, dark flat and flat (from the
+rows you filled in), calibrates the first light so you can see it, and then moves on to the Photometry page by itself.
 
 ![The Calibrate page after a successful calibration, with the log filled](img/07-calibrate-done.png)
 
@@ -35,11 +35,15 @@ left unchanged.
 
 ## What happens
 
-1. **Masters.** For each of bias, dark and flat, SHOBS-P either reuses the master it saved last time, or median-combines
-   the raw frames into a new one and saves it in the `SHOBS-P masters` subfolder of that folder. The log says which,
-   for example "Using saved master flat …" or "Median-combining 30 flat frames".
-2. **Each light** is then calibrated as (light − bias − dark) / flat, with the dark scaled to the light's exposure.
-3. **The first light** is calibrated and split into its colors (for a color camera), and shown on the Photometry page.
+1. **The plan.** Before the masters are built, one log line says how the lights and flats will be calibrated, for
+   example *"Calibration: lights = light − dark (the darks match the lights' exposure, so no bias is needed); flats =
+   flat − dark flat."* Indented notes and ⚠ warnings may follow it (see "Dark flats" below).
+2. **Masters.** For each of bias, dark, dark flat and flat, SHOBS-P either reuses the master it saved last time, or
+   median-combines the raw frames into a new one and saves it in the `SHOBS-P masters` subfolder of that folder. The
+   log says which, for example "Using saved master flat …" or "Median-combining 30 flat frames".
+3. **Each light** is then calibrated as (light − bias − dark) / flat, with the dark scaled to the light's exposure.
+   Without bias frames, the dark flats take the bias's place (below).
+4. **The first light** is calibrated and split into its colors (for a color camera), and shown on the Photometry page.
    The other lights are calibrated the same way, one by one, when you run photometry.
 
 The log ends with lines such as:
@@ -71,6 +75,80 @@ Before using a master, SHOBS-P checks it against the lights. A master of the wro
 calibration stops with a message ending "Pick the matching frames, or tick Rebuild masters." Smaller differences are
 noted as cautions in the log: a different Bayer pattern, gain, offset, a sensor temperature more than 3 °C apart, a
 flat taken at another rotator angle, or a flat more than 30 days from the lights.
+
+## Dark flats
+
+Dark flats are darks taken at the flats' exposure. Many capture programs offer them in place of bias frames. Put them
+in the **Dark flats** row on the Input page (chapter 5). The row is optional: with bias, darks and flats and no dark
+flats, nothing changes.
+
+What SHOBS-P does with them:
+
+- **Flats**: each flat becomes flat − dark flat, exactly.
+- **No bias frames**: the dark flats also stand in for the bias (the camera's zero-exposure offset).
+  - With darks that match the lights' exposure, the lights become light − dark exactly, with no warning.
+  - With darks that must be scaled, the lights become light − dark flat − (dark − dark flat) × t_light / t_dark, so
+    only the darks' own signal is scaled. The log says so in a note under the "Calibration:" line.
+  - The log line "Note: no bias frames. That step is skipped." does not appear when dark flats are given.
+- **Bias and dark flats both given**: the dark flats are used for the flats, and the bias for the lights and darks.
+  The log says *"Bias and dark flats are both given: …"*.
+- **Flats that are already calibrated** (for example PixInsight `_c` files): the dark flats are not used, and the log
+  says so.
+
+The master is saved as `SHOBS-P masters/SHOBS-P_master_darkflat_bin<b>_<exp>s.fits` in the dark-flat folder and reused
+like the other masters; **Master file…** on the row takes this file. A master flat built with dark flats is reused only
+with the same dark flats. The log says, for example, "Median-combining 15 dark flat frames" and "Saved master dark flat
+in the dark flat folder's 'SHOBS-P masters' subfolder: …", or "Using saved master dark flat …".
+
+**Dark flats in the Flat folder.** Some programs save the dark flats beside the flats. SHOBS-P knows a dark flat by
+its IMAGETYP header ('Dark Flat', 'DARKFLAT', 'Flat Dark', 'FLATDARK', 'Dark-Flat', 'dark_flat' and the like, in any
+case) or, with no IMAGETYP, by "darkflat" or "flatdark" in the file name. Such frames are never stacked into the master
+flat. With the Dark flats row empty, they are used as the dark flats: *"4 dark flats found in the Flat folder (IMAGETYP
+or name): used as the dark flats, and left out of the master flat."* Blink's **Flats** view leaves them out too
+(chapter 6).
+
+**Dark flats in the Bias row.** The older way, dark flats put in the **Bias** row, still works exactly as before. When
+the Bias row's frames say they are dark flats (IMAGETYP), the log adds a note that the **Dark flats** row is now the
+place for them.
+
+**No bias and no dark flats.** A dark scaled to another exposure also scales the camera's offset it holds, so the wrong
+amount of offset comes off. SHOBS-P warns about it on the Input page (chapter 5) and in the log, for example:
+
+- *"⚠ Darks can't be scaled correctly without bias or dark flats. The darks (110 s) are scaled ×0.5 to the lights
+  (55 s), and the camera's offset (pedestal) inside them is scaled too, … Add bias frames or dark flats, or use 55 s
+  darks."*
+- *"⚠ The flats (0.5 s) get the master dark (55 s) scaled ×0.00909, and with no bias that scales the camera's offset
+  too, so the wrong amount of offset comes off and the master flat is wrong. Put dark flats (darks at the flats'
+  exposure) in the Dark flats box, or add bias frames."*
+
+And when the dark flats do not match the flats: *"⚠ The dark flats are 2 s and the flats 0.5 s. Dark flats should
+match the flats' exposure; … Take dark flats at 0.5 s."*
+
+## Camera binning and the gain
+
+SHOBS-P works out each point's error bar from the photons it collected, so it needs to know how many electrons one
+image unit holds. It starts from the camera gain in the headers (EGAIN, in electrons per ADU).
+
+When the **camera** binned the frames (XBINNING above 1), that is not the whole story. EGAIN is the gain of one native
+pixel, and capture programs write the same value at every binning. Some cameras (CCDs) **sum** the binned pixels,
+and then EGAIN is right as it is. Many CMOS cameras **average** them instead: a stored ADU of a 3×3-binned frame then
+holds 9 × EGAIN electrons. Used as it is, EGAIN would make the error bars about 2–3 times too big (and the transit
+fit's reduced χ² well under 1).
+
+SHOBS-P tells the two apart from the sky's own noise, which it always measures on the reference frame. The log's
+**Photon noise:** line then adds one sentence, for example:
+
+- *"The camera binned 3x3 and averaged the binned pixels (the sky's noise says so), so each stored ADU holds 9 x
+  EGAIN electrons: about 6.91 electrons per image unit."*
+- *"The camera binned 2x2 and summed the binned pixels (the sky's noise says so): EGAIN is used as it is."*
+- With no sky estimate: *"The camera binned 3x3; with no sky estimate SHOBS-P cannot tell whether it summed (EGAIN as
+  it is, used) or averaged (9 x EGAIN) the binned pixels. If the Transit fit's reduced chi-square is well under 1, the
+  camera averaged."*
+
+The Transit fit's settings record then says, for example, *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3
+averaged, so 6.91 e- per stored ADU used (from the sky's noise)"*. SHOBS-P's own **Binning** box (processing bin) was
+already handled correctly, and unbinned cameras, mono or color, are not affected at all. Nights reduced before 2.3.0
+keep their old error bars until you reduce them again.
 
 ## Changing the channel
 
@@ -137,8 +215,10 @@ whether to calibrate without that step. If no light can be read, it stops.
 
 You may see these after calibration. None stops you; they explain what SHOBS-P noticed.
 
+- **"Calibration: lights = …; flats = …"**: how the lights and flats are calibrated, from the rows you filled in (see
+  "Dark flats" above). Any ⚠ under it says what to add.
 - **"Flats look already calibrated …: used as they are"**: your flats came from another program already calibrated;
-  SHOBS-P does not subtract bias or dark from them again.
+  SHOBS-P does not subtract bias, dark or dark flats from them again.
 - **"Meridian flip before frame 222 (30° to 210°) …"**: the rotator reading changed by 180° at a flip. The same flats
   fit both sides. Each star may show a small step at the flip; SHOBS-P lines this up later.
 - **"Note: the camera rotator moved during these lights …"**: the camera really turned during the night. One set of

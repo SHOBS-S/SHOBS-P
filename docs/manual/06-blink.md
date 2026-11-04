@@ -97,6 +97,9 @@ Choose **Flats** at the left of the tool row to look through the flat frames the
 a flat with a shadow (a hand, a cable) or one taken at the wrong brightness. Flats you reject here are left out of the
 master flat. The list then reads **Rejected flats …**.
 
+Dark flats saved in the Flat folder are not flats, so this view leaves them out, and the status line says, for
+example, *"4 dark flat(s) in the Flat folder are not shown (they are not flats)."* (see chapter 7).
+
 ## Things to know
 
 - **Rejections are not saved on their own.** They are kept while SHOBS-P is open, and they are saved with a series
