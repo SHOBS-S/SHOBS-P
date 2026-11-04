@@ -74,6 +74,14 @@ A flip, a camera rotation or a guiding re-acquisition can all shift the star on 
 When the step test is run but the transit wins, the notes say so as information: *"Step check: a …% jump at the
 …-minute gap fits worse than the transit …"*.
 
+**On a night with a meridian flip** that SHOBS-P knows about (**Mount** set to **German equatorial**), the flip gets
+its own test instead: the fit tries a flip step at the flip and keeps it only at ΔBIC 10 or more (chapter 17, "A
+meridian flip in the night"). When the step is kept, the flat line in the verdict test carries the same step, so the
+verdict reads, for example, *"Inconclusive. The dip beats a flat line with the flip step (ΔBIC …), but …"* or
+*"Transit detected: ΔBIC … against a flat line with the flip step …"*. The plain-jump test above is then not run
+again at that gap. With too little baseline on one side of the flip, the step and the transit cannot be told apart,
+and the verdict is often inconclusive: put the flip well into the baseline next time.
+
 ### "Timing usable; depth unreliable: depth …% vs published …, and …"
 
 The transit was detected, but its depth is more than 3σ from the published one, and the night shows why it might be

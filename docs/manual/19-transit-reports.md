@@ -65,8 +65,14 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 - the O − C against the predicted Tc, for example `SHOBS-P O - C +5.38 +/- 11.15 min (+0.48 sigma; …) vs predicted Tc
   … at epoch 2362; ephemeris from …` (not for "no transit", or for times left in JD_UTC); when the Archive was down
   and SHOBS-P used its saved answer, the source ends `, from cache (fetched 12 Oct 2026)`,
+- on a night with a meridian flip, the flip time and the flip-step decision, written whether or not the step was
+  kept, for example `SHOBS-P: meridian flip at BJD_TDB 2463218.67686; baseline step -1.45+/-0.05% (kept, dBIC 629) …`
+  or `SHOBS-P: meridian flip at BJD_TDB …; Flip step not needed: …, no step in this fit`. A later refit of the report
+  (by SHOBS-P or another program) then uses the same flip time. `#DETREND_PARAMETERS` is unchanged: it lists data
+  columns, and the step is in the NOTES,
 - one line of reduction settings, starting `SHOBS-P settings:` (aperture, comps, check, frames left out, trimmed
-  frames, detrending, gain, calibration),
+  frames, detrending, gain, calibration, and, for stacked points, `points are stacks of 40 frames (effective exposure
+  30 s)`),
 - a parameter limited by its prior range (chapter 17, "The corner plot").
 
 ### The settings file and the field image
@@ -74,9 +80,24 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 Beside the report, SHOBS-P writes:
 
 - `…_settings.txt`: the full settings of the reduction, one per line: **Source**, **Aperture** (what the night was
-  measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames left out** (by flag and frame
-  number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and the dark's exposure) and the **Gain**
-  with where it came from. With it, you (or anyone you send it to) can reduce the night again the same way.
+  measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames skipped at photometry**,
+  **Frames left out** (by flag and frame number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and
+  the dark's exposure) and the **Gain** with where it came from, and **Stacking** for stacked points. With it, you (or
+  anyone you send it to) can reduce the night again the same way. Some rows in more detail:
+  - **Comps** lists only what this night really measured, for example `Comps: C1, C2 (Use comps choice; measured: C1,
+    C2, C3 (missing in 14 frames: off the frame edge), SP (as spare))`. A comp no frame of the night measured is not
+    listed. Without a Use comps choice, the `(measured: …)` part is added only when it says something new.
+  - **Frames skipped at photometry (reason: frame numbers)**: frames the photometry run could not measure, for example
+    `every comp lost (off the frame edge): 158-213`, or `none`. **Frames left out (flag: frame numbers)** is a
+    different list: frames the fit left out because of their flags.
+  - **Calibration** names the dark flat master when there is one, and with no bias adds `dark flat used as the bias
+    (no bias frames)`.
+  - **Gain** on camera-binned frames says how the camera binned, for example `Gain 0.768 e-/ADU (header EGAIN); camera
+    bin 3x3 averaged, so 6.91 e- per stored ADU used (from the sky's noise)` (chapter 7).
+  - **Stacking**: `stacks of 40 frames (effective exposure 30 s) (sigma-clipped mean, whole-pixel shifts, never across
+    a flip)` (chapter 8).
+  - On an alt-az night where the field turned by about 180° between two frames, a row `Warning: field turned 180 deg
+    between frames … on an alt-az night (a meridian flip? check Mount)` (chapter 8).
 - `…_field.png`: the reference frame exactly as shot (never turned or mirrored), filling the picture on a smooth
   dark-gray background. The target, comps and check star are marked with their apertures to scale, with a scale
   bar at the bottom right. Yellow **N** and **E** arrows in the top-right corner show where north and east lie on
@@ -108,7 +129,9 @@ To save the package:
    - `…_fit.txt`: the fitted values and the notes ExoFOP asks for (telescope and camera, pixel scale, binning (the
      camera's, and SHOBS-P's processing bin), aperture, transit coverage, and the comparison-star spread as a
      systematic error). When the planet's TOI status and ExoClock priority were looked up (chapter 16), the summary
-     at the top has a **TESS TOI** line (with the target's ExoFOP-TESS address) and an **ExoClock** line.
+     at the top has a **TESS TOI** line (with the target's ExoFOP-TESS address) and an **ExoClock** line. On a
+     night with a meridian flip it has the *Meridian flip* lines and the *Flip step …* line, and **Detrending** says
+     `airmass, meridian flip step` when the step was kept (chapter 17).
    - `…_plot.png`: the transit plot.
 
 The package is a plain folder, not a zip, and it does not contain the AAVSO report; save that separately if you want
@@ -158,7 +181,8 @@ form.
   report fits too. It is the best single picture of a result to share or keep. The legend sits under the residual
   panel.
 - The **corner plot** of the fit is saved beside it, as `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png`
-  (chapter 17). The **Corner plot…** window's **Save PNG…** saves it on its own.
+  (chapter 17). **Save corner plot…** (Results row) opens the corner plot window, whose **Save PNG…** saves it on its
+  own.
 - **Save light-curve CSV…** writes the general light-curve CSV, the same as in Variables mode: one row per frame with
   magnitudes, errors, airmass, flags and much more (see [9. Reduce a variable-star night](09-reduce-a-variable-night.md)).
   It is in magnitudes, not the transit fit's relative flux.
