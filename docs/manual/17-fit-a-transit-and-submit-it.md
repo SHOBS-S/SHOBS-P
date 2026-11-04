@@ -205,6 +205,11 @@ Where you see the decision:
   needed)."*, then the depth without the step, the step–depth correlation and the baseline on each side. When it is
   not needed: *"… Flip step not needed: … The step is kept only at ΔBIC 10 or more, so this fit has no step term."*
 
+![A transit fit on a meridian-flip night with the flip step kept](img/17-flip-step.png)
+
+*A night with a meridian flip: the purple dash-dot line marks the flip, and the table has the Flip step (ppt), Depth
+without step and Step–depth correlation rows.*
+
 The leave-one-comp-out check uses the main fit's decision (step or no step) for every refit. The reports carry the
 flip time either way (chapter 19), so a later refit of a report uses the same time.
 
