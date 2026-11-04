@@ -63,6 +63,14 @@ def _seeing_widths(paths, pattern, mode, ref_img) -> tuple:
     return (f_stack, f_ref)
 
 
+def _ui_scale(widget) -> float:
+    """The display's scaling against 96 dpi (1.0 at least): clearv_app.ui_scale's rule (not imported: no cycle)."""
+    try:
+        return max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
+    except Exception:
+        return 1.0
+
+
 class StackMixin:
     """The App's stacking methods (see the module text)."""
 
@@ -93,7 +101,8 @@ class StackMixin:
         use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
         use.pack(side="top", anchor=W, pady=(2, 0))
         # the line wraps at the switch's own width, so the box never needs more room than the two buttons
-        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), 100)), add="+")
+        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), int(100 * _ui_scale(self)))),
+                 add="+")
         self._points_box, self._points_view_box = box, view_box
         options.bind("<Configure>", lambda _e: self.after_idle(self._stack_place_points_box), add="+")
         # The Stack row: shown under the settings once a run has points.
@@ -111,8 +120,9 @@ class StackMixin:
         ttk.Label(ctl, text="ppt per point (optional)", style="Card.TLabel").pack(side=LEFT, padx=(2, 8))
         self.stack_button = ttk.Button(ctl, text="Stack", command=self.start_stack)
         self.stack_button.pack(side=LEFT)
-        srow.bind("<Configure>", lambda e: self.stack_line_label.configure(wraplength=max(int(e.width) - 20, 300)),
-                  add="+")
+        # 2.3.0 review fix (high DPI): the margin and the floor scale with the display (clearv_app.ui_scale)
+        srow.bind("<Configure>", lambda e: self.stack_line_label.configure(
+            wraplength=max(int(e.width) - int(20 * _ui_scale(self)), int(300 * _ui_scale(self)))), add="+")
         self._stack_row, self._stack_anchor = srow, options
         self.stack_goal.trace_add("write", lambda *_a: self.after_idle(lambda: self._stack_refresh_line(fill_n=True)))
 

@@ -281,6 +281,20 @@ class TestStackFixesInApp(unittest.TestCase):
             fits.PrimaryHDU(np.clip(img + 500, 0, 65535).astype(np.uint16), header=hdr).writeto(
                 os.path.join(lights, f"light_{i:04d}.fits"))
 
+    def test_wrap_floors_scale_with_display(self):
+        """Fix 10: the Stack line's and the skip line's wrap floors follow the display scaling (200 % here)."""
+        app = self.app
+        old = float(app.tk.call("tk", "scaling"))
+        try:
+            app.tk.call("tk", "scaling", 1.3333 * 2)
+            app._stack_row.event_generate("<Configure>", width=40, height=10)
+            app.skip_line.event_generate("<Configure>", width=40, height=10)
+            app.update_idletasks()
+            self.assertAlmostEqual(int(str(app.stack_line_label.cget("wraplength"))), 600, delta=3)
+            self.assertAlmostEqual(int(str(app.skip_label.cget("wraplength"))), 600, delta=3)
+        finally:
+            app.tk.call("tk", "scaling", old)
+
     def test_darkflat_notes_cached(self):
         """Fix 9: the dark-flat note reads the folders' headers once, then again only when a folder changes."""
         ca, app = self.ca, self.app

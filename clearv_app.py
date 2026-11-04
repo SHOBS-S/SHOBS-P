@@ -3420,14 +3420,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._folder_row(frames, "Flat", self.flat_dir, "Flat")
         self._folder_row(frames, "Lights", self.light_dir, "Lights")
         self._folder_row(frames, "Output", self.output_dir, "Output")
-        ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, packages). Leave "
-                               "it empty to be asked each time. Files already there are never overwritten; a new "
-                               "copy gets _2, _3 ….", style="Hint.TLabel", wraplength=1100, justify=LEFT).pack(anchor=W)
+        # 2.3.0 review fix (high DPI): the two hints wrap at the card's own width (scaled floor), not at 1100 px
+        _wrap0 = int(900 * ui_scale(self))
+        out_hint = ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, "
+                                          "packages). Leave it empty to be asked each time. Files already there are "
+                                          "never overwritten; a new copy gets _2, _3 ….", style="Hint.TLabel",
+                             wraplength=_wrap0, justify=LEFT)
+        out_hint.pack(anchor=W)
         # 2.3.0 (item 11)
-        ttk.Label(frames, text="Dark flats (optional, like Bias): darks taken at the flats' exposure. They are taken "
-                               "off the flats, and with no bias they also stand in for it, so Bias can stay empty. "
-                               "Leave it empty if you have none.", style="Hint.TLabel", wraplength=1100,
-                  justify=LEFT).pack(anchor=W)
+        df_hint = ttk.Label(frames, text="Dark flats (optional, like Bias): darks taken at the flats' exposure. They are "
+                                         "taken off the flats, and with no bias they also stand in for it, so Bias can "
+                                         "stay empty. Leave it empty if you have none.", style="Hint.TLabel",
+                            wraplength=_wrap0, justify=LEFT)
+        df_hint.pack(anchor=W)
+        frames.bind("<Configure>", lambda e: [h.configure(wraplength=max(int(e.width) - int(10 * ui_scale(self)),
+                                                                        int(300 * ui_scale(self))))
+                                               for h in (out_hint, df_hint)], add="+")
         # 2.2.19 (#20): darks and lights of different exposures, said here before Calibrate.
         self.dark_exposure_note = StringVar(value="")
         self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
@@ -6855,10 +6863,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.19 (#41): what the current photometry was measured with, and a caution when the boxes now differ.
         self.aperture_state = StringVar(value="")
         self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
-                                              justify=LEFT, wraplength=700)
+                                              justify=LEFT, wraplength=int(700 * ui_scale(self)))
         # 2.2.19 (r2: S3): shown only while it has text (_update_aperture_state), so no empty line is reserved
-        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(wraplength=max(e.width - 40, 300)),
-                  add="+")   # wraps with the window, never wider than it
+        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(
+            wraplength=max(e.width - int(40 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")   # 2.3.0 review   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
         # 2.3.0 (#50, item 10): frames the last run skipped (and why), comps left out of some frames, a flip on an
@@ -6868,12 +6876,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.skip_button = ttk.Button(self.skip_line, text="Measure skipped frames",
                                       command=self.measure_skipped_frames)
         self.skip_label = ttk.Label(self.skip_line, textvariable=self.skip_text, style="Warn.TLabel", justify=LEFT,
-                                    wraplength=700)
+                                    wraplength=int(700 * ui_scale(self)))   # 2.3.0 review: scaled (high DPI)
         self.skip_label.pack(side=LEFT, fill=X, expand=True)
         self._skip_button_side = {"side": RIGHT, "padx": (6, 0), "before": self.skip_label}
         self.skip_line.bind("<Configure>", lambda e: self.skip_label.configure(
             wraplength=max(e.width - (self.skip_button.winfo_reqwidth() if self.skip_button.winfo_ismapped() else 0)
-                           - 20, 300)), add="+")
+                           - int(20 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")
         # 2.2.19 (r2: S2): the measurement settings in small groups that wrap like text (_flow_meas) when the row is
         # narrow (125 % on a 1366-px screen cut "Also measure R and B" off after "linear ADU" was added).
         meas = ttk.Frame(options, style="Card.TFrame")
