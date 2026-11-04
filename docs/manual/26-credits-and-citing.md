@@ -17,7 +17,8 @@ To see every source SHOBS-P uses:
      the NASA Exoplanet Archive (planet values and TESS TOI status), ExoFOP, ExoClock (planet priorities) and
      VizieR.
    - **METHODS**: the published methods behind the period search, the color transformations, the transit model,
-     the MCMC sampler, the red-noise estimate, the error bars, the timing methods and more.
+     the MCMC sampler, the red-noise estimate, the error bars, the timing methods, the Sun's position (for the
+     approximate BJD_TDB of a report that has no site) and more.
 
    For each source the page says what SHOBS-P uses it for and gives the reference. Sentences in quotes are the
    acknowledgements each source asks for, in its own words.
@@ -53,7 +54,7 @@ always points to the latest version:
 
 The suggested citation, exactly as the Credits page shows it (and copies with **Copy**):
 
-> Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.2.20, Zenodo,
+> Armbrust, J. W., and Shiloh Hill Observatory, SHOBS-P: Shiloh Hill Observatory Photometry, version 2.3.0, Zenodo,
 > doi:10.5281/zenodo.23417063
 
 The version in it is always the one you are running.
@@ -64,7 +65,7 @@ In BibTeX:
 @software{shobs_p,
   author    = {Armbrust, John W. and {Shiloh Hill Observatory}},
   title     = {{SHOBS-P: Shiloh Hill Observatory Photometry}},
-  version   = {2.2.20},
+  version   = {2.3.0},
   year      = {2026},
   publisher = {Zenodo},
   doi       = {10.5281/zenodo.23417063},
@@ -72,8 +73,8 @@ In BibTeX:
 }
 ```
 
-Always give the version you used. It is at the bottom of the sidebar (**Version 2.2.20**), in the citation on the
-Credits page, and in the `#SOFTWARE=SHOBS-P 2.2.20` line of every AAVSO report SHOBS-P writes.
+Always give the version you used. It is at the bottom of the sidebar (**Version 2.3.0**), in the citation on the
+Credits page, and in the `#SOFTWARE=SHOBS-P 2.3.0` line of every AAVSO report SHOBS-P writes.
 
 To cite one specific release rather than the latest, open the DOI above. The Zenodo page lists every version with
 its own DOI; use the one for your version.
