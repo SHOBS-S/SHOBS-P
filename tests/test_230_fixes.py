@@ -233,6 +233,98 @@ class TestStackFixesInApp(unittest.TestCase):
             app.update()
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_switch_carries_flags_and_catalog_and_measure_skipped(self):
+        """Fix 6: transit flags and catalog magnitudes changed while the stacks are shown follow to the per-frame
+        points on a switch. Fix 4: Measure skipped frames on a stacked night switches to Per frame first and drops
+        the stacks once the frames are in; a stacked night without per-frame points is refused."""
+        import copy
+        ca, app = self.ca, self.app
+        tmp = tempfile.mkdtemp()
+        lights = os.path.join(tmp, "lights")
+        os.makedirs(lights)
+        self._write_lights(lights)
+        try:
+            with mock.patch.object(ca.messagebox, "askyesno", return_value=True), \
+                    mock.patch.object(ca.messagebox, "askyesnocancel", return_value=False), \
+                    mock.patch.object(ca.messagebox, "showinfo") as info_box, \
+                    mock.patch.object(ca.messagebox, "showwarning"), \
+                    mock.patch.object(ca.messagebox, "showerror") as err:
+                self._setup_run(lights)
+                app.run_photometry()
+                self.assertTrue(self.pump_until(lambda: not app.busy and app.observations), "per-frame run")
+                night = app.observations[0].night
+                frames = sorted([o for o in app.observations if o.night == night], key=lambda o: o.jd)
+                mag0 = {id(o): o.mag for o in frames}
+                app.stack_n.set("5")
+                app._stack_n_typed = True
+                app.start_stack()
+                self.assertTrue(self.pump_until(lambda: not app.busy and app._stack_set_live(night)
+                                                and app.points_choice.get() == "stack"), "stack")
+                self.assertFalse(err.called, err.call_args)
+                # --- fix 6: flags and catalog changes made on the stacks
+                lo, hi = frames[10].jd - 1e-6, frames[19].jd + 1e-6
+                info = app._night_info(night, create=True)
+                info["planet_transits"] = [{"planet": "b", "windows": [[lo, hi]]}]
+                app._set_transit_flags(night, True, quiet=True)
+                self.assertTrue(any("transit" in o.flag.split() for o in app.observations if o.night == night))
+                self.assertTrue(app.set_catalog_mags({"C1": 11.1}))
+                app.points_choice.set("frame")
+                app._points_switched()
+                pts = sorted([o for o in app.observations if o.night == night], key=lambda o: o.jd)
+                self.assertEqual({id(o) for o in pts}, {id(o) for o in frames})
+                flagged = [o for o in pts if "transit" in o.flag.split()]
+                self.assertEqual(len(flagged), 10)
+                self.assertTrue(all(lo <= o.jd <= hi for o in flagged))
+                shifts = [o.mag - mag0[id(o)] for o in pts if math.isfinite(o.mag) and math.isfinite(mag0[id(o)])]
+                self.assertTrue(shifts)
+                self.assertTrue(all(abs(s - 0.05) < 1e-6 for s in shifts), shifts[:5])
+                # back to the stacks: they were changed already, nothing applied twice
+                st_before = {id(o): o.mag for o in app._stack_sets[night]["stack"]}
+                app.points_choice.set("stack")
+                app._points_switched()
+                self.assertTrue(all(o.mag == st_before[id(o)] or not math.isfinite(o.mag)
+                                    for o in app.observations if o.night == night))
+                info["transit_flagged"] = False
+                app._set_transit_flags(night, False, quiet=True)
+                info.pop("planet_transits", None)
+                info.pop("transit_flagged", None)
+                # --- fix 4: Measure skipped frames while the stacks are shown
+                extra = frames[0].path
+                app._prev_stars = (list(app.comps_used), app.check_used)
+                with mock.patch.object(app, "recoverable_skips", return_value={"C9": [extra]}), \
+                        mock.patch.object(app, "_lights", return_value=[extra]), \
+                        mock.patch.object(app, "run_photometry") as run:
+                    app.measure_skipped_frames()
+                    run.assert_called_once()
+                    self.assertEqual(run.call_args.kwargs.get("only"), [extra])
+                self.assertEqual(app.points_choice.get(), "frame")
+                self.assertEqual({id(o) for o in app.observations if o.night == night}, {id(o) for o in frames})
+                new = copy.copy(frames[-1])
+                new.jd = frames[-1].jd + 3.0 / 86400
+                new.path = os.path.join(lights, "light_extra.fits")
+                app._remeasure_done({"night": night}, [new], "variables")
+                self.assertNotIn(night, app._stack_sets)
+                self.assertIsNone(app.stack_meta(night))
+                self.assertEqual(len(app._stack_source["points"]), len(frames) + 1)
+                self.assertTrue(app._stack_source_live())   # Stack can be pressed again
+                # a stacked night whose per-frame points are not loaded (saved series): refused
+                app._night_info(night, create=True)["stack"] = {"n": 5}
+                info_box.reset_mock()
+                with mock.patch.object(app, "recoverable_skips", return_value={"C9": [extra]}), \
+                        mock.patch.object(app, "_lights", return_value=[extra]), \
+                        mock.patch.object(app, "run_photometry") as run:
+                    app.measure_skipped_frames()
+                    run.assert_not_called()
+                self.assertTrue(info_box.called)
+                self.assertIn("are stacks", info_box.call_args.args[1])
+                app._night_info(night).pop("stack", None)
+        finally:
+            with mock.patch.object(app, "_offer_series_save", return_value=True):
+                if app.observations:
+                    app.close_series(asked=True)
+            app.update()
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14248,6 +14248,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "cannot be measured on their own. Open that night's frames and press Run "
                                            "photometry to measure the whole night again.")
             return
+        # 2.3.0 review fix (#54): single frames never go into a night that shows stacks. With the per-frame points at
+        # hand, the night goes back to Points: Per frame first (the new frames join those; the stacks are dropped
+        # once they are in, and Stack makes new ones); a stacked night from a saved series has no per-frame points
+        # here, so the user is told to run the night again.
+        sets = getattr(self, "_stack_sets", {}).get(night)
+        if self.stack_meta(night) or (sets and not sets.get("scan") and self.points_choice.get() == "stack"):
+            if sets and not sets.get("scan") and self._stack_set_live(night):
+                self.points_choice.set("frame")
+                self._apply_points(night, "frame", announce=False)
+                self.log(f"Measure skipped frames: {self.label_nights(night)} showed stacked points; switched to Points: "
+                         "Per frame so the skipped frames join the per-frame points. The stacks of this night are "
+                         "dropped once the frames are in: press Stack again to stack the whole night.")
+            else:
+                messagebox.showinfo(APP_TITLE, f"The points of {self.label_nights(night)} are stacks, and its per-frame "
+                                               "points are not loaded (a saved series keeps only the points shown). "
+                                               "Single frames cannot be added to stacks: open that night's frames, "
+                                               "press Run photometry (per frame), then Stack again.")
+                return
         if len(found) < len(paths):
             self.log(f"Measure skipped frames: {len(paths) - len(found)} of the {len(paths)} frames are no longer in the "
                      "Lights folder (or are rejected in Blink) and stay skipped.")
@@ -14280,6 +14298,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except ValueError as exc:
             self.log(f"Measure skipped frames: could not re-derive {night} with the comps in use: {exc}")
         info = self._night_info(night, create=True)
+        self._stack_drop_after_remeasure(night, night_pts)   # 2.3.0 review fix (#54)
         done = {os.path.normcase(os.path.abspath(o.path)) for o in new_points}
         still = list(getattr(self, "_run_skipped", None) or [])
         labs = core.frame_labels_for([s["path"] for s in still]) if still else []

@@ -488,8 +488,9 @@ class StackMixin:
         # 2.3.0 review fix: the per-frame set is the run's source, never the stacks on screen (pressing Stack again
         # while Points: Stacked is shown used to store the old stacks as the night's "Per frame" points).
         frame_set = self._stack_frame_set(night, run.get("src"), frames_now)
+        prior_cat = ((self._stack_sets.get(night) or {}).get("cat") or {}).get("frame")
         self._stack_sets[night] = {"frame": frame_set, "stack": night_points, "meta": run["summary"],
-                                   "paths": list(run["paths"])}
+                                   "paths": list(run["paths"]), "cat": {"frame": prior_cat} if prior_cat else {}}
         self.points_choice.set("stack")
         self._apply_points(night, "stack", announce=False)
         words = stack_core.stack_words(run["summary"])
@@ -574,18 +575,56 @@ class StackMixin:
         current = {id(o) for o in self.observations if o.night == night}
         if current == {id(o) for o in sets[which]}:
             before = which
-        if tp is not None and getattr(tp, "report", None) is None and getattr(tp, "result", None) is not None \
+        # 2.3.0 review fix: only the set really on screen is recorded (after Stack again, the old stacks are on
+        # screen and are neither of the night's two sets)
+        on_screen = current == {id(o) for o in sets[before]}
+        if on_screen and tp is not None and getattr(tp, "report", None) is None \
+                and getattr(tp, "result", None) is not None \
                 and getattr(tp, "night", None) is not None and tp.night.get() == night:
             self._stack_fit_cache[before] = (tp._fit_signature, tp.result, tp.meta_for_files)
+        try:
+            cat_now = dict(self._comp_catalog())
+        except Exception:
+            cat_now = None
+        cats = sets.setdefault("cat", {})
+        if on_screen and cat_now is not None:
+            cats[before] = dict(cat_now)   # the catalog magnitudes the set on screen is derived with
         new = sets[which]
+        recomputed = False
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
                 core.recompute_with_comps(new, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
+                recomputed = True
             except Exception as exc:
                 self.log(f"Could not apply the chosen comps to the {which} points: {exc}")
         self.observations = core.merge_nights([o for o in self.observations if o.night != night], new)
         info = self._night_info(night, create=True)
+        # 2.3.0 review fix: what was changed on the set on screen follows to the set now shown: catalog magnitudes
+        # typed in Use comps… (shifted by the same deltas, as set_catalog_mags does) and the night's planet-transit
+        # flags (Variables campaign rule).
+        old_cat = cats.get(which)
+        if not recomputed and cat_now is not None and old_cat:
+            pairs = {k: (old_cat[k], v) for k, v in cat_now.items()
+                     if old_cat.get(k) is not None and v is not None and float(old_cat[k]) != float(v)}
+            if pairs:
+                try:
+                    comps = info.get("comps") if isinstance(info, dict) else None
+                    default = list(self.active_comps or (comps if isinstance(comps, list) and comps
+                                                         else self.comps_used))
+                    res = core.apply_catalog_mags(new, pairs, {}, default, self._star_aliases())
+                    if res.get("changed"):
+                        self.log(f"  The catalog magnitudes changed in Use comps… applied to the {which} points too "
+                                 f"({res['changed']} points).")
+                except Exception as exc:
+                    self.log(f"Could not apply the changed catalog magnitudes to the {which} points: {exc}")
+        if cat_now is not None:
+            cats[which] = dict(cat_now)
+        if info.get("planet_transits") and "transit_flagged" in info:
+            try:
+                self._set_transit_flags(night, bool(info["transit_flagged"]), quiet=True)
+            except Exception:
+                traceback.print_exc()
         if which == "stack":
             info["stack"] = {k: v for k, v in (sets.get("meta") or {}).items() if k != "mode"}
         else:
@@ -621,6 +660,27 @@ class StackMixin:
                 self._write_series(self.series_path)
             except OSError as exc:
                 self.log(f"Could not auto-save the series: {exc}")
+
+    def _stack_drop_after_remeasure(self, night, night_points):
+        """2.3.0 review fix: Measure skipped frames added frames to the night's per-frame points: its stacks no longer
+        match them and are dropped; the per-frame points (with the new frames) are the source of any new stacks."""
+        if not hasattr(self, "_stack_row"):
+            return
+        had = self._stack_sets.pop(night, None)
+        src = getattr(self, "_stack_source", None)
+        if src and not src.get("scan") and src.get("night") == night:
+            src["points"] = list(night_points)
+        try:
+            self._night_info(night, create=True).pop("stack", None)
+        except Exception:
+            pass
+        self._stack_fit_cache = {}
+        self.points_choice.set("frame")
+        if had:
+            self.log(f"Stacks of {night} dropped (they do not hold the frames just measured); press Stack to stack the "
+                     "night again.")
+        self._stack_ui_update()
+        self._stack_refresh_line(fill_n=False)
 
     # ---- Discovery: the scan on the stacks -------------------------------------------------------------------
     def _stack_scan_done(self, result):
