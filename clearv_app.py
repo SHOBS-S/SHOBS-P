@@ -4350,13 +4350,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                        f"({dark_exp:g} s darks to {light_exp:g} s lights scales the camera's offset too). Add bias "
                        "frames or dark flats, or use darks at the lights' exposure.")
         if have_df and self.flat_dir.get().strip():
-            df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
-            try:   # the first real flat (dark flats saved in the Flat folder are not counted)
-                frames, master = core.calibration_source(self.flat_dir.get())
-                first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
-                flat_exp = self._header_exposure(core.read_header(first)) if first else None
-            except Exception:
-                flat_exp = None
+            # 2.3.0 review fix: the two exposures are cached on the folders (names and modification times), so a note
+            # refresh does not read up to 21 headers on the window's thread every time
+            def stamp(path):
+                try:
+                    return (path, os.stat(path).st_mtime_ns)
+                except OSError:
+                    return (path, None)
+            key = (stamp(self.darkflat_dir.get().strip()), stamp(self.flat_dir.get().strip()))
+            cached = getattr(self, "_darkflat_exp_cache", None)
+            if cached and cached[0] == key:
+                df_exp, flat_exp = cached[1]
+            else:
+                df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
+                try:   # the first real flat (dark flats saved in the Flat folder are not counted)
+                    frames, master = core.calibration_source(self.flat_dir.get())
+                    first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
+                    flat_exp = self._header_exposure(core.read_header(first)) if first else None
+                except Exception:
+                    flat_exp = None
+                self._darkflat_exp_cache = (key, (df_exp, flat_exp))
             if core.exposures_match(df_exp, flat_exp) is False:
                 out.append(f"⚠ Dark flats {df_exp:g} s, flats {flat_exp:g} s: dark flats should match the flats' "
                            f"exposure. Take dark flats at {flat_exp:g} s.")

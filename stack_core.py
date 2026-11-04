@@ -422,33 +422,53 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
             cnt = np.zeros(x.shape, dtype=np.int32)
         elif x.shape != S.shape:
             raise ValueError(f"{os.path.basename(m['path'])} has another size than the other frames")
+        # 2.3.0 review fix (memory): x is this loop's own copy, so it is worked on in place (no float64 or masked
+        # temporaries of the full frame); fmax/fmin skip NaN, so uncovered pixels need no mask there.
         ok = np.isfinite(x)
-        x0 = np.where(ok, x, 0.0)
-        S += x0
+        bad = not ok.all()
+        if bad:
+            np.copyto(x, np.float32(np.nan), where=~ok)   # +-inf counts as uncovered, as before
+        if Q is not None:
+            np.fmax(mx, x, out=mx)
+            np.fmin(mn, x, out=mn)
+        if bad:
+            np.copyto(x, np.float32(0.0), where=~ok)
+        S += x
         cnt += ok
         if Q is not None:
-            Q += x0.astype(np.float64) ** 2
-            np.fmax(mx, np.where(ok, x, -np.inf), out=mx)
-            np.fmin(mn, np.where(ok, x, np.inf), out=mn)
-        del x, x0, ok
+            Q += np.square(x, dtype=np.float64)
+        del x, ok
         if progress is not None:
             progress(k + 1, 2 * n if n >= min_clip else n)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        plain = np.where(cnt > 0, S / np.maximum(cnt, 1), np.nan)
     if n < min_clip:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            plain = np.where(cnt > 0, S / np.maximum(cnt, 1), np.nan)
         return (plain * n).astype(np.float32), {"n": n, "clipped": 0.0, "plain": True}
-    # Reference level and scatter with each pixel's lowest and highest value left out.
+    # 2.3.0 review fix (memory): the plain mean is only needed where no value is kept: float32
+    with np.errstate(invalid="ignore", divide="ignore"):
+        plain = (S / np.maximum(cnt, 1)).astype(np.float32)
+    np.copyto(plain, np.float32(np.nan), where=cnt == 0)
+    # Reference level and scatter with each pixel's lowest and highest value left out (worked out in the
+    # accumulators' own buffers: S becomes the reference, Q the variance).
     m2 = np.maximum(cnt - 2, 1)
     with np.errstate(invalid="ignore", divide="ignore"):
-        ref = (S - mx - mn) / m2
-        var = (Q - mx.astype(np.float64) ** 2 - mn.astype(np.float64) ** 2) / m2 - ref ** 2
-    del Q, S
-    corr = np.ones(cnt.shape, dtype=np.float64)
+        S -= mx
+        S -= mn
+        S /= m2
+        ref = S
+        Q -= np.square(mx, dtype=np.float64)
+        Q -= np.square(mn, dtype=np.float64)
+        Q /= m2
+        Q -= np.square(ref)
+        var = Q
+    del Q, S, m2
+    np.maximum(var, 0.0, out=var)
     for c in np.unique(cnt):
         if c >= min_clip:
-            corr[cnt == c] = trimmed_var_factor(int(c))
-    sig = np.sqrt(np.maximum(var, 0.0) / corr).astype(np.float32)
-    del var, corr, mx, mn
+            var[cnt == c] /= trimmed_var_factor(int(c))
+    np.sqrt(var, out=var)
+    sig = var.astype(np.float32)
+    del var, mx, mn
     ref = ref.astype(np.float32)
     clippable = cnt >= min_clip
     # A scatter taken from a handful of values is itself uncertain (from 3 values, often half the truth), and a clip on
@@ -487,8 +507,15 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
         if math.isfinite(sky_level):
             signal[pl] = np.abs(ref[pl] - np.float32(sky_level))
     # A pixel whose values are all equal has no scatter: only exactly-equal values are kept there.
-    tol = (kfac * sig + SIGNAL_SPAN * signal + 1e-6 * np.abs(ref)).astype(np.float32)
-    del kfac, signal
+    # (in place, the same sums in the same order: kfac * sig + SIGNAL_SPAN * signal + 1e-6 * |ref|)
+    tol = kfac
+    tol *= sig
+    signal *= np.float32(SIGNAL_SPAN)
+    tol += signal
+    np.abs(ref, out=signal)
+    signal *= np.float32(1e-6)
+    tol += signal
+    del kfac, signal, sig
     K = np.zeros(cnt.shape, dtype=np.float64)
     KC = np.zeros(cnt.shape, dtype=np.int32)
     thrown = 0
@@ -502,15 +529,17 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
         with np.errstate(invalid="ignore"):
             keep = ok & (~clippable | (np.abs(x - ref) <= tol))
         thrown += int(np.count_nonzero(ok & ~keep))
-        K += np.where(keep, x, 0.0)
+        np.add(K, x, out=K, where=keep)
         KC += keep
         del x, ok, keep
         if progress is not None:
             progress(n + k + 1, 2 * n)
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = np.where(KC > 0, K / np.maximum(KC, 1), plain)
+        K /= np.maximum(KC, 1)
+    np.copyto(K, plain, where=KC == 0)
+    K *= n
     total = int(cnt.sum())
-    return (out * n).astype(np.float32), {"n": n, "clipped": thrown / total if total else 0.0, "plain": False}
+    return K.astype(np.float32), {"n": n, "clipped": thrown / total if total else 0.0, "plain": False}
 
 
 # ---- files ---------------------------------------------------------------------------------------------------

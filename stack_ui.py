@@ -47,6 +47,22 @@ def load_frame(path: str, binning: int, masters):
     return raw, header, core.calibrate_frame(core.bin_image(raw, binning), header, masters)
 
 
+def _seeing_widths(paths, pattern, mode, ref_img) -> tuple:
+    """(star FWHM on the middle stack, on one frame) in px, NaN when not measurable. Worker thread (no Tk)."""
+    nan = float("nan")
+    try:
+        img = core.debayer(stack_core.read_stack(paths[len(paths) // 2])[0], pattern, mode)
+        f_stack = float(core.field_fwhm(img)["fwhm"])
+        del img
+    except Exception:
+        return (nan, nan)
+    try:
+        f_ref = float(core.field_fwhm(ref_img)["fwhm"]) if ref_img is not None else nan
+    except Exception:
+        f_ref = nan
+    return (f_stack, f_ref)
+
+
 class StackMixin:
     """The App's stacking methods (see the module text)."""
 
@@ -364,6 +380,7 @@ class StackMixin:
             return
         self._progress_start(len(groups), "Stacking")
         cancel = self._cancel
+        ref_img = self.preview   # one frame, for the aperture check after the stacks (read in the worker)
         dropped = stack_core.left_out_counts(recs)
         self.log(f"Stacking {total} frames into {len(groups)} stacks of up to {n} (sigma-clipped mean; whole-pixel "
                  "shifts from the measured drift; never across a meridian flip or a gap)"
@@ -410,6 +427,8 @@ class StackMixin:
                 summ = stack_core.summary(groups, n)
                 summ.update(turn=float(max(turns) if turns else 0.0), clipped=float(np.mean(clipped) if clipped else 0),
                             shift=int(shifts_max), mode=src["mode"])
+                # 2.3.0 review fix: the aperture check's star widths are measured here, not on the window's thread
+                summ["_seeing"] = _seeing_widths(paths, pattern, mode, ref_img)
                 self.call_ui(self._stack_made, src, paths, meta, summ, folder, None)
             except Exception as exc:
                 if str(exc) != "Canceled":
@@ -429,6 +448,7 @@ class StackMixin:
                 messagebox.showerror(TITLE, f"Stacking failed: {error}")
             return
         self._progress_end(f"{len(paths)} stacks.")
+        seeing = summ.pop("_seeing", None)
         stack_core.prune_folders(folder)
         words = stack_core.stack_words(summ)
         self.log(f"Stacks made: {summ['frames']} frames → {summ['stacks']} {words}; {summ['clipped'] * 100:.3f}% of the "
@@ -444,7 +464,7 @@ class StackMixin:
         if summ.get("mode") == "discovery":
             self.log("  Note: the scan on the stacks cannot see changes faster than one stack "
                      f"({stack_core._dur(summ['exp'])} of exposure).")
-        run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src}
+        run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src, "seeing": seeing}
         self._stack_run_ctx = run
         if src.get("scan"):
             self.scan_field(stack_run=run)
@@ -514,12 +534,11 @@ class StackMixin:
         return [o for o in frames_now if not is_stack_path(getattr(o, "path", ""))] or frames_now
 
     def _stack_seeing_note(self, run):
-        """Re-check the aperture against the stacks (stars in a stack are a little wider than in one frame)."""
+        """Re-check the aperture against the stacks (stars in a stack are a little wider than in one frame). The
+        widths were measured in the Stack worker (run["seeing"]); only the words are made here."""
         try:
-            img = core.debayer(load_frame(run["paths"][len(run["paths"]) // 2], 1, None)[2], self.pattern.get(),
-                               self.debayer_mode.get())
-            f_stack = core.field_fwhm(img)["fwhm"]
-            f_ref = core.field_fwhm(self.preview)["fwhm"] if self.preview is not None else float("nan")
+            f_stack, f_ref = run.get("seeing") or (float("nan"), float("nan"))
+            f_stack, f_ref = float(f_stack), float(f_ref)
         except Exception:
             return
         if not (math.isfinite(f_stack) and math.isfinite(f_ref) and f_ref > 0):

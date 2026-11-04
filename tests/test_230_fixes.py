@@ -167,6 +167,36 @@ class TestNoiseCheckNits(unittest.TestCase):
         self.assertIn("time resolution allows no stacking", text)
 
 
+class TestCombineMemory(unittest.TestCase):
+    def test_uncovered_and_inf_pixels_and_seeing_widths(self):
+        """Fix 9: the in-place combine still treats NaN/inf as uncovered and keeps the plain mean where no value is
+        kept; the worker-side seeing widths read a stack file."""
+        rng = np.random.default_rng(9)
+        frames = {f"f{k}": rng.normal(300, 10, (40, 50)).astype(np.float32) for k in range(6)}
+        frames["f0"][3, 3] = np.inf
+        frames["f1"][3, 3] = np.nan
+        img, info = sc.combine(lambda p: frames[p], [{"path": k} for k in frames], [(0, 0)] * 6)
+        vals = [frames[k][3, 3] for k in frames if np.isfinite(frames[k][3, 3])]
+        self.assertTrue(np.isfinite(img[3, 3]))
+        self.assertAlmostEqual(float(img[3, 3]), float(np.mean(vals)) * 6, delta=1e-2)
+        plain, _ = sc.combine(lambda p: frames[p], [{"path": k} for k in list(frames)[:3]], [(0, 0)] * 3)
+        self.assertTrue(np.isfinite(plain).all())
+        import stack_ui
+        tmp = tempfile.mkdtemp()
+        try:
+            rng = np.random.default_rng(2)
+            frame = T.render(rng)
+            path = os.path.join(tmp, "stack_0001.fits")
+            sc.write_stack(path, frame * 5, {"SHOBSSTK": 1})
+            fs, fr = stack_ui._seeing_widths([path], core.MONO, "luminance", frame)
+            self.assertTrue(math.isfinite(fs) and math.isfinite(fr))
+            self.assertAlmostEqual(fs, fr, delta=0.3)
+            self.assertTrue(all(math.isnan(v) for v in stack_ui._seeing_widths([os.path.join(tmp, "gone.fits")],
+                                                                                  core.MONO, "luminance", frame)))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _have_tk():
     try:
         import tkinter as tk
@@ -250,6 +280,45 @@ class TestStackFixesInApp(unittest.TestCase):
             hdr["EGAIN"] = 1.0
             fits.PrimaryHDU(np.clip(img + 500, 0, 65535).astype(np.uint16), header=hdr).writeto(
                 os.path.join(lights, f"light_{i:04d}.fits"))
+
+    def test_darkflat_notes_cached(self):
+        """Fix 9: the dark-flat note reads the folders' headers once, then again only when a folder changes."""
+        ca, app = self.ca, self.app
+        tmp = tempfile.mkdtemp()
+        try:
+            df, fl = os.path.join(tmp, "df"), os.path.join(tmp, "flat")
+            os.makedirs(df)
+            os.makedirs(fl)
+            for folder, exp, typ in ((df, 1.0, "DARKFLAT"), (fl, 2.0, "FLAT")):
+                for i in range(3):
+                    h = fits.Header()
+                    h["EXPTIME"] = exp
+                    h["IMAGETYP"] = typ
+                    fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16), header=h).writeto(
+                        os.path.join(folder, f"{typ.lower()}_{i}.fits"))
+            app.bias_dir.set("")
+            app.darkflat_dir.set(df)
+            app.flat_dir.set(fl)
+            real = core.read_header
+            calls = []
+            with mock.patch.object(core, "read_header", side_effect=lambda p, *a, **k: calls.append(p) or real(p, *a, **k)):
+                a = app._darkflat_notes(None, None)
+                n1 = len(calls)
+                self.assertGreater(n1, 0)
+                b =app._darkflat_notes(None, None)
+                self.assertEqual(len(calls), n1)
+                self.assertEqual(a, b)
+                self.assertTrue(any("Dark flats 1 s, flats 2 s" in t for t in a), a)
+                h = fits.Header()
+                h["EXPTIME"] = 1.0
+                fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16), header=h).writeto(os.path.join(fl, "zz.fits"))
+                os.utime(fl, ns=(time.time_ns() + 10 ** 9, time.time_ns() + 10 ** 9))
+                app._darkflat_notes(None, None)
+                self.assertGreater(len(calls), n1)
+        finally:
+            app.darkflat_dir.set("")
+            app.flat_dir.set("")
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_restack_keeps_per_frame_points(self):
         """Fix 1: Stack pressed again while Points: Stacked is shown keeps the per-frame points as 'Per frame'."""
