@@ -466,6 +466,28 @@ class TestStackFixesInApp(unittest.TestCase):
                 self.assertEqual(len(pts), n_pts)
                 self.assertFalse(any(os.path.basename(o.path).startswith("stack_") for o in pts))
                 self.assertEqual({id(o) for o in pts}, {id(o) for o in frames})
+                # Fix 11e: a saved stacked series reopens after its stack files were pruned from the cache
+                app.points_choice.set("stack")
+                app._points_switched()
+                series = os.path.join(tmp, "series.cvseries")
+                app._write_series(series)
+                shutil.rmtree(sc.STACK_CACHE_DIR, ignore_errors=True)
+                with mock.patch.object(app, "_offer_series_save", return_value=True):
+                    app.close_series(asked=True)
+                with mock.patch.object(ca.filedialog, "askopenfilename", return_value=series), \
+                        mock.patch.object(app, "_check_planet_transits"), \
+                        mock.patch.object(app, "_stack_files_note", wraps=app._stack_files_note) as note:
+                    app.load_series()
+                    self.assertTrue(note.called)
+                pts = [o for o in app.observations if o.night == night]
+                self.assertEqual(len(pts), 12)
+                self.assertEqual(app.stack_meta(night)["n"], 5)
+                lines = app._stack_files_note()
+                self.assertEqual(len(lines), 1)
+                self.assertIn("12 of the 12 stack files are no longer", lines[0])
+                self.assertIn("stacks of 5", app._report_text(pts))
+                app._night_pier(pts)   # reads the (gone) stack headers: fails soft
+                self.assertFalse(err.called, err.call_args)
         finally:
             with mock.patch.object(app, "_offer_series_save", return_value=True):
                 if app.observations:

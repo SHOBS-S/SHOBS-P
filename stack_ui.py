@@ -735,6 +735,28 @@ class StackMixin:
             return list(self._stack_sets[src["night"]].get("paths") or []) or None
         return None
 
+    def _stack_files_note(self, observations=None) -> list:
+        """2.3.0 review fix: after a series is loaded, nights whose points are stacks whose files are no longer in
+        the stacks cache (it keeps only the latest set) get one Log line. Nothing needs those files: the points, their
+        values and the stacking record are in the series; the files would only be needed to measure the stacks
+        again. Returns the lines logged."""
+        obs = self.observations if observations is None else observations
+        lines = []
+        for night in sorted({o.night for o in obs}):
+            meta = self.stack_meta(night)
+            if not meta:
+                continue
+            paths = [o.path for o in obs if o.night == night and is_stack_path(getattr(o, "path", ""))]
+            gone = sum(1 for p in paths if not os.path.isfile(p))
+            if paths and gone:
+                lines.append(f"{self.label_nights(night)}: the points are {stack_core.stack_words(meta)}; "
+                             f"{gone} of the {len(paths)} stack files are no longer in SHOBS-P's cache (only the "
+                             "latest stacks are kept). Nothing needs them: the points are in the series. To measure "
+                             "the stacks again, run photometry on that night's frames and Stack.")
+        for line in lines:
+            self.log(line)
+        return lines
+
     # ---- reports ---------------------------------------------------------------------------------------------
     def stack_report_note(self, points, lead: bool = True) -> str:
         """The AAVSO report notes part: '; points are stacks of 40 frames (effective exposure 30 s)' when the

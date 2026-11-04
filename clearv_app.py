@@ -15656,6 +15656,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7): the series as on disk
         self.draw_output()
         self._warn_legacy(self.legacy_mixed, os.path.basename(path))
+        try:
+            self._stack_files_note()   # 2.3.0 review fix (#54): stack files pruned from the cache: said, not needed
+        except Exception:
+            traceback.print_exc()
         nights = sorted({obs.night for obs in observations})
         self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then choose Add.")
         messagebox.showinfo(
