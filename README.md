@@ -38,7 +38,8 @@ frames don't actually cover a predicted transit.
 After photometry, the **transit fit** detrends for airmass and runs an MCMC fit, guided by the planet's published
 shape. It scales the error bars for red (correlated) noise and gives a plain verdict: **detected, inconclusive, or
 no transit**. It doesn't just accept any dip: it tests whether a simple jump at a gap in the data, or a one-sided
-baseline, explains the dip just as well. You also get the O − C timing against the ephemeris, a free-shape fit as
+baseline, explains the dip just as well. On a night with a meridian flip it tests a flux step at the flip and keeps
+it only when the data clearly ask for it (ΔBIC ≥ 10). You also get the O − C timing against the ephemeris, a free-shape fit as
 a cross-check, and a nearby-eclipsing-binary check. You can open an **EXOTIC report** to see both fits side by
 side. Results go out as an **AAVSO exoplanet report** and an **ExoFOP package**.
 
@@ -55,9 +56,11 @@ labeled new, known, or "check first" (for example, near a bright star or at the 
 Interesting stars can be put on a **watch list**. Every later night you add to that field's series measures the
 watched stars automatically, building up their light curves over time.
 
-Highlights: bias/dark/flat calibration with superpixel debayering, frame alignment through meridian flips,
-comparison-star ensembles, catalog comps from the AAVSO sequence, Gaia DR3, APASS and Tycho-2 (Johnson V/B/R and
-Sloan g′r′i′), and error bars from the CCD equation plus scintillation (Merline & Howell 1995; Osborn et al. 2015).
+Highlights: bias/dark/dark-flat/flat calibration with superpixel debayering, frame alignment through meridian flips,
+comparison-star ensembles (a comp that drifts off the frame edge drops out of those frames only), catalog comps from
+the AAVSO sequence, Gaia DR3, APASS and Tycho-2 (Johnson V/B/R and Sloan g′r′i′), error bars from the CCD equation
+plus scintillation (Merline & Howell 1995; Osborn et al. 2015) that know whether the camera summed or averaged its
+binned pixels, and optional stacking of frames when the comparison stars are weak, in every mode.
 
 ## Requirements
 
@@ -159,7 +162,7 @@ user folder (`C:\Users\<you>`).
 
 ## Documentation
 
-**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, updated for 2.2.21) walks you through the program task
+**[The SHOBS-P User's Manual](docs/manual/README.md)** (draft, updated for 2.3.0) walks you through the program task
 by task: installing, your first night, reducing a variable star, fitting a transit, scanning a field, and what every
 message means.
 

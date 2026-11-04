@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.2.21
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.0
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -16,12 +16,13 @@ Quick start
    (in your user folder) and a screenshot.
 
 Process flow
-1. Input: folders of bias, dark, flat, and light FITS, and an optional Output folder; the target (type the Star ID
+1. Input: folders of bias, dark, dark flat (optional), flat, and light FITS, and an optional Output folder; the target (type the Star ID
    and press Enter: SIMBAD, then VSX, fill RA/Dec); AAVSO observer code and chart; site and optics. (Comparison and check stars are chosen on the
    Photometry page.)
 2. Blink: step through raw lights (or flats) and reject trails, clouds, and bad guiding. Rejected frames stay on disk.
-3. Calibrate: master bias, exposure-scaled master dark, normalized master flat. Each light becomes
-   (light - bias - dark) / flat. The first light is then debayered (superpixel; the channel is chosen on this page:
+3. Calibrate: master bias, exposure-scaled master dark, master dark flat (if given), normalized master flat. Each
+   light becomes (light - bias - dark) / flat; with no bias, the dark flats stand in for it, and the flats become
+   flat - dark flat. The first light is then debayered (superpixel; the channel is chosen on this page:
    green is the default, AAVSO TG with V comps; red is TR, blue is TB, luminance is CV; MONO for monochrome cameras)
    and the app goes straight to Photometry.
 4. Photometry: mark the target, one to ten comparison stars (C1-C10), and the check star. The image is solved on
@@ -34,7 +35,9 @@ Process flow
    (91 = V 9.1) and are suggested first; a sequence comp puts the AAVSO chart ID in the Chart box (otherwise na).
    The Circles box only chooses which catalog's circles are drawn. Type a name or RA/Dec in an empty comp or check
    slot and press Enter to put the marker on that star. Solve again retries (for example after a catalog did not
-   answer). Every frame is aligned to the marked frame (shift, rotation, meridian flip).
+   answer). Every frame is aligned to the marked frame (shift, rotation, meridian flip). After the run, the Stack row
+   says whether stacking frames would help (weak comps); Stack measures stacks of N frames, and the Points box
+   (Per frame / Stacked) chooses which set the results use.
 5. Output: light curve, folded curve, check-star plot, Lomb-Scargle periodogram; AAVSO Extended report, CSV, PNG.
 
 Run on Windows 11
@@ -70,6 +73,42 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
+- S  Stacking when comps are weak [#54]: after a run, the Photometry page's Stack row compares the comp ensemble's
+     noise with the target's and suggests a stack size N ("Comps are weak (comp noise 4.7x the target's per frame).
+     Stack 20 frames ..."): the smallest N whose stacked comp noise is at most half the target's single-frame noise,
+     capped so a stack never blurs the signal (Transits 1/5 of ingress, Variables 1/50 of the period, Discovery
+     5 min; 2 or 5 min when nothing is known), never fewer than 10 points, with an optional precision goal in ppt.
+     Stack makes sigma-clipped means of N calibrated frames (whole-pixel shifts from the measured drift, never
+     across a meridian flip or a gap; 32-bit; kept in ~/.shobs_p_cache/stacks) and runs the same photometry (or the
+     field scan) on them. The Points box beside the View box switches Per frame / Stacked; "Results use: ..." says
+     which. Reports, the settings record and the series carry the stack size and effective exposure.
+- S  Comps off the frame edge [#50]: a comp whose aperture or sky ring leaves the frame is left out of that frame
+     only (the comparison is rebuilt from the comps present, on the night's scale, so no step); a comp missing in
+     most of a night is left out of the whole night. Skipped frames and left-out comps are listed on the Photometry
+     page, in a box after the run and in the settings file ("Frames skipped at photometry"). When Use comps drops
+     the comp that caused skips, "Measure skipped frames" measures just those frames.
+- S  Dark flats box (Input page): darks at the flats' exposure, taken off the flats; with no bias they stand in for
+     it, so Bias can stay empty. Dark flats in the Flat folder are found (IMAGETYP or name) and never stacked into
+     the master flat; warnings when darks are scaled with no bias and no dark flats. Dark flats in the Bias box
+     still work as before.
+- S  Camera-binned frames [#53]: SHOBS-P tells from the sky's noise whether the camera summed or averaged its binned
+     pixels, and counts bin^2 x EGAIN electrons per ADU when it averaged. Error bars on such frames (many CMOS
+     cameras at bin 2 or 3) are no longer about 2x too large. Unbinned cameras are unchanged.
+- S  On-sky log format version 2 [#55]: electrons per image unit for every star (gain, binning, superpixel and
+     flat included), so SHOBS-FLUX's zero points match SHOBS-P's.
+- S  Alt-az night with a ~180 degree turn between two frames: a warning that it looks like a meridian flip and the
+     Mount box should say German equatorial; the settings file's Comps row lists only what the night measured.
+- T  Meridian flip step in the transit fit [#8]: on a flip night the fit tests a flux step at the flip and keeps it
+     only at Delta BIC 10 or more; a kept step is fitted with the transit (result line, table row Flip step (ppt),
+     plot line, notes, reports). Multi-night fits do the same per night.
+- T  Planet lookup from the host star [#51]: typing the star in Star ID keeps the busy bar on through the star, its
+     planet list and the planet; the ephemeris boxes no longer show "looking up..."; a clear line when no planet is
+     found.
+- T  Tonight's transits and the Transit planner are removed [#52], with their windows, CSV exports and the
+     downloaded planet list (~/.shobs_p_transit_catalog.csv can be deleted).
+- T  Save corner plot... is in the Transit fit page's Results row (it was Corner plot... in the tools row).
 
 New in 2.2.21 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
 - S  Site time zone [#22]: every local time is shown in the observing site's own zone for that night, labelled
@@ -1036,6 +1075,11 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.0  Stacking when comps are weak (#54); comps off the frame edge and Measure skipped frames (#50); Dark flats box;
+       camera-binned gain (#53); on-sky log v2 (#55); alt-az flip warning; transit flip step (#8); planet lookup
+       from the host star (#51); Tonight's transits and Transit planner removed (#52); Save corner plot.
+2.2.21 Site time zone (#22); cached lookups when a service is down (#21); VSX while CDS is down (#48); TESS TOI status
+       (#32) and ExoClock priority; Fit the series' nights (#44); series keeps its own site.
 2.2.20 One busy bar; field image as shot; New reduction notes (#46); Mac/Linux Python choice (#33); IDIA mirrors; no-AUID
        warning; ExoClock (#47); Multi-night plots, corner plot and airmass in the fit CSV (#45).
 2.2.19.1 On-sky log for SHOBS-FLUX (one JSON file per reduction in .shobs\onsky); shared shobs_profile.py.
