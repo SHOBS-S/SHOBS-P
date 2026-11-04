@@ -38,7 +38,7 @@ Every text file SHOBS-P writes (reports, CSVs, fit notes) carries a line such as
 
 `# Created 121153Z OCT 26 by SHOBS-P`
 
-The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.2.21*
+The time is a date-time group in UTC: day 12, 11:53 Z, October 2026. Plot PNGs carry *Created … · SHOBS-P 2.3.0*
 in the picture. The line tells you, and anyone you send the file to, when it was made and with which program.
 
 ## Result files by mode
@@ -64,13 +64,11 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 |---|---|
 | **Save AAVSO exoplanet report…** | `AAVSO_<planet>_<date>_SHOBS-P.txt` (for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`), and beside it `AAVSO_<planet>_<date>_SHOBS-P_settings.txt` (the reduction settings) and the field image `<planet>_<date>_SHOBS-P_field.png` (with `…_aavso_chart.png`). |
 | **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png`, and the corner plot `…_transit_corner.png` beside it |
-| **Corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png` |
+| **Save corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png` |
 | **Save field image…** | `<star>_<filter>_<date>_SHOBS-P_field.png`, named after the Star ID (the host star), with `…_aavso_chart.png` |
 | **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag`, `airmass`, `segment` (trimmed points flagged `trimmed`; `segment` is `before flip` / `after flip` on a night with a meridian flip). `rel_flux` is the raw relative flux, not detrended. Comment lines starting with `#` under the Created line give the planet, filter, Tc, verdict and O − C, a `# Columns:` line saying what the columns hold, and `# Meridian flip at BJD_TDB …` when there was a flip. It gets the same number as the report and plot. |
 | **Save ExoFOP package…** | A folder `ExoFOP_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` holding `…_lightcurve.csv`, `…_fit.txt` and `…_plot.png`. |
 | **Save for ExoClock…** | `ExoClock_<planet>_<YYYYMMDD>.txt` (for example `ExoClock_TOI-2046b_20261027.txt`; the planet without spaces, the UTC date of the first frame): `#` header lines, then JD_UTC at mid-exposure, relative flux (not detrended) and error, one line per frame the fit used. Beside it, `ExoClock_info.txt`: what to pick on ExoClock's upload form. Both get `_2`, `_3` … when the name is taken. |
-| **Tonight's transits…** → **Export CSV…** | `transits_<date>.csv` |
-| **Transit planner…** → **Export CSV…** | `<planet>_transits.csv` |
 | **Multi-night…** → **Save timing CSV…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight_timings.csv`: one row per epoch (mid-time in BJD_TDB with its error, O − C against each ephemeris), with the joint shape and the ephemerides in `#` header lines |
 | **Multi-night…** → **Save plot PNG…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight.png` |
 | **Multi-night…** → **Corner plot…** → **Save PNG…** | `<planet>_<first night>_to_<last night>_SHOBS-P_multinight_corner.png` |
@@ -108,17 +106,22 @@ night notes, the watch list and the settings of each night. It is a text file (J
   `<name>_prev.cvseries`. Later writes in that session leave the `_prev` file alone, so it always holds the series
   as it was before this session. If something goes wrong, close the series and load the `_prev` file.
 - Star positions on the image are **not** stored. You mark the target and comparison stars again on each new night.
+- **Stacked nights.** A night whose points are stacks (the Photometry page's **Points: Stacked**, chapter 8) stores
+  only the stacked points, and its settings carry a `"stack"` entry: the stack size N, the number of stacks and
+  frames, how many were partial, the effective exposure and the frames' own exposure, and how far the field turned,
+  how much was clipped and the largest shift. A per-frame night has none.
 - A series records its mode. Loading it switches SHOBS-P to that mode.
 
 See [10. Build a multi-night series](10-build-a-multi-night-series.md).
 
 ## Saved calibration masters
 
-When SHOBS-P builds a master bias, dark or flat, it saves it in a subfolder **SHOBS-P masters** inside the folder of
-the raw frames:
+When SHOBS-P builds a master bias, dark, dark flat or flat, it saves it in a subfolder **SHOBS-P masters** inside the
+folder of the raw frames:
 
 - `SHOBS-P_master_bias_bin1.fits`
 - `SHOBS-P_master_dark_bin1_120s.fits` (the dark's exposure is in the name)
+- `SHOBS-P_master_darkflat_bin1_0.5s.fits` (the dark flats' exposure is in the name)
 - `SHOBS-P_master_flat_bin1.fits`
 
 The next time you calibrate with the same frames and binning, the master is reused, which saves minutes. It is
@@ -134,16 +137,18 @@ on hidden items (on a Mac, Cmd+Shift+period in Finder).
 
 | File | What it holds |
 |---|---|
-| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, focal length, pixel size, mount, observer code, scintillation choice, linear limit, stretch, Blink speed, window places, Tonight's transits limits, Discovery's period range and watch stars, and similar. Not the folders. |
+| `.shobs_p_settings.json` | Your remembered settings: mode, site, telescope, aperture, focal length, pixel size, mount, observer code, scintillation choice, linear limit, stretch, Blink speed, window places, Discovery's period range and watch stars, and similar. Not the folders. |
 | `.shobs_p.log` | Every line of the Log window, each with the date and time in front, and the full details of any error. Past 5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts. |
-| `.shobs_p_transit_catalog.csv` | The list of transiting planets for Tonight's transits, refreshed weekly. |
 | `.shobs_p_cache\catalogs\` | Star catalogs fetched for your fields, kept for 30 days so solving the same field again is faster. |
+| `.shobs_p_cache\stacks\` | The stacks of the last **Stack** run (chapter 8): one 32-bit FITS file per stack, `stack_0001.fits` and on. Only the newest set is kept, because each stack is a full frame. Your Lights folder is never written to. |
 | `.shobs_p_cache\lookups\` | The last good answer from each online lookup: `simbad.json` and `vsx.json` (Star ID lookups), `vsx_cone.json` (the variable-star check), `vsp.json` (AAVSO charts and sequences), `nea.json` (planet lookups), and more from other services. Used only when the service does not answer; a live answer always replaces it. Only public catalog values are kept, never your site, observer code or data. **Clear cached catalogs** (Credits page) empties this folder and `catalogs`. |
+| `.shobs\onsky\` | One small JSON file per finished reduction, `<night>__<target>__<run id>.json`, for the SHOBS-FLUX app: the setup, the aperture and each frame's star fluxes, sky, seeing and airmass. Your site is never written to it. Since 2.3.0 it is format version 2: each star in each frame also has `e_per_unit` (electrons per SHOBS-P image unit, with the gain, binning, superpixel and flat included), and the measurement part has `e_per_unit_median`, `e_per_unit_source`, `e_per_unit_note`, `flat_applied` and `camera_bin_mode`. With no gain known, or on pre-calibrated frames, `e_per_unit` is empty (null) and the note says why. Nothing on screen changes. |
 | `.shiloh_photometry_exports.json` | Named setups from the **Export…** window. |
 | `.shiloh_photometry_colorcal.json` | The color term saved from a field color calibration, reused on later nights. |
 
 Deleting any of these is safe: SHOBS-P starts again with defaults (and re-downloads what it needs). You will have to
-type your site again if you delete the settings file.
+type your site again if you delete the settings file. A `.shobs_p_transit_catalog.csv` left from SHOBS-P 2.2.21 or
+earlier is no longer read or written (it served Tonight's transits, which is gone); you can delete it.
 
 Your site is stored only here, and only after you type it (or say **Yes** when SHOBS-P offers the one in your FITS
 headers). It is never shipped with the program. A series file carries the site of its own nights, but loading it
