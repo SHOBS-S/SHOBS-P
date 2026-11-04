@@ -25,7 +25,7 @@ SHOBS-P has three modes. You choose one with the buttons at the top left of the 
 | Mode | Use it to… |
 |---|---|
 | **Variables** | Follow a known variable star over one night or many: light curve, period search, times of maximum and minimum, AAVSO Extended reports. |
-| **Transits** | Catch an exoplanet transit: planet lookup, transit planner, transit fit with a plain verdict (detected, inconclusive or none), AAVSO exoplanet report and ExoFOP package. |
+| **Transits** | Catch an exoplanet transit: planet lookup, transit fit with a plain verdict (detected, inconclusive or none), AAVSO exoplanet report and ExoFOP package. |
 | **Discovery** | Measure every star in a field and flag the ones that vary more than stars of the same brightness. No target star needed. |
 
 All three modes share the same five steps: **Input → Blink → Calibrate → Photometry → Output**. Part 2 of this
@@ -57,6 +57,8 @@ Knowing the limits saves time:
   only.
 - **It does not use other programs' master frames.** Point it at your raw bias, dark and flat frames instead. It
   builds its own masters and reuses them.
+- **It does not predict transits.** It fits the transits you observed; choose the night with your usual planning
+  resource (chapter 16).
 - **It needs the internet for lookups**: star and planet names, catalogs and the variable-star check. Calibration and
   photometry themselves run offline.
 - **Windows 10 and 11 are the most tested.** It also runs on a Mac and on Linux, with their own start files since

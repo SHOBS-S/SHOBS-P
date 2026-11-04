@@ -13,7 +13,7 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.2.21**).
+4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.3.0**).
 
 ## The three modes and their colors
 
@@ -22,7 +22,7 @@ Each mode colors the whole window, so you can always see which one you are in:
 | Mode | Color | Banner across the top |
 |---|---|---|
 | **Variables** | navy | VARIABLES · light curves, periods, color, and AAVSO reports |
-| **Transits** | green | TRANSITS · transit fit (MCMC), planner, nearby-binary check, and ExoFOP package |
+| **Transits** | green | TRANSITS · transit fit (MCMC), nearby-binary check, and ExoFOP package |
 | **Discovery** | plum | DISCOVERY · measure every star in the field and flag the ones that vary |
 
 To switch modes, click another mode button. Things to know:
@@ -82,9 +82,12 @@ Whenever SHOBS-P is working on something, a green bar slides back and forth at t
 with words beside it saying what it is doing. This is the one sign that SHOBS-P is busy, on every page. For example:
 
 - *Looking up TOI-2046 at SIMBAD and VSX…* (a Star ID lookup on the Input page)
+- *Looking up TrES-3's planets at the NASA Exoplanet Archive…* (the same lookup in Transits mode, finding the star's
+  planets)
 - *Building calibration masters: median-combining 40 bias frames…*
 - *Solving: fetching catalogs: AAVSO ✓ APASS ✓ Tycho ✓ Gaia…*
 - *Photometry… 12 of 38, about 1:20 left*
+- *Stacking… 3 of 10* (stacking frames when the comps are weak, chapter 8)
 - *Fitting the transit: MCMC step… 1,200 of 3,000*
 
 A job with several steps keeps the same bar and changes the words. When SHOBS-P can count, the count is in the

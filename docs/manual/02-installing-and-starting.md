@@ -26,7 +26,7 @@ It takes about ten minutes, most of it waiting for downloads.
 
 1. Open the SHOBS-P releases page at
    [github.com/SHOBS-S/SHOBS-P/releases](https://github.com/SHOBS-S/SHOBS-P/releases).
-2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.2.21.zip`).
+2. Under the latest release, download the file **SHOBS-P_v*version*.zip** (for example `SHOBS-P_v2.3.0.zip`).
 3. Unzip it somewhere permanent, for example `C:\Astro`. Avoid your Downloads folder: the shortcuts point at this
    folder, so it should not move.
 4. Open the folder the zip made. It holds files such as `clearv_app.py`, `Create shortcuts.bat`,
@@ -225,7 +225,7 @@ update does not lose them. Chapter 3 lists what is remembered.
   `.shobs_p.log` in your user folder (`C:\Users\<you>` on Windows, your home folder `~` on Linux and the Mac).
 - `.shobs_p.log` also holds every line of the Log window, each with the date and time in front. When it grows past
   5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts.
-- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.2.21**).
+- The version is shown at the bottom of the left-hand sidebar (for example **Version 2.3.0**).
 - To report a problem, open an Issue on the SHOBS-P GitHub page and attach `selftest_log.txt` and `.shobs_p.log`,
   with a screenshot.
 
