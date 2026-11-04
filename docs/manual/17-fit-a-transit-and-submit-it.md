@@ -9,7 +9,9 @@ This chapter covers:
 - reading the verdict, the numbers and the plot,
 - the comparison-star checks on this page (leave-one-comp-out, **Comp health…**, **Use comps…**),
 - leaving out a bad stretch with **Trim**,
+- a meridian flip in the night (the flip step),
 - the corner plot of the fit's uncertainties,
+- per-frame or stacked points,
 - saving and submitting the result (AAVSO, ExoFOP and ExoClock),
 - fitting several nights of one planet together (**Multi-night…**).
 
@@ -33,8 +35,9 @@ depends on the number of frames and comps.
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 
-In 2.2.20 the Results row has two new buttons, **Save for ExoClock…** and **Go to ExoClock…**, and the page has no
-progress bar of its own: a running fit shows on the busy bar in the status strip.
+In 2.3.0 the tools row starts with **Nearby-binary (NEB) check…** (Tonight's transits and the Transit planner are
+gone), and the corner plot moved to the Results row as **Save corner plot…**. A running fit shows on the busy bar in
+the status strip; the page has no progress bar of its own.
 
 ## The page, top to bottom
 
@@ -51,17 +54,18 @@ progress bar of its own: a running fit shows on the busy bar in the status strip
 - **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.
 - **Fit transit** runs the fit again with the current settings. **Cancel** stops it.
-- **Tonight's transits…**, **Transit planner…** (see chapter 16), **Nearby-binary (NEB) check…** and
-  **Multi-night…** (below).
-- **Comp health…** and **Use comps…** (below).
-- **Corner plot…** and the **credible bands** box (below).
+- The tools row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Comp health…**, **Use comps…** (all below) and
+  the **credible bands** box (see "Read the plot").
 - **Trim** row (below).
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
-  *"✖ Fit failed."* or *"Canceled."*, and then the comp-check result (below).
+  *"✖ Fit failed."* or *"Canceled."*, and then the comp-check result (below). On a night with a meridian flip it also
+  says what the flip step test decided, for example *"; Flip step fitted: −14.4 ± 0.5 ppt (ΔBIC 629), kept"* (see
+  "A meridian flip in the night").
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
-  PNG…**, **Save field image…** and **Fit the series' nights…**, with **Variable View  ▶** at the right. **Multi-night
+  PNG…**, **Save corner plot…**, **Save field image…** and **Fit the series' nights…**, with **Variable View  ▶** at
+  the right. **Multi-night
   fit…** is grayed unless a Transits series with two or more nights is open (see *Fit several nights together*
   below).
 - Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
@@ -101,7 +105,8 @@ Under the verdict a single line sums up the noise, for example:
 
 The table under the plot has one row per quantity: **Tc (BJD_TDB)**, **O − C (min)**, **Rp/R\***, **Depth (%)**,
 **a/R\***, **Impact parameter b**, **Inclination (°)**, **Duration T14 (h)**, the limb-darkening coefficients, the
-**Airmass slope**, and the noise figures. Its columns are:
+**Airmass slope**, the flip step on a night with a meridian flip (see "A meridian flip in the night"), and the noise
+figures. Its columns are:
 
 - **SHOBS-P (MCMC)**: the result, value ± uncertainty. This is what goes in the report.
 - **Free shape**: a quick fit with a/R\* and b left free. It is a cross-check: if Rp/R\* moves a lot here, your data
@@ -137,6 +142,8 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 - Blue dotted line: the published transit shape, for comparison.
 - Gray dashed line and band: the predicted mid-transit and its uncertainty.
 - Thin green lines: the fitted start and end of the transit.
+- Purple line at a meridian flip: dash-dot when the flip step was kept, labeled for example *"flip: step −14.4 ± 0.5
+  ppt"*; dotted when it was not needed, labeled *"flip: no step needed"*.
 - Green shading around the model: the 68 % and 95 % **credible bands**, the range of models the MCMC allows. The
   lower panel shades the baseline's own spread the same way. Untick **credible bands** to hide them.
 - Lower panel (**Resid. %**): the residuals. They should look like noise, with no dip or step.
@@ -151,19 +158,67 @@ The notes under the table also say:
 - what this night was measured with, for example *"Measured with r 8, sky 14–22 px (Bin 1)."*, in orange when the
   Photometry page's boxes have changed since (run photometry again to apply them);
 - the camera gain the error bars used and where it came from, for example *"Gain 0.25 e-/ADU (header EGAIN)."* When
-  the headers have no gain, it is estimated from the sky's own noise, or 1 e-/ADU is assumed, in orange.
+  the headers have no gain, it is estimated from the sky's own noise, or 1 e-/ADU is assumed, in orange. On frames
+  the camera binned (XBINNING above 1), SHOBS-P also works out from the sky's noise whether the camera summed or
+  averaged the binned pixels, for example *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3 averaged, so 6.91 e- per
+  stored ADU used (from the sky's noise)"*. See "Camera binning and the gain" in [7. Calibrate](07-calibrate.md);
+- on stacked points, *"Stacking: stacks of 40 frames (effective exposure 30 s) (sigma-clipped mean, whole-pixel
+  shifts, never across a flip)"* (see "Per-frame or stacked points" below).
 
-The full set of reduction settings (aperture, binning, comps, check, frames left out, trimmed frames, detrending,
-calibration, gain) is written to the log after each fit, one line per fit, and saved with the report (see below), so
+The full set of reduction settings (aperture, binning, comps, check, frames skipped at photometry, frames left out,
+trimmed frames, detrending, calibration, gain, stacking) is written to the log after each fit, one line per fit, and saved with the report (see below), so
 a result can be reproduced later.
+
+## A meridian flip in the night
+
+On a German equatorial mount the star lands on another part of the sensor after the flip, and its measured level can
+jump a little: a **flip step**. Left in, such a step drags the baseline on one side and can make the depth wrong (on
+one real night the target was 16 mmag fainter after the flip, and without a step the depth came out 14 ppt instead of
+the published 24 ppt).
+
+When SHOBS-P knows the night has a flip (**Mount** set to **German equatorial**; the flip comes from the frames'
+headers or the image, chapter 16), the fit tests a step there:
+
+1. It fits the night twice by least squares, with and without a step. The step multiplies the baseline after the flip
+   by (1 + step), so it is in relative flux, given in ppt. A target that gets fainter after the flip has a negative
+   step.
+2. It keeps the step only when it lowers the BIC by **10 or more** (ΔBIC ≥ 10, the same bar as a detection).
+3. A kept step is fitted together with the transit in the MCMC, so its uncertainty is part of the depth's. A step
+   that is not needed is left out: the fit then has no step term at all.
+
+The flip time itself is never fitted: it is halfway between the last frame before the flip and the first after it.
+An alt-az night has no flip and never gets the term.
+
+Where you see the decision:
+
+- **The log while fitting**: *"meridian flip: step −14.5 ± 0.6 ppt, ΔBIC 628.8 (kept at 10 or more): kept, fitted
+  with the transit"* or *"… not needed, fitted without a step"*.
+- **The result line**: *"; Flip step fitted: −14.4 ± 0.5 ppt (ΔBIC 629), kept"* or *"; Flip step not needed: +0.2 ±
+  0.6 ppt (ΔBIC −6; kept only at 10 or more)"*.
+- **The table**. With the step kept: a row **Flip step (ppt)**, for example *"−14.4 ± 0.5 (ΔBIC 629, kept)"*, then
+  **Depth without step (%)** (what the depth would be with no step, from a least-squares fit) and **Step–depth
+  correlation** (how much the step and the depth trade off in the MCMC; near ±1 they are hard to tell apart). With
+  the step not needed: one row **Flip step**, for example *"not needed (ΔBIC −6; test step +0.2 ± 0.6 ppt)"*.
+- **The plot**: the purple line at the flip (see "Read the plot").
+- **The notes**: for example *"Meridian flip at BJD_TDB … (+2.57 h from mid-transit; the frames' flip segment): a
+  baseline step there was fitted together with the transit: step −14.4 ± 0.5 ppt (kept: ΔBIC 629, at least 10
+  needed)."*, then the depth without the step, the step–depth correlation and the baseline on each side. When it is
+  not needed: *"… Flip step not needed: … The step is kept only at ΔBIC 10 or more, so this fit has no step term."*
+
+The leave-one-comp-out check uses the main fit's decision (step or no step) for every refit. The reports carry the
+flip time either way (chapter 19), so a later refit of a report uses the same time.
+
+For an opened report, which carries no flip segment, tick **meridian flip at the largest gap** to tell the fit that
+the report's largest gap is the flip; the same ΔBIC ≥ 10 rule then decides.
 
 ## The corner plot
 
-**Corner plot…** opens a window with the MCMC samples of every fitted parameter: a histogram per parameter on the
-diagonal (with its median and 16/84 % lines, and the value and error in the title), and each pair below it, with 1σ and
+**Save corner plot…** (in the Results row) opens a window with the MCMC samples of every fitted parameter: a
+histogram per parameter on the diagonal (with its median and 16/84 % lines, and the value and error in the title), and each pair below it, with 1σ and
 2σ contours. Tc is in minutes from its median. By default the window shows the shape parameters (Tc, Rp/R\*, a/R\*, b,
 and the flip step if fitted); tick **Show all parameters (baseline, limb darkening)** for the rest. **Save PNG…** saves
-the plot.
+the plot, and **Close** closes the window. Without a fit, the button says *"Fit a transit first: the corner plot shows
+that fit's MCMC samples."*
 
 How to read it: a round hump is a measurement. A histogram that piles up against the edge of its allowed range is
 set by that range, not by your data, so its error bar is not a measurement. SHOBS-P flags such a parameter with ⚠ in
@@ -237,6 +292,23 @@ To clear the neighbors:
 
 The check needs a solved image and the transit depth.
 
+## Per-frame or stacked points
+
+When the comparison stars are much fainter than the target, the Photometry page can stack frames and measure the
+stacks (see "Stacking when comps are weak" in [8. Photometry page basics](08-photometry-basics.md)). The night then has
+two sets of points, and the **Points** box on the Photometry page (**Per frame** / **Stacked**) chooses which one the
+fit uses. The **Results use** line on the Photometry page, and on the Output page in Variable View, says which.
+
+- The fit of each set is kept. Switching back to a set fitted before shows its fit at once, and the result line says,
+  for example, *"✔ Fit of the stacked points (kept from before)."* A set not fitted yet is fitted as soon as this page
+  is on screen.
+- The fit needs 20 points or more. **Stack** asks first when the stacks would be fewer.
+- With stacked points the fit uses the stacks' effective exposure (the sum of their frames' exposures), and the
+  settings record and the report's `SHOBS-P settings:` notes say *"points are stacks of 40 frames (effective exposure
+  30 s)"*.
+- A stack hides anything faster than itself, so SHOBS-P suggests stacks no longer than a fifth of the ingress (or
+  egress), from the planet on the Input page.
+
 ## Look at the light curve in detail
 
 **Variable View  ▶** (bottom right) shows the Variables-style Output page for the same photometry: the light curve
@@ -257,6 +329,7 @@ When the verdict is "detected" and you are happy with the fit:
    (coordinate with TFOP Sub Group 1 first); for a **CP** or **KP** (confirmed or known planet), AAVSO and Exoplanet
    Watch are the right home.
 5. Click **Save plot PNG…** for your own records. The corner plot is saved beside it, as `…_corner.png`.
+   (**Save corner plot…** opens the corner plot on its own, with its own **Save PNG…**.)
 6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
    (the same as on the Variables Output page) and a fit CSV beside it, named like
    `TrES-3b_TG_05-OCT-2026_SHOBS-P_transit_fit.csv`. The fit CSV has the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`,
@@ -407,7 +480,10 @@ plot PNG…**, **Corner plot…** and **Close**.
 *The Multi-night window after a joint fit of three nights: nights table above the divider, plots below.*
 
 The joint fit uses one transit shape (Rp/R\*, a/R\*, b and limb darkening) for all nights, with each night's own
-mid-transit time, baseline and detrending. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
+mid-transit time, baseline and detrending. A night with a meridian flip gets its own flip step only when that
+night's own test kept it (the same ΔBIC ≥ 10 rule as above); the **Nights** part of the Summary says, per night,
+*"flip step fitted: … ppt (ΔBIC …), kept"* or *"flip step not needed (ΔBIC …; kept only at 10 or more)"*, and the
+corner plot shows a kept step as *step:N*. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
 O − C against three ephemerides: **O − C input** (min and σ), **O − C alternative**, and **O − C own fit**, the nights'
 own updated linear ephemeris. Outlier nights are flagged.
 
