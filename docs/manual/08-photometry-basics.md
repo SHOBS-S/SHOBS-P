@@ -2,8 +2,8 @@
 
 The Photometry page is where you choose which stars to measure and then measure them on every frame. This chapter
 covers what works the same in every mode: the automatic solve, the image view, marking stars, apertures, and running
-photometry. Choosing good comparison stars for a variable is in chapter 9; transits are in chapter 16; Discovery's
-**Scan field** is in chapter 20.
+photometry, and stacking frames when the comparison stars are weak. Choosing good comparison stars for a variable is
+in chapter 9; transits are in chapters 16 and 17; Discovery's **Scan field** is in chapter 20.
 
 ![The Photometry page, with the target, one comparison star and the check star marked](img/08-photometry-solved.jpg)
 
@@ -16,7 +16,13 @@ From top to bottom:
   button.
 - **The options row.** The aperture boxes **Aperture r**, **sky in** and **sky out**, the **Suggest…** button,
   **raw sat ADU**, **linear ADU**, and **Also measure R and B (color index; slower)**. On the right, the **View** box.
-  After a run, a gray line under it says what the photometry was measured with (see "Apertures" below).
+  After the first run, a small **Points** box sits just left of the View box (see "Stacking when comps are weak"
+  below). When the window is narrow and the View box moves to a line of its own, the Points box moves with it.
+- **The Stack row** (after the first run only): a suggestion line, then **Stack N** [box] **frames   Precision goal**
+  [box] **ppt per point (optional)** and the **Stack** button.
+- **The "Measured with" line**: after a run, a gray line says what the photometry was measured with (see "Apertures"
+  below). Under it, an orange line appears when the run skipped frames or left a comp out of some frames (see "Comps
+  near the frame edge" below).
 - **The step strip**: what is done and what to do next.
 - **The image** on the left, with a legend under it, and the **Stars** and **Watch stars** panels on the right.
 - **The run row**: a gray line with the last run's summary (for example "Photometry done in 1:52. 38 points."),
@@ -345,8 +351,14 @@ Every frame is calibrated, lined up with the first one (through shifts, small ro
 measured. On an alt-az mount (the **Mount** box on the Input page, or clear evidence in the headers) there are no
 flips: the alignment follows the field rotation instead, and the log says how far the field turned, for example
 "Field rotation: the field turned by 12.4° on the sensor through the night (alt-az mount); the apertures followed it."
-If the field turns by more than 5° on a German equatorial mount, the log suggests setting **Mount** to **Alt-az**. Frames that cannot be lined up (cloud, trailing) are skipped and listed in the log. When the run is done,
-SHOBS-P switches to the Output page.
+If the field turns by more than 5° on a German equatorial mount, the log suggests setting **Mount** to **Alt-az**. The
+other way round, when **Mount** is **Alt-az** but the field turns by about 180° between two frames, the run warns:
+*"⚠ The field turned by 180° between frames 314a and 1b — that looks like a meridian flip. Is the Mount set right
+(German equatorial)? An alt-az field turns smoothly, not by half a turn between two frames. If it was a flip, set Mount
+to German equatorial in the Optics box (Input page) and run photometry again, so the frames after the flip are treated
+as after it."* An alt-az field turns smoothly, well under a degree per frame, so ordinary field rotation never sets
+this off, not even across a long gap or near the zenith. Frames that cannot be lined up (cloud, trailing) are skipped
+and listed in the log. When the run is done, SHOBS-P switches to the Output page.
 
 After a meridian flip, SHOBS-P checks the alignment of each flipped frame on up to 15 stars' own centers, so the comp
 and check apertures land on their stars again. If the frame you marked the stars on was rejected in Blink, the first
@@ -355,6 +367,48 @@ example "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames
 
 To stop, press **Cancel run**. Nothing is added: the gray line beside **Cancel run** says, for example, "Photometry
 done in 0:12. Canceled; nothing was added."
+
+### Comps near the frame edge
+
+When the field drifts during the night, a comparison star near the edge can slide partly off the frame. SHOBS-P then
+leaves that comp out **of that frame only**, and measures the frame with the other comps. This happens when the comp's
+aperture is partly off the frame, when its sky ring is mostly (over half) off the frame, or when it has no light
+above the sky in that frame. A clipped comp is never measured, so it cannot leak into the results.
+
+- **No step in the light curve.** In a frame without some comps, the comparison is rebuilt from the comps that are
+  there, each first put on the night's scale by its own median offset from the others. So the comparison level stays
+  the same when a comp leaves or comes back; such a frame is only a little noisier. Frames with every comp are
+  measured exactly as before.
+- **A comp missing most of the night.** A comp measured in fewer than half of a night's frames (or in fewer than 5)
+  is left out of the **whole night**, and the night uses the other comps from start to end. The log says so.
+- **The check star** off the edge: that frame has no check value, and the frame is kept.
+- **Spares and watch stars** off the edge are simply not measured in that frame. They never cost a frame.
+- **The target** off the edge: the frame is skipped, and listed.
+- **Every comp lost** in a frame: the frame is skipped, with the reason *"every comp lost (off the frame edge)"*.
+
+After the run, an orange line under the "Measured with" line lists what happened, for example:
+
+- *"⚠ 16 frames skipped: every comp lost (off the frame edge) (frames 25–40)."*
+- *"C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps."*
+- *"check star left out of 18 frames (off the frame edge; frames 23–40); no check value there."*
+- *"…; out of the whole night (missing in most frames)."* when the whole-night rule applied.
+
+A warning box after the run lists the same lines, and the log has them too, each with its night.
+
+### Measure skipped frames
+
+Frames skipped because of one comp stay skipped when you later drop that comp with **Use comps…** (chapter 11): Use
+comps recalculates the measured points, it does not measure the skipped frames. So the orange line then says, for
+example, *"⚠ 64 frames were skipped because of APASS J175248.7+373202, which is no longer a comp — Run photometry again
+to measure them."*, and a **Measure skipped frames** button appears at the right of that line. The log and the status
+line say it too.
+
+**Measure skipped frames** measures only those frames, with the comps now in use, and adds them to the night. An open
+series with a file is saved automatically; in Transits mode the fit is refreshed. It needs that night's Lights folder
+on the Input page and its image loaded; otherwise a box explains this and says to use **Run photometry**. Once the
+frames are back, the line and the button go away.
+
+![The Photometry page after Use comps dropped an edge comp, with Measure skipped frames](img/08-skipped-frames.png)
 
 ### Questions it may ask
 
@@ -400,6 +454,139 @@ a single night. Either way, nothing is written to disk until you save, unless th
 
 The run's results are on the Output page: the light curve for Variables (chapter 9), the transit fit for Transits
 (chapter 17), or the scan results for Discovery (chapter 20).
+
+## Stacking when comps are weak
+
+The comparison stars set a floor under your error bars. When they are much fainter than the target, their noise, not
+the target's, decides how good each point is. More comps help a little; brighter comps help most. When there are none,
+SHOBS-P can **stack** the frames: it combines groups of N calibrated frames and measures the stacks. Each stacked
+point then has about √N times less photon noise, at the cost of N times fewer points.
+
+> **Caution:** A stack hides anything faster than itself. A stack of 20 one-minute frames cannot show a change that
+> takes less than 20 minutes. SHOBS-P keeps its suggestion short enough for the signal you are after (below), but
+> check it against your target.
+
+### The suggestion line
+
+After every per-frame run (or **Scan field** in Discovery) the **Stack row** appears under the settings row. Its first
+line says whether stacking would help. SHOBS-P compares the target's photon noise with the photon noise of the comp
+ensemble, over every good frame, from the run's own error model. The log gets the numbers, for example *"Noise check
+(per frame): target 5.4 mmag (SNR 202), comp ensemble 21.5 mmag (SNR 50; each comp 36, 35) over 60 frames; comp noise
+4.01× the target's."*
+
+The line reads (N and the numbers are examples):
+
+- **The comps are weak** (orange, with ⚠): *"⚠ Comps are weak (comp noise 4.7× the target's per frame). Stack 20
+  frames (60 s each) → comps SNR ~193; 200 frames → 10 points?"* It may add why N is what it is: *"Capped at 57 frames
+  by the time resolution (1/50 of the 2.40-h period = 2.9 min); the comp rule wanted 100."*, *"Kept to 20 frames so the
+  night still has at least 10 points."*, *"The 2 ppt goal is not met (about 2.6 ppt per point)."* or *"(3 frames left
+  out of stacks: 2 sat, 1 cloud.)"*.
+- **The comps are weak but the time cap allows no stacking**: *"⚠ Comps are weak (…), but the time resolution allows
+  no stacking (…). Brighter comps, or longer exposures, would help."*
+- **The comps are fine, but your precision goal is not reached per frame**: *"⚠ Per-frame points are about 3.1 ppt;
+  your 2 ppt goal needs stacks of 3 frames (9 s each); …"*
+- **The comps are fine** (gray): *"Comps are fine per frame (comp noise 35% of the target's): stacking is not needed.
+  Type N to stack anyway."*
+- **Discovery** has no comps, so the line is never orange: *"Stacking (optional): stacks of 6 frames (18 s each); 60
+  frames → 10 points. Time cap 5.0 min: a stack hides events faster than itself."*
+
+![The Photometry page after a run with weak comps: the Points box and the Stack row](img/08-stack-row.png)
+
+### How N is chosen
+
+- **The comp rule** (the default): the smallest N at which a stack's comp-ensemble noise is no more than **half the
+  target's noise in one frame**.
+- **Precision goal** (optional, empty by default, in ppt per point): N grows until a stacked point's whole error,
+  scintillation included, meets the goal.
+- **The time cap**, so a stack does not blur the signal:
+  - **Transits**: 1/5 of the ingress (or egress) time, from the planet on the Input page (its period, a/R\*, Rp/R\*
+    and b, or T14);
+  - **Variables**: 1/50 of the VSX period;
+  - **Discovery**: 5 minutes;
+  - with no planet or no period known: 2 minutes (Transits) or 5 minutes (Variables), and the line says this is *"a
+    conservative default"*.
+- **At least 10 points** are always left in the night.
+
+The **Stack N** box fills in with the suggestion. If you type your own N, it is kept. Typing a precision goal fills
+in the new suggestion.
+
+### Stack
+
+Press **Stack**. It asks first only when it needs to:
+
+- stacks longer than the time cap: *"Stacks of N frames last about …, longer than the time resolution allows (…): they
+  may blur the signal. Stack anyway?"*;
+- in Transits mode, fewer than 20 stacks: *"That makes only K stacked points; the transit fit needs 20 or more. Stack
+  anyway?"*;
+- in Discovery, fewer than 10 stacks stops with *"That makes only K stacks; a field scan needs at least 10. Use a
+  smaller N."*
+
+Then the busy bar shows two steps: **Stacking… k of K** (each stack is made), then **Photometry on K stacks…** (the
+same photometry runs on the stacks; in Discovery, the field scan does). The log says what was done, for example:
+
+    Stacking 200 frames into 10 stacks of up to 20 (sigma-clipped mean; whole-pixel shifts from the measured
+    drift; never across a meridian flip or a gap).
+    Stacks made: 200 frames → 10 stacks of 20 frames (effective exposure 40 s); 0.012% of the pixel values
+    clipped (cosmic rays, satellite trails, hot pixels); shifts up to 2 px.
+    Photometry on the stacks done: 10 points (stacks of 20 frames (effective exposure 40 s)), 0 flagged.
+    Points: Stacked is selected; Per frame (beside the View box) switches back.
+
+When some stacks are short, the log adds *"The last stack of a run (before a flip, a gap, or the end) can be
+partial."* When the field turned inside a stack (an alt-az mount), it adds a note on how far, for example *"Note: the
+field turned by up to 0.30° inside a stack (about 1.4 px at the frame's corners) …"*.
+
+**The aperture on the stacks.** Stacked stars can be a little wider than in one frame. The log line *"Aperture check on
+the stacks: …"* compares the stacks' star FWHM with one frame's and gives the suggested r for each. When the stacks'
+stars are more than 15 % wider, the line starts with ⚠ and says to run **Suggest…** with **Points: Stacked**: the
+aperture test then measures the stacks. If you choose a new aperture, press **Stack** again. The stacks are reused,
+so only the photometry is redone.
+
+After a stack run SHOBS-P goes to the Output page, with **Points: Stacked** selected.
+
+### What goes into a stack
+
+- Rejected frames (Blink) are not in the run, so not in a stack.
+- Frames the per-frame run flagged (sat, compsat, drift, cloud and the other flags) are left out before stacking.
+- Saturation is judged per exposure, so a sum of unsaturated frames stays linear.
+- A stack never spans a meridian flip, a rotator move, or a gap of more than 3 frame spacings. Each side of a flip is
+  stacked on its own, so the last stack before a flip or gap can be short (partial).
+- There is one way to combine: a sigma-clipped **mean** (a plain mean below 5 frames). The clip removes cosmic rays,
+  satellite trails and hot pixels, and leaves alone starlight that only changes with the seeing. There is no median,
+  no weighting and no drizzle.
+- The frames are lined up by whole pixels, from the drift the run already measured (on a color camera, by whole 2×2
+  color cells). Mono and color cameras both work, and no plate solution or header pointing is needed.
+- Stacks are 32-bit floating point, so they have no 16-bit ceiling.
+- Each stack records its mid-time (the mean of its frames' mid-times), its frame count N and its **effective
+  exposure** (the sum of its frames' exposures).
+- Stacks are kept in SHOBS-P's cache folder (`~/.shobs_p_cache/stacks`), never in your Lights folder. Only the newest
+  set is kept, because each stack is a full frame.
+
+### The Points box: Per frame or Stacked
+
+Once a night has been stacked it has two sets of points. The **Points** box chooses which set is the night's:
+
+- **Per frame** and **Stacked** (grayed until there are stacks). Switching is instant.
+- Under them, **Results use: Per frame** or **Results use: Stacked (20 frames)**. The Output page shows the same text
+  at the right end of the row with the **Airmass-corrected night means** box (empty until the night is stacked).
+
+Everything after photometry uses the chosen set: the Output page, the period search and **Time of max/min**, **Comp
+health…**, the AAVSO report and light-curve CSV, **Save series**, the transit fit and the ExoClock, EXOTIC and ExoFOP
+files. A **Use comps…** choice is applied to whichever set is switched in. With a series file open, a switch saves
+the series with the chosen set, as a run does. The series keeps only the chosen set.
+
+When a series is loaded or closed, or the night is removed, the Points box goes back to **Per frame** and **Stacked**
+grays out.
+
+![The Points box with Stacked chosen, on a narrow window](img/08-points-stacked.png)
+
+### What the reports say
+
+- **AAVSO report**: the NOTES get *"points are stacks of 40 frames (effective exposure 30 s)"*, after any notes you
+  typed. The exposure column holds the effective exposure. The file and frame columns name the stack (stack_0003 is
+  stack 3).
+- **Transit fit**: the settings record says *"Stacking: stacks of 40 frames (effective exposure 30 s) (sigma-clipped
+  mean, whole-pixel shifts, never across a flip)"*, and the fit uses the effective exposure (chapter 17).
+- **Series file**: a stacked night carries its stack size and effective exposure (chapter 22).
 
 ---
 
