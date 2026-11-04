@@ -129,7 +129,7 @@ If nothing is left, you see **No usable points to report for that choice.**
 
 ## What is in the file
 
-The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=Shiloh Hill Observatory – Photometry (SHOBS-P) 2.2.21`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
+The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE=Shiloh Hill Observatory – Photometry (SHOBS-P) 2.3.0`, `#DELIM=,`, `#DATE=JD`, `#OBSTYPE=CCD`, and a line saying when SHOBS-P created it. Then one line per point:
 
 | Field | What SHOBS-P writes |
 |---|---|

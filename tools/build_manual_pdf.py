@@ -15,8 +15,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAN = ROOT / "docs" / "manual"
-VERSION = "2.2.21"
-EDITION = "Edition for version 2.2.21"
+VERSION = "2.3.0"
+EDITION = "Edition for version 2.3.0"
 TITLE = "SHOBS-P User's Manual"
 
 CSS = """

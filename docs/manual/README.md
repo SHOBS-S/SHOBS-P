@@ -10,8 +10,8 @@
 > saves that keep the series' own site) and for 2.3.0 (stacking when comps are weak; comps off the frame edge and
 > Measure skipped frames; the Dark flats box; error bars on camera-binned frames; the meridian-flip step in the transit
 > fit; the planet lookup from the host star; chapter 16 rewritten now that Tonight's transits and the Transit planner
-> are gone; Save corner plot in the Results row), checked against the program. Screenshots were retaken on 2.2.21;
-> the pages 2.3.0 changed are listed for retaking in `_reshoots_230.md`.
+> are gone; Save corner plot in the Results row), checked against the program. Screenshots were retaken on 2.3.0
+> wherever the page or its version line changed.
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
@@ -67,4 +67,4 @@
 26. **[Credits and how to cite SHOBS-P](26-credits-and-citing.md)** — the Copy button, DOI, CITATION.cff.
 
 ---
-*Screenshots are from SHOBS-P 2.2.17–2.2.21 on Windows; every window that shows the version, and every page that 2.2.21 changed, was retaken on 2.2.21. The shots that 2.3.0 changes or adds are listed in [_reshoots_230.md](_reshoots_230.md).*
+*Screenshots are from SHOBS-P 2.2.17–2.3.0 on Windows; every window that shows the version, and every page that 2.3.0 changed or added, was retaken on 2.3.0 (one exception: the No AUID shot in chapter 15 stays from 2.2.21, because its example star now has an AUID).*
