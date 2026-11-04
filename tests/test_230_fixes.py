@@ -105,6 +105,40 @@ class TestOscClip(unittest.TestCase):
         self.assertLess(abs(float(a[10, 10]) - 8 * 400), 150)
 
 
+class TestEnsembleSoleComp(unittest.TestCase):
+    def _pts(self):
+        nan = float("nan")
+        pts = []
+        for k in range(20):
+            pts.append(core.Obs(jd=2460000.0 + k / 1440, mag=12.0, merr=0.01, flag="", cmag=-8.0, kmag=None,
+                                airmass=1.2, flux_var=1e4, flux_comp=2e4, path=f"f{k}", exptime=30.0,
+                                night="JD2460000", target_inst=-7.0, target_var=1e-4,
+                                comp_vars=[4e-4, 4e-4 if k < 8 else nan], comp_insts=[-8.0, -8.2 if k < 8 else nan]))
+        return pts
+
+    def test_sole_comp_in_few_frames_is_kept(self):
+        """Fix 5: B alone, measured in 8 of 20 frames: those 8 frames are derived (as in 2.2.21), the rest nocomp."""
+        pts = self._pts()
+        res = core.recompute_with_comps(pts, ["B"], ["A", "B"], {"A": 11.0, "B": 11.2})
+        self.assertEqual(res["done"], 8)
+        self.assertEqual(res["missing"], 12)
+        self.assertEqual(res["night_out"], {})
+        self.assertEqual(res["night_few"], {"JD2460000": ["B"]})
+        good = [o for o in pts if math.isfinite(o.mag)]
+        self.assertEqual(len(good), 8)
+        self.assertAlmostEqual(good[0].mag, 11.2 + (-7.0) - (-8.2), places=9)
+        self.assertTrue(all("nocomp" in o.flag for o in pts[8:]))
+
+    def test_rule_unchanged_when_others_remain(self):
+        """Fix 5: with A in every frame, B (40 %) is still left out of the night and A carries it."""
+        pts = self._pts()
+        res = core.recompute_with_comps(pts, ["A", "B"], ["A", "B"], {"A": 11.0, "B": 11.2})
+        self.assertEqual(res["done"], 20)
+        self.assertEqual(res["night_out"], {"JD2460000": ["B"]})
+        self.assertEqual(res["night_few"], {})
+        self.assertEqual({o.n_comps for o in pts}, {1})
+
+
 def _have_tk():
     try:
         import tkinter as tk

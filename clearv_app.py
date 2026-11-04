@@ -17594,6 +17594,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.3.0 (#50): the rule said once: a comp measured in fewer than half a night's frames is not used there
             self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} left out of the whole night "
                      f"(measured in fewer than half its frames); the night uses the other comps.")
+        for night, names in sorted((result.get("night_few") or {}).items()):
+            # 2.3.0 review fix: the night's only comps are kept even when measured in few of its frames
+            self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} measured in fewer than half the "
+                     "night's frames but kept (no other comp in use there): only the frames where it was measured "
+                     "get a magnitude; the others are flagged nocomp.")
         # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page)
         recover = {}
         for night in sorted({o.night for o in self.observations}):
