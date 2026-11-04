@@ -397,18 +397,20 @@ A warning box after the run lists the same lines, and the log has them too, each
 
 ### Measure skipped frames
 
-Frames skipped because of one comp stay skipped when you later drop that comp with **Use comps…** (chapter 11): Use
-comps recalculates the measured points, it does not measure the skipped frames. So the orange line then says, for
-example, *"⚠ 64 frames were skipped because of APASS J175248.7+373202, which is no longer a comp — Run photometry again
-to measure them."*, and a **Measure skipped frames** button appears at the right of that line. The log and the status
-line say it too.
+Since 2.3.0 a comp that leaves the frame (or is clipped, or has no flux) is simply left out of those frames, and the
+other comps carry them, so a single edge comp no longer costs frames. A frame is skipped only when **every** comp was
+lost in it, for example on a one-comp night when that comp drifts off the edge, or when all the comps sit near the same
+edge.
+
+Skipped frames stay skipped when you later drop the comps that caused them with **Use comps…** (chapter 11): Use comps
+recalculates the measured points, it does not measure the skipped frames. The orange line then says *"⚠ N frames were
+skipped because of …, which is no longer a comp — Run photometry again to measure them."*, and a **Measure skipped
+frames** button appears at the right of that line. The log and the status line say it too.
 
 **Measure skipped frames** measures only those frames, with the comps now in use, and adds them to the night. An open
 series with a file is saved automatically; in Transits mode the fit is refreshed. It needs that night's Lights folder
 on the Input page and its image loaded; otherwise a box explains this and says to use **Run photometry**. Once the
 frames are back, the line and the button go away.
-
-![The Photometry page after Use comps dropped an edge comp, with Measure skipped frames](img/08-skipped-frames.png)
 
 ### Questions it may ask
 

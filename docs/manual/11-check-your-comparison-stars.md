@@ -76,7 +76,7 @@ To return to the comps the nights were reduced with, open **Use comps…** again
 Things to know:
 
 - Pick stars measured on **every** night. A frame missing only some of the chosen comps is kept: its point is worked out from the chosen comps that are there, put on the night's scale, so no step appears. Only frames with none of the chosen comps (or nights that never measured a chosen star) are flagged `nocomp` and left out; SHOBS-P tells you how many before it applies. The log line *"Comps in use: … N points re-derived"* adds *"(M of them from the comps present in that frame)"*.
-- **Dropping a comp that cost frames.** If the run skipped frames because of a comp (for example one that drifted off the frame edge) and your new choice drops that comp, the Photometry page says *"⚠ 64 frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."* Use comps only recalculates frames that were measured; press **Measure skipped frames** on that line to measure the skipped ones with the comps now in use (chapter 8).
+- **Dropping a comp that cost frames.** If the run skipped frames because every comp was lost in them (for example a one-comp night whose comp drifted off the frame edge) and your new choice drops those comps, the Photometry page says *"⚠ N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."* Use comps only recalculates frames that were measured; press **Measure skipped frames** on that line to measure the skipped ones with the comps now in use (chapter 8).
 - Every chosen star needs a catalog magnitude. If one has none, you get **No catalog magnitude for …**. You can type
   one in its **Catalog mag** box (below).
 - The check star cannot be a comp.
