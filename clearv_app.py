@@ -3612,7 +3612,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
 
     # ---- 2.2.19 (nit): busy indicator for the Input page's Star ID and planet lookups ------------------------------
-    LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (a late answer is still used)
+    LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (see _lookup_busy_start: late answers)
 
     @staticmethod
     def _lookup_no_answer(error) -> bool:
@@ -3632,7 +3632,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _lookup_busy_start(self, kind: str, name: str, service: str):
         """2.2.20 (item 3): a Star ID ("star") or planet lookup shows on the status strip's busy bar ("Looking up
         TOI-2046 at SIMBAD and VSX…", "Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"); after
-        LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer (a late answer is still used).
+        LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer. A late answer of a "star" or
+        "planet" lookup is still used; a late answer of the "planets" list is dropped (2.3.0 review: the agreed
+        behaviour — the lookup has given up, and the boxes keep the values they had).
         2.3.0 (#51): the planet boxes no longer show "looking up…": the busy bar is the only working signal and the
         boxes are blank until the values come. kind "planets" is the Star ID's planet list (Transits), "Looking up
         TrES-3's planets at the NASA Exoplanet Archive…"; it ends only once the planet's own lookup (kind "planet")
