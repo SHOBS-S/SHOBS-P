@@ -38,7 +38,9 @@ parameters. SHOBS-P needs a ΔBIC of 10 or more to call a transit detected.
 
 **Binning** — Adding neighboring pixels together. SHOBS-P's **Binning** (Input page) adds same-color pixels only, so
 colors stay separate. It is separate from any binning done in the camera. A transit report's `#BINNING` is the
-camera's binning; SHOBS-P's own "processing bin" goes into the report's notes.
+camera's binning; SHOBS-P's own "processing bin" goes into the report's notes. A camera can **sum** its binned pixels
+or **average** them; SHOBS-P tells which from the sky's noise, because it changes how many electrons one ADU holds
+(chapter 7).
 
 **BJD_TDB** — Barycentric Julian Date in Barycentric Dynamical Time: the time the light would have reached the center
 of mass of the solar system, on a uniform time scale. The standard for exoplanet timing. It differs from JD by up to
@@ -62,7 +64,7 @@ against it, so changes in the sky affect both and cancel. SHOBS-P takes up to te
 
 **Corner plot** — A grid of plots of an **MCMC** fit's samples: one histogram per fitted parameter, and every pair
 of parameters against each other. It shows each parameter's **posterior**, and whether two parameters trade off
-against each other. **Corner plot…** on the Transit fit page.
+against each other. **Save corner plot…** in the Transit fit page's Results row.
 
 **Credible band** — The range of model curves the **MCMC** allows: the 68 % band holds the middle 68 % of the
 sampled models at each moment, the 95 % band the middle 95 %. Shaded around the transit fit.
@@ -76,14 +78,21 @@ light.
 rotation, so the stars stay put on the sensor. SHOBS-P recognizes one from a rotator reading that drifts smoothly in
 the headers.
 
+**Dark flat** — A dark taken at the flats' exposure. SHOBS-P takes the dark flats off the flats, and with no bias
+frames they also stand in for the bias. They go in the **Dark flats** row of the Input page (chapter 7).
+
 **Detrending** — Removing a slow trend from a light curve, for example with **airmass**, while fitting. In the
 transit fit the trend is fitted together with the transit.
 
 **DTG** — Date-time group, the stamp on every file SHOBS-P writes: `121153Z OCT 26` means the 12th, 11:53 UTC,
 October 2026.
 
+**Effective exposure** — The exposure of a **stack**: the sum of its frames' exposures. Reports of stacked points
+give it as their exposure time.
+
 **EGAIN** — The FITS header keyword with the camera gain in electrons per count (ADU). SHOBS-P uses it to work out
-the photon noise in each point. Without it, the gain is estimated from the sky.
+the photon noise in each point. Without it, the gain is estimated from the sky. EGAIN is the gain of one native
+pixel; on frames the camera binned by averaging, one stored ADU holds bin² × EGAIN electrons.
 
 **Ensemble** — Using the average of several comparison stars. In an AAVSO report the comparison name is then
 `ENSEMBLE`.
@@ -106,6 +115,11 @@ period search. SHOBS-P calls a period significant at 1% or less, counted both by
 **Flat, bias, dark** — Calibration frames. A bias is a zero-length exposure (the camera's electronic offset), a dark
 is an exposure with the shutter closed (heat signal), and a flat is an evenly lit exposure that maps vignetting and
 dust shadows.
+
+**Flip step** — In the transit fit: a jump in the star's level at a **meridian flip**, fitted as the baseline after
+the flip times (1 + step), in ppt. SHOBS-P keeps it only when it lowers the BIC by 10 or more (**ΔBIC**); a kept step
+is fitted together with the transit. In Variables mode, the flip step of a night is the offset in magnitudes that
+lines up the two pier sides (chapter 12).
 
 **FWHM** — Full width at half maximum: the size of a star's image, a measure of seeing and focus, in pixels.
 
@@ -150,6 +164,10 @@ several nights usually means the ephemeris is out of date.
 **Plate solution (WCS)** — The mapping between pixels in the image and positions on the sky. Many capture programs
 write one into the FITS header; otherwise SHOBS-P finds it by matching star patterns to the catalogs.
 
+**Points: Per frame / Stacked** — The switch on the Photometry page that chooses whether a night's points are its
+single frames or its **stacks**. Every result, report and saved file uses the chosen set; the **Results use** line
+says which.
+
 **Posterior** — What a fit learns about a parameter: the spread of values the data allow, here the **MCMC** samples.
 A round hump is a measurement; one piled up against the end of its allowed range (the prior) is not.
 
@@ -170,6 +188,10 @@ more nights. See [10. Build a multi-night series](10-build-a-multi-night-series.
 **Spare comp** — A catalog star near the comps' brightness that SHOBS-P measures on every frame, so you can swap it in
 later with **Use comps…** without reducing again.
 
+**Stack** — A sigma-clipped mean of N calibrated frames in a row, lined up by whole pixels, measured as one point.
+Stacking lowers the photon noise of weak comps by about √N but hides any change faster than the stack. SHOBS-P
+suggests N from the comps' noise and a time cap (chapter 8). A stack never spans a meridian flip or a gap.
+
 **Superpixel** — A way of turning a color camera's mosaic into an image: each 2×2 group of pixels becomes one pixel of
 the chosen color channel. The image has half the width and height of the sensor, and no colors are mixed.
 
@@ -189,8 +211,8 @@ target. See [21. Follow a candidate](21-follow-a-candidate.md).
 more makes a candidate by default.
 
 **Zenith keyhole** — The small patch of sky around the zenith (above 85° in SHOBS-P) where an **alt-az mount** must
-turn very fast in azimuth and the field rotation gets extreme, so frames there can trail or smear. Tonight's transits
-and the Transit planner mark transits that pass through it when **Mount** is **Alt-az**.
+turn very fast in azimuth and the field rotation gets extreme, so frames there can trail or smear. When you scan the
+folders of an alt-az night that went above 85°, the log says so (chapter 16).
 
 **Zero point** — The offset that turns instrumental magnitudes into catalog magnitudes, measured from comparison
 stars or, in a field scan, from all the catalog stars in the field.

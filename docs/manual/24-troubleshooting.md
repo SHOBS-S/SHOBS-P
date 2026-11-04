@@ -113,6 +113,8 @@ message above."*
 | A monochrome camera's frames look like a checkerboard. | The Bayer pattern is wrong. On the Calibrate page choose **MONO** (SHOBS-P sets it by itself from raw flats, or from the lights' sky background when there are bias or dark frames or the sky is bright; otherwise it asks **Color or monochrome camera?** at **Scan folders**). |
 | Calibration takes a long time every night. | It should reuse saved masters. If your flats or darks change every night, that is expected. |
 | Results look worse after replacing calibration frames. | Tick **Rebuild masters (ignore saved ones)** once. |
+| You have no bias frames, only dark flats. | Put the dark flats in the **Dark flats** row and leave **Bias** empty: they stand in for the bias (chapter 7). If they sit in the Flat folder, SHOBS-P finds them there by their IMAGETYP or file name. |
+| The Input page says *"⚠ No bias and no dark flats: darks can't be scaled correctly …"*. | Add bias frames or dark flats, or use darks at the lights' exposure. Without either, a scaled dark takes off the wrong amount of the camera's offset. |
 
 ### Solving and stars
 
@@ -155,11 +157,16 @@ To start fresh, press **Clear cached catalogs** on the Credits page (chapter 3).
 
 | Problem | Fix |
 |---|---|
-| Error bars much larger than the scatter (χ²ν far below 1). | Usually the camera gain: the EGAIN keyword is missing or wrong in your headers. The photometry log's *Photon noise* line says which gain was used. |
+| Error bars much larger than the scatter (χ²ν far below 1). | Usually the camera gain: the EGAIN keyword is missing or wrong in your headers. The photometry log's *Photon noise* line says which gain was used. On camera-binned frames, check that line's second sentence: SHOBS-P 2.3.0 tells from the sky's noise whether the camera summed or averaged the binned pixels (chapter 7). Nights reduced with 2.2.21 or earlier keep their old error bars until you run photometry again. |
+| The comps are much fainter than the target, and the points are noisy. | Read the Stack row's line on the Photometry page. If it says *"⚠ Comps are weak …"*, press **Stack** (chapter 8, "Stacking when comps are weak"), or choose brighter comps. |
+| Frames are missing from the light curve after **Use comps…** dropped a comp. | Those frames were skipped at photometry because of that comp. Press **Measure skipped frames** on the Photometry page's orange line (chapter 8). |
+| A comp near the edge cost many frames in an older version. | Run photometry again in 2.3.0: a comp off the frame edge is now left out of those frames only (chapter 8, "Comps near the frame edge"). |
 | Steps between nights in a series. | Different comps, apertures or equipment between nights. Read the **Careful:** lines when adding a night, and use **Use comps…** to put every night on the same comps. |
 | A step at the meridian flip. | Look at **Comp health…**: a comp that jumps at the flip is a common cause. Read the log after the run: a line *"⚠ After the meridian flip the … apertures were off their stars …"* means an aperture problem, not the stars (chapter 12). Try **Pier side as segments** (Variables mode). |
 | One star's comps turned up on another star's night (points flagged `nocomp`). | Press **New reduction** on the Input page before you start on another star (chapter 5). |
 | Frames on an alt-az mount are lost or misaligned through the night. | Set **Mount** to **Alt-az** in the Optics box (Input page), so the alignment follows the field rotation. |
+| The run warns *"⚠ The field turned by 180° between frames … — that looks like a meridian flip."* | **Mount** is set to **Alt-az**, but the frames come from a German equatorial mount (often a setting left from another telescope's data). Set **Mount** to **German equatorial** and run photometry again. |
+| A transit's depth is far off on a night with a meridian flip. | Check that **Mount** is **German equatorial**, so the fit can test a flip step, and read the **Flip step** row (chapter 17). Keep 30 minutes or more of baseline on each side of the flip. |
 | The transit fit does not start. | It needs a planet on the Input page and at least 20 usable points. Look at the hint under the page title. |
 | The Output pages show an old result. | Run photometry again: an old transit fit is cleared as soon as the data change. |
 | You lost a night from a series. | Close the series and load `<name>_prev.cvseries`, the version from before this session. |
