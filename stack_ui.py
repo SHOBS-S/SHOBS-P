@@ -47,6 +47,30 @@ def load_frame(path: str, binning: int, masters):
     return raw, header, core.calibrate_frame(core.bin_image(raw, binning), header, masters)
 
 
+def _seeing_widths(paths, pattern, mode, ref_img) -> tuple:
+    """(star FWHM on the middle stack, on one frame) in px, NaN when not measurable. Worker thread (no Tk)."""
+    nan = float("nan")
+    try:
+        img = core.debayer(stack_core.read_stack(paths[len(paths) // 2])[0], pattern, mode)
+        f_stack = float(core.field_fwhm(img)["fwhm"])
+        del img
+    except Exception:
+        return (nan, nan)
+    try:
+        f_ref = float(core.field_fwhm(ref_img)["fwhm"]) if ref_img is not None else nan
+    except Exception:
+        f_ref = nan
+    return (f_stack, f_ref)
+
+
+def _ui_scale(widget) -> float:
+    """The display's scaling against 96 dpi (1.0 at least): clearv_app.ui_scale's rule (not imported: no cycle)."""
+    try:
+        return max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
+    except Exception:
+        return 1.0
+
+
 class StackMixin:
     """The App's stacking methods (see the module text)."""
 
@@ -77,7 +101,8 @@ class StackMixin:
         use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
         use.pack(side="top", anchor=W, pady=(2, 0))
         # the line wraps at the switch's own width, so the box never needs more room than the two buttons
-        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), 100)), add="+")
+        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), int(100 * _ui_scale(self)))),
+                 add="+")
         self._points_box, self._points_view_box = box, view_box
         options.bind("<Configure>", lambda _e: self.after_idle(self._stack_place_points_box), add="+")
         # The Stack row: shown under the settings once a run has points.
@@ -95,8 +120,9 @@ class StackMixin:
         ttk.Label(ctl, text="ppt per point (optional)", style="Card.TLabel").pack(side=LEFT, padx=(2, 8))
         self.stack_button = ttk.Button(ctl, text="Stack", command=self.start_stack)
         self.stack_button.pack(side=LEFT)
-        srow.bind("<Configure>", lambda e: self.stack_line_label.configure(wraplength=max(int(e.width) - 20, 300)),
-                  add="+")
+        # 2.3.0 review fix (high DPI): the margin and the floor scale with the display (clearv_app.ui_scale)
+        srow.bind("<Configure>", lambda e: self.stack_line_label.configure(
+            wraplength=max(int(e.width) - int(20 * _ui_scale(self)), int(300 * _ui_scale(self)))), add="+")
         self._stack_row, self._stack_anchor = srow, options
         self.stack_goal.trace_add("write", lambda *_a: self.after_idle(lambda: self._stack_refresh_line(fill_n=True)))
 
@@ -357,13 +383,14 @@ class StackMixin:
         masters = self.masters
         key = [[r["path"] for r in g["members"]] for g in groups] + [binning, pattern, n, stack_core.STACK_VERSION,
                                                                      stack_core.CLIP_SIGMA,
-                                                                     getattr(masters, "used", None) or ""]
+                                                                     stack_core.masters_fingerprint(masters)]
         folder = stack_core.stack_folder(key)
         total = sum(len(g["members"]) for g in groups)
         if not self._start_job(f"Stacking {total} frames into {len(groups)} stacks…"):
             return
         self._progress_start(len(groups), "Stacking")
         cancel = self._cancel
+        ref_img = self.preview   # one frame, for the aperture check after the stacks (read in the worker)
         dropped = stack_core.left_out_counts(recs)
         self.log(f"Stacking {total} frames into {len(groups)} stacks of up to {n} (sigma-clipped mean; whole-pixel "
                  "shifts from the measured drift; never across a meridian flip or a gap)"
@@ -393,7 +420,7 @@ class StackMixin:
                             reuse = False
                     if not reuse:
                         img, info = stack_core.combine(lambda p: load_frame(p, binning, masters)[2], members, shifts,
-                                                       cancel=cancel)
+                                                       cancel=cancel, bayer=pattern != core.MONO)
                         try:
                             anchor_head = core.read_header(members[anchor]["path"])
                         except Exception:
@@ -410,6 +437,8 @@ class StackMixin:
                 summ = stack_core.summary(groups, n)
                 summ.update(turn=float(max(turns) if turns else 0.0), clipped=float(np.mean(clipped) if clipped else 0),
                             shift=int(shifts_max), mode=src["mode"])
+                # 2.3.0 review fix: the aperture check's star widths are measured here, not on the window's thread
+                summ["_seeing"] = _seeing_widths(paths, pattern, mode, ref_img)
                 self.call_ui(self._stack_made, src, paths, meta, summ, folder, None)
             except Exception as exc:
                 if str(exc) != "Canceled":
@@ -429,6 +458,7 @@ class StackMixin:
                 messagebox.showerror(TITLE, f"Stacking failed: {error}")
             return
         self._progress_end(f"{len(paths)} stacks.")
+        seeing = summ.pop("_seeing", None)
         stack_core.prune_folders(folder)
         words = stack_core.stack_words(summ)
         self.log(f"Stacks made: {summ['frames']} frames → {summ['stacks']} {words}; {summ['clipped'] * 100:.3f}% of the "
@@ -444,7 +474,7 @@ class StackMixin:
         if summ.get("mode") == "discovery":
             self.log("  Note: the scan on the stacks cannot see changes faster than one stack "
                      f"({stack_core._dur(summ['exp'])} of exposure).")
-        run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src}
+        run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src, "seeing": seeing}
         self._stack_run_ctx = run
         if src.get("scan"):
             self.scan_field(stack_run=run)
@@ -485,8 +515,12 @@ class StackMixin:
         if not frames_now:
             self.log("Stacks: the night is no longer in the series; nothing changed.")
             return
-        self._stack_sets[night] = {"frame": frames_now, "stack": night_points, "meta": run["summary"],
-                                   "paths": list(run["paths"])}
+        # 2.3.0 review fix: the per-frame set is the run's source, never the stacks on screen (pressing Stack again
+        # while Points: Stacked is shown used to store the old stacks as the night's "Per frame" points).
+        frame_set = self._stack_frame_set(night, run.get("src"), frames_now)
+        prior_cat = ((self._stack_sets.get(night) or {}).get("cat") or {}).get("frame")
+        self._stack_sets[night] = {"frame": frame_set, "stack": night_points, "meta": run["summary"],
+                                   "paths": list(run["paths"]), "cat": {"frame": prior_cat} if prior_cat else {}}
         self.points_choice.set("stack")
         self._apply_points(night, "stack", announce=False)
         words = stack_core.stack_words(run["summary"])
@@ -499,13 +533,22 @@ class StackMixin:
         except Exception:
             pass
 
+    def _stack_frame_set(self, night, src, frames_now):
+        """The night's per-frame points for a new stack set: the earlier set's per-frame points, else the run's
+        source points, else the night's points on screen when they are not stacks."""
+        prior = self._stack_sets.get(night)
+        if prior and not prior.get("scan") and prior.get("frame"):
+            return list(prior["frame"])
+        if src and src.get("points") and not src.get("scan"):
+            return list(src["points"])
+        return [o for o in frames_now if not is_stack_path(getattr(o, "path", ""))] or frames_now
+
     def _stack_seeing_note(self, run):
-        """Re-check the aperture against the stacks (stars in a stack are a little wider than in one frame)."""
+        """Re-check the aperture against the stacks (stars in a stack are a little wider than in one frame). The
+        widths were measured in the Stack worker (run["seeing"]); only the words are made here."""
         try:
-            img = core.debayer(load_frame(run["paths"][len(run["paths"]) // 2], 1, None)[2], self.pattern.get(),
-                               self.debayer_mode.get())
-            f_stack = core.field_fwhm(img)["fwhm"]
-            f_ref = core.field_fwhm(self.preview)["fwhm"] if self.preview is not None else float("nan")
+            f_stack, f_ref = run.get("seeing") or (float("nan"), float("nan"))
+            f_stack, f_ref = float(f_stack), float(f_ref)
         except Exception:
             return
         if not (math.isfinite(f_stack) and math.isfinite(f_ref) and f_ref > 0):
@@ -561,18 +604,56 @@ class StackMixin:
         current = {id(o) for o in self.observations if o.night == night}
         if current == {id(o) for o in sets[which]}:
             before = which
-        if tp is not None and getattr(tp, "report", None) is None and getattr(tp, "result", None) is not None \
+        # 2.3.0 review fix: only the set really on screen is recorded (after Stack again, the old stacks are on
+        # screen and are neither of the night's two sets)
+        on_screen = current == {id(o) for o in sets[before]}
+        if on_screen and tp is not None and getattr(tp, "report", None) is None \
+                and getattr(tp, "result", None) is not None \
                 and getattr(tp, "night", None) is not None and tp.night.get() == night:
             self._stack_fit_cache[before] = (tp._fit_signature, tp.result, tp.meta_for_files)
+        try:
+            cat_now = dict(self._comp_catalog())
+        except Exception:
+            cat_now = None
+        cats = sets.setdefault("cat", {})
+        if on_screen and cat_now is not None:
+            cats[before] = dict(cat_now)   # the catalog magnitudes the set on screen is derived with
         new = sets[which]
+        recomputed = False
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
                 core.recompute_with_comps(new, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
+                recomputed = True
             except Exception as exc:
                 self.log(f"Could not apply the chosen comps to the {which} points: {exc}")
         self.observations = core.merge_nights([o for o in self.observations if o.night != night], new)
         info = self._night_info(night, create=True)
+        # 2.3.0 review fix: what was changed on the set on screen follows to the set now shown: catalog magnitudes
+        # typed in Use comps… (shifted by the same deltas, as set_catalog_mags does) and the night's planet-transit
+        # flags (Variables campaign rule).
+        old_cat = cats.get(which)
+        if not recomputed and cat_now is not None and old_cat:
+            pairs = {k: (old_cat[k], v) for k, v in cat_now.items()
+                     if old_cat.get(k) is not None and v is not None and float(old_cat[k]) != float(v)}
+            if pairs:
+                try:
+                    comps = info.get("comps") if isinstance(info, dict) else None
+                    default = list(self.active_comps or (comps if isinstance(comps, list) and comps
+                                                         else self.comps_used))
+                    res = core.apply_catalog_mags(new, pairs, {}, default, self._star_aliases())
+                    if res.get("changed"):
+                        self.log(f"  The catalog magnitudes changed in Use comps… applied to the {which} points too "
+                                 f"({res['changed']} points).")
+                except Exception as exc:
+                    self.log(f"Could not apply the changed catalog magnitudes to the {which} points: {exc}")
+        if cat_now is not None:
+            cats[which] = dict(cat_now)
+        if info.get("planet_transits") and "transit_flagged" in info:
+            try:
+                self._set_transit_flags(night, bool(info["transit_flagged"]), quiet=True)
+            except Exception:
+                traceback.print_exc()
         if which == "stack":
             info["stack"] = {k: v for k, v in (sets.get("meta") or {}).items() if k != "mode"}
         else:
@@ -609,6 +690,27 @@ class StackMixin:
             except OSError as exc:
                 self.log(f"Could not auto-save the series: {exc}")
 
+    def _stack_drop_after_remeasure(self, night, night_points):
+        """2.3.0 review fix: Measure skipped frames added frames to the night's per-frame points: its stacks no longer
+        match them and are dropped; the per-frame points (with the new frames) are the source of any new stacks."""
+        if not hasattr(self, "_stack_row"):
+            return
+        had = self._stack_sets.pop(night, None)
+        src = getattr(self, "_stack_source", None)
+        if src and not src.get("scan") and src.get("night") == night:
+            src["points"] = list(night_points)
+        try:
+            self._night_info(night, create=True).pop("stack", None)
+        except Exception:
+            pass
+        self._stack_fit_cache = {}
+        self.points_choice.set("frame")
+        if had:
+            self.log(f"Stacks of {night} dropped (they do not hold the frames just measured); press Stack to stack the "
+                     "night again.")
+        self._stack_ui_update()
+        self._stack_refresh_line(fill_n=False)
+
     # ---- Discovery: the scan on the stacks -------------------------------------------------------------------
     def _stack_scan_done(self, result):
         """_scan_done: a per-frame scan becomes the source of stacks; a scan on stacks is kept beside it."""
@@ -632,6 +734,28 @@ class StackMixin:
         if src and self.points_choice.get() == "stack" and self._stack_set_live(src["night"]):
             return list(self._stack_sets[src["night"]].get("paths") or []) or None
         return None
+
+    def _stack_files_note(self, observations=None) -> list:
+        """2.3.0 review fix: after a series is loaded, nights whose points are stacks whose files are no longer in
+        the stacks cache (it keeps only the latest set) get one Log line. Nothing needs those files: the points, their
+        values and the stacking record are in the series; the files would only be needed to measure the stacks
+        again. Returns the lines logged."""
+        obs = self.observations if observations is None else observations
+        lines = []
+        for night in sorted({o.night for o in obs}):
+            meta = self.stack_meta(night)
+            if not meta:
+                continue
+            paths = [o.path for o in obs if o.night == night and is_stack_path(getattr(o, "path", ""))]
+            gone = sum(1 for p in paths if not os.path.isfile(p))
+            if paths and gone:
+                lines.append(f"{self.label_nights(night)}: the points are {stack_core.stack_words(meta)}; "
+                             f"{gone} of the {len(paths)} stack files are no longer in SHOBS-P's cache (only the "
+                             "latest stacks are kept). Nothing needs them: the points are in the series. To measure "
+                             "the stacks again, run photometry on that night's frames and Stack.")
+        for line in lines:
+            self.log(line)
+        return lines
 
     # ---- reports ---------------------------------------------------------------------------------------------
     def stack_report_note(self, points, lead: bool = True) -> str:

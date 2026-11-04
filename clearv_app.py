@@ -3420,14 +3420,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._folder_row(frames, "Flat", self.flat_dir, "Flat")
         self._folder_row(frames, "Lights", self.light_dir, "Lights")
         self._folder_row(frames, "Output", self.output_dir, "Output")
-        ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, packages). Leave "
-                               "it empty to be asked each time. Files already there are never overwritten; a new "
-                               "copy gets _2, _3 ….", style="Hint.TLabel", wraplength=1100, justify=LEFT).pack(anchor=W)
+        # 2.3.0 review fix (high DPI): the two hints wrap at the card's own width (scaled floor), not at 1100 px
+        _wrap0 = int(900 * ui_scale(self))
+        out_hint = ttk.Label(frames, text="Output: where every Save button writes (reports, light curves, plots, "
+                                          "packages). Leave it empty to be asked each time. Files already there are "
+                                          "never overwritten; a new copy gets _2, _3 ….", style="Hint.TLabel",
+                             wraplength=_wrap0, justify=LEFT)
+        out_hint.pack(anchor=W)
         # 2.3.0 (item 11)
-        ttk.Label(frames, text="Dark flats (optional, like Bias): darks taken at the flats' exposure. They are taken "
-                               "off the flats, and with no bias they also stand in for it, so Bias can stay empty. "
-                               "Leave it empty if you have none.", style="Hint.TLabel", wraplength=1100,
-                  justify=LEFT).pack(anchor=W)
+        df_hint = ttk.Label(frames, text="Dark flats (optional, like Bias): darks taken at the flats' exposure. They are "
+                                         "taken off the flats, and with no bias they also stand in for it, so Bias can "
+                                         "stay empty. Leave it empty if you have none.", style="Hint.TLabel",
+                            wraplength=_wrap0, justify=LEFT)
+        df_hint.pack(anchor=W)
+        frames.bind("<Configure>", lambda e: [h.configure(wraplength=max(int(e.width) - int(10 * ui_scale(self)),
+                                                                        int(300 * ui_scale(self))))
+                                               for h in (out_hint, df_hint)], add="+")
         # 2.2.19 (#20): darks and lights of different exposures, said here before Calibrate.
         self.dark_exposure_note = StringVar(value="")
         self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
@@ -3612,7 +3620,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
 
     # ---- 2.2.19 (nit): busy indicator for the Input page's Star ID and planet lookups ------------------------------
-    LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (a late answer is still used)
+    LOOKUP_GIVE_UP_S = 60   # after this the line says the service did not answer (see _lookup_busy_start: late answers)
 
     @staticmethod
     def _lookup_no_answer(error) -> bool:
@@ -3632,7 +3640,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _lookup_busy_start(self, kind: str, name: str, service: str):
         """2.2.20 (item 3): a Star ID ("star") or planet lookup shows on the status strip's busy bar ("Looking up
         TOI-2046 at SIMBAD and VSX…", "Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"); after
-        LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer (a late answer is still used).
+        LOOKUP_GIVE_UP_S the bar goes and a ✖ line says the service did not answer. A late answer of a "star" or
+        "planet" lookup is still used; a late answer of the "planets" list is dropped (2.3.0 review: the agreed
+        behaviour — the lookup has given up, and the boxes keep the values they had).
         2.3.0 (#51): the planet boxes no longer show "looking up…": the busy bar is the only working signal and the
         boxes are blank until the values come. kind "planets" is the Star ID's planet list (Transits), "Looking up
         TrES-3's planets at the NASA Exoplanet Archive…"; it ends only once the planet's own lookup (kind "planet")
@@ -4348,13 +4358,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                        f"({dark_exp:g} s darks to {light_exp:g} s lights scales the camera's offset too). Add bias "
                        "frames or dark flats, or use darks at the lights' exposure.")
         if have_df and self.flat_dir.get().strip():
-            df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
-            try:   # the first real flat (dark flats saved in the Flat folder are not counted)
-                frames, master = core.calibration_source(self.flat_dir.get())
-                first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
-                flat_exp = self._header_exposure(core.read_header(first)) if first else None
-            except Exception:
-                flat_exp = None
+            # 2.3.0 review fix: the two exposures are cached on the folders (names and modification times), so a note
+            # refresh does not read up to 21 headers on the window's thread every time
+            def stamp(path):
+                try:
+                    return (path, os.stat(path).st_mtime_ns)
+                except OSError:
+                    return (path, None)
+            key = (stamp(self.darkflat_dir.get().strip()), stamp(self.flat_dir.get().strip()))
+            cached = getattr(self, "_darkflat_exp_cache", None)
+            if cached and cached[0] == key:
+                df_exp, flat_exp = cached[1]
+            else:
+                df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
+                try:   # the first real flat (dark flats saved in the Flat folder are not counted)
+                    frames, master = core.calibration_source(self.flat_dir.get())
+                    first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
+                    flat_exp = self._header_exposure(core.read_header(first)) if first else None
+                except Exception:
+                    flat_exp = None
+                self._darkflat_exp_cache = (key, (df_exp, flat_exp))
             if core.exposures_match(df_exp, flat_exp) is False:
                 out.append(f"⚠ Dark flats {df_exp:g} s, flats {flat_exp:g} s: dark flats should match the flats' "
                            f"exposure. Take dark flats at {flat_exp:g} s.")
@@ -6840,10 +6863,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.19 (#41): what the current photometry was measured with, and a caution when the boxes now differ.
         self.aperture_state = StringVar(value="")
         self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
-                                              justify=LEFT, wraplength=700)
+                                              justify=LEFT, wraplength=int(700 * ui_scale(self)))
         # 2.2.19 (r2: S3): shown only while it has text (_update_aperture_state), so no empty line is reserved
-        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(wraplength=max(e.width - 40, 300)),
-                  add="+")   # wraps with the window, never wider than it
+        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(
+            wraplength=max(e.width - int(40 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")   # 2.3.0 review   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
         # 2.3.0 (#50, item 10): frames the last run skipped (and why), comps left out of some frames, a flip on an
@@ -6853,12 +6876,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.skip_button = ttk.Button(self.skip_line, text="Measure skipped frames",
                                       command=self.measure_skipped_frames)
         self.skip_label = ttk.Label(self.skip_line, textvariable=self.skip_text, style="Warn.TLabel", justify=LEFT,
-                                    wraplength=700)
+                                    wraplength=int(700 * ui_scale(self)))   # 2.3.0 review: scaled (high DPI)
         self.skip_label.pack(side=LEFT, fill=X, expand=True)
         self._skip_button_side = {"side": RIGHT, "padx": (6, 0), "before": self.skip_label}
         self.skip_line.bind("<Configure>", lambda e: self.skip_label.configure(
             wraplength=max(e.width - (self.skip_button.winfo_reqwidth() if self.skip_button.winfo_ismapped() else 0)
-                           - 20, 300)), add="+")
+                           - int(20 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")
         # 2.2.19 (r2: S2): the measurement settings in small groups that wrap like text (_flow_meas) when the row is
         # narrow (125 % on a 1366-px screen cut "Also measure R and B" off after "linear ADU" was added).
         meas = ttk.Frame(options, style="Card.TFrame")
@@ -12174,6 +12197,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 frame_side = []
                 peaks = []
                 raw_peaks, clips = [], []   # 2.2.19 (#25)
+                meas = []   # 2.3.0 review: per frame (or stack), how many frames' raw cores each count stands on
+                # 2.3.0 review fix (#54): a stack has no raw pixels; its stars' peaks, raw cores and clipped counts
+                # are its member frames' (kept from the per-frame scan for the same star list)
+                stack_meta = stack_run["meta"] if stack_run else None
+                xy_key = hash(tuple(np.round(xy0, 1).ravel().tolist()))
                 chans = {"green": [], "red": [], "blue": []} if color else None
                 for i, path in enumerate(lights, 1):
                     if cancel.is_set():
@@ -12206,7 +12234,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         row = core.detected_mags(flux, exp, noise)
                         peak_row = core.peak_values(img, pos, radius)
                         # 2.2.19 (#25): each star's raw core on this frame (clipped -> True).
-                        if precal:
+                        members = (stack_meta.get(path) or {}).get("members") if stack_meta else None
+                        if members is not None:
+                            # 2.3.0 review fix (#54): the stack's member frames' values (highest peak, highest raw
+                            # core, how many of them clipped), as Variables/Transits do (apply_member_peaks)
+                            mp = [m.get("scan_peaks") for m in members]
+                            mp = [d for d in mp if d and d.get("key") == xy_key and len(d.get("peak", ())) == len(pos)]
+                            with np.errstate(all="ignore"):
+                                if mp:
+                                    peak_row = np.nanmax(np.array([d["peak"] for d in mp], dtype=float), axis=0)
+                                    raw_row = np.nanmax(np.array([d["raw"] for d in mp], dtype=float), axis=0)
+                                    clip_row = np.sum([d["clip"] for d in mp], axis=0).astype(int)
+                                    meas_row = np.sum([d["meas"] for d in mp], axis=0).astype(int)
+                                else:   # star list changed since the per-frame scan: one frame's share of the peak
+                                    peak_row = peak_row / max(len(members), 1)
+                                    raw_row = np.full(len(pos), np.nan)
+                                    clip_row = np.zeros(len(pos), dtype=int)
+                                    meas_row = np.zeros(len(pos), dtype=int)
+                        elif precal:
                             raw_row = np.full(len(pos), np.nan)
                             clip_row = np.zeros(len(pos), dtype=bool)
                             with np.errstate(all="ignore"):
@@ -12219,6 +12264,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             raw_row = core.raw_peaks_many(raw, pos, radius, total_bin)
                             with np.errstate(invalid="ignore"):
                                 clip_row = raw_row >= raw_limit
+                        if members is None:
+                            meas_row = (np.ones(len(pos), dtype=int) if precal
+                                        else np.isfinite(raw_row).astype(int))
                         frame_jd = core.mid_jd(header)
                         side = (bool(reg.get("flipped")), core.header_rotator(header))
                         crow = {}
@@ -12232,11 +12280,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         # fails half-way can never leave the lists out of step (2.2.1).
                         rows.append(row)
                         jds.append(frame_jd)
-                        frame_recs.append(stack_core.scan_record(path, frame_jd, exp, reg, side[1]))   # 2.3.0 (#54)
+                        rec = stack_core.scan_record(path, frame_jd, exp, reg, side[1])   # 2.3.0 (#54)
+                        if members is None:   # 2.3.0 review: what a stack of this frame needs for saturation
+                            rec["scan_peaks"] = {"key": xy_key, "peak": np.asarray(peak_row, float).tolist(),
+                                                 "raw": np.asarray(raw_row, float).tolist(),
+                                                 "clip": np.asarray(clip_row).astype(int).tolist(),
+                                                 "meas": np.asarray(meas_row).astype(int).tolist()}
+                        frame_recs.append(rec)
                         frame_side.append(side)
                         peaks.append(peak_row)
                         raw_peaks.append(raw_row)
                         clips.append(clip_row)
+                        meas.append(meas_row)
                         if color:
                             for ch in ("green", "red", "blue"):
                                 chans[ch].append(crow[ch])
@@ -12261,10 +12316,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "curve lined up across them before measuring its scatter.")
                 # 2.2.19 (#25): saturated = raw core clipped on 2 or more frames (or saturated on the reference, as
                 # before); clipped on one frame only (cosmic ray, hot pixel) = a caution on the candidate.
-                clip_stack = np.vstack(clips)
-                raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0),
-                                                        np.isfinite(np.vstack(raw_peaks)).sum(axis=0)
-                                                        if not precal else np.full(clip_stack.shape[1], len(clips)))
+                # 2.3.0 review: counted in frames (a stack counts its member frames)
+                clip_stack = np.vstack(clips).astype(int)
+                raw_sat, raw_some = core.scan_saturated(clip_stack.sum(axis=0), np.vstack(meas).sum(axis=0))
                 ref_only = len(saturated - raw_sat)
                 saturated.update(raw_sat)
                 clipped_some = {i: int(clip_stack[:, i].sum()) for i in raw_some if i not in saturated}
@@ -12840,7 +12894,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if n_cal_found < 5:
             cal_stars = []
         # Warn before the run, not after it, when color is ticked but cannot be calibrated.
-        if only is None and measure_color and not cal_stars and (saved_cal is None or cat_bv is None):
+        # 2.3.0 review fix (#54): not asked again on the stacks (answered for the per-frame run)
+        if only is None and stack_run is None and measure_color and not cal_stars \
+                and (saved_cal is None or cat_bv is None):
             reasons = [f"only {n_cal_found} labeled stars have catalog B and V (5 are needed for a field fit)"]
             if saved_cal is None:
                 reasons.append("no color term has been saved from an earlier night")
@@ -14248,6 +14304,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "cannot be measured on their own. Open that night's frames and press Run "
                                            "photometry to measure the whole night again.")
             return
+        # 2.3.0 review fix (#54): single frames never go into a night that shows stacks. With the per-frame points at
+        # hand, the night goes back to Points: Per frame first (the new frames join those; the stacks are dropped
+        # once they are in, and Stack makes new ones); a stacked night from a saved series has no per-frame points
+        # here, so the user is told to run the night again.
+        sets = getattr(self, "_stack_sets", {}).get(night)
+        if self.stack_meta(night) or (sets and not sets.get("scan") and self.points_choice.get() == "stack"):
+            if sets and not sets.get("scan") and self._stack_set_live(night):
+                self.points_choice.set("frame")
+                self._apply_points(night, "frame", announce=False)
+                self.log(f"Measure skipped frames: {self.label_nights(night)} showed stacked points; switched to Points: "
+                         "Per frame so the skipped frames join the per-frame points. The stacks of this night are "
+                         "dropped once the frames are in: press Stack again to stack the whole night.")
+            else:
+                messagebox.showinfo(APP_TITLE, f"The points of {self.label_nights(night)} are stacks, and its per-frame "
+                                               "points are not loaded (a saved series keeps only the points shown). "
+                                               "Single frames cannot be added to stacks: open that night's frames, "
+                                               "press Run photometry (per frame), then Stack again.")
+                return
         if len(found) < len(paths):
             self.log(f"Measure skipped frames: {len(paths) - len(found)} of the {len(paths)} frames are no longer in the "
                      "Lights folder (or are rejected in Blink) and stay skipped.")
@@ -14280,6 +14354,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except ValueError as exc:
             self.log(f"Measure skipped frames: could not re-derive {night} with the comps in use: {exc}")
         info = self._night_info(night, create=True)
+        self._stack_drop_after_remeasure(night, night_pts)   # 2.3.0 review fix (#54)
         done = {os.path.normcase(os.path.abspath(o.path)) for o in new_points}
         still = list(getattr(self, "_run_skipped", None) or [])
         labs = core.frame_labels_for([s["path"] for s in still]) if still else []
@@ -15581,6 +15656,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7): the series as on disk
         self.draw_output()
         self._warn_legacy(self.legacy_mixed, os.path.basename(path))
+        try:
+            self._stack_files_note()   # 2.3.0 review fix (#54): stack files pruned from the cache: said, not needed
+        except Exception:
+            traceback.print_exc()
         nights = sorted({obs.night for obs in observations})
         self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then choose Add.")
         messagebox.showinfo(
@@ -17575,6 +17654,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.3.0 (#50): the rule said once: a comp measured in fewer than half a night's frames is not used there
             self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} left out of the whole night "
                      f"(measured in fewer than half its frames); the night uses the other comps.")
+        for night, names in sorted((result.get("night_few") or {}).items()):
+            # 2.3.0 review fix: the night's only comps are kept even when measured in few of its frames
+            self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} measured in fewer than half the "
+                     "night's frames but kept (no other comp in use there): only the frames where it was measured "
+                     "get a magnitude; the others are flagged nocomp.")
         # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page)
         recover = {}
         for night in sorted({o.night for o in self.observations}):

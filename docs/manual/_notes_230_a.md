@@ -119,3 +119,38 @@ After a stack run the app goes to Output, with **Points: Stacked** selected.
 - Any manual page that shows the whole Photometry settings row. It now has the Points box, so the row's layout changed.
 
 A new manual section is needed (the issue asks for one): "Stacking when comps are weak". It should explain why, the suggestion line, N, the cap, the Points switch, what reports say, and that stacking hides changes faster than one stack.
+
+## Review fixes (after review of #54)
+
+- **Stack again while Points: Stacked is shown** (the "new aperture → press Stack again" flow): Points: Per frame
+  still holds the per-frame points afterwards (before, the old stacks took their place).
+- **Rebuilt masters:** stacks are remade when the masters change (the cache follows the masters themselves, not only
+  their frame counts). Nothing to click; Stack simply takes longer the first time after a Calibrate with new frames.
+- **Color cameras:** cosmic rays and satellite trails are now clipped on every Bayer color in the stacks (before,
+  hits on red or blue pixels could pass). Mono cameras are combined exactly as before.
+- **Measure skipped frames on a stacked night:** the night switches to Points: Per frame first. The Log says:
+  `Measure skipped frames: <night> showed stacked points; switched to Points: Per frame so the skipped frames join
+  the per-frame points. The stacks of this night are dropped once the frames are in: press Stack again to stack the
+  whole night.` and then `Stacks of <night> dropped (they do not hold the frames just measured); press Stack to stack
+  the night again.` A stacked night from a saved series (its per-frame points are not loaded) gets a message instead:
+  "The points of <night> are stacks, and its per-frame points are not loaded (a saved series keeps only the points
+  shown). Single frames cannot be added to stacks: open that night's frames, press Run photometry (per frame), then
+  Stack again."
+- **The Points switch keeps your edits:** catalog magnitudes changed in Use comps… while one set was shown, and the
+  night's planet-transit flags (Variables, campaign rule), now also apply to the other set when you switch. A Log line
+  says when catalog changes were applied: `The catalog magnitudes changed in Use comps… applied to the frame points
+  too (N points).`
+- **Suggestion line:** weak comps on a night with fewer than 20 kept frames now say "but the night is too short to
+  stack: N frames, and a stacked night must keep at least 10 points" (it used to blame the time resolution). The
+  per-comp SNRs in the Log's noise check are now right when a comp is missing from some frames.
+- **Color question asked once:** "'Also measure R and B' is ticked, but B-V cannot be calibrated…" is asked for the
+  per-frame run only, not again when Stack measures the stacks.
+- **Discovery on stacks:** saturated stars are found from the stacked frames' own raw cores (a star that clips in
+  2 or more of the frames is saturated, as on the frames), and bright stars are no longer marked "near saturation"
+  just because a stack's pixel values are sums.
+- **Reopening a stacked series:** works as before when the stack files have been removed from SHOBS-P's cache (only
+  the latest stacks are kept). The Log says: `<night>: the points are stacks of N frames (effective exposure X s);
+  K of the M stack files are no longer in SHOBS-P's cache (only the latest stacks are kept). Nothing needs them: the
+  points are in the series. To measure the stacks again, run photometry on that night's frames and Stack.`
+- High-DPI: the Stack line and the Points line wrap with the window at any display scaling (no change at 100 %).
+- No screenshot needs retaking for these fixes beyond the list above (the Stack row looks the same).

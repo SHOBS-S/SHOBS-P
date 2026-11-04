@@ -121,12 +121,20 @@ def noise_check(points, scint=None, point_err=None) -> dict | None:
         if getattr(o, "flag", "") or not math.isfinite(float(getattr(o, "mag", float("nan")))):
             continue
         tv = float(getattr(o, "target_var", float("nan")))
-        cv = [float(v) for v in (getattr(o, "comp_vars", None) or []) if math.isfinite(float(v))]
+        # 2.3.0 review fix: each comp keeps its place (a comp missing from this frame is NaN there), so comp_snr
+        # never mixes one comp's values with another's
+        allv = []
+        for v in (getattr(o, "comp_vars", None) or []):
+            try:
+                allv.append(float(v))
+            except (TypeError, ValueError):
+                allv.append(float("nan"))
+        cv = [v for v in allv if math.isfinite(v)]
         if not (math.isfinite(tv) and tv > 0 and cv):
             continue
         t.append(tv)
         c.append(sum(cv) / len(cv) ** 2)   # the error of a mean of n comp magnitudes
-        each.append(cv)
+        each.append(allv)
         if point_err is not None:
             try:
                 e = float(point_err(o, scint))
@@ -140,7 +148,7 @@ def noise_check(points, scint=None, point_err=None) -> dict | None:
     n_comp = max(len(v) for v in each)
     comp_snr = []
     for k in range(n_comp):
-        vals = [v[k] for v in each if len(v) > k]
+        vals = [v[k] for v in each if len(v) > k and math.isfinite(v[k])]
         comp_snr.append(1.0857362 / math.sqrt(float(np.median(vals))) if vals else float("nan"))
     sig_point = float(np.median(tot)) if tot else math.hypot(sig_t, sig_c)
     return {"sig_t": sig_t, "sig_c": sig_c, "ratio": sig_c / sig_t if sig_t > 0 else float("inf"),
@@ -284,9 +292,16 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
         return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame). Stack {n} frames "
                 f"({span} each) → comps SNR ~{sug['snr_c']:.0f}{tail}?{cap_note}", True)
     if noise["ratio"] > 1.0:
-        return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame), but the time "
-                f"resolution allows no stacking ({cap['text']}). Brighter comps, or longer exposures, would help.",
-                True)
+        # 2.3.0 review fix: say what really kept N at 1 (the time cap, or the 10-point minimum of a short night)
+        if sug.get("capped") and (sug.get("n_cap") or 1) <= 1:
+            why = f"the time resolution allows no stacking ({cap['text']})"
+        elif sug.get("few_points"):
+            why = (f"the night is too short to stack: {n_kept} frames, and a stacked night must keep at least "
+                   f"{MIN_POINTS} points")
+        else:
+            why = f"the time resolution allows no stacking ({cap['text']})"
+        return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame), but {why}. "
+                "Brighter comps, or longer exposures, would help.", True)
     if goal_needs and n > 1:
         return (f"⚠ Per-frame points are about {noise['sig_point'] / 1.0857362e-3:.1f} ppt; your {goal_ppt:g} ppt goal "
                 f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", True)
@@ -374,7 +389,7 @@ def trimmed_var_factor(n: int) -> float:
 
 
 def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: int = MIN_CLIP_FRAMES,
-            cancel=None, progress=None) -> tuple[np.ndarray, dict]:
+            cancel=None, progress=None, bayer: bool = False) -> tuple[np.ndarray, dict]:
     """The stack of `members` on the scale of their SUM (clipped mean x n), float32.
 
     loader(path) -> the calibrated, binned (not debayered) frame. Frames are read one at a time (twice when
@@ -385,6 +400,9 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     The clip is symmetric about an unbiased level, so real noise is not biased. Below min_clip: a plain mean.
     Pixels a shift left uncovered in some frames are the mean of the frames that cover them. Never median, never
     weighted or normalized.
+    bayer=True (a color camera's mosaic): the sky level and the scatter floor are taken for each of the four Bayer
+    positions on its own (2.3.0 review fix: one level for the whole mosaic made the red and blue sky look like
+    signal, which widened their clip so far that cosmic rays passed).
     Returns (image, {"n", "clipped" (fraction of values thrown out), "plain" (bool)})."""
     n = len(members)
     if n == 0:
@@ -404,33 +422,53 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
             cnt = np.zeros(x.shape, dtype=np.int32)
         elif x.shape != S.shape:
             raise ValueError(f"{os.path.basename(m['path'])} has another size than the other frames")
+        # 2.3.0 review fix (memory): x is this loop's own copy, so it is worked on in place (no float64 or masked
+        # temporaries of the full frame); fmax/fmin skip NaN, so uncovered pixels need no mask there.
         ok = np.isfinite(x)
-        x0 = np.where(ok, x, 0.0)
-        S += x0
+        bad = not ok.all()
+        if bad:
+            np.copyto(x, np.float32(np.nan), where=~ok)   # +-inf counts as uncovered, as before
+        if Q is not None:
+            np.fmax(mx, x, out=mx)
+            np.fmin(mn, x, out=mn)
+        if bad:
+            np.copyto(x, np.float32(0.0), where=~ok)
+        S += x
         cnt += ok
         if Q is not None:
-            Q += x0.astype(np.float64) ** 2
-            np.fmax(mx, np.where(ok, x, -np.inf), out=mx)
-            np.fmin(mn, np.where(ok, x, np.inf), out=mn)
-        del x, x0, ok
+            Q += np.square(x, dtype=np.float64)
+        del x, ok
         if progress is not None:
             progress(k + 1, 2 * n if n >= min_clip else n)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        plain = np.where(cnt > 0, S / np.maximum(cnt, 1), np.nan)
     if n < min_clip:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            plain = np.where(cnt > 0, S / np.maximum(cnt, 1), np.nan)
         return (plain * n).astype(np.float32), {"n": n, "clipped": 0.0, "plain": True}
-    # Reference level and scatter with each pixel's lowest and highest value left out.
+    # 2.3.0 review fix (memory): the plain mean is only needed where no value is kept: float32
+    with np.errstate(invalid="ignore", divide="ignore"):
+        plain = (S / np.maximum(cnt, 1)).astype(np.float32)
+    np.copyto(plain, np.float32(np.nan), where=cnt == 0)
+    # Reference level and scatter with each pixel's lowest and highest value left out (worked out in the
+    # accumulators' own buffers: S becomes the reference, Q the variance).
     m2 = np.maximum(cnt - 2, 1)
     with np.errstate(invalid="ignore", divide="ignore"):
-        ref = (S - mx - mn) / m2
-        var = (Q - mx.astype(np.float64) ** 2 - mn.astype(np.float64) ** 2) / m2 - ref ** 2
-    del Q, S
-    corr = np.ones(cnt.shape, dtype=np.float64)
+        S -= mx
+        S -= mn
+        S /= m2
+        ref = S
+        Q -= np.square(mx, dtype=np.float64)
+        Q -= np.square(mn, dtype=np.float64)
+        Q /= m2
+        Q -= np.square(ref)
+        var = Q
+    del Q, S, m2
+    np.maximum(var, 0.0, out=var)
     for c in np.unique(cnt):
         if c >= min_clip:
-            corr[cnt == c] = trimmed_var_factor(int(c))
-    sig = np.sqrt(np.maximum(var, 0.0) / corr).astype(np.float32)
-    del var, corr, mx, mn
+            var[cnt == c] /= trimmed_var_factor(int(c))
+    np.sqrt(var, out=var)
+    sig = var.astype(np.float32)
+    del var, mx, mn
     ref = ref.astype(np.float32)
     clippable = cnt >= min_clip
     # A scatter taken from a handful of values is itself uncertain (from 3 values, often half the truth), and a clip on
@@ -439,9 +477,18 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     # relative uncertainty of a scatter from n - 2 values (k = clip_sigma (1 + 1.5 / sqrt(n - 2))): 3 sigma at
     # n -> large, ~5.6 at n = 5, ~4.6 at n = 10. Cosmic rays, trails and hot pixels sit tens to thousands of sigma
     # off, so they are still thrown out.
-    floor = float(np.nanmedian(sig[clippable])) if np.any(clippable) else 0.0
-    if math.isfinite(floor) and floor > 0:
-        np.maximum(sig, np.float32(floor), out=sig)
+    # 2.3.0 review fix: on a color mosaic, the four Bayer positions each get their own floor and sky level (their
+    # sky differs by the color of the sky and the flat); a mono frame is one plane, exactly as before.
+    if bayer and ref.ndim >= 2 and ref.shape[-2] >= 2 and ref.shape[-1] >= 2:
+        planes = [(Ellipsis, slice(py, None, 2), slice(px, None, 2)) for py in (0, 1) for px in (0, 1)]
+    else:
+        planes = [(Ellipsis,)]
+    for pl in planes:
+        cp = clippable[pl]
+        floor = float(np.nanmedian(sig[pl][cp])) if np.any(cp) else 0.0
+        if math.isfinite(floor) and floor > 0:
+            view = sig[pl]
+            np.maximum(view, np.float32(floor), out=view)
     kfac = np.ones(cnt.shape, dtype=np.float32) * np.float32(clip_sigma)
     for c in np.unique(cnt):
         if c >= min_clip:
@@ -453,11 +500,22 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     # rays, trails and hot pixels there go; on a star the clip catches only hits much brighter than the star itself,
     # where a missed hit is a small part of the light anyway. (Synthetic stars whose seeing changes by 1.7x within a
     # stack of 6: without this the clip added noise comparable to the star's photon noise; with it, none measurable.)
-    sky_level = float(np.nanmedian(ref[clippable])) if np.any(clippable) else 0.0
-    signal = np.abs(ref - np.float32(sky_level)) if math.isfinite(sky_level) else np.zeros_like(ref)
+    signal = np.zeros_like(ref)
+    for pl in planes:
+        cp = clippable[pl]
+        sky_level = float(np.nanmedian(ref[pl][cp])) if np.any(cp) else 0.0
+        if math.isfinite(sky_level):
+            signal[pl] = np.abs(ref[pl] - np.float32(sky_level))
     # A pixel whose values are all equal has no scatter: only exactly-equal values are kept there.
-    tol = (kfac * sig + SIGNAL_SPAN * signal + 1e-6 * np.abs(ref)).astype(np.float32)
-    del kfac, signal
+    # (in place, the same sums in the same order: kfac * sig + SIGNAL_SPAN * signal + 1e-6 * |ref|)
+    tol = kfac
+    tol *= sig
+    signal *= np.float32(SIGNAL_SPAN)
+    tol += signal
+    np.abs(ref, out=signal)
+    signal *= np.float32(1e-6)
+    tol += signal
+    del kfac, signal, sig
     K = np.zeros(cnt.shape, dtype=np.float64)
     KC = np.zeros(cnt.shape, dtype=np.int32)
     thrown = 0
@@ -471,15 +529,17 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
         with np.errstate(invalid="ignore"):
             keep = ok & (~clippable | (np.abs(x - ref) <= tol))
         thrown += int(np.count_nonzero(ok & ~keep))
-        K += np.where(keep, x, 0.0)
+        np.add(K, x, out=K, where=keep)
         KC += keep
         del x, ok, keep
         if progress is not None:
             progress(n + k + 1, 2 * n)
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = np.where(KC > 0, K / np.maximum(KC, 1), plain)
+        K /= np.maximum(KC, 1)
+    np.copyto(K, plain, where=KC == 0)
+    K *= n
     total = int(cnt.sum())
-    return (out * n).astype(np.float32), {"n": n, "clipped": thrown / total if total else 0.0, "plain": False}
+    return K.astype(np.float32), {"n": n, "clipped": thrown / total if total else 0.0, "plain": False}
 
 
 # ---- files ---------------------------------------------------------------------------------------------------
@@ -488,6 +548,33 @@ def stack_folder(key_parts) -> str:
     lights). Older stack sets are removed when a new one is made (prune_folders)."""
     key = hashlib.sha1(json.dumps(key_parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return os.path.join(STACK_CACHE_DIR, f"set_{key}")
+
+
+def masters_fingerprint(masters) -> str:
+    """2.3.0 review fix: what identifies the masters the stacks were calibrated with, for the stack cache's key.
+    The masters' own raw-frame fingerprints (FPRINT) when they have headers, and always the content of each master
+    (shape, a checksum of every 7th row and column, and its sum), its exposure and the pedestal: masters rebuilt from
+    other frames with the same counts no longer reuse the old stacks; the same masters rebuilt from the same frames
+    (the same pixels) still do."""
+    if masters is None:
+        return "none"
+    h = hashlib.sha1()
+    for kind in ("bias", "dark", "flat", "darkflat"):
+        arr = getattr(masters, kind, None)
+        h.update(kind.encode())
+        if arr is None:
+            h.update(b"-")
+        else:
+            a = np.asarray(arr)
+            h.update(repr((a.shape, str(a.dtype))).encode())
+            h.update(np.ascontiguousarray(a[..., ::7, ::7]).tobytes())
+            with np.errstate(all="ignore"):
+                h.update(repr(float(np.nansum(a, dtype=np.float64))).encode())
+        head = (getattr(masters, "headers", None) or {}).get(kind) or {}
+        h.update(str(head.get("FPRINT", "")).encode())
+    h.update(repr((getattr(masters, "dark_exptime", None), getattr(masters, "darkflat_exptime", None),
+                   getattr(masters, "pedestal", ""))).encode())
+    return h.hexdigest()[:20]
 
 
 def prune_folders(keep: str) -> int:

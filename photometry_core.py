@@ -6576,8 +6576,15 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
     if absent and not absent_out:
         return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent}
     keep = [j for j, name in enumerate(sel) if name not in absent and name not in out]
+    few = []
+    if not keep and out:
+        # 2.3.0 review fix: leaving the few-frame comps out would leave the night with no comp at all (2.2.21 derived
+        # those frames): keep them, used in the frames where they were measured ("few" says which).
+        few, out = list(out), []
+        keep = [j for j, name in enumerate(sel) if name in few]
     if not keep:
-        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent}
+        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent,
+                "few": few}
     mk = m[:, keep]
     ok = np.isfinite(mk)
     a = np.zeros(len(keep))
@@ -6602,7 +6609,7 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
             ens.append(float(np.mean(mk[f])))
         else:
             ens.append(float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean()))
-    return {"ens": ens, "present": present, "use": [sel[j] for j in keep], "out": out, "absent": absent}
+    return {"ens": ens, "present": present, "use": [sel[j] for j in keep], "out": out, "absent": absent, "few": few}
 
 
 def recompute_with_comps(observations: list[Obs], selection: list[str], comp_names: list[str],
@@ -6627,6 +6634,7 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
     done = missing = partial = 0
     missing_nights = set()
     night_out = {}
+    night_few = {}   # 2.3.0 review fix: comps kept although measured in few frames (the night's only comps)
     by_night: dict = {}
     for obs in observations:
         by_night.setdefault(obs.night, []).append(obs)
@@ -6634,6 +6642,8 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
         ne = night_ensemble(pts, selection, comp_names, aliases, absent_out=absent_out)
         if ne["out"] or (absent_out and ne["absent"]):
             night_out[night] = list(ne["out"]) + (list(ne["absent"]) if absent_out else [])
+        if ne.get("few"):
+            night_few[night] = list(ne["few"])
         use = ne["use"]
         ens_cat = float(np.mean([catalog[n] for n in use])) if use else float("nan")
         for obs, ens, names in zip(pts, ne["ens"], ne["present"]):
@@ -6660,7 +6670,7 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
                 done += 1
             obs.flag = " ".join(words)
     return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights), "partial": partial,
-            "night_out": night_out}
+            "night_out": night_out, "night_few": night_few}
 
 
 def comp_drop_summary(points: list[Obs], labels: list[str] | None = None) -> dict:
