@@ -490,6 +490,33 @@ def stack_folder(key_parts) -> str:
     return os.path.join(STACK_CACHE_DIR, f"set_{key}")
 
 
+def masters_fingerprint(masters) -> str:
+    """2.3.0 review fix: what identifies the masters the stacks were calibrated with, for the stack cache's key.
+    The masters' own raw-frame fingerprints (FPRINT) when they have headers, and always the content of each master
+    (shape, a checksum of every 7th row and column, and its sum), its exposure and the pedestal: masters rebuilt from
+    other frames with the same counts no longer reuse the old stacks; the same masters rebuilt from the same frames
+    (the same pixels) still do."""
+    if masters is None:
+        return "none"
+    h = hashlib.sha1()
+    for kind in ("bias", "dark", "flat", "darkflat"):
+        arr = getattr(masters, kind, None)
+        h.update(kind.encode())
+        if arr is None:
+            h.update(b"-")
+        else:
+            a = np.asarray(arr)
+            h.update(repr((a.shape, str(a.dtype))).encode())
+            h.update(np.ascontiguousarray(a[..., ::7, ::7]).tobytes())
+            with np.errstate(all="ignore"):
+                h.update(repr(float(np.nansum(a, dtype=np.float64))).encode())
+        head = (getattr(masters, "headers", None) or {}).get(kind) or {}
+        h.update(str(head.get("FPRINT", "")).encode())
+    h.update(repr((getattr(masters, "dark_exptime", None), getattr(masters, "darkflat_exptime", None),
+                   getattr(masters, "pedestal", ""))).encode())
+    return h.hexdigest()[:20]
+
+
 def prune_folders(keep: str) -> int:
     """Remove every stack set but `keep` (stacks are large: one full frame each)."""
     n = 0

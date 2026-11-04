@@ -357,7 +357,7 @@ class StackMixin:
         masters = self.masters
         key = [[r["path"] for r in g["members"]] for g in groups] + [binning, pattern, n, stack_core.STACK_VERSION,
                                                                      stack_core.CLIP_SIGMA,
-                                                                     getattr(masters, "used", None) or ""]
+                                                                     stack_core.masters_fingerprint(masters)]
         folder = stack_core.stack_folder(key)
         total = sum(len(g["members"]) for g in groups)
         if not self._start_job(f"Stacking {total} frames into {len(groups)} stacks…"):
@@ -485,7 +485,10 @@ class StackMixin:
         if not frames_now:
             self.log("Stacks: the night is no longer in the series; nothing changed.")
             return
-        self._stack_sets[night] = {"frame": frames_now, "stack": night_points, "meta": run["summary"],
+        # 2.3.0 review fix: the per-frame set is the run's source, never the stacks on screen (pressing Stack again
+        # while Points: Stacked is shown used to store the old stacks as the night's "Per frame" points).
+        frame_set = self._stack_frame_set(night, run.get("src"), frames_now)
+        self._stack_sets[night] = {"frame": frame_set, "stack": night_points, "meta": run["summary"],
                                    "paths": list(run["paths"])}
         self.points_choice.set("stack")
         self._apply_points(night, "stack", announce=False)
@@ -498,6 +501,16 @@ class StackMixin:
             self.show_step(self.STACK_STEP_OUTPUT)
         except Exception:
             pass
+
+    def _stack_frame_set(self, night, src, frames_now):
+        """The night's per-frame points for a new stack set: the earlier set's per-frame points, else the run's
+        source points, else the night's points on screen when they are not stacks."""
+        prior = self._stack_sets.get(night)
+        if prior and not prior.get("scan") and prior.get("frame"):
+            return list(prior["frame"])
+        if src and src.get("points") and not src.get("scan"):
+            return list(src["points"])
+        return [o for o in frames_now if not is_stack_path(getattr(o, "path", ""))] or frames_now
 
     def _stack_seeing_note(self, run):
         """Re-check the aperture against the stacks (stars in a stack are a little wider than in one frame)."""
