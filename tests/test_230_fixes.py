@@ -392,7 +392,7 @@ class TestStackFixesInApp(unittest.TestCase):
 
     def test_darkflat_notes_cached(self):
         """Fix 9: the dark-flat note reads the folders' headers once, then again only when a folder changes."""
-        ca, app = self.ca, self.app
+        app = self.app
         tmp = tempfile.mkdtemp()
         try:
             df, fl = os.path.join(tmp, "df"), os.path.join(tmp, "flat")
