@@ -31,6 +31,11 @@ The order matters: load first, reduce second.
 
 **Yes** adds the night and keeps every earlier night. Because the series file is open, SHOBS-P saves it at once (the status bar says **Auto-saved to …**). The one exception is a night with a large meridian-flip step that looks like an aperture problem: SHOBS-P asks before saving it (chapter 9, "After the run"), and if you answer **No**, the file is left as it was until you press **Save series**.
 
+**Stacked nights.** If you stack a night (chapter 8, "Stacking when comps are weak"), the series keeps only the set
+the **Points** box has chosen, **Per frame** or **Stacked**. Switching the Points box saves the series again with the
+chosen set, as a run does. Loading or closing a series puts the Points box back to **Per frame**. Nights of one series
+can differ: a stacked night carries its stack size and effective exposure, a per-frame night none.
+
 **No** starts a *new* series with this night only. The old file on disk is not changed, but the new series is not saved until you press **Save series** and give it a new name.
 
 > **Tip:** If the Input page says **No series loaded — this run will be a single night**, you forgot to load the series. You can still add the night afterwards: save tonight as its own series, load the main series, and use **Add series file…** (below).

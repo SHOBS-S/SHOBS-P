@@ -144,7 +144,11 @@ The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE
 | AMASS | The airmass, or `na` without a site and pointing |
 | GROUP | `na` |
 | CHART | The Chart ID |
-| NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep |
+| NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep; for stacked points, `points are stacks of 40 frames (effective exposure 30 s)` |
+
+For stacked points (chapter 8, "Stacking when comps are weak"), each line is one stack: its time is the mean of its
+frames' mid-times, and the NOTES give the stack size and its effective exposure (the sum of its frames'
+exposures).
 
 Stars from the AAVSO sequence appear under their **AUID**. Other stars appear under their catalog name. The comps named are the ones actually in use, including a choice made with **Use comps…** (chapter 11). For a Sloan filter, the notes also say which catalogs the comp and check magnitudes came from.
 

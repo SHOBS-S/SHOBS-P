@@ -582,8 +582,9 @@ grays out.
 ### What the reports say
 
 - **AAVSO report**: the NOTES get *"points are stacks of 40 frames (effective exposure 30 s)"*, after any notes you
-  typed. The exposure column holds the effective exposure. The file and frame columns name the stack (stack_0003 is
-  stack 3).
+  typed.
+- **Light-curve CSV**: the exptime column holds the effective exposure, and the file and frame columns name the stack
+  (stack_0003 is stack 3).
 - **Transit fit**: the settings record says *"Stacking: stacks of 40 frames (effective exposure 30 s) (sigma-clipped
   mean, whole-pixel shifts, never across a flip)"*, and the fit uses the effective exposure (chapter 17).
 - **Series file**: a stacked night carries its stack size and effective exposure (chapter 22).

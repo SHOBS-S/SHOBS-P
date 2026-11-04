@@ -26,7 +26,7 @@ The night table's **Flags** column counts them per night, for example `12 cloud,
 | `cloud edge` | A point just next to a cloud run, far off the night's level | Left out with the cloud frames. |
 | `dew/haze?` | All stars faded together, smoothly, with a flat sky | See "Dew and haze" below. |
 | `in planet b transit` | The frame falls in a known planet's predicted transit | See "Planet transits" below. |
-| `nocomp` | One of the comps chosen with **Use comps…** was not measured on this frame | See chapter 11. |
+| `nocomp` | None of the comps chosen with **Use comps…** was measured on this frame (a frame missing only some of them is kept, from the comps present) | See chapter 11. |
 
 ## Cloud
 

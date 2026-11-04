@@ -1,4 +1,4 @@
-# SHOBS-P User's Manual (version 2.2.21)
+# SHOBS-P User's Manual (version 2.3.0)
 
 > November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
 > defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20
@@ -7,7 +7,11 @@
 > Multi-night window with its own corner plot; airmass in the transit-fit CSV; a simpler Linux and Mac setup that
 > prefers Python 3.13) and for 2.2.21 (the site's time zone; TOI status and ExoClock priority at planet lookup; a
 > saved copy of each lookup for when a service is down, with Clear cached catalogs; Fit the series' nights…; report
-> saves that keep the series' own site), checked against the program. Screenshots were retaken on 2.2.21.
+> saves that keep the series' own site) and for 2.3.0 (stacking when comps are weak; comps off the frame edge and
+> Measure skipped frames; the Dark flats box; error bars on camera-binned frames; the meridian-flip step in the transit
+> fit; the planet lookup from the host star; chapter 16 rewritten now that Tonight's transits and the Transit planner
+> are gone; Save corner plot in the Results row), checked against the program. Screenshots were retaken on 2.2.21;
+> the pages 2.3.0 changed are listed for retaking in `_reshoots_230.md`.
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
@@ -22,15 +26,15 @@
 4. **[Before your first night](04-before-your-first-night.md)**
    - Your site and optics (Input page Site and Optics boxes), including the mount (German equatorial or alt-az).
    - Color (OSC) or monochrome camera, and color images that are already debayered; filters, including Sloan g′ r′ i′.
-   - Calibration frames: bias, darks, flats; matching flats to the rotator angle (also on alt-az mounts and derotators); saved masters.
+   - Calibration frames: bias, darks, dark flats, flats; matching flats to the rotator angle (also on alt-az mounts and derotators); saved masters.
    - Folder layout that works well.
 
 ## Part 2 — Common steps (all modes)
 
-5. **[Input](05-input.md)** — choosing folders, target lookup, New reduction, the series line (Load / Close series), what the program checks in your headers (another star's frames, mislabeled frames, mixed binning).
+5. **[Input](05-input.md)** — choosing folders (including Dark flats), target lookup, New reduction, the series line (Load / Close series), what the program checks in your headers (another star's frames, mislabeled frames, mixed binning).
 6. **[Blink](06-blink.md)** — playing the frames, stretch, rejecting and keeping frames, the rejected list, frame numbers.
-7. **[Calibrate](07-calibrate.md)** — what happens, masters reuse, binning, common warnings.
-8. **[Photometry page basics](08-photometry-basics.md)** — auto-solve, the image view (zoom, pop-out, compass, View box, stretch), the step strip, clicking stars and how names and magnitudes fill in, apertures and Suggest apertures, defocused stars, the linear limit, running photometry and the questions it may ask.
+7. **[Calibrate](07-calibrate.md)** — what happens, masters reuse, dark flats, camera binning and the gain, common warnings.
+8. **[Photometry page basics](08-photometry-basics.md)** — auto-solve, the image view (zoom, pop-out, compass, View box, stretch), the step strip, clicking stars and how names and magnitudes fill in, apertures and Suggest apertures, defocused stars, the linear limit, running photometry and the questions it may ask, comps near the frame edge and Measure skipped frames, stacking when comps are weak (the Stack row and the Points switch).
 
 ## Part 3 — Variables mode
 
@@ -44,8 +48,8 @@
 
 ## Part 4 — Transits mode
 
-16. **[Plan a transit night](16-plan-a-transit-night.md)** — planet lookup by any name, Tonight's transits, baseline, meridian flips and the zenith keyhole.
-17. **[Fit a transit and submit it](17-fit-a-transit-and-submit-it.md)** — the Transit fit page, the verdict, O − C, rms lines, leave-one-comp-out, Trim, Comp health and Use comps on this page, the corner plot, multi-night transit timing.
+16. **[Prepare for a transit night](16-plan-a-transit-night.md)** — planet lookup by any name or by the host star, TOI status and ExoClock priority, choosing the night, baseline, meridian flips and the zenith keyhole.
+17. **[Fit a transit and submit it](17-fit-a-transit-and-submit-it.md)** — the Transit fit page, the verdict, O − C, rms lines, the meridian-flip step, leave-one-comp-out, Trim, Comp health and Use comps on this page, the corner plot, per-frame or stacked points, multi-night transit timing.
 18. **[When the fit says "inconclusive" or "none"](18-inconclusive-or-none.md)** — gaps, one-sided baselines, cloud-flagged frames, the depth-unreliable warning.
 19. **[Reports](19-transit-reports.md)** — AAVSO exoplanet report, ExoFOP package, the fit CSV, the settings file and field image, opening an EXOTIC report for a side-by-side fit.
 
@@ -59,8 +63,8 @@
 22. **[Files SHOBS-P writes](22-files-shobs-p-writes.md)** — names, folders, the "Created" line, series files.
 23. **[Messages explained](23-messages-explained.md)** — common warnings and cautions, what they mean, what to do.
 24. **[Troubleshooting](24-troubleshooting.md)** — the self-test, the log file, pip_log.txt, typical problems.
-25. **[Glossary](25-glossary.md)** — comp, check, ensemble, AUID, BJD_TDB, O − C, scintillation, superpixel, and more.
+25. **[Glossary](25-glossary.md)** — comp, check, ensemble, AUID, BJD_TDB, O − C, scintillation, superpixel, stack, dark flat, flip step, and more.
 26. **[Credits and how to cite SHOBS-P](26-credits-and-citing.md)** — the Copy button, DOI, CITATION.cff.
 
 ---
-*Screenshots are from SHOBS-P 2.2.17–2.2.21 on Windows; every window that shows the version, and every page that 2.2.21 changed, was retaken on 2.2.21.*
+*Screenshots are from SHOBS-P 2.2.17–2.2.21 on Windows; every window that shows the version, and every page that 2.2.21 changed, was retaken on 2.2.21. The shots that 2.3.0 changes or adds are listed in [_reshoots_230.md](_reshoots_230.md).*
