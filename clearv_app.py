@@ -12863,7 +12863,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if n_cal_found < 5:
             cal_stars = []
         # Warn before the run, not after it, when color is ticked but cannot be calibrated.
-        if only is None and measure_color and not cal_stars and (saved_cal is None or cat_bv is None):
+        # 2.3.0 review fix (#54): not asked again on the stacks (answered for the per-frame run)
+        if only is None and stack_run is None and measure_color and not cal_stars \
+                and (saved_cal is None or cat_bv is None):
             reasons = [f"only {n_cal_found} labeled stars have catalog B and V (5 are needed for a field fit)"]
             if saved_cal is None:
                 reasons.append("no color term has been saved from an earlier night")

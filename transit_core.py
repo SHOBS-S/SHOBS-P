@@ -760,7 +760,17 @@ def _apply_flip_gate(S: dict, detrend_airmass, detrend_time, say=None) -> dict |
     starts), so the rest of the fit is the plain one. Returns the test (or None)."""
     if S.get("t_flip") is None or not S.get("flip_gated"):
         return None
-    test = flip_step_test(S, detrend_airmass, detrend_time)
+    try:
+        test = flip_step_test(S, detrend_airmass, detrend_time)
+    except Exception as exc:
+        # 2.3.0 review fix: a test that cannot be done (a singular Jacobian in lsq_errors, a fit that fails) never
+        # stops the transit fit: the fit goes on without a step and says why (S["flip_gate_error"]).
+        S["t_flip"] = None
+        S["starts"] = [s for s in S["starts"] if "step" not in s]
+        S["flip_gate_error"] = str(exc) or type(exc).__name__
+        if say:
+            say(f"  meridian flip: the step test could not be done ({S['flip_gate_error']}); fitted without a step")
+        return None
     if test is None:
         return None
     if say:
@@ -861,7 +871,8 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
     p = prob_s.full(x_s)
     out = {"p": dict(p, tc=p["tc"] + S["t_ref"]), "err": dict(zip(prob_s.free, map(float, e))), "chi2": chi2_s,
            "error_scale": scale, "rchi_raw": float(rchi), "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
-           is not None else None, "cadence": S["cadence"], "t": S["t_abs"], "flip_test": flip_test}
+           is not None else None, "cadence": S["cadence"], "t": S["t_abs"], "flip_test": flip_test,
+           "flip_gate_error": S.get("flip_gate_error")}
     out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
     out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
     if prob_s.t_flip is not None:
@@ -980,6 +991,7 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         # 2.2.13
         "flip": flip, "flagged": fmask,
         "flip_test": flip_test,   # 2.3.0 (#8): the with/without-step BIC test (None: no flip, or not gated)
+        "flip_gate_error": S.get("flip_gate_error"),   # 2.3.0 review: the test failed, fitted without a step
         "with_flagged": ({"n": int(fmask.sum()), "label": flagged_label, "factor": FLAGGED_ERR_FACTOR}
                          if fmask.any() else None),
         "excluded": excluded if excluded and len(np.atleast_1d(excluded.get("t", []))) else None,
@@ -1694,6 +1706,11 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                                   f"TESS's red band; a large difference: {why}."))
     # 2.2.13: the meridian flip step, and flagged frames put back in.
     ft = r.get("flip_test")
+    if r.get("flip_gate_error"):
+        # 2.3.0 review fix: the with/without-step test failed; the fit has no step term
+        flags.append(("info", f"Meridian flip: the step test (with/without a step, ΔBIC) could not be done "
+                              f"({r['flip_gate_error']}), so this fit has no step term. If the light curve shows a "
+                              "jump at the flip, fit again or check the frames around it."))
     if ft and not ft.get("kept"):
         # 2.3.0 (#8): the step was tested (BIC) and left out: the fit has no step term.
         rel_h = (ft["t_flip"] - best["tc"]) * 24

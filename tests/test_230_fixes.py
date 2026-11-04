@@ -197,6 +197,36 @@ class TestCombineMemory(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class TestFlipGateFailSoft(unittest.TestCase):
+    def test_lsq_errors_failure_falls_back_to_no_step(self):
+        """Fix 11b: the flip-step test raising (lsq_errors on a singular Jacobian) fits without a step, with a note."""
+        import transit_core as tc
+        import test_230_b as B
+        t, f, e, am, af = B.synth_night(16.0, seed=1)
+        real = tc.lsq_errors
+        calls = {"n": 0}
+
+        def boom(prob):
+            # only inside the flip-step test (its first lsq_errors call); the fit's own errors work
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise np.linalg.LinAlgError("Singular matrix")
+            return real(prob)
+        with mock.patch.object(tc, "lsq_errors", side_effect=boom):
+            r = tc.lsq_fit(t, f, e, am, B.PLANET, detrend_airmass=False, after_flip=af)
+        self.assertIsNone(r["flip_test"])
+        self.assertIsNone(r["t_flip"])
+        self.assertNotIn("step", r["free"])
+        self.assertIn("Singular", r["flip_gate_error"])
+        lines = []
+        S = {"t_flip": 0.1, "flip_gated": True, "starts": [{"step": 0.0}, {"tc": 0.0}]}
+        with mock.patch.object(tc, "flip_step_test", side_effect=np.linalg.LinAlgError("Singular matrix")):
+            self.assertIsNone(tc._apply_flip_gate(S, False, False, lines.append))
+        self.assertIsNone(S["t_flip"])
+        self.assertEqual(S["starts"], [{"tc": 0.0}])
+        self.assertTrue(lines and "could not be done" in lines[0])
+
+
 def _have_tk():
     try:
         import tkinter as tk
