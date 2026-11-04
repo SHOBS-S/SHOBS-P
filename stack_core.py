@@ -121,12 +121,20 @@ def noise_check(points, scint=None, point_err=None) -> dict | None:
         if getattr(o, "flag", "") or not math.isfinite(float(getattr(o, "mag", float("nan")))):
             continue
         tv = float(getattr(o, "target_var", float("nan")))
-        cv = [float(v) for v in (getattr(o, "comp_vars", None) or []) if math.isfinite(float(v))]
+        # 2.3.0 review fix: each comp keeps its place (a comp missing from this frame is NaN there), so comp_snr
+        # never mixes one comp's values with another's
+        allv = []
+        for v in (getattr(o, "comp_vars", None) or []):
+            try:
+                allv.append(float(v))
+            except (TypeError, ValueError):
+                allv.append(float("nan"))
+        cv = [v for v in allv if math.isfinite(v)]
         if not (math.isfinite(tv) and tv > 0 and cv):
             continue
         t.append(tv)
         c.append(sum(cv) / len(cv) ** 2)   # the error of a mean of n comp magnitudes
-        each.append(cv)
+        each.append(allv)
         if point_err is not None:
             try:
                 e = float(point_err(o, scint))
@@ -140,7 +148,7 @@ def noise_check(points, scint=None, point_err=None) -> dict | None:
     n_comp = max(len(v) for v in each)
     comp_snr = []
     for k in range(n_comp):
-        vals = [v[k] for v in each if len(v) > k]
+        vals = [v[k] for v in each if len(v) > k and math.isfinite(v[k])]
         comp_snr.append(1.0857362 / math.sqrt(float(np.median(vals))) if vals else float("nan"))
     sig_point = float(np.median(tot)) if tot else math.hypot(sig_t, sig_c)
     return {"sig_t": sig_t, "sig_c": sig_c, "ratio": sig_c / sig_t if sig_t > 0 else float("inf"),
@@ -284,9 +292,16 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
         return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame). Stack {n} frames "
                 f"({span} each) → comps SNR ~{sug['snr_c']:.0f}{tail}?{cap_note}", True)
     if noise["ratio"] > 1.0:
-        return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame), but the time "
-                f"resolution allows no stacking ({cap['text']}). Brighter comps, or longer exposures, would help.",
-                True)
+        # 2.3.0 review fix: say what really kept N at 1 (the time cap, or the 10-point minimum of a short night)
+        if sug.get("capped") and (sug.get("n_cap") or 1) <= 1:
+            why = f"the time resolution allows no stacking ({cap['text']})"
+        elif sug.get("few_points"):
+            why = (f"the night is too short to stack: {n_kept} frames, and a stacked night must keep at least "
+                   f"{MIN_POINTS} points")
+        else:
+            why = f"the time resolution allows no stacking ({cap['text']})"
+        return (f"⚠ Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame), but {why}. "
+                "Brighter comps, or longer exposures, would help.", True)
     if goal_needs and n > 1:
         return (f"⚠ Per-frame points are about {noise['sig_point'] / 1.0857362e-3:.1f} ppt; your {goal_ppt:g} ppt goal "
                 f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", True)

@@ -139,6 +139,34 @@ class TestEnsembleSoleComp(unittest.TestCase):
         self.assertEqual({o.n_comps for o in pts}, {1})
 
 
+class TestNoiseCheckNits(unittest.TestCase):
+    def test_comp_snr_per_comp_with_a_dropped_comp(self):
+        """Fix 8: a frame missing comp 1 does not put comp 2's values under comp 1."""
+        pts = []
+        for k in range(10):
+            cv = [1e-4, 4e-4] if k % 2 else [float("nan"), 4e-4]
+            pts.append(T.FakeObs(flag="", mag=12.0, target_var=1e-4, comp_vars=cv))
+        res = sc.noise_check(pts)
+        self.assertAlmostEqual(res["comp_snr"][0], 1.0857362 / 0.01, places=6)
+        self.assertAlmostEqual(res["comp_snr"][1], 1.0857362 / 0.02, places=6)
+
+    def test_short_night_message(self):
+        """Fix 8: weak comps on a night too short to stack say so (not 'time resolution')."""
+        noise = {"sig_t": 0.001, "sig_c": 0.003, "ratio": 3.0, "snr_t": 1085.7, "snr_c": 361.9, "comp_snr": [300],
+                 "sig_point": 0.0032, "n": 15}
+        cap = sc.time_cap("discovery")
+        cap = dict(cap, seconds=3600.0, known=True, text="1 h")
+        sug = sc.suggest_n(noise, 10.0, cap, 15)
+        self.assertEqual(sug["n"], 1)
+        text, warn = sc.suggest_text("variables", noise, sug, cap, 15, None)
+        self.assertTrue(warn)
+        self.assertIn("too short to stack", text)
+        self.assertNotIn("time resolution", text)
+        sug = sc.suggest_n(noise, 10.0, dict(cap, seconds=5.0), 200)
+        text, _ = sc.suggest_text("variables", noise, sug, dict(cap, seconds=5.0), 200, None)
+        self.assertIn("time resolution allows no stacking", text)
+
+
 def _have_tk():
     try:
         import tkinter as tk
