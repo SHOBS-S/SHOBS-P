@@ -80,3 +80,16 @@ A comp that no frame of the night measured is not listed. Without a Use comps ch
 - **Transit fit → settings file** example text: the new "Frames skipped at photometry" row and the `measured:` list.
 - **Mount / alt-az section:** the meridian-flip warning box (HD 189733 b 23 Jul with Mount = Alt-az is the real case).
 - Any shot of the "Use comps… nocomp" question box: its count is now smaller (frames missing one comp are kept).
+
+## Review fixes
+
+- **Use comps… with one comp that is in fewer than half of a night's frames:** when that comp is the night's only
+  comp in use, it is no longer left out of the whole night (which left the night with no magnitudes). It is kept and
+  used in the frames where it was measured; the other frames are flagged nocomp, as in 2.2.21. The Log says:
+  `<night>: <comp> measured in fewer than half the night's frames but kept (no other comp in use there): only the
+  frames where it was measured get a magnitude; the others are flagged nocomp.` With other comps in use the rule is
+  unchanged (the comp is left out of that night and the others carry it).
+- **Measure skipped frames on a night that shows stacked points:** see _notes_230_a.md, Review fixes (the night
+  switches to Points: Per frame first; a stacked night from a saved series gets a message).
+- High-DPI: the orange skipped-frames line and the "Measured with …" line wrap with the window at any display
+  scaling; the Input page's "Output: …" and "Dark flats (optional …)" hints wrap at the page's width.
