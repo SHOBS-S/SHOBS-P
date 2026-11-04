@@ -374,7 +374,7 @@ def trimmed_var_factor(n: int) -> float:
 
 
 def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: int = MIN_CLIP_FRAMES,
-            cancel=None, progress=None) -> tuple[np.ndarray, dict]:
+            cancel=None, progress=None, bayer: bool = False) -> tuple[np.ndarray, dict]:
     """The stack of `members` on the scale of their SUM (clipped mean x n), float32.
 
     loader(path) -> the calibrated, binned (not debayered) frame. Frames are read one at a time (twice when
@@ -385,6 +385,9 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     The clip is symmetric about an unbiased level, so real noise is not biased. Below min_clip: a plain mean.
     Pixels a shift left uncovered in some frames are the mean of the frames that cover them. Never median, never
     weighted or normalized.
+    bayer=True (a color camera's mosaic): the sky level and the scatter floor are taken for each of the four Bayer
+    positions on its own (2.3.0 review fix: one level for the whole mosaic made the red and blue sky look like
+    signal, which widened their clip so far that cosmic rays passed).
     Returns (image, {"n", "clipped" (fraction of values thrown out), "plain" (bool)})."""
     n = len(members)
     if n == 0:
@@ -439,9 +442,18 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     # relative uncertainty of a scatter from n - 2 values (k = clip_sigma (1 + 1.5 / sqrt(n - 2))): 3 sigma at
     # n -> large, ~5.6 at n = 5, ~4.6 at n = 10. Cosmic rays, trails and hot pixels sit tens to thousands of sigma
     # off, so they are still thrown out.
-    floor = float(np.nanmedian(sig[clippable])) if np.any(clippable) else 0.0
-    if math.isfinite(floor) and floor > 0:
-        np.maximum(sig, np.float32(floor), out=sig)
+    # 2.3.0 review fix: on a color mosaic, the four Bayer positions each get their own floor and sky level (their
+    # sky differs by the color of the sky and the flat); a mono frame is one plane, exactly as before.
+    if bayer and ref.ndim >= 2 and ref.shape[-2] >= 2 and ref.shape[-1] >= 2:
+        planes = [(Ellipsis, slice(py, None, 2), slice(px, None, 2)) for py in (0, 1) for px in (0, 1)]
+    else:
+        planes = [(Ellipsis,)]
+    for pl in planes:
+        cp = clippable[pl]
+        floor = float(np.nanmedian(sig[pl][cp])) if np.any(cp) else 0.0
+        if math.isfinite(floor) and floor > 0:
+            view = sig[pl]
+            np.maximum(view, np.float32(floor), out=view)
     kfac = np.ones(cnt.shape, dtype=np.float32) * np.float32(clip_sigma)
     for c in np.unique(cnt):
         if c >= min_clip:
@@ -453,8 +465,12 @@ def combine(loader, members, shifts, clip_sigma: float = CLIP_SIGMA, min_clip: i
     # rays, trails and hot pixels there go; on a star the clip catches only hits much brighter than the star itself,
     # where a missed hit is a small part of the light anyway. (Synthetic stars whose seeing changes by 1.7x within a
     # stack of 6: without this the clip added noise comparable to the star's photon noise; with it, none measurable.)
-    sky_level = float(np.nanmedian(ref[clippable])) if np.any(clippable) else 0.0
-    signal = np.abs(ref - np.float32(sky_level)) if math.isfinite(sky_level) else np.zeros_like(ref)
+    signal = np.zeros_like(ref)
+    for pl in planes:
+        cp = clippable[pl]
+        sky_level = float(np.nanmedian(ref[pl][cp])) if np.any(cp) else 0.0
+        if math.isfinite(sky_level):
+            signal[pl] = np.abs(ref[pl] - np.float32(sky_level))
     # A pixel whose values are all equal has no scatter: only exactly-equal values are kept there.
     tol = (kfac * sig + SIGNAL_SPAN * signal + 1e-6 * np.abs(ref)).astype(np.float32)
     del kfac, signal

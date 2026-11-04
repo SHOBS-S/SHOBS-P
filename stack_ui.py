@@ -393,7 +393,7 @@ class StackMixin:
                             reuse = False
                     if not reuse:
                         img, info = stack_core.combine(lambda p: load_frame(p, binning, masters)[2], members, shifts,
-                                                       cancel=cancel)
+                                                       cancel=cancel, bayer=pattern != core.MONO)
                         try:
                             anchor_head = core.read_header(members[anchor]["path"])
                         except Exception:

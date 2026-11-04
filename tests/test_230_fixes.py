@@ -51,6 +51,60 @@ class TestMastersKey(unittest.TestCase):
         self.assertEqual(sc.masters_fingerprint(core.Masters()), sc.masters_fingerprint(core.Masters()))
 
 
+class TestOscClip(unittest.TestCase):
+    def _mosaic(self, n=12):
+        H, W = 120, 120
+        lvl = np.zeros((H, W))
+        lvl[0::2, 0::2], lvl[0::2, 1::2], lvl[1::2, 0::2], lvl[1::2, 1::2] = 600.0, 1200.0, 1200.0, 500.0
+        frames = {}
+        for k in range(n):
+            r = np.random.default_rng(k)
+            frames[f"f{k}"] = (r.poisson(lvl) + r.normal(0, 3, lvl.shape)).astype(np.float32)
+        return frames
+
+    def test_cosmic_rays_clipped_on_every_bayer_position(self):
+        """Fix 3: on an OSC mosaic (sky R 600, G 1200, B 500) a 300 ADU hit on an R, a G and a B pixel is clipped:
+        the stack there is the mean of the other frames x N."""
+        n = 12
+        frames = self._mosaic(n)
+        hits = [(50, 50), (50, 51), (51, 51)]   # R, G, B in RGGB
+        clean = {yx: np.mean([frames[f"f{k}"][yx] for k in range(n) if k != 4]) * n for yx in hits}
+        for (y, x) in hits:
+            frames["f4"][y, x] += 300.0
+        img, info = sc.combine(lambda p: frames[p], [{"path": f"f{k}"} for k in range(n)], [(0, 0)] * n, bayer=True)
+        for yx in hits:
+            self.assertAlmostEqual(float(img[yx]), clean[yx], delta=0.05, msg=str(yx))
+        # the old whole-mosaic level let the R and B hits through
+        old, _ = sc.combine(lambda p: frames[p], [{"path": f"f{k}"} for k in range(n)], [(0, 0)] * n, bayer=False)
+        self.assertGreater(float(old[51, 51]) - clean[(51, 51)], 200)
+
+    def test_osc_clean_mosaic_barely_clipped_and_starlight_kept(self):
+        """Fix 3: real noise is not clipped (the floor per Bayer position) and a star that changes from frame to frame
+        on a mosaic keeps all of its light."""
+        n = 10
+        frames = self._mosaic(n)
+        yy, xx = np.mgrid[0:120, 0:120]
+        for k in range(n):
+            amp = 4000.0 * (0.8 + 0.4 * k / (n - 1))
+            sig = (2.0 + 1.5 * k / (n - 1)) / 2.355 * 2   # seeing changes by 1.75x (in mosaic pixels)
+            frames[f"f{k}"] += (amp * np.exp(-((xx - 60.3) ** 2 + (yy - 60.6) ** 2) / (2 * sig * sig))).astype(np.float32)
+        img, info = sc.combine(lambda p: frames[p], [{"path": f"f{k}"} for k in range(n)], [(0, 0)] * n, bayer=True)
+        self.assertLess(info["clipped"], 2e-4)
+        total = sum(frames.values())
+        m = (xx - 60.3) ** 2 + (yy - 60.6) ** 2 <= 12 ** 2
+        self.assertAlmostEqual(float(img[m].sum()) / float(total[m].sum()), 1.0, delta=2e-4)
+
+    def test_mono_unchanged(self):
+        """Fix 3: a mono frame is combined exactly as before (bayer=False is the default)."""
+        rng = np.random.default_rng(3)
+        frames = {f"f{k}": rng.normal(400, 20, (60, 80)).astype(np.float32) for k in range(8)}
+        frames["f2"][10, 10] += 2000
+        a, ia = sc.combine(lambda p: frames[p], [{"path": k} for k in frames], [(0, 0)] * 8)
+        b, ib = sc.combine(lambda p: frames[p], [{"path": k} for k in frames], [(0, 0)] * 8, bayer=False)
+        self.assertTrue(np.array_equal(a, b))
+        self.assertLess(abs(float(a[10, 10]) - 8 * 400), 150)
+
+
 def _have_tk():
     try:
         import tkinter as tk
