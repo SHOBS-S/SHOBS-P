@@ -222,6 +222,22 @@ class TestInApp(unittest.TestCase):
             app._check_aperture_scope({"INSTRUME": "X", "FOCALLEN": 1000})
         self.assertEqual(self.boxes["askyesno"].call_count, 1)
 
+    def test_no_to_one_question_does_not_silence_the_other(self):
+        """review r2: No to 'is 203 right for X?' must not hide the later offer 'use 114 mm, as last used with X?'."""
+        app = self.app
+        app.__dict__.pop("_aperture_asked", None)
+        app.aperture_mm.set("203")
+        app.settings["aperture_scopes"] = []
+        app.settings["aperture_scope_last"] = {"telescope": "", "camera": "Mine", "focal_mm": 2900.0, "aperture_mm": 203.0}
+        head = {"INSTRUME": "eVscope", "FOCALLEN": 450}
+        self.boxes["askyesno"].return_value = False
+        with mock.patch.object(app, "after_idle"):
+            app._check_aperture_scope(head)   # "another telescope … is 203 right?" → No
+        app.settings["aperture_scopes"] = [dict(ca.lights_scope(head), aperture_mm=114.0)]
+        app._check_aperture_scope(head)   # now known with 114: offered
+        self.assertEqual(self.boxes["askyesno"].call_count, 2)
+        self.assertIn("114 mm", self.boxes["askyesno"].call_args[0][1])
+
     def test_remember_uses_the_measured_frames(self):
         """review S4: the telescope recorded is the one of the Lights folder's frames, not the last Scan folders."""
         app = self.app

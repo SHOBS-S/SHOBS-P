@@ -5621,9 +5621,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         cur = self._aperture_box()
         # review S2: a question answered this session is not asked again for the same telescope and box value
         asked = self.__dict__.setdefault("_aperture_asked", set())
-        ask_key = (scope_words(scope).lower(), cur)
-        if ask_key in asked:
-            return
+        words = scope_words(scope).lower()
         known = next((r for r in reversed(self.settings.get("aperture_scopes") or [])
                       if isinstance(r, dict) and same_scope(r, scope)), None)
         if known is not None:
@@ -5632,6 +5630,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except (TypeError, ValueError):
                 return
             if cur is not None and abs(ap - cur) < 0.5:
+                return
+            ask_key = ("known", words, cur, ap)   # review r2: each question has its own key
+            if ask_key in asked:
                 return
             if messagebox.askyesno(
                     APP_TITLE,
@@ -5655,6 +5656,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if abs(last_ap - cur) >= 0.5:
             return   # the box was changed since that run: someone already typed a value for these frames
+        ask_key = ("last", words, cur)
+        if ask_key in asked:
+            return
         if messagebox.askyesno(
                 APP_TITLE,
                 f"These lights come from {scope_words(scope)}, another telescope than the last frames you measured "
@@ -5662,7 +5666,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 f"{cur:g} mm right for this telescope? (It sets the scintillation part of the error bars.)\n\n"
                 "Yes keeps it; No takes you to the box (Input page, Optics) to type this telescope's aperture."):
             self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
-            self._lights_scope = scope
             self._remember_aperture_scope(scope)   # review S2: a Yes is remembered at once
             return
         asked.add(ask_key)
@@ -5685,7 +5688,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 head = core.read_header(lights[0]) if lights else None
             except Exception:
                 head = None
-            scope = lights_scope(head) if head else getattr(self, "_lights_scope", None)
+            scope = (lights_scope(head) if head else None) or getattr(self, "_lights_scope", None)
         ap = self._aperture_box()
         if not scope or ap is None:
             return
@@ -11440,7 +11443,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         raise ValueError("No star catalog answered for this field ("
                                          + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "). That is a catalog "
                                          "service outage, not your RA/Dec or Optics values. Try Solve again later.")
-                    raise ValueError("No catalog returned stars for this field ().")   # review S5: 2.3.0 wording
+                    raise ValueError("No catalog returned stars for this field.")   # review S5 (r2: no empty "()")
                 usable = [s for s in stars if s.get("bright") is not None]
                 usable.sort(key=lambda s: s["bright"])
                 match_set = usable[:60]
@@ -16588,10 +16591,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.3.1 (nit): one night shorter than two cycles of even the SHORTEST period searched (Tessa's < 1 h eVscope
         # night) cannot test any period: say only that, instead of a meaningless best peak (20 d) with three ⚠ marks.
         shortest = period_search_floor(self.period, self._num(self.min_period)) if self.period else None
+        hopeless = bool(too_short and shortest and span_used < 2.0 * shortest)
         box_min = self._num(self.min_period)
         if shortest and box_min and abs(shortest - box_min) <= 0.02 * box_min:
-            shortest = box_min   # review N2: "0.02 d", not the grid's 0.0201506 d
-        hopeless = bool(too_short and shortest and span_used < 2.0 * shortest)
+            shortest = box_min   # review N2: shown as typed ("0.02 d"), after the gate (r2) used the grid's floor
         self._period_hopeless = hopeless
         if self.period and usable and hopeless:
             ax.text(0.5, 0.5, f"One night of {span_used * 24:.1f} h is too short for a period search:\n"
