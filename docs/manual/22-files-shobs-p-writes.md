@@ -47,7 +47,7 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 
 | Button | File |
 |---|---|
-| **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. |
+| **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. Beside it, `AAVSO_<star>_<filter>_<date>_SHOBS-P_settings.txt`: what the reported points were measured with, night by night (aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain, telescope aperture, stacking, the SHOBS-P version), and the report's comps, check, scintillation and line-up choices. |
 | **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
 | **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. |

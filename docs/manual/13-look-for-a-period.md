@@ -66,9 +66,18 @@ A period is shown as **Best**, and the fold is titled **Folded**, only when *all
 4. **The data cover at least two cycles** on a single night.
 5. **It does not follow airmass** (see below).
 
+When one night is too short for even the shortest period searched (under two of its cycles; a 50-minute night with
+the search starting at 0.02 d), there is nothing to test. The Period box then holds one line and no peak:
+
+- **Too short for a period search: one night of 0.8 h covers under two cycles of even the shortest period searched
+  (0.02 d = 0.5 h). Add nights, or observe longer.**
+
+The fold and the periodogram say the same; no best period is marked.
+
 If any test fails, the Period box starts with a plain sentence saying why, for example:
 
-- **No reliable period yet: one short night covers under two cycles of the best peak. Add nights.**
+- **No reliable period yet: one short night covers under two cycles of the best peak. Add nights.** (On such a night
+  the day-alias and search-edge ⚠ marks are left out: the peak is not reliable either way.)
 - **No reliable period: the peak depends on … alone (often an offset between nights, not the star).**
 - **No reliable period: the peak follows the nights' airmass; it is not shown to be the star.**
 - **No significant period: counting nights, the peak's false-alarm probability is … (a night's points share offsets).**

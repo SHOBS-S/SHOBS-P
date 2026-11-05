@@ -57,6 +57,13 @@ class TestCatalogOutage(unittest.TestCase):
     def test_empty_gaia_alone_counts(self):
         self.assertIn("Gaia DR3 (no stars came back)", ca.catalog_outage_text({}, {"Gaia DR3": 0, "APASS DR9": 40}))
 
+    def test_enough_stars_is_not_an_outage(self):
+        """review S5: Gaia down but 60 APASS/Tycho stars to match: the lock failure is RA/Dec or optics."""
+        err, cnt = {"Gaia DR3": "HTTP 503"}, {"APASS DR9": 60, "Tycho-2": 9}
+        self.assertEqual(ca.catalog_outage_text(err, cnt, 60), "")
+        self.assertIn("Gaia DR3", ca.catalog_outage_text(err, cnt, 8))
+        self.assertIn("did not answer", ca.catalog_outage_text({c: "x" for c in ca.CATALOG_OUTAGE_MAIN}, {}, 60))
+
     def test_no_outage(self):
         self.assertEqual(ca.catalog_outage_text({}, {"Gaia DR3": 900, "APASS DR9": 40, "Tycho-2": 0}), "")
         self.assertEqual(ca.catalog_outage_text({"AAVSO sequence": "HTTP 503"}, {"Gaia DR3": 900}), "")
@@ -197,6 +204,40 @@ class TestInApp(unittest.TestCase):
         app._check_aperture_scope({"INSTRUME": "ASI2600MM", "FOCALLEN": 2098})
         self.boxes["askyesno"].assert_not_called()
 
+    def test_answers_not_asked_twice(self):
+        """review S2: Yes is remembered at once; No is not asked again this session for the same value."""
+        app = self.app
+        app.__dict__.pop("_aperture_asked", None)
+        app.aperture_mm.set("152")
+        app.settings["aperture_scope_last"] = {"telescope": "", "camera": "MOBS", "focal_mm": 650.0, "aperture_mm": 152.0}
+        head = {"INSTRUME": "ASI2600MM", "FOCALLEN": 2098}
+        app._check_aperture_scope(head)   # Yes: 152 is right for it
+        app._check_aperture_scope(head)
+        self.assertEqual(self.boxes["askyesno"].call_count, 1)
+        self.assertTrue(any(ca.same_scope(r, ca.lights_scope(head)) for r in app.settings["aperture_scopes"]))
+        app.settings["aperture_scopes"] = [{"telescope": "", "camera": "X", "focal_mm": 1000.0, "aperture_mm": 254.0}]
+        self.boxes["askyesno"].reset_mock()
+        self.boxes["askyesno"].return_value = False
+        for _ in range(2):
+            app._check_aperture_scope({"INSTRUME": "X", "FOCALLEN": 1000})
+        self.assertEqual(self.boxes["askyesno"].call_count, 1)
+
+    def test_remember_uses_the_measured_frames(self):
+        """review S4: the telescope recorded is the one of the Lights folder's frames, not the last Scan folders."""
+        app = self.app
+        paths = D.write_night(os.path.join(self.dir, "lights"), [("T", 100, 110, 50000)], n=2, drift=(0.0, 0.0))
+        from astropy.io import fits
+        for pth in paths:
+            with fits.open(pth, mode="update") as hd:
+                hd[0].header["INSTRUME"] = "CamB"
+                hd[0].header["FOCALLEN"] = 800.0
+        app.light_dir.set(os.path.dirname(paths[0]))
+        app._split_cache = None
+        app._lights_scope = {"telescope": "", "camera": "CamA", "focal_mm": 2000.0}
+        app.aperture_mm.set("100")
+        app._remember_aperture_scope()
+        self.assertEqual(app.settings["aperture_scope_last"]["camera"], "CamB")
+
     def test_remember_keeps_one_record_per_telescope(self):
         app = self.app
         app.settings["aperture_scopes"] = []
@@ -246,7 +287,9 @@ class TestInApp(unittest.TestCase):
         self.assertEqual(len(warns), 1, [c[0][1] for c in self.boxes["showwarning"].call_args_list])
         text = warns[0]
         self.assertIn("check K", text)
-        self.assertIn("is off it in 20 frames", text)
+        self.assertIn("check K comes within", text)   # review S1: the edge distance is kept
+        self.assertIn("The check star was off the frame in 20 frames", text)
+        self.assertNotIn(" .", text)
         self.assertIn("A better check star stays farther in: FAR", text)
         self.assertNotIn("spare EDGE", text)   # spares near the edge: log only
         self.assertTrue(any("spare EDGE" in t and "nothing to do" in t for t in self.logged), self.logged)
@@ -260,8 +303,8 @@ class TestInApp(unittest.TestCase):
             body = fh.read()
         self.assertTrue(body.startswith(f"SHOBS-P {ca.APP_VERSION} settings for "), body[:80])
         for want in ("Star: T", "Mode: variables", f"Aperture: r {D.RADIUS:g} px, sky {D.SKY_IN:g}-",
-                     "Comps measured: C1, C2", "Check measured: K", "Telescope aperture at photometry: 203 mm",
-                     "Frames skipped at photometry (reason: frame numbers): none", "Scintillation: ",
+                     "Comps measured: C1, C2", "Check measured: K", "Telescope aperture box when the night was measured: 203 mm",
+                     "Frames skipped at photometry (reason: frame numbers): none", "Scintillation (this report's error bars): ",
                      "Frames left out (flag: frame numbers):", f"Reduced with: SHOBS-P {ca.APP_VERSION}"):
             self.assertIn(want, body)
         # a second save never overwrites the first

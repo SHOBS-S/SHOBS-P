@@ -1150,7 +1150,7 @@ def scope_words(scope: dict | None) -> str:
 CATALOG_OUTAGE_MAIN = ("Gaia DR3", "APASS DR9", "Tycho-2")   # 2.3.1: the catalogs a solve leans on
 
 
-def catalog_outage_text(errors: dict | None, counts: dict | None) -> str:
+def catalog_outage_text(errors: dict | None, counts: dict | None, n_matched: int | None = None) -> str:
     """2.3.1 (nit): a solve that failed while catalog services were down says so first, naming them: "Gaia DR3 (HTTP
     503) and APASS DR9 (no stars came back) did not answer: a catalog service outage, not your settings." Empty when
     the main catalogs answered. A catalog that 'answered' with no stars counts only next to one that failed (a small
@@ -1160,6 +1160,10 @@ def catalog_outage_text(errors: dict | None, counts: dict | None) -> str:
     failed = [c for c in CATALOG_OUTAGE_MAIN if c in errors]
     empty = [c for c in CATALOG_OUTAGE_MAIN if c not in errors and c in counts and not counts.get(c)]
     if not failed and "Gaia DR3" not in empty:
+        return ""
+    # review S5: with enough catalog stars to match (20 or more) a failed lock is RA/Dec or optics, not the outage,
+    # unless every main catalog failed or came back empty
+    if n_matched is not None and n_matched >= 20 and len(set(failed) | set(empty)) < len(CATALOG_OUTAGE_MAIN):
         return ""
     parts = [f"{c} ({str(errors[c]).strip() or 'no answer'})" for c in failed]
     parts += [f"{c} (no stars came back)" for c in empty if c == "Gaia DR3" or failed]
@@ -4979,10 +4983,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 kept = self._check_lights_targets(lights, header)
                 self._check_target_field(kept if kept is not None else header)
                 self._update_dark_exposure_note()   # 2.2.19 (#20)
-                self._lights_scope = None
+                self._lights_scope = lights_scope(header)   # review S3: MicroObservatory lights too (no question)
                 if not core.is_microobservatory(lights[0], header):
                     self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
-                    self._check_aperture_scope(header)   # 2.3.1 (nit): the aperture belongs to the telescope
+                    try:
+                        self._check_aperture_scope(header)   # 2.3.1 (nit): the aperture belongs to the telescope
+                    except Exception:
+                        traceback.print_exc()   # review N1: never costs the Bayer-pattern detection below
                 self._update_mount_hint(lights, log=True)   # 2.2.18 (item 8)
                 if not core.is_microobservatory(lights[0], header):
                     self._save_header_mount(lights)   # 2.2.19 (nit)
@@ -5612,6 +5619,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if scope is None or "aperture_mm" in core.header_optics(header) or getattr(self, "_loading_meta", False):
             return
         cur = self._aperture_box()
+        # review S2: a question answered this session is not asked again for the same telescope and box value
+        asked = self.__dict__.setdefault("_aperture_asked", set())
+        ask_key = (scope_words(scope).lower(), cur)
+        if ask_key in asked:
+            return
         known = next((r for r in reversed(self.settings.get("aperture_scopes") or [])
                       if isinstance(r, dict) and same_scope(r, scope)), None)
         if known is not None:
@@ -5630,6 +5642,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.aperture_mm.set(f"{ap:g}")
                 self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}.")
             else:
+                asked.add(ask_key)
                 self.log(f"Telescope aperture kept at {cur:g} mm for {scope_words(scope)}." if cur is not None else
                          "Telescope aperture left empty: no scintillation error for these frames.")
             return
@@ -5649,7 +5662,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 f"{cur:g} mm right for this telescope? (It sets the scintillation part of the error bars.)\n\n"
                 "Yes keeps it; No takes you to the box (Input page, Optics) to type this telescope's aperture."):
             self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
+            self._lights_scope = scope
+            self._remember_aperture_scope(scope)   # review S2: a Yes is remembered at once
             return
+        asked.add(ask_key)
         self.log(f"Telescope aperture: type the aperture of {scope_words(scope)} in the Optics box (Input page); "
                  f"it says {cur:g} mm from the last frames.")
         self.status.set("Type this telescope's aperture in the Optics box (Input page).")
@@ -5660,9 +5676,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 pass
 
-    def _remember_aperture_scope(self):
-        """2.3.1: at a photometry run, which aperture went with which telescope (for _check_aperture_scope)."""
-        scope = getattr(self, "_lights_scope", None)
+    def _remember_aperture_scope(self, scope: dict | None = None):
+        """2.3.1: at a photometry run, which aperture went with which telescope (for _check_aperture_scope). Review S4:
+        the telescope of the frames on the Photometry page (not only the last Scan folders)."""
+        if scope is None:
+            try:
+                lights = self._lights()
+                head = core.read_header(lights[0]) if lights else None
+            except Exception:
+                head = None
+            scope = lights_scope(head) if head else getattr(self, "_lights_scope", None)
         ap = self._aperture_box()
         if not scope or ap is None:
             return
@@ -11413,9 +11436,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._chart_diag["catalog_from_cache"] = dict(cat_info.get("from_cache") or {})   # 2.2.21 (#21)
                 if not stars:
                     # 2.3.1 (nit): say it is the catalog services, not the user's RA/Dec or optics
-                    raise ValueError("No star catalog answered for this field ("
-                                     + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "). That is a catalog "
-                                     "service outage, not your RA/Dec or Optics values. Try Solve again later.")
+                    if failed:
+                        raise ValueError("No star catalog answered for this field ("
+                                         + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "). That is a catalog "
+                                         "service outage, not your RA/Dec or Optics values. Try Solve again later.")
+                    raise ValueError("No catalog returned stars for this field ().")   # review S5: 2.3.0 wording
                 usable = [s for s in stars if s.get("bright") is not None]
                 usable.sort(key=lambda s: s["bright"])
                 match_set = usable[:60]
@@ -11648,7 +11673,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             n_src = diag.get("sources", 0)
             # 2.3.1 (nit): catalogs that failed or came back empty (Joanna's WASP-50 b: Gaia ESA 503, VizieR/APASS 0
             # stars) are named first; then the plate scale and RA/Dec are only something to check if they persist.
-            outage = catalog_outage_text(diag.get("catalog_errors"), diag.get("catalogs"))
+            outage = catalog_outage_text(diag.get("catalog_errors"), diag.get("catalogs"), n)
             if n_src < 15:
                 why.append(f"Only {n_src} stars were found on this frame"
                            + (f" (even after stacking {diag['stacked'][0]} frames)" if diag.get("stacked") else "")
@@ -14658,10 +14683,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         loud = [p for p in problems if not p.startswith("spare ")]
         for p in spares:
             self.log(f"{night}: {p.split(':')[0]} (a spare: only measured, not used; nothing to do).")
-        check_line = self._check_edge_line(night, night_points, shape, margin,
-                                           any(p.startswith("check ") for p in loud))
-        if check_line:
-            loud = [p for p in loud if not p.startswith("check ")] + [check_line]
+        # review S1: the check's own line (edge distance or vignetting) is kept; the frames it was off the frame and a
+        # better spare are added to it
+        orig = next((p for p in loud if p.startswith("check ")), "")
+        extra = self._check_edge_line(night, night_points, shape, margin, "frame edge" in orig)
+        if extra:
+            loud = [p for p in loud if not p.startswith("check ")] + [(orig + " " if orig else f"check {self.check_used}: ") + extra]
         for p in loud:
             self.log(f"⚠ {night}: {p}")
         return loud   # shown in _warn_run_skips' pop-up
@@ -14674,26 +14701,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return ""
         miss = core.check_missing_frames(night_points)
         if not near and not miss:
-            return ""
+            return ""   # a vignetting-only problem keeps its own line as it is
         import transit_ui as tu
         pts = sorted(night_points, key=lambda o: o.jd)
         nums = tu.frame_numbers([getattr(o, "path", "") for o in pts])
-        parts = [f"check {check} " + ("comes close to the frame edge" if near else "is at the frame edge")]
+        text = ""
         if miss:
-            parts.append(f"and is off it in {len(miss)} frame{'s' if len(miss) != 1 else ''} "
-                         f"({tu.frame_ranges([nums[k] for k in miss])}), which have no check value")
+            text = (f"The check star was off the frame in {len(miss)} frame{'s' if len(miss) != 1 else ''} "
+                    f"({tu.frame_ranges([nums[k] for k in miss])}), which have no check value. ")
         alt = core.check_edge_alternative(night_points, shape, margin, check)
         if alt:
             star = self._chart_star_named(alt["name"]) if hasattr(self, "_chart_star_named") else None
             mag = (star or {}).get("mag")
-            parts.append(f". A better check star stays farther in: {alt['name']}"
-                         + (f" ({core.band_label(self._band())} {float(mag):.2f})" if mag is not None else "")
-                         + f", {abs(alt['dmag']):.1f} mag {'fainter' if alt['dmag'] > 0 else 'brighter'} than "
-                         f"{check}, at least {alt['closest_px']:.0f} px in all night (measured as a spare). Pick it as "
-                         "the check next time")
+            text += (f"A better check star stays farther in: {alt['name']}"
+                     + (f" ({core.band_label(self._band())} {float(mag):.2f})" if mag is not None else "")
+                     + f", {abs(alt['dmag']):.1f} mag {'fainter' if alt['dmag'] > 0 else 'brighter'} than {check}, "
+                     f"at least {alt['closest_px']:.0f} px in all night (measured as a spare). Pick it as the check "
+                     "next time.")
         else:
-            parts.append(f". Pick a check star at least {margin:.0f} px in next time")
-        return " ".join(parts[:2]) + "".join(parts[2:]) + "."
+            text += f"Pick a check star at least {margin:.0f} px in next time."
+        return text if near or miss else ""
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
                             sky_out) -> dict:
@@ -16561,6 +16588,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.3.1 (nit): one night shorter than two cycles of even the SHORTEST period searched (Tessa's < 1 h eVscope
         # night) cannot test any period: say only that, instead of a meaningless best peak (20 d) with three ⚠ marks.
         shortest = period_search_floor(self.period, self._num(self.min_period)) if self.period else None
+        box_min = self._num(self.min_period)
+        if shortest and box_min and abs(shortest - box_min) <= 0.02 * box_min:
+            shortest = box_min   # review N2: "0.02 d", not the grid's 0.0201506 d
         hopeless = bool(too_short and shortest and span_used < 2.0 * shortest)
         self._period_hopeless = hopeless
         if self.period and usable and hopeless:
@@ -18676,7 +18706,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + (f"; catalog magnitudes {', '.join(mags)}" if mags else ""))
         check_mag = self.check_mag.get().strip()
         lines.append(f"Check in the report: {self.check_used or 'none'}" + (f" ({check_mag})" if check_mag and self.check_used else ""))
-        lines.append("Scintillation: " + self._scint_note())
+        lines.append("Scintillation (this report's error bars): " + self._scint_note())
         lines.append("Flagged points: " + ("left out" if self.skip_flagged.get() else "kept"))
         for name, var in (("Check-star zero point", "use_check_zp"), ("Segments lined up", "norm_segments"),
                           ("Pier sides lined up", "pier_segments"), ("Flip lined up", "align_flip")):
@@ -18733,7 +18763,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
             lines.append(tu.gain_note(setup.get("photon_noise")))
             if setup.get("aperture_mm"):
-                lines.append(f"Telescope aperture at photometry: {float(setup['aperture_mm']):g} mm")
+                # review S6: the error bars use the box at report time (the Scintillation line above)
+                lines.append(f"Telescope aperture box when the night was measured: {float(setup['aperture_mm']):g} mm")
             stack = setup.get("stack") if isinstance(setup.get("stack"), dict) else None
             if stack and int(stack.get("n") or 1) > 1:
                 lines.append(f"Stacking: {stack_core.stack_words(stack)} (sigma-clipped mean, whole-pixel shifts, "

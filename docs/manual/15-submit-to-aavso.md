@@ -27,6 +27,11 @@ the background after the report is saved; whatever happens to it goes into the l
 answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; press **Save field image** later
 to fetch it.
 
+It also saves a settings file (`…_settings.txt`, from 2.3.1): night by night, the aperture and sky radii, binning,
+comps and check measured, frames skipped and left out, calibration, gain, telescope aperture and stacking, with the
+report's own comps, check and scintillation. Keep it with the report: with it, a night can be reduced again the same
+way.
+
 When a series file is open, saving the report also notes it in the series (for the **Sent** column), so the series
 file is rewritten: the status line ends with **Series file updated: SZ_Lyn.cvseries.** The series keeps its own site
 and observer code. If the Input page's latitude, longitude, elevation or observer code differ from the series', you

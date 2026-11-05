@@ -86,6 +86,7 @@ The automatic solve stays quiet when it fails: the step strip shows **1 Not solv
 | What you see | What to do |
 |---|---|
 | **Solve needs to know roughly where the frame is: …** | Your headers give no position and the Input page has no RA/Dec. Type the target's name on the Input page and press Enter (or, in Discovery, the field center), then **Solve again**. |
+| **Star catalogs did not answer, so the frame could not be solved …** with *"Gaia DR3 (HTTP 503) and APASS DR9 (no stars came back) did not answer: a catalog service outage …"* | A catalog server is down (not your settings). **Solve again** in a few minutes. Meanwhile you can mark stars and type comp and check magnitudes by hand. |
 | **The catalog stars did not lock onto this frame …** | Usually wrong optics. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; the window shows the plate scale it used. Also check that the **Target** marker is on your star. |
 | "Only N stars were found on this frame" (in the same window) | Very short exposures or a small telescope. Mark the stars by hand and type their names and magnitudes. |
 | **Not solved: the catalog request failed.** | The internet or a catalog server was down. **Solve again** later. |
@@ -222,6 +223,8 @@ APASS, Gaia and Tycho-2. The line under each row says where the magnitude came f
   reads too faint — pick a fainter comp." (for the target: "— shorter exposures or more defocus");
 - for a comp or check star near the frame edge, how far in a star must be, for example "⚠ only 12 px from the frame
   edge: its sky ring (out to 22 px) needs the star at least 27 px in, with room for drift — pick a star further in".
+  For the check star it also names a suggested comp ring farther in, for example "…; S2 (TYC 3089-883-1) is farther
+  in and would make a good check".
 
 **Suggested comparison stars** are drawn as thick green rings labeled **S1**, **S2** …: up to four catalog stars close
 to the target in brightness and color, not variable, not near saturation, AAVSO sequence stars first. They are good

@@ -1,4 +1,4 @@
-# SHOBS-P User's Manual (version 2.3.0)
+# SHOBS-P User's Manual (version 2.3.1)
 
 > November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
 > defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20
@@ -10,7 +10,9 @@
 > saves that keep the series' own site) and for 2.3.0 (stacking when comps are weak; comps off the frame edge and
 > Measure skipped frames; the Dark flats box; error bars on camera-binned frames; the meridian-flip step in the transit
 > fit; the planet lookup from the host star; chapter 16 rewritten now that Tonight's transits and the Transit planner
-> are gone; Save corner plot in the Results row), checked against the program. Screenshots were retaken on 2.3.0
+> are gone; Save corner plot in the Results row) and for 2.3.1 (the Telescope aperture follows the telescope; a
+settings file for Variables reports; the short-night period search; a catalog outage named as such; the frame-edge
+warning for comps and the check only, with a better check star), checked against the program. Screenshots were retaken on 2.3.0
 > wherever the page or its version line changed.
 > Each chapter is its own file in this folder; this page is the table of contents.
 

@@ -38,11 +38,26 @@ In the **Optics** box on the Input page:
 | Box | What to type | Why it matters |
 |---|---|---|
 | **Telescope** | Your telescope's name, for example "0.25 m Newtonian". | Goes into reports. Leave it blank to use the FITS header's name (often the mount's name, so typing your own is better). Remembered. |
-| **Telescope aperture (mm)** | The clear aperture in millimeters. | Used for the scintillation error. Remembered. |
+| **Telescope aperture (mm)** | The clear aperture in millimeters. | Used for the scintillation error. Remembered, and remembered per telescope (see below). |
 | **Focal length (mm)** | The effective focal length, with any reducer. | With the pixel size, gives the plate scale the solve needs. Remembered. |
 | **Pixel size (µm)** | Your camera's pixel size. | As above. Remembered. |
 | **Binning** | 1, 2 or 4. | SHOBS-P's own binning (see below). Usually 1. |
 | **Mount** | **German equatorial** or **Alt-az**. | Meridian flips, pier sides and the flats-angle check depend on it (see below). Remembered. |
+
+**Frames from more than one telescope.** The aperture is a property of the telescope, not of the night. When the
+lights' header does not give the aperture, SHOBS-P remembers which aperture you measured each telescope with (it
+knows a telescope by the header's TELESCOP, INSTRUME and focal length). When you scan lights:
+
+- from a telescope you measured before with another aperture, it asks: *"… Last time you measured frames from that
+  telescope the Telescope aperture was 203 mm; the box says 152 mm. Use 203 mm for these frames?"*
+- from another telescope than the last frames you measured, it asks whether the box's value is right: *"These lights
+  come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says
+  152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box.
+
+It only asks: the box changes only when you answer Yes or type a new value, and the same question is not asked again
+for the same telescope and value. Each night records the box's aperture when it was measured (the settings file's
+**Telescope aperture box when the night was measured** line). The error bars use the box's value when the report is
+saved; the settings file's **Scintillation** line says which.
 
 Leave **Include scintillation (atmospheric twinkling) in the error bars** ticked. It makes the error bars match the
 real scatter, especially for bright stars and short exposures.

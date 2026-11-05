@@ -83,8 +83,7 @@ After the run, SHOBS-P may ask more questions:
 
 - **Add these N points as the night of …** appears only if a series is open. See chapter 10.
 - A question about dew or haze, or about frames during a planet transit. See chapter 12, [Flags and bad data](12-flags-and-bad-data.md).
-- A warning that a comp or the check is near the frame edge or a weak part of the flat. It says how far in a star must be to be safe. Consider other stars next time.
-- A warning box listing frames skipped, or comps left out of some frames because they went off the frame edge. The same lines stay in orange on the Photometry page. See chapter 8, "Comps near the frame edge".
+- A warning box listing frames skipped, comps left out of some frames because they went off the frame edge, and a comp or the check near the frame edge or a weak part of the flat (it says how far in a star must be to be safe, and for the check, which spare would have been better). The skipped-frame lines stay in orange on the Photometry page. See chapter 8, "Comps near the frame edge", and chapter 12, "Stars near the frame edge".
 - **This night's meridian-flip step is … mag ⚠ …** appears only when a series is open and saves itself, and the night has a large step at the flip that looks like an aperture problem rather than the star: the check star steps too, or the comp and check apertures jumped together at the flip (or, with no check star, the step is far beyond the night's scatter). **Yes** saves the night into the series file. **No** keeps the night on screen but leaves the file on disk as it was; no automatic save writes it later either. Press **Save series** to keep it, or **Remove night…** to take it out. Chapter 12 explains flip steps.
 
 Then the **Output – Variability** page opens.

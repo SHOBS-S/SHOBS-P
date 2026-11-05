@@ -82,7 +82,9 @@ Beside the report, SHOBS-P writes:
 - `…_settings.txt`: the full settings of the reduction, one per line: **Source**, **Aperture** (what the night was
   measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames skipped at photometry**,
   **Frames left out** (by flag and frame number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and
-  the dark's exposure) and the **Gain** with where it came from, and **Stacking** for stacked points. With it, you (or
+  the dark's exposure) and the **Gain** with where it came from, **Scintillation** (on or off, with the telescope
+  aperture and elevation the error bars used), **Telescope aperture box when the night was measured** (nights measured with 2.3.1 or
+  later), and **Stacking** for stacked points. With it, you (or
   anyone you send it to) can reduce the night again the same way. Some rows in more detail:
   - **Comps** lists only what this night really measured, for example `Comps: C1, C2 (Use comps choice; measured: C1,
     C2, C3 (missing in 14 frames: off the frame edge), SP (as spare))`. A comp no frame of the night measured is not

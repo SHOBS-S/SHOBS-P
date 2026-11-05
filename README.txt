@@ -80,8 +80,9 @@ mode, T = Transits, V = Variables)
      aperture each telescope (TELESCOP, INSTRUME, focal length) was measured with. Lights from a telescope you have
      measured before offer its aperture; lights from another telescope than the last ones ask whether the box's
      value is right (it sets the scintillation part of the error bars). It only asks: the box is never changed
-     without a Yes. Each night now records the aperture it was measured with ("Telescope aperture at photometry"
-     in the settings file).
+     without a Yes, and an answer is not asked again for the same telescope and value. Each night records the box's
+     aperture when it was measured ("Telescope aperture box when the night was measured" in the settings file; the
+     Scintillation line says what the report's error bars used).
 - S  The Photometry image's title says "Monochrome" for a mono camera (it said "Debayered (luminance)" on
      MicroObservatory frames), or the channel for color images.
 - S  Star catalogs down: when the solve cannot lock because Gaia, APASS or Tycho-2 did not answer (or Gaia sent no

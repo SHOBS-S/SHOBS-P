@@ -1067,9 +1067,9 @@ class TransitPage:
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
         if meta.get("scint"):
-            lines.append(f"Scintillation: {meta['scint']}")   # 2.3.1 (nit): the aperture the error bars used
+            lines.append(f"Scintillation (this fit's error bars): {meta['scint']}")   # 2.3.1 (nit)
         if rep.get("aperture_mm"):
-            lines.append(f"Telescope aperture at photometry: {rep['aperture_mm']}")   # 2.3.1
+            lines.append(f"Telescope aperture box when the night was measured: {rep['aperture_mm']}")   # 2.3.1
         if rep.get("flip_like"):
             lines.append(f"Warning: {rep['flip_like']}")   # 2.3.0 (item 10)
         if rep.get("stack"):   # 2.3.0 (#54)
