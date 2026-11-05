@@ -1021,6 +1021,11 @@ class TransitPage:
                                          for fl in flips)
         check = setup.get("check") if "check" in setup else app.check_used
         rep["check"] = check or "none"
+        if setup.get("aperture_mm"):   # 2.3.1 (nit): recorded in the night's setup from 2.3.1 on
+            try:
+                rep["aperture_mm"] = f"{float(setup['aperture_mm']):g} mm"
+            except (TypeError, ValueError):
+                pass
         # Frame numbers: the number at the end of each light's file name (as Blink shows it), else the frame's place
         # in the night's measured frames.
         night_obs = sorted([o for o in app.observations if o.night == night], key=lambda o: o.jd)
@@ -1061,6 +1066,10 @@ class TransitPage:
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        if meta.get("scint"):
+            lines.append(f"Scintillation: {meta['scint']}")   # 2.3.1 (nit): the aperture the error bars used
+        if rep.get("aperture_mm"):
+            lines.append(f"Telescope aperture at photometry: {rep['aperture_mm']}")   # 2.3.1
         if rep.get("flip_like"):
             lines.append(f"Warning: {rep['flip_like']}")   # 2.3.0 (item 10)
         if rep.get("stack"):   # 2.3.0 (#54)

@@ -7,8 +7,8 @@ authors:
     family-names: "Armbrust"
     affiliation: "Shiloh Hill Observatory"
   - name: "Shiloh Hill Observatory"
-version: "2.3.0"
-date-released: "2026-11-03"
+version: "2.3.1"
+date-released: "2026-11-05"
 doi: "10.5281/zenodo.23417063"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/SHOBS-S/SHOBS-P"

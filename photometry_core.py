@@ -10645,6 +10645,53 @@ def edge_problems(observations: list, shape: tuple, comp_names: list[str], check
     return out
 
 
+def check_edge_alternative(observations: list, shape: tuple, margin: float, check_name: str,
+                           max_dmag: float = 1.5) -> dict | None:
+    """2.3.1 (nit): a check star near (or off) the frame edge: the spare that would have made a better check: measured
+    in at least 95 % of the night's frames, never closer than `margin` px to an edge, closest to the check in
+    instrumental brightness (within max_dmag). Returns {"name", "closest_px", "dmag" (spare - check)} or None."""
+    h, w = shape[0], shape[1]
+    obs = list(observations or [])
+    if not obs or not check_name:
+        return None
+    k_inst = [o.kmag for o in obs if getattr(o, "kmag", None) is not None and math.isfinite(o.kmag)]
+    if not k_inst:
+        return None
+    k_med = float(np.median(k_inst))
+    tracks: dict = {}
+    for o in obs:
+        pos = getattr(o, "pos", None) or {}
+        for name, xy in (pos.get("s") or {}).items():
+            v = (getattr(o, "spare_insts", None) or {}).get(name)
+            if xy is not None and v is not None and math.isfinite(v):
+                tracks.setdefault(name, ([], []))
+                tracks[name][0].append(xy)
+                tracks[name][1].append(v)
+    best = None
+    for name, (pts, vals) in tracks.items():
+        if name == check_name or len(vals) < 0.95 * len(obs):
+            continue
+        xy = np.array(pts, dtype=float)
+        closest = float(np.nanmin(np.minimum.reduce([xy[:, 0], xy[:, 1], (w - 1) - xy[:, 0], (h - 1) - xy[:, 1]])))
+        if not closest >= margin:
+            continue
+        dmag = float(np.median(vals)) - k_med
+        if abs(dmag) > max_dmag:
+            continue
+        if best is None or abs(dmag) < abs(best["dmag"]):
+            best = {"name": name, "closest_px": closest, "dmag": dmag}
+    return best
+
+
+def check_missing_frames(observations: list) -> list[int]:
+    """2.3.1 (nit): indices (in time order) of a night's frames where the check star's aperture or sky ring fell off
+    the frame (2.3.0 #50 keeps those frames without a check value; Obs.check_lost says why). A check too faint in a
+    frame ("no flux above sky") is not an edge problem and is not counted."""
+    obs = sorted(observations or [], key=lambda o: o.jd)
+    return [k for k, o in enumerate(obs)
+            if getattr(o, "check_lost", "") and "no flux above sky" not in str(o.check_lost)]
+
+
 def night_setup_differences(new: dict, others: dict) -> list[str]:
     """2.2.3: how a night's reduction settings differ from the other nights of a series.
 

@@ -64,7 +64,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 # 2.3.0 (item 11): the Input page's calibration boxes (a folder of raw frames or one SHOBS-P master each)
 CAL_KEYS = ("Bias", "Dark", "Dark flats", "Flat")
 CAL_KIND = {"Bias": "bias", "Dark": "dark", "Dark flats": "darkflat", "Flat": "flat"}
@@ -1104,6 +1104,93 @@ class ScrollBody:
 
     def pack(self, **kw):
         self.outer.pack(**kw)
+
+
+def lights_scope(header: dict | None) -> dict | None:
+    """2.3.1 (nit): which telescope took a set of lights, for the Telescope aperture check: {"telescope", "camera",
+    "focal_mm"} from TELESCOP / INSTRUME / FOCALLEN. None when the header names none of them."""
+    h = header or {}
+    tel = str(h.get("TELESCOP") or "").strip()
+    cam = str(h.get("INSTRUME") or "").strip()
+    focal = core.header_optics(h).get("focal_mm")
+    if not tel and not cam and not focal:
+        return None
+    return {"telescope": tel, "camera": cam, "focal_mm": round(float(focal), 1) if focal else None}
+
+
+def same_scope(a: dict | None, b: dict | None, tol: float = 0.03) -> bool:
+    """2.3.1: two lights_scope() records are one telescope: same TELESCOP and INSTRUME (case and spacing aside) and
+    focal lengths within 3 % (an ASIAIR writes its plate-solved focal length, 2898–2906 mm on one 14\" RC)."""
+    if not a or not b:
+        return False
+
+    def word(v):
+        return " ".join(str(v or "").lower().split())
+    if word(a.get("telescope")) != word(b.get("telescope")) or word(a.get("camera")) != word(b.get("camera")):
+        return False
+    fa, fb = a.get("focal_mm"), b.get("focal_mm")
+    if fa is None or fb is None:
+        return fa is None and fb is None
+    try:
+        return abs(float(fa) - float(fb)) <= tol * max(float(fa), float(fb))
+    except (TypeError, ValueError):
+        return False
+
+
+def scope_words(scope: dict | None) -> str:
+    """2.3.1: "ZWO ASI2600MM Pro, focal 2098 mm" for the aperture question."""
+    if not scope:
+        return "unknown telescope"
+    parts = [p for p in (scope.get("telescope"), scope.get("camera")) if p]
+    if scope.get("focal_mm"):
+        parts.append(f"focal {float(scope['focal_mm']):.0f} mm")
+    return ", ".join(parts) or "unknown telescope"
+
+
+CATALOG_OUTAGE_MAIN = ("Gaia DR3", "APASS DR9", "Tycho-2")   # 2.3.1: the catalogs a solve leans on
+
+
+def catalog_outage_text(errors: dict | None, counts: dict | None) -> str:
+    """2.3.1 (nit): a solve that failed while catalog services were down says so first, naming them: "Gaia DR3 (HTTP
+    503) and APASS DR9 (no stars came back) did not answer: a catalog service outage, not your settings." Empty when
+    the main catalogs answered. A catalog that 'answered' with no stars counts only next to one that failed (a small
+    field can have no Tycho-2 star, but Gaia always has some)."""
+    errors = {str(k): v for k, v in (errors or {}).items()}
+    counts = {str(k): v for k, v in (counts or {}).items()}
+    failed = [c for c in CATALOG_OUTAGE_MAIN if c in errors]
+    empty = [c for c in CATALOG_OUTAGE_MAIN if c not in errors and c in counts and not counts.get(c)]
+    if not failed and "Gaia DR3" not in empty:
+        return ""
+    parts = [f"{c} ({str(errors[c]).strip() or 'no answer'})" for c in failed]
+    parts += [f"{c} (no stars came back)" for c in empty if c == "Gaia DR3" or failed]
+    if not parts:
+        return ""
+    names = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    return (f"{names} did not answer: a catalog service outage, so too few catalog stars came back to match. That is "
+            "not your RA/Dec or Optics values. Solve again in a few minutes.")
+
+
+def period_search_floor(period: dict | None, min_box=None) -> float | None:
+    """2.3.1 (nit): the shortest period the search tried (days): from its frequency grid, else the Period search box."""
+    try:
+        freqs = np.asarray((period or {}).get("freqs"), dtype=float)
+        freqs = freqs[np.isfinite(freqs) & (freqs > 0)]
+        if freqs.size:
+            return float(1.0 / freqs.max())
+    except Exception:
+        pass
+    try:
+        v = float(min_box)
+        return v if math.isfinite(v) and v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def too_short_period_text(span_days: float, shortest_days: float) -> str:
+    """2.3.1 (nit): the one line the Period box shows for a night too short to test any searched period."""
+    return (f"Too short for a period search: one night of {span_days * 24:.1f} h covers under two cycles of even the "
+            f"shortest period searched ({shortest_days:g} d = {shortest_days * 24:.1f} h). Add nights, or observe "
+            "longer.")
 
 
 def shade_long_periods(ax, span_days: float, periods) -> bool:
@@ -2455,12 +2542,39 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         need = sky_out + 5.0
         safe = 3.0 * sky_out
         if dist < need:
-            return (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
+            note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
                     f"star at least {need:.0f} px in, with room for drift — pick a star further in")
-        if dist < safe:
-            return (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
+        elif dist < safe:
+            note = (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
                     "stay clear of the edge and the weakest part of the flat")
-        return ""
+        else:
+            return ""
+        if role == "check":
+            # 2.3.1 (nit): a check that drifts off the edge loses its value in those frames; name a star farther in
+            alt = self._check_alternative_ring(xy, safe)
+            if alt:
+                note += f"; {alt} is farther in and would make a good check"
+        return note
+
+    def _check_alternative_ring(self, xy, safe: float) -> str:
+        """2.3.1 (nit): the nearest-in-brightness suggested comp (green ring S1, S2 …) not marked, at least `safe` px
+        from every edge: 'S2 (TYC 3089-883-1)', or ''."""
+        if self.preview is None or not self.suggested_comps:
+            return ""
+        h, w = self.preview.shape[:2]
+        taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
+        k_inst = self._inst_at(xy)
+        best = None
+        for k, (name, _dm, x, y) in enumerate(self.suggested_comps):
+            if min(x, y, (w - 1) - x, (h - 1) - y) < safe:
+                continue
+            if any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken) or math.hypot(x - xy[0], y - xy[1]) < 2.0:
+                continue
+            m = self._inst_at((x, y))
+            score = abs(m - k_inst) if math.isfinite(m) and math.isfinite(k_inst) else 9.0 + k
+            if best is None or score < best[0]:
+                best = (score, f"S{k + 1} ({name})")
+        return best[1] if best else ""
 
     def _raw_peak_at(self, xy) -> float:
         """2.2.19 (#16): the brightest raw pixel around xy (image coordinates) in the reference frame's raw file. Only a
@@ -3578,7 +3692,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         optics.pack(fill=X, pady=(10, 0))
         # 2.2.16 (item 5): the telescope's name (row 0; the header's TELESCOP is often the mount).
         self._field(optics, 0, "Telescope", self.telescope_name, width=12, hint="blank = from the header")
-        self._field(optics, 1, "Telescope aperture (mm)", self.aperture_mm, width=12, hint="for the scintillation error")
+        self._aperture_entry = self._field(optics, 1, "Telescope aperture (mm)", self.aperture_mm, width=12,
+                                           hint="for the scintillation error")   # 2.3.1: focused by the aperture check
         self._field(optics, 2, "Focal length (mm)", self.focal_mm, width=12)
         self._field(optics, 3, "Pixel size (µm)", self.pixel_um, width=12)
         ttk.Label(optics, text="Binning", style="Card.TLabel").grid(row=4, column=0, sticky=W, padx=(0, 10), pady=3)
@@ -4864,8 +4979,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 kept = self._check_lights_targets(lights, header)
                 self._check_target_field(kept if kept is not None else header)
                 self._update_dark_exposure_note()   # 2.2.19 (#20)
+                self._lights_scope = None
                 if not core.is_microobservatory(lights[0], header):
                     self._header_setup(header)   # 2.2.9: site and optics from the header (fills, asks, borrows)
+                    self._check_aperture_scope(header)   # 2.3.1 (nit): the aperture belongs to the telescope
                 self._update_mount_hint(lights, log=True)   # 2.2.18 (item 8)
                 if not core.is_microobservatory(lights[0], header):
                     self._save_header_mount(lights)   # 2.2.19 (nit)
@@ -5473,6 +5590,88 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         else:
             self.settings["header_declined"] = (declined + [key])[-20:]
             self._save_settings()
+
+    # ---- 2.3.1 (nit): the Telescope aperture box follows the telescope, not the last data set ----------------------
+    APERTURE_SCOPES_KEPT = 20
+
+    def _aperture_box(self):
+        try:
+            v = float(self.aperture_mm.get())
+            return v if math.isfinite(v) and v > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _check_aperture_scope(self, header: dict):
+        """2.3.1 (nit, John 5 Nov): the Telescope aperture (it sets the scintillation error) stayed at the last data
+        set's value (MicroObservatory's 152 mm on an 8SE's frames). When the lights' header gives no aperture:
+        - lights from a telescope measured before with another aperture: offer that one;
+        - lights from another telescope than the box's value was last used with: ask whether it is right.
+        Asks only; the aperture used is still the box's (written in the night's setup and the settings file)."""
+        scope = lights_scope(header)
+        self._lights_scope = scope
+        if scope is None or "aperture_mm" in core.header_optics(header) or getattr(self, "_loading_meta", False):
+            return
+        cur = self._aperture_box()
+        known = next((r for r in reversed(self.settings.get("aperture_scopes") or [])
+                      if isinstance(r, dict) and same_scope(r, scope)), None)
+        if known is not None:
+            try:
+                ap = float(known.get("aperture_mm"))
+            except (TypeError, ValueError):
+                return
+            if cur is not None and abs(ap - cur) < 0.5:
+                return
+            if messagebox.askyesno(
+                    APP_TITLE,
+                    f"These lights come from {scope_words(scope)}. Last time you measured frames from that "
+                    f"telescope the Telescope aperture was {ap:g} mm; the box says "
+                    + (f"{cur:g} mm" if cur is not None else "nothing") + ".\n\n"
+                    f"Use {ap:g} mm for these frames? (It sets the scintillation part of the error bars.)"):
+                self.aperture_mm.set(f"{ap:g}")
+                self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}.")
+            else:
+                self.log(f"Telescope aperture kept at {cur:g} mm for {scope_words(scope)}." if cur is not None else
+                         "Telescope aperture left empty: no scintillation error for these frames.")
+            return
+        last = self.settings.get("aperture_scope_last")
+        if not isinstance(last, dict) or same_scope(last, scope) or cur is None:
+            return
+        try:
+            last_ap = float(last.get("aperture_mm"))
+        except (TypeError, ValueError):
+            return
+        if abs(last_ap - cur) >= 0.5:
+            return   # the box was changed since that run: someone already typed a value for these frames
+        if messagebox.askyesno(
+                APP_TITLE,
+                f"These lights come from {scope_words(scope)}, another telescope than the last frames you measured "
+                f"({scope_words(last)}).\n\nThe Telescope aperture box still says {cur:g} mm from those frames. Is "
+                f"{cur:g} mm right for this telescope? (It sets the scintillation part of the error bars.)\n\n"
+                "Yes keeps it; No takes you to the box (Input page, Optics) to type this telescope's aperture."):
+            self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
+            return
+        self.log(f"Telescope aperture: type the aperture of {scope_words(scope)} in the Optics box (Input page); "
+                 f"it says {cur:g} mm from the last frames.")
+        self.status.set("Type this telescope's aperture in the Optics box (Input page).")
+        box = getattr(self, "_aperture_entry", None)
+        if box is not None:
+            try:
+                self.after_idle(lambda: (box.focus_set(), box.select_range(0, "end")))
+            except Exception:
+                pass
+
+    def _remember_aperture_scope(self):
+        """2.3.1: at a photometry run, which aperture went with which telescope (for _check_aperture_scope)."""
+        scope = getattr(self, "_lights_scope", None)
+        ap = self._aperture_box()
+        if not scope or ap is None:
+            return
+        rec = dict(scope, aperture_mm=ap)
+        kept = [r for r in (self.settings.get("aperture_scopes") or [])
+                if isinstance(r, dict) and not same_scope(r, scope)]
+        self.settings["aperture_scopes"] = (kept + [rec])[-self.APERTURE_SCOPES_KEPT:]
+        self.settings["aperture_scope_last"] = rec
+        self._save_settings()
 
     def _restore_own_setup(self):
         """Back from someone else's frames (MicroObservatory) to your own site, optics, and camera settings."""
@@ -6811,7 +7010,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             channel = f"{core.RGB_CHANNEL_WORDS[self._rgb_channel]} channel of the color images"
         self.debayer_info.set(f"Preview: {channel}  →  {mono.shape[1]}×{mono.shape[0]}"
                               + ("" if self.pattern.get() == core.MONO else " (superpixel)"))
-        self.log(f"Preview debayered: {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
+        # 2.3.1 (nit): the Photometry image's title says what the image is: "Monochrome" on a mono camera (it said
+        # "Debayered (luminance)" on MicroObservatory frames), the channel for color images taken apart, else the debayer.
+        if self.pattern.get() == core.MONO:
+            self._preview_title = (f"{core.RGB_CHANNEL_WORDS[self._rgb_channel].capitalize()} channel"
+                                   if self._rgb_channel else "Monochrome")
+        else:
+            self._preview_title = f"Debayered ({self.debayer_mode.get()})"
+        self.log(("Preview" if self.pattern.get() == core.MONO else "Preview debayered")
+                 + f": {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
         self.refresh_preview()
         _tok = self._preview_token
         self.after(400, lambda: self._aperture_caution(_tok))   # 2.2.19 (nit, #30): the aperture kept from before
@@ -8946,7 +9153,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._photo_hover_key = None
         if self.preview_is_debayered:
             what = "watch or exclude stars" if self.mode_key == "discovery" else "mark stars"
-            self.photo_ax.set_title(f"Debayered ({self.debayer_mode.get()}) — click to {what}, "
+            title = getattr(self, "_preview_title", None) or f"Debayered ({self.debayer_mode.get()})"   # 2.3.1 (nit)
+            self.photo_ax.set_title(f"{title} — click to {what}, "
                                     "right-click a marker to clear it")
         else:
             self.photo_ax.set_title("Calibrated mosaic — choose the channel on the Calibrate page")
@@ -11204,8 +11412,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._chart_diag["catalog_retrying"] = dict(cat_info.get("retrying") or {})   # 2.2.19 (#11)
                 self._chart_diag["catalog_from_cache"] = dict(cat_info.get("from_cache") or {})   # 2.2.21 (#21)
                 if not stars:
-                    raise ValueError("No catalog returned stars for this field ("
-                                     + "; ".join(f"{c}: {e}" for c, e in failed.items()) + ").")
+                    # 2.3.1 (nit): say it is the catalog services, not the user's RA/Dec or optics
+                    raise ValueError("No star catalog answered for this field ("
+                                     + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "). That is a catalog "
+                                     "service outage, not your RA/Dec or Optics values. Try Solve again later.")
                 usable = [s for s in stars if s.get("bright") is not None]
                 usable.sort(key=lambda s: s["bright"])
                 match_set = usable[:60]
@@ -11436,13 +11646,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.9: say why, in plain words.
             why = []
             n_src = diag.get("sources", 0)
+            # 2.3.1 (nit): catalogs that failed or came back empty (Joanna's WASP-50 b: Gaia ESA 503, VizieR/APASS 0
+            # stars) are named first; then the plate scale and RA/Dec are only something to check if they persist.
+            outage = catalog_outage_text(diag.get("catalog_errors"), diag.get("catalogs"))
             if n_src < 15:
                 why.append(f"Only {n_src} stars were found on this frame"
                            + (f" (even after stacking {diag['stacked'][0]} frames)" if diag.get("stacked") else "")
                            + ": too few to match a catalog. Very short exposures or a small telescope do this; mark "
                              "the stars by hand and type their names and magnitudes.")
-            why.append(f"The plate scale used is {diag.get('scale', 0):.3f}\"/px, from the focal length and pixel size in "
-                       "the Optics box: for another telescope's frames, enter its values.")
+            if outage:
+                why.insert(0, outage)
+                why.append(f"If it still does not lock once the catalogs answer: the plate scale used is "
+                           f"{diag.get('scale', 0):.3f}\"/px, from the focal length and pixel size in the Optics box.")
+            else:
+                why.append(f"The plate scale used is {diag.get('scale', 0):.3f}\"/px, from the focal length and pixel "
+                           "size in the Optics box: for another telescope's frames, enter its values.")
             if auto:
                 self.log(f"Solve: the catalog stars did not lock onto this frame ({hits} of {n} matched). "
                          + " ".join(why) + " Check binning too, then Solve again. You can mark stars meanwhile; "
@@ -11452,14 +11670,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return
             messagebox.showinfo(
                 APP_TITLE,
-                f"The catalog stars did not lock onto this frame ({hits} of {n} matched, {needed} needed).\n\n"
-                f"Target marker: ({tx:.0f}, {ty:.0f})   stars found in frame: {diag.get('sources', 0)}\n"
+                (f"Star catalogs did not answer, so the frame could not be solved ({hits} of {n} catalog stars "
+                 f"matched, {needed} needed).\n\n" if outage else
+                 f"The catalog stars did not lock onto this frame ({hits} of {n} matched, {needed} needed).\n\n")
+                + f"Target marker: ({tx:.0f}, {ty:.0f})   stars found in frame: {diag.get('sources', 0)}\n"
                 f"Plate scale used: {diag.get('scale', 0):.3f}\"/px (camera bin {diag.get('camera_bin', 1)}, "
                 f"app bin {self._image_binning()}, "
                 + ("monochrome)" if self.pattern.get() == core.MONO else "superpixel x2)") + "\n\n"
                 + "\n\n".join(why) + "\n\n"
-                "Check that the Target marker is on your star, then RA/Dec, focal length, pixel size, and binning.\n"
-                "You can always type the comp and check magnitudes in by hand." + hint,
+                + ("Solve again in a few minutes. Meanwhile you can mark stars and type the comp and check "
+                   "magnitudes by hand." if outage else
+                   "Check that the Target marker is on your star, then RA/Dec, focal length, pixel size, and binning.\n"
+                   "You can always type the comp and check magnitudes in by hand.") + hint,
             )
             return
         if diag.get("stacked"):
@@ -13031,6 +13253,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if only is not None:
             self._remeasure = {"night": night or self._latest_night()}   # 2.3.0 (#50): _photometry_done adds them
+        try:
+            self._remember_aperture_scope()   # 2.3.1 (nit)
+        except Exception:
+            traceback.print_exc()
         self.photo_bring_back()   # 2.2.16 (item 16): the run's progress and results show on the page
         # 2.3.0 (#54): a stack run ends in _stack_done; its stacks carry their frames' records
         done_cb = self._stack_done if stack_run else self._photometry_done
@@ -13758,8 +13984,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._refresh_period()
         self._log_zero_point_check(night)   # 2.2.14 (item 10)
         self._noise_note(night_points)
-        self._warn_edges(night, night_points)
-        self._warn_run_skips(night)   # 2.3.0 (#50, item 10): on screen, not only in the log
+        # 2.3.1 (nit): one pop-up for the edge problems and the frames left out (two came one after the other)
+        edge_lines = self._warn_edges(night, night_points)
+        self._warn_run_skips(night, edge_lines)   # 2.3.0 (#50, item 10): on screen, not only in the log
         try:
             self._stack_after_run(night, night_points)   # 2.3.0 (#54): noise check, Stack row
         except Exception as exc:
@@ -14194,18 +14421,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     as_spares.append(n)
         info["measured"] = {"comps": run_comps, "spares": as_spares}
 
-    def _warn_run_skips(self, night: str):
+    def _warn_run_skips(self, night: str, edge_lines: list | None = None):
         """2.3.0 (#50, item 10): say on screen (and in the log) what the run left out: skipped frames with their
-        reason, comps left out of some frames, and a ~180° turn on an alt-az night."""
+        reason, comps left out of some frames, and a ~180° turn on an alt-az night. 2.3.1: with the stars near the
+        frame edge (_warn_edges) in the same pop-up."""
         info = self._night_info(night)
         text = self.comp_skip_text(night)
         if text:
             for line in text.splitlines():
                 self.log(f"{night}: {line}")
         flips = info.get("flip_like") or []
-        if not flips and not text:
+        edge_lines = list(edge_lines or [])
+        if not flips and not text and not edge_lines:
             return
         body = ["⚠ " + self.flip_like_text(fl) for fl in flips] + ([text] if text else [])
+        if edge_lines:
+            body.append("Near the frame edge or a weak part of the flat:\n  • " + "\n  • ".join(edge_lines))
         messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}:\n\n" + "\n\n".join(body)
                                + "\n\nThe Photometry page shows this under the settings row.")
 
@@ -14404,11 +14635,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 traceback.print_exc()
 
-    def _warn_edges(self, night: str, night_points: list):
-        """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat)."""
+    def _warn_edges(self, night: str, night_points: list) -> list:
+        """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat).
+        2.3.1: returns the lines for the pop-up (comps in use and the check); spares are only logged."""
         shape = getattr(self.preview, "shape", None) if self.preview is not None else None
         if not shape:
-            return
+            return []
         try:
             margin = 3.0 * float(self.sky_out.get())
         except Exception:
@@ -14420,12 +14652,48 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                           flat, scale)
         except Exception:
             problems = []
-        if not problems:
-            return
-        for p in problems:
+        # 2.3.1 (nit, John 4 Nov): a spare near the edge does not matter (it is only measured): a quiet log line. The
+        # pop-up is kept for the comps in use and the check; a check near the edge also names a better check star.
+        spares = [p for p in problems if p.startswith("spare ")]
+        loud = [p for p in problems if not p.startswith("spare ")]
+        for p in spares:
+            self.log(f"{night}: {p.split(':')[0]} (a spare: only measured, not used; nothing to do).")
+        check_line = self._check_edge_line(night, night_points, shape, margin,
+                                           any(p.startswith("check ") for p in loud))
+        if check_line:
+            loud = [p for p in loud if not p.startswith("check ")] + [check_line]
+        for p in loud:
             self.log(f"⚠ {night}: {p}")
-        messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}: near the frame edge or a weak part of the flat:\n\n  • "
-                               + "\n  • ".join(problems))
+        return loud   # shown in _warn_run_skips' pop-up
+
+    def _check_edge_line(self, night: str, night_points: list, shape, margin: float, near: bool) -> str:
+        """2.3.1 (nit): the check star near the edge, or off it in some frames (TrES-3 b 0705: Gaia DR3 …4848 off the
+        edge in frames 194–213): how many frames lost their check value, and a spare that stays farther in."""
+        check = self.check_used
+        if not check:
+            return ""
+        miss = core.check_missing_frames(night_points)
+        if not near and not miss:
+            return ""
+        import transit_ui as tu
+        pts = sorted(night_points, key=lambda o: o.jd)
+        nums = tu.frame_numbers([getattr(o, "path", "") for o in pts])
+        parts = [f"check {check} " + ("comes close to the frame edge" if near else "is at the frame edge")]
+        if miss:
+            parts.append(f"and is off it in {len(miss)} frame{'s' if len(miss) != 1 else ''} "
+                         f"({tu.frame_ranges([nums[k] for k in miss])}), which have no check value")
+        alt = core.check_edge_alternative(night_points, shape, margin, check)
+        if alt:
+            star = self._chart_star_named(alt["name"]) if hasattr(self, "_chart_star_named") else None
+            mag = (star or {}).get("mag")
+            parts.append(f". A better check star stays farther in: {alt['name']}"
+                         + (f" ({core.band_label(self._band())} {float(mag):.2f})" if mag is not None else "")
+                         + f", {abs(alt['dmag']):.1f} mag {'fainter' if alt['dmag'] > 0 else 'brighter'} than "
+                         f"{check}, at least {alt['closest_px']:.0f} px in all night (measured as a spare). Pick it as "
+                         "the check next time")
+        else:
+            parts.append(f". Pick a check star at least {margin:.0f} px in next time")
+        return " ".join(parts[:2]) + "".join(parts[2:]) + "."
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
                             sky_out) -> dict:
@@ -14532,6 +14800,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         out = {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
                "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
                "comps": list(self.comps_used), "check": self.check_used or ""}
+        # 2.3.1 (nit): the Telescope aperture and elevation the scintillation error used (they were not recorded)
+        if self._aperture_box() is not None:
+            out["aperture_mm"] = self._aperture_box()
+        if not self.use_scint.get():
+            out["scintillation"] = "off"
         # 2.2.9: which telescope/camera and observer took the night, so nights from other equipment are recognized.
         inst = self._lights_instrument()
         if inst:
@@ -16285,7 +16558,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         span_used = (max(o.jd for o in usable) - min(o.jd for o in usable)) if usable else 0.0
         too_short = bool(self.period) and len(nights) == 1 and span_used < 2.0 * self.period["period_days"]
         self._period_too_short = too_short
-        if self.period and usable:
+        # 2.3.1 (nit): one night shorter than two cycles of even the SHORTEST period searched (Tessa's < 1 h eVscope
+        # night) cannot test any period: say only that, instead of a meaningless best peak (20 d) with three ⚠ marks.
+        shortest = period_search_floor(self.period, self._num(self.min_period)) if self.period else None
+        hopeless = bool(too_short and shortest and span_used < 2.0 * shortest)
+        self._period_hopeless = hopeless
+        if self.period and usable and hopeless:
+            ax.text(0.5, 0.5, f"One night of {span_used * 24:.1f} h is too short for a period search:\n"
+                              f"it covers under two cycles of even the shortest\nperiod searched "
+                              f"({shortest:g} d = {shortest * 24:.1f} h). Add nights.",
+                    transform=ax.transAxes, ha="center", va="center", fontsize=9, color="#5d6d76",
+                    bbox=dict(boxstyle="round", fc="#ffffff", ec="#c9d6de", alpha=0.9))
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_title("Too short for a period search")
+            period_lines = [too_short_period_text(span_used, shortest)]
+        elif self.period and usable:
             p = self.period["period_days"]
             epoch = self.period["epoch_jd"]
             u_jd = np.array([o.jd for o in usable])
@@ -16400,7 +16688,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if getattr(self, "_period_bins_note", ""):
                 period_lines.append(self._period_bins_note)
             head = 0 if significant else 1
-            if self.period.get("alias_text"):
+            # 2.3.1 (nit): on one short night the peak is already "not reliable"; a day alias or the search's edge
+            # adds nothing but ⚠ marks (the cautions below say what to do: add nights).
+            if self.period.get("alias_text") and not too_short:
                 period_lines[head] += "   ⚠ near a day alias"
                 cautions.append(self.period["alias_text"])
             carried = self.period.get("carried_by") or []
@@ -16416,11 +16706,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 cautions.append(am_text + (" " + am_check["why"] if am_check.get("why") else
                                            " The period survives with the trend taken out and without the "
                                            "high-airmass nights."))
-            edge_text = core.period_edge_text(self.period)
+            edge_text = core.period_edge_text(self.period) if not too_short else ""
             if edge_text:
                 period_lines[head] += "   ⚠ at the edge"
                 cautions.append(edge_text)
-            if math.isfinite(baseline) and p > baseline / 1.5:
+            if math.isfinite(baseline) and p > baseline / 1.5 and not too_short:
                 cautions.append(f"The data span only {baseline:.2f} d, under 1.5 cycles of the best period; it is not "
                                 "pinned down yet.")
             marked = self._parse_marks()
@@ -16549,14 +16839,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             period_axis = 1.0 / self.period["freqs"]
             ax.plot(period_axis, self.period["power_spectrum"], color="#c0c6cc" if too_short else "#0067c0", lw=0.8)
             shade_long_periods(ax, span_used, period_axis)
-            if too_short:
+            if getattr(self, "_period_hopeless", False):   # 2.3.1 (nit): no best peak to point at
+                ax.text(0.5, 0.5, "Too short for a period search:\nadd nights",
+                        transform=ax.transAxes, ha="center", va="center", fontsize=9, color="#5d6d76",
+                        bbox=dict(boxstyle="round", fc="#ffffff", ec="#c9d6de", alpha=0.9))
+            elif too_short:
                 ax.text(0.5, 0.5, "Periods longer than half the night\ncannot be told apart yet",
                         transform=ax.transAxes, ha="center", va="center", fontsize=9, color="#5d6d76",
                         bbox=dict(boxstyle="round", fc="#ffffff", ec="#c9d6de", alpha=0.9))
             pw = np.asarray(self.period["power_spectrum"])
             self._hover_sets.append((ax, period_axis, pw, [f"P = {pp:.5f} d ({pp * 24:.3f} h)\npower {vv:.3f}"
                                                            for pp, vv in zip(period_axis, pw)], 0.0))
-            ax.axvline(self.period["period_days"], color="#c43b3b", lw=0.8)
+            if not getattr(self, "_period_hopeless", False):
+                ax.axvline(self.period["period_days"], color="#c43b3b", lw=0.8)
             show_legend = False
             if self.catalog_period and period_axis.min() <= self.catalog_period <= period_axis.max():
                 ax.axvline(self.catalog_period, color="#2e7d32", lw=0.8, ls="--", label="VSX")
@@ -18340,6 +18635,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
         with core.AsciiWriter(path) as fh:
             fh.write(self._report_text(points))
+        self._write_variables_settings(path, points)   # 2.3.1 (nit): Variables reports get a settings file too
         self._note_report(points, path, scope)
         self._field_image_with_report(path)   # 2.2.19 (#28)
         self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
@@ -18351,6 +18647,114 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs",
                           note=warn)   # 2.2.15 (item 8)
         return True
+
+    # ---- 2.3.1 (nit): <report stem>_settings.txt for Variables reports (Transits has had one since 2.2.19) ---------
+    def variables_settings_lines(self, points: list) -> list:
+        """What the reported points were measured with, night by night, from each night's stored setup (what the
+        photometry used, not what the boxes say now), plus the report-wide choices. One 'Name: value' per line."""
+        import transit_ui as tu
+        star = self.star_id.get().strip()
+        auid = str(getattr(self, "target_auid", "") or "").strip()
+        if getattr(self, "target_auid_name", "") != star:
+            auid = ""
+        nights = []
+        for o in sorted(points, key=lambda o: o.jd):
+            if o.night not in nights:
+                nights.append(o.night)
+        lines = [f"Star: {star or 'not named'}" + (f" (AUID {auid})" if auid else ""),
+                 f"Mode: {self.mode_key}",
+                 f"Points reported: {len(points)} on {len(nights)} night{'s' if len(nights) != 1 else ''}",
+                 f"Filter: {'/'.join(sorted({o.filt for o in points})) or 'CV'}"]
+        comps = list(self.active_comps or self.comps_used or [])
+        mags = []
+        for role in COMP_ROLES:
+            name, mag = getattr(self, f"{role}_name").get().strip(), getattr(self, f"{role}_mag").get().strip()
+            if name and mag and name in comps:
+                mags.append(f"{name} {mag}")
+        lines.append("Comps in the report: " + (", ".join(comps) or "none recorded")
+                     + (" (Use comps choice)" if self.active_comps else "")
+                     + (f"; catalog magnitudes {', '.join(mags)}" if mags else ""))
+        check_mag = self.check_mag.get().strip()
+        lines.append(f"Check in the report: {self.check_used or 'none'}" + (f" ({check_mag})" if check_mag and self.check_used else ""))
+        lines.append("Scintillation: " + self._scint_note())
+        lines.append("Flagged points: " + ("left out" if self.skip_flagged.get() else "kept"))
+        for name, var in (("Check-star zero point", "use_check_zp"), ("Segments lined up", "norm_segments"),
+                          ("Pier sides lined up", "pier_segments"), ("Flip lined up", "align_flip")):
+            v = getattr(self, var, None)
+            try:
+                if v is not None and v.get():
+                    lines.append(f"{name}: on")
+            except Exception:
+                pass
+        for night in nights:
+            setup = self._night_info(night)
+            lines.append("")
+            lines.append(f"Night: {self.night_label(night)} ({night})")
+            r, si, so = setup.get("radius"), setup.get("sky_in"), setup.get("sky_out")
+            pbin = setup.get("binning") or self.binning.get()
+            if r:
+                lines.append(f"Aperture: r {r:g} px" + (f", sky {si:g}-{so:g} px" if si and so else "")
+                             + f" (at processing bin {pbin})")
+            else:
+                lines.append("Aperture: not recorded")
+            lines.append(f"Binning: processing bin {pbin}")
+            try:
+                measured = self.measured_comps_text(night)
+            except Exception:
+                measured = ", ".join(setup.get("comps") or [])
+            lines.append("Comps measured: " + (measured or ", ".join(setup.get("comps") or []) or "none recorded"))
+            lines.append(f"Check measured: {setup.get('check') or 'none'}")
+            skips = setup.get("skipped") or []
+            if skips:
+                by_why = {}
+                for sk in skips:
+                    by_why.setdefault(core.skip_reason_word(sk.get("why", "")), []).append(sk.get("frame", ""))
+
+                def labs_text(labs):
+                    try:
+                        return tu.frame_ranges([int(str(x).lstrip("#")) for x in labs])
+                    except ValueError:
+                        return ", ".join(str(x) for x in labs)
+                lines.append("Frames skipped at photometry (reason: frame numbers): "
+                             + "; ".join(f"{why}: {labs_text(labs)}" for why, labs in by_why.items()))
+            else:
+                lines.append("Frames skipped at photometry (reason: frame numbers): none")
+            night_obs = sorted([o for o in self.observations if o.night == night], key=lambda o: o.jd)
+            nums = dict(zip((id(o) for o in night_obs), tu.frame_numbers([getattr(o, "path", "") for o in night_obs])))
+            used = {id(o) for o in points if o.night == night}
+            out_by = {}
+            for o in night_obs:
+                if id(o) not in used:
+                    why = (o.flag or "no magnitude").split()[0] if (o.flag or not math.isfinite(o.mag)) else "left out"
+                    out_by.setdefault(why, []).append(nums[id(o)])
+            lines.append("Frames left out (flag: frame numbers): "
+                         + ("; ".join(f"{why} {tu.frame_ranges(v)}" for why, v in sorted(out_by.items())) or "none"))
+            masters = setup.get("masters") or []
+            lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
+            lines.append(tu.gain_note(setup.get("photon_noise")))
+            if setup.get("aperture_mm"):
+                lines.append(f"Telescope aperture at photometry: {float(setup['aperture_mm']):g} mm")
+            stack = setup.get("stack") if isinstance(setup.get("stack"), dict) else None
+            if stack and int(stack.get("n") or 1) > 1:
+                lines.append(f"Stacking: {stack_core.stack_words(stack)} (sigma-clipped mean, whole-pixel shifts, "
+                             "never across a flip)")
+            if setup.get("app_version"):
+                lines.append(f"Reduced with: SHOBS-P {setup['app_version']}")
+        return lines
+
+    def _write_variables_settings(self, report_path: str, points: list) -> str:
+        """<report stem>_settings.txt beside a Variables AAVSO report. Never costs the report (logged on failure)."""
+        try:
+            lines = self.variables_settings_lines(points)
+            path = self._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")
+            with core.AsciiWriter(path, newline="\n") as fh:
+                fh.write(f"SHOBS-P {APP_VERSION} settings for {os.path.basename(report_path)}\n"
+                         + "\n".join(lines) + "\n")
+        except Exception as exc:
+            self.log(f"Settings file not written: {exc}")
+            return ""
+        self.log(f"Settings file: {path}")
+        return path
 
     # ---- 2.2.20 (item 4): no AUID from VSX -----------------------------------------------------------------------
     def _no_auid_needed(self) -> bool:

@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.0
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.1
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -73,6 +73,34 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.1 (screen and file changes only: every measured number is the same as in 2.3.0; S = shared by every
+mode, T = Transits, V = Variables)
+- S  Telescope aperture follows the telescope: when the lights' header gives no aperture, SHOBS-P remembers which
+     aperture each telescope (TELESCOP, INSTRUME, focal length) was measured with. Lights from a telescope you have
+     measured before offer its aperture; lights from another telescope than the last ones ask whether the box's
+     value is right (it sets the scintillation part of the error bars). It only asks: the box is never changed
+     without a Yes. Each night now records the aperture it was measured with ("Telescope aperture at photometry"
+     in the settings file).
+- S  The Photometry image's title says "Monochrome" for a mono camera (it said "Debayered (luminance)" on
+     MicroObservatory frames), or the channel for color images.
+- S  Star catalogs down: when the solve cannot lock because Gaia, APASS or Tycho-2 did not answer (or Gaia sent no
+     stars), the pop-up and the log say which catalog did not answer and to Solve again later, instead of asking
+     you to check RA/Dec, focal length and pixel size.
+- S  Stars near the frame edge: a spare near the edge is only a log line now (it is measured, not used). The comps
+     in use and the check star still get the warning, now in the same box as the frames left out (one pop-up, not
+     two). A check star that leaves the frame in some frames says in which, and names a spare as bright as it that
+     stayed farther in all night, to pick as the check next time. Marking a check near the edge names a green
+     ring (S1, S2 ...) farther in.
+- V  Variables reports get a settings file too: <report>_settings.txt beside the AAVSO report, night by night:
+     aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain,
+     telescope aperture, stacking, and the version that measured it; plus the report's comps, check, scintillation
+     and line-up options.
+- V  One night too short for a period search (under two cycles of even the shortest period searched, e.g. a 50-min
+     eVscope night): the Period box says just that ("Too short for a period search ...") with no best peak and no
+     warnings; the fold and periodogram say it too. A longer night that is still short of two cycles of its best
+     peak keeps "No reliable period yet", without the day-alias and search-edge marks.
+- T  The transit settings file also says the scintillation setting and the telescope aperture the night used.
 
 New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
 - S  Stacking when comps are weak [#54]: after a run, the Photometry page's Stack row compares the comp ensemble's
@@ -1075,6 +1103,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.1  UI only (numbers as 2.3.0): Telescope aperture follows the telescope; Monochrome title; catalog
+       outage named; edge pop-up for comps/check only, with a better check star; Variables settings file;
+       short-night period search.
 2.3.0  Stacking when comps are weak (#54); comps off the frame edge and Measure skipped frames (#50); Dark flats box;
        camera-binned gain (#53); on-sky log v2 (#55); alt-az flip warning; transit flip step (#8); planet lookup
        from the host star (#51); Tonight's transits and Transit planner removed (#52); Save corner plot.
