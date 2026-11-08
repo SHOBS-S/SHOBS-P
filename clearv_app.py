@@ -64,7 +64,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 # 2.3.0 (item 11): the Input page's calibration boxes (a folder of raw frames or one SHOBS-P master each)
 CAL_KEYS = ("Bias", "Dark", "Dark flats", "Flat")
 CAL_KIND = {"Bias": "bias", "Dark": "dark", "Dark flats": "darkflat", "Flat": "flat"}
@@ -5255,6 +5255,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def scan_folders(self):
         self._typed_site_check(action="Scan folders")   # 2.3.2 (item 1): before the header compares sites
+        self._scanned_lights = self.light_dir.get().strip()   # 2.3.2 (item 4): Calibrate knows these were scanned
         if getattr(self, "photo_popout", None) is not None:
             self.photo_bring_back()   # 2.2.17 (item 2): new lights: the image (and its buttons) back on the page
         for key, var in (
@@ -7075,6 +7076,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def run_calibration(self):
         self._typed_site_check(action="Calibrate")   # 2.3.2 (item 1)
+        # 2.3.2 (item 4): after a restart the Lights folder is filled in but not scanned, so the mono/colour detection
+        # and the header site/optics/aperture checks never ran (TrES-3 b 0705 was debayered as RGGB): run them first.
+        lights_dir = self.light_dir.get().strip()
+        if lights_dir and getattr(self, "_scanned_lights", None) != lights_dir:
+            self.log("Calibrate: the Lights folder was not scanned yet, so the Scan folders checks run first (mono or "
+                     "color camera, Bayer pattern, site and optics from the header).")
+            try:
+                self.scan_folders()
+            except Exception:
+                traceback.print_exc()   # a failed check never stops the calibration itself
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())

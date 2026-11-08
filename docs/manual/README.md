@@ -1,4 +1,4 @@
-# SHOBS-P User's Manual (version 2.3.1)
+# SHOBS-P User's Manual (version 2.3.2)
 
 > November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
 > defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20

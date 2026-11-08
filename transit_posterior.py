@@ -196,6 +196,49 @@ def free_shape_unconstrained(free_fit: dict, errors: dict, ref_depth: float | No
     return ""
 
 
+# 2.3.2 (item 7): a free shape can run away in a/R*, b or T14 with a sensible depth (Joanna's WASP-35 b,
+# MicroObservatory: a/R* 5.68 and T14 4.137 h against the published 8.53 and 3.143 h, shown as normal values).
+# Display only: the table says "not constrained" for that parameter; the fit and the saved numbers are unchanged.
+FREE_SHAPE_RATIO = 1.25     # a/R* or T14 more than 25 % from the reference
+FREE_B_OFF = 0.3            # b more than 0.3 from the reference, or its error above 0.3
+FREE_REL_ERR = 0.25         # a/R*'s own error above 25 % of its value
+
+
+def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
+    """{"a_rs" | "b" | "t14": why} for the free-shape parameters that are not constrained. ref holds the published
+    values ("a_rs", "b", "t14"; t14 in days like the fit), else the MCMC's; a missing or non-finite reference skips
+    the comparison (the error test still runs)."""
+    out = {}
+    if not free_fit:
+        return out
+    p = free_fit.get("p") or {}
+    err = free_fit.get("err") or {}
+
+    def finite(v):
+        return isinstance(v, (int, float)) and math.isfinite(v)
+
+    def ratio_off(v, r):
+        return finite(v) and finite(r) and r > 0 and v > 0 and not (1 / FREE_SHAPE_RATIO <= v / r <= FREE_SHAPE_RATIO)
+
+    a, ea = p.get("a_rs"), err.get("a_rs")
+    if finite(a):
+        if ea is not None and (not finite(ea) or ea > FREE_REL_ERR * a):
+            out["a_rs"] = f"a/R* {a:.2f} ± {ea:.2f}" if finite(ea) else f"a/R* {a:.2f} has no finite error"
+        elif ratio_off(a, ref.get("a_rs")):
+            out["a_rs"] = f"a/R* {a:.2f} against {ref['a_rs']:.2f}"
+    b, eb = p.get("b"), err.get("b")
+    if finite(b):
+        rb = ref.get("b")
+        if eb is not None and (not finite(eb) or eb > FREE_B_OFF):
+            out["b"] = f"b {b:.2f} ± {eb:.2f}" if finite(eb) else f"b {b:.2f} has no finite error"
+        elif finite(rb) and abs(b - rb) > FREE_B_OFF:
+            out["b"] = f"b {b:.2f} against {rb:.2f}"
+    t14 = free_fit.get("t14")
+    if ratio_off(t14, ref.get("t14")):
+        out["t14"] = f"T14 {t14 * 24:.2f} h against {ref['t14'] * 24:.2f} h"
+    return out
+
+
 def single_detrend_dbic(prob, best: dict, starts) -> dict:
     """2.2.19 (nit): with "Both" detrending (airmass and time slope), refit by least squares with each one alone and
     return {"airmass": ΔBIC, "time": ΔBIC, "corr": correlation of airmass with time}. ΔBIC is the flat line (same

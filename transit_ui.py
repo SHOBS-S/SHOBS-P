@@ -180,6 +180,19 @@ class TransitPage:
         self.show_bands = BooleanVar(value=True)
         ttk.Checkbutton(row4, text="credible bands", variable=self.show_bands,
                         command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(12, 0))
+        # 2.3.2 (item 6): the plot's bin width (display only: the fit, beta and the 10-min rms use every frame).
+        bins_box = ttk.Frame(row4, style="Card.TFrame")
+        ttk.Label(bins_box, text="Plot bins", style="Card.TLabel").pack(side=LEFT)
+        self.plot_bins = StringVar(value=PLOT_BIN_CHOICES[0])
+        bins_combo = ttk.Combobox(bins_box, textvariable=self.plot_bins, values=list(PLOT_BIN_CHOICES), width=7,
+                                  state="readonly")
+        bins_combo.pack(side=LEFT, padx=(4, 0))
+        try:
+            bins_combo.bind("<<ComboboxSelected>>", lambda _e: self._plot_bins_changed())
+        except Exception:
+            pass
+        bins_box.pack(side=LEFT, padx=(12, 0))
+        self._last_preview = None
         self.comp_hint = StringVar(value="")
         self.comp_hint_label = ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel",
                                          justify=LEFT)   # 2.2.19 (r2: nit): wraps at the row's width (_flow_row4)
@@ -381,6 +394,18 @@ class TransitPage:
         # 2.2.11: no hint here (the plot's placeholder says what to do); the notes column shows only real notes.
         self._notes_text([])
         self._update_comp_buttons()
+
+    def _plot_bins_changed(self):
+        """2.3.2 (item 6): a new Plot bins choice redraws the plot (fit or preview); nothing is refitted."""
+        if self.result:
+            self.draw()
+        elif self._last_preview is not None:
+            self.draw(preview=self._last_preview)
+
+    def _plot_bin_width(self, cadence_h: float) -> float:
+        """2.3.2 (item 6): the plot's bin width in hours from the Plot bins box."""
+        return plot_bin_width_h(getattr(self, "plot_bins", None).get() if getattr(self, "plot_bins", None) else
+                                PLOT_BIN_CHOICES[0], cadence_h)
 
     def _flow_row4(self, width: int):
         """Lay the Transit tools row out in as many lines as its width needs (clearv_app.flow_rows)."""
@@ -1683,10 +1708,11 @@ class TransitPage:
             x = (t - t.min()) * 24
             ax.plot(x, f, ".", color="#9aa7b0", ms=4, label="each frame")
             cadence = float(np.median(np.diff(np.sort(t)))) * 24 if t.size > 1 else 0.0
-            bins = _bin(x, f, max(10.0 / 60, 3 * cadence))
+            width = self._plot_bin_width(cadence)   # 2.3.2 (item 6)
+            bins = _bin(x, f, width)
             if bins:
                 ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k",
-                            ms=4, capsize=2, label="10-minute bins")
+                            ms=4, capsize=2, label=plot_bin_label(width))
             lo, hi = np.percentile(f, 1), np.percentile(f, 99)
             pad = max((hi - lo) * 0.15, 0.002)
             ax.set_ylim(lo - pad, hi + pad)
@@ -1759,6 +1785,9 @@ class TransitPage:
         free_off = bool(((r or {}).get("free_fit") or {}).get("unconstrained"))
         if free_off:
             ff = {}
+        # 2.3.2 (item 7): a/R*, b or T14 that ran away on their own (the depth may still be fine) say so too.
+        runaway = {} if free_off or not r else self._free_runaway(r, p, s)
+        NC = "not constrained"
 
         def val(name, fmt, scale=1.0):
             if name not in s:
@@ -1786,11 +1815,15 @@ class TransitPage:
             ("Depth (%)", val("depth", "{:.2f}", 100),
              "not constrained" if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
              num(tc.published_depth(p)[0], "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
-            ("a/R*", val("a_rs", "{:.2f}"), num(ff.get("a_rs"), "{:.2f}"), num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
-            ("Impact parameter b", val("b", "{:.3f}"), num(ff.get("b"), "{:.3f}"), num(p.get("b"), "{:.3f}"),
-             exo("Impact Parameter (b)", "{:.3f}")),
+            ("a/R*", val("a_rs", "{:.2f}"), NC if "a_rs" in runaway else num(ff.get("a_rs"), "{:.2f}"),
+             num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
+            ("Impact parameter b", val("b", "{:.3f}"), NC if "b" in runaway else num(ff.get("b"), "{:.3f}"),
+             num(p.get("b"), "{:.3f}"), exo("Impact Parameter (b)", "{:.3f}")),
             ("Inclination (°)", val("inc", "{:.2f}"), "", num(p.get("inc"), "{:.2f}"), exo("inc", "{:.2f}")),
-            ("Duration T14 (h)", val("t14", "{:.3f}", 24), num((r or {}).get("free_fit", {}).get("t14") if r and r.get("free_fit") and not free_off else None, "{:.3f}", 24),
+            ("Duration T14 (h)", val("t14", "{:.3f}", 24),
+             NC if "t14" in runaway else
+             num((r or {}).get("free_fit", {}).get("t14") if r and r.get("free_fit") and not free_off else None,
+                 "{:.3f}", 24),
              num(p.get("t14"), "{:.3f}", 24), exo("Duration", "{:.3f}", 24)),
             ("Limb darkening u1", val("u1", "{:.2f}"), "", num((r or {}).get("ld_prior", [None])[0] if r else None, "{:.2f}"), ""),
             ("Limb darkening u2", val("u2", "{:.2f}"), "", num((r or {}).get("ld_prior", [None, None])[1] if r else None, "{:.2f}"), ""),
@@ -1844,6 +1877,22 @@ class TransitPage:
         self._fit_columns(rows)
         self._show_refit_flagged()
         self._count_text()   # 2.2.14 (GitHub #7): the label follows every change of the shown fit
+
+    @staticmethod
+    def _free_runaway(r: dict, planet: dict, summary: dict) -> dict:
+        """2.3.2 (item 7): which free-shape values (a/R*, b, T14) ran away: against the published values, else the
+        MCMC's (transit_posterior.free_shape_runaway)."""
+        try:
+            import transit_posterior as tpost
+            ref = {}
+            for name in ("a_rs", "b", "t14"):
+                v = planet.get(name)
+                if not (isinstance(v, (int, float)) and math.isfinite(v)):
+                    v = (summary.get(name) or [None])[0]
+                ref[name] = v
+            return tpost.free_shape_runaway(r.get("free_fit") or {}, ref)
+        except Exception:
+            return {}
 
     def _notes_text(self, flags):
         self.notes.configure(state="normal")
@@ -1911,8 +1960,10 @@ class TransitPage:
         axr.set_visible(True)
         ax.tick_params(axis="x", labelbottom=False)
         if not r and preview is not None:
+            self._last_preview = preview   # 2.3.2 (item 6): Plot bins redraws it
             self._draw_preview(*preview)
             return
+        self._last_preview = None
         if not r:
             # 2.2.9 (John): an empty frame labeled like the fitted plot, no overlapping default ticks.
             ax.set_ylabel("Relative flux")
@@ -1940,10 +1991,11 @@ class TransitPage:
             wf = r.get("with_flagged") or {}
             ax.plot(x[fmask], y[fmask], "o", ms=4, mfc="none", mec="#d08a2e", mew=0.8,
                     label=f"flagged {wf.get('label', '')} (errors ×{wf.get('factor', 2):g})".replace("  ", " "))
-        bins = _bin(x, y, max(10.0 / 60, 3 * r["cadence_days"] * 24))
+        width = self._plot_bin_width(r["cadence_days"] * 24)   # 2.3.2 (item 6): Plot bins box; legend names it
+        bins = _bin(x, y, width)
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
-                        capsize=2, label="10-minute bins")
+                        capsize=2, label=plot_bin_label(width))
         bands = r.get("bands") if self.show_bands.get() else None
         if bands:
             # 2.2.19 (#31): 68 % and 95 % envelopes of transit × baseline over posterior draws (the baseline's spread
@@ -2020,7 +2072,7 @@ class TransitPage:
         hi = max(np.percentile(y, 99), 1.0) + 0.004
         ax.set_ylim(lo, hi)
         axr.plot(x, r["residuals"] / r["baseline"] * 100, ".", color="#9aa7b0", ms=3)
-        rb = _bin(x, r["residuals"] / r["baseline"] * 100, max(10.0 / 60, 3 * r["cadence_days"] * 24))
+        rb = _bin(x, r["residuals"] / r["baseline"] * 100, width)   # 2.3.2 (item 6): the same bins as above
         if rb:
             axr.plot([b[0] for b in rb], [b[1] for b in rb], "o", color="k", ms=3)
         axr.axhline(0, color="k", lw=0.8)
@@ -3229,7 +3281,30 @@ def parse_clock(text):
     return h, m
 
 
-def _bin(x, y, width):
+# 2.3.2 (item 6): the Transit plot's bins, display only (Joanna's WASP-35 b, MicroObservatory ~4.4 min cadence: the
+# legend said "10-minute bins" for 13-minute ones, and a 2-frame bin at +2.5 h blew up).
+PLOT_BIN_CHOICES = ("Auto", "5 min", "10 min", "15 min", "30 min")
+PLOT_BIN_MIN_FRAMES = 3
+
+
+def plot_bin_width_h(choice: str, cadence_h: float) -> float:
+    """Bin width in hours: Auto = max(10 min, 3 × cadence) (the rule before 2.3.2), else the minutes chosen."""
+    m = re.match(r"\s*(\d+(?:\.\d+)?)\s*min", str(choice or ""))
+    if m:
+        return float(m.group(1)) / 60.0
+    try:
+        cad = float(cadence_h)
+    except (TypeError, ValueError):
+        cad = 0.0
+    return max(10.0 / 60, 3 * cad if math.isfinite(cad) else 0.0)
+
+
+def plot_bin_label(width_h: float) -> str:
+    """The legend's words for the real bin width: "13-minute bins"."""
+    return f"{max(1, int(round(width_h * 60)))}-minute bins"
+
+
+def _bin(x, y, width, min_n: int = PLOT_BIN_MIN_FRAMES):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     if len(x) < 4 or width <= 0:
@@ -3238,7 +3313,7 @@ def _bin(x, y, width):
     out = []
     for lo, hi in zip(edges[:-1], edges[1:]):
         m = (x >= lo) & (x < hi) & np.isfinite(y)
-        if m.sum() >= 2:
+        if m.sum() >= min_n:
             out.append((float(x[m].mean()), float(y[m].mean()), float(y[m].std() / math.sqrt(m.sum()))))
     return out
 
