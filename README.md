@@ -114,7 +114,8 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
    while SHOBS-P runs.
 4. Double-click **Run self-test.command** to check the install.
 5. Double-click **Create shortcut.command** once for a SHOBS-P app with its logo (Applications and the Desktop); it
-   starts SHOBS-P without a Terminal window. Run it again if you move the folder.
+   starts SHOBS-P through Terminal and puts that window in the Dock while SHOBS-P runs. Run it again if you move the
+   folder.
 
 **Which Python (Linux and Mac, since 2.2.20).** The first start tries the Pythons it finds in the order 3.13, 3.12,
 3.11, then newer ones, and installs ready-made packages only, so it never asks to compile anything (no "developer

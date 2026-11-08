@@ -60,7 +60,8 @@ The first time macOS may refuse a file from an unidentified developer: right-cli
 xattr -d com.apple.quarantine *.command *.sh. Keep the Terminal window open while SHOBS-P runs. "Run
 self-test.command" checks the install. SHOBS-P's environment lives in ~/Library/Application Support/SHOBS-P.
 "Create shortcut.command" (2.3.2) makes SHOBS-P.app with the SHOBS-P logo in Applications and a SHOBS-P link on the
-Desktop (drag it to the Dock); it starts SHOBS-P without a Terminal window. Run it again if you move the folder.
+Desktop (drag it to the Dock); it starts SHOBS-P through Terminal and puts that window in the Dock while SHOBS-P
+runs (macOS lets Terminal read Downloads, Desktop and Documents). Run it again if you move the folder.
 Which Python (2.2.20): SHOBS-P tries the Pythons it finds in the order 3.13, 3.12, 3.11, then newer ones, and only
 installs ready-made packages, so it never asks to compile anything (no "developer tools" prompt on a Mac). A
 brand-new Python (e.g. 3.15) often has no ready-made packages yet; SHOBS-P then says so and moves on to the next
@@ -113,8 +114,8 @@ mode, T = Transits, V = Variables, M = Mac)
      stored points are unchanged).
 - V  The WebObs upload button is on the Results row only, not also at the end of the status bar.
 - M  Create shortcut.command makes SHOBS-P.app with the SHOBS-P logo in Applications and a SHOBS-P link on the
-     Desktop; the app starts SHOBS-P without a Terminal window (the first setup, and the first start of a new version,
-     show in Terminal).
+     Desktop; the app starts SHOBS-P through Terminal, whose window goes to the Dock while SHOBS-P runs (the first
+     setup, and the first start of a new version, stay in view; an error brings the window back up).
 - M  The window opens at a size that fits between the menu bar and the Dock (it was too big on an iMac).
 - M  Python 3.14 is the Python to install on a Mac (3.13.17, the last 3.13 with a Mac installer, works too).
 - S  README.txt wording: the spare nearest the check's brightness.

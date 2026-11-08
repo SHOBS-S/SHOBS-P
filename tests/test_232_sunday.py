@@ -163,12 +163,27 @@ class TestMacApp(unittest.TestCase):
             text = open(exe, encoding="utf-8").read()
             self.assertIn(f"APP_DIR='{os.path.realpath(repo)}'", text)
             self.assertIn("Start SHOBS-P.command", text)
+            # run-through (iMac): macOS refused the hidden start in ~/Downloads ("Operation not permitted"), so
+            # every start goes through Terminal; the window goes to the Dock (shobs_setup.sh) and the old log is gone
+            self.assertNotIn("shobs_setup.sh run", text)
+            self.assertNotIn("app_start_log", text)
+            self.assertIn("app_minimize", text)
             self.assertEqual(subprocess.run([bash, "-n", exe]).returncode, 0)
             self.assertTrue(os.path.islink(os.path.join(d, "SHOBS-P")))
             # run again (the folder moved, say): written over, still one app
             r = subprocess.run([bash, os.path.join(repo, "Create shortcut.command")], env=env, capture_output=True,
                                text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_setup_docks_the_terminal_only_when_the_app_asked(self):
+        repo = os.path.dirname(HERE)
+        text = open(os.path.join(repo, "shobs_setup.sh"), encoding="utf-8").read()
+        run = text[text.index("    run)\n"):text.index("    selftest)\n")]
+        self.assertIn("app_minimize", run)
+        self.assertIn("\\033[2t", run)       # to the Dock
+        self.assertIn("\\033[1t", run)       # back up on an error
+        self.assertIn("-le 120", run)           # a left-over note is not used
+        self.assertIn('[ "$MAC" = 1 ]', run)
 
     def test_in_the_release_zip(self):
         import zipfile

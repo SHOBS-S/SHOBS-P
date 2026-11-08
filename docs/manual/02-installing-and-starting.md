@@ -94,12 +94,12 @@ with the reason. When Tkinter is missing, it names the package to install. Insta
 6. For a SHOBS-P app with its icon (from 2.3.2), double-click **Create shortcut.command** once. It makes
    **SHOBS-P.app** with the SHOBS-P logo in Applications (the one in your home folder if you may not write to the
    main one) and puts **SHOBS-P** on your Desktop; drag it to the Dock to keep it there. The app starts SHOBS-P from
-   this folder without a Terminal window. If SHOBS-P has not been set up yet, and at the first start of a new version
-   or folder, the app opens **Start SHOBS-P.command** in Terminal instead, so you can watch the setup. While SHOBS-P
-   runs, its Dock icon is Python's (the program is Python's window), and opening the app again does nothing until
-   SHOBS-P is closed. If SHOBS-P stops with an error, its messages open in
-   TextEdit (`app_start_log.txt` in `~/Library/Application Support/SHOBS-P`). Run **Create shortcut.command** again
-   if you move the SHOBS-P folder or unzip a new version somewhere else.
+   this folder through Terminal (macOS lets Terminal, but not a homemade app, read folders in Downloads, Desktop and
+   Documents). If SHOBS-P has not been set up yet, and at the first start of a new version or folder, the Terminal
+   window stays up so you can watch the setup; other starts put it in the Dock once SHOBS-P is ready. Leave it there
+   while SHOBS-P runs (closing it closes SHOBS-P). If SHOBS-P stops with an error, the Terminal window comes back up
+   with the message. While SHOBS-P runs, its Dock icon is Python's (the program is Python's window). Run
+   **Create shortcut.command** again if you move the SHOBS-P folder or unzip a new version somewhere else.
 
 SHOBS-P opens at a size that fits the screen between the menu bar and the Dock (from 2.3.2); make it bigger or
 press the green button to fill the screen.

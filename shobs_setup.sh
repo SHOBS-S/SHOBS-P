@@ -642,8 +642,27 @@ no_screen_hint() {
 case "$ACTION" in
     run)
         no_screen_hint
+        # 2.3.2 (run-through): started from SHOBS-P.app (it leaves app_minimize, with the time, a moment before), this
+        # Terminal window goes to the Dock while SHOBS-P runs and comes back up if SHOBS-P stops with an error.
+        # A note older than 2 minutes is left over (Terminal did not run it) and is not used.
+        DOCKED=0
+        if [ "$MAC" = 1 ] && [ -f "$DATA_DIR/app_minimize" ]; then
+            noted=$(head -n 1 "$DATA_DIR/app_minimize" 2>/dev/null)
+            rm -f "$DATA_DIR/app_minimize"
+            now=$(date +%s)
+            case "$noted" in
+                ''|*[!0-9]*) noted=0 ;;
+            esac
+            if [ $((now - noted)) -ge 0 ] && [ $((now - noted)) -le 120 ] && [ -t 1 ]; then
+                echo 'SHOBS-P is starting; this Terminal window goes to the Dock while it runs.'
+                printf '\033[2t'
+                DOCKED=1
+            fi
+        fi
         "$PY" "$APP_DIR/clearv_app.py"
-        exit $?
+        code=$?
+        [ "$DOCKED" = 1 ] && [ "$code" -ne 0 ] && printf '\033[1t'
+        exit $code
         ;;
     selftest)
         echo 'Running the SHOBS-P self-test. It takes a minute or two (the transit fits are the slow part)...'

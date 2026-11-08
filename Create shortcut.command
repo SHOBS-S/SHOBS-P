@@ -6,10 +6,10 @@
 # Desktop (drag it to the Dock to keep it there). The app starts SHOBS-P from this folder: run this again if you
 # move or rename the folder, or after unzipping a new version somewhere else.
 #
-# The app: the first start (no SHOBS-P setup yet), and the first start of each new version or folder, open
-# "Start SHOBS-P.command" in Terminal, so the setup's progress shows. Other starts run without a Terminal window;
-# their messages go to app_start_log.txt in ~/Library/Application Support/SHOBS-P, and if SHOBS-P stops with an error
-# that log opens in TextEdit.
+# The app opens "Start SHOBS-P.command" in Terminal every time (macOS lets Terminal, not this homemade app, read
+# folders in Downloads, Desktop and Documents). The first start (no SHOBS-P setup yet) and the first start of each
+# new version or folder leave the Terminal window up, so the setup's progress shows; other starts put it in the Dock
+# once SHOBS-P is ready, and it comes back up with the message if SHOBS-P stops with an error.
 #
 # For testing: SHOBS_APP_DEST=/some/dir builds the app there (no Desktop link unless SHOBS_DESKTOP_DIR is also set).
 # Kept to bash 3.2 and to tools every Mac has (sips and iconutil make the icon; without them the app has none).
@@ -150,18 +150,20 @@ if [ -z "\$PY" ] || [ ! -x "\$PY" ] || [ "\$(cat "\$SUPPORT/app_seen.txt" 2>/dev
     # First start, or the first of this version or folder: the setup may install packages for a few minutes;
     # Terminal shows its progress.
     mkdir -p "\$SUPPORT" && printf '%s\n' "\$SEEN" > "\$SUPPORT/app_seen.txt"
+    rm -f "\$SUPPORT/app_minimize"   # this start keeps its Terminal window up
     /usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command"
     exit 0
 fi
-LOG="\$SUPPORT/app_start_log.txt"
-cd "\$APP_DIR" || exit 1
-/bin/bash ./shobs_setup.sh run >"\$LOG" 2>&1
-code=\$?
-if [ "\$code" -ne 0 ]; then
-    alert "SHOBS-P did not start, or stopped with an error. Its messages open in TextEdit (app_start_log.txt)."
-    /usr/bin/open -e "\$LOG"
-fi
-exit "\$code"
+# 2.3.2 (run-through): every start goes through Terminal. macOS lets this unsigned app read nothing in Downloads,
+# Desktop or Documents (bash: "Operation not permitted", and no question asked), while Terminal may; so the app only
+# asks Terminal to run "Start SHOBS-P.command", and leaves a note that the window may go to the Dock once SHOBS-P
+# is ready (shobs_setup.sh: it comes back up if SHOBS-P stops with an error).
+date +%s > "\$SUPPORT/app_minimize" 2>/dev/null
+/usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command" || {
+    alert "SHOBS-P could not open Terminal. Double-click Start SHOBS-P.command in \$APP_DIR instead."
+    exit 1
+}
+exit 0
 LAUNCH
 chmod 755 "$APP/Contents/MacOS/SHOBS-P" || finish 2
 # Tell Finder the app changed (a new icon shows at once).
