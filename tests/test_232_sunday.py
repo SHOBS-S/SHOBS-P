@@ -292,6 +292,32 @@ class TestInApp(unittest.TestCase):
             app._layout_meas_col()
         self.assertEqual(app._meas_col.pack_slaves()[1:], [])
 
+    def test_status_lines_follow_view_box_own_line(self):
+        """2.3.2 (John, run-through): when the View box drops to its own line, the Stack / Measured-with / skipped
+        lines go on that line, left of the Points / View boxes (no empty patch beside them), and come back to the
+        column when the View box does."""
+        app = self.app
+        app._stack_shown = True
+        app._aperture_state_shown = True
+        saved = app._view_own_line
+        try:
+            app._view_own_line = True
+            app._layout_meas_col()
+            app._stack_place_points_box()
+            for w in (app._stack_row, app.aperture_state_label):
+                self.assertIs(w.pack_info()["in"], app._meas_side)
+            self.assertEqual(app._meas_side.pack_slaves(), [app._stack_row, app.aperture_state_label])
+            self.assertEqual(app._meas_col.pack_slaves()[1:], [])
+            self.assertIs(app._view_line2.pack_slaves()[-1], app._meas_side)
+            app._view_own_line = False
+            app._layout_meas_col()
+            self.assertEqual(app._meas_col.pack_slaves()[1:], [app._stack_row, app.aperture_state_label])
+            self.assertEqual(app._meas_side.pack_slaves(), [])
+        finally:
+            app._view_own_line = saved
+            app._stack_shown = app._aperture_state_shown = False
+            app._layout_meas_col()
+
     def test_view_box_width_ignores_wrapped_column(self):
         """review S1: the View box layout counts the column's one-line width, not its wrapped (self-sized) width."""
         app = self.app

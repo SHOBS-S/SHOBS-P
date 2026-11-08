@@ -145,6 +145,7 @@ class StackMixin:
             pass
         try:
             self._meas_col_last()   # 2.3.2 (item 10): the left column stays packed after the boxes
+            self._meas_side_last()  # 2.3.2: so does the status-line frame on the View box's own line
         except Exception:
             pass
 

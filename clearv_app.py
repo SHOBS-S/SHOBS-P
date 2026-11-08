@@ -6671,6 +6671,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         col = getattr(self, "_meas_col", None)
         if col is None:
             return
+        # 2.3.2 (John, run-through): when the View box has dropped to its own line (the settings row and the Points /
+        # View boxes do not fit side by side), the status lines go on that line, left of the boxes, instead of
+        # above them with an empty patch beside them.
+        side = getattr(self, "_meas_side", None)
+        target = side if (side is not None and getattr(self, "_view_own_line", False)) else col
         gap = int(14 * ui_scale(self))
         rows = []
         if getattr(self, "_stack_shown", False) and getattr(self, "_stack_row", None) is not None:
@@ -6681,14 +6686,46 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             rows.append(self.skip_line)
         self._meas_col_last()
         try:
-            if col.pack_slaves()[1:] == rows:
+            self._meas_side_last()
+            here = col.pack_slaves()[1:] if target is col else target.pack_slaves()
+            other = (side.pack_slaves() if (side is not None and target is col) else col.pack_slaves()[1:])
+            if here == rows and not other:
                 return   # 2.3.2 review: nothing came or went (this runs on every keystroke in the Aperture boxes)
             for w in (getattr(self, "_stack_row", None), getattr(self, "aperture_state_label", None),
                       getattr(self, "skip_line", None)):
                 if w is not None and w.winfo_manager():
                     w.pack_forget()
             for k, w in enumerate(rows):
-                w.pack(in_=col, side="top", anchor=W, fill=X, padx=6, pady=((gap if k == 0 else 0), 2))
+                top = (gap if k == 0 and target is col else 0)
+                w.pack(in_=target, side="top", anchor=W, fill=X, padx=6, pady=(top, 2))
+        except Exception:
+            pass
+
+    def _wrap_aperture_state(self, event):
+        """The Measured-with line wraps at the width of the frame it is packed in (the column, or the status-line
+        frame on the View box's own line); a <Configure> of the other frame leaves it alone."""
+        try:
+            if self.aperture_state_label.winfo_manager() and \
+                    str(self.aperture_state_label.pack_info().get("in")) != str(event.widget):
+                return
+        except Exception:
+            pass
+        self.aperture_state_label.configure(
+            wraplength=max(int(event.width) - int(20 * ui_scale(self)), int(200 * ui_scale(self))))
+
+    def _meas_side_last(self):
+        """2.3.2: the status-line frame on the View box's own line is packed after the Points / View boxes there, so
+        the boxes get their width first and the lines wrap in what is left."""
+        side, line2 = getattr(self, "_meas_side", None), getattr(self, "_view_line2", None)
+        if side is None or line2 is None:
+            return
+        try:
+            slaves = line2.pack_slaves()
+            if side in slaves and slaves[-1] is side:
+                return
+            if side.winfo_manager():
+                side.pack_forget()
+            side.pack(in_=line2, side=LEFT, fill=BOTH, expand=True, anchor="n")
         except Exception:
             pass
 
@@ -6784,6 +6821,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 pass
             self._meas_col_last()   # 2.3.2 (item 10)
+            self._layout_meas_col()   # 2.3.2: the status lines follow the View box onto its own line and back
 
     def _stretch_controls(self, parent, page: str):
         """A compact 'Stretch' row: linear / log / asinh, black and white points (percentiles of the image), Reset.
@@ -7578,8 +7616,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # which were packed under the boxes and pushed the image down.
         self._meas_col = ttk.Frame(options, style="Card.TFrame")
         self._meas_col.pack(side=LEFT, fill=BOTH, expand=True, anchor="n")
-        self._meas_col.bind("<Configure>", lambda e: self.aperture_state_label.configure(
-            wraplength=max(int(e.width) - int(20 * ui_scale(self)), int(200 * ui_scale(self)))), add="+")
+        self._meas_col.bind("<Configure>", lambda e: self._wrap_aperture_state(e), add="+")
         meas = ttk.Frame(self._meas_col, style="Card.TFrame")
         meas.pack(side="top", fill=X, anchor="n", pady=(int(14 * ui_scale(self)), 0))
         self._meas_box, self._meas_groups, self._meas_key = meas, [], None
@@ -7634,6 +7671,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._view_switches.append(self.candidates_only_box)
         self._view_options, self._view_box, self._view_grid = options, view_box, view
         self._view_line2 = ttk.Frame(options, style="Card.TFrame")   # the View box's own line when the row is narrow
+        # 2.3.2: the status lines' place on that line, left of the boxes (_layout_meas_col)
+        self._meas_side = ttk.Frame(self._view_line2, style="Card.TFrame")
+        self._meas_side.bind("<Configure>", lambda e: self._wrap_aperture_state(e), add="+")
         self._view_own_line = False
         self._view_layout_key = None
         options.bind("<Configure>", lambda _e: self._layout_view_box(), add="+")
