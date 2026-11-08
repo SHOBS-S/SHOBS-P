@@ -1843,6 +1843,13 @@ def _name_variants(clean: str) -> list[str]:
     return list(dict.fromkeys(x.replace("'", "") for x in out))
 
 
+def unescape_name(text: str) -> str:
+    """2.3.2 (item 9): a name as sent by the Archive's services, HTML entities undone (twice: "&amp;auml;" too)."""
+    import html
+
+    return html.unescape(html.unescape(str(text or ""))).strip()
+
+
 def _strip_tags(text: str) -> str:
     import re
 
@@ -1932,7 +1939,9 @@ def _parse_alias_reply(data) -> dict | None:
     aliases = []
     if resolved:
         raw = obj(obj(planets_info.get(resolved)).get("alias_set")).get("aliases")
-        aliases = [a for a in (raw if isinstance(raw, list) else []) if isinstance(a, str) and a != resolved]
+        # 2.3.2 (item 9): the alias service sends names HTML-escaped like the Archive ("Umb&auml;&auml;ssa")
+        aliases = [unescape_name(a) for a in (raw if isinstance(raw, list) else []) if isinstance(a, str)]
+        aliases = [a for a in dict.fromkeys(aliases) if a and a != resolved]
     return {"resolved": resolved, "system": manifest.get("system_name") or "", "planets": planets,
             "aliases": aliases, "matched_planet": matched_planet}
 

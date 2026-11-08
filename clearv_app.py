@@ -4110,7 +4110,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         aka = ""
         if typed and typed.lower().replace(" ", "") != str(p["name"]).lower().replace(" ", ""):
             aka = f" (you typed {typed})"
-        others = [a for a in (p.get("aliases") or []) if not a.startswith(("Gaia ", "WISE ", "2MASS "))][:4]
+        others = [tcore.unescape_name(a) for a in (p.get("aliases") or [])]   # 2.3.2 (item 9): cached escaped names too
+        others = [a for a in others if a and not a.startswith(("Gaia ", "WISE ", "2MASS "))][:4]
         if others:
             aka += "; also known as " + ", ".join(others)
         self.planet_source.set(

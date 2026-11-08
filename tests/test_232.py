@@ -29,6 +29,24 @@ def _have_tk():
         return False
 
 
+class TestAliasNames(unittest.TestCase):
+    """item 9: TrES-3 b's alias came through as 'Umb&auml;&auml;ssa'."""
+
+    def test_parse_alias_reply_unescapes(self):
+        import transit_core as tc
+        data = {"manifest": {"lookup_status": "OK", "resolved_name": "TrES-3 b", "system_name": "TrES-3"},
+                "system": {"objects": {"planet_set": {"planets": {"TrES-3 b": {"alias_set": {"aliases": [
+                    "TrES-3 b", "Umb&auml;&auml;ssa", "Umb&amp;auml;&amp;auml;ssa", "TOI-1339.01", "K&ouml;"]}}}}}}}
+        out = tc._parse_alias_reply(data)
+        self.assertEqual(out["aliases"], ["Umbäässa", "TOI-1339.01", "Kö"])
+
+    def test_unescape_name(self):
+        import transit_core as tc
+        self.assertEqual(tc.unescape_name("Kab&amp;aacute;th"), "Kabáth")
+        self.assertEqual(tc.unescape_name("WASP-35 b"), "WASP-35 b")
+        self.assertEqual(tc.unescape_name(None), "")
+
+
 @unittest.skipUnless(_have_tk(), "needs a display")
 class TestInApp(unittest.TestCase):
     @classmethod
