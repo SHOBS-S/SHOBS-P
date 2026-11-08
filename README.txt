@@ -90,8 +90,8 @@ mode, T = Transits, V = Variables)
      you to check RA/Dec, focal length and pixel size.
 - S  Stars near the frame edge: a spare near the edge is only a log line now (it is measured, not used). The comps
      in use and the check star still get the warning, now in the same box as the frames left out (one pop-up, not
-     two). A check star that leaves the frame in some frames says in which, and names a spare as bright as it that
-     stayed farther in all night, to pick as the check next time. Marking a check near the edge names a green
+     two). A check star that leaves the frame in some frames says in which, and names the spare nearest its brightness
+     that stayed farther in all night, to pick as the check next time. Marking a check near the edge names a green
      ring (S1, S2 ...) farther in.
 - V  Variables reports get a settings file too: <report>_settings.txt beside the AAVSO report, night by night:
      aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain,
