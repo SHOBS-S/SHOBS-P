@@ -20,8 +20,10 @@ This chapter covers:
 1. In Transits mode, enter the planet on the Input page (see [16. Prepare for a transit night](16-plan-a-transit-night.md)).
 2. Work through Input, Blink and Calibrate, then mark the target and comparison stars and press **Run photometry**
    (see [8. Photometry page basics](08-photometry-basics.md)). A check star is optional for a transit.
-3. When photometry ends, SHOBS-P opens the Output step. The fit starts by itself when there are at least 20 usable
-   points and a planet is known. Press **Cancel** if you want to change a setting first.
+3. When photometry ends, SHOBS-P opens the Output step. The fit never starts by itself: the page says *"… usable
+   points. Set the detrend and press Fit transit."* Set the detrend (and anything else) first, then press **Fit
+   transit**. It needs at least 20 usable points and a planet. The same holds after **Use comps…**, after you pick
+   another night, and after you open a report.
 
 The fit has three stages. The busy bar at the left end of the bottom status strip names each one as it goes: a
 least-squares fit (*"Fitting the transit: least-squares fit…"*), then an MCMC run (*"Fitting the transit: MCMC
@@ -43,7 +45,7 @@ the status strip; the page has no progress bar of its own.
 
 - **Planet line**: the planet's period, duration, depth and shape, and where they came from.
 - **Night**: which night of your photometry is fitted (for example *"KELT-16 b · night of 5–6 Oct 2026"*). The newest
-  night is chosen. Picking another one refits it. The hint beside it counts the points: usable, in this fit,
+  night is chosen. Picking another one clears the fit; press **Fit transit** to fit it. The hint beside it counts the points: usable, in this fit,
   flagged, trimmed.
 - **Open AAVSO exoplanet report (EXOTIC)…**: fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
 - **Detrend**: **airmass** (on by default) and **time slope** (off). These are baseline trends fitted together with
@@ -245,8 +247,8 @@ that the files carry its result.
 through the night. A comp marked **SUSPECT** should go. See [11. Check your comparison stars](11-check-your-comparison-stars.md).
 
 **Use comps….** Tick the stars to use and click **Apply**. Every point is recalculated from the stored
-measurements (nothing is reduced again), and the transit is refitted at once with the same settings. The notes say
-*"Comps changed (now C1, C3): refitting with the same settings…"*.
+measurements (nothing is reduced again), and the old fit is cleared. The page says *"Comps in use: C1, C3. Set the
+detrend and press Fit transit."*; nothing is fitted until you press it.
 
 These two buttons work only on this session's photometry. While an EXOTIC report is shown they are grayed out, and
 the hint beside them says why.

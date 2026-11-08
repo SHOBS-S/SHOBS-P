@@ -484,7 +484,8 @@ class TransitPage:
     # ---- source --------------------------------------------------------------------------
     def refresh(self, shown: bool = False):
         """List the nights and show the planet. shown=True when the page has just been opened: then a fit made
-        from data that have since changed is cleared, and fresh data are fitted straight away (2.2)."""
+        from data that have since changed is cleared. 2.3.2 (item 2): fresh data wait for the Fit transit button
+        (2.2 to 2.3.1 fitted them straight away, before a detrend could be set)."""
         nights = sorted({o.night for o in self.app.observations if o.night})
         labels = [self.app.night_label(n) for n in nights]
         self._night_keys = {(lab if labels.count(lab) == 1 else f"{lab} ({n})"): n for lab, n in zip(labels, nights)}
@@ -669,7 +670,9 @@ class TransitPage:
         if self.report is not None:
             return
         sig = self._signature()
+        cleared = False
         if self.result is not None and sig != self._fit_signature:
+            cleared = True
             self.result = None
             self._fit_signature = None
             self._fill_table()
@@ -684,13 +687,27 @@ class TransitPage:
         planet = self.current_planet()
         n = sig[1]
         if not planet:
-            self._notes_text([("info", "Photometry is ready. Enter the planet on the Input page (name, then Lookup) "
-                                       "and come back: the fit then runs by itself.")])
+            self._notes_text([("info", "Photometry is ready. Enter the planet on the Input page (name, then Lookup), "
+                                       "come back, set the detrend and press Fit transit.")])
             return
         if n < 20:
             return
         self._auto_tried = sig
-        self.fit(auto=True)
+        # 2.3.2 (item 2): never fitted without the button
+        self._await_fit("The photometry, the comps, or the planet changed since the last fit, so that fit was "
+                        "cleared." if cleared else f"{n} usable points.")
+
+    def _await_fit(self, lead: str = ""):
+        """2.3.2 (item 2, John): the transit fit ALWAYS waits for the Fit transit button: after photometry, after
+        Use comps…, after another night is picked, after a report is opened. The page says so instead."""
+        text = (lead.strip() + " " if lead.strip() else "") + "Set the detrend and press Fit transit."
+        self._notes_text([("info", text)])
+        if self.result is None:
+            self.draw(placeholder=text)
+        try:
+            self.app.status.set(text)
+        except Exception:
+            pass
 
     def current_planet(self) -> dict | None:
         p = self.app.planet_from_fields()
@@ -734,27 +751,25 @@ class TransitPage:
         self._fit_signature = None
         self._show_source()
         self._fill_table()
-        # 2.2.7: the old plot goes at once, and the report is fitted straight away (as new photometry is).
+        # 2.2.7: the old plot goes at once. 2.3.2 (item 2): the report waits for Fit transit, as photometry does.
         name = (rep.get("planet") or {}).get("name") or "the planet"
         # 2.2.12: a report without an ephemeris (no QC-XC line) gets one from the NASA Exoplanet Archive, else from
         # EXOTIC's inits file beside the report, before the fit; never from the lowest point.
         need_eph = not (rep.get("planet") or {}).get("t0") and self.current_planet() is rep.get("planet")
         what = ("looking up the ephemeris…" if need_eph else
-                "fitting…" if not self.app.busy else "press Fit transit when the current job ends")
+                "set the detrend and press Fit transit" if not self.app.busy
+                else "press Fit transit when the current job ends")
         writer = report_software(h) or "the report"
         self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from {writer}: {what}")
-        self._notes_text([("info", "Report loaded and being fitted. SHOBS-P refits its light curve and lists "
-                                   f"the report's own results ({writer}) beside SHOBS-P's. Cancel stops the fit; Fit "
-                                   "transit runs it again with other settings.")])
+        self._notes_text([("info", "Report loaded. Set the detrend and press Fit transit: SHOBS-P refits its light "
+                                   f"curve and lists the report's own results ({writer}) beside SHOBS-P's.")])
         if need_eph:
             self._eph_pending = rep
             self._find_ephemeris(rep)
-        elif not self.app.busy:
-            self.fit(auto=True)
 
     def _find_ephemeris(self, rep):
         """2.2.12: NASA Exoplanet Archive (most precise ephemeris) first, then an EXOTIC inits file beside the
-        report. Runs in the background; the fit starts when it is done (if the report is still the one shown)."""
+        report. Runs in the background; then the page asks for Fit transit (2.3.2, item 2: never fitted by itself)."""
         planet = rep["planet"]
         app = self.app
         # 2.2.20 (item 3): the wait on the main window's busy bar
@@ -776,7 +791,7 @@ class TransitPage:
                                                     planet.get("host", ""))
                 except Exception:
                     found = None
-            app.call_ui(app.busy_end, tok, True)   # the fit that follows takes over the bar
+            app.call_ui(app.busy_end, tok)
             app.call_ui(self._ephemeris_found, rep, found, why)
 
         threading.Thread(target=work, daemon=True).start()
@@ -800,8 +815,9 @@ class TransitPage:
         if not self.app.busy:
             name = planet.get("name") or "the planet"
             self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from "
-                                  f"{report_software(rep.get('header')) or 'the report'}: fitting…")
-            self.fit(auto=True)
+                                  f"{report_software(rep.get('header')) or 'the report'}: set the detrend and press "
+                                  "Fit transit.")   # 2.3.2 (item 2)
+            self._notes_text([("info", "Ephemeris in. Set the detrend and press Fit transit.")])
         else:
             self.draw(placeholder="Press Fit transit when the current job ends.")
 
@@ -1122,10 +1138,10 @@ class TransitPage:
                 self.app.status.set("Still checking the comps (a few seconds); Fit transit again when it is done, "
                                     "or Cancel the check.")
             return
-        # 2.2.12: a report's ephemeris is still being looked up: the fit starts by itself when it is in.
+        # 2.2.12: a report's ephemeris is still being looked up. 2.3.2 (item 2): press Fit transit once it is in.
         if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
             if not auto:
-                messagebox.showinfo("SHOBS-P", "Still looking up this planet's ephemeris; the fit starts by itself "
+                messagebox.showinfo("SHOBS-P", "Still looking up this planet's ephemeris; press Fit transit again "
                                                "as soon as it is in.")
             return
         if self.report is None:
@@ -1407,9 +1423,10 @@ class TransitPage:
             return
         if self._signature() != getattr(self, "_pending_signature", None):
             if self._refit_pending:
-                # 2.2.17 review: comps changed while this fit ran; the automatic refit follows (_fit_done).
-                self.prog_text.set("Comps changed during the fit: refitting with the new comps…")
-                self.draw(placeholder="Refitting with the new comps…")
+                # 2.2.17 review: comps changed while this fit ran; its result is not shown. 2.3.2 (item 2): the page
+                # then asks for Fit transit (_run_pending_refit), it never refits by itself.
+                self.prog_text.set("Comps changed during the fit: that fit is not used.")
+                self.draw(placeholder="Comps changed: set the detrend and press Fit transit.")
                 return
             # 2.2.7: the data changed while this fit ran (a report opened or closed, another night picked): the
             # result belongs to other data, so it is not shown.
@@ -2107,9 +2124,9 @@ class TransitPage:
         return str(text).startswith(COMP_CAUTION_PREFIXES) and not self._comp_windows_ok()
 
     def comps_changed(self):
-        """Called by the App after Use comps applied a new comp set in Transits mode: the shown fit is stale; refit
-        now when this page is on screen (else when it is next shown), or once the fit or comp check running now
-        ends (its result is not shown: _finish_fit and _comp_check_done see the changed signature)."""
+        """Called by the App after Use comps applied a new comp set in Transits mode: the shown fit is stale and is
+        cleared (a fit or comp check running now is not shown: _finish_fit and _comp_check_done see the changed
+        signature). 2.3.2 (item 2): the page then waits for Fit transit, so a detrend can be set first."""
         if self.report is not None:
             return       # the page shows a report; the photometry's fit is redone when its night is chosen again
         self._auto_tried = None      # the same comps as an earlier automatic fit still refit
@@ -2117,18 +2134,16 @@ class TransitPage:
         if self._fitting or getattr(self, "_checking", False):
             self._refit_pending = True
             self._check_stale(auto=False)
-            # Review: one consistent message: the refit is automatic.
             what = "fit" if self._fitting else "comp check"
-            self._notes_text([("info", f"Comps changed (now {comps}): the transit is refitted with them as soon as "
-                                       f"the running {what} ends.")])
-            self.app.log(f"Transit fit: comps changed; refitting when the running {what} ends.")
-            self.app.status.set(f"Comps in use: {comps}. The transit refits when the running {what} ends.")
+            self._notes_text([("info", f"Comps changed (now {comps}): the running {what} is not used. When it ends, "
+                                       "set the detrend and press Fit transit.")])
+            self.app.log(f"Transit fit: comps changed; the running {what} is not used. Press Fit transit when it ends.")
+            self.app.status.set(f"Comps in use: {comps}. Press Fit transit when the running {what} ends.")
             return
         on_screen = getattr(self.app, "transit_page_on_screen", lambda: True)()
         self._check_stale(auto=on_screen)
-        if self._fitting:
-            self._notes_text([("info", f"Comps changed (now {comps}): refitting with the same settings…")])
-            self.app.status.set(f"Comps in use: {comps}. Refitting the transit…")
+        if on_screen and self.result is None:
+            self._await_fit(f"Comps in use: {comps}.")
 
     def _run_pending_refit(self):
         if not self._refit_pending or self._fitting or getattr(self, "_checking", False):

@@ -294,6 +294,45 @@ class TestInApp(unittest.TestCase):
             app.chart_solution, app.check_xy = old[0], old[1]
             app.check_name.set(old[2])
 
+    # ---- item 2 -----------------------------------------------------------------------------------------------
+    def _tp(self):
+        tp = getattr(self.app, "transit_page", None)
+        if tp is None:
+            self.skipTest("no Transit page in this build of the window")
+        return tp
+
+    def test_fresh_photometry_waits_for_fit_button(self):
+        tp = self._tp()
+        sig = ("2026-10-19", 254, 1.0, 2.0, ("a",), "p", "None", ())
+        with mock.patch.object(tp, "_signature", return_value=sig), \
+                mock.patch.object(tp, "current_planet", return_value={"name": "HAT-P-32 b", "period": 2.15}), \
+                mock.patch.object(tp, "fit") as fit, mock.patch.object(tp, "draw") as draw:
+            tp.result, tp._auto_tried, tp.report = None, None, None
+            tp._check_stale(auto=True)
+            fit.assert_not_called()
+            self.assertIn("press Fit transit", draw.call_args[1]["placeholder"])
+            self.assertIn("Set the detrend and press Fit transit.", self.app.status.get())
+
+    def test_comps_changed_waits_for_fit_button(self):
+        tp = self._tp()
+        sig = ("2026-10-19", 254, 1.0, 2.0, ("b",), "p", "None", ())
+        with mock.patch.object(tp, "_signature", return_value=sig), \
+                mock.patch.object(tp, "current_planet", return_value={"name": "HAT-P-32 b", "period": 2.15}), \
+                mock.patch.object(self.app, "transit_page_on_screen", return_value=True, create=True), \
+                mock.patch.object(tp, "fit") as fit, mock.patch.object(tp, "draw"):
+            tp.result, tp.report, tp._fitting = {"x": 1}, None, False
+            tp._fit_signature = ("old",)
+            tp.comps_changed()
+            fit.assert_not_called()
+            self.assertIsNone(tp.result)
+            self.assertIn("press Fit transit", self.app.status.get())
+
+    def test_no_auto_fit_calls_left(self):
+        import inspect
+        import transit_ui
+        src = inspect.getsource(transit_ui)
+        self.assertNotIn("self.fit(auto=True)", src)
+
 
 if __name__ == "__main__":
     unittest.main()

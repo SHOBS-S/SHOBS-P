@@ -212,7 +212,8 @@ look again at an older observation.
 To open a report:
 
 1. On the Transit fit page, click **Open AAVSO exoplanet report (EXOTIC)…** and choose the `.txt` file.
-2. The old plot clears and SHOBS-P starts fitting. A brown banner above the plot says what is being fitted, for
+2. The old plot clears and the page says *"Report loaded. Set the detrend and press Fit transit …"* (a report without
+   an ephemeris first has one looked up). Press **Fit transit**. A brown banner above the plot says what is being fitted, for
    example *"Fitting EXOTIC report: WASP-12 b, 05-OCT-2026, 210 points from AAVSO_WASP-12b.txt. Your … photometry
    is kept; choose its night above (or Close report) to go back."*
 3. When the fit is done, the table has a fourth column with the report's own values (headed with its software, for
