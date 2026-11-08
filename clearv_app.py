@@ -6814,12 +6814,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # and when even that is not enough the lines stay in the column above (an empty patch beats hidden controls).
         side_ok = False
         if own and width > 1:
-            need = self._meas_side_need(scale)
+            need = self._meas_side_need(scale)   # the Stack controls include the Points box (2.3.2)
             if need:
-                pts = getattr(self, "_points_box", None)
-                pts_w = (px(pts.winfo_reqwidth()) + int(10 * scale)) if (pts is not None and getattr(
-                    self, "_stack_shown", False)) else 0
-                side_avail = width - box_pad - gap - pts_w - need
+                side_avail = width - box_pad - gap - need
                 if side_avail >= least:
                     side_ok, avail = True, side_avail
         # 2.2.19 (r2: S2): the settings wrap only on a line of their own (the View box beside them is moved under
@@ -6857,10 +6854,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     box.lift(line2)
                 else:
                     box.pack(in_=options, side=RIGHT, padx=(10, 0), anchor="n")   # 2.3.2: top of the row
-            except Exception:
-                pass
-            try:
-                self._stack_place_points_box()   # 2.3.2 review (S2): the Points box back left of the moved View box
             except Exception:
                 pass
             self._meas_col_last()   # 2.3.2 (item 10)

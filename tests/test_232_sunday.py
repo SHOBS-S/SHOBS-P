@@ -318,7 +318,10 @@ class TestInApp(unittest.TestCase):
                 self.assertIs(w.pack_info()["in"], app._meas_side)
             self.assertEqual(app._meas_side.pack_slaves(), [app._stack_row, app.aperture_state_label])
             self.assertEqual(app._meas_col.pack_slaves()[1:], [])
-            self.assertEqual(app._view_line2.pack_slaves(), [app._view_box, app._points_box, app._meas_side])
+            self.assertEqual(app._view_line2.pack_slaves(), [app._view_box, app._meas_side])
+            # the Points box rides on the Stack row, right after the Stack button
+            self.assertIs(app._points_box.master, app._stack_ctl)
+            self.assertEqual(app._stack_ctl.pack_slaves()[-2:], [app.stack_button, app._points_box])
             # the side's share holds the Stack controls whole
             need = app._meas_side_need(ca.ui_scale(app))
             self.assertGreaterEqual(need, app._stack_ctl.winfo_reqwidth())

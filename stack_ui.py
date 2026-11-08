@@ -88,24 +88,7 @@ class StackMixin:
         self._stack_shown = False
         self._stack_run_ctx = None
         self._stack_n_typed = False
-        # The Points switch, its own small box beside the View box (Option A, John 3 Nov).
-        box = ttk.LabelFrame(options, text="Points", style="Group.TLabelframe", padding=(8, 2, 8, 4))
-        row = ttk.Frame(box, style="Card.TFrame")
-        row.pack(side="top", anchor=W)
-        self.points_frame_button = ttk.Radiobutton(row, text="Per frame", value="frame", variable=self.points_choice,
-                                                   command=self._points_switched)
-        self.points_frame_button.pack(side=LEFT)
-        self.points_stack_button = ttk.Radiobutton(row, text="Stacked", value="stack", variable=self.points_choice,
-                                                   command=self._points_switched)
-        self.points_stack_button.pack(side=LEFT, padx=(8, 0))
-        use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
-        use.pack(side="top", anchor=W, pady=(2, 0))
-        # the line wraps at the switch's own width, so the box never needs more room than the two buttons
-        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), int(100 * _ui_scale(self)))),
-                 add="+")
-        self._points_box, self._points_view_box = box, view_box
-        options.bind("<Configure>", lambda _e: self.after_idle(self._stack_place_points_box), add="+")
-        # The Stack row: shown under the settings once a run has points.
+        # The Stack row: shown in the column under the settings once a run has points.
         srow = ttk.Frame(card, style="Card.TFrame")
         self.stack_line_label = ttk.Label(srow, textvariable=self.stack_line, style="Hint.TLabel", justify=LEFT)
         self.stack_line_label.pack(side="top", anchor=W, fill=X)
@@ -120,6 +103,24 @@ class StackMixin:
         ttk.Label(ctl, text="ppt per point (optional)", style="Card.TLabel").pack(side=LEFT, padx=(2, 8))
         self.stack_button = ttk.Button(ctl, text="Stack", command=self.start_stack)
         self.stack_button.pack(side=LEFT)
+        # The Points switch, its own small box (Option A, John 3 Nov). 2.3.2 (John, run-through): on the Stack row,
+        # right after the Stack button, so it comes and goes with the row and leaves the View box its width.
+        box = ttk.LabelFrame(ctl, text="Points", style="Group.TLabelframe", padding=(8, 2, 8, 4))
+        row = ttk.Frame(box, style="Card.TFrame")
+        row.pack(side="top", anchor=W)
+        self.points_frame_button = ttk.Radiobutton(row, text="Per frame", value="frame", variable=self.points_choice,
+                                                   command=self._points_switched)
+        self.points_frame_button.pack(side=LEFT)
+        self.points_stack_button = ttk.Radiobutton(row, text="Stacked", value="stack", variable=self.points_choice,
+                                                   command=self._points_switched)
+        self.points_stack_button.pack(side=LEFT, padx=(8, 0))
+        use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
+        use.pack(side="top", anchor=W, pady=(2, 0))
+        # the line wraps at the switch's own width, so the box never needs more room than the two buttons
+        row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), int(100 * _ui_scale(self)))),
+                 add="+")
+        box.pack(side=LEFT, padx=(int(16 * _ui_scale(self)), 0))
+        self._points_box, self._points_view_box = box, view_box
         # 2.3.0 review fix (high DPI): the margin and the floor scale with the display (clearv_app.ui_scale)
         srow.bind("<Configure>", lambda e: self.stack_line_label.configure(
             wraplength=max(int(e.width) - int(20 * _ui_scale(self)), int(300 * _ui_scale(self)))), add="+")
@@ -127,22 +128,8 @@ class StackMixin:
         self.stack_goal.trace_add("write", lambda *_a: self.after_idle(lambda: self._stack_refresh_line(fill_n=True)))
 
     def _stack_place_points_box(self):
-        """Keep the Points box just left of the View box, wherever _layout_view_box has put the View box."""
-        box, vb = getattr(self, "_points_box", None), getattr(self, "_points_view_box", None)
-        if box is None or vb is None:
-            return
-        try:
-            if not self._stack_shown:
-                if box.winfo_manager():
-                    box.pack_forget()
-                return
-            master = vb.pack_info().get("in")
-            slaves = master.pack_slaves()
-            if box in slaves and slaves.index(box) > slaves.index(vb):
-                return
-            box.pack(in_=master, side=RIGHT, padx=(10, 0), after=vb, anchor="n")   # 2.3.2: top of the row
-        except Exception:
-            pass
+        """2.3.2 (John, run-through): the Points box sits on the Stack row after the Stack button, so it is shown
+        exactly when that row is; this only keeps the left column / status-line frame packed after the boxes."""
         try:
             self._meas_col_last()   # 2.3.2 (item 10): the left column stays packed after the boxes
             self._meas_side_last()  # 2.3.2: so does the status-line frame on the View box's own line
