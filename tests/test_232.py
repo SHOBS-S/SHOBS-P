@@ -220,6 +220,24 @@ class TestInApp(unittest.TestCase):
         finally:
             fresh.destroy()
 
+    # ---- item 3 -----------------------------------------------------------------------------------------------
+    def test_exoplanet_offer_has_no_status_button(self):
+        app = self.app
+        app.offer_upload("/tmp/AAVSO_TrES-3b_x.txt", "Open AAVSO Exoplanet Database…", ca.core.AAVSO_EXOPLANET_URL,
+                         "the AAVSO Exoplanet Database (check its current instructions)", page_button=True)
+        app.update()
+        self.assertFalse(app.status_link.winfo_ismapped())
+        self.assertEqual(app._status_offer, ("", ""))
+        self.assertIn("with Open AAVSO Exoplanet Database… on the Results row", app.status.get())
+        # WebObs keeps its status-bar button (unchanged in 2.3.2)
+        app.offer_upload("/tmp/AAVSO_x.txt", "Open AAVSO WebObs…", ca.core.AAVSO_WEBOBS_URL, "AAVSO WebObs")
+        self.assertEqual(app._status_offer[1], ca.core.AAVSO_WEBOBS_URL)
+
+    def test_transit_ui_passes_page_button(self):
+        import inspect
+        import transit_ui
+        self.assertIn("page_button=True", inspect.getsource(transit_ui))
+
 
 if __name__ == "__main__":
     unittest.main()

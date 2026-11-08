@@ -2730,8 +2730,9 @@ class TransitPage:
         if self.report is None:
             self.app._field_image_with_report(path)   # 2.2.19 (#28): not for an opened EXOTIC report's fit
         # 2.2.15 (item 8): the status line names the file and offers the upload page.
+        # 2.3.2 (item 3): the Results row's own Open AAVSO Exoplanet Database… button; no second one on the status bar
         self.app.offer_upload(path, "Open AAVSO Exoplanet Database…", core.AAVSO_EXOPLANET_URL,
-                              "the AAVSO Exoplanet Database (check its current instructions)")
+                              "the AAVSO Exoplanet Database (check its current instructions)", page_button=True)
         self._series_hint_after_save()   # 2.2.21 (#44)
 
     def _write_settings(self, report_path: str, meta: dict) -> str:

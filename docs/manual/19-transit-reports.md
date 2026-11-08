@@ -32,9 +32,9 @@ To save and upload it:
    that is not in this reduction, SHOBS-P asks before saving (chapter 17, "Notes that name another star").
 3. Click **Save AAVSO exoplanet report…**.
    The file is called `AAVSO_<planet>_<DD-MON-YYYY>_SHOBS-P.txt`, for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`.
-4. The status bar says *"Saved … — upload to the AAVSO Exoplanet Database (check its current instructions):"* with
-   a button **Open AAVSO Exoplanet Database…** at its right end. Click it (or the button of the same name in the
-   Results row) to open the submit page in your browser.
+4. The status bar says *"Saved … — upload to the AAVSO Exoplanet Database (check its current instructions) with
+   Open AAVSO Exoplanet Database… on the Results row."* Click that button, beside **Save AAVSO exoplanet report…**,
+   to open the submit page in your browser.
 5. Upload the file there.
 
 When the page opens, SHOBS-P marks the report's night as sent (the night table's **Sent** column). If that night was

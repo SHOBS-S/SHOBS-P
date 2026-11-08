@@ -325,9 +325,8 @@ back. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md) for t
 When the verdict is "detected" and you are happy with the fit:
 
 1. Set an **Output** folder on the Input page if you have not, so every save goes there without asking.
-2. Click **Save AAVSO exoplanet report…**. The status bar names the file and offers **Open AAVSO Exoplanet
-   Database…**.
-3. Click **Open AAVSO Exoplanet Database…** and upload the report there, following the AAVSO's current
+2. Click **Save AAVSO exoplanet report…**. The status bar names the file.
+3. Click **Open AAVSO Exoplanet Database…** (beside it on the Results row) and upload the report there, following the AAVSO's current
    instructions.
 4. For a TESS target, click **Save ExoFOP package…** and then **Open ExoFOP…**. The TOI line under the Results row
    tells you whether ExoFOP-TESS wants it: a **PC** or **APC** (planet candidate) is follow-up science there

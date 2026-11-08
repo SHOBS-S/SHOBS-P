@@ -3204,9 +3204,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log(f"Opened {url}")
         return True   # 2.2.18 (item 10): the upload buttons mark "sent" only after this
 
-    def offer_upload(self, path: str, button: str, url: str, where: str, note: str = ""):
+    def offer_upload(self, path: str, button: str, url: str, where: str, note: str = "", page_button: bool = False):
         """After a report save: the status line names the saved file and offers the upload page. note: a warning
-        said first (2.2.20, item 4: "⚠ No AUID…")."""
+        said first (2.2.20, item 4: "⚠ No AUID…"). page_button (2.3.2, item 3): the page's own Results row already
+        has that button beside the Save button, so the status line only names it (no second button far lower right)."""
+        if page_button:
+            text = (f"{note}   " if note else "") + (f"Saved {os.path.basename(path)} — upload to {where} with "
+                                                       f"{button} on the Results row.")
+            text = self._series_note(text)
+            self._status_offer = ("", "")
+            self.status.set(text)
+            try:
+                self.status_link.pack_forget()
+            except Exception:
+                pass
+            return
         # 2.2.15 review: short, and the button has its own slot on the right, so a long line never hides it.
         text = (f"{note}   " if note else "") + f"Saved {os.path.basename(path)} — upload to {where}:"
         text = self._series_note(text)   # 2.2.21 (nit j): "Series file updated: <name>."
