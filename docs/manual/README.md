@@ -16,7 +16,8 @@ warning for comps and the check only, with a better check star) and for 2.3.2 (a
 is asked about before it is saved; the transit fit waits for Fit transit; Plot bins; the Free shape check per
 parameter; pier sides within 10°; Calibrate runs the Scan folders checks; a roomier Photometry image; the Mac app from
 Create shortcut.command), checked against the program. Screenshots were retaken on 2.3.0
-> wherever the page or its version line changed.
+> wherever the page or its version line changed, and on 2.3.2 for the pages 2.3.2 changed (the Photometry page, the
+> Transit fit page and the WebObs offer).
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
