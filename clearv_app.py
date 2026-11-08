@@ -2386,16 +2386,59 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _remember_site(self, key: str, var):
         """2.2.4: latitude, longitude and elevation are remembered between sessions (settings file only).
         2.3.2 (item 1): a site typed that differs from your saved one is not saved until you say it is yours
-        (_typed_site_check); typed for someone else's frames, it is used for those frames only."""
+        (_typed_site_check); typed for someone else's frames, it is used for those frames only. Review S6: saved
+        ~0.7 s after the last key, so the keystrokes on the way (an elevation passing through 234 on its way to
+        2340) never reach the file (or SHOBS-SCHED)."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return   # a borrowed site (MicroObservatory frames) or a series file's site is not the user's own
         if self._site_unconfirmed():
             self._typed_site_pending = True
+            self.__dict__.setdefault("_typed_held", set()).add(key)
             return
-        value = var.get().strip()
+        if key == "site_tz":
+            self._store_site(key, var)   # picked from the list (a half-typed name never gets here): saved at once
+            return
+        pending = self.__dict__.setdefault("_site_after", {})
+        if pending.get(key):
+            try:
+                self.after_cancel(pending[key])
+            except Exception:
+                pass
+        try:
+            pending[key] = self.after(700, lambda k=key, v=var: self._store_site(k, v))
+        except Exception:
+            self._store_site(key, var)
+
+    def _store_site(self, key: str, var):
+        """The debounced save of _remember_site, checked again (a site typed or a series loaded during the pause)."""
+        self.__dict__.setdefault("_site_after", {}).pop(key, None)
+        if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
+            return
+        if self._site_unconfirmed():
+            self._typed_site_pending = True
+            self.__dict__.setdefault("_typed_held", set()).add(key)
+            return
+        try:
+            value = var.get().strip()
+        except Exception:
+            return
+        if key == "site_tz" and value and not site_time.is_valid(value):
+            return
         if self.settings.get(key, "") != value:
             self.settings[key] = value
             self._save_settings()
+
+    def _flush_site_saves(self):
+        """Run the waiting debounced site saves now (before a question, a scan or a run)."""
+        pending = dict(self.__dict__.get("_site_after") or {})
+        names = {"site_lat": self.lat, "site_lon": self.lon, "site_elevation": self.elevation, "site_tz": self.site_tz}
+        for key, job in pending.items():
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+            if key in names:
+                self._store_site(key, names[key])
 
     # ---- 2.3.2 (item 1): a site typed for someone else's frames never becomes your saved setup ---------------------
     # Bit twice (5 Nov MicroObservatory, 6 Nov Matthew's 203 mm): every Site/Optics box was saved as it was typed.
@@ -2405,11 +2448,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     _TYPED_SETUP_KEYS = (("lat", "site_lat"), ("lon", "site_lon"), ("elevation", "site_elevation"),
                          ("site_tz", "site_tz"), ("focal_mm", "focal_mm"), ("pixel_um", "pixel_um"),
                          ("aperture_mm", "aperture_mm"), ("telescope_name", "telescope_name"))
+    _SITE_KEYS = ("site_lat", "site_lon", "site_elevation", "site_tz")
+    _INCOMPLETE = "incomplete"
+    _INCOMPLETE_ELEV = "incomplete elevation"
 
     def _saved_site(self):
-        """(lat, lon, elevation or None) of your saved site as last confirmed (at start, or on a Yes), or None when
-        none is saved. The confirmed copy, not the live settings, so values saved key by key while typing (an
-        elevation passing through 234 on its way to 2340) never move the reference."""
+        """(lat, lon, elevation or None) of your saved site as last confirmed (at start, on a Yes, or on leaving the
+        boxes at your own site), or None when none is saved. The confirmed copy, not the live settings."""
         st = getattr(self, "_confirmed_setup", None)
         if st is None:
             st = getattr(self, "settings", None) or {}
@@ -2426,20 +2471,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             elev = None
         return lat, lon, elev
 
+    def _box_site(self):
+        """(lat, lon) in the Site boxes, or None when they are empty or half typed."""
+        try:
+            lat, lon = float(self.lat.get()), float(self.lon.get())
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -360 <= lon <= 360):
+            return None
+        return lat, lon
+
     def _site_unconfirmed(self) -> str:
         """Why the Site boxes are not your saved site ("" when they are, or when no site is saved yet): a site more
-        than 50 km away, an elevation 100 m off, or a latitude/longitude box that is empty or half typed (so
-        select-all-and-type never saves an empty site first and the typed one after it as if it were your first)."""
+        than 50 km away, an elevation 100 m off, or a box that is empty or half typed (so select-all-and-type never
+        saves an empty site first and the typed one after it as if it were your first)."""
         saved = self._saved_site()
         if saved is None:
             return ""
-        try:
-            lat, lon = float(self.lat.get()), float(self.lon.get())
-            if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -360 <= lon <= 360):
-                raise ValueError
-        except (TypeError, ValueError, AttributeError):
-            return "incomplete"
-        dist = core.site_distance_km(saved[:2], (lat, lon))
+        here = self._box_site()
+        if here is None:
+            return self._INCOMPLETE
+        dist = core.site_distance_km(saved[:2], here)
         if dist > self.TYPED_SITE_KM:
             return f"{dist:.0f} km from your saved site"
         try:
@@ -2447,42 +2499,71 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except (TypeError, ValueError, AttributeError):
             elev = None
         if elev is None and saved[2] is not None:
-            return "incomplete"   # an emptied elevation is never saved over yours
+            return self._INCOMPLETE_ELEV   # an emptied elevation is never saved over yours (it alone is held)
         if elev is not None and saved[2] is not None and abs(elev - saved[2]) > self.TYPED_ELEV_M:
             return f"elevation {elev:.0f} m against your saved {saved[2]:.0f} m"
         return ""
 
-    def _setup_saving_held(self) -> bool:
-        """True while a typed site waits for _typed_site_check: no Site/Optics value is saved meanwhile."""
+    def _setup_saving_held(self, key: str = "") -> bool:
+        """True while a typed site waits for _typed_site_check: that Optics value is not saved meanwhile (it is
+        noted, and saved with the site on Yes). An emptied Elevation box holds only the elevation (review S4)."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return False   # those cases have their own guards
-        if self._site_unconfirmed():
-            self._typed_site_pending = True
-            return True
-        return False
+        why = self._site_unconfirmed()
+        if not why or why == self._INCOMPLETE_ELEV:
+            return False
+        self._typed_site_pending = True
+        if key:
+            self.__dict__.setdefault("_typed_held", set()).add(key)
+        return True
 
     def _confirm_setup_now(self):
         """The setup that _typed_site_check's No goes back to: the saved values as they are now."""
         st = getattr(self, "settings", None) or {}
         self._confirmed_setup = {k: st[k] for _b, k in self._TYPED_SETUP_KEYS if k in st}
+        self._typed_held = set()
 
-    def _typed_site_check(self, _event=None) -> bool:
-        """Leaving a Site box (and before Scan folders, Calibrate and Run): a typed site that differs from your saved
-        one is asked about once. Yes saves it (and the optics typed with it) as yours; No uses it for these frames
-        only: your saved setup is set aside and comes back when you scan your own lights. Returns False only when
-        the boxes are left incomplete (nothing is saved then either)."""
-        if not getattr(self, "_typed_site_pending", False):
-            return True
+    def _typed_site_focus_out(self, _event=None):
+        """Review S3: leaving a Site box for another Site box (lat → lon) is still typing: ask once focus has left
+        the Site boxes (and not on a switch to another window)."""
+        def later():
+            try:
+                now = self.focus_get()
+            except Exception:
+                now = None
+            if now is None or now in (getattr(self, "_site_entries", ()) + (getattr(self, "site_tz_box", None),)):
+                return
+            self._typed_site_check()
+        try:
+            self.after_idle(later)
+        except Exception:
+            pass
+
+    def _typed_site_check(self, _event=None, action: str = "") -> bool:
+        """Leaving the Site boxes (Enter, or focus elsewhere) and before Scan folders, Calibrate and Run photometry
+        (action names it): a typed site that differs from your saved one is asked about once. Yes saves it (and the
+        Optics values typed with it) as yours; No uses it for these frames only: your saved setup is set aside and
+        comes back when you scan your own lights. Returns False only when the boxes are left incomplete."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             self._typed_site_pending = False
+            return True
+        self._flush_site_saves()
+        if self._saved_site() is None and self._box_site() is not None and \
+                self._saved_site_in(getattr(self, "settings", None) or {}):
+            self._confirm_setup_now()   # review S2: the first site you typed this session is now yours to protect
+        if not getattr(self, "_typed_site_pending", False):
             return True
         why = self._site_unconfirmed()
         if not why:
             self._typed_site_pending = False
-            self._save_typed_setup()   # back to (or near) your own site: the boxes are saved as typed
+            self._save_typed_setup(back_home=True)   # back at (or near) your own site
             return True
-        if why == "incomplete":
-            return False   # still typing (or cleared): nothing saved; asked once the boxes hold a site
+        if why in (self._INCOMPLETE, self._INCOMPLETE_ELEV):
+            if action:   # still typing (or cleared): nothing saved; say so when a step starts with it
+                what = "Elevation box is" if why == self._INCOMPLETE_ELEV else "Site boxes are"
+                self.log(f"{action}: the {what} empty or not a number, so the site is not saved as yours (your "
+                         "saved site is kept). Fill it in if these are your own frames.", keep_status=True)
+            return False
         saved = self._saved_site()
         self._typed_site_pending = False
         here = f"latitude {float(self.lat.get()):.4f}, longitude {float(self.lon.get()):.4f}"
@@ -2490,18 +2571,32 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if messagebox.askyesno(
                 APP_TITLE,
                 f"The Site boxes now hold {here} ({why}; yours is {yours}).\n\n"
-                "Is this your own site from now on? Yes saves it, with the Optics boxes, as your setup (SHOBS-SCHED "
-                "reads it too). No uses it for these frames only: your saved site, optics and camera settings are "
-                "kept and come back when you scan a folder of your own lights."):
+                "Is this your own site from now on? Yes saves it, with the Optics values you typed, as your setup "
+                "(SHOBS-SCHED reads it too). No uses it for these frames only: your saved site, optics and camera "
+                "settings are kept and come back when you scan a folder of your own lights."):
             self._save_typed_setup()
             self.log(f"Site saved as yours: {here}.")
             return True
         self._typed_setup_for_these_frames()
         return True
 
-    def _save_typed_setup(self):
-        """Yes (or back at your own site): the Site and Optics boxes saved as your setup."""
+    @staticmethod
+    def _saved_site_in(st: dict) -> bool:
+        try:
+            return all(math.isfinite(float(st.get(k))) for k in ("site_lat", "site_lon"))
+        except (TypeError, ValueError):
+            return False
+
+    def _save_typed_setup(self, back_home: bool = False):
+        """Yes (or back at your own site): only the boxes you typed while the site was held are saved as your setup
+        (on Yes the latitude, longitude and elevation always). Review M1: values filled by a loaded series or a
+        header (another site's optics, time zone) are never saved here."""
+        held = set(self.__dict__.get("_typed_held") or set())
+        if not back_home:
+            held |= {"site_lat", "site_lon", "site_elevation"}
         for name, key in self._TYPED_SETUP_KEYS:
+            if key not in held:
+                continue
             value = self._setup_value(name)
             if name in ("focal_mm", "pixel_um"):
                 try:
@@ -2514,8 +2609,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 value = str(value).strip()
                 if name == "site_tz" and value and not site_time.is_valid(value):
                     continue
+                if name == "elevation" and back_home and not value:
+                    continue
             self.settings[key] = value
-        self.settings.pop("aperture_cm", None)
+        if "aperture_mm" in held:
+            self.settings.pop("aperture_cm", None)
         self._save_settings()
         self._confirm_setup_now()
 
@@ -2529,7 +2627,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 if self.settings.get(key) != confirmed[key]:
                     undone.append(f"{key.replace('_', ' ')} {self.settings.get(key)!s}")
                     self.settings[key] = confirmed[key]
-            elif key in self.settings and key not in ("site_lat", "site_lon", "site_elevation"):
+            elif key in self.settings and key not in self._SITE_KEYS:
                 undone.append(f"{key.replace('_', ' ')} {self.settings.get(key)!s}")
                 self.settings.pop(key, None)
         self._save_settings()
@@ -2540,6 +2638,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             elif name in ("focal_mm", "pixel_um", "aperture_mm", "telescope_name"):
                 own[name] = ""   # none of yours saved: empty (2.3.2 item 14)
         self._own_setup = own
+        self._typed_held = set()
         self._typed_borrow = ""   # tied to the Lights folder at the next Scan folders (_header_setup)
         self.log("Site typed for these frames only: used for them, not saved as yours. Your own site, optics and "
                  "camera settings come back when you scan a folder of your own lights."
@@ -2627,7 +2726,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if key != "observer_code" and getattr(self, "_own_setup", None) is not None:
             return
-        if key != "observer_code" and self._setup_saving_held():
+        if key != "observer_code" and self._setup_saving_held(key):
             return   # 2.3.2 (item 1): saved with the typed site on Yes, never on No
         try:
             value = var.get()
@@ -2655,7 +2754,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _store_own_value(self, key: str, value):
         """2.2.18 (item 11, review nit): the debounced save of _remember_own_value."""
         self.__dict__.setdefault("_own_value_after", {}).pop(key, None)
-        if key != "observer_code" and (getattr(self, "_own_setup", None) is not None or self._setup_saving_held()):
+        if key != "observer_code" and (getattr(self, "_own_setup", None) is not None or self._setup_saving_held(key)):
             return   # 2.3.2 (item 1): a site was typed (or borrowed) during the pause
         if self.settings.get(key) != value:
             self.settings[key] = value
@@ -2836,7 +2935,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return
-        if self._setup_saving_held():
+        if self._setup_saving_held("telescope_name"):
             return   # 2.3.2 (item 1)
         value = self.telescope_name.get().strip()
         if self.settings.get("telescope_name", "") != value:
@@ -2958,7 +3057,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _remember_scint(self):
         """2.2.2: the aperture and the scintillation switch are remembered between sessions."""
         # 2.2.9: a borrowed aperture (another telescope's frames) is not the user's own: not remembered.
-        if getattr(self, "_own_setup", None) is None and not self._setup_saving_held():   # 2.3.2 (item 1)
+        if (getattr(self, "_own_setup", None) is None and not getattr(self, "_loading_meta", False)   # 2.3.2 review
+                and not self._setup_saving_held("aperture_mm")):   # 2.3.2 item 1
             self.settings["aperture_mm"] = self.aperture_mm.get().strip()
             self.settings.pop("aperture_cm", None)
         self.settings["use_scint"] = bool(self.use_scint.get())
@@ -3882,9 +3982,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._field(site, 0, "Latitude (°, north +)", self.lat, width=12),
             self._field(site, 1, "Longitude (°, east +)", self.lon, width=12, hint="west is negative"),
             self._field(site, 2, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation"))
+        self._site_entries = tuple(_site_entries)
         for _entry in _site_entries:   # 2.3.2 (item 1): a typed site that is not your saved one is asked about
-            for _seq in ("<FocusOut>", "<Return>", "<KP_Enter>"):
+            for _seq in ("<Return>", "<KP_Enter>"):
                 _entry.bind(_seq, self._typed_site_check, add="+")
+            _entry.bind("<FocusOut>", self._typed_site_focus_out, add="+")   # review S3
         # 2.2.21 (#22): the site's time zone; type part of a name (Phoenix, Warsaw) to narrow the list
         ttk.Label(site, text="Time zone", style="Card.TLabel").grid(row=3, column=0, sticky=W, padx=(0, 10), pady=3)
         self.site_tz_box = ttk.Combobox(site, textvariable=self.site_tz, values=site_time.available_zones(), width=22)
@@ -5152,7 +5254,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._try_auto_target("lookup")
 
     def scan_folders(self):
-        self._typed_site_check()   # 2.3.2 (item 1): before the lights' header compares sites
+        self._typed_site_check(action="Scan folders")   # 2.3.2 (item 1): before the header compares sites
         if getattr(self, "photo_popout", None) is not None:
             self.photo_bring_back()   # 2.2.17 (item 2): new lights: the image (and its buttons) back on the page
         for key, var in (
@@ -5628,6 +5730,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self._own_setup is None:
             # Taken only when the borrowed setup is accepted (2.2.4), so answering No never freezes the saved site.
             self._own_setup = self._setup_snapshot()
+        self._typed_borrow = None   # 2.3.2 review S1: this borrow comes from the frames, not from typed boxes
         self.pattern.set(core.MONO)
         self.debayer_mode.set("luminance")
         if self._mono_filter_source != "header":
@@ -5705,6 +5808,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 + (f" ({cam})" if cam else "") + ".\n\nIs that your own site? Yes saves it as yours; No uses it "
                 "for these frames only.")
             asked = True
+            self._header_site_is_own = not far   # 2.3.2 review N2: Yes saves it below, with no second question
         if far:
             if not asked and not messagebox.askyesno(
                     APP_TITLE,
@@ -5727,6 +5831,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     except Exception:
                         pass
                 self.scale_approx = False
+            self._typed_borrow = None   # 2.3.2 review S1: the frames' own site now, not a typed one
             self.lat.set(f"{site[0]:.4f}")
             self.lon.set(f"{site[1]:.4f}")
             # Never leave your own elevation with another site's coordinates (2.2.8 MicroObservatory lesson).
@@ -5779,7 +5884,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if cur is None or (key in ("focal_mm", "pixel_um") and (cur <= 0 or unset)):
                 getattr(self, key).set(value if key not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
                 filled.append(f"{label} {value:g} ({src})")
-                unset_filled = unset_filled or unset
+                # review S5 (2.3.2 item 14): an empty box with nothing of yours saved gets the caution too
+                unset_filled = unset_filled or unset or (key in ("focal_mm", "pixel_um") and key not in self.settings)
             elif abs(cur - value) > tol:
                 differ.append((key, label, cur, value, src))
         # 2.2.19 (nit): focal length and pixel size read from your own lights' header are saved to the settings file
@@ -5791,6 +5897,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 cur = fnum(self._setup_value(key))
                 if cur is not None and abs(cur - value) <= tol:
                     self._store_own_value(key, float(cur))
+        if getattr(self, "_header_site_is_own", False):
+            # 2.3.2 review N2: "Is that your own site?" Yes: the header's site is saved as yours now (item 1 would
+            # otherwise hold it, the boxes having been empty, and ask again at Run).
+            self._header_site_is_own = False
+            self._typed_site_pending = False
+            self._save_typed_setup()
         if filled:
             self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
             if unset_filled:   # 2.2.18 (item 11, review S6)
@@ -6962,7 +7074,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return lines
 
     def run_calibration(self):
-        self._typed_site_check()   # 2.3.2 (item 1)
+        self._typed_site_check(action="Calibrate")   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())
@@ -13244,7 +13356,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         self._remeasure = None
-        self._typed_site_check()   # 2.3.2 (item 1)
+        self._typed_site_check(action="Run photometry")   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
         if stack_run:

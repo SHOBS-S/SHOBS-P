@@ -219,10 +219,75 @@ class TestInApp(unittest.TestCase):
             app.settings.pop(k, None)
         app._confirm_setup_now()   # a fresh install: no site of yours yet
         self._type(app.lat, "51.5"); self._type(app.lon, "-0.12")
+        self.assertNotIn("site_lat", app.settings)   # review S6: saved after a pause, not per keystroke
+        app._typed_site_check()                       # leaving the box saves it at once
         self.assertEqual(app.settings["site_lat"], "51.5")
         self.boxes["askyesno"].assert_not_called()
+        # review S2: from now on that first site is protected in this session too
+        self._type(app.lat, "39.1918"); self._type(app.lon, "-84.7104")
+        self.boxes["askyesno"].return_value = False
+        app._typed_site_check()
+        self.boxes["askyesno"].assert_called_once()
+        self.assertEqual(app.settings["site_lat"], "51.5")
         for k in ("site_lat", "site_lon", "site_elevation"):
             app.settings[k] = JOHN[k]
+
+    # ---- Fable review of items 1 and 14 --------------------------------------------------------------------------
+    def test_m1_series_optics_never_saved_back_home(self):
+        app = self.app
+        app._loading_meta = True   # a series from Matthew's site fills the boxes
+        app.lat.set("39.1918"); app.lon.set("-84.7104"); app.elevation.set("191")
+        app.focal_mm.set(1000.0); app.pixel_um.set(5.0); app.aperture_mm.set("203"); app.telescope_name.set("MG Scope")
+        app._loading_meta = False
+        self._type(app.lat, "35.303"); self._type(app.lon, "-81.9407"); self._type(app.elevation, "280")
+        app._typed_site_check()
+        self.boxes["askyesno"].assert_not_called()
+        for k, v in JOHN.items():
+            self.assertEqual(app.settings.get(k), v, k)
+
+    def test_s1_header_borrow_clears_typed_borrow(self):
+        app = self.app
+        self._type_matthew()
+        self.boxes["askyesno"].return_value = False
+        app._typed_site_check()
+        self.boxes["askyesno"].return_value = True   # frames from a far site: use theirs
+        app.light_dir.set("/tmp/mobs")
+        app._header_setup({"EXPTIME": 60, "SITELAT": 31.68, "SITELONG": -110.88})
+        self.assertIsNone(app._typed_borrow)
+        app.light_dir.set("/tmp/john")
+        app._header_setup({"EXPTIME": 60})   # your own lights, no site in the header: your setup comes back
+        self.assertIsNone(app._own_setup)
+        self.assertEqual(app.lat.get(), "35.303")
+
+    def test_s3_tab_between_site_boxes_does_not_ask(self):
+        app = self.app
+        self._type(app.lat, "39.1918")
+        with mock.patch.object(app, "focus_get", return_value=app._site_entries[1]):
+            app._typed_site_focus_out()
+            app.update()
+        self.boxes["askyesno"].assert_not_called()
+        with mock.patch.object(app, "focus_get", return_value=app):
+            app._typed_site_focus_out()
+            app.update()
+        self.boxes["askyesno"].assert_called_once()
+
+    def test_s4_empty_elevation_holds_only_elevation(self):
+        app = self.app
+        app.elevation.set("")
+        app.focal_mm.set(2500.0)
+        app._store_own_value("focal_mm", 2500.0)
+        self.assertEqual(app.settings["focal_mm"], 2500.0)
+        self.assertEqual(app.settings["site_elevation"], "280")
+        self.assertFalse(app._typed_site_check(action="Run photometry"))
+        self.assertTrue(any("Elevation box is empty" in t for t in self.logged))
+
+    def test_n2_header_own_site_yes_saved_once(self):
+        app = self.app
+        app.lat.set(""); app.lon.set(""); app.elevation.set("")
+        app._header_setup({"EXPTIME": 60, "SITELAT": 35.3027, "SITELONG": -81.9400})
+        app._typed_site_check(action="Run photometry")
+        self.assertEqual(self.boxes["askyesno"].call_count, 1)   # only "Is that your own site?"
+        self.assertEqual(app.settings["site_lat"], "35.3027")
 
     # ---- item 14 ----------------------------------------------------------------------------------------------
     def test_fresh_install_optics_blank(self):
@@ -238,6 +303,7 @@ class TestInApp(unittest.TestCase):
             fresh._header_setup({"FOCALLEN": 2098, "XPIXSZ": 3.76})
             self.assertAlmostEqual(float(fresh.focal_mm.get()), 2098.0)
             self.assertAlmostEqual(float(fresh.pixel_um.get()), 3.76)
+            self.assertIn("now saved as your own optics", fresh.log_box.get("1.0", "end"))   # review S5
             # typing 2900 by hand is saved like any other value (no more "starting value" exception)
             saved = []
             fresh._save_settings = lambda *a, **k: saved.append(dict(fresh.settings))

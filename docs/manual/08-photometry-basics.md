@@ -216,7 +216,7 @@ measuring (the column header says which, for example **V magnitude**). AAVSO seq
 APASS, Gaia and Tycho-2. If the check star has no catalog name (for example when a catalog did not answer), SHOBS-P
 names it by its sky position when you press **Run photometry**, the way APASS names its stars, for example
 `J020351.8+464115`. The log says so, and that name goes into the series, the reports and the settings file instead
-of a bare "check". The line under each row says where the magnitude came from and adds checks:
+of a bare "check" (a night added to a series whose check was saved as "check" before 2.3.2 keeps the series' name). The line under each row says where the magnitude came from and adds checks:
 
 - its color (B−V) and a warning if it is very red;
 - how much brighter or fainter than the target it is, with a warning if it is more than about 1 magnitude away;
@@ -414,7 +414,7 @@ skipped because of …, which is no longer a comp — Run photometry again to me
 frames** button appears at the right of that line. The log and the status line say it too.
 
 **Measure skipped frames** measures only those frames, with the comps now in use, and adds them to the night. An open
-series with a file is saved automatically; in Transits mode the fit is refreshed. It needs that night's Lights folder
+series with a file is saved automatically; in Transits mode the old fit is cleared (press **Fit transit** to fit again). It needs that night's Lights folder
 on the Input page and its image loaded; otherwise a box explains this and says to use **Run photometry**. Once the
 frames are back, the line and the button go away.
 
