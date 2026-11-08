@@ -220,6 +220,22 @@ yours, and SHOBS-P will not ask again about those same values.
 **Your Site boxes are empty.** If the header has a site and yours is empty, SHOBS-P asks **Is that your own site?**
 **Yes** saves it as yours; **No** uses it for these frames only.
 
+**A site you typed that is not your saved one.** When you type a site into the Site boxes for someone else's frames
+(a friend's data, or frames whose headers have no site), SHOBS-P does not save it while you type. When you leave the
+box (or press **Scan folders**, **Calibrate** or **Run photometry**) and the typed site is more than 50 km from your
+saved site, or its elevation is more than 100 m off, SHOBS-P asks:
+
+> The Site boxes now hold latitude …, longitude … (… km from your saved site; yours is …).
+>
+> Is this your own site from now on? …
+
+**Yes** saves it, with the Optics boxes, as your setup (SHOBS-SCHED reads the same setup). **No** uses it for these
+frames only: your saved site, optics and camera settings are kept, and nothing you type into the Site or Optics boxes
+is saved while the typed site is in use. If you saved an Optics value earlier in the same session (for example the
+other telescope's aperture before its site), it goes back too, and the log names it. The typed site stays in use for
+that Lights folder when its header has no site; your own setup comes back the next time you scan a folder of your own
+lights. Small changes at your own site (a corrected elevation, a fourth decimal) are saved without a question.
+
 **Monochrome camera.** If there is no Bayer keyword and the raw flats show no color mask, the status bar says
 **Monochrome camera found (no color mask in the flat): Bayer pattern MONO.** Without flats, SHOBS-P tests the lights'
 sky background instead (it needs bias or dark frames, or a bright sky); then the status bar says **Monochrome camera

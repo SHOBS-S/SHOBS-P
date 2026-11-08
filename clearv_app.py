@@ -1370,6 +1370,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # mount). Blank = from the header (unless it names a mount) and the aperture / focal length.
         self.telescope_name = StringVar(value=str(self.settings.get("telescope_name", "") or ""))
         self.telescope_name.trace_add("write", lambda *_: self._remember_telescope())
+        self._typed_site_pending = False   # 2.3.2 (item 1)
+        self._confirm_setup_now()
         # 2.2.18 (item 8): the mount type (German equatorial / Alt-az), remembered; the lights' headers win only when
         # they say it unambiguously (core.detect_mount / resolve_mount).
         _mount = self.settings.get("mount") if self.settings.get("mount") in core.MOUNT_LABELS else core.MOUNT_GEM
@@ -2359,13 +2361,168 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._update_dark_exposure_note()   # 2.2.19 (#20); 2.3.0 (item 11): + Bias, Dark flats, Flat
 
     def _remember_site(self, key: str, var):
-        """2.2.4: latitude, longitude and elevation are remembered between sessions (settings file only)."""
+        """2.2.4: latitude, longitude and elevation are remembered between sessions (settings file only).
+        2.3.2 (item 1): a site typed that differs from your saved one is not saved until you say it is yours
+        (_typed_site_check); typed for someone else's frames, it is used for those frames only."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return   # a borrowed site (MicroObservatory frames) or a series file's site is not the user's own
+        if self._site_unconfirmed():
+            self._typed_site_pending = True
+            return
         value = var.get().strip()
         if self.settings.get(key, "") != value:
             self.settings[key] = value
             self._save_settings()
+
+    # ---- 2.3.2 (item 1): a site typed for someone else's frames never becomes your saved setup ---------------------
+    # Bit twice (5 Nov MicroObservatory, 6 Nov Matthew's 203 mm): every Site/Optics box was saved as it was typed.
+    TYPED_SITE_KM = 50.0     # as _header_setup's "another site"
+    TYPED_ELEV_M = 100.0
+    # box name -> settings key, for the setup a typed site carries with it
+    _TYPED_SETUP_KEYS = (("lat", "site_lat"), ("lon", "site_lon"), ("elevation", "site_elevation"),
+                         ("site_tz", "site_tz"), ("focal_mm", "focal_mm"), ("pixel_um", "pixel_um"),
+                         ("aperture_mm", "aperture_mm"), ("telescope_name", "telescope_name"))
+
+    def _saved_site(self):
+        """(lat, lon, elevation or None) of your saved site as last confirmed (at start, or on a Yes), or None when
+        none is saved. The confirmed copy, not the live settings, so values saved key by key while typing (an
+        elevation passing through 234 on its way to 2340) never move the reference."""
+        st = getattr(self, "_confirmed_setup", None)
+        if st is None:
+            st = getattr(self, "settings", None) or {}
+        try:
+            lat, lon = float(st.get("site_lat")), float(st.get("site_lon"))
+        except (TypeError, ValueError):
+            return None
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            return None
+        try:
+            elev = float(st.get("site_elevation"))
+            elev = elev if math.isfinite(elev) else None
+        except (TypeError, ValueError):
+            elev = None
+        return lat, lon, elev
+
+    def _site_unconfirmed(self) -> str:
+        """Why the Site boxes are not your saved site ("" when they are, or when no site is saved yet): a site more
+        than 50 km away, an elevation 100 m off, or a latitude/longitude box that is empty or half typed (so
+        select-all-and-type never saves an empty site first and the typed one after it as if it were your first)."""
+        saved = self._saved_site()
+        if saved is None:
+            return ""
+        try:
+            lat, lon = float(self.lat.get()), float(self.lon.get())
+            if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -360 <= lon <= 360):
+                raise ValueError
+        except (TypeError, ValueError, AttributeError):
+            return "incomplete"
+        dist = core.site_distance_km(saved[:2], (lat, lon))
+        if dist > self.TYPED_SITE_KM:
+            return f"{dist:.0f} km from your saved site"
+        try:
+            elev = float(self.elevation.get())
+        except (TypeError, ValueError, AttributeError):
+            elev = None
+        if elev is None and saved[2] is not None:
+            return "incomplete"   # an emptied elevation is never saved over yours
+        if elev is not None and saved[2] is not None and abs(elev - saved[2]) > self.TYPED_ELEV_M:
+            return f"elevation {elev:.0f} m against your saved {saved[2]:.0f} m"
+        return ""
+
+    def _setup_saving_held(self) -> bool:
+        """True while a typed site waits for _typed_site_check: no Site/Optics value is saved meanwhile."""
+        if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
+            return False   # those cases have their own guards
+        if self._site_unconfirmed():
+            self._typed_site_pending = True
+            return True
+        return False
+
+    def _confirm_setup_now(self):
+        """The setup that _typed_site_check's No goes back to: the saved values as they are now."""
+        st = getattr(self, "settings", None) or {}
+        self._confirmed_setup = {k: st[k] for _b, k in self._TYPED_SETUP_KEYS if k in st}
+
+    def _typed_site_check(self, _event=None) -> bool:
+        """Leaving a Site box (and before Scan folders, Calibrate and Run): a typed site that differs from your saved
+        one is asked about once. Yes saves it (and the optics typed with it) as yours; No uses it for these frames
+        only: your saved setup is set aside and comes back when you scan your own lights. Returns False only when
+        the boxes are left incomplete (nothing is saved then either)."""
+        if not getattr(self, "_typed_site_pending", False):
+            return True
+        if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
+            self._typed_site_pending = False
+            return True
+        why = self._site_unconfirmed()
+        if not why:
+            self._typed_site_pending = False
+            self._save_typed_setup()   # back to (or near) your own site: the boxes are saved as typed
+            return True
+        if why == "incomplete":
+            return False   # still typing (or cleared): nothing saved; asked once the boxes hold a site
+        saved = self._saved_site()
+        self._typed_site_pending = False
+        here = f"latitude {float(self.lat.get()):.4f}, longitude {float(self.lon.get()):.4f}"
+        yours = f"latitude {saved[0]:.4f}, longitude {saved[1]:.4f}"
+        if messagebox.askyesno(
+                APP_TITLE,
+                f"The Site boxes now hold {here} ({why}; yours is {yours}).\n\n"
+                "Is this your own site from now on? Yes saves it, with the Optics boxes, as your setup (SHOBS-SCHED "
+                "reads it too). No uses it for these frames only: your saved site, optics and camera settings are "
+                "kept and come back when you scan a folder of your own lights."):
+            self._save_typed_setup()
+            self.log(f"Site saved as yours: {here}.")
+            return True
+        self._typed_setup_for_these_frames()
+        return True
+
+    def _save_typed_setup(self):
+        """Yes (or back at your own site): the Site and Optics boxes saved as your setup."""
+        for name, key in self._TYPED_SETUP_KEYS:
+            value = self._setup_value(name)
+            if name in ("focal_mm", "pixel_um"):
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not (math.isfinite(value) and value > 0):
+                    continue
+            else:
+                value = str(value).strip()
+                if name == "site_tz" and value and not site_time.is_valid(value):
+                    continue
+            self.settings[key] = value
+        self.settings.pop("aperture_cm", None)
+        self._save_settings()
+        self._confirm_setup_now()
+
+    def _typed_setup_for_these_frames(self):
+        """No: the typed site (and optics) for these frames only. The saved setup is the one confirmed before this
+        site was typed; any Optics value saved since then goes back too, and the Log names it."""
+        confirmed = dict(getattr(self, "_confirmed_setup", None) or {})
+        undone = []
+        for name, key in self._TYPED_SETUP_KEYS:
+            if key in confirmed:
+                if self.settings.get(key) != confirmed[key]:
+                    undone.append(f"{key.replace('_', ' ')} {self.settings.get(key)!s}")
+                    self.settings[key] = confirmed[key]
+            elif key in self.settings and key not in ("site_lat", "site_lon", "site_elevation"):
+                undone.append(f"{key.replace('_', ' ')} {self.settings.get(key)!s}")
+                self.settings.pop(key, None)
+        self._save_settings()
+        own = self._setup_snapshot()
+        for name, key in self._TYPED_SETUP_KEYS:
+            if key in confirmed:
+                own[name] = confirmed[key]
+            elif name in ("focal_mm", "pixel_um", "aperture_mm", "telescope_name"):
+                own[name] = ""   # none of yours saved: empty (2.3.2 item 14)
+        self._own_setup = own
+        self._typed_borrow = ""   # tied to the Lights folder at the next Scan folders (_header_setup)
+        self.log("Site typed for these frames only: used for them, not saved as yours. Your own site, optics and "
+                 "camera settings come back when you scan a folder of your own lights."
+                 + (" Not kept as yours either (typed since your setup was last confirmed): " + "; ".join(undone)
+                    + "." if undone else ""))
+        self.status.set("Site and optics for these frames only (your saved setup is kept).")
 
     def _apply_site_tz(self, warn: bool = True) -> bool:
         """2.2.21 (#22): use the Time zone box's zone for local times. A name that cannot be loaded leaves this
@@ -2411,25 +2568,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
 
-    OPTICS_DEFAULTS = {"focal_mm": 2900.0, "pixel_um": 3.76}   # 2.2.18 (item 11): until your own are known
+    # 2.2.18 (item 11) started these at 2900 mm / 3.76 µm (John's own). 2.3.2 (item 14): a fresh install starts with
+    # both boxes EMPTY; the keys only name the boxes _optics_unset covers.
+    OPTICS_DEFAULTS = {"focal_mm": None, "pixel_um": None}
 
-    def _saved_optics(self, key: str) -> float:
-        """2.2.18 (item 11): the saved focal length / pixel size, else the built-in starting value."""
+    def _saved_optics(self, key: str):
+        """2.2.18 (item 11): the saved focal length / pixel size; 2.3.2 (item 14): else empty (was 2900 / 3.76)."""
         try:
             v = float(self.settings.get(key))
             if math.isfinite(v) and v > 0:
                 return v
         except (TypeError, ValueError):
             pass
-        return self.OPTICS_DEFAULTS[key]
+        return ""
 
     def _optics_unset(self, key: str) -> bool:
-        """2.2.18 (item 11): the box still holds the built-in starting value, never saved as yours: the lights' header
-        fills it like an empty box (before 2.2.18 it asked whether to replace "your" 2900 mm)."""
+        """2.2.18 (item 11): the box holds no value of yours, so the lights' header fills it like an empty box.
+        2.3.2 (item 14): a fresh install starts with the boxes empty (no built-in 2900 mm / 3.76 µm any more), so
+        only an empty or unreadable box counts; any number in it was typed or filled from a header."""
         if key not in self.OPTICS_DEFAULTS or key in self.settings:
             return False
         try:
-            return abs(float(getattr(self, key).get()) - self.OPTICS_DEFAULTS[key]) < 1e-9
+            float(getattr(self, key).get())
+            return False
         except Exception:
             return True
 
@@ -2443,6 +2604,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if key != "observer_code" and getattr(self, "_own_setup", None) is not None:
             return
+        if key != "observer_code" and self._setup_saving_held():
+            return   # 2.3.2 (item 1): saved with the typed site on Yes, never on No
         try:
             value = var.get()
         except Exception:
@@ -2458,8 +2621,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return
             if not (math.isfinite(value) and value > 0):
                 return
-            if key not in self.settings and abs(value - self.OPTICS_DEFAULTS[key]) < 1e-9:
-                return   # the starting value put back is not a value of yours
         pending = self.__dict__.setdefault("_own_value_after", {})
         if pending.get(key):
             try:
@@ -2471,6 +2632,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _store_own_value(self, key: str, value):
         """2.2.18 (item 11, review nit): the debounced save of _remember_own_value."""
         self.__dict__.setdefault("_own_value_after", {}).pop(key, None)
+        if key != "observer_code" and (getattr(self, "_own_setup", None) is not None or self._setup_saving_held()):
+            return   # 2.3.2 (item 1): a site was typed (or borrowed) during the pause
         if self.settings.get(key) != value:
             self.settings[key] = value
             self._save_settings()
@@ -2650,6 +2813,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.16 (item 5): the Optics box's Telescope name is remembered between sessions (your own setup only)."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return
+        if self._setup_saving_held():
+            return   # 2.3.2 (item 1)
         value = self.telescope_name.get().strip()
         if self.settings.get("telescope_name", "") != value:
             self.settings["telescope_name"] = value
@@ -2770,7 +2935,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _remember_scint(self):
         """2.2.2: the aperture and the scintillation switch are remembered between sessions."""
         # 2.2.9: a borrowed aperture (another telescope's frames) is not the user's own: not remembered.
-        if getattr(self, "_own_setup", None) is None:
+        if getattr(self, "_own_setup", None) is None and not self._setup_saving_held():   # 2.3.2 (item 1)
             self.settings["aperture_mm"] = self.aperture_mm.get().strip()
             self.settings.pop("aperture_cm", None)
         self.settings["use_scint"] = bool(self.use_scint.get())
@@ -3678,9 +3843,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.9: Site and Optics are two boxes.
         site = self._group(right, "Site")
         site.pack(fill=X, pady=(10, 0))
-        self._field(site, 0, "Latitude (°, north +)", self.lat, width=12)
-        self._field(site, 1, "Longitude (°, east +)", self.lon, width=12, hint="west is negative")
-        self._field(site, 2, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation")
+        _site_entries = (
+            self._field(site, 0, "Latitude (°, north +)", self.lat, width=12),
+            self._field(site, 1, "Longitude (°, east +)", self.lon, width=12, hint="west is negative"),
+            self._field(site, 2, "Elevation (m)", self.elevation, width=12, hint="for exoplanet reports and scintillation"))
+        for _entry in _site_entries:   # 2.3.2 (item 1): a typed site that is not your saved one is asked about
+            for _seq in ("<FocusOut>", "<Return>", "<KP_Enter>"):
+                _entry.bind(_seq, self._typed_site_check, add="+")
         # 2.2.21 (#22): the site's time zone; type part of a name (Phoenix, Warsaw) to narrow the list
         ttk.Label(site, text="Time zone", style="Card.TLabel").grid(row=3, column=0, sticky=W, padx=(0, 10), pady=3)
         self.site_tz_box = ttk.Combobox(site, textvariable=self.site_tz, values=site_time.available_zones(), width=22)
@@ -4947,6 +5116,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._try_auto_target("lookup")
 
     def scan_folders(self):
+        self._typed_site_check()   # 2.3.2 (item 1): before the lights' header compares sites
         if getattr(self, "photo_popout", None) is not None:
             self.photo_bring_back()   # 2.2.17 (item 2): new lights: the image (and its buttons) back on the page
         for key, var in (
@@ -5538,6 +5708,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      "'s zone until you pick the frames' site zone.")
             self.status.set("Lights from another site: their site and optics are in use.")
             return
+        # 2.3.2 (item 1): a site typed "for these frames only" stays in use for that Lights folder when its header
+        # names no site (nothing says these are your own frames); another folder brings your own setup back.
+        borrow = getattr(self, "_typed_borrow", None)
+        if not site and borrow is not None and self._own_setup is not None:
+            folder = self.light_dir.get().strip()
+            if borrow in ("", folder):
+                self._typed_borrow = folder
+                self.log("The site and optics typed for these frames stay in use (their header names no site).")
+                return
         # Your own frames (or no site in the header): any borrowed setup goes back first.
         self._restore_own_setup()
         wanted = []
@@ -5709,6 +5888,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 pass
         self._own_setup = None
+        self._typed_borrow = None   # 2.3.2 (item 1)
         self.scale_approx = False
         if getattr(self, "_mono_filter_source", None) == "mobs":
             hand = self._mono_filter_hand()
@@ -6746,6 +6926,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return lines
 
     def run_calibration(self):
+        self._typed_site_check()   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())
@@ -11323,10 +11504,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     continue
             # Camera binning, app binning, then the superpixel debayer each multiply the pixel size (a monochrome
             # frame has no debayer). Frames from another telescope (MicroObservatory) bring their own scale.
-            scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * camera_bin * binning * superpixel
             if wcs is not None:
                 # The header's plate solution knows the true scale of the frame as saved.
                 scale = wcs["scale_arcsec"] * binning * superpixel
+            else:
+                focal, pixel = self._setup_value("focal_mm"), self._setup_value("pixel_um")
+                if focal in ("", None) or pixel in ("", None):
+                    # 2.3.2 (item 14): a fresh install's Optics boxes are empty until you type yours
+                    raise ValueError("the Focal length and Pixel size boxes (Input page, Optics) are empty")
+                scale = float(pixel) / float(focal) * 206.265 * camera_bin * binning * superpixel
         except Exception as exc:
             self._update_step_hint()   # 2.2.16 (item 10): "1 Not solved"
             if auto:
@@ -13002,6 +13188,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         self._remeasure = None
+        self._typed_site_check()   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
         if stack_run:

@@ -188,15 +188,17 @@ again each night.
 To start over for another star without closing SHOBS-P, press **New reduction** on the Input page (chapter 5). It
 clears everything that belongs to the old star; your folders, site and optics stay.
 
-Until you type your own, **Focal length (mm)** and **Pixel size (µm)** start at 2900 mm and 3.76 µm. If the boxes
-still hold these starting values (or are empty), the lights' FITS headers fill them in. When you have not saved a
+A new install starts with **Focal length (mm)** and **Pixel size (µm)** empty, like the Site boxes. While they are
+empty, the lights' FITS headers fill them in. When you have not saved a
 focal length, pixel size or mount of your own yet, the values your own lights' headers give are remembered as yours.
 The log says so, for example `Mount: … from the lights' headers (…), saved as yours (change it in the Optics box if
 that is wrong).` A value you typed is never replaced this way.
 
 **Never stored anywhere unless you type it:** your site. SHOBS-P ships with the Site boxes empty, and it never saves
-a site read from somebody else's frames as yours without asking you first. In the same way, the optics of a loaded
-series or of another telescope's frames are never saved as yours.
+a site read from somebody else's frames as yours without asking you first. A site you type that is more than 50 km
+from your saved one (or 100 m higher or lower) is not saved either until you answer **Yes** to SHOBS-P's question
+(chapter 5). In the same way, the optics of a loaded series or of another telescope's frames are never saved as
+yours.
 
 ---
 

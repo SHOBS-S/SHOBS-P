@@ -62,9 +62,10 @@ saved; the settings file's **Scintillation** line says which.
 Leave **Include scintillation (atmospheric twinkling) in the error bars** ticked. It makes the error bars match the
 real scatter, especially for bright stars and short exposures.
 
-> **Tip:** Until you type your own, **Focal length (mm)** and **Pixel size (µm)** start at 2900 mm and 3.76 µm. If
-> your capture program writes `FOCALLEN` and `XPIXSZ` into the headers, **Scan folders** fills them in while the
-> boxes still hold those starting values, and asks if your own values differ from the header's. Once set, both are
+> **Tip:** A new install starts with **Focal length (mm)** and **Pixel size (µm)** empty. If your capture program
+> writes `FOCALLEN` and `XPIXSZ` into the headers, **Scan folders** fills them in while the boxes are empty, and asks
+> if your own values differ from the header's. If your headers don't have them, type them before you solve: with
+> neither the boxes nor a plate solution in the header, the solve stops and says the boxes are empty. Once set, both are
 > remembered. Wrong values are the most common reason a solve fails, so check them once. Optics read from a loaded
 > series or from another telescope's frames are never saved as yours.
 
