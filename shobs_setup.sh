@@ -69,6 +69,13 @@ if ! mkdir -p "$DATA_DIR"; then
     echo "SHOBS-P could not make its folder $DATA_DIR"
     exit 5
 fi
+# 2.3.2 (run-through): the note SHOBS-P.app leaves (the time, a moment before it opens Terminal) is read and removed
+# here, before anything can stop the setup, so a left-over note never docks a later start (used in "run" below).
+APP_NOTE=''
+if [ "$ACTION" = run ] && [ "$MAC" = 1 ] && [ -f "$DATA_DIR/app_minimize" ]; then
+    APP_NOTE=$(head -n 1 "$DATA_DIR/app_minimize" 2>/dev/null)
+    rm -f "$DATA_DIR/app_minimize"
+fi
 
 # 2.2.20 (#33): where to look, 3.13 3.12 3.11 first, then newer. A Python newer than this list is still found as
 # plain "python3". The order the Pythons are TRIED in is set by version afterwards (python_rank), whatever folder
@@ -642,26 +649,25 @@ no_screen_hint() {
 case "$ACTION" in
     run)
         no_screen_hint
-        # 2.3.2 (run-through): started from SHOBS-P.app (it leaves app_minimize, with the time, a moment before), this
-        # Terminal window goes to the Dock while SHOBS-P runs and comes back up if SHOBS-P stops with an error.
-        # A note older than 2 minutes is left over (Terminal did not run it) and is not used.
+        # 2.3.2 (run-through): started from SHOBS-P.app (APP_NOTE, read above), this Terminal window goes to the Dock
+        # as SHOBS-P starts and comes back up when SHOBS-P closes (with the message if it stopped with an error), so
+        # no window is left behind in the Dock. A note older than 2 minutes is left over and is not used.
         DOCKED=0
-        if [ "$MAC" = 1 ] && [ -f "$DATA_DIR/app_minimize" ]; then
-            noted=$(head -n 1 "$DATA_DIR/app_minimize" 2>/dev/null)
-            rm -f "$DATA_DIR/app_minimize"
-            now=$(date +%s)
-            case "$noted" in
-                ''|*[!0-9]*) noted=0 ;;
-            esac
-            if [ $((now - noted)) -ge 0 ] && [ $((now - noted)) -le 120 ] && [ -t 1 ]; then
-                echo 'SHOBS-P is starting; this Terminal window goes to the Dock while it runs.'
+        case "$APP_NOTE" in
+            ''|*[!0-9]*) APP_NOTE='' ;;
+        esac
+        if [ -n "$APP_NOTE" ] && [ -t 1 ]; then
+            age=$(( $(date +%s) - APP_NOTE ))
+            if [ "$age" -ge 0 ] && [ "$age" -le 120 ]; then
+                echo 'SHOBS-P is starting; this Terminal window goes to the Dock while it runs and comes back when'
+                echo 'SHOBS-P closes (with the message, if it stopped with an error).'
                 printf '\033[2t'
                 DOCKED=1
             fi
         fi
         "$PY" "$APP_DIR/clearv_app.py"
         code=$?
-        [ "$DOCKED" = 1 ] && [ "$code" -ne 0 ] && printf '\033[1t'
+        [ "$DOCKED" = 1 ] && printf '\033[1t'
         exit $code
         ;;
     selftest)

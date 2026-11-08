@@ -96,9 +96,11 @@ with the reason. When Tkinter is missing, it names the package to install. Insta
    main one) and puts **SHOBS-P** on your Desktop; drag it to the Dock to keep it there. The app starts SHOBS-P from
    this folder through Terminal (macOS lets Terminal, but not a homemade app, read folders in Downloads, Desktop and
    Documents). If SHOBS-P has not been set up yet, and at the first start of a new version or folder, the Terminal
-   window stays up so you can watch the setup; other starts put it in the Dock once SHOBS-P is ready. Leave it there
-   while SHOBS-P runs (closing it closes SHOBS-P). If SHOBS-P stops with an error, the Terminal window comes back up
-   with the message. While SHOBS-P runs, its Dock icon is Python's (the program is Python's window). Run
+   window stays up so you can watch the setup; other starts put it in the Dock as SHOBS-P starts. Leave it there
+   while SHOBS-P runs (closing it closes SHOBS-P). When SHOBS-P closes, the Terminal window comes back up (with the
+   message, if SHOBS-P stopped with an error); then close it. While SHOBS-P runs, its Dock icon is Python's (the
+   program is Python's window), and opening the app again only says that SHOBS-P is already running. The first time,
+   macOS may ask whether Terminal may open files in your Downloads (or Desktop, Documents) folder: answer OK. Run
    **Create shortcut.command** again if you move the SHOBS-P folder or unzip a new version somewhere else.
 
 SHOBS-P opens at a size that fits the screen between the menu bar and the Dock (from 2.3.2); make it bigger or

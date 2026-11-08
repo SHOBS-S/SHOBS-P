@@ -135,13 +135,19 @@ cat > "$APP/Contents/MacOS/SHOBS-P" <<LAUNCH
 APP_DIR='$APP_DIR'
 # An app started from Finder gets a short PATH: add where python.org and Homebrew put Python.
 export PATH="/Library/Frameworks/Python.framework/Versions/Current/bin:/usr/local/bin:/opt/homebrew/bin:\$PATH"
-SUPPORT="\$HOME/Library/Application Support/SHOBS-P"
+SUPPORT="\$HOME/Library/Application Support/SHOBS-P"   # the app always means the normal profile (no SHOBS_PROFILE)
 alert() {
     /usr/bin/osascript -e "display alert \"SHOBS-P\" message \"\$1\"" >/dev/null 2>&1
 }
 if [ ! -f "\$APP_DIR/shobs_setup.sh" ]; then
     alert "SHOBS-P is no longer in \$APP_DIR. Open the SHOBS-P folder where it is now and double-click Create shortcut.command again."
     exit 1
+fi
+# Review M1: every start now goes through Terminal and returns at once, so a second double-click would start a
+# second SHOBS-P on the same settings; say it is running instead.
+if /usr/bin/pgrep -u "\$(id -u)" -f -- 'clearv_app\.py' >/dev/null 2>&1; then
+    alert "SHOBS-P is already running (look for Python's icon in the Dock)."
+    exit 0
 fi
 # The Python the setup recorded (its own environment, or a Python used directly).
 PY=\$(head -n 1 "\$SUPPORT/python.txt" 2>/dev/null)
@@ -151,7 +157,10 @@ if [ -z "\$PY" ] || [ ! -x "\$PY" ] || [ "\$(cat "\$SUPPORT/app_seen.txt" 2>/dev
     # Terminal shows its progress.
     mkdir -p "\$SUPPORT" && printf '%s\n' "\$SEEN" > "\$SUPPORT/app_seen.txt"
     rm -f "\$SUPPORT/app_minimize"   # this start keeps its Terminal window up
-    /usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command"
+    /usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command" || {
+        alert "SHOBS-P could not open Terminal. Double-click Start SHOBS-P.command in \$APP_DIR instead."
+        exit 1
+    }
     exit 0
 fi
 # 2.3.2 (run-through): every start goes through Terminal. macOS lets this unsigned app read nothing in Downloads,
@@ -160,6 +169,7 @@ fi
 # is ready (shobs_setup.sh: it comes back up if SHOBS-P stops with an error).
 date +%s > "\$SUPPORT/app_minimize" 2>/dev/null
 /usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command" || {
+    rm -f "\$SUPPORT/app_minimize"
     alert "SHOBS-P could not open Terminal. Double-click Start SHOBS-P.command in \$APP_DIR instead."
     exit 1
 }

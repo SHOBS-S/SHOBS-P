@@ -168,6 +168,10 @@ class TestMacApp(unittest.TestCase):
             self.assertNotIn("shobs_setup.sh run", text)
             self.assertNotIn("app_start_log", text)
             self.assertIn("app_minimize", text)
+            self.assertIn("already running", text)             # review M1: no second SHOBS-P
+            start = text.index("First start, or the first")
+            first = text[start:text.index("exit 0", start)]
+            self.assertIn('rm -f "$SUPPORT/app_minimize"', first)   # the first start keeps its window up
             self.assertEqual(subprocess.run([bash, "-n", exe]).returncode, 0)
             self.assertTrue(os.path.islink(os.path.join(d, "SHOBS-P")))
             # run again (the folder moved, say): written over, still one app
@@ -179,11 +183,38 @@ class TestMacApp(unittest.TestCase):
         repo = os.path.dirname(HERE)
         text = open(os.path.join(repo, "shobs_setup.sh"), encoding="utf-8").read()
         run = text[text.index("    run)\n"):text.index("    selftest)\n")]
-        self.assertIn("app_minimize", run)
+        self.assertIn("APP_NOTE", run)
+        self.assertIn('rm -f "$DATA_DIR/app_minimize"', text)   # read and removed before the setup can stop
         self.assertIn("\\033[2t", run)       # to the Dock
         self.assertIn("\\033[1t", run)       # back up on an error
         self.assertIn("-le 120", run)           # a left-over note is not used
-        self.assertIn('[ "$MAC" = 1 ]', run)
+
+    def test_dock_logic_runs(self):
+        """review S7: the run step's dock logic, run for real (stdout not a tty here, so never docked)."""
+        import shutil
+        import subprocess
+        import time
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("needs bash")
+        repo = os.path.dirname(HERE)
+        text = open(os.path.join(repo, "shobs_setup.sh"), encoding="utf-8").read()
+        note = text[text.index("APP_NOTE=''\n"):text.index("# Which Python") if "# Which Python" in text else None]
+        note = note[:note.index("\nfi\n") + 4]
+        run = text[text.index("    run)\n"):text.index("    selftest)\n")].split("\n", 1)[1].rsplit(";;", 1)[0]
+        run = run.replace("no_screen_hint", "true")
+        for age, docked in ((0, "0"), (500, "0")):
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "app_minimize"), "w") as fh:
+                    fh.write(str(int(time.time()) - age))
+                with open(os.path.join(d, "clearv_app.py"), "w") as fh:
+                    fh.write("exit 4")
+                script = (f'ACTION=run\nMAC=1\nDATA_DIR="{d}"\nPY=/bin/sh\nAPP_DIR="{d}"\n' + note
+                          + run.replace("exit $code", 'echo "DOCKED=$DOCKED"; exit $code'))
+                r = subprocess.run([bash, "-c", script], capture_output=True, text=True, timeout=30)
+                self.assertEqual(r.returncode, 4, r.stdout + r.stderr)          # SHOBS-P's exit code is kept
+                self.assertIn(f"DOCKED={docked}", r.stdout)
+                self.assertFalse(os.path.exists(os.path.join(d, "app_minimize")))   # read and removed early
 
     def test_in_the_release_zip(self):
         import zipfile
