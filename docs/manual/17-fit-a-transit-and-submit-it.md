@@ -115,8 +115,8 @@ figures. Its columns are:
   alone do not pin the shape down, and the result leans on the published shape. When the free fit runs away (for
   example to an impossible depth), the column says **not constrained** instead of numbers, and a note explains that
   the reported values use the published a/R\* and b. From 2.3.2 one parameter can also run away on its own while the
-  depth looks fine: then only that row says **not constrained**. That is a/R\* or T14 more than 25 % from the
-  published value (else the MCMC's), b more than 0.3 from it, or an error larger than 25 % of a/R\* or 0.3 in b.
+  depth looks fine: then only that row says **not constrained**. That is a/R\* or T14 more than 25 % above or below
+  the published value (else the MCMC's), b more than 0.3 from it, or an error larger than 25 % of a/R\* or 0.3 in b.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
   On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.
@@ -232,8 +232,9 @@ histogram per parameter on the diagonal (with its median and 16/84 % lines, and 
 2σ contours. Tc is in minutes from its median. By default the window shows the shape parameters (Tc, Rp/R\*, a/R\*, b,
 and the flip step if fitted); tick **Show all parameters (baseline, limb darkening)** for the rest. **Save PNG…** saves
 the plot, and **Close** closes the window. From 2.3.2 the file carries the number of the fit's saved set
-(`…_transit_2_corner.png` beside `…_transit_2.png`), and it replaces the corner plot that **Save plot PNG…** wrote for
-the same fit, in the view you see, instead of adding a `_2` copy. Without a fit, the button says *"Fit a transit first: the corner plot shows
+(`…_transit_2_corner.png` beside `…_transit_2.png`), whichever you save first, and one fit keeps one corner plot:
+saving it again for the same fit (from this window or with **Save plot PNG…**) replaces it, in the view saved last,
+instead of adding a `_2` copy. Without a fit, the button says *"Fit a transit first: the corner plot shows
 that fit's MCMC samples."*
 
 How to read it: a round hump is a measurement. A histogram that piles up against the edge of its allowed range is

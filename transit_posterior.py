@@ -199,7 +199,7 @@ def free_shape_unconstrained(free_fit: dict, errors: dict, ref_depth: float | No
 # 2.3.2 (item 7): a free shape can run away in a/R*, b or T14 with a sensible depth (Joanna's WASP-35 b,
 # MicroObservatory: a/R* 5.68 and T14 4.137 h against the published 8.53 and 3.143 h, shown as normal values).
 # Display only: the table says "not constrained" for that parameter; the fit and the saved numbers are unchanged.
-FREE_SHAPE_RATIO = 1.25     # a/R* or T14 more than 25 % from the reference
+FREE_SHAPE_OFF = 0.25       # a/R* or T14 more than 25 % above or below the reference
 FREE_B_OFF = 0.3            # b more than 0.3 from the reference, or its error above 0.3
 FREE_REL_ERR = 0.25         # a/R*'s own error above 25 % of its value
 
@@ -218,7 +218,7 @@ def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
         return isinstance(v, (int, float)) and math.isfinite(v)
 
     def ratio_off(v, r):
-        return finite(v) and finite(r) and r > 0 and v > 0 and not (1 / FREE_SHAPE_RATIO <= v / r <= FREE_SHAPE_RATIO)
+        return finite(v) and finite(r) and r > 0 and abs(v / r - 1.0) > FREE_SHAPE_OFF
 
     a, ea = p.get("a_rs"), err.get("a_rs")
     if finite(a):

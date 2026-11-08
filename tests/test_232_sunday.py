@@ -109,7 +109,7 @@ class TestWindowFits(unittest.TestCase):
         for sw, sh in ((1920, 1080), (2048, 1152), (1440, 900), (1280, 800)):
             w, h, x, y, mw, mh = ca.main_window_geometry(sw, sh, "darwin")
             self.assertGreaterEqual(y, ca.MAC_MENU_BAR)
-            self.assertLessEqual(y + h, sh - ca.MAC_DOCK_ROOM)
+            self.assertLessEqual(y + ca.MAC_TITLE_BAR + h, sh - ca.MAC_DOCK_ROOM)
             self.assertGreaterEqual(x, 0)
             self.assertLessEqual(x + w, sw)
             self.assertLessEqual(mw, w)
@@ -120,7 +120,7 @@ class TestWindowFits(unittest.TestCase):
 
     def test_fit_on_screen(self):
         self.assertEqual(ca.fit_on_screen(1700, 1000, -30, 10, 1440, 900, "darwin"),
-                         (1440, 900 - 25 - 80, 0, 25))
+                         (1440, 900 - 25 - 28 - 80, 0, 25))
         self.assertEqual(ca.fit_on_screen(800, 600, 100, 100, 1920, 1080, "darwin"), (800, 600, 100, 100))
 
 
@@ -279,6 +279,34 @@ class TestInApp(unittest.TestCase):
                 p2, how2 = tp.corner_save_target(True)
                 self.assertEqual(os.path.basename(p2), "TrES-1b_transit_2_corner_2.png")
                 self.assertEqual(how2, "new")
+            tp.result = None
+            app._save_set = None
+            app.output_dir.set("")
+
+    def test_corner_window_first_then_plot_png_one_set(self):
+        """review M2: corner window Save first, then Save plot PNG: one set, one corner file."""
+        import transit_ui as tu
+        tp = self._tp()
+        app = self.app
+        with tempfile.TemporaryDirectory() as d:
+            app.output_dir.set(d)
+            app._save_set = None
+            tp.result = {"_serial": 77, "chain": {"flat": 1}}
+            names = ["AAVSO_X.txt", "X_transit.png", "X_transit_fit.csv"]
+            touch = lambda p, *a, **k: open(p, "w").close()  # noqa: E731
+            with mock.patch.object(tp, "family_names", return_value=names), \
+                    mock.patch.object(app, "_family_names", return_value=["X_lightcurve.csv"] + names), \
+                    mock.patch.object(app, "_results_key", return_value=("k",)), \
+                    mock.patch.object(tu.tpost, "save_corner", side_effect=lambda r, p, **k: touch(p)), \
+                    mock.patch.object(tp, "_write_png", side_effect=touch), \
+                    mock.patch.object(tp, "_still_checking", return_value=False), \
+                    mock.patch.object(app, "saved_notice"):
+                w = type("W", (), {})()
+                w.page, w.app, w.result, w.win = tp, app, tp.result, app
+                w._shape_only = lambda: True
+                tu.CornerWindow.save(w)
+                tp.save_png()
+                self.assertEqual(sorted(os.listdir(d)), ["X_transit.png", "X_transit_corner.png"])
             tp.result = None
             app._save_set = None
             app.output_dir.set("")

@@ -13,7 +13,9 @@ The Input page's **Output** folder decides where results go:
   dialog opens in the folder you last saved a result to in this session, with the next free name (and number) filled
   in. A name typed with a number after its extension (`…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`; if that name
   is taken, the next free one is used and the status bar says so.
-- **Nothing is overwritten.** If a file of that name exists, the new one gets `_2`, `_3` and so on.
+- **Nothing is overwritten.** If a file of that name exists, the new one gets `_2`, `_3` and so on. One exception
+  (from 2.3.2): a transit fit's corner plot saved again for the same fit, this session, replaces that fit's own
+  corner plot instead of adding a copy.
 - **Matching numbers.** The report, light-curve CSV and plot PNG of one set of results share one number, so they
   sort together (for example `…_SHOBS-P_2.txt`, `…_SHOBS-P_lightcurve_2.csv`, `…_SHOBS-P_lightcurve_2.png`). The files
   saved beside them (corner plot, settings file, field image, AAVSO chart) keep that number too, and a number counts
@@ -63,8 +65,8 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 | Button | File |
 |---|---|
 | **Save AAVSO exoplanet report…** | `AAVSO_<planet>_<date>_SHOBS-P.txt` (for example `AAVSO_KELT-16b_05-OCT-2026_SHOBS-P.txt`), and beside it `AAVSO_<planet>_<date>_SHOBS-P_settings.txt` (the reduction settings) and the field image `<planet>_<date>_SHOBS-P_field.png` (with `…_aavso_chart.png`). |
-| **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png`, and the corner plot `…_transit_corner.png` beside it |
-| **Save corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png` |
+| **Save plot PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit.png`, and the corner plot `…_transit_corner.png` beside it (`…_transit_2.png` and `…_transit_2_corner.png` in set 2) |
+| **Save corner plot…** → **Save PNG…** | `<planet>_<filter>_<date>_SHOBS-P_transit_corner.png`, with the fit's set number like the plot PNG (`…_transit_2_corner.png`); for the same fit it replaces the one **Save plot PNG…** wrote, in the view shown |
 | **Save field image…** | `<star>_<filter>_<date>_SHOBS-P_field.png`, named after the Star ID (the host star), with `…_aavso_chart.png` |
 | **Save light-curve CSV…** | The Variables-style light-curve CSV of the same photometry, and with a fit shown also `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`: columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`, `residual`, `flag`, `airmass`, `segment` (trimmed points flagged `trimmed`; `segment` is `before flip` / `after flip` on a night with a meridian flip). `rel_flux` is the raw relative flux, not detrended. Comment lines starting with `#` under the Created line give the planet, filter, Tc, verdict and O − C, a `# Columns:` line saying what the columns hold, and `# Meridian flip at BJD_TDB …` when there was a flip. It gets the same number as the report and plot. |
 | **Save ExoFOP package…** | A folder `ExoFOP_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` holding `…_lightcurve.csv`, `…_fit.txt` and `…_plot.png`. |

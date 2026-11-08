@@ -85,7 +85,8 @@ mode, T = Transits, V = Variables, M = Mac)
      never saves its optics or telescope aperture as yours.
 - S  A fresh install starts with Focal length and Pixel size empty, like the Site boxes.
 - S  Build masters and calibrate runs the Scan folders checks first when the Lights folder was not scanned (after a
-     restart): mono or color camera, Bayer pattern, site and optics from the header.
+     restart): mono or color camera, Bayer pattern, site and optics from the header. Results differ from 2.3.0 only
+     where skipping the scan had set the camera wrong (a mono camera debayered as RGGB).
 - S  More room for the Photometry image: the "Wheel to zoom, drag to pan ... Pop out" line is gone (the legend under
      the image says it) and the status rows above the image sit closer together.
 - S  A check star with no catalog name is named by its position (J020351.8+464115), not "check".
@@ -97,15 +98,18 @@ mode, T = Transits, V = Variables, M = Mac)
      10, 15 or 30 minutes. A bin needs at least 3 frames, and the legend names the real width ("13-minute bins").
      Display only: the fit, red-noise beta and rms per 10-min bin use every frame as before.
 - T  Free shape column: a/R*, b or T14 that ran away on their own say "not constrained" too (a/R* or T14 more than
-     25 % from the published value, b more than 0.3, or a large error), not only a runaway depth.
-- T  Save corner plot... -> Save PNG... names the file with the fit's set number (..._transit_2_corner.png) and
-     replaces the corner plot Save plot PNG... wrote for that fit, instead of a _corner_2 copy.
+     25 % above or below the published value, b more than 0.3 off, or a large error), not only a runaway depth.
+- T  The corner plot carries the fit's set number (..._transit_2_corner.png), whether Save corner plot... or Save
+     plot PNG... comes first; saved again for the same fit it replaces that fit's corner plot (no _corner_2 copy).
 - T  The status bar names the saved exoplanet report; Open AAVSO Exoplanet Database... is on the Results row only.
 - V  Camera angles within 10 degrees of each other are one pier side (was 5): 30 and 37-38 degrees, as the solve
-     reports them from night to night, are no longer listed as two sides.
+     reports them from night to night, are no longer listed as two sides. With Pier side as segments ticked, the
+     plots, period search and Export... of such a campaign line up those nights as one side (AAVSO reports and the
+     stored points are unchanged).
 - V  The WebObs upload button is on the Results row only, not also at the end of the status bar.
 - M  Create shortcut.command makes SHOBS-P.app with the SHOBS-P logo in Applications and a SHOBS-P link on the
-     Desktop; the app starts SHOBS-P without a Terminal window (the first setup still shows in Terminal).
+     Desktop; the app starts SHOBS-P without a Terminal window (the first setup, and the first start of a new version,
+     show in Terminal).
 - M  The window opens at a size that fits between the menu bar and the Dock (it was too big on an iMac).
 - M  Python 3.14 is the Python to install on a Mac (3.13.17, the last 3.13 with a Mac installer, works too).
 - S  README.txt wording: the spare nearest the check's brightness.

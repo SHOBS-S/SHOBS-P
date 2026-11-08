@@ -1283,12 +1283,15 @@ def display_scaling_text(widget) -> str:
 # screen pixels (points on a Retina screen, as Tk reports them). Windows and Linux open as before 2.3.2.
 MAC_MENU_BAR = 25
 MAC_DOCK_ROOM = 80
+MAC_TITLE_BAR = 28   # review S8: geometry sizes the content; the window's title bar sits above it
 
 
 def usable_screen(sw: int, sh: int, platform: str) -> tuple:
     """(left, top, width, height) of the part of the screen a window may use."""
     if platform == "darwin":
-        return 0, MAC_MENU_BAR, sw, max(sh - MAC_MENU_BAR - MAC_DOCK_ROOM, 300)
+        # top: where the window (its title bar) may start, as geometry's +y places it; height: room for the
+        # content (geometry's H), the title bar taken off
+        return 0, MAC_MENU_BAR, sw, max(sh - MAC_MENU_BAR - MAC_TITLE_BAR - MAC_DOCK_ROOM, 300)
     return 0, 0, sw, sh
 
 
@@ -1320,8 +1323,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             self.update_idletasks()
             sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
-            w, h = int(self.winfo_width()), int(self.winfo_height())
-            x, y = int(self.winfo_x()), int(self.winfo_y())
+            # review S8: wm geometry's own numbers (content size, window position), the system geometry() sets;
+            # winfo_y is the content's top, a title bar lower
+            m = _re.match(r"^(\d+)x(\d+)\+?(-?\d+)\+?(-?\d+)$", str(self.wm_geometry()).strip())
+            if not m:
+                return
+            w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             nw, nh, nx, ny = fit_on_screen(w, h, x, y, sw, sh, sys.platform)
             if (nw, nh, nx, ny) != (w, h, x, y):
                 self.minsize(min(nw, self.minsize()[0]), min(nh, self.minsize()[1]))
@@ -5306,7 +5313,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._try_auto_target("lookup")
 
     def scan_folders(self):
-        self._typed_site_check(action="Scan folders")   # 2.3.2 (item 1): before the header compares sites
+        if not getattr(self, "_scan_from_calibrate", False):   # review N11: Calibrate already asked
+            self._typed_site_check(action="Scan folders")   # 2.3.2 (item 1): before the header compares sites
         self._scanned_lights = self.light_dir.get().strip()   # 2.3.2 (item 4): Calibrate knows these were scanned
         if getattr(self, "photo_popout", None) is not None:
             self.photo_bring_back()   # 2.2.17 (item 2): new lights: the image (and its buttons) back on the page
@@ -7134,10 +7142,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if lights_dir and getattr(self, "_scanned_lights", None) != lights_dir:
             self.log("Calibrate: the Lights folder was not scanned yet, so the Scan folders checks run first (mono or "
                      "color camera, Bayer pattern, site and optics from the header).")
+            self._scan_from_calibrate = True
             try:
                 self.scan_folders()
             except Exception:
                 traceback.print_exc()   # a failed check never stops the calibration itself
+            finally:
+                self._scan_from_calibrate = False
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())

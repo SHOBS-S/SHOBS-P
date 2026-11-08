@@ -1809,11 +1809,11 @@ class TransitPage:
              # 2.2.19 (#29): the predicted Tc with its propagated ephemeris uncertainty
              + ((f" ± {r['tc_pred_err']:.5f}" if r["tc_pred_err"] >= 5e-5 else f" ± {r['tc_pred_err']:.1e}")
                 if r and r.get("tc_pred") is not None and r.get("tc_pred_err") is not None else ""), exo("Tc", "{:.5f}")),
-            ("Rp/R*", val("k", "{:.4f}"), "not constrained" if free_off else num(ff.get("k"), "{:.4f}"),
+            ("Rp/R*", val("k", "{:.4f}"), NC if free_off else num(ff.get("k"), "{:.4f}"),
              num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
             # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
             ("Depth (%)", val("depth", "{:.2f}", 100),
-             "not constrained" if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
+             NC if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
              num(tc.published_depth(p)[0], "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
             ("a/R*", val("a_rs", "{:.2f}"), NC if "a_rs" in runaway else num(ff.get("a_rs"), "{:.2f}"),
              num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
@@ -2631,7 +2631,11 @@ class TransitPage:
         plot PNG (logged only)."""
         if not (self.result or {}).get("chain"):
             return ""
-        path = self.app._unique_path(os.path.splitext(png_path)[0] + "_corner.png")   # never over an older one
+        path = os.path.splitext(png_path)[0] + "_corner.png"
+        mine = self.__dict__.get("_corners", {}).get(os.path.normcase(os.path.abspath(path)))
+        if os.path.exists(path) and not (mine and mine[0] == fit_serial(self.result or {})):
+            path = self.app._unique_path(path)   # never over an older one of another fit
+        # 2.3.2 review M2: this fit's own corner plot (saved from the corner window first) is replaced, not doubled
         try:
             tpost.save_corner(self.result, path)
         except Exception as exc:
@@ -2647,13 +2651,14 @@ class TransitPage:
         self.__dict__.setdefault("_corners", {})[os.path.normcase(os.path.abspath(path))] = (
             fit_serial(self.result or {}), bool(shape_only))
 
-    def corner_save_target(self, shape_only: bool) -> tuple:
+    def corner_save_target(self, shape_only: bool, claim: bool = False) -> tuple:
         """2.3.2 (item 10): (path, how) for the corner plot's Save PNG… With an Output folder, the name has the
         number of this fit's saved set (X_transit_2_corner.png beside X_transit_2.png), not a counter of its own (it
         gave X_transit_corner_2.png, and _corner.png + _corner_2.png for one fit). how: "new"; "same" (that file
         holds this fit in this view already: nothing to write); "replace" (it holds this fit in the other view,
         written this session: the view shown replaces it, one corner plot per fit). Without an Output folder,
-        ("", "new"): the save dialog decides."""
+        ("", "new"): the save dialog decides. claim: the save is happening now, so a new set number is taken for
+        this fit (review M2: the plot PNG and report saved after it then share that number)."""
         folder = self.app._out_folder()
         if not folder:
             return "", "new"
@@ -2664,7 +2669,7 @@ class TransitPage:
         if state and state.get("key") == key:
             path = self.app._suffixed(os.path.join(folder, name), state["k"])   # the set this fit was saved in
         else:
-            path = self.app._family_path(folder, name, peek=True)   # the number its set will get
+            path = self.app._family_path(folder, name, peek=not claim)   # the number its set gets (taken on claim)
         if os.path.exists(path):
             mine = self.__dict__.get("_corners", {}).get(os.path.normcase(os.path.abspath(path)))
             if mine and mine[0] == fit_serial(self.result or {}):
@@ -3510,7 +3515,7 @@ class CornerWindow:
         page = self.page
         shape_only = self._shape_only()
         # 2.3.2 (item 10): named with the fit's set number; the same plot saved twice is not written again
-        path, how = page.corner_save_target(shape_only)
+        path, how = page.corner_save_target(shape_only, claim=True)
         if how == "same":
             self.app.log(f"Corner plot PNG already saved for this fit: {path}")
             self.app.saved_notice(path)

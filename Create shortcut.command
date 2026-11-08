@@ -1,13 +1,15 @@
 #!/bin/bash
 # Makes a SHOBS-P app on a Mac (2.3.2, item 15): the twin of "Create shortcuts.bat" on Windows. Double-click this
-# file in Finder (the first time: right-click, Open, Open). It builds SHOBS-P.app, with the SHOBS-P logo, in
+# file in Finder (the first time macOS may refuse it: right-click, Open, Open; on macOS 15 and newer System Settings >
+# Privacy & Security > Open Anyway). It builds SHOBS-P.app, with the SHOBS-P logo, in
 # /Applications when you may write there, else in Applications in your home folder, and puts SHOBS-P on your
 # Desktop (drag it to the Dock to keep it there). The app starts SHOBS-P from this folder: run this again if you
 # move or rename the folder, or after unzipping a new version somewhere else.
 #
-# The app: the first start (no SHOBS-P environment yet) opens "Start SHOBS-P.command" in Terminal, so the setup's
-# progress shows. Later starts run without a Terminal window; their messages go to app_start_log.txt in
-# ~/Library/Application Support/SHOBS-P, and if SHOBS-P stops with an error that log opens in TextEdit.
+# The app: the first start (no SHOBS-P setup yet), and the first start of each new version or folder, open
+# "Start SHOBS-P.command" in Terminal, so the setup's progress shows. Other starts run without a Terminal window;
+# their messages go to app_start_log.txt in ~/Library/Application Support/SHOBS-P, and if SHOBS-P stops with an error
+# that log opens in TextEdit.
 #
 # For testing: SHOBS_APP_DEST=/some/dir builds the app there (no Desktop link unless SHOBS_DESKTOP_DIR is also set).
 # Kept to bash 3.2 and to tools every Mac has (sips and iconutil make the icon; without them the app has none).
@@ -31,9 +33,19 @@ if [ ! -f "$APP_DIR/shobs_setup.sh" ] || [ ! -f "$APP_DIR/clearv_app.py" ]; then
     finish 1
 fi
 case "$APP_DIR" in
-    *"'"*) echo "The SHOBS-P folder's path has a ' in it, which the app cannot use. Rename or move the folder and run this again."
-           finish 1 ;;
+    *"'"*|*'"'*|*\\*)
+        echo "The SHOBS-P folder's path has a ' or \" or \\ in it, which the app cannot use. Rename or move the folder and run this again."
+        finish 1 ;;
 esac
+
+# The file you just allowed is this one; SHOBS-P's other start files from the same zip still carry the Mac's
+# quarantine mark, and the app opens "Start SHOBS-P.command" at its first start (review M1). Named files only.
+if command -v xattr >/dev/null 2>&1; then
+    for f in "Start SHOBS-P.command" "Run self-test.command" "Create shortcut.command" shobs_setup.sh run_linux.sh \
+             run_selftest.sh; do
+        [ -f "$APP_DIR/$f" ] && xattr -d com.apple.quarantine "$APP_DIR/$f" 2>/dev/null
+    done
+fi
 
 VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' "$APP_DIR/clearv_app.py" | head -n 1)
 [ -n "$VERSION" ] || VERSION=0
@@ -79,6 +91,7 @@ if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1 && [ -
         else
             echo 'Note: the icon could not be made; the app works, with the plain app icon.'
         fi
+        rm -rf "$WORK"
     fi
 else
     echo 'Note: sips or iconutil is missing, so the app gets the plain app icon.'
@@ -130,12 +143,16 @@ if [ ! -f "\$APP_DIR/shobs_setup.sh" ]; then
     alert "SHOBS-P is no longer in \$APP_DIR. Open the SHOBS-P folder where it is now and double-click Create shortcut.command again."
     exit 1
 fi
-if [ ! -x "\$SUPPORT/python-env/bin/python3" ] || [ ! -f "\$SUPPORT/python.txt" ]; then
-    # First start: the setup takes a few minutes; Terminal shows its progress.
+# The Python the setup recorded (its own environment, or a Python used directly).
+PY=\$(head -n 1 "\$SUPPORT/python.txt" 2>/dev/null)
+SEEN="\$APP_DIR|$VERSION"
+if [ -z "\$PY" ] || [ ! -x "\$PY" ] || [ "\$(cat "\$SUPPORT/app_seen.txt" 2>/dev/null)" != "\$SEEN" ]; then
+    # First start, or the first of this version or folder: the setup may install packages for a few minutes;
+    # Terminal shows its progress.
+    mkdir -p "\$SUPPORT" && printf '%s\n' "\$SEEN" > "\$SUPPORT/app_seen.txt"
     /usr/bin/open -a Terminal "\$APP_DIR/Start SHOBS-P.command"
     exit 0
 fi
-mkdir -p "\$SUPPORT"
 LOG="\$SUPPORT/app_start_log.txt"
 cd "\$APP_DIR" || exit 1
 /bin/bash ./shobs_setup.sh run >"\$LOG" 2>&1
@@ -149,6 +166,7 @@ LAUNCH
 chmod 755 "$APP/Contents/MacOS/SHOBS-P" || finish 2
 # Tell Finder the app changed (a new icon shows at once).
 touch "$APP" 2>/dev/null
+command -v xattr >/dev/null 2>&1 && xattr -dr com.apple.quarantine "$APP" 2>/dev/null
 
 # The Desktop: a link to the app (no Finder permission question, as an alias made by a script would ask).
 DESK=${SHOBS_DESKTOP_DIR:-}
