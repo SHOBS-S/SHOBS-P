@@ -6675,7 +6675,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # View boxes do not fit side by side), the status lines go on that line, left of the boxes, instead of
         # above them with an empty patch beside them.
         side = getattr(self, "_meas_side", None)
-        target = side if (side is not None and getattr(self, "_view_own_line", False)) else col
+        try:
+            self._layout_view_box()   # what is shown changes the room the side needs (returns at once if unchanged)
+        except Exception:
+            pass
+        target = side if (side is not None and getattr(self, "_meas_side_ok", False)) else col
         gap = int(14 * ui_scale(self))
         rows = []
         if getattr(self, "_stack_shown", False) and getattr(self, "_stack_row", None) is not None:
@@ -6688,7 +6692,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             self._meas_side_last()
             here = col.pack_slaves()[1:] if target is col else target.pack_slaves()
-            other = (side.pack_slaves() if (side is not None and target is col) else col.pack_slaves()[1:])
+            other = (side.pack_slaves() if target is col else col.pack_slaves()[1:]) if side is not None else []
             if here == rows and not other:
                 return   # 2.3.2 review: nothing came or went (this runs on every keystroke in the Aperture boxes)
             for w in (getattr(self, "_stack_row", None), getattr(self, "aperture_state_label", None),
@@ -6698,20 +6702,40 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             for k, w in enumerate(rows):
                 top = (gap if k == 0 and target is col else 0)
                 w.pack(in_=target, side="top", anchor=W, fill=X, padx=6, pady=(top, 2))
+            # review S4: the Measured-with line takes its new frame's width now, not at that frame's next resize
+            self.after_idle(lambda t=target: self._wrap_aperture_state(None, t))
         except Exception:
             pass
 
-    def _wrap_aperture_state(self, event):
+    def _meas_side_need(self, scale) -> int:
+        """2.3.2 (review M1): the least width the status lines need beside the boxes: the Stack controls whole (they
+        do not wrap), else room for the wrapped lines; 0 when none is shown."""
+        need = 0
+        try:
+            if getattr(self, "_stack_shown", False) and getattr(self, "_stack_ctl", None) is not None:
+                need = int(self._stack_ctl.winfo_reqwidth()) + int(12 * scale)
+            if getattr(self, "_stack_shown", False) or getattr(self, "_aperture_state_shown", False) or \
+                    getattr(self, "_skip_line_shown", False):
+                need = max(need, int(320 * scale))
+        except Exception:
+            return 0
+        return need
+
+    def _wrap_aperture_state(self, event, frame=None):
         """The Measured-with line wraps at the width of the frame it is packed in (the column, or the status-line
         frame on the View box's own line); a <Configure> of the other frame leaves it alone."""
         try:
+            widget = frame if frame is not None else event.widget
+            width = int(widget.winfo_width()) if frame is not None else int(event.width)
             if self.aperture_state_label.winfo_manager() and \
-                    str(self.aperture_state_label.pack_info().get("in")) != str(event.widget):
+                    str(self.aperture_state_label.pack_info().get("in")) != str(widget):
+                return
+            if width <= 1:
                 return
         except Exception:
-            pass
+            return   # review nit: on a failure leave the wrap as it is
         self.aperture_state_label.configure(
-            wraplength=max(int(event.width) - int(20 * ui_scale(self)), int(200 * ui_scale(self))))
+            wraplength=max(width - int(20 * ui_scale(self)), int(200 * ui_scale(self))))
 
     def _meas_side_last(self):
         """2.3.2: the status-line frame on the View box's own line is packed after the Points / View boxes there, so
@@ -6725,7 +6749,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return
             if side.winfo_manager():
                 side.pack_forget()
-            side.pack(in_=line2, side=LEFT, fill=BOTH, expand=True, anchor="n")
+            side.pack(in_=line2, side=LEFT, fill=BOTH, expand=True)
         except Exception:
             pass
 
@@ -6785,14 +6809,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             room = width - left - gap
             own = room < least
             avail = (width - box_pad - gap if own else room - box_pad) if (own or room < one_line) else None
+        # 2.3.2 (review M1): on the View box's own line the status lines go left of the Points / View boxes only when
+        # they fit there whole (the Stack controls do not wrap): the switches wrap onto more rows to make that room,
+        # and when even that is not enough the lines stay in the column above (an empty patch beats hidden controls).
+        side_ok = False
+        if own and width > 1:
+            need = self._meas_side_need(scale)
+            if need:
+                pts = getattr(self, "_points_box", None)
+                pts_w = (px(pts.winfo_reqwidth()) + int(10 * scale)) if (pts is not None and getattr(
+                    self, "_stack_shown", False)) else 0
+                side_avail = width - box_pad - gap - pts_w - need
+                if side_avail >= least:
+                    side_ok, avail = True, side_avail
         # 2.2.19 (r2: S2): the settings wrap only on a line of their own (the View box beside them is moved under
         # them first, so the two never take turns).
         self._flow_meas((width - gap) if (width > 1 and own) else None)
         rows = flow_rows(sw, avail)
-        key = (own, tuple(tuple(r) for r in rows), len(switches))
+        key = (own, side_ok, tuple(tuple(r) for r in rows), len(switches))
         if key == self._view_layout_key and not force:
             return
         self._view_layout_key = key
+        side_changed = side_ok != getattr(self, "_meas_side_ok", False)
+        self._meas_side_ok = side_ok
         for b in getattr(self, "_view_switches", []):
             try:
                 b.grid_forget()
@@ -6820,7 +6859,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     box.pack(in_=options, side=RIGHT, padx=(10, 0), anchor="n")   # 2.3.2: top of the row
             except Exception:
                 pass
+            try:
+                self._stack_place_points_box()   # 2.3.2 review (S2): the Points box back left of the moved View box
+            except Exception:
+                pass
             self._meas_col_last()   # 2.3.2 (item 10)
+            side_changed = True
+        if side_changed:
             self._layout_meas_col()   # 2.3.2: the status lines follow the View box onto its own line and back
 
     def _stretch_controls(self, parent, page: str):

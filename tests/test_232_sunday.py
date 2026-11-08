@@ -293,29 +293,52 @@ class TestInApp(unittest.TestCase):
         self.assertEqual(app._meas_col.pack_slaves()[1:], [])
 
     def test_status_lines_follow_view_box_own_line(self):
-        """2.3.2 (John, run-through): when the View box drops to its own line, the Stack / Measured-with / skipped
-        lines go on that line, left of the Points / View boxes (no empty patch beside them), and come back to the
-        column when the View box does."""
+        """2.3.2 (John, run-through; review M1/S2/S3): when the View box drops to its own line, the Stack /
+        Measured-with lines go on that line, left of the Points / View boxes, only when the Stack controls fit there
+        whole; otherwise (and when the View box is back beside the settings) they stay in the column."""
         app = self.app
         app._stack_shown = True
         app._aperture_state_shown = True
-        saved = app._view_own_line
+        opts = app._view_options
+
+        def layout(width, one_line):
+            app.update_idletasks()   # real requested sizes (the boxes report 1 px before their first layout)
+            with mock.patch.object(opts, "winfo_width", return_value=width), \
+                    mock.patch.object(app, "_meas_one_line", return_value=one_line):
+                app._layout_view_box(force=True)
+                app._layout_meas_col()
+                app._stack_place_points_box()
+
         try:
-            app._view_own_line = True
-            app._layout_meas_col()
-            app._stack_place_points_box()
+            # settings too wide for the boxes beside them, a wide line: the lines go beside the boxes
+            layout(4000, 5000)
+            self.assertTrue(app._view_own_line)
+            self.assertTrue(app._meas_side_ok)
             for w in (app._stack_row, app.aperture_state_label):
                 self.assertIs(w.pack_info()["in"], app._meas_side)
             self.assertEqual(app._meas_side.pack_slaves(), [app._stack_row, app.aperture_state_label])
             self.assertEqual(app._meas_col.pack_slaves()[1:], [])
-            self.assertIs(app._view_line2.pack_slaves()[-1], app._meas_side)
-            app._view_own_line = False
-            app._layout_meas_col()
+            self.assertEqual(app._view_line2.pack_slaves(), [app._view_box, app._points_box, app._meas_side])
+            # the side's share holds the Stack controls whole
+            need = app._meas_side_need(ca.ui_scale(app))
+            self.assertGreaterEqual(need, app._stack_ctl.winfo_reqwidth())
+            # a narrow line: no room for the Stack controls beside the boxes, so the lines stay in the column
+            layout(900, 5000)
+            self.assertTrue(app._view_own_line)
+            self.assertFalse(app._meas_side_ok)
             self.assertEqual(app._meas_col.pack_slaves()[1:], [app._stack_row, app.aperture_state_label])
             self.assertEqual(app._meas_side.pack_slaves(), [])
-        finally:
-            app._view_own_line = saved
+            # the View box back beside the settings: the column again
+            layout(4000, 100)
+            self.assertFalse(app._view_own_line)
+            self.assertFalse(app._meas_side_ok)
+            self.assertEqual(app._meas_col.pack_slaves()[1:], [app._stack_row, app.aperture_state_label])
+            # nothing shown: the side needs no room
             app._stack_shown = app._aperture_state_shown = False
+            self.assertEqual(app._meas_side_need(1.0), 0)
+        finally:
+            app._stack_shown = app._aperture_state_shown = False
+            app._layout_view_box(force=True)
             app._layout_meas_col()
 
     def test_view_box_width_ignores_wrapped_column(self):
