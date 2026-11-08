@@ -24,7 +24,7 @@ From top to bottom:
   below). Under it, an orange line appears when the run skipped frames or left a comp out of some frames (see "Comps
   near the frame edge" below).
 - **The step strip**: what is done and what to do next.
-- **The image** on the left, with a legend under it, and the **Stars** and **Watch stars** panels on the right.
+- **The image** on the left, with its legend in a column at its left, and the **Stars** and **Watch stars** panels on the right.
 - **The run row**: a gray line with the last run's summary (for example "Photometry done in 1:52. 38 points."),
   **Cancel run**, and **Hide log** / **Show log**, with the log under it. While a run is going, its progress is on the
   busy bar at the bottom of the window (chapter 3).
@@ -122,8 +122,8 @@ there.
 
 **Small image?** On a small frame (MicroObservatory's, for example), or with Windows display scaling at 125 % or 150 %,
 the image area can get short and wide. SHOBS-P then gives the image room first: the log under it shrinks (down to 3
-lines). If the image is still drawn small, a line under it says **⚠ Small image? Pop out opens it in its own window
-(also in the View box, top right); Hide log gives it more room.**, with its own **Pop out** button.
+lines). If the image is still small, press **Pop out** in the View box, or **Hide log**. (Up to 2.3.1 a line under
+the image said so; from 2.3.2 that line is gone, so the image gets its height.)
 
 While the image is out, the page shows **Image is in its own window (Bring back in the View box).** and the **Pop out**
 button reads **Bring back**. The image comes back when you press **Go back** or **Bring back**, close the window,
@@ -148,7 +148,7 @@ Under the switches are the same **Stretch**, **black**, **white** and **Reset** 
 
 ### What the marks mean
 
-The legend under the image lists only the marks drawn right now. The most common:
+The legend at the left of the image (one entry per line) lists only the marks drawn right now. The most common:
 
 | Mark | Meaning |
 |---|---|

@@ -87,8 +87,10 @@ mode, T = Transits, V = Variables, M = Mac)
 - S  Build masters and calibrate runs the Scan folders checks first when the Lights folder was not scanned (after a
      restart): mono or color camera, Bayer pattern, site and optics from the header. Results differ from 2.3.0 only
      where skipping the scan had set the camera wrong (a mono camera debayered as RGGB).
-- S  More room for the Photometry image: the "Wheel to zoom, drag to pan ... Pop out" line is gone (the legend under
-     the image says it) and the status rows above the image sit closer together.
+- S  More room for the Photometry image: the "Wheel to zoom, drag to pan ... Pop out" line, the "Small image?" line
+     and the "wheel: zoom" hint are gone (Pop out is in the View box); the Aperture line sits one line under the
+     Target line, with the Stack and Measured-with lines beside the View box instead of under it; and the legend is a
+     column at the left of the image instead of a row under it.
 - S  A check star with no catalog name is named by its position (J020351.8+464115), not "check".
 - S  Planet alias names show their accents (Umbäässa, not the HTML code).
 - T  The transit fit always waits for Fit transit (it no longer starts by itself after a run, Use comps, a night

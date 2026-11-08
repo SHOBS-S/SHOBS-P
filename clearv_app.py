@@ -6650,6 +6650,46 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
 
+    def _meas_col_last(self):
+        """2.3.2 (item 10): the column is packed after the Points / View boxes, so a long status line wraps in the
+        room they leave instead of squeezing them (pack gives the earlier-packed slaves their size first)."""
+        col = getattr(self, "_meas_col", None)
+        options = getattr(self, "_view_options", None)
+        if col is None or options is None:
+            return
+        try:
+            slaves = options.pack_slaves()
+            if slaves and slaves[-1] is not col:
+                col.pack_configure(after=slaves[-1])
+        except Exception:
+            pass
+
+    def _layout_meas_col(self):
+        """2.3.2 (item 10): the left column beside the Points / View boxes, top to bottom: the Aperture line; one
+        empty line; the Stack row, the Measured-with line and the skipped-frames line, each only when it has
+        something to say. Re-packed in this order whenever one of them comes or goes."""
+        col = getattr(self, "_meas_col", None)
+        if col is None:
+            return
+        gap = int(14 * ui_scale(self))
+        rows = []
+        if getattr(self, "_stack_shown", False) and getattr(self, "_stack_row", None) is not None:
+            rows.append(self._stack_row)
+        if getattr(self, "_aperture_state_shown", False):
+            rows.append(self.aperture_state_label)
+        if getattr(self, "_skip_line_shown", False):
+            rows.append(self.skip_line)
+        self._meas_col_last()
+        try:
+            for w in (getattr(self, "_stack_row", None), getattr(self, "aperture_state_label", None),
+                      getattr(self, "skip_line", None)):
+                if w is not None and w.winfo_manager():
+                    w.pack_forget()
+            for k, w in enumerate(rows):
+                w.pack(in_=col, side="top", anchor=W, fill=X, padx=6, pady=((gap if k == 0 else 0), 2))
+        except Exception:
+            pass
+
     def _layout_view_box(self, force: bool = False):
         """2.2.18 (item 23): the Photometry page's View box at any window width. Wide: beside the measurement
         settings, switches on one line. Narrower: still beside them, the switches wrapped onto two (or more) rows.
@@ -6729,9 +6769,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     # and hid it (a blank band where the View box should be); raise the box over its new master.
                     box.lift(line2)
                 else:
-                    box.pack(in_=options, side=RIGHT, padx=(10, 0))
+                    box.pack(in_=options, side=RIGHT, padx=(10, 0), anchor="n")   # 2.3.2: top of the row
             except Exception:
                 pass
+            self._meas_col_last()   # 2.3.2 (item 10)
 
     def _stretch_controls(self, parent, page: str):
         """A compact 'Stretch' row: linear / log / asinh, black and white points (percentiles of the image), Reset.
@@ -7501,8 +7542,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.aperture_state_label = ttk.Label(card, textvariable=self.aperture_state, style="Hint.TLabel",
                                               justify=LEFT, wraplength=int(700 * ui_scale(self)))
         # 2.2.19 (r2: S3): shown only while it has text (_update_aperture_state), so no empty line is reserved
-        card.bind("<Configure>", lambda e: self.aperture_state_label.configure(
-            wraplength=max(e.width - int(40 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")   # 2.3.0 review   # wraps with the window, never wider than it
+        # 2.3.2 (item 10): it lives in the column beside the Points / View boxes, so it wraps at that column's width
+        # (_meas_col's <Configure>, below)   # 2.3.0 review   # wraps with the window, never wider than it
         for var in (self.radius, self.sky_in, self.sky_out, self.binning):
             var.trace_add("write", lambda *_a: self._update_aperture_state())
         # 2.3.0 (#50, item 10): frames the last run skipped (and why), comps left out of some frames, a flip on an
@@ -7520,8 +7561,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                            - int(20 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")
         # 2.2.19 (r2: S2): the measurement settings in small groups that wrap like text (_flow_meas) when the row is
         # narrow (125 % on a 1366-px screen cut "Also measure R and B" off after "linear ADU" was added).
-        meas = ttk.Frame(options, style="Card.TFrame")
-        meas.pack(side=LEFT, fill=X)
+        # 2.3.2 (item 10, John: more room for the image): a left column beside the Points / View boxes holds the
+        # Aperture line (one empty line under the Target / Comps line; it was centred on the taller boxes, two or
+        # three lines down) and, one empty line under it, the Stack row and the Measured-with / skipped-frames lines,
+        # which were packed under the boxes and pushed the image down.
+        self._meas_col = ttk.Frame(options, style="Card.TFrame")
+        self._meas_col.pack(side=LEFT, fill=BOTH, expand=True, anchor="n")
+        self._meas_col.bind("<Configure>", lambda e: self.aperture_state_label.configure(
+            wraplength=max(int(e.width) - int(20 * ui_scale(self)), int(200 * ui_scale(self)))), add="+")
+        meas = ttk.Frame(self._meas_col, style="Card.TFrame")
+        meas.pack(side="top", fill=X, anchor="n", pady=(int(14 * ui_scale(self)), 0))
         self._meas_box, self._meas_groups, self._meas_key = meas, [], None
 
         def group(pad):
@@ -7556,7 +7605,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.9: everything that changes what the image shows sits in one "View" box on the right, under the
         # Catalog / Solve row (John); the row on the left keeps the measurement settings.
         view = ttk.LabelFrame(options, text="View", style="Group.TLabelframe", padding=(8, 2, 8, 4))
-        view.pack(side=RIGHT, padx=(10, 0))
+        view.pack(side=RIGHT, padx=(10, 0), anchor="n")   # 2.3.2: top of the row
         # 2.2.15 (review): the switches on one line, the display stretch (GitHub #1) on a second line under them.
         view_box, view = view, ttk.Frame(view, style="Card.TFrame")
         view.pack(side="top", anchor=W)
@@ -7659,9 +7708,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             ttk.Label(plot_host, text="matplotlib is not installed.", style="Card.TLabel").pack()
             self.photo_canvas = None
         else:
-            # Symbol legend under the image: only the markers drawn right now (2.2.1).
+            # Symbol legend: only the markers drawn right now (2.2.1). 2.3.2 (item 10, John): a column at the left of
+            # the image, against the page's margin (it was a row under the image, which took its height).
             self.legend_row = ttk.Frame(plot_host, style="Card.TFrame")
-            self.legend_row.pack(side="bottom", fill=X, pady=(2, 0))
+            self.legend_row.pack(side=LEFT, fill=Y, anchor="n", padx=(0, 4), pady=(int(24 * ui_scale(self)), 0))
+            self._legend_page_row = self.legend_row
             # 2.2.19 (#10): when the image is drawn small, say where Pop out is (shown only then).
             self.photo_small_row = ttk.Frame(plot_host, style="Card.TFrame")
             self.photo_small_hint = StringVar(value="")
@@ -9416,13 +9467,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.photo_log.configure(height=n)
                 h += int(round((cur - n) * line))   # what the image area gets
                 fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
-        small = is_small(fit)
-        if small:
-            self.photo_small_hint.set("⚠ Small image? Pop out opens it in its own window (also in the View box, top "
-                                      "right)" + ("; Hide log gives it more room." if log_shown else "."))
-            if not self.photo_small_row.winfo_ismapped():
-                self.photo_small_row.pack(side="bottom", fill=X, pady=(2, 0), before=self.legend_row)
-        elif self.photo_small_row.winfo_ismapped():
+        # 2.3.2 (item 10, John): no "⚠ Small image? Pop out …" line under the image any more: its height goes to the
+        # image, and Pop out is in the View box. (The log still shrinks for a small image, above.)
+        if self.photo_small_row.winfo_ismapped():
             self.photo_small_row.pack_forget()
         self._photo_fit = fit
         return fit
@@ -9842,11 +9889,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 items.append(("□", st["legend"], st["color"]))
         if self.scan_excluded:
             items.append(("×", "Excluded from the scan", "#ff9800"))
+        if row is getattr(self, "_legend_page_row", None):
+            # 2.3.2 (item 10): on the page, one entry per line down the left of the image (wrapped, so the column
+            # stays narrow); the pop-out window keeps its row under the image.
+            wrap = int(170 * ui_scale(self))
+            for symbol, text, colour in items:
+                ttk.Label(row, text=f"{symbol} {text}", style="Card.TLabel", foreground=colour, justify=LEFT,
+                          wraplength=wrap, font=(core.UI_FONT, 9, "bold")).pack(side="top", anchor=W, pady=(0, 6))
+            return   # 2.3.2 (John): no "wheel: zoom · drag: pan" hint any more (the manual has it)
         for symbol, text, colour in items:
             ttk.Label(row, text=f"{symbol} {text}", style="Card.TLabel", foreground=colour,
                       font=(core.UI_FONT, 9, "bold")).pack(side=LEFT, padx=(0, 12))
-        ttk.Label(row, text="wheel: zoom · drag: pan · right-click a marker: clear", style="Hint.TLabel").pack(
-            side=RIGHT)
 
     # ---- zoom and pan on the Photometry image (2.2) ----------------------------------------
     def reset_photo_view(self):
@@ -10116,8 +10169,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.legend_row = getattr(self, "_legend_home", None) or self.legend_row
         try:
             self.photo_placeholder.pack_forget()
-            self.legend_row.pack(side="bottom", fill=X, pady=(2, 0))
-            home.get_tk_widget().pack(fill=BOTH, expand=True)
+            self.legend_row.pack(side=LEFT, fill=Y, anchor="n", padx=(0, 4), pady=(int(24 * ui_scale(self)), 0))
+            home.get_tk_widget().pack(fill=BOTH, expand=True)   # 2.3.2 (item 10): legend column first, then the image
         except Exception:
             pass
         try:
@@ -14922,14 +14975,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.skip_button.pack(**self._skip_button_side)
             else:
                 self.skip_button.pack_forget()
-            shown = getattr(self, "_skip_line_shown", False)
-            anchor = self.aperture_state_label if getattr(self, "_aperture_state_shown", False) else self._view_options
-            if text and not shown:
-                line.pack(anchor=W, fill=X, padx=6, pady=(0, 4), after=anchor)
-                self._skip_line_shown = True
-            elif not text and shown:
-                line.pack_forget()
-                self._skip_line_shown = False
+            self._skip_line_shown = bool(text)
+            self._layout_meas_col()   # 2.3.2 (item 10)
         except Exception:
             pass
 
@@ -15240,11 +15287,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             label = self.aperture_state_label
             shown = getattr(self, "_aperture_state_shown", False)
             if text and not shown:
-                label.pack(anchor=W, fill=X, padx=6, pady=(0, 4), after=self._view_options)
                 self._aperture_state_shown = True
             elif not text and shown:
-                label.pack_forget()
                 self._aperture_state_shown = False
+            self._layout_meas_col()   # 2.3.2 (item 10)
         except Exception:
             pass
         self._update_skip_line()   # 2.3.0 (#50)

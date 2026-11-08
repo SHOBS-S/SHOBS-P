@@ -140,7 +140,11 @@ class StackMixin:
             slaves = master.pack_slaves()
             if box in slaves and slaves.index(box) > slaves.index(vb):
                 return
-            box.pack(in_=master, side=RIGHT, padx=(10, 0), after=vb)
+            box.pack(in_=master, side=RIGHT, padx=(10, 0), after=vb, anchor="n")   # 2.3.2: top of the row
+        except Exception:
+            pass
+        try:
+            self._meas_col_last()   # 2.3.2 (item 10): the left column stays packed after the boxes
         except Exception:
             pass
 
@@ -154,14 +158,13 @@ class StackMixin:
         if not live and self.points_choice.get() != "frame":
             self.points_choice.set("frame")
         shown = src is not None
-        try:
-            if shown and not self._stack_shown:
-                self._stack_row.pack(fill=X, padx=6, pady=(0, 4), after=self._stack_anchor)
-            elif not shown and self._stack_shown:
-                self._stack_row.pack_forget()
-        except Exception:
-            pass
+        changed = shown != self._stack_shown
         self._stack_shown = shown
+        if changed:
+            try:
+                self._layout_meas_col()   # 2.3.2 (item 10): in the column beside the Points / View boxes
+            except Exception:
+                pass
         self._stack_place_points_box()
         try:
             self.points_stack_button.configure(state="normal" if live else "disabled")
