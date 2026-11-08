@@ -6717,6 +6717,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if getattr(self, "_stack_shown", False) or getattr(self, "_aperture_state_shown", False) or \
                     getattr(self, "_skip_line_shown", False):
                 need = max(need, int(320 * scale))
+            # review (S2): the skipped-frames line keeps its button beside its wrapped text
+            if getattr(self, "_skip_line_shown", False) and self.skip_button.winfo_manager():
+                need = max(need, int(326 * scale) + int(self.skip_button.winfo_reqwidth()))
         except Exception:
             return 0
         return need
