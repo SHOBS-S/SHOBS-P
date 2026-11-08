@@ -15,8 +15,10 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAN = ROOT / "docs" / "manual"
-VERSION = "2.3.1"
-EDITION = "Edition for version 2.3.1"
+# 2.3.2: the version comes from the app (it was typed here and went stale)
+VERSION = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', (ROOT / "clearv_app.py").read_text(encoding="utf-8"),
+                    re.M).group(1)
+EDITION = "Edition for version %s" % VERSION
 TITLE = "SHOBS-P User's Manual"
 
 CSS = """
@@ -158,4 +160,4 @@ def build(pdf_out):
 
 
 if __name__ == "__main__":
-    build(sys.argv[1] if len(sys.argv) > 1 else str(ROOT / "SHOBS-P Users Manual %s.pdf" % VERSION))
+    build(sys.argv[1] if len(sys.argv) > 1 else str(ROOT / ("SHOBS-P Users Manual %s.pdf" % VERSION)))
