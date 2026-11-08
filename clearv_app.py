@@ -19034,7 +19034,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if warn:
             self.log(warn)
         self.offer_upload(path, "Open AAVSO WebObs…", core.AAVSO_WEBOBS_URL, "AAVSO WebObs",
-                          note=warn)   # 2.2.15 (item 8)
+                          note=warn, page_button=True)   # 2.2.15 (item 8); 2.3.2 (item 3, John): Results row only
         return True
 
     # ---- 2.3.1 (nit): <report stem>_settings.txt for Variables reports (Transits has had one since 2.2.19) ---------

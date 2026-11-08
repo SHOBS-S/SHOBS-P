@@ -23,7 +23,7 @@ Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame
 arrows showing where north and east lie, and the target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
 saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars. The chart is fetched in
 the background after the report is saved; whatever happens to it goes into the log only, so the status line keeps
-**Saved AAVSO_….txt — upload to AAVSO WebObs:** and its **Open AAVSO WebObs…** button. If the chart server does not
+**Saved AAVSO_….txt — upload to AAVSO WebObs with Open AAVSO WebObs… on the Results row.** If the chart server does not
 answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; press **Save field image** later
 to fetch it.
 
@@ -104,7 +104,7 @@ With no night highlighted, the whole series is saved.
 ### The duplicate warning
 
 Saving a report never warns: many reports are saved and never uploaded. The warning comes when you upload, that is
-when you press **Open AAVSO WebObs…** (on the Output page or on the status line).
+when you press **Open AAVSO WebObs…** on the Output page.
 
 - When the upload page opens, SHOBS-P marks the nights of the last report you saved as **sent**. The night table's
   **Sent** column then shows where and when, for example `✓ WebObs 2026-10-18`, and the log says **Marked sent to
@@ -159,16 +159,16 @@ Stars from the AAVSO sequence appear under their **AUID**. Other stars appear un
 
 ## Upload with WebObs
 
-After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file and shows a button **Open AAVSO WebObs…** (after the **⚠ No AUID** warning, if the star has no AUID). The same button is in the **Results** row of the Output page. Either one checks for nights already sent and marks the report's nights as sent (see "The duplicate warning" above).
+After saving (and, without an Output folder, a **Saved** dialog), the status bar names the file (after the **⚠ No AUID** warning, if the star has no AUID) and points to **Open AAVSO WebObs…**, beside **Save AAVSO report** in the **Results** row of the Output page. That button checks for nights already sent and marks the report's nights as sent (see "The duplicate warning" above).
 
-1. Press **Open AAVSO WebObs…**. AAVSO's photometry submission page opens in your browser.
+1. Press **Open AAVSO WebObs…** on the Results row. AAVSO's photometry submission page opens in your browser.
 2. Log in with your AAVSO account.
 3. Use the file upload, and choose the report file.
 4. Read WebObs's check of the file before you confirm.
 
 Before uploading, check three things in the file: your observer code, the chart ID, and the comparison magnitudes.
 
-![The Output page status bar after saving a report, with the Open AAVSO WebObs button](img/15-webobs-offer.png)
+![The Output page after saving a report: the status bar names the file, Open AAVSO WebObs… is on the Results row](img/15-webobs-offer.png)
 
 ---
 

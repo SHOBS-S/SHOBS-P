@@ -324,7 +324,7 @@ class TestInApp(unittest.TestCase):
         self.assertFalse(app.status_link.winfo_ismapped())
         self.assertEqual(app._status_offer, ("", ""))
         self.assertIn("with Open AAVSO Exoplanet Database… on the Results row", app.status.get())
-        # WebObs keeps its status-bar button (unchanged in 2.3.2)
+        # without page_button the status-bar button still works (no caller uses it now; kept for later offers)
         app.offer_upload("/tmp/AAVSO_x.txt", "Open AAVSO WebObs…", ca.core.AAVSO_WEBOBS_URL, "AAVSO WebObs")
         self.assertEqual(app._status_offer[1], ca.core.AAVSO_WEBOBS_URL)
 
@@ -332,6 +332,8 @@ class TestInApp(unittest.TestCase):
         import inspect
         import transit_ui
         self.assertIn("page_button=True", inspect.getsource(transit_ui))
+        src = inspect.getsource(ca.App._save_aavso_report)
+        self.assertIn("page_button=True", src)   # John (7 Nov): WebObs too
 
     # ---- item 5 -----------------------------------------------------------------------------------------------
     def test_check_without_id_named_by_radec(self):
