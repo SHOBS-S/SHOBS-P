@@ -76,7 +76,8 @@ class StackMixin:
 
     # ---- the page parts --------------------------------------------------------------------------------------
     def _stack_build_ui(self, card, options, view_box):
-        """Called by _page_photo once the View box is built."""
+        """Called by _page_photo once the View box is built (options and view_box are no longer used: 2.3.2 put the
+        Points box on the Stack row)."""
         self.stack_n = StringVar(value="")
         self.stack_goal = StringVar(value="")
         self.points_choice = StringVar(value="frame")
@@ -120,7 +121,7 @@ class StackMixin:
         row.bind("<Configure>", lambda e: use.configure(wraplength=max(int(e.width), int(100 * _ui_scale(self)))),
                  add="+")
         box.pack(side=LEFT, padx=(int(16 * _ui_scale(self)), 0))
-        self._points_box, self._points_view_box = box, view_box
+        self._points_box = box
         # 2.3.0 review fix (high DPI): the margin and the floor scale with the display (clearv_app.ui_scale)
         srow.bind("<Configure>", lambda e: self.stack_line_label.configure(
             wraplength=max(int(e.width) - int(20 * _ui_scale(self)), int(300 * _ui_scale(self)))), add="+")
