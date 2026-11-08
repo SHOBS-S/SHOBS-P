@@ -56,8 +56,8 @@ the status strip; the page has no progress bar of its own.
 - **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.
 - **Fit transit** runs the fit again with the current settings. **Cancel** stops it.
-- The tools row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Comp health…**, **Use comps…** (all below) and
-  the **credible bands** box (see "Read the plot").
+- The tools row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Comp health…**, **Use comps…** (all below),
+  the **credible bands** box and the **Plot bins** box (see "Read the plot").
 - **Trim** row (below).
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
@@ -114,7 +114,9 @@ figures. Its columns are:
 - **Free shape**: a quick fit with a/R\* and b left free. It is a cross-check: if Rp/R\* moves a lot here, your data
   alone do not pin the shape down, and the result leans on the published shape. When the free fit runs away (for
   example to an impossible depth), the column says **not constrained** instead of numbers, and a note explains that
-  the reported values use the published a/R\* and b.
+  the reported values use the published a/R\* and b. From 2.3.2 one parameter can also run away on its own while the
+  depth looks fine: then only that row says **not constrained**. That is a/R\* or T14 more than 25 % from the
+  published value (else the MCMC's), b more than 0.3 from it, or an error larger than 25 % of a/R\* or 0.3 in b.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
   On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.
@@ -139,7 +141,12 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 ## Read the plot
 
 - Gray dots: each frame, detrended.
-- Black points with error bars: 10-minute bins.
+- Black points with error bars: bins of several frames, also shown on the residual panel. The **Plot bins** box
+  sets their width: **Auto** (10 minutes, or 3 frames' spacing when the frames are farther apart than 3⅓ minutes),
+  **5 min**, **10 min**, **15 min** or **30 min**. A bin needs at least 3 frames, and the legend names the real width
+  (for example *"13-minute bins"* on MicroObservatory frames). The bins are only for the eye: changing them redraws
+  the plot without refitting, and the fit, the red-noise beta and the **rms per 10-min bin** line use every frame
+  as before.
 - Green line: the SHOBS-P model, labeled with its Rp/R\* and depth.
 - Blue dotted line: the published transit shape, for comparison.
 - Gray dashed line and band: the predicted mid-transit and its uncertainty.
@@ -224,7 +231,9 @@ the report's largest gap is the flip; the same ΔBIC ≥ 10 rule then decides.
 histogram per parameter on the diagonal (with its median and 16/84 % lines, and the value and error in the title), and each pair below it, with 1σ and
 2σ contours. Tc is in minutes from its median. By default the window shows the shape parameters (Tc, Rp/R\*, a/R\*, b,
 and the flip step if fitted); tick **Show all parameters (baseline, limb darkening)** for the rest. **Save PNG…** saves
-the plot, and **Close** closes the window. Without a fit, the button says *"Fit a transit first: the corner plot shows
+the plot, and **Close** closes the window. From 2.3.2 the file carries the number of the fit's saved set
+(`…_transit_2_corner.png` beside `…_transit_2.png`), and it replaces the corner plot that **Save plot PNG…** wrote for
+the same fit, in the view you see, instead of adding a `_2` copy. Without a fit, the button says *"Fit a transit first: the corner plot shows
 that fit's MCMC samples."*
 
 How to read it: a round hump is a measurement. A histogram that piles up against the edge of its allowed range is

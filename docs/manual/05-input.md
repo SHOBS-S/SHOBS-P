@@ -178,7 +178,9 @@ It is what:
 
 When it is done, the status bar says **Folders scanned.** (or what it found).
 
-> **Caution:** **Next: Blink** does not scan. If you skip **Scan folders**, the checks below are not made.
+> **Caution:** **Next: Blink** does not scan. If you skip **Scan folders**, the checks below are not made until you
+> calibrate: from 2.3.2, **Build masters and calibrate** runs them first when the Lights folder was not scanned (after
+> a restart, say), and the log says so.
 
 ## The checks SHOBS-P makes on your headers
 

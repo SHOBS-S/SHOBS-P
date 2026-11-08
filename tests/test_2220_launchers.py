@@ -14,7 +14,8 @@ import zipfile
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETUP = os.path.join(HERE, "shobs_setup.sh")
-SCRIPTS = ["shobs_setup.sh", "run_linux.sh", "run_selftest.sh", "Start SHOBS-P.command", "Run self-test.command"]
+SCRIPTS = ["shobs_setup.sh", "run_linux.sh", "run_selftest.sh", "Start SHOBS-P.command", "Run self-test.command",
+           "Create shortcut.command"]   # 2.3.2 (item 15)
 BASH = shutil.which("bash")
 
 

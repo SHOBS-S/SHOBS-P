@@ -43,7 +43,7 @@ esac
 
 if [ "$ACTION" = desktop ]; then
     if [ "$MAC" = 1 ]; then
-        echo 'The menu icon is for Linux. On a Mac, double-click "Start SHOBS-P.command" (you can drag it to the Dock).'
+        echo 'The menu icon is for Linux. On a Mac, double-click "Create shortcut.command" for a SHOBS-P app.'
         exit 6
     fi
     if [ "$PROFILE" != SHOBS-P ]; then
@@ -606,7 +606,8 @@ fi
 # Files from a downloaded zip carry the Mac's quarantine mark; once one launcher was allowed, clear it from SHOBS-P's
 # own launchers only (named files, never the folder: it may be Downloads), and only at the first setup.
 if [ "$MAC" = 1 ] && [ "$IS_NEW" = 1 ] && [ -z "$SHOBS_TEST_PLATFORM" ] && command -v xattr >/dev/null 2>&1; then
-    for f in "$APP_DIR/Start SHOBS-P.command" "$APP_DIR/Run self-test.command" "$APP_DIR/shobs_setup.sh" \
+    for f in "$APP_DIR/Start SHOBS-P.command" "$APP_DIR/Run self-test.command" "$APP_DIR/Create shortcut.command" \
+             "$APP_DIR/shobs_setup.sh" \
              "$APP_DIR/run_linux.sh" "$APP_DIR/run_selftest.sh"; do
         [ -f "$f" ] && xattr -d com.apple.quarantine "$f" 2>/dev/null
     done

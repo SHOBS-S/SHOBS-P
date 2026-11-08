@@ -1278,8 +1278,56 @@ def display_scaling_text(widget) -> str:
         return ""
 
 
+
+# 2.3.2 (item 13): the screen taken by the system on a Mac (menu bar at the top, the Dock, usually at the bottom), in
+# screen pixels (points on a Retina screen, as Tk reports them). Windows and Linux open as before 2.3.2.
+MAC_MENU_BAR = 25
+MAC_DOCK_ROOM = 80
+
+
+def usable_screen(sw: int, sh: int, platform: str) -> tuple:
+    """(left, top, width, height) of the part of the screen a window may use."""
+    if platform == "darwin":
+        return 0, MAC_MENU_BAR, sw, max(sh - MAC_MENU_BAR - MAC_DOCK_ROOM, 300)
+    return 0, 0, sw, sh
+
+
+def main_window_geometry(sw: int, sh: int, platform: str) -> tuple:
+    """2.3.2 (item 13): (width, height, x, y, min_width, min_height) for the main window: about 80 % of the screen,
+    centered, never beyond the usable area; the minimum size never more than the opening size."""
+    left, top, uw, uh = usable_screen(int(sw), int(sh), platform)
+    width = min(int(sw * 0.8), uw)
+    height = min(int(sh * 0.8), uh)
+    x = left + max((uw - width) // 2, 0)
+    y = top + max((uh - height) // 2 - 20, 0)
+    return width, height, x, y, min(1200, width), min(800, height)
+
+
+def fit_on_screen(w: int, h: int, x: int, y: int, sw: int, sh: int, platform: str) -> tuple:
+    """2.3.2 (item 13): (w, h, x, y) shrunk to the usable area and moved so all of it is on the screen."""
+    left, top, uw, uh = usable_screen(int(sw), int(sh), platform)
+    w, h = min(int(w), uw), min(int(h), uh)
+    x = min(max(int(x), left), left + uw - w)
+    y = min(max(int(y), top), top + uh - h)
+    return w, h, x, y
+
 class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py)
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
+
+    def _keep_on_screen(self):
+        """2.3.2 (item 13): once drawn, a window that ended up larger than the usable screen, or partly off it (a Mac
+        moves a window below its menu bar), is shrunk and moved back. Never makes it larger."""
+        try:
+            self.update_idletasks()
+            sw, sh = int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+            w, h = int(self.winfo_width()), int(self.winfo_height())
+            x, y = int(self.winfo_x()), int(self.winfo_y())
+            nw, nh, nx, ny = fit_on_screen(w, h, x, y, sw, sh, sys.platform)
+            if (nw, nh, nx, ny) != (w, h, x, y):
+                self.minsize(min(nw, self.minsize()[0]), min(nh, self.minsize()[1]))
+                self.geometry(f"{nw}x{nh}+{nx}+{ny}")
+        except Exception:
+            pass
 
     def __init__(self):
         super().__init__()
@@ -1291,12 +1339,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._set_window_icon()
         self._style()
         # Open as a normal window at about 80% of the screen, centered. Maximize it yourself if you like.
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        width = int(screen_w * 0.8)
-        height = int(screen_h * 0.8)
-        self.geometry(f"{width}x{height}+{(screen_w - width) // 2}+{max((screen_h - height) // 2 - 20, 0)}")
-        self.minsize(min(1200, width), min(800, height))
+        # 2.3.2 (item 13): sized to the screen's usable area (on a Mac the menu bar and the Dock take part of the
+        # screen; the window opened too big on John's iMac, sidebar and the Optics box cut off), and pulled back
+        # onto the screen once it is drawn.
+        width, height, x, y, min_w, min_h = main_window_geometry(self.winfo_screenwidth(), self.winfo_screenheight(),
+                                                                 sys.platform)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.minsize(min_w, min_h)
+        if sys.platform == "darwin":
+            self.after(400, self._keep_on_screen)   # Windows and Linux place the window as asked
 
         self.bias_dir = StringVar()
         self.dark_dir = StringVar()

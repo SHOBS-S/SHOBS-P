@@ -252,8 +252,9 @@ The full details are always in the log on this page.
 
 > **Caution:** A monochrome camera that writes no Bayer keyword and has no flats is detected from the lights' sky
 > background, which needs bias or dark frames (or a bright sky). If SHOBS-P still cannot tell, it asks **Color or
-> monochrome camera?** when you press **Scan folders**. If you skipped the scan, check that **Bayer pattern** says
-> **MONO** before calibrating; otherwise every frame is split as if it had a color mask.
+> monochrome camera?** when you press **Scan folders**. If you skipped the scan, **Build masters and calibrate** runs
+> its checks first (from 2.3.2), so the question comes then; still check that **Bayer pattern** says **MONO** before
+> calibrating, or every frame is split as if it had a color mask.
 
 ---
 

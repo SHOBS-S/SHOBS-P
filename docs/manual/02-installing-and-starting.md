@@ -91,6 +91,16 @@ with the reason. When Tkinter is missing, it names the package to install. Insta
    downloads the packages, which takes a few minutes. Keep the Terminal window open while SHOBS-P runs; closing it
    closes the program.
 5. To check the install, double-click **Run self-test.command**.
+6. For a SHOBS-P app with its icon (from 2.3.2), double-click **Create shortcut.command** once. It makes
+   **SHOBS-P.app** with the SHOBS-P logo in Applications (the one in your home folder if you may not write to the
+   main one) and puts **SHOBS-P** on your Desktop; drag it to the Dock to keep it there. The app starts SHOBS-P from
+   this folder without a Terminal window. If SHOBS-P has not been set up yet, the app opens **Start SHOBS-P.command**
+   in Terminal for the first start, so you can watch the setup. If SHOBS-P stops with an error, its messages open in
+   TextEdit (`app_start_log.txt` in `~/Library/Application Support/SHOBS-P`). Run **Create shortcut.command** again
+   if you move the SHOBS-P folder or unzip a new version somewhere else.
+
+SHOBS-P opens at a size that fits the screen between the menu bar and the Dock (from 2.3.2); make it bigger or
+press the green button to fill the screen.
 
 ### What the first start says (Linux and Mac)
 
@@ -162,7 +172,8 @@ If the result says `FAILED`, the lines marked `FAIL` say which part. See chapter
 ## Start SHOBS-P
 
 Double-click the **SHOBS-P** icon on the Desktop, or choose it from the Start menu. The program opens without a
-console window. On Linux, type `./run_linux.sh` or choose SHOBS-P from the applications menu; on a Mac, double-click
+console window. On Linux, type `./run_linux.sh` or choose SHOBS-P from the applications menu; on a Mac, open **SHOBS-P**
+from the Desktop, the Dock or Applications (made by **Create shortcut.command**), or double-click
 **Start SHOBS-P.command**. Any error is shown in the program itself and written to a log file (see "When something goes wrong"
 below).
 
@@ -213,7 +224,8 @@ kept.
 1. Download the new zip from the releases page.
 2. Unzip it. You can replace the old folder or unzip beside it.
 3. On Windows, run **Create shortcuts.bat** in the new folder. (On Linux or a Mac, just start the new version with
-   its start file; run `./run_linux.sh --desktop` again for the menu entry.) It points the shortcuts at the new version and installs any new
+   its start file; run `./run_linux.sh --desktop` again for the menu entry, or on a Mac **Create shortcut.command**
+   for the app.) It points the shortcuts at the new version and installs any new
    packages it needs. SHOBS-P's own Python environment is shared by every version, so this is quick. (The first time
    you run it after updating from 2.2.18 or older, it sets that environment up and downloads the packages once.)
 

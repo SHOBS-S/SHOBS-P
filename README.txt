@@ -59,6 +59,8 @@ The first time macOS may refuse a file from an unidentified developer: right-cli
 (macOS 15 and newer: System Settings > Privacy & Security > Open Anyway). Or, in Terminal, in the SHOBS-P folder:
 xattr -d com.apple.quarantine *.command *.sh. Keep the Terminal window open while SHOBS-P runs. "Run
 self-test.command" checks the install. SHOBS-P's environment lives in ~/Library/Application Support/SHOBS-P.
+"Create shortcut.command" (2.3.2) makes SHOBS-P.app with the SHOBS-P logo in Applications and a SHOBS-P link on the
+Desktop (drag it to the Dock); it starts SHOBS-P without a Terminal window. Run it again if you move the folder.
 Which Python (2.2.20): SHOBS-P tries the Pythons it finds in the order 3.13, 3.12, 3.11, then newer ones, and only
 installs ready-made packages, so it never asks to compile anything (no "developer tools" prompt on a Mac). A
 brand-new Python (e.g. 3.15) often has no ready-made packages yet; SHOBS-P then says so and moves on to the next
@@ -73,6 +75,40 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.2 (screen and file changes only: every measured number is the same as in 2.3.0; S = shared by every
+mode, T = Transits, V = Variables, M = Mac)
+- S  A site typed for someone else's frames is no longer saved as your own as you type it. When you leave the Site
+     boxes, or press Scan folders, Calibrate or Run photometry, a site far from your saved one is asked about once:
+     Yes saves it (with the Optics values typed with it) as yours; No uses it for these frames only and your saved
+     setup stays as it was. Small corrections at your own site are saved without a question. Loading a series
+     never saves its optics or telescope aperture as yours.
+- S  A fresh install starts with Focal length and Pixel size empty, like the Site boxes.
+- S  Build masters and calibrate runs the Scan folders checks first when the Lights folder was not scanned (after a
+     restart): mono or color camera, Bayer pattern, site and optics from the header.
+- S  More room for the Photometry image: the "Wheel to zoom, drag to pan ... Pop out" line is gone (the legend under
+     the image says it) and the status rows above the image sit closer together.
+- S  A check star with no catalog name is named by its position (J020351.8+464115), not "check".
+- S  Planet alias names show their accents (Umbäässa, not the HTML code).
+- T  The transit fit always waits for Fit transit (it no longer starts by itself after a run, Use comps, a night
+     change or an opened report); the page says "Set the detrend and press Fit transit." Trim and refit and Clear
+     trim still refit, since pressing them asks for a fit.
+- T  Plot bins box beside credible bands: Auto (as before: 10 minutes, or 3 frames' spacing on sparse frames), 5,
+     10, 15 or 30 minutes. A bin needs at least 3 frames, and the legend names the real width ("13-minute bins").
+     Display only: the fit, red-noise beta and rms per 10-min bin use every frame as before.
+- T  Free shape column: a/R*, b or T14 that ran away on their own say "not constrained" too (a/R* or T14 more than
+     25 % from the published value, b more than 0.3, or a large error), not only a runaway depth.
+- T  Save corner plot... -> Save PNG... names the file with the fit's set number (..._transit_2_corner.png) and
+     replaces the corner plot Save plot PNG... wrote for that fit, instead of a _corner_2 copy.
+- T  The status bar names the saved exoplanet report; Open AAVSO Exoplanet Database... is on the Results row only.
+- V  Camera angles within 10 degrees of each other are one pier side (was 5): 30 and 37-38 degrees, as the solve
+     reports them from night to night, are no longer listed as two sides.
+- V  The WebObs upload button is on the Results row only, not also at the end of the status bar.
+- M  Create shortcut.command makes SHOBS-P.app with the SHOBS-P logo in Applications and a SHOBS-P link on the
+     Desktop; the app starts SHOBS-P without a Terminal window (the first setup still shows in Terminal).
+- M  The window opens at a size that fits between the menu bar and the Dock (it was too big on an iMac).
+- M  Python 3.14 is the Python to install on a Mac (3.13.17, the last 3.13 with a Mac installer, works too).
+- S  README.txt wording: the spare nearest the check's brightness.
 
 New in 2.3.1 (screen and file changes only: every measured number is the same as in 2.3.0; S = shared by every
 mode, T = Transits, V = Variables)
@@ -1104,6 +1140,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.2  UI only (numbers as 2.3.0): typed site for other frames not saved as yours; fit waits for Fit transit;
+       Plot bins; Free shape a/R*, b, T14 runaway; corner plot named with its set; pier sides within 10 degrees;
+       Calibrate runs the Scan folders checks; roomier Photometry image; Mac app and window size.
 2.3.1  UI only (numbers as 2.3.0): Telescope aperture follows the telescope; Monochrome title; catalog
        outage named; edge pop-up for comps/check only, with a better check star; Variables settings file;
        short-night period search.

@@ -12,7 +12,10 @@
 > fit; the planet lookup from the host star; chapter 16 rewritten now that Tonight's transits and the Transit planner
 > are gone; Save corner plot in the Results row) and for 2.3.1 (the Telescope aperture follows the telescope; a
 settings file for Variables reports; the short-night period search; a catalog outage named as such; the frame-edge
-warning for comps and the check only, with a better check star), checked against the program. Screenshots were retaken on 2.3.0
+warning for comps and the check only, with a better check star) and for 2.3.2 (a site typed for someone else's frames
+is asked about before it is saved; the transit fit waits for Fit transit; Plot bins; the Free shape check per
+parameter; pier sides within 10°; Calibrate runs the Scan folders checks; a roomier Photometry image; the Mac app from
+Create shortcut.command), checked against the program. Screenshots were retaken on 2.3.0
 > wherever the page or its version line changed.
 > Each chapter is its own file in this folder; this page is the table of contents.
 

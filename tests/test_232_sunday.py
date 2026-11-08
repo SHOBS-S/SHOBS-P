@@ -102,6 +102,76 @@ class TestPierSides(unittest.TestCase):
         self.assertNotEqual(g[30], g[60])   # a real camera turn (30 degrees) is another side
 
 
+class TestWindowFits(unittest.TestCase):
+    """item 13: the main window opens inside the usable screen (Mac: menu bar and Dock)."""
+
+    def test_mac_imac(self):
+        for sw, sh in ((1920, 1080), (2048, 1152), (1440, 900), (1280, 800)):
+            w, h, x, y, mw, mh = ca.main_window_geometry(sw, sh, "darwin")
+            self.assertGreaterEqual(y, ca.MAC_MENU_BAR)
+            self.assertLessEqual(y + h, sh - ca.MAC_DOCK_ROOM)
+            self.assertGreaterEqual(x, 0)
+            self.assertLessEqual(x + w, sw)
+            self.assertLessEqual(mw, w)
+            self.assertLessEqual(mh, h)
+
+    def test_windows_unchanged_on_a_normal_screen(self):
+        self.assertEqual(ca.main_window_geometry(1920, 1080, "win32")[:4], (1536, 864, 192, 88))
+
+    def test_fit_on_screen(self):
+        self.assertEqual(ca.fit_on_screen(1700, 1000, -30, 10, 1440, 900, "darwin"),
+                         (1440, 900 - 25 - 80, 0, 25))
+        self.assertEqual(ca.fit_on_screen(800, 600, 100, 100, 1920, 1080, "darwin"), (800, 600, 100, 100))
+
+
+class TestMacApp(unittest.TestCase):
+    """item 15: Create shortcut.command builds SHOBS-P.app (run here without sips/iconutil: no icon)."""
+
+    def test_builds_the_app(self):
+        import plistlib
+        import shutil
+        import subprocess
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("needs bash")
+        repo = os.path.dirname(HERE)
+        with tempfile.TemporaryDirectory() as d:
+            env = dict(os.environ, HOME=d, SHOBS_APP_DEST=os.path.join(d, "Apps"), SHOBS_DESKTOP_DIR=d)
+            r = subprocess.run([bash, os.path.join(repo, "Create shortcut.command")], env=env, capture_output=True,
+                               text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            app = os.path.join(d, "Apps", "SHOBS-P.app", "Contents")
+            with open(os.path.join(app, "Info.plist"), "rb") as fh:
+                info = plistlib.load(fh)
+            self.assertEqual(info["CFBundleExecutable"], "SHOBS-P")
+            self.assertEqual(info["CFBundleShortVersionString"], ca.APP_VERSION)
+            exe = os.path.join(app, "MacOS", "SHOBS-P")
+            self.assertTrue(os.access(exe, os.X_OK))
+            text = open(exe, encoding="utf-8").read()
+            self.assertIn(f"APP_DIR='{os.path.realpath(repo)}'", text)
+            self.assertIn("Start SHOBS-P.command", text)
+            self.assertEqual(subprocess.run([bash, "-n", exe]).returncode, 0)
+            self.assertTrue(os.path.islink(os.path.join(d, "SHOBS-P")))
+            # run again (the folder moved, say): written over, still one app
+            r = subprocess.run([bash, os.path.join(repo, "Create shortcut.command")], env=env, capture_output=True,
+                               text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_in_the_release_zip(self):
+        import zipfile
+        import subprocess
+        repo = os.path.dirname(HERE)
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "z.zip")
+            r = subprocess.run([sys.executable, os.path.join(repo, "tools", "make_release_zip.py"), out, "--src", repo],
+                               capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            with zipfile.ZipFile(out) as z:
+                info = [i for i in z.infolist() if i.filename.endswith("/Create shortcut.command")]
+                self.assertEqual(len(info), 1)
+                self.assertEqual((info[0].external_attr >> 16) & 0o777, 0o755)
+
+
 @unittest.skipUnless(_have_tk(), "needs a display")
 class TestInApp(unittest.TestCase):
     @classmethod
