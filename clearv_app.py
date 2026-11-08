@@ -138,6 +138,29 @@ def series_prev_path(path: str) -> str:
     return f"{stem}_prev{ext or '.cvseries'}"
 
 
+def radec_star_name(ra_deg: float, dec_deg: float) -> str:
+    """2.3.2 (item 5): a name from the sky position, as APASS names its stars ("J020351.8+565553"), for a star with
+    no catalog ID (a catalog that did not answer)."""
+    ra = (float(ra_deg) % 360.0) / 15.0
+    h = int(ra)
+    m = int((ra - h) * 60)
+    s = round(((ra - h) * 60 - m) * 60, 1)
+    if s >= 60.0:
+        s, m = 0.0, m + 1
+    if m >= 60:
+        m, h = 0, (h + 1) % 24
+    sign = "-" if dec_deg < 0 else "+"
+    d = abs(float(dec_deg))
+    dd = int(d)
+    dm = int((d - dd) * 60)
+    ds = int(round(((d - dd) * 60 - dm) * 60))
+    if ds >= 60:
+        ds, dm = 0, dm + 1
+    if dm >= 60:
+        dm, dd = 0, dd + 1
+    return f"J{h:02d}{m:02d}{s:04.1f}{sign}{dd:02d}{dm:02d}{ds:02d}"
+
+
 def placeholder_star_name(name) -> bool:
     """2.2.14 (item 7): a name SHOBS-P gives a star that never got a real one ("check", "comp2", "watch 3 (…)")."""
     import re
@@ -11398,6 +11421,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return "—"
         return f"({xy[0]:.1f}, {xy[1]:.1f})"
 
+    def _name_check_by_radec(self) -> str:
+        """2.3.2 (item 5): a check star with no name (no catalog ID, e.g. Gaia down on 6 Nov's Qatar-10b rerun) is
+        named by its sky position from the image's solution, so the series, reports and settings file say which star
+        it was instead of the literal "check". Returns the name given ("" when it has one or there is no solution)."""
+        if self.check_xy is None or not placeholder_star_name(self.check_name.get()):
+            return ""
+        sol = self.chart_solution if self.chart_placed or (self.chart_solution or {}).get("auto") else None
+        if not sol:
+            return ""
+        try:
+            ra, dec = core.pixel_to_sky(self.check_xy[0], self.check_xy[1], sol)
+        except Exception:
+            return ""
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return ""
+        name = radec_star_name(ra, dec)
+        self.check_name.set(name)
+        self.log(f"Check star: no catalog ID, so it is named by its position, {name}.")
+        return name
+
     def _star(self, name, xy, mag_text, required_mag):
         if xy is None:
             raise ValueError(f"{name} is not marked")
@@ -13264,6 +13307,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 raise ValueError(f"Two comps have the same name ({', '.join(sorted(dupes))}). Give each its own name.")
             check = None
             if self.check_xy is not None:
+                self._name_check_by_radec()   # 2.3.2 (item 5): never saved as the literal "check"
                 check = self._star(self.check_name.get() or "check", self.check_xy, self.check_mag.get(), False)
             radius = float(self.radius.get())
             sky_in = float(self.sky_in.get())

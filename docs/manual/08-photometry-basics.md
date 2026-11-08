@@ -213,7 +213,10 @@ status bar says, for example, " Centered on the star (2.3 px from the click)." I
 **How names and magnitudes fill in.** On a solved image, clicking a comp or the check star fills its row in the
 **Stars** panel: the star's name (its AAVSO identifier or catalog name) and its catalog magnitude in the band you are
 measuring (the column header says which, for example **V magnitude**). AAVSO sequence magnitudes are used first, then
-APASS, Gaia and Tycho-2. The line under each row says where the magnitude came from and adds checks:
+APASS, Gaia and Tycho-2. If the check star has no catalog name (for example when a catalog did not answer), SHOBS-P
+names it by its sky position when you press **Run photometry**, the way APASS names its stars, for example
+`J020351.8+464115`. The log says so, and that name goes into the series, the reports and the settings file instead
+of a bare "check". The line under each row says where the magnitude came from and adds checks:
 
 - its color (B−V) and a warning if it is very red;
 - how much brighter or fainter than the target it is, with a warning if it is more than about 1 magnitude away;

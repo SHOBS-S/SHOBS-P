@@ -47,6 +47,17 @@ class TestAliasNames(unittest.TestCase):
         self.assertEqual(tc.unescape_name(None), "")
 
 
+class TestRadecName(unittest.TestCase):
+    """item 5: a check star with no catalog ID is named by its RA/Dec."""
+
+    def test_apass_style(self):
+        # APASS J020351.8+... (HAT-P-32 field) and a southern star
+        self.assertEqual(ca.radec_star_name(30.96583, 46.6875), "J020351.8+464115")
+        self.assertEqual(ca.radec_star_name(348.1638, -5.5), "J231239.3-053000")
+        self.assertEqual(ca.radec_star_name(359.99999, 0.0), "J000000.0+000000")
+        self.assertFalse(ca.placeholder_star_name(ca.radec_star_name(10.0, 10.0)))
+
+
 @unittest.skipUnless(_have_tk(), "needs a display")
 class TestInApp(unittest.TestCase):
     @classmethod
@@ -255,6 +266,33 @@ class TestInApp(unittest.TestCase):
         import inspect
         import transit_ui
         self.assertIn("page_button=True", inspect.getsource(transit_ui))
+
+    # ---- item 5 -----------------------------------------------------------------------------------------------
+    def test_check_without_id_named_by_radec(self):
+        app = self.app
+        sol = {"target_xy": (100.0, 100.0), "scale": 1.0, "angle": 0.0, "ra_deg": 30.96583, "dec_deg": 46.6875,
+               "auto": True}
+        old = (app.chart_solution, app.check_xy, app.check_name.get())
+        try:
+            app.chart_solution = sol
+            app.check_xy = (100.0, 100.0)
+            app.check_name.set("")
+            self.assertEqual(app._name_check_by_radec(), "J020351.8+464115")
+            self.assertEqual(app.check_name.get(), "J020351.8+464115")
+            self.assertTrue(any("named by its position" in t for t in self.logged))
+            app.check_name.set("check")
+            self.assertEqual(app._name_check_by_radec(), "J020351.8+464115")
+            # a real name is kept; no solution names nothing
+            app.check_name.set("TYC 3281-582-1")
+            self.assertEqual(app._name_check_by_radec(), "")
+            self.assertEqual(app.check_name.get(), "TYC 3281-582-1")
+            app.chart_solution = None
+            app.check_name.set("")
+            self.assertEqual(app._name_check_by_radec(), "")
+            self.assertEqual(app.check_name.get(), "")
+        finally:
+            app.chart_solution, app.check_xy = old[0], old[1]
+            app.check_name.set(old[2])
 
 
 if __name__ == "__main__":
