@@ -200,8 +200,11 @@ def free_shape_unconstrained(free_fit: dict, errors: dict, ref_depth: float | No
 # MicroObservatory: a/R* 5.68 and T14 4.137 h against the published 8.53 and 3.143 h, shown as normal values).
 # Display only: the table says "not constrained" for that parameter; the fit and the saved numbers are unchanged.
 FREE_SHAPE_OFF = 0.25       # a/R* or T14 more than 25 % above or below the reference
-FREE_B_OFF = 0.3            # b more than 0.3 from the reference, or its error above 0.3
-FREE_REL_ERR = 0.25         # a/R*'s own error above 25 % of its value
+FREE_B_OFF = 0.3            # b more than 0.3 from the reference (or no finite error)
+FREE_REL_ERR = 0.5          # a/R*'s own error above 50 % of its value
+# John 8 Nov: b's own error bar is no test: b and a/R* trade off on any single ground-based light curve, so a wide
+# b error is normal (TOI-2046 b 20-21 Oct, a good night, was flagged); b says "not constrained" only when it lands
+# far from the published value. a/R*'s error test was eased from 25 % to 50 % for the same reason.
 
 
 def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
@@ -229,8 +232,8 @@ def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
     b, eb = p.get("b"), err.get("b")
     if finite(b):
         rb = ref.get("b")
-        if eb is not None and (not finite(eb) or eb > FREE_B_OFF):
-            out["b"] = f"b {b:.2f} ± {eb:.2f}" if finite(eb) else f"b {b:.2f} has no finite error"
+        if eb is not None and not finite(eb):
+            out["b"] = f"b {b:.2f} has no finite error"
         elif finite(rb) and abs(b - rb) > FREE_B_OFF:
             out["b"] = f"b {b:.2f} against {rb:.2f}"
     t14 = free_fit.get("t14")

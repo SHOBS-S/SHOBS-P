@@ -98,7 +98,8 @@ mode, T = Transits, V = Variables, M = Mac)
      10, 15 or 30 minutes. A bin needs at least 3 frames, and the legend names the real width ("13-minute bins").
      Display only: the fit, red-noise beta and rms per 10-min bin use every frame as before.
 - T  Free shape column: a/R*, b or T14 that ran away on their own say "not constrained" too (a/R* or T14 more than
-     25 % above or below the published value, b more than 0.3 off, or a large error), not only a runaway depth.
+     25 % above or below the published value, b more than 0.3 off, or an a/R* error over half its value), not only
+     a runaway depth. A wide error on b alone is normal and not flagged.
 - T  The corner plot carries the fit's set number (..._transit_2_corner.png), whether Save corner plot... or Save
      plot PNG... comes first; saved again for the same fit it replaces that fit's corner plot (no _corner_2 copy).
 - T  The status bar names the saved exoplanet report; Open AAVSO Exoplanet Database... is on the Results row only.

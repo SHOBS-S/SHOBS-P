@@ -116,7 +116,8 @@ figures. Its columns are:
   example to an impossible depth), the column says **not constrained** instead of numbers, and a note explains that
   the reported values use the published a/R\* and b. From 2.3.2 one parameter can also run away on its own while the
   depth looks fine: then only that row says **not constrained**. That is a/R\* or T14 more than 25 % above or below
-  the published value (else the MCMC's), b more than 0.3 from it, or an error larger than 25 % of a/R\* or 0.3 in b.
+  the published value (else the MCMC's), b more than 0.3 from it, or an error on a/R\* larger than half of it. A wide
+  error on b alone is normal (b and a/R\* trade off on one night's light curve) and is not flagged.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
   On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.

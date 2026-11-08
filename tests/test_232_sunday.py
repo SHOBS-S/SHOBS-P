@@ -69,10 +69,14 @@ class TestFreeShapeRunaway(unittest.TestCase):
 
     def test_b_and_errors(self):
         import transit_posterior as tp
-        out = tp.free_shape_runaway({"p": {"a_rs": 6.0, "b": 0.9}, "err": {"a_rs": 2.5, "b": 0.05}, "t14": None},
+        out = tp.free_shape_runaway({"p": {"a_rs": 6.0, "b": 0.9}, "err": {"a_rs": 3.5, "b": 0.05}, "t14": None},
                                     {"a_rs": 6.0, "b": 0.2, "t14": None})
-        self.assertIn("a_rs", out)   # its own error is 40 % of it
+        self.assertIn("a_rs", out)   # its own error is 58 % of it
         self.assertIn("b", out)      # 0.7 from the reference
+        # TOI-2046 b 20-21 Oct (John, 8 Nov): a wide b error alone is not a runaway
+        good = tp.free_shape_runaway({"p": {"a_rs": 5.31, "b": 0.27}, "err": {"a_rs": 1.4, "b": 0.45},
+                                      "t14": 2.428 / 24}, {"a_rs": 4.75, "b": 0.51, "t14": 2.41 / 24})
+        self.assertEqual(good, {})
         self.assertEqual(tp.free_shape_runaway({}, {}), {})
 
     def test_reference_missing_skips_comparison(self):
