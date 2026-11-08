@@ -88,7 +88,7 @@ After the run, SHOBS-P may ask more questions:
 
 Then the **Output – Variability** page opens.
 
-**Weak comps?** The Photometry page now shows a Stack row with a suggestion line. When it says *"⚠ Comps are weak …"*, you can press **Stack** there and measure stacks of frames instead of single frames. The **Points** box beside the View box then switches between **Per frame** and **Stacked**, and a **Results use: …** line says which set the Output page, the period search and the reports use. Chapter 8 explains it, under "Stacking when comps are weak". A stack hides changes faster than itself, so SHOBS-P keeps a stack to 1/50 of the VSX period.
+**Weak comps?** The Photometry page now shows a Stack row with a suggestion line. When it says *"⚠ Comps are weak …"*, you can press **Stack** there and measure stacks of frames instead of single frames. The **Points** box on the Stack row then switches between **Per frame** and **Stacked**, and a **Results use: …** line says which set the Output page, the period search and the reports use. Chapter 8 explains it, under "Stacking when comps are weak". A stack hides changes faster than itself, so SHOBS-P keeps a stack to 1/50 of the VSX period.
 
 ## Read the Output page
 

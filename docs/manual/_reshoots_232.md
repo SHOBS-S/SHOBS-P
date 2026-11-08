@@ -33,3 +33,20 @@ Checked and reusable (first round): `08-points-stacked.png`, `08-stars-panel.png
 `08-popout-window.jpg`, `17-exoclock-buttons.png` (Results row unchanged),
 `03-window-parts.png`, `02-first-start.png` (its Optics values are the example's typed values, not the install
 defaults), `05-input-page.png`.
+
+## Third round (8 Nov, after John's look at the Stack row)
+
+The Stack, Measured-with and skipped-frames lines follow the View box onto its own line (left of it, when the Stack
+controls fit there whole), and the Points box moved onto the Stack row, after the Stack button. Retaken on the
+example site (40 / −100 / 500 m), window 2409 × 1775:
+
+- `08-photometry-solved.jpg` (SZ Lyn, Bin 2, solved, target marked, Comps step), `20-discovery-photometry.jpg`
+  (NGC 7789 21–22 Oct, solved), `17-transit-fit-page.png` and `17-trim.png` (TOI-2046 b series, night 20–21 Oct;
+  trim 19:16–19:37) — the second-round list.
+- `08-stack-row.png` (HD 219134 2 Nov, r 13 / 20–30, scintillation off: "Comps are weak 4.8×", Stack 9 → 26 points,
+  as in 2.3.0; nothing saved to the series) and `20-discovery-stack-row.png` (NGC 7789, Scan field, stacks of 4 →
+  67 points, as in 2.3.0). Crop: Aperture line to the bottom of the View box.
+- `08-points-stacked.png`: no longer reusable (the Points box moved). HD 219134 2 Nov after Stack (9 frames): the
+  Stack controls and the Points box with Stacked chosen.
+
+OCR: no user name, observer code or real site in any of them.

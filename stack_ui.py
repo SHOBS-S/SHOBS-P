@@ -1,5 +1,5 @@
 """2.3.0 (#54): the Stack step in the window (all modes): the Photometry page's Stack row (suggestion line, N, the
-optional precision goal, Stack), the Points: Per frame / Stacked switch beside the View box with its "Results use: …"
+optional precision goal, Stack), the Points: Per frame / Stacked switch on the Stack row (2.3.2) with its "Results use: …"
 line, and what follows a switch (Output page, transit fit, reports, series).
 
 A mixin of the App (clearv_app.App): it uses the App's own photometry run, job lock, busy bar, log and pages. The
@@ -517,7 +517,7 @@ class StackMixin:
         words = stack_core.stack_words(run["summary"])
         flagged = sum(1 for o in night_points if o.flag)
         self.log(f"Photometry on the stacks done: {len(night_points)} points ({words}), {flagged} flagged. "
-                 "Points: Stacked is selected; Per frame (beside the View box) switches back.")
+                 "Points: Stacked is selected; Per frame (on the Stack row) switches back.")
         self._stack_seeing_note(run)
         try:
             self.show_step(self.STACK_STEP_OUTPUT)

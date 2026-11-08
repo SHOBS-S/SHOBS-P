@@ -90,7 +90,9 @@ mode, T = Transits, V = Variables, M = Mac)
 - S  More room for the Photometry image: the "Wheel to zoom, drag to pan ... Pop out" line, the "Small image?" line
      and the page's "wheel: zoom" hint are gone (Pop out is in the View box; the pop-out window keeps its hint); the
      Aperture line sits one line under the Target line, with the Stack and Measured-with lines beside the View box
-     instead of under it; and the legend is a column at the left of the image instead of a row under it.
+     instead of under it (on its own line too, when the window is narrow); the Points box (Per frame / Stacked) is
+     on the Stack row, after the Stack button; and the legend is a column at the left of the image instead of a row
+     under it.
 - S  A check star with no catalog name is named by its position (J020351.8+464115), not "check".
 - S  Planet alias names show their accents (Umbäässa, not the HTML code).
 - T  The transit fit always waits for Fit transit (it no longer starts by itself after a run, Use comps, a night
@@ -154,7 +156,7 @@ New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discove
      5 min; 2 or 5 min when nothing is known), never fewer than 10 points, with an optional precision goal in ppt.
      Stack makes sigma-clipped means of N calibrated frames (whole-pixel shifts from the measured drift, never
      across a meridian flip or a gap; 32-bit; kept in ~/.shobs_p_cache/stacks) and runs the same photometry (or the
-     field scan) on them. The Points box beside the View box switches Per frame / Stacked; "Results use: ..." says
+     field scan) on them. The Points box on the Stack row switches Per frame / Stacked; "Results use: ..." says
      which. Reports, the settings record and the series carry the stack size and effective exposure.
 - S  Comps off the frame edge [#50]: a comp whose aperture or sky ring leaves the frame is left out of that frame
      only (the comparison is rebuilt from the comps present, on the night's scale, so no step); a comp missing in

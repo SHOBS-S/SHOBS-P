@@ -5,7 +5,7 @@ covers what works the same in every mode: the automatic solve, the image view, m
 photometry, and stacking frames when the comparison stars are weak. Choosing good comparison stars for a variable is
 in chapter 9; transits are in chapters 16 and 17; Discovery's **Scan field** is in chapter 20.
 
-![The Photometry page, with the target, one comparison star and the check star marked](img/08-photometry-solved.jpg)
+![The Photometry page, solved, with the target marked and the Comps step next](img/08-photometry-solved.jpg)
 
 ## The page at a glance
 
@@ -16,12 +16,12 @@ From top to bottom:
   button.
 - **The options row.** On the left, one line under the Target line, the aperture boxes **Aperture r**, **sky in** and
   **sky out**, the **Suggest…** button, **raw sat ADU**, **linear ADU**, and **Also measure R and B (color index;
-  slower)**. On the right, the **View** box. After the first run, a small **Points** box sits just left of the View box
-  (see "Stacking when comps are weak" below). When the window is narrow and the View box moves to a line of its own,
-  the Points box moves with it. Under the aperture boxes, beside the View box, these lines appear only when they have
-  something to say:
+  slower)**. On the right, the **View** box. Under the aperture boxes, beside the View box, these lines appear only
+  when they have something to say (when the window is narrow and the View box moves to a line of its own, they go on
+  that line, left of the View box, if they fit there):
   - **The Stack row** (after the first run only): a suggestion line, then **Stack N** [box] **frames   Precision
-    goal** [box] **ppt per point (optional)** and the **Stack** button.
+    goal** [box] **ppt per point (optional)**, the **Stack** button and the small **Points** box (see "Stacking when
+    comps are weak" below).
   - **The "Measured with" line**: after a run, a gray line says what the photometry was measured with (see
     "Apertures" below).
   - An orange line when the run skipped frames or left a comp out of some frames (see "Comps near the frame edge"
@@ -501,7 +501,7 @@ The line reads (N and the numbers are examples):
 - **Discovery** has no comps, so the line is never orange: *"Stacking (optional): stacks of 6 frames (18 s each); 60
   frames → 10 points. Time cap 5.0 min: a stack hides events faster than itself."*
 
-![The Photometry page after a run with weak comps: the Points box and the Stack row](img/08-stack-row.png)
+![The Photometry page after a run with weak comps: the Stack row with the Points box, beside the View box](img/08-stack-row.png)
 
 ### How N is chosen
 
@@ -540,7 +540,7 @@ same photometry runs on the stacks; in Discovery, the field scan does). The log 
     Stacks made: 200 frames → 10 stacks of 20 frames (effective exposure 40 s); 0.012% of the pixel values
     clipped (cosmic rays, satellite trails, hot pixels); shifts up to 2 px.
     Photometry on the stacks done: 10 points (stacks of 20 frames (effective exposure 40 s)), 0 flagged.
-    Points: Stacked is selected; Per frame (beside the View box) switches back.
+    Points: Stacked is selected; Per frame (on the Stack row) switches back.
 
 When some stacks are short, the log adds *"The last stack of a run (before a flip, a gap, or the end) can be
 partial."* When the field turned inside a stack (an alt-az mount), it adds a note on how far, for example *"Note: the
@@ -574,7 +574,8 @@ After a stack run SHOBS-P goes to the Output page, with **Points: Stacked** sele
 
 ### The Points box: Per frame or Stacked
 
-Once a night has been stacked it has two sets of points. The **Points** box chooses which set is the night's:
+Once a night has been stacked it has two sets of points. The **Points** box, on the Stack row after the **Stack**
+button, chooses which set is the night's:
 
 - **Per frame** and **Stacked** (grayed until there are stacks). Switching is instant.
 - Under them, **Results use: Per frame** or **Results use: Stacked (20 frames)**. The Output page shows the same text
@@ -588,7 +589,7 @@ the series with the chosen set, as a run does. The series keeps only the chosen 
 When a series is loaded or closed, or the night is removed, the Points box goes back to **Per frame** and **Stacked**
 grays out.
 
-![The Points box with Stacked chosen, on a narrow window](img/08-points-stacked.png)
+![The Stack row after Stack: the Points box with Stacked chosen](img/08-points-stacked.png)
 
 ### What the reports say
 
