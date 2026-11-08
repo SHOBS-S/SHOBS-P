@@ -8,8 +8,8 @@ It takes about ten minutes, most of it waiting for downloads.
 - Windows 10 or 11, a Mac (macOS 12 Monterey or newer), or Linux. The Windows steps come first; Linux and the Mac have their own sections
   below.
 - An internet connection (for the install, and later for star and catalog lookups).
-- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works. On Linux and
-  the Mac, Python 3.13 is the best choice (see below).
+- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works. On Linux,
+  Python 3.13 is the best choice; on the Mac, Python 3.14 (see below).
 
 ## Install Python (Windows)
 
@@ -76,10 +76,11 @@ with the reason. When Tkinter is missing, it names the package to install. Insta
 
 ## Install on a Mac
 
-1. Install **Python 3.13** from [python.org/downloads/macos](https://www.python.org/downloads/macos/). It includes
-   Tk, the window toolkit. Pick 3.13 even if a newer Python is offered: a brand-new Python often does not have
-   ready-made copies of all the packages SHOBS-P needs yet (see below). (A Homebrew Python works too, with
-   `brew install python-tk@3.13` for a Python 3.13.)
+1. Install **Python 3.14** from [python.org/downloads/macos](https://www.python.org/downloads/macos/). It includes
+   Tk, the window toolkit. Pick 3.14 even if a newer Python is offered: a brand-new Python often does not have
+   ready-made copies of all the packages SHOBS-P needs yet (see below). Python 3.13 works too, but python.org has
+   no Mac installers for 3.13 after **3.13.17**, so take 3.13.17 if you want 3.13. (A Homebrew Python works too,
+   with `brew install python-tk@3.14` for a Python 3.14.)
 2. Unzip SHOBS-P somewhere permanent, for example in Documents.
 3. Double-click **Start SHOBS-P.command**. The first time, macOS may refuse to open a file from an unidentified
    developer. Right-click (or Control-click) the file, choose **Open**, then **Open** again. You only do this once.
@@ -126,13 +127,13 @@ new Python was the only one, the window ends with:
     ✖ SHOBS-P could not set up its packages with any Python on this computer (each one is listed above).
       Python 3.15.0 has no ready-made copies of some packages yet.
 
-and says what to do: on a Mac, install Python 3.13 from python.org and double-click again (your other Pythons can
+and says what to do: on a Mac, install Python 3.14 from python.org and double-click again (your other Pythons can
 stay); on Linux, install Python 3.13, 3.12 or 3.11 with Tkinter. Nothing else needs to change.
 
 **When something fails.**
 
 - `✖ SHOBS-P could not find a Python it can use` means none of the Pythons found has Tkinter or is new enough
-  (3.11 or newer). Each one is listed above that line with the reason. On a Mac, install Python 3.13 from python.org.
+  (3.11 or newer). Each one is listed above that line with the reason. On a Mac, install Python 3.14 from python.org.
 - `✖ The packages could not be downloaded. Check the internet connection and try again.` means just that.
 - pip, the tool that downloads the packages, writes its own detailed messages to **pip_log.txt** next to the
   environment: `~/Library/Application Support/SHOBS-P/pip_log.txt` on a Mac, `~/.local/share/SHOBS-P/pip_log.txt` on

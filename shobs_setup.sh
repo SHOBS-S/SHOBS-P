@@ -330,8 +330,10 @@ stop_no_python() {
     echo 'It needs Python 3.11 or newer with Tkinter (the window toolkit).'
     tk_advice
     if [ "$MAC" = 1 ]; then
-        # 2.2.20 (#33): name the version that has ready-made copies of every package.
-        echo 'Install Python 3.13 from https://www.python.org/downloads/macos/ (it includes Tk), then double-click again.'
+        # 2.2.20 (#33): name the version that has ready-made copies of every package. 2.3.2 (item 12): 3.14, since
+        # python.org has no macOS installers for 3.13 after 3.13.17 (7 Nov 2026 Mac test: 3.14.10, all wheels).
+        echo 'Install Python 3.14 from https://www.python.org/downloads/macos/ (it includes Tk), then double-click again.'
+        echo '(Python 3.13.17, the last 3.13 with a Mac installer, works too.)'
     elif [ -z "$TK_FAILS" ]; then
         echo 'Install Python 3.13, 3.12 or 3.11 with your package manager (or from https://www.python.org/downloads/),'
         echo 'with its Tkinter package, then run this again.'
@@ -570,8 +572,9 @@ if [ -z "$PY" ]; then
             echo "  Python$NOBUILD has no ready-made copies of some packages yet."
         fi
         if [ "$MAC" = 1 ]; then
-            echo '  Install Python 3.13 from https://www.python.org/downloads/macos/ (it includes Tk and has'
+            echo '  Install Python 3.14 from https://www.python.org/downloads/macos/ (it includes Tk and has'
             echo '  ready-made copies of every package), then double-click again. Your other Pythons can stay.'
+            echo '  (Python 3.13.17, the last 3.13 with a Mac installer, works too.)'
         else
             echo '  Install Python 3.13, 3.12 or 3.11 with Tkinter (your package manager, or https://www.python.org/downloads/),'
             echo '  then run this again.'

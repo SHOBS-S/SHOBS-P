@@ -63,7 +63,8 @@ class LauncherTests(unittest.TestCase):
             r = subprocess.run([BASH, SETUP, "selftest"], capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("✖ SHOBS-P could not find a Python it can use", r.stdout)
-            self.assertIn("Install Python 3.13 from https://www.python.org/downloads/macos/", r.stdout)
+            self.assertIn("Install Python 3.14 from https://www.python.org/downloads/macos/", r.stdout)
+            self.assertIn("3.13.17", r.stdout)   # 2.3.2 (item 12): the fallback
             self.assertIn("double-click again", r.stdout)
             # The Mac place, and no lock left behind.
             data = os.path.join(home, "Library", "Application Support", "SHOBS-P")

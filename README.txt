@@ -54,7 +54,7 @@ install python3-tkinter; Arch: sudo pacman -S tk), unzip SHOBS-P in your home fo
 ./run_linux.sh (the first start sets up SHOBS-P's own environment in ~/.local/share/SHOBS-P and downloads the
 packages; later starts skip that). ./run_linux.sh --desktop adds an applications-menu entry; ./run_selftest.sh checks
 the install.
-Mac: install Python 3.13 from python.org (it includes Tk), unzip SHOBS-P, and double-click "Start SHOBS-P.command".
+Mac: install Python 3.14 from python.org (it includes Tk; 3.13.17, the last 3.13 with a Mac installer, works too), unzip SHOBS-P, and double-click "Start SHOBS-P.command".
 The first time macOS may refuse a file from an unidentified developer: right-click (or Control-click) it, Open, Open
 (macOS 15 and newer: System Settings > Privacy & Security > Open Anyway). Or, in Terminal, in the SHOBS-P folder:
 xattr -d com.apple.quarantine *.command *.sh. Keep the Terminal window open while SHOBS-P runs. "Run

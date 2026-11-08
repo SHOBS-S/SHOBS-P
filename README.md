@@ -102,8 +102,9 @@ transit shape (blue dotted); the report's own fit (red dashed) runs about twice 
 
 ### Mac
 
-1. Install **Python 3.13** from [python.org](https://www.python.org/downloads/macos/) (it includes Tk). Homebrew's
-   Python also works with `brew install python-tk@3.13`.
+1. Install **Python 3.14** from [python.org](https://www.python.org/downloads/macos/) (it includes Tk). Python
+   3.13.17, the last 3.13 with a Mac installer, works too. Homebrew's Python also works with
+   `brew install python-tk@3.14`.
 2. Unzip SHOBS-P, for example into Documents.
 3. Double-click **Start SHOBS-P.command**. The first time macOS may refuse a file from an unidentified developer:
    right-click (or Control-click) it, choose **Open**, then **Open** again (once only; on macOS 15 and newer use
