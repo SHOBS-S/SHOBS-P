@@ -6681,6 +6681,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             rows.append(self.skip_line)
         self._meas_col_last()
         try:
+            if col.pack_slaves()[1:] == rows:
+                return   # 2.3.2 review: nothing came or went (this runs on every keystroke in the Aperture boxes)
             for w in (getattr(self, "_stack_row", None), getattr(self, "aperture_state_label", None),
                       getattr(self, "skip_line", None)):
                 if w is not None and w.winfo_manager():
@@ -6724,6 +6726,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     continue
                 if w is getattr(self, "_meas_box", None):
                     left += self._meas_one_line()   # 2.2.19 (r2: S2): its one-line width, not its wrapped one
+                    continue
+                if w is getattr(self, "_meas_col", None):
+                    # 2.3.2 review (S1): the column's wrapped lines follow its own width, so count only what
+                    # cannot wrap (the settings on one line, the Stack controls), or the View box never comes back
+                    least_col = self._meas_one_line()
+                    ctl = getattr(self, "_stack_ctl", None)
+                    if ctl is not None and getattr(self, "_stack_shown", False):
+                        least_col = max(least_col, px(ctl.winfo_reqwidth()) + int(12 * scale))
+                    left += least_col + int(12 * scale)
                     continue
                 left += px(w.winfo_reqwidth()) + _pad_total(w.pack_info().get("padx", 0))
         except Exception:
@@ -7671,8 +7682,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel",
                                          justify=LEFT)
         self.step_text_label.pack(side="top", anchor=W, fill=X)
-        # 2.3.2 (item 10): the "Wheel to zoom, drag to pan … or Pop out" line is gone (the legend row under the image
-        # says "wheel: zoom · drag: pan", and Pop out needs no explaining): its height goes to the image.
+        # 2.3.2 (item 10): the "Wheel to zoom, drag to pan … or Pop out" line is gone (the manual explains the wheel
+        # and drag, and Pop out needs no explaining): its height goes to the image.
         self.step_strip.bind("<Configure>", lambda e: self.step_text_label.configure(
             wraplength=max(int(e.width) - 20, 200)), add="+")
         self.step_hide_button = ttk.Button(self.step_line, text="Hide tips", style="Compact.TButton",
@@ -7713,12 +7724,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.legend_row = ttk.Frame(plot_host, style="Card.TFrame")
             self.legend_row.pack(side=LEFT, fill=Y, anchor="n", padx=(0, 4), pady=(int(24 * ui_scale(self)), 0))
             self._legend_page_row = self.legend_row
-            # 2.2.19 (#10): when the image is drawn small, say where Pop out is (shown only then).
-            self.photo_small_row = ttk.Frame(plot_host, style="Card.TFrame")
-            self.photo_small_hint = StringVar(value="")
-            ttk.Label(self.photo_small_row, textvariable=self.photo_small_hint, style="Warn.TLabel").pack(side=LEFT)
-            ttk.Button(self.photo_small_row, text="Pop out", command=self.photo_pop_toggle).pack(side=LEFT,
-                                                                                               padx=(8, 0))
             plot_host.bind("<Configure>", lambda _e: self._photo_space_soon(), add="+")
             self.photo_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.photo_ax = self.photo_fig.add_subplot(111)
@@ -9426,8 +9431,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         frame (MicroObservatory 650 x 500) is drawn as large as the area allows; what made it small at 125 % was the
         area itself: every text row on the page is 25 % taller there, so the image area got short and wide, and a
         frame limited by the height left most of the width empty. Here (1) while the image is limited by the height,
-        the log gives up lines (7 down to 3; Hide log hides it), and (2) when the image is still drawn small, a line
-        under it says where Pop out is. Returns the fit (image_fit_px) or None."""
+        the log gives up lines (7 down to 3; Hide log hides it). (2.3.2: the "Small image? Pop out" line is gone.)
+        Returns the fit (image_fit_px) or None."""
         canvas = getattr(self, "photo_canvas", None)
         if canvas is None or self.preview is None or getattr(self, "photo_popout", None) is not None:
             return None
@@ -9469,8 +9474,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 fit = image_fit_px(w, h, img_w, img_h, title_px, 6.0 * k)
         # 2.3.2 (item 10, John): no "⚠ Small image? Pop out …" line under the image any more: its height goes to the
         # image, and Pop out is in the View box. (The log still shrinks for a small image, above.)
-        if self.photo_small_row.winfo_ismapped():
-            self.photo_small_row.pack_forget()
         self._photo_fit = fit
         return fit
 
@@ -9842,7 +9845,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return out
 
     def _update_legend(self):
-        """The legend strip under the Photometry image: one entry per kind of marker on the image now."""
+        """The Photometry image legend: one entry per kind of marker on the image now (2.3.2: a column left of the
+        image on the page, a row under it in the pop-out window)."""
         row = getattr(self, "legend_row", None)
         if row is None:
             return
@@ -9892,14 +9896,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if row is getattr(self, "_legend_page_row", None):
             # 2.3.2 (item 10): on the page, one entry per line down the left of the image (wrapped, so the column
             # stays narrow); the pop-out window keeps its row under the image.
-            wrap = int(170 * ui_scale(self))
+            # 2.3.2 review (S2): a long list (a Discovery scan has up to ~11 entries) packs tighter and a size smaller,
+            # so its lowest entries are not cut off on a short screen at 125 %.
+            many = len(items) > 6
+            wrap = int((200 if many else 170) * ui_scale(self))
+            size, gap = (8, 2) if many else (9, 6)
             for symbol, text, colour in items:
                 ttk.Label(row, text=f"{symbol} {text}", style="Card.TLabel", foreground=colour, justify=LEFT,
-                          wraplength=wrap, font=(core.UI_FONT, 9, "bold")).pack(side="top", anchor=W, pady=(0, 6))
+                          wraplength=wrap, font=(core.UI_FONT, size, "bold")).pack(side="top", anchor=W, pady=(0, gap))
             return   # 2.3.2 (John): no "wheel: zoom · drag: pan" hint any more (the manual has it)
         for symbol, text, colour in items:
             ttk.Label(row, text=f"{symbol} {text}", style="Card.TLabel", foreground=colour,
                       font=(core.UI_FONT, 9, "bold")).pack(side=LEFT, padx=(0, 12))
+        # 2.3.2 review: the pop-out window keeps its hint (it has no View box beside it); only the page lost it
+        ttk.Label(row, text="wheel: zoom · drag: pan · right-click a marker: clear", style="Hint.TLabel").pack(
+            side=RIGHT)
 
     # ---- zoom and pan on the Photometry image (2.2) ----------------------------------------
     def reset_photo_view(self):
@@ -14948,7 +14959,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if edge_lines:
             body.append("Near the frame edge or a weak part of the flat:\n  • " + "\n  • ".join(edge_lines))
         messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}:\n\n" + "\n\n".join(body)
-                               + "\n\nThe Photometry page shows this under the settings row.")
+                               + "\n\nThe Photometry page shows this beside the View box, under the Aperture line.")
 
     def _update_skip_line(self):
         """2.3.0 (#50): the Photometry page's line about skipped frames and comps left out (shown only with text),
@@ -15282,7 +15293,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.aperture_state_label.configure(foreground="#b35c00" if changed else "#5d6d76")
         except Exception:
             text = None
-        # 2.2.19 (r2: S3): no text, no line (as photo_small_row): packed under the settings row when it has text.
+        # 2.2.19 (r2: S3): no text, no line; 2.3.2: shown in the column beside the View box when it has text.
         try:
             label = self.aperture_state_label
             shown = getattr(self, "_aperture_state_shown", False)

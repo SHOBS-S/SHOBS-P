@@ -79,6 +79,15 @@ class TestFreeShapeRunaway(unittest.TestCase):
         self.assertEqual(good, {})
         self.assertEqual(tp.free_shape_runaway({}, {}), {})
 
+    def test_b_without_finite_error_and_numpy_scalars(self):
+        import numpy as np
+        import transit_posterior as tp
+        got = tp.free_shape_runaway({"p": {"b": 0.4}, "err": {"b": float("nan")}}, {})
+        self.assertEqual(set(got), {"b"})
+        got = tp.free_shape_runaway({"p": {"a_rs": np.float32(5.68)}, "err": {"a_rs": np.float32(0.3)},
+                                     "t14": np.float32(4.137 / 24)}, {"a_rs": 8.53, "t14": 3.143 / 24})
+        self.assertEqual(set(got), {"a_rs", "t14"})
+
     def test_reference_missing_skips_comparison(self):
         import transit_posterior as tp
         ff = {"p": {"a_rs": 5.0, "b": 0.5}, "err": {}, "t14": 0.2}
@@ -258,6 +267,46 @@ class TestInApp(unittest.TestCase):
         import inspect
         self.assertNotIn("Pop out for a bigger window", inspect.getsource(ca))
         self.assertEqual(str(self.app.step_hide_button.cget("style")), "Compact.TButton")
+
+    def test_photometry_layout_item10(self):
+        """2.3.2 item 10 (review S6): legend column left of the image, no Small image row, the Stack /
+        Measured-with / skipped lines in the column beside the View box, the column packed after the boxes."""
+        import inspect
+        app = self.app
+        self.assertEqual(app._legend_page_row.pack_info()["side"], "left")
+        self.assertFalse(hasattr(app, "photo_small_row"))
+        self.assertNotIn("photo_small_hint", inspect.getsource(ca))
+        app._stack_shown = True
+        app._aperture_state_shown = True
+        app._skip_line_shown = True
+        try:
+            app._layout_meas_col()
+            app._stack_place_points_box()
+            for w in (app._stack_row, app.aperture_state_label, app.skip_line):
+                self.assertIs(w.pack_info()["in"], app._meas_col)
+            self.assertEqual(app._meas_col.pack_slaves()[1:], [app._stack_row, app.aperture_state_label,
+                                                              app.skip_line])
+            self.assertIs(app._view_options.pack_slaves()[-1], app._meas_col)
+        finally:
+            app._stack_shown = app._aperture_state_shown = app._skip_line_shown = False
+            app._layout_meas_col()
+        self.assertEqual(app._meas_col.pack_slaves()[1:], [])
+
+    def test_view_box_width_ignores_wrapped_column(self):
+        """review S1: the View box layout counts the column's one-line width, not its wrapped (self-sized) width."""
+        app = self.app
+        app.stack_line.set("x " * 200)   # a long suggestion line, wrapped at the column's width
+        app._stack_shown = True
+        try:
+            app._layout_meas_col()
+            app.update_idletasks()
+            with mock.patch.object(app._meas_col, "winfo_reqwidth", return_value=5000) as req:
+                app._layout_view_box(force=True)
+                req.assert_not_called()   # the column's wrapped width never feeds the layout
+        finally:
+            app._stack_shown = False
+            app.stack_line.set("")
+            app._layout_meas_col()
 
     def test_corner_name_follows_the_set(self):
         tp = self._tp()

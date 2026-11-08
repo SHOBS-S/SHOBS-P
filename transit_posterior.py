@@ -210,7 +210,8 @@ FREE_REL_ERR = 0.5          # a/R*'s own error above 50 % of its value
 def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
     """{"a_rs" | "b" | "t14": why} for the free-shape parameters that are not constrained. ref holds the published
     values ("a_rs", "b", "t14"; t14 in days like the fit), else the MCMC's; a missing or non-finite reference skips
-    the comparison (the error test still runs)."""
+    the comparison (a/R*'s error test still runs; for b the only error test left is "has no finite error", since b and
+    a/R* trade off in a free fit and a wide b error alone is common)."""
     out = {}
     if not free_fit:
         return out
@@ -218,7 +219,8 @@ def free_shape_runaway(free_fit: dict, ref: dict) -> dict:
     err = free_fit.get("err") or {}
 
     def finite(v):
-        return isinstance(v, (int, float)) and math.isfinite(v)
+        # 2.3.2 review: numpy scalars too (np.float32 is not a float subclass); bool is not a number here
+        return isinstance(v, (int, float, np.floating, np.integer)) and not isinstance(v, bool) and math.isfinite(v)
 
     def ratio_off(v, r):
         return finite(v) and finite(r) and r > 0 and abs(v / r - 1.0) > FREE_SHAPE_OFF

@@ -123,7 +123,7 @@ class StackMixin:
         # 2.3.0 review fix (high DPI): the margin and the floor scale with the display (clearv_app.ui_scale)
         srow.bind("<Configure>", lambda e: self.stack_line_label.configure(
             wraplength=max(int(e.width) - int(20 * _ui_scale(self)), int(300 * _ui_scale(self)))), add="+")
-        self._stack_row, self._stack_anchor = srow, options
+        self._stack_row, self._stack_ctl = srow, ctl   # 2.3.2 review: ctl = the one-line part (_layout_view_box)
         self.stack_goal.trace_add("write", lambda *_a: self.after_idle(lambda: self._stack_refresh_line(fill_n=True)))
 
     def _stack_place_points_box(self):

@@ -14,15 +14,18 @@ From top to bottom:
 - **The tools row.** On the left, what a click on the image does: **● Target**, **● Comps (C1–C10)**, **● Check**,
   **● Watch**, and **Clear selected**. On the right: **Circles**, **Solve again** and the orange **Run photometry**
   button.
-- **The options row.** The aperture boxes **Aperture r**, **sky in** and **sky out**, the **Suggest…** button,
-  **raw sat ADU**, **linear ADU**, and **Also measure R and B (color index; slower)**. On the right, the **View** box.
-  After the first run, a small **Points** box sits just left of the View box (see "Stacking when comps are weak"
-  below). When the window is narrow and the View box moves to a line of its own, the Points box moves with it.
-- **The Stack row** (after the first run only): a suggestion line, then **Stack N** [box] **frames   Precision goal**
-  [box] **ppt per point (optional)** and the **Stack** button.
-- **The "Measured with" line**: after a run, a gray line says what the photometry was measured with (see "Apertures"
-  below). Under it, an orange line appears when the run skipped frames or left a comp out of some frames (see "Comps
-  near the frame edge" below).
+- **The options row.** On the left, one line under the Target line, the aperture boxes **Aperture r**, **sky in** and
+  **sky out**, the **Suggest…** button, **raw sat ADU**, **linear ADU**, and **Also measure R and B (color index;
+  slower)**. On the right, the **View** box. After the first run, a small **Points** box sits just left of the View box
+  (see "Stacking when comps are weak" below). When the window is narrow and the View box moves to a line of its own,
+  the Points box moves with it. Under the aperture boxes, beside the View box, these lines appear only when they have
+  something to say:
+  - **The Stack row** (after the first run only): a suggestion line, then **Stack N** [box] **frames   Precision
+    goal** [box] **ppt per point (optional)** and the **Stack** button.
+  - **The "Measured with" line**: after a run, a gray line says what the photometry was measured with (see
+    "Apertures" below).
+  - An orange line when the run skipped frames or left a comp out of some frames (see "Comps near the frame edge"
+    below).
 - **The step strip**: what is done and what to do next.
 - **The image** on the left, with its legend in a column at its left, and the **Stars** and **Watch stars** panels on the right.
 - **The run row**: a gray line with the last run's summary (for example "Photometry done in 1:52. 38 points."),
@@ -281,7 +284,7 @@ boxes are in pixels on the calibrated image:
 
 The rings are drawn on the image as you type, so you can see whether a neighbor star falls inside them.
 
-**What was measured.** After a run, a gray line under the options row says what the photometry was measured with, for
+**What was measured.** After a run, a gray line under the aperture boxes says what the photometry was measured with, for
 example "Measured with r 8, sky 14–22 px (Bin 1)". If you then change the aperture, sky or **Binning** boxes, the line
 turns orange: "⚠ Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
 next run.
@@ -476,7 +479,7 @@ point then has about √N times less photon noise, at the cost of N times fewer 
 
 ### The suggestion line
 
-After every per-frame run (or **Scan field** in Discovery) the **Stack row** appears under the settings row. Its first
+After every per-frame run (or **Scan field** in Discovery) the **Stack row** appears under the aperture boxes, beside the View box. Its first
 line says whether stacking would help. SHOBS-P compares the target's photon noise with the photon noise of the comp
 ensemble, over every good frame, from the run's own error model. The log gets the numbers, for example *"Noise check
 (per frame): target 5.4 mmag (SNR 202), comp ensemble 21.5 mmag (SNR 50; each comp 36, 35) over 60 frames; comp noise
