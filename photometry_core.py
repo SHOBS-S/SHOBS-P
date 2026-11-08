@@ -10356,7 +10356,9 @@ def flat_angle_tolerance(mount: str | None = None) -> float:
 # segments was on, so a campaign can be normalized side by side and comps that step at the flip can be found.
 
 FLIP_STEP_MARK = 0.02   # a night's flip step above this is marked in the night table
-PIER_ANGLE_TOL = 5.0    # 2.2.15 (item 10): camera angles within this many degrees are one pier side
+# 2.2.15 (item 10): camera angles within this many degrees are one pier side. 2.3.2 (item 8): 10, was 5 (HD 219134
+# 6-7 Nov: the solve/ASIAIR said 37-38 deg with the camera not turned, and the night table listed it apart from 30).
+PIER_ANGLE_TOL = 10.0
 
 
 def side_label(angle) -> str:

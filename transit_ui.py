@@ -2638,7 +2638,39 @@ class TransitPage:
             self.app.log(f"Corner plot not saved: {exc}")
             return ""
         self.app.log(f"Corner plot PNG: {path}")
+        self._corner_written(path, False)
         return path
+
+    def _corner_written(self, path: str, shape_only: bool) -> None:
+        """2.3.2 (item 10): which fit (and which view) a corner PNG of this session holds, so a second Save of the
+        same plot names that file instead of writing a _2 copy."""
+        self.__dict__.setdefault("_corners", {})[os.path.normcase(os.path.abspath(path))] = (
+            fit_serial(self.result or {}), bool(shape_only))
+
+    def corner_save_target(self, shape_only: bool) -> tuple:
+        """2.3.2 (item 10): (path, how) for the corner plot's Save PNG… With an Output folder, the name has the
+        number of this fit's saved set (X_transit_2_corner.png beside X_transit_2.png), not a counter of its own (it
+        gave X_transit_corner_2.png, and _corner.png + _corner_2.png for one fit). how: "new"; "same" (that file
+        holds this fit in this view already: nothing to write); "replace" (it holds this fit in the other view,
+        written this session: the view shown replaces it, one corner plot per fit). Without an Output folder,
+        ("", "new"): the save dialog decides."""
+        folder = self.app._out_folder()
+        if not folder:
+            return "", "new"
+        stem = os.path.splitext(self.family_names()[1])[0]
+        name = stem + "_corner.png"
+        state = getattr(self.app, "_save_set", None)
+        key = (self.app._results_key(), os.path.normcase(os.path.abspath(folder)))
+        if state and state.get("key") == key:
+            path = self.app._suffixed(os.path.join(folder, name), state["k"])   # the set this fit was saved in
+        else:
+            path = self.app._family_path(folder, name, peek=True)   # the number its set will get
+        if os.path.exists(path):
+            mine = self.__dict__.get("_corners", {}).get(os.path.normcase(os.path.abspath(path)))
+            if mine and mine[0] == fit_serial(self.result or {}):
+                return path, ("same" if mine[1] == bool(shape_only) else "replace")
+            path = self.app._unique_path(path)   # an older file of another fit: never written over
+        return path, "new"
 
     def open_corner(self):
         """2.2.19 (#31): the corner plot of the shown fit's MCMC samples, in its own window."""
@@ -3476,17 +3508,27 @@ class CornerWindow:
 
     def save(self):
         page = self.page
-        stem = os.path.splitext(page.family_names()[1])[0]
-        path = self.app.output_path(stem + "_corner.png", title="Save corner plot PNG", defaultextension=".png",
-                                    filetypes=[("PNG", "*.png")], parent=self.win)
+        shape_only = self._shape_only()
+        # 2.3.2 (item 10): named with the fit's set number; the same plot saved twice is not written again
+        path, how = page.corner_save_target(shape_only)
+        if how == "same":
+            self.app.log(f"Corner plot PNG already saved for this fit: {path}")
+            self.app.saved_notice(path)
+            return
+        if not path:
+            stem = os.path.splitext(page.family_names()[1])[0]
+            path = self.app.output_path(stem + "_corner.png", title="Save corner plot PNG", defaultextension=".png",
+                                        filetypes=[("PNG", "*.png")], parent=self.win)
         if not path:
             return
         try:
-            tpost.save_corner(self.result, path, shape_only=self._shape_only())
+            tpost.save_corner(self.result, path, shape_only=shape_only)
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
             return
-        self.app.log(f"Corner plot PNG: {path}")
+        page._corner_written(path, shape_only)
+        self.app.log(f"Corner plot PNG: {path}" + (" (replaces this fit's corner plot saved with the plot PNG, now "
+                                                    "in the view shown)" if how == "replace" else ""))
         self.app.saved_notice(path)
 
 

@@ -103,7 +103,7 @@ If no night has been checked yet, the button runs the check on every night. Your
 
 After a meridian flip, the camera sees the field rotated by 180°. Each star now falls on a different part of the sensor and the flat. Small flat-field errors can then make a step in the light curve at the flip, even though the star did not change.
 
-SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. The **Flip step** column shows each night's step, with ⚠ when it is large.
+SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. With ROTATOR readings, camera angles within 10° of each other count as one pier side (30° and 37° are one side, 210° and 217° the other), since the angle a solve or the camera software reports can wander a few degrees from night to night without the camera being turned. The **Flip step** column shows each night's step, with ⚠ when it is large.
 
 You have three ways to take steps out. Each is a checkbox on the Output page. They affect the plots, the period search and **Export…** files. They do not change the stored points or the AAVSO report.
 

@@ -1843,6 +1843,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background="#1f4464", foreground="#f4f7f8")
         style.map("Step.TButton", background=[("active", "#2a5a80")], foreground=[("active", "#ffffff")])
         style.configure("Accent.TButton", padding=(12, 6), background="#c47a2c", foreground="#ffffff")
+        style.configure("Compact.TButton", padding=(6, 0))   # 2.3.2 (item 10): Hide/Show tips, a thin status row
         style.map("Accent.TButton", background=[("active", "#a86622")], foreground=[("active", "#ffffff")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
@@ -7543,13 +7544,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         self.pick_label = StringVar(value="No stars marked.")
         self.pick_label_widget = ttk.Label(card, textvariable=self.pick_label, style="Hint.TLabel")
-        self.pick_label_widget.pack(anchor=W)
+        self.pick_label_widget.pack(anchor=W, pady=0)
         # 2.2.15 (GitHub #3): first-time guidance, "1 Solve → 2 Target → 3 Comps → 4 Check → Run" with the current step
         # highlighted (Hide tips / Show tips, remembered); (GitHub #1) the display stretch at the right of the row.
         # Review: the step labels and Hide tips on one line, what to do now on its own line under them (wrapped to the
         # row's width); the stretch sits in the View box.
         self.step_row = ttk.Frame(card, style="Card.TFrame")
-        self.step_row.pack(fill=X, pady=(2, 0))
+        self.step_row.pack(fill=X, pady=0)   # 2.3.2 (item 10): the status rows closer together
         self.step_strip = ttk.Frame(self.step_row, style="Card.TFrame")
         self.step_line = ttk.Frame(self.step_strip, style="Card.TFrame")
         self.step_line.pack(side="top", fill=X)
@@ -7559,19 +7560,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.step_text_label = ttk.Label(self.step_strip, textvariable=self.step_text, style="Hint.TLabel",
                                          justify=LEFT)
         self.step_text_label.pack(side="top", anchor=W, fill=X)
-        # 2.2.16 (item 16, GitHub #2): how to enlarge the image, for anyone who never finds wheel zoom on a trackpad.
-        self.step_zoom_tip = ttk.Label(self.step_strip, text="Wheel to zoom, drag to pan. On a trackpad: the − + Fit "
-                                                             "buttons in the View box, or Pop out for a bigger window.",
-                                       style="Hint.TLabel", justify=LEFT)
-        self.step_zoom_tip.pack(side="top", anchor=W, fill=X)
-        self.step_strip.bind("<Configure>", lambda e: [lab.configure(wraplength=max(int(e.width) - 20, 200))
-                                                       for lab in (self.step_text_label, self.step_zoom_tip)], add="+")
-        self.step_hide_button = ttk.Button(self.step_line, text="Hide tips", command=lambda: self._set_tips(False))
-        self.step_show_button = ttk.Button(self.step_row, text="Show tips", command=lambda: self._set_tips(True))
+        # 2.3.2 (item 10): the "Wheel to zoom, drag to pan … or Pop out" line is gone (the legend row under the image
+        # says "wheel: zoom · drag: pan", and Pop out needs no explaining): its height goes to the image.
+        self.step_strip.bind("<Configure>", lambda e: self.step_text_label.configure(
+            wraplength=max(int(e.width) - 20, 200)), add="+")
+        self.step_hide_button = ttk.Button(self.step_line, text="Hide tips", style="Compact.TButton",
+                                           command=lambda: self._set_tips(False))
+        self.step_show_button = ttk.Button(self.step_row, text="Show tips", style="Compact.TButton",
+                                           command=lambda: self._set_tips(True))
         self._place_step_strip()
 
         body = ttk.Frame(card, style="Card.TFrame")
-        body.pack(fill=BOTH, expand=True, pady=6)
+        body.pack(fill=BOTH, expand=True, pady=(2, 6))   # 2.3.2 (item 10)
         self.photo_body = body
         panel = ttk.Frame(body, style="Card.TFrame", width=520)
         panel.pack(side=RIGHT, fill=Y, padx=(8, 0))

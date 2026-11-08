@@ -81,6 +81,27 @@ class TestFreeShapeRunaway(unittest.TestCase):
         self.assertEqual(tp.free_shape_runaway(ff, {"a_rs": None, "b": float("nan"), "t14": None}), {})
 
 
+class TestPierSides(unittest.TestCase):
+    """item 8: camera angles within 10 degrees are one pier side (HD 219134 6-7 Nov: 37-38 deg vs 30 deg)."""
+
+    def test_37_joins_30(self):
+        import photometry_core as core
+        self.assertEqual(core.PIER_ANGLE_TOL, 10.0)
+        g = core.pier_side_groups([30, 30, 30, 210, 210, 37, 38, 217])
+        self.assertEqual({g[a] for a in (30, 37, 38)}, {30})
+        self.assertEqual({g[a] for a in (210, 217)}, {210})
+        out = core.group_pier_sides({"a": {"source": "ROTATOR", "before": "30°", "after": "210°"},
+                                     "b": {"source": "ROTATOR", "before": "30°", "after": "210°"},
+                                     "c": {"source": "ROTATOR", "before": "38°", "after": ""}})
+        self.assertEqual(out["c"]["before"], "30°")
+        self.assertEqual(out["c"]["read"]["before"], "38°")
+
+    def test_far_angles_stay_apart(self):
+        import photometry_core as core
+        g = core.pier_side_groups([30, 30, 30, 60, 60])
+        self.assertNotEqual(g[30], g[60])   # a real camera turn (30 degrees) is another side
+
+
 @unittest.skipUnless(_have_tk(), "needs a display")
 class TestInApp(unittest.TestCase):
     @classmethod
@@ -156,6 +177,41 @@ class TestInApp(unittest.TestCase):
         planet = {"name": "WASP-35 b", "a_rs": 8.53, "b": 0.3, "t14": 3.143 / 24}
         got = tp._free_runaway(r, planet, r["summary"])
         self.assertEqual(set(got), {"a_rs", "t14"})
+
+    # ---- item 10: Photometry image room; corner plot named with its fit's set number ----------------------
+    def test_zoom_tip_line_gone(self):
+        self.assertFalse(hasattr(self.app, "step_zoom_tip"))
+        import inspect
+        self.assertNotIn("Pop out for a bigger window", inspect.getsource(ca))
+        self.assertEqual(str(self.app.step_hide_button.cget("style")), "Compact.TButton")
+
+    def test_corner_name_follows_the_set(self):
+        tp = self._tp()
+        app = self.app
+        with tempfile.TemporaryDirectory() as d:
+            app.output_dir.set(d)
+            res = {"_serial": 4242, "planet": {"name": "TrES-1 b"}}
+            with mock.patch.object(tp, "family_names", return_value=["AAVSO_TrES-1b.txt", "TrES-1b_transit.png",
+                                                                     "TrES-1b_transit_fit.csv"]), \
+                    mock.patch.object(app, "_results_key", return_value=("k", 1)):
+                tp.result = res
+                app._save_set = {"key": (("k", 1), os.path.normcase(os.path.abspath(d))), "k": 2, "used": {"x"}}
+                path, how = tp.corner_save_target(True)
+                self.assertEqual(os.path.basename(path), "TrES-1b_transit_2_corner.png")
+                self.assertEqual(how, "new")
+                # Save plot PNG wrote that file (all parameters) for this fit: the window's view replaces it
+                open(path, "w").close()
+                tp._corner_written(path, False)
+                self.assertEqual(tp.corner_save_target(True), (path, "replace"))
+                self.assertEqual(tp.corner_save_target(False), (path, "same"))
+                # an older file of another fit is never written over
+                tp.result = {"_serial": 99}
+                p2, how2 = tp.corner_save_target(True)
+                self.assertEqual(os.path.basename(p2), "TrES-1b_transit_2_corner_2.png")
+                self.assertEqual(how2, "new")
+            tp.result = None
+            app._save_set = None
+            app.output_dir.set("")
 
 
 if __name__ == "__main__":
