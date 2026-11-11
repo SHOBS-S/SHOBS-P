@@ -219,6 +219,26 @@ def frame_labels_for(paths: list[str]) -> list[str]:
     return out
 
 
+def distinct_frame_labels(paths: list[str]) -> list[str]:
+    """2.3.3 (#63): frame_labels_for for a list shown to the user (the log's "Rejected frames" line), one entry per
+    file and every entry its own. Frames whose names hold no number are labeled by position ("#1"), and a frame labeled
+    from another list (the folder's every-image list, or on its own) could repeat a light's "#k" (Joanna's WASP-43 b
+    log: "Rejected frames (19): #1, #1, #2, …"). A label that repeats for different files gets the file's name added;
+    one file under two spellings of its path is listed once. Display only: callers that pair labels with paths keep
+    frame_labels_for."""
+    seen, files = set(), []
+    for p in paths:
+        same = os.path.normcase(os.path.abspath(str(p)))
+        if same not in seen:
+            seen.add(same)
+            files.append(p)
+    labels = frame_labels_for(files)
+    count = {}
+    for lab in labels:
+        count[lab] = count.get(lab, 0) + 1
+    return [f"{lab} ({os.path.basename(str(p))})" if count[lab] > 1 else lab for lab, p in zip(labels, files)]
+
+
 def frame_list_text(labels: list[str], limit: int = 40) -> str:
     """'63, 64, 65' (sorted by number; long lists end with ' … (+n more)')."""
     def key(t):
@@ -4422,13 +4442,69 @@ def vizier_params(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
     return params
 
 
+# ---- 2.3.3 (#64 item 1): a damaged copy of APASS is never used or kept ----------------------------------------------
+# 10 Nov 2026, with CDS down: the CfA VizieR mirror's II/336 sent V 0.1–2.1 (and B 999999) for stars IDIA gives as V
+# 12–13, as if its columns were shifted. SHOBS-P took it as real and cached it (GSC 03308-00462's check came back as
+# "V 0.622"; Joanna's Qatar-1 b comps). The rule is SHOBS-SCHED 1.4.1's (targets.apass_vs_plausible), plus the
+# 999999 / 99.999 placeholders. A good answer is never touched, so every good catalog answer gives what 2.3.0 gave.
+APASS_DAMAGED_V = 6.0     # most stars (and at least 3) brighter than this: a broken catalog copy, not the sky
+APASS_MAX_BRIGHT = 10     # … or more than this many stars brighter than V 6, whatever the field
+APASS_FLOOR_V = 4.0       # … or two stars brighter than this (APASS has none: its V range starts at 5.5)
+CATALOG_SENTINEL_MAG = 90.0   # 99.999 and 999999 are "no value" placeholders, never magnitudes
+CATALOG_NOTES: list = []  # one line per damaged answer, logged once by the next fetch_field_catalogs (as cache errors)
+
+
+def is_sentinel_mag(value) -> bool:
+    """2.3.3 (#64): 99.999 / 999999 and the like: a catalog's 'no value' placeholder, not a magnitude."""
+    return value is not None and math.isfinite(value) and abs(value) >= CATALOG_SENTINEL_MAG
+
+
+def apass_damage(vs, bs=None) -> str:
+    """2.3.3 (#64 item 1): why an APASS answer (its V, and B, magnitudes) is a damaged copy of the catalog, or '' when
+    it looks like real sky. Damaged: two stars brighter than V APASS_FLOOR_V; more than APASS_MAX_BRIGHT brighter than
+    V 6; most stars (at least 3) brighter than V 6; or most rows (at least 3) with a 99.999 / 999999 placeholder for V or
+    B. It sees only damage that makes stars too bright or fills placeholders; one or two odd rows pass."""
+    vs = [None if v is None or not math.isfinite(v) else float(v) for v in vs]
+    bs = [None if b is None or not math.isfinite(b) else float(b) for b in (bs if bs is not None else [None] * len(vs))]
+    n = len(vs)
+    if not n:
+        return ""
+    sentinel = sum(1 for v, b in zip(vs, bs) if is_sentinel_mag(v) or is_sentinel_mag(b))
+    real = [v for v in vs if v is not None and not is_sentinel_mag(v)]
+    floor = sum(1 for v in real if v < APASS_FLOOR_V)
+    bright = sum(1 for v in real if v < APASS_DAMAGED_V)
+    brightest = f"brightest V {min(real):.2f}" if real else "no usable V"
+    if floor >= 2:
+        return f"{floor} of {n} stars brighter than V {APASS_FLOOR_V:g} ({brightest})"
+    if bright > APASS_MAX_BRIGHT or (bright >= 3 and bright * 2 > n):
+        return f"{bright} of {n} stars brighter than V {APASS_DAMAGED_V:g} ({brightest})"
+    if sentinel >= 3 and sentinel * 2 > n:
+        return f"{sentinel} of {n} stars with a 99.999 / 999999 placeholder magnitude"
+    return ""
+
+
+def _apass_row_damage(rows) -> str:
+    return apass_damage([_num(r.get("Vmag")) for r in rows], [_num(r.get("Bmag")) for r in rows])
+
+
+def apass_stars_damage(stars) -> str:
+    """apass_damage of a list of APASS stars (a saved field answer, or fetch_apass9's own)."""
+    return apass_damage([(st.get("mags") or {}).get("V", st.get("bright")) for st in stars],
+                        [(st.get("mags") or {}).get("B") for st in stars])
+
+
 def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float, columns: list[str], sort: str,
-                  max_rows: int, box_deg=None, constraints: dict | None = None, timeout: float = 60) -> list[dict]:
+                  max_rows: int, box_deg=None, constraints: dict | None = None, timeout: float = 60,
+                  damage=None) -> list[dict]:
+    """One VizieR ASU query, CDS then the mirrors. 2.3.3 (#64 item 1): damage(rows) -> why an answer is a damaged copy
+    ('' when fine); a damaged answer is logged (CATALOG_NOTES), never used or cached, and the next mirror is asked. An
+    empty answer after a damaged one is used tonight but not kept (marked incomplete): the empty copy may be the bad
+    one. When every mirror that answered was damaged, the query fails (the catalog's stars are missing tonight)."""
     import urllib.parse
 
     query = urllib.parse.urlencode(vizier_params(source, ra_deg, dec_deg, radius_deg, columns, sort, max_rows,
                                                  box_deg, constraints))
-    errors = []
+    errors, damaged = [], []
     for host in _vizier_hosts(source):   # 2.2.20: the IDIA mirror added last; 2.2.21 (#48): a failed host last
         try:
             try:
@@ -4440,9 +4516,25 @@ def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
                 raise
             rows = CatalogRows(parse_vizier_tsv(text))
             rows.markers = vizier_markers(text)   # 2.2.16 (review): kept so an incomplete answer is never cached
-            return rows
         except Exception as exc:
             errors.append(f"{host}: {exc}")
+            continue
+        why = damage(rows) if damage is not None and rows else ""
+        if why:
+            name = host.split("//", 1)[-1]
+            damaged.append(name)
+            CATALOG_NOTES.append(f"{source} from {name} looked wrong ({why}); not used, asking the next mirror")
+            errors.append(f"{host}: a damaged copy ({why})")
+            continue
+        if damaged:
+            # 2.3.3 (#64): good stars from the next mirror are complete; an empty one after a damaged copy is not kept
+            if not rows:
+                rows.markers = list(rows.markers or []) + [f"error: empty answer after a damaged copy at "
+                                                           f"{', '.join(damaged)}"]
+        return rows
+    if damaged and len(damaged) == len(errors):
+        raise ConnectionError(f"{source}: every VizieR copy that answered looked wrong (damaged); not used.\n"
+                              + "\n".join(errors))
     raise ConnectionError("VizieR request failed.\n" + "\n".join(errors))
 
 
@@ -4495,6 +4587,7 @@ def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
     rows = _vizier_query(
         "II/336/apass9", ra_deg, dec_deg, radius_deg,
         ["RAJ2000", "DEJ2000", "Vmag", "e_Vmag", "Bmag"] + sloan_cols, "Vmag", max_rows, box_deg=box_deg,
+        damage=_apass_row_damage,   # 2.3.3 (#64 item 1)
     )
     stars = []
     for row in rows:
@@ -4504,15 +4597,15 @@ def fetch_apass9(ra_deg: float, dec_deg: float, radius_deg: float, band: str = "
         except (ValueError, IndexError):
             continue
         v = _num(row.get("Vmag"))
-        if v is None:
+        if v is None or is_sentinel_mag(v):   # 2.3.3 (#64): a 99.999 / 999999 placeholder is no V
             continue
         mags = {"V": v}
-        if _num(row.get("Bmag")) is not None:
+        if _num(row.get("Bmag")) is not None and not is_sentinel_mag(_num(row.get("Bmag"))):
             mags["B"] = _num(row.get("Bmag"))
         if sloan_cols:
             for b in "gri":
                 m = _num(row.get(f"{b}'mag"))
-                if m is not None:
+                if m is not None and not is_sentinel_mag(m):
                     mags["S" + b.upper()] = m   # 2.2.17 (item 1)
         mag = mags.get(band)
         stars.append({"auid": _position_name("APASS", ra, dec), "label": f"{mag:.1f}" if mag is not None else "",
@@ -5364,9 +5457,15 @@ def catalog_cache_load(key: dict, now: float | None = None) -> list[dict] | None
             if st.get("ra") is None or st.get("dec") is None:
                 return None
             stars.append(st)
-        return stars
     except Exception:
         return None
+    if key.get("catalog") == "APASS DR9":
+        why = apass_stars_damage(stars)
+        if why:
+            # 2.3.3 (#64 item 1): a copy saved from a damaged catalog answer (10 Nov 2026) is not used: asked again
+            CATALOG_NOTES.append(f"APASS DR9 saved copy for this field looked wrong ({why}); not used, asking again")
+            return None
+    return stars
 
 
 def catalog_cache_prune(now: float | None = None) -> int:
@@ -5562,6 +5661,12 @@ def fetch_field_catalogs(ra_hours: float, dec_deg: float, fov_arcmin: float, ban
     while CATALOG_CACHE_ERRORS:
         try:
             info.setdefault("cache_errors", []).append(CATALOG_CACHE_ERRORS.pop(0))
+        except IndexError:
+            break
+    # 2.3.3 (#64 item 1): damaged catalog answers turned away (one log line each in the app)
+    while CATALOG_NOTES:
+        try:
+            info.setdefault("catalog_notes", []).append(CATALOG_NOTES.pop(0))
         except IndexError:
             break
     found, errors = {}, {}
@@ -9631,6 +9736,58 @@ def read_extremum_csv(path: str) -> list[dict]:
                 row[k] = v
         rows.append(row)
     return rows
+
+
+def extremum_csv_elements(rows: list[dict], kind: str = "max") -> dict | None:
+    """2.3.3 (nit, 10 Nov): the elements the Time of max/min window starts from when the star's times CSV has rows
+    (rows of one star, as read_extremum_csv gives them): the period last used (the latest time saved with one) and,
+    as the epoch, the first saved time of this kind (HJD, or BJD_TDB when that row's elements were BJD). None when no
+    row of this kind has a time. {'period', 'epoch', 'system', 'n'}."""
+    def num(r, k):
+        v = r.get(k)
+        return float(v) if isinstance(v, float) and math.isfinite(v) else None
+
+    def when(r):
+        for k in ("hjd", "jd_utc", "bjd_tdb"):
+            if num(r, k) is not None:
+                return num(r, k)
+        return None
+    timed = sorted((r for r in rows if when(r) is not None), key=when)
+    same = [r for r in timed if str(r.get("type") or "").strip().lower() == kind]
+    if not same:
+        return None
+    first = same[0]
+    system = "BJD" if str(first.get("elements") or "").strip().upper().endswith("BJD") else "HJD"
+    epoch = num(first, "bjd_tdb" if system == "BJD" else "hjd")
+    if epoch is None:
+        return None
+    with_p = [r for r in timed if num(r, "period_d") and num(r, "period_d") > 0]
+    period = num(with_p[-1], "period_d") if with_p else None
+    return {"period": period, "epoch": epoch, "system": system, "n": len(same)}
+
+
+def extremum_times_lines(rows: list[dict], limit: int = 8) -> list[str]:
+    """2.3.3 (nit, 10 Nov): one short line per saved time of one star (oldest first; the last `limit`):
+    'max  HJD 2461353.81255 ± 20.8 min   O−C −6.8 min   night JD2461353'."""
+    def num(r, k):
+        v = r.get(k)
+        return float(v) if isinstance(v, float) and math.isfinite(v) else None
+    out = []
+    for r in rows[-limit:] if limit else rows:
+        t, sysw = num(r, "hjd"), "HJD"
+        if t is None:
+            t, sysw = num(r, "jd_utc"), "JD"
+        if t is None:
+            continue
+        line = f"{str(r.get('type') or '?'):<3}  {sysw} {t:.5f}"
+        if num(r, "error_min") is not None:
+            line += f" ± {num(r, 'error_min'):.1f} min"
+        if num(r, "o_c_min") is not None:
+            line += f"   O−C {num(r, 'o_c_min'):+.1f} min"
+        if str(r.get("night") or "").strip():
+            line += f"   night {str(r.get('night')).strip()}"
+        out.append(line)
+    return out
 
 
 def _extremum_header(path: str) -> list[str]:

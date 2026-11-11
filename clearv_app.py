@@ -44,6 +44,7 @@ from tkinter import (
 import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
+import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 import photometry_core as core
 import transit_core as tcore
@@ -64,7 +65,9 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.3"
+# 2.3.3 (#57): the GitHub repository whose releases the new-version check asks about (shobs_update.py)
+REPO = "SHOBS-S/SHOBS-P"
 # 2.3.0 (item 11): the Input page's calibration boxes (a folder of raw frames or one SHOBS-P master each)
 CAL_KEYS = ("Bias", "Dark", "Dark flats", "Flat")
 CAL_KIND = {"Bias": "bias", "Dark": "dark", "Dark flats": "darkflat", "Flat": "flat"}
@@ -1314,6 +1317,66 @@ def fit_on_screen(w: int, h: int, x: int, y: int, sw: int, sh: int, platform: st
     y = min(max(int(y), top), top + uh - h)
     return w, h, x, y
 
+def update_check_wanted() -> bool:
+    """2.3.3 (#57): ask GitHub about a newer release at start, except in the test suite and the self-test (they must
+    never reach the network) or when SHOBS_P_NO_UPDATE_CHECK is set. Setup's own checkbox is read by shobs_update."""
+    if os.environ.get("SHOBS_P_NO_UPDATE_CHECK"):
+        return False
+    return not any(m in sys.modules for m in ("unittest", "pytest", "selftest"))
+
+
+class NewVersionWindow:
+    """2.3.3 (#57): what the newer release brings (its notes' Highlights), with Open release page and Close. Never
+    downloads or installs anything: the release page has the zip and the user's manual (as SHOBS-SCHED 1.4.1)."""
+
+    def __init__(self, app, note: dict):
+        import datetime as _dt
+        self.app, self.note = app, note
+        win = Toplevel(app)
+        self.win = win
+        win.title(f"{APP_SHORT} — new version")
+        win.transient(app)
+        body = ttk.Frame(win, style="Card.TFrame", padding=16)
+        body.pack(fill=BOTH, expand=True)
+        when = str(note.get("published") or "")
+        try:
+            when = _dt.date.fromisoformat(when).strftime("%d %b %Y") if when else ""
+        except ValueError:
+            pass
+        wrap = int(440 * ui_scale(app))
+        ttk.Label(body, text=f"{note.get('app') or APP_SHORT} {note.get('version') or note.get('tag')} is available"
+                  + (f" (released {when})" if when else ""), font=(core.UI_FONT, 13, "bold"),
+                  style="Card.TLabel").pack(anchor=W)
+        ttk.Label(body, text=f"You have {APP_VERSION}. What's new:", style="Card.TLabel").pack(anchor=W, pady=(4, 2))
+        self.lines = []
+        for h in note.get("highlights") or []:
+            ttk.Label(body, text=f"•  {h}", style="Card.TLabel", justify=LEFT, wraplength=wrap).pack(
+                anchor=W, padx=(6, 0), pady=1)
+            self.lines.append(h)
+        ttk.Label(body, text="The release page has the full notes, the zip and the user's manual. Install it the way "
+                             "you installed this one; your settings and series are kept.", style="Hint.TLabel",
+                  justify=LEFT, wraplength=wrap).pack(anchor=W, pady=(8, 0))
+        btns = ttk.Frame(body, style="Card.TFrame")
+        btns.pack(anchor=W, pady=(10, 0))
+        self.open_btn = ttk.Button(btns, text="Open release page", style="Accent.TButton", command=self.open_page)
+        self.open_btn.pack(side=LEFT)
+        ttk.Button(btns, text="Close", command=self.close).pack(side=LEFT, padx=(8, 0))
+        try:
+            win.bind("<Escape>", lambda _e: self.close())
+        except Exception:
+            pass
+
+    def open_page(self):
+        self.app.open_link(self.note.get("url"), "the release page")
+        self.close()
+
+    def close(self):
+        try:
+            self.win.destroy()
+        except Exception:
+            pass
+
+
 class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py)
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
@@ -1642,6 +1705,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.set_mode(self.mode_key, initial=True)
         self.show_step(0)
         self.after(50, self._drain_ui_queue)
+        if update_check_wanted():
+            self.after(1500, self.check_for_update)   # 2.3.3 (#57): in the background, once a day at most
         if sys.platform == "win32" and display_scaling_text(self):
             log_to_file(display_scaling_text(self))   # 2.2.19 (#10): in the log file, for screen reports
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
@@ -1948,6 +2013,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background=m["step"], foreground="#f4f7f8")
         style.map("Step.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
         style.configure("Status.TLabel", background=m["status"], foreground="#d5e0e6")
+        # 2.3.3 (#57): the new-version note at the right of the status strip, a link (as SHOBS-SCHED's)
+        style.configure("StatusLink.TLabel", background=m["status"], foreground="#9fd3ff",
+                        font=(core.UI_FONT, 10, "underline"))
         style.configure("Banner.TFrame", background=m["step"])
         style.configure("Banner.TLabel", background=m["step"], foreground="#ffffff", font=(core.UI_FONT, 11, "bold"))
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground=m["side"], font=(core.UI_FONT, 10, "bold"))
@@ -2027,6 +2095,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.busy_bar = busy_bar.BusyBar(status_row, label_style="Status.TLabel", frame_style="Side.TFrame",
                                          bar_style="Status.Horizontal.TProgressbar")
         self.busy_bar.pack(side=LEFT)
+        # 2.3.3 (#57): a newer release: its own note at the right end, so other status messages never wipe it
+        self.update_var = StringVar(value="")
+        self.update_note: dict = {}
+        self.update_label = ttk.Label(status_row, textvariable=self.update_var, style="StatusLink.TLabel",
+                                      cursor="hand2")
+        self.update_label.pack(side=RIGHT, padx=(10, 0))
+        self.update_label.bind("<Button-1>", lambda _e: self.open_update())
         self.status_label = ttk.Label(status_row, textvariable=self.status, style="Status.TLabel")
         self.status_label.pack(side=LEFT)
         self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
@@ -2073,6 +2148,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         ttk.Button(nav, text="Save credits as text…", command=self.save_credits).pack(side=LEFT)
         # 2.2.21 (#21): the saved catalog and lookup answers (star fields, SIMBAD/VSX/AAVSO/Archive lookups)
         ttk.Button(nav, text="Clear cached catalogs", command=self.clear_cached_catalogs).pack(side=LEFT, padx=(8, 0))
+        # 2.3.3 (#57): the new-version check, on by default, saved at once
+        self.check_updates_var = BooleanVar(value=bool(self.settings.get("check_updates", True)))
+        ttk.Checkbutton(nav, text="Check for new versions at start", variable=self.check_updates_var,
+                        command=self._set_check_updates).pack(side=LEFT, padx=(16, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(self._before_credits)).pack(side=RIGHT)
         box = Text(card, wrap="word", font=(core.UI_FONT, 10), bg="#ffffff", fg="#1c2b33", relief="flat", padx=8, pady=8)
         box.pack(fill=BOTH, expand=True, before=nav)
@@ -2092,6 +2171,70 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"Could not copy to the clipboard ({exc}). The citation: {text}")
             return
         self.status.set("Citation copied to the clipboard.")
+
+    # ---- 2.3.3 (#57): a newer release ----
+    def check_for_update(self):
+        """Ask GitHub, in the background, whether a newer release is out (once a day at most; never downloads)."""
+        shobs_update.start(self, APP_SHORT, REPO, APP_VERSION, self.settings, lambda _st: self._save_settings(),
+                           self.show_update)
+
+    UPDATE_STATUS_ROOM = 640   # px kept for the status message beside the note (as SHOBS-SCHED)
+
+    def show_update(self, note: dict):
+        if not self.settings.get("check_updates", True):
+            return   # unticked while the check ran
+        self.update_note = dict(note or {})
+        self._fit_update_note()
+        log_to_file(f"New version: {self.update_note.get('tag')} ({self.update_note.get('url')})")
+
+    def _fit_update_note(self, _e=None):
+        """The note with its highlight when the strip has room for it beside the status message, else the short form
+        ("… is available — click for details"); the New version window always lists the highlights."""
+        note = self.update_note
+        if not note:
+            return
+        full = note.get("text") or ""
+        short = (f"{note.get('app') or APP_SHORT} {note.get('version') or note.get('tag')} is available — "
+                 + ("click for details" if note.get("highlights") else "see the release notes"))
+        try:
+            from tkinter import font as tkfont
+            room = int(self.winfo_width()) - int(self.UPDATE_STATUS_ROOM * ui_scale(self))
+            f = getattr(self, "_update_font", None)
+            if f is None:
+                f = self._update_font = tkfont.Font(self, font=(core.UI_FONT, 10, "underline"))
+            text = full if f.measure(full) <= room else short
+        except Exception:
+            text = short
+        if self.update_var.get() != text:
+            self.update_var.set(text)
+        if not getattr(self, "_update_fit_bound", False):
+            self._update_fit_bound = True
+            self.bind("<Configure>", lambda e: self._fit_update_note() if e.widget is self else None, add="+")
+
+    def open_update(self):
+        """A click on the note: the New version window when the release has highlights, else the release page."""
+        note = self.update_note
+        if not note:
+            return
+        if note.get("highlights"):
+            w = getattr(self, "_new_version_win", None)
+            try:
+                if w is not None and w.win.winfo_exists():
+                    w.win.lift()
+                    return
+            except Exception:
+                pass
+            self._new_version_win = NewVersionWindow(self, note)
+        else:
+            self.open_link(note.get("url"), "the release page")
+
+    def _set_check_updates(self):
+        on = bool(self.check_updates_var.get())
+        self.settings["check_updates"] = on
+        self._save_settings()
+        if not on:
+            self.update_var.set("")
+            self.update_note = {}
 
     def show_credits(self):
         if not getattr(self, "_on_credits", False):
@@ -5908,7 +6051,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.21 (#22): the header names no time zone; local times use the Time zone box until it is set
             self.log(f"  Check the Time zone box (Input page, Site): local times use {self.site_tz.get() or 'this computer'}"
                      "'s zone until you pick the frames' site zone.")
-            self.status.set("Lights from another site: their site and optics are in use.")
+            # 2.3.3 (nit, 8 Nov): no elevation in the header: said on the status line, not only in the log (the
+            # scintillation error and the AAVSO exoplanet report need it). Remembering it per telescope: 2.4.0.
+            self.status.set("Lights from another site: their site and optics are in use."
+                            + ("" if site[2] is not None else
+                               " Elevation not in the header — type it on the Input page."))
             return
         # 2.3.2 (item 1): a site typed "for these frames only" stays in use for that Lights folder when its header
         # names no site (nothing says these are your own frames); another folder brings your own setup back.
@@ -12183,6 +12330,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 core.CATALOG_CACHE_ERRORS.remove(err)
             except ValueError:
                 pass
+        for note in core.CATALOG_NOTES[:]:   # 2.3.3 (#64 item 1)
+            self.log(f"  {note}.")
+            try:
+                core.CATALOG_NOTES.remove(note)
+            except ValueError:
+                pass
 
     @staticmethod
     def _catalog_times_text(info, found, failed) -> str:
@@ -12220,6 +12373,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             text += f"\n  {cat}: the server says the answer was cut short ({why}); used, not kept."
         for err in (info or {}).get("cache_errors") or []:
             text += f"\n  Catalog cache: could not save {err}"
+        for note in (info or {}).get("catalog_notes") or []:   # 2.3.3 (#64 item 1): a damaged copy turned away
+            text += f"\n  {note}."
         return text
 
     def _label_done(self, catalog, chart_id, stars, match_set, solved, placed, band, error, vet=None):
@@ -13991,8 +14146,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.log(f"Photometry on {len(lights)} lights, {n_rej} rejected, aperture {radius:.1f} px, {mode} channel")
         rej_lights = [p for p in self.rejected if os.path.dirname(p) == os.path.dirname(lights[0])] if lights else []
         if rej_lights:   # 2.2.17 (item 6): by the frames' own numbers, as on the Blink page and in the CSV
-            self.log(f"Rejected frames ({len(rej_lights)}): "
-                     + core.frame_list_text(core.frame_labels_for(rej_lights)))
+            rej_labels = core.distinct_frame_labels(rej_lights)   # 2.3.3 (#63): each file once, each label its own
+            self.log(f"Rejected frames ({len(rej_labels)}): " + core.frame_list_text(rej_labels))
         # 2.2.17 (item 8): photon noise in electrons (EGAIN, binning, superpixel, flat); said once in the log.
         noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
                                                [target] + comps, radius, sky_in, sky_out)
@@ -20759,6 +20914,7 @@ class ExtremumWindow:
         self.csv_path = app.extremum_csv if app.extremum_csv and (
             core.same_star_text(app.extremum_csv_star, self._star())
             or os.path.basename(app.extremum_csv) == core.extremum_csv_name(self._star())) else ""
+        self._prefill_from_csv()   # 2.3.3 (nit, 10 Nov)
         self.fig = None
         if Figure is not None:
             self.fig = make_constrained_figure((10.5, 4.0))
@@ -20959,13 +21115,43 @@ class ExtremumWindow:
             self._show_csv()
             self.draw()
 
+    def _csv_rows(self) -> list[dict]:
+        path = self._default_csv()
+        try:
+            return [r for r in core.read_extremum_csv(path)
+                    if core.same_star_text(r.get("star"), self._star())] if path else []
+        except Exception:
+            return []
+
+    def _prefill_from_csv(self):
+        """2.3.3 (nit, 10 Nov): a star with saved times starts from them: Period = the one last used, Epoch = the
+        first saved time of this type (so the CSV need not be opened to find it). Without saved times: VSX's, as
+        before. The elements can still be typed over or fetched with Elements from VSX."""
+        kind = "max" if self.kind.get() == "maximum" else "min"
+        got = core.extremum_csv_elements(self._csv_rows(), kind)
+        if not got:
+            return
+        if got.get("period"):
+            self.period.set(f"{got['period']:.8f}")
+        self.epoch.set(f"{got['epoch']:.5f}")
+        self.system.set(got["system"])
+        word = "maximum" if kind == "max" else "minimum"
+        self.source.set(f"from the times CSV: epoch = first saved {word}"
+                        + (", period last used" if got.get("period") else "; period from VSX"
+                           if self.period.get().strip() else "; type the period"))
+
     def _show_csv(self):
         path = self._default_csv()
         if not path:
             self.csv_text.set("Times CSV: not chosen yet (no series file or output folder); Save asks where.")
             return
-        rows = [r for r in core.read_extremum_csv(path) if core.same_star_text(r.get("star"), self._star())]
-        self.csv_text.set(f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})")
+        rows = self._csv_rows()
+        text = f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})"
+        lines = core.extremum_times_lines(rows)   # 2.3.3 (nit, 10 Nov): the saved times themselves
+        if lines:
+            more = len(rows) - len(lines)
+            text += "\n" + "\n".join("   " + ln for ln in lines) + (f"\n   … and {more} earlier" if more > 0 else "")
+        self.csv_text.set(text)
 
     def save(self):
         if not self.results:
@@ -21255,6 +21441,12 @@ class ExportWindow:
         nav.pack(fill=X, side="bottom", pady=(10, 0))
         ttk.Button(nav, text="Export…", style="Accent.TButton", command=self.export).pack(side=LEFT)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
+        # 2.3.3 (nit, 9 Nov): the result in this window (rows and file), not only on the main window's status line
+        # behind it (with an Output folder set there is no Save dialog either, so nothing showed that it worked)
+        self.result = StringVar(value="")
+        self.result_label = ttk.Label(outer, textvariable=self.result, style="Card.TLabel", justify=LEFT,
+                                      wraplength=text_wrap_px(win, chars=85))
+        self.result_label.pack(side="bottom", anchor=W, fill=X, pady=(8, 0))
         body = ScrollBody(outer)
         body.pack(fill=BOTH, expand=True)
         top = body.inner
@@ -21385,8 +21577,14 @@ class ExportWindow:
                            f"flagged points {'left out' if app.skip_flagged.get() else 'included'}; "
                            f"cloud flag at {app.cloud_limit.get()}%; {app._scint_note()}"),
         }
-        n = core.write_export(path, points, values, setup, meta, times, app.night_notes)
+        try:
+            n = core.write_export(path, points, values, setup, meta, times, app.night_notes)
+        except OSError as exc:   # 2.3.3 (nit): said in this window (a file open in Excel cannot be written)
+            self.result.set(f"Could not write {path}: {exc}")
+            app.status.set(f"Export failed: could not write {os.path.basename(path)}.")
+            return None
         app.status.set(f"Exported {n} rows to {path}")
+        self.result.set(f"Exported {n} row{'s' if n != 1 else ''} to {path}")   # 2.3.3 (nit)
         return path
 
 

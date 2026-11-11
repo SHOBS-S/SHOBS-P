@@ -156,7 +156,7 @@ The **Results** row has:
 
 - **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page. When VSX knows your star but has no AUID for it, an orange line under this row says **⚠ No AUID: WebObs will reject this report. …** (chapter 15).
 - **Save light-curve CSV**: every point, including flagged ones with their flag word. A long series can take a few seconds; the CSV is written in the background, the busy bar says, for example, **Saving the light-curve CSV (412 points)…**, and then the status bar says **✔ Saved …**.
-- **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns.
+- **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns. After **Export…** the window itself says what it wrote, for example **Exported 245 rows to …\GSC_03308-00462_HJD_UTC_mag.csv** (from 2.3.3), or why it could not write (a file open in Excel, say).
 - **Save plot PNG**: the four plots with the summary boxes and cautions above them.
 - **Save field image**: a picture of the reference frame as shot (not turned), with yellow **N** and **E** arrows showing where north and east lie, a scale bar, and the target, comps and check star marked with their apertures. (On an unsolved image the arrows are replaced by "Orientation unknown (the image is not solved)".) The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report.
 - **Refit period**: runs the period search again.

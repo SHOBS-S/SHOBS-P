@@ -151,6 +151,14 @@ always wins and replaces the kept one.
   transit report's ephemeris line says *"from cache (fetched …)"*. A star with several planets still needs the live
   Archive to list them.
 
+**A damaged catalog copy.** On 10 Nov 2026, with CDS down, the CfA mirror's copy of APASS sent impossible magnitudes
+(every star V 0–2, B 999999), and SHOBS-P 2.3.2 and older used and saved them: comps and the check got V values near
+0.6, colours far off, and comp suggestions said "very red" for nearly every star. From 2.3.3 such an answer is never
+used or saved; the log says so in one line and the next mirror (CDS, CfA, then Cape Town) is asked, and a copy saved
+earlier from a damaged answer is asked again. If you reduced a night on 10 Nov 2026 with CDS down, redo the comp step
+(catalog magnitudes, comp suggestions and the AAVSO report's comp magnitudes); transit depths and times use only
+measured flux ratios and are not affected.
+
 To start fresh, press **Clear cached catalogs** on the Credits page (chapter 3).
 
 ### Results

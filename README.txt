@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.2
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.3
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -77,6 +77,28 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.3 (every measured number on a good catalog answer is the same as in 2.3.0; S = shared by every mode,
+V = Variables)
+- S  Impossible catalog answers are now rejected. On 10 Nov 2026, with CDS down, a VizieR mirror (CfA) sent a
+     damaged copy of APASS (every star V 0-2, B 999999), and SHOBS-P used and saved it: comps and checks got V
+     values near 0.6. Such an answer (two stars brighter than V 4, more than 10 brighter than V 6, most stars
+     brighter than V 6, or mostly 99.999 / 999999 placeholders) is now never used or saved: the log says so in
+     one line and the next mirror (CDS, CfA, then Cape Town) is asked. A copy saved earlier from a damaged answer
+     is ignored and asked again. A 99.999 / 999999 placeholder in a single row is no magnitude.
+     IF YOU RAN SHOBS-P ON 10 NOV 2026 WITH CDS DOWN: redo the comp step (catalog V, B-V, comp suggestions and the
+     AAVSO report's comp magnitudes may have used the damaged values; transit depths and times did not).
+- S  New-version check: at start SHOBS-P asks GitHub (once a day at most, in the background, nothing about you is
+     sent, nothing downloaded) whether a newer release is out, and says so at the right of the status bar; click
+     it for what's new and the release page. Off with "Check for new versions at start" on the Credits page. For
+     an email at each release: on GitHub, Watch -> Custom -> Releases (or the feed
+     https://github.com/SHOBS-S/SHOBS-P/releases.atom).
+- S  The Export window says what it wrote (rows and file), and why when it could not write.
+- S  The log's "Rejected frames" line lists each frame once with its own label (a "#1" could show twice).
+- S  Frames from another site with no elevation in the header: the status line says "Elevation not in the
+     header — type it on the Input page" (it was only in the log).
+- V  Time of max/min: a star with saved times starts from them (Period = the one last used, Epoch = the first
+     saved maximum or minimum), and the window lists the saved times.
 
 New in 2.3.2 (screen and file changes only: every measured number is the same as in 2.3.0; S = shared by every
 mode, T = Transits, V = Variables, M = Mac)
@@ -1152,6 +1174,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.3  Damaged catalog answers rejected (APASS); new-version check; Export window feedback;
+       Rejected frames listed once each; elevation note; Time of max/min starts from saved times.
 2.3.2  UI only (numbers as 2.3.0): typed site for other frames not saved as yours; fit waits for Fit transit;
        Plot bins; Free shape a/R*, b, T14 runaway; corner plot named with its set; pier sides within 10 degrees;
        Calibrate runs the Scan folders checks; roomier Photometry image; Mac app and window size.

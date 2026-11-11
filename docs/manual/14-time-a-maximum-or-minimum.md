@@ -16,7 +16,10 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 2. In **Night**, choose the night. It starts on the highlighted night, or the last one.
 3. In **Type**, choose **maximum** or **minimum**. SHOBS-P sets this from the VSX variable type: minimum for eclipsing binaries, maximum for pulsators and the rest.
 4. Leave **Half-window (min)** blank. SHOBS-P then picks how much of the light curve on each side of the extremum to fit. Type a number of minutes only if the automatic window catches something it should not, such as a nearby shoulder of the light curve.
-5. Check **Period (d)** and **Epoch**. If they are empty, press **Elements from VSX**. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
+5. Check **Period (d)** and **Epoch**. A star with times already saved in its times CSV (below) starts from them
+   (from 2.3.3): **Period** is the one used last and **Epoch** the first saved maximum (or minimum), and the label
+   says **from the times CSV**. That is often better than VSX's elements, whose epoch can be decades old. Otherwise
+   the boxes hold VSX's elements from the Star ID lookup. If they are empty, press **Elements from VSX**. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure**.
 
 ![The Time of maximum / minimum window with a measured minimum and an O − C diagram](img/14-extremum.png)
@@ -43,7 +46,7 @@ If no elements are given, the result says **No elements: type the period and epo
 1. Press **Save to times CSV**.
 2. The first time, if the series has no file and no Output folder is set, SHOBS-P asks where to save.
 
-The file is called `<Star>_times_of_extremum.csv` (for example `SZ_Lyn_times_of_extremum.csv`). It goes next to the series file, or in the Output folder. The line under the result shows which file is in use and how many times of this star it holds.
+The file is called `<Star>_times_of_extremum.csv` (for example `SZ_Lyn_times_of_extremum.csv`). It goes next to the series file, or in the Output folder. The line under the result shows which file is in use and how many times of this star it holds, and, from 2.3.3, lists the saved times themselves (type, HJD and error, O − C, night; the last eight), so you need not open the CSV to find an epoch.
 
 Measuring the same extremum again and saving replaces that row (same star, same type, within 0.01 d), so you can refine a timing without making duplicates.
 

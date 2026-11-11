@@ -213,7 +213,9 @@ on. If the `OBJECT` names a different star in another place, it asks the same **
 site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
 their setup; your own comes back automatically the next time you scan a folder of your own lights. FITS headers do
 not say the site's time zone, so the log reminds you to check the **Time zone** box: pick the frames' site zone there
-so their local times are right.
+so their local times are right. When the header has no elevation either, the status line adds **Elevation not in the
+header — type it on the Input page** (from 2.3.3): the scintillation error and the AAVSO exoplanet report use it, and
+it must be typed again for each run of those frames.
 
 **Header values that differ from yours.** If the header's latitude, longitude, elevation, aperture, focal length or
 pixel size differs from your boxes, SHOBS-P lists the differences and asks **Use the header values?** **No** keeps

@@ -76,6 +76,15 @@ The bottom of the window has two lines:
   message that opens the matching upload page (for example the AAVSO's). It goes away with the next message.
 - **The credits line** (dimmer) names the libraries and catalogs SHOBS-P is built on.
 
+**A new version.** From 2.3.3, SHOBS-P asks GitHub at start whether a newer release is out (in the background, once
+a day at most; nothing about you is sent and nothing is downloaded). When one is, a light-blue underlined note sits
+at the right end of the status line, for example **SHOBS-P 2.3.4 is available: … — click for details**. Other
+messages never replace it. Click it: the **New version** window lists what is new, with **Open release page** (the
+zip and the user's manual are there; install it the way you installed this one, and your settings and series are
+kept) and **Close**. A release without a list of highlights opens its release page straight away. To stop the check,
+untick **Check for new versions at start** on the Credits page. For an email at each release, on GitHub choose
+**Watch → Custom → Releases** on the SHOBS-P page (or follow `https://github.com/SHOBS-S/SHOBS-P/releases.atom`).
+
 ### The busy bar
 
 Whenever SHOBS-P is working on something, a green bar slides back and forth at the left end of the status line,
@@ -150,6 +159,8 @@ when you publish results made with SHOBS-P.
   first, and then says how many files were removed. Nothing else is touched (not your settings, site or data); the
   catalogs are fetched again the next time they are needed. See "When a service is down" in
   [24. Troubleshooting](24-troubleshooting.md).
+- **Check for new versions at start** (on by default, from 2.3.3) turns the new-version check on or off (see
+  "The status bar" above). It is saved at once.
 - **Back** returns to the step you came from.
 
 ## What SHOBS-P remembers, and what it does not
