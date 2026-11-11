@@ -23,7 +23,11 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
    be decades old. A time saved against them is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure**.
 
-![The Time of maximum / minimum window with a measured minimum and an O − C diagram](img/14-extremum.png)
+![The Time of maximum / minimum window for GSC 03308-00462: the elements filled by Elements from saved times, a measured maximum, the two saved times listed under the result, and the O − C diagram](img/14-extremum.png)
+
+*The O − C beside each saved time is the one stored when it was saved, against the elements used then; the O − C
+diagram recomputes every point against the elements in the boxes. They differ when the elements have changed, as for the
+first time here (saved against an earlier period).*
 
 ## Read the result
 
