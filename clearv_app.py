@@ -1317,12 +1317,15 @@ def fit_on_screen(w: int, h: int, x: int, y: int, sw: int, sh: int, platform: st
     y = min(max(int(y), top), top + uh - h)
     return w, h, x, y
 
+# 2.3.3 (#57, Fable M1): only the real program (main()) asks GitHub; a window built by the tests or the self-test never
+# does. (A test for "unittest" in sys.modules does not work: SciPy imports it, so the check never ran.)
+UPDATE_CHECK = False
+
+
 def update_check_wanted() -> bool:
-    """2.3.3 (#57): ask GitHub about a newer release at start, except in the test suite and the self-test (they must
-    never reach the network) or when SHOBS_P_NO_UPDATE_CHECK is set. Setup's own checkbox is read by shobs_update."""
-    if os.environ.get("SHOBS_P_NO_UPDATE_CHECK"):
-        return False
-    return not any(m in sys.modules for m in ("unittest", "pytest", "selftest"))
+    """2.3.3 (#57): ask GitHub about a newer release at start: only when main() started the program, and not when
+    SHOBS_P_NO_UPDATE_CHECK is set. The Credits page's checkbox is read by shobs_update."""
+    return bool(UPDATE_CHECK) and not os.environ.get("SHOBS_P_NO_UPDATE_CHECK")
 
 
 class NewVersionWindow:
@@ -1365,6 +1368,7 @@ class NewVersionWindow:
             win.bind("<Escape>", lambda _e: self.close())
         except Exception:
             pass
+        fit_to_content(win, min_w=360, min_h=160)   # review nit: placed on screen like the other windows
 
     def open_page(self):
         self.app.open_link(self.note.get("url"), "the release page")
@@ -20903,7 +20907,11 @@ class ExtremumWindow:
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
                      width=5).grid(row=1, column=5, sticky=W)
         ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
-        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=7, sticky=W, padx=(6, 0))
+        # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click (not filled by themselves: under the numbers
+        # freeze the same clicks as 2.3.0 must save the same O−C; Fable M2)
+        self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
+        self.saved_button.grid(row=1, column=7, sticky=W, padx=(6, 0))
+        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=8, sticky=W, padx=(6, 0))
         self.result_text = StringVar(value="Choose the night and press Measure.")
         ttk.Label(top, textvariable=self.result_text, font=(core.MONO_FONT, 10), style="Card.TLabel",
                   justify=LEFT).pack(anchor=W, pady=(6, 4))
@@ -20914,7 +20922,6 @@ class ExtremumWindow:
         self.csv_path = app.extremum_csv if app.extremum_csv and (
             core.same_star_text(app.extremum_csv_star, self._star())
             or os.path.basename(app.extremum_csv) == core.extremum_csv_name(self._star())) else ""
-        self._prefill_from_csv()   # 2.3.3 (nit, 10 Nov)
         self.fig = None
         if Figure is not None:
             self.fig = make_constrained_figure((10.5, 4.0))
@@ -20946,6 +20953,9 @@ class ExtremumWindow:
         cp, ce = self.app.catalog_period, self.app.catalog_epoch
         if cp and ce and abs(period - cp) < 1e-9 and abs(epoch - ce) < 1e-5:
             return "VSX"
+        sp, se = getattr(self, "_saved_elements", (None, None))   # 2.3.3: Elements from saved times
+        if sp and se and abs(period - sp) < 1e-9 and abs(epoch - se) < 1e-5:
+            return "saved"
         return "typed"
 
     def _coords(self):
@@ -21124,16 +21134,21 @@ class ExtremumWindow:
             return []
 
     def _prefill_from_csv(self):
-        """2.3.3 (nit, 10 Nov): a star with saved times starts from them: Period = the one last used, Epoch = the
-        first saved time of this type (so the CSV need not be opened to find it). Without saved times: VSX's, as
-        before. The elements can still be typed over or fetched with Elements from VSX."""
+        """2.3.3 (nit, 10 Nov): Elements from saved times: Period = the one last used, Epoch = the first saved time of
+        the chosen type (so the CSV need not be opened to find it). The elements can still be typed over or fetched
+        with Elements from VSX."""
         kind = "max" if self.kind.get() == "maximum" else "min"
         got = core.extremum_csv_elements(self._csv_rows(), kind)
         if not got:
+            self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times CSV")
             return
         if got.get("period"):
             self.period.set(f"{got['period']:.8f}")
         self.epoch.set(f"{got['epoch']:.5f}")
+        try:
+            self._saved_elements = (float(self.period.get()), round(got["epoch"], 5))
+        except ValueError:
+            self._saved_elements = (None, None)
         self.system.set(got["system"])
         word = "maximum" if kind == "max" else "minimum"
         self.source.set(f"from the times CSV: epoch = first saved {word}"
@@ -21191,6 +21206,7 @@ class ExtremumWindow:
         self.app.status.set(f"Saved to {path}")
         self._show_csv()
         self.draw()
+        grow_to_content(self.win)   # review nit: the saved-times list grew
 
     # -- plots ----------------------------------------------------------------------------
     def draw(self):
@@ -22407,6 +22423,8 @@ def main():
         sys.stderr = sys.stderr or stream
     log_to_file(f"{APP_TITLE} {APP_VERSION} started (Python {sys.version.split()[0]}).")
     enable_windows_dpi()
+    global UPDATE_CHECK
+    UPDATE_CHECK = True   # 2.3.3 (#57): the real program asks GitHub (tests and the self-test never do)
     app = App()
     app.mainloop()
 

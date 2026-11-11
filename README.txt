@@ -97,8 +97,8 @@ V = Variables)
 - S  The log's "Rejected frames" line lists each frame once with its own label (a "#1" could show twice).
 - S  Frames from another site with no elevation in the header: the status line says "Elevation not in the
      header — type it on the Input page" (it was only in the log).
-- V  Time of max/min: a star with saved times starts from them (Period = the one last used, Epoch = the first
-     saved maximum or minimum), and the window lists the saved times.
+- V  Time of max/min: the window lists the star's saved times, and Elements from saved times fills Period (the
+     one last used) and Epoch (the first saved maximum or minimum) in one click.
 
 New in 2.3.2 (screen and file changes only: every measured number is the same as in 2.3.0; S = shared by every
 mode, T = Transits, V = Variables, M = Mac)

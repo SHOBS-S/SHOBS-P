@@ -15,7 +15,7 @@ settings file for Variables reports; the short-night period search; a catalog ou
 warning for comps and the check only, with a better check star) and for 2.3.2 (a site typed for someone else's frames
 is asked about before it is saved; the transit fit waits for Fit transit; Plot bins; the Free shape check per
 parameter; pier sides within 10°; Calibrate runs the Scan folders checks; a roomier Photometry image; the Mac app from
-Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the new-version check; the Export window's result line; Time of max/min starting from the saved times), checked against the program. Screenshots were retaken on 2.3.0
+Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the new-version check; the Export window's result line; Time of max/min listing the saved times, with Elements from saved times), checked against the program. Screenshots were retaken on 2.3.0
 > wherever the page or its version line changed, and on 2.3.2 for the pages 2.3.2 changed (the Photometry page, the
 > Transit fit page and the WebObs offer), and on 2.3.3 for the pages 2.3.3 changed (the Credits page and the Time of
 > maximum / minimum window).

@@ -484,6 +484,7 @@ def main() -> None:
         # 2.2.18 (review S8): the test window's Log lines go to a temporary file, not your ~/.shobs_p.log
         import tempfile
         ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_selftest.log")
+        os.environ["SHOBS_P_NO_UPDATE_CHECK"] = "1"   # 2.3.3 (#57): the test window never asks GitHub
         app = ca.App()
         app.update()
         for i in range(5):

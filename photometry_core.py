@@ -3744,12 +3744,17 @@ _VIZIER_DOWN: dict = {}
 VIZIER_NOT_ON: dict = {}
 
 
+_VIZIER_DAMAGED: dict = {}   # 2.3.3 (Fable S4): (host, catalog) -> time.monotonic() until which it is asked last
+
+
 def _vizier_hosts(source: str = ""):
-    """VIZIER_HOSTS for this catalog: hosts that do not carry it left out, a host that just failed moved last."""
+    """VIZIER_HOSTS for this catalog: hosts that do not carry it left out, a host that just failed moved last.
+    2.3.3 (Fable S4): a host that just sent a damaged copy of THIS catalog is asked last for it (10 minutes); its other
+    catalogs keep their place (the CfA's Tycho-2 was fine while its APASS was not)."""
     import time
     now = time.monotonic()
     hosts = [h for h in VIZIER_HOSTS if source not in VIZIER_NOT_ON.get(h, ())]
-    return sorted(hosts, key=lambda h: _VIZIER_DOWN.get(h, 0) > now)
+    return sorted(hosts, key=lambda h: (_VIZIER_DOWN.get(h, 0) > now or _VIZIER_DAMAGED.get((h, source), 0) > now))
 
 
 def _vizier_failed(host: str) -> None:
@@ -4474,7 +4479,9 @@ def apass_damage(vs, bs=None) -> str:
     floor = sum(1 for v in real if v < APASS_FLOOR_V)
     bright = sum(1 for v in real if v < APASS_DAMAGED_V)
     brightest = f"brightest V {min(real):.2f}" if real else "no usable V"
-    if floor >= 2:
+    # Fable S3: a one- or two-star answer with a star brighter than V 4 is damaged too (real APASS has none: the
+    # Pleiades, Orion, M44 and HD 219134 fields hold nothing brighter than V 7.1)
+    if floor >= 2 or (floor >= 1 and n <= 2):
         return f"{floor} of {n} stars brighter than V {APASS_FLOOR_V:g} ({brightest})"
     if bright > APASS_MAX_BRIGHT or (bright >= 3 and bright * 2 > n):
         return f"{bright} of {n} stars brighter than V {APASS_DAMAGED_V:g} ({brightest})"
@@ -4521,18 +4528,16 @@ def _vizier_query(source: str, ra_deg: float, dec_deg: float, radius_deg: float,
             continue
         why = damage(rows) if damage is not None and rows else ""
         if why:
+            import time
             name = host.split("//", 1)[-1]
             damaged.append(name)
+            _VIZIER_DAMAGED[(host, source)] = time.monotonic() + 600   # Fable S4
             CATALOG_NOTES.append(f"{source} from {name} looked wrong ({why}); not used, asking the next mirror")
             errors.append(f"{host}: a damaged copy ({why})")
             continue
-        if damaged:
-            # 2.3.3 (#64): good stars from the next mirror are complete; an empty one after a damaged copy is not kept
-            if not rows:
-                rows.markers = list(rows.markers or []) + [f"error: empty answer after a damaged copy at "
-                                                           f"{', '.join(damaged)}"]
+        # 2.3.3 (#64): good stars from the next mirror are complete; an empty answer is never cached (_cacheable)
         return rows
-    if damaged and len(damaged) == len(errors):
+    if damaged:
         raise ConnectionError(f"{source}: every VizieR copy that answered looked wrong (damaged); not used.\n"
                               + "\n".join(errors))
     raise ConnectionError("VizieR request failed.\n" + "\n".join(errors))
@@ -5460,7 +5465,10 @@ def catalog_cache_load(key: dict, now: float | None = None) -> list[dict] | None
     except Exception:
         return None
     if key.get("catalog") == "APASS DR9":
-        why = apass_stars_damage(stars)
+        try:
+            why = apass_stars_damage(stars)
+        except Exception:
+            return None   # Fable S5: a hand-edited or corrupt saved copy counts as unreadable
         if why:
             # 2.3.3 (#64 item 1): a copy saved from a damaged catalog answer (10 Nov 2026) is not used: asked again
             CATALOG_NOTES.append(f"APASS DR9 saved copy for this field looked wrong ({why}); not used, asking again")

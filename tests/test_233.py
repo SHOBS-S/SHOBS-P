@@ -59,6 +59,13 @@ class DamageRule(unittest.TestCase):
         self.assertTrue(core.apass_damage([12.0] * 3000 + [5.0 + 0.05 * i for i in range(11)]))
         self.assertEqual(core.apass_damage([12.0] * 3000 + [5.0 + 0.05 * i for i in range(10)]), "")
 
+    def test_one_or_two_row_damaged_answer(self):
+        # Fable S3: a 1-row answer at V 0.3 (CfA, small cone) is damaged; one bright row in a big field is not judged
+        self.assertTrue(core.apass_damage([0.3]))
+        self.assertTrue(core.apass_damage([0.3, 12.0]))
+        self.assertEqual(core.apass_damage([12.0] * 40 + [3.0]), "")
+        self.assertEqual(core.apass_damage([7.1]), "")
+
     def test_majority_bright(self):
         self.assertTrue(core.apass_damage([5.0, 5.2, 5.5, 12.0]))
         self.assertEqual(core.apass_damage([5.0, 5.2, 12.0, 12.5, 13.0]), "")
@@ -77,6 +84,11 @@ class DamageRule(unittest.TestCase):
 class FetchApass(unittest.TestCase):
     def setUp(self):
         core.CATALOG_NOTES.clear()
+        core._VIZIER_DOWN.clear()
+        core._VIZIER_DAMAGED.clear()
+
+    def tearDown(self):
+        core._VIZIER_DAMAGED.clear()
         core._VIZIER_DOWN.clear()
 
     def _run(self, answers):
@@ -110,6 +122,9 @@ class FetchApass(unittest.TestCase):
         self.assertEqual(getattr(stars, "incomplete", ""), "")   # IDIA's good stars are complete: kept
         self.assertEqual(len(core.CATALOG_NOTES), 1)
         self.assertIn("vizier.cfa.harvard.edu looked wrong", core.CATALOG_NOTES[0])
+        # Fable S4: the damaged copy is asked last for APASS for a while; its other catalogs keep their place
+        self.assertEqual(core._vizier_hosts("II/336/apass9")[-1], "https://vizier.cfa.harvard.edu")
+        self.assertEqual(core._vizier_hosts("I/259/tyc2")[0], "https://vizier.cfa.harvard.edu")   # CDS down: CfA first
 
     def test_only_damaged_copies_fail(self):
         with self.assertRaises(ConnectionError) as cm:
@@ -122,8 +137,7 @@ class FetchApass(unittest.TestCase):
     def test_empty_after_damaged_not_kept(self):
         stars, _ = self._run({"cds": _tsv(_cfa_rows()), "cfa": _tsv([]), "idia": _tsv(_good_rows())})
         self.assertEqual(list(stars), [])
-        self.assertTrue(stars.incomplete)
-        self.assertFalse(core._cacheable("APASS DR9", stars, None))
+        self.assertFalse(core._cacheable("APASS DR9", stars, None))   # an empty answer is never kept
 
     def test_sentinel_b_dropped_per_row(self):
         rows = _good_rows()
@@ -167,6 +181,13 @@ class SavedCopies(unittest.TestCase):
         core.catalog_cache_save(key, self._stars(12.0, 12.6))
         self.assertEqual(len(core.catalog_cache_load(key)), 30)
         self.assertEqual(core.CATALOG_NOTES, [])
+
+    def test_corrupt_saved_copy_unreadable(self):
+        key = core.catalog_cache_key("APASS DR9", 2.787, 50.75, 40.0, "V", None)
+        stars = self._stars(12.0, 12.6)
+        stars[0]["mags"] = ["not", "a", "dict"]
+        core.catalog_cache_save(key, stars)
+        self.assertIsNone(core.catalog_cache_load(key))
 
     def test_other_catalogs_not_judged(self):
         key = core.catalog_cache_key("Tycho-2", 2.787, 50.75, 40.0, "V", None)
@@ -306,7 +327,43 @@ class AppPieces(unittest.TestCase):
     def test_version_and_no_check_in_tests(self):
         self.assertEqual(self.ca.APP_VERSION, "2.3.3")
         self.assertEqual(self.ca.REPO, "SHOBS-S/SHOBS-P")
-        self.assertFalse(self.ca.update_check_wanted())
+        self.assertFalse(self.ca.update_check_wanted())   # a bare App() (tests, self-test) never asks GitHub
+        # Fable M1: the real program does (main() sets the flag); the env var still turns it off
+        with mock.patch.object(self.ca, "UPDATE_CHECK", True):
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SHOBS_P_NO_UPDATE_CHECK", None)
+                self.assertTrue(self.ca.update_check_wanted())
+            with mock.patch.dict(os.environ, {"SHOBS_P_NO_UPDATE_CHECK": "1"}):
+                self.assertFalse(self.ca.update_check_wanted())
+
+    def test_main_turns_the_check_on(self):
+        with mock.patch.object(self.ca, "App") as fake, mock.patch.object(self.ca, "enable_windows_dpi"), \
+                mock.patch.object(self.ca, "log_to_file"), mock.patch.object(self.ca, "UPDATE_CHECK", False):
+            self.ca.main()
+            self.assertTrue(self.ca.UPDATE_CHECK)
+            fake.return_value.mainloop.assert_called_once()
+
+    def test_extremum_saved_elements_button(self):
+        app = self.app
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, core.extremum_csv_name("GSC 03308-00462"))
+            for r in ExtremumCsv.ROWS[:2]:
+                core.save_extremum_row(path, dict(r))
+            app.star_id.set("GSC 03308-00462")
+            app.catalog_period, app.catalog_epoch = 0.1166, 2452000.5
+            app.extremum_csv, app.extremum_csv_star = path, "GSC 03308-00462"
+            w = self.ca.ExtremumWindow(app)
+            try:
+                # opens on VSX's elements, as 2.3.0 (numbers freeze): the saved times are listed, not used by themselves
+                self.assertEqual(w.epoch.get(), "2452000.50000")
+                self.assertIn("2461353.81255", w.csv_text.get())
+                w._prefill_from_csv()
+                self.assertEqual(w.epoch.get(), "2461353.81255")
+                self.assertEqual(w.period.get(), "0.11664000")
+                self.assertEqual(w._elements_source(*w._elements()), "saved")
+            finally:
+                w.win.destroy()
+                app.star_id.set("")
 
     def test_show_update_and_window(self):
         app = self.app

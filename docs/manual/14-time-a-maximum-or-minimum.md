@@ -16,10 +16,11 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 2. In **Night**, choose the night. It starts on the highlighted night, or the last one.
 3. In **Type**, choose **maximum** or **minimum**. SHOBS-P sets this from the VSX variable type: minimum for eclipsing binaries, maximum for pulsators and the rest.
 4. Leave **Half-window (min)** blank. SHOBS-P then picks how much of the light curve on each side of the extremum to fit. Type a number of minutes only if the automatic window catches something it should not, such as a nearby shoulder of the light curve.
-5. Check **Period (d)** and **Epoch**. A star with times already saved in its times CSV (below) starts from them
-   (from 2.3.3): **Period** is the one used last and **Epoch** the first saved maximum (or minimum), and the label
-   says **from the times CSV**. That is often better than VSX's elements, whose epoch can be decades old. Otherwise
-   the boxes hold VSX's elements from the Star ID lookup. If they are empty, press **Elements from VSX**. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
+5. Check **Period (d)** and **Epoch**. They hold VSX's elements from the Star ID lookup; if they are empty, press
+   **Elements from VSX**. For a star with times already saved in its times CSV (below), **Elements from saved times**
+   (from 2.3.3) fills **Period** with the one used last and **Epoch** with the first saved maximum (or minimum, by the
+   **Type** box), and the label says **from the times CSV**. That is often better than VSX's elements, whose epoch can
+   be decades old. A time saved against them is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure**.
 
 ![The Time of maximum / minimum window with a measured minimum and an O − C diagram](img/14-extremum.png)
