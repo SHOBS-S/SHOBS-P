@@ -3059,6 +3059,9 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
     t = np.asarray(r["t"], dtype=float)
     flux = np.asarray(r["flux"], dtype=float)
     err = np.asarray(r.get("err_scaled", r.get("err")), dtype=float)
+    # 2.3.4 (#73): the raw (unscaled) error too, in a new last column, so the raw chi-square can be rebuilt from the file
+    raw = r.get("err")
+    raw = np.asarray(raw, dtype=float) if raw is not None and len(raw) == len(t) else np.full(len(t), np.nan)
     model = np.asarray(r["model"], dtype=float)
     resid = np.asarray(r["residuals"], dtype=float)
     am = r.get("airmass")
@@ -3067,19 +3070,19 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
     fmask = np.asarray(fmask, dtype=bool) if fmask is not None and len(fmask) == len(t) else np.zeros(len(t), bool)
     label = str((r.get("with_flagged") or {}).get("label") or "flagged")
     nan = float("nan")
-    rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "", am[k]) for k in range(len(t))]
+    rows = [(t[k], flux[k], err[k], model[k], resid[k], label if fmask[k] else "", am[k], raw[k]) for k in range(len(t))]
     trim = r.get("trim") or {}
     med = float(r.get("flux_median") or 1.0)
     tt = np.asarray(trim.get("t", []), dtype=float)
     if tt.size:
         # review: trimmed rows have no error either (the fit never weighted them)
         ft = np.asarray(trim.get("flux", []), dtype=float) / med
-        rows += [(tt[k], ft[k], nan, nan, nan, "trimmed", nan) for k in range(tt.size)]
+        rows += [(tt[k], ft[k], nan, nan, nan, "trimmed", nan, nan) for k in range(tt.size)]
     fc = trim.get("flagged_cut") or {}
     if r.get("with_flagged") and len(fc.get("t", [])):
         # review: frames both flagged (put back with Fit with flagged) and trimmed: "trimmed" first, then the flag
         ff = np.asarray(fc["flux"], dtype=float) / med
-        rows += [(float(fc["t"][k]), ff[k], nan, nan, nan, f"trimmed {fc.get('label')}", nan)
+        rows += [(float(fc["t"][k]), ff[k], nan, nan, nan, f"trimmed {fc.get('label')}", nan, nan)
                  for k in range(len(fc["t"]))]
     rows.sort(key=lambda row: row[0])
     t_flip = fit_csv_flip_time(r, meta)
@@ -3097,11 +3100,32 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
         for line in fit_csv_comments(r, meta, jd_utc):     # 2.2.19 (#29, #18): unquoted, so each starts with "#"
             fh.write(line + "\r\n")
         w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag",
-                    "airmass", "segment"])
+                    "airmass", "segment", "rel_flux_err_raw"])
         for row in rows:
             w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5], num(row[6], "{:.4f}"),
-                                                                                          seg(row[0])])
+                                                                                          seg(row[0]),
+                                                                                          num(row[7], "{:.6f}")])
     return len(rows)
+
+
+def fit_csv_error_line(r: dict) -> str:
+    """2.3.4 (#73): what rel_flux_err is: the raw error x S, where S = sqrt(max(reduced chi-square, 1)) x red-noise
+    beta (the error bars the MCMC used); the raw reduced chi-square, its N and free parameters, and beta, so the raw
+    chi-square can't be mistaken for the one rebuilt from rel_flux_err. '' when the fit lacks the numbers."""
+    r = r or {}
+    try:
+        S = float(r["error_scale"])
+        rchi = float(r["rchi2"])
+        beta = float(r["beta"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if not all(math.isfinite(v) for v in (S, rchi, beta)):
+        return ""
+    n = r.get("n_points")
+    k = len(r.get("free_params") or [])
+    nk = f" (N {int(n)}, {k} free)" if n else ""
+    return (f"# Errors: rel_flux_err = rel_flux_err_raw x S (S = sqrt(max(chi2_nu, 1)) x beta = {S:.3f}, the error "
+            f"bars the MCMC used); raw reduced chi-square {rchi:.2f}{nk}; red-noise beta {beta:.2f}")
 
 
 def fit_csv_flip_time(r: dict, meta: dict | None = None):
@@ -3140,6 +3164,9 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     out.append(f"# Columns: rel_flux is the raw relative flux (divided by its median, NOT detrended); model = transit "
                f"x baseline (detrend: {det}); residual = rel_flux - model; airmass per point"
                + ("" if has_am else " (none in these data: blank)") + "; segment = before / after the meridian flip")
+    sl = fit_csv_error_line(r)
+    if sl:
+        out.append(sl)
     t_flip = fit_csv_flip_time(r, meta)
     if t_flip is not None:
         out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")
