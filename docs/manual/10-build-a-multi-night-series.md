@@ -21,7 +21,7 @@ The first night sets the rules for every night after it. Changing the aperture, 
 
 ![The aperture suggestion (Suggest…)](img/08-suggest-apertures.png)
 
-![The Colour box with Also measure R and B ticked](img/10-colour-box.png)
+![The Photometry page settings row with Also measure R and B ticked](img/10-colour-box.png)
 
 ## Start a series
 

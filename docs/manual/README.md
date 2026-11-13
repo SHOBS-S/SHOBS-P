@@ -18,8 +18,8 @@ parameter; pier sides within 10°; Calibrate runs the Scan folders checks; a roo
 Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the new-version check; the Export window's result line; Time of max/min listing the saved times, with Elements from saved times) and for 2.3.4 (series comps and check placed after the solve; markers that follow a new reference frame; Comp health zero points; the fit CSV's raw error column; how S1–S4 are chosen; starting a new series), checked against the program. Screenshots were retaken on 2.3.0
 > wherever the page or its version line changed, and on 2.3.2 for the pages 2.3.2 changed (the Photometry page, the
 > Transit fit page and the WebObs offer), and on 2.3.3 for the pages 2.3.3 changed (the Credits page and the Time of
-> maximum / minimum window), and on 2.3.4 for the pages 2.3.4 changed (the Photometry page's Stars panel and
-> suggestion lines, the Comp health window, the Colour box).
+> maximum / minimum window), and on 2.3.4 for the pages 2.3.4 changed (the Photometry page and its Stars panel,
+> the Comp health window, and the Also measure R and B setting).
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P

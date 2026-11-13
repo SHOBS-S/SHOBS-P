@@ -21,7 +21,7 @@ With two or more nights, the plot shows each star's nightly median, relative to 
 
 Click a row in the table to highlight that star's curve.
 
-![The Comparison star health window for a multi-night series, one SUSPECT comp](img/11-comp-health.png)
+![The Comparison star health window for a multi-night series, with some spares marked SUSPECT](img/11-comp-health.png)
 
 ### The table
 

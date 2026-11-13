@@ -186,7 +186,7 @@ choice.
 You mark stars by choosing what a click means (**● Target**, **● Comps (C1–C10)**, **● Check** or **● Watch**), then
 clicking the star on the image.
 
-![The Stars panel with a target, three comparison stars and a check star filled in](img/08-stars-panel.png)
+![The Stars panel on a loaded series: target, two comparison stars and the check star placed after the solve, magnitudes kept as loaded](img/08-stars-panel.png)
 
 ### The target
 
