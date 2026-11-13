@@ -9929,17 +9929,46 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     night_list = sorted(set(nights))
     night_arr = np.array(nights)
 
+    import warnings
+    # 2.3.4 (#75): each star on its own zero point before the reference is averaged. The reference was a mean of the
+    # stars' MAGNITUDES, so a star missing from some frames (APASS J024610.5 on 48 % of the 10 Nov GSC frames) moved
+    # its level by that star's offset from the rest: a fake 0.05-0.065 mag night offset. Offsets come from the frames
+    # where each star and the others are both measured (two passes: the frame median, then the zero-pointed mean).
+    zp = np.zeros(data.shape[1])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for _pass in range(2):
+            shifted = data - zp
+            frame_ref = np.nanmedian(shifted, axis=1) if _pass == 0 else np.nanmean(shifted, axis=1)
+            for c in range(data.shape[1]):
+                d = shifted[:, c] - frame_ref
+                d = d[np.isfinite(d)]
+                if d.size:
+                    zp[c] += float(np.median(d))
+    zdata = data - zp
+    # 2.3.4 (#75): the core set is chosen per night: a star in most of one night's frames is in that night's
+    # reference, whatever it does on other nights.
+    row_present = np.isfinite(data)
+    night_core = np.zeros(data.shape, dtype=bool)
+    for night in night_list:
+        sel = night_arr == night
+        night_core[sel, :] = row_present[sel].mean(axis=0) >= 0.8
+
     def evaluate(core_set):
         resid = np.full_like(data, np.nan)
+        use = night_core & np.asarray(core_set, dtype=bool)[None, :]
         for j in range(data.shape[1]):
-            ref_cols = [c for c in range(data.shape[1]) if c != j and core_set[c]]
-            if not ref_cols:
-                ref_cols = [c for c in range(data.shape[1]) if c != j]
-            import warnings
+            others = np.ones(data.shape[1], dtype=bool)
+            others[j] = False
+            mask = use & others[None, :]
+            # a frame with no core star besides this one falls back to every other star measured there
+            empty = ~mask.any(axis=1)
+            mask[empty] = others[None, :].repeat(int(empty.sum()), axis=0)
+            vals = np.where(mask, zdata, np.nan)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                ref = np.nanmean(data[:, ref_cols], axis=1)
-            resid[:, j] = data[:, j] - ref
+                ref = np.nanmean(vals, axis=1)
+            resid[:, j] = zdata[:, j] - ref
         nightly = {lab: {} for lab in labels}
         summary = []
         flip_rows = np.array([sg == "flip" for sg in row_seg])
@@ -10005,7 +10034,7 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                 s["verdict"] = "steady"
         return nightly, summary, resid
 
-    core_set = present >= 0.8
+    core_set = present > 0   # 2.3.4 (#75): who is in each night's reference is decided per night (night_core)
     nightly, summary, resid = evaluate(core_set)
     # A drifting star in the reference makes every other star look as if it drifts the opposite way.
     # Take the suspects out of the reference and measure again, so steady stars read as steady.

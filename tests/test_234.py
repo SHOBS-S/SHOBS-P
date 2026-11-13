@@ -122,5 +122,192 @@ class TestStarsPanelWidth(unittest.TestCase):
         self._check(screen=1200)
 
 
+class TestCompHealthZeroPoint(unittest.TestCase):
+    """2.3.4 (#75): a star missing from part of a night no longer moves the other stars' night level."""
+
+    def _obs(self, night, jd, insts, spare=None):
+        import photometry_core as core
+        return core.Obs(jd=jd, mag=10.0, merr=0.01, cmag=0.0, kmag=None, airmass=1.2, path="f.fits", exptime=30,
+                        flux_var=1.0, flux_comp=1.0, night=night, comp_insts=list(insts),
+                        spare_insts=dict(spare or {}))
+
+    def test_partly_missing_star_does_not_fake_a_night_offset(self):
+        import numpy as np
+        import photometry_core as core
+        rng = np.random.default_rng(1)
+        obs = []
+        for k, night in enumerate(("2026-11-08", "2026-11-09", "2026-11-10")):
+            for i in range(60):
+                cloud = 0.3 * rng.random()   # common to every star in the frame
+                insts = [-9.0 + cloud + rng.normal(0, 0.003), -8.2 + cloud + rng.normal(0, 0.003),
+                         -8.6 + cloud + rng.normal(0, 0.003)]
+                spare = {}
+                # a star 1.5 mag fainter than the rest, on every frame of the first two nights, half of the third
+                if night != "2026-11-10" or i % 2 == 0:
+                    spare["APASS J1"] = -7.1 + cloud + rng.normal(0, 0.003)
+                obs.append(self._obs(night, 2460990.5 + k + i / 1000.0, insts, spare))
+        res = core.comp_health(obs, ["A", "B", "C"], spare_names=["APASS J1"])
+        for row in res["summary"]:
+            if row["label"] in ("A", "B", "C"):
+                self.assertLess(row["night_spread"], 0.005, row)
+                self.assertEqual(row["verdict"], "steady", row)
+
+    def test_drifting_star_still_flagged(self):
+        import numpy as np
+        import photometry_core as core
+        rng = np.random.default_rng(2)
+        obs = []
+        for k, night in enumerate(("2026-11-08", "2026-11-09", "2026-11-10")):
+            for i in range(40):
+                cloud = 0.2 * rng.random()
+                insts = [-9.0 + cloud + rng.normal(0, 0.003), -8.2 + cloud + 0.04 * k + rng.normal(0, 0.003),
+                         -8.6 + cloud + rng.normal(0, 0.003), -8.8 + cloud + rng.normal(0, 0.003)]
+                obs.append(self._obs(night, 2460990.5 + k + i / 1000.0, insts))
+        res = core.comp_health(obs, ["A", "B", "C", "D"])
+        verdict = {r["label"]: r["verdict"] for r in res["summary"]}
+        self.assertTrue(verdict["B"].startswith("SUSPECT"), verdict)
+        for n in ("A", "C", "D"):
+            self.assertEqual(verdict[n], "steady", verdict)
+
+
+def _field(shift=(0.0, 0.0), flipped=False, n=40, shape=(400, 500), seed=3):
+    """A synthetic star field (Gaussian stars on a flat sky) and the star positions on it."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    h, w = shape
+    pts = np.column_stack((rng.uniform(30, w - 30, n), rng.uniform(30, h - 30, n)))
+    amp = rng.uniform(800, 20000, n)
+    if flipped:
+        pts = np.column_stack((w - 1 - pts[:, 0], h - 1 - pts[:, 1]))
+    pts = pts + np.asarray(shift)
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.full(shape, 300.0)
+    for (x, y), a in zip(pts, amp):
+        img += a * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.6 ** 2))
+    img += rng.normal(0, 5, shape)
+    return img, pts
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestMarkersAfterSolve(unittest.TestCase):
+    """2.3.4: series comps/check placed after the solve (names and magnitudes kept); #74 markers follow a new
+    reference frame."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ca, cls.app = _app()
+        cls.app.set_mode("variables")
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _solved(self, img, pts):
+        app, ca = self.app, self.ca
+        app.preview = img
+        app.preview_is_debayered = True
+        app.radius.set(5); app.sky_in.set(9); app.sky_out.set(14)
+        # a fake plate solution: 1 px = 1 arcsec, RA grows with x (enough for sky_to_pixel and the matching)
+        app.chart_solution = {"target_xy": (250.0, 200.0), "scale": 1.0, "angle": 0.0, "ra_deg": 30.0,
+                              "dec_deg": 0.0, "auto": True}
+        app.chart_placed = []
+        for i, (x, y) in enumerate(pts[:12]):
+            ra, dec = ca.core.pixel_to_sky(float(x), float(y), app.chart_solution)
+            app.chart_placed.append((float(x), float(y), {"label": f"TYC 1-{i}-1", "ra": ra, "dec": dec,
+                                                          "mag": 10.0 + i / 10, "band": "V", "catalog": "Tycho-2"}))
+        return app
+
+    def test_series_slots_placed_and_keep_their_numbers(self):
+        img, pts = _field()
+        app = self._solved(img, pts)
+        for r in list(self.ca.COMP_ROLES) + ["check"]:
+            setattr(app, f"{r}_xy", None)
+            getattr(app, f"{r}_name").set("")
+            getattr(app, f"{r}_mag").set("")
+        c1, chk = self.ca.COMP_ROLES[0], "check"
+        app.comp_coords = {"TYC 1-3-1": app.chart_placed[3][2]["ra"] and
+                           (app.chart_placed[3][2]["ra"], app.chart_placed[3][2]["dec"])}
+        getattr(app, f"{c1}_name").set("TYC 1-3-1")
+        getattr(app, f"{c1}_mag").set("8.728")      # the series' V, not the catalog's 10.300
+        app.check_name.set("TYC 1-5-1")              # no saved position: found by name on the chart
+        app.check_mag.set("9.786")
+        placed = app._auto_place_named_slots()
+        self.assertEqual(set(placed), {c1, chk})
+        self.assertLess(math.hypot(app.__dict__[f"{c1}_xy"][0] - pts[3][0], app.__dict__[f"{c1}_xy"][1] - pts[3][1]), 1.0)
+        self.assertLess(math.hypot(app.check_xy[0] - pts[5][0], app.check_xy[1] - pts[5][1]), 1.0)
+        self.assertEqual(getattr(app, f"{c1}_mag").get(), "8.728")
+        self.assertEqual(app.check_mag.get(), "9.786")
+        self.assertEqual(getattr(app, f"{c1}_name").get(), "TYC 1-3-1")
+        # a second call does nothing (markers are there)
+        self.assertEqual(app._auto_place_named_slots(), [])
+
+    def test_off_frame_series_comp_says_so(self):
+        img, pts = _field()
+        app = self._solved(img, pts)
+        c2 = self.ca.COMP_ROLES[1]
+        for r in list(self.ca.COMP_ROLES) + ["check"]:
+            setattr(app, f"{r}_xy", None)
+            getattr(app, f"{r}_name").set("")
+        ra, dec = self.ca.core.pixel_to_sky(2000.0, 2000.0, app.chart_solution)
+        app.comp_coords = {"FAR AWAY": (ra, dec)}
+        getattr(app, f"{c2}_name").set("FAR AWAY")
+        self.assertEqual(app._auto_place_named_slots(), [])
+        self.assertIsNone(getattr(app, f"{c2}_xy"))
+        self.assertIn("not on this frame", app._slot_notes[c2][1])
+
+    def test_markers_follow_new_reference_frame(self):
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        img2, pts2 = _field(shift=(6.0, -4.0))
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        app.target_xy = tuple(pts1[0])
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app.check_xy = tuple(pts1[2])
+        app.watch_xy = {"V1441 Cas": tuple(pts1[4])}
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0016.fits"), "moved")
+        for xy, want in ((app.target_xy, pts2[0]), (getattr(app, f"{c1}_xy"), pts2[1]), (app.check_xy, pts2[2]),
+                         (app.watch_xy["V1441 Cas"], pts2[4])):
+            self.assertLess(math.hypot(xy[0] - want[0], xy[1] - want[1]), 1.0)
+        # same frame: nothing moves
+        before = app.check_xy
+        app.preview_path = "/data/lights/L_0016.fits"
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0016.fits"), "")
+        self.assertEqual(app.check_xy, before)
+
+    def test_markers_follow_across_a_meridian_flip(self):
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        img2, pts2 = _field(flipped=True, shift=(3.0, 2.0))
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app.check_xy = tuple(pts1[2])
+        app.target_xy = None
+        app.watch_xy = {}
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0030.fits"), "moved")
+        self.assertLess(math.hypot(app.check_xy[0] - pts2[2][0], app.check_xy[1] - pts2[2][1]), 1.0)
+
+    def test_unalignable_frames_take_markers_off_but_keep_names(self):
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        import numpy as np
+        blank = np.full(img1.shape, 300.0)
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        getattr(app, f"{c1}_name").set("TYC 4006-1008-1")
+        getattr(app, f"{c1}_mag").set("8.728")
+        app.watch_xy = {}
+        self.assertEqual(app._carry_marks_to_new_reference(blank, "/data/lights/L_0030.fits"), "cleared")
+        self.assertIsNone(getattr(app, f"{c1}_xy"))
+        self.assertEqual(getattr(app, f"{c1}_name").get(), "TYC 4006-1008-1")
+        self.assertEqual(getattr(app, f"{c1}_mag").get(), "8.728")
+
+
 if __name__ == "__main__":
     unittest.main()

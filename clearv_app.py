@@ -7668,6 +7668,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.masters = masters
         self.masters_binning = binning
         self.calibrated = calibrated
+        self._carry_marks_to_new_reference(calibrated, path)   # 2.3.4 (#74): before the old image is replaced
         self._forget_target_search()   # 2.2.19 (#9): a new reference frame
         self._preview_foreign = ""   # 2.2.21 (nit f): a new frame, of the target now on the Input page
         self._raw_cache = None   # 2.2.19 (#16)
@@ -7706,6 +7707,56 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.log("The lights carry a plate solution in their FITS headers: Solve uses it directly.")
         # 2.2: no separate Debayer step. Debayer the preview now and go straight to Photometry.
         self.apply_debayer(auto=True)
+
+    def _carry_marks_to_new_reference(self, calibrated, path) -> str:
+        """2.3.4 (#74): Calibrate again after rejecting frames in Blink makes the first kept frame the reference. The
+        markers (target, comps, check, watch stars) were placed on the old reference frame, so they are moved to the
+        new one with the alignment between the two frames (as the #9 frame search does, core.move_star); when the two
+        frames cannot be aligned they are cleared and the log says to click them again. Nothing happens for the same
+        frame, a frame of another size (the binning path rescales), or no markers. Returns "moved", "cleared" or ""."""
+        old, old_path = self.preview, self.preview_path
+        if old is None or not self.preview_is_debayered or not old_path or not path \
+                or os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(path)):
+            return ""
+        marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
+        if not marked and not self.watch_xy:
+            return ""
+        try:
+            new = core.debayer(calibrated, self.pattern.get(), self.debayer_mode.get())
+        except Exception:
+            new = None
+        if new is None or tuple(new.shape[:2]) != tuple(old.shape[:2]):
+            return ""
+        reg = None
+        try:
+            ref_src = core.detect_sources(old, max_sources=80)
+            src = core.detect_sources(new, max_sources=80)
+            if ref_src and src and len(ref_src) >= 3 and len(src) >= 3:
+                reg = core.register_frame(ref_src, src, tuple(new.shape[:2]))
+        except Exception:
+            reg = None
+        names = [role_label(role) for role, _xy in marked] + list(self.watch_xy)
+        new_lab, old_lab = core.frame_label(path), core.frame_label(old_path)
+        if reg is None:
+            for role, _xy in marked:
+                setattr(self, f"{role}_xy", None)   # names and magnitudes stay: the solve places them again
+            self.watch_xy.clear()
+            self.log(f"Reference: frame {new_lab} replaces {old_lab} (frames rejected in Blink), and the two could not "
+                     "be aligned, so these markers were taken off: " + ", ".join(names) + ". Comp and check names "
+                     "stay and are placed again after the solve, as are watch stars with a catalog name or position.")
+            return "cleared"
+        for role, xy in marked:
+            st = core.move_star(core.Star(role, float(xy[0]), float(xy[1])), reg, tuple(new.shape[:2]))
+            setattr(self, f"{role}_xy", (float(st.x), float(st.y)))
+        for wname, wxy in list(self.watch_xy.items()):
+            st = core.move_star(core.Star(wname, float(wxy[0]), float(wxy[1])), reg, tuple(new.shape[:2]))
+            self.watch_xy[wname] = (float(st.x), float(st.y))
+        if getattr(self, "_auto_target_xy", None) is not None and self.target_xy is not None:
+            self._auto_target_xy = self.target_xy
+        self.log(f"Reference: frame {new_lab} replaces {old_lab} (frames rejected in Blink); markers carried over to "
+                 f"it ({'turned 180°, ' if reg.get('flipped') else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
+                 + ", ".join(names) + ".")
+        return "moved"
 
     def _calibration_failed(self, message: str, detail: str = ""):
         """2.2.18 (item 22): every calibration failure (a worker error, or a bad Master file… choice found before the
@@ -11095,6 +11146,81 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             pass
         return xy
 
+    def _auto_place_named_slots(self) -> list:
+        """2.3.4 (John): after the solve, every comp/check slot that holds a name but no marker (a loaded series, or
+        names kept from an earlier run) gets its marker, as Enter would place it, so a series run is solve -> Run.
+        The position comes from the series' saved sky position (comp_coords), else the solved image's catalog star of
+        that name, else a J-designation's own coordinates. Unlike Enter, the slot keeps its name, magnitude and colours
+        as loaded (the series' numbers win over a catalog answer, #56). Names typed here and waiting for Enter are left
+        to Enter. Returns the roles placed."""
+        if self.mode_key == "discovery" or not self.chart_solution or self.preview is None \
+                or not self.preview_is_debayered:
+            return []
+        token = getattr(self, "_preview_token", 0)
+        placed, missing = [], []
+        for role in list(COMP_ROLES) + ["check"]:
+            name_var, mag_var = getattr(self, f"{role}_name"), getattr(self, f"{role}_mag")
+            name = name_var.get().strip()
+            if not name or getattr(self, f"{role}_xy") is not None:
+                continue
+            if getattr(self, "_slot_typed", {}).get(role) == (token, name):
+                continue   # typed on this image: Enter decides (and fills the catalog magnitude)
+            xy = None
+            rd = self.comp_coords.get(name)
+            if rd is None:
+                star = self._chart_star_named(name)
+                if star is not None and self._chart_xy_of(star) is not None:
+                    xy = self._chart_xy_of(star)
+                else:
+                    rd = designation_coords(name)
+            if xy is None and rd is not None:
+                try:
+                    ra, dec = float(rd[0]), float(rd[1])
+                except (TypeError, ValueError):
+                    ra = dec = None
+                if ra is not None:
+                    best = None
+                    for x, y, st in self.chart_placed:
+                        if st.get("ra") is None or st.get("dec") is None:
+                            continue
+                        d = core.sky_separation_arcsec(ra, dec, st["ra"], st["dec"])
+                        if d < 5.0 and (best is None or d < best[0]):
+                            best = (d, (x, y))
+                    xy = best[1] if best else self._project_to_frame(ra, dec)
+                    if xy is None:
+                        self._slot_say(role, f"⚠ {name} is not on this frame (or too near its edge); click another "
+                                             "star or clear the slot.", bad=True)
+                        missing.append(name)
+                        continue
+            if xy is None:
+                self._slot_say(role, f"⚠ {name}: no saved position and not on this image's catalog chart; press "
+                                     "Enter in the box to look it up, or click the star.", bad=True)
+                missing.append(name)
+                continue
+            mag = mag_var.get()
+            bands = self.star_bands.get(role)
+            self._set_slot(role, xy, name)
+            if getattr(self, f"{role}_xy") is None:
+                missing.append(name)   # _set_slot refused (already marked as another slot) and said why
+                continue
+            name_var.set(name)
+            if str(mag).strip():
+                mag_var.set(mag)
+            if isinstance(bands, dict):
+                self.star_bands[role] = bands
+            got = getattr(self, f"{role}_xy")
+            self._slot_say(role, f"✓ {role_label(role)} {name} placed after the solve at ({got[0]:.0f}, {got[1]:.0f})"
+                                 + (f"; magnitude {str(mag).strip()} kept as loaded." if str(mag).strip() else
+                                    "; type its magnitude."))
+            placed.append(role)
+        if placed:
+            self.log("Comps/check placed after the solve: " + ", ".join(
+                f"{role_label(r)} {getattr(self, f'{r}_name').get().strip()}" for r in placed) + ".")
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
+        return placed
+
     def _set_slot(self, role: str, xy, text: str):
         xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centered on its star like a click
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
@@ -12539,6 +12665,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._fill_marked_from_chart()
         if self.mode_key != "discovery":
             self._drop_offframe_slots()   # 2.2.19 (#20): comps/check of an earlier run that are not on this frame
+            self._auto_place_named_slots()   # 2.3.4: a loaded series' comps/check get their markers (no Enter)
             self._locate_comps_under()    # 2.2.19 (#34): comps moved out by Use comps are measured as spares
         self._suggest_comps()
         self._update_pick_label()
