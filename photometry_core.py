@@ -11089,12 +11089,15 @@ def catalog_zero_point(inst_mag: np.ndarray, catalog_mag: np.ndarray, use: np.nd
 
 def suggest_comps_near(target_inst: float, candidates: list, max_dmag: float = 1.0, count: int = 4,
                        target_bv: float | None = None, max_dbv: float = 0.6, aim: float = 0.0,
-                       window: tuple[float, float] | None = None) -> list[tuple[str, float]]:
+                       window: tuple[float, float] | None = None, color_weight: float = 1.0,
+                       no_color: float = 0.25) -> list[tuple[str, float]]:
     """Comparison candidates near the target in brightness and, when catalog colors are known, in color.
     candidates: (name, instrumental mag, x, y[, B-V]) measured on the same image as target_inst. Ranked by
     |delta mag - aim| + |delta B-V| (a star without a color counts 0.25 for it). Returns [(name, comp - target mag)].
     2.2.8: aim and window (comp - target, mag) let a faint target get brighter comps (aim -1, window -2..+0.3):
-    a comp as faint as a faint target adds as much noise as the target itself (CoRoT-1 MicroObservatory run)."""
+    a comp as faint as a faint target adds as much noise as the target itself (CoRoT-1 MicroObservatory run).
+    2.3.4: color_weight multiplies the color term (|delta B-V|, or no_color for a star or target without a color), so
+    the color can count more than the brightness."""
     if target_inst is None or not math.isfinite(target_inst):
         return []
     lo, hi = window if window is not None else (-max_dmag, max_dmag)
@@ -11109,8 +11112,8 @@ def suggest_comps_near(target_inst: float, candidates: list, max_dmag: float = 1
             if dbv > max_dbv:
                 continue
         else:
-            dbv = 0.25
-        rows.append((abs(m - target_inst - aim) + dbv, name, m - target_inst))
+            dbv = no_color
+        rows.append((abs(m - target_inst - aim) + color_weight * dbv, name, m - target_inst))
     rows.sort()
     return [(name, dm) for _a, name, dm in rows[:count]]
 

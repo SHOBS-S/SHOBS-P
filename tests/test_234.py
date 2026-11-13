@@ -309,5 +309,112 @@ class TestMarkersAfterSolve(unittest.TestCase):
         self.assertEqual(getattr(app, f"{c1}_mag").get(), "8.728")
 
 
+class TestSuggestCore(unittest.TestCase):
+    def test_color_weight(self):
+        import photometry_core as core
+        cands = [("bright-match", -9.3, 0, 0, 0.62), ("same-mag-off-color", -9.0, 0, 0, 0.85)]
+        # weight 1: 0.3 + 0.02 = 0.32 vs 0 + 0.25 = 0.25 -> the off-color star first; weight 2: 0.34 vs 0.50
+        self.assertEqual(core.suggest_comps_near(-9.0, cands, target_bv=0.60)[0][0], "same-mag-off-color")
+        self.assertEqual(core.suggest_comps_near(-9.0, cands, target_bv=0.60, color_weight=2.0)[0][0], "bright-match")
+        self.assertEqual(core.suggest_comps_near(-9.0, cands, target_bv=0.60, max_dbv=0.2), [("bright-match",
+                                                                                              core.suggest_comps_near(
+            -9.0, cands, target_bv=0.60, max_dbv=0.2)[0][1])])
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestSuggestedCompRules(unittest.TestCase):
+    """2.3.4 (medium feature): the colour gate 0.3 (colour weighted above brightness), the linear-limit gate, the
+    bigger edge margin, the measured target B-V, and S-lines that say why."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ca, cls.app = _app()
+        cls.app.set_mode("variables")
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _setup(self, specs, target_bv=0.60):
+        """specs: list of (x, y, amplitude, B-V or None, name). Star 0 is the target."""
+        import numpy as np
+        app, ca = self.app, self.ca
+        h, w = 400, 600
+        yy, xx = np.mgrid[0:h, 0:w]
+        img = np.full((h, w), 300.0)
+        for x, y, a, _bv, _n in specs:
+            img += a * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.6 ** 2))
+        app.preview, app.preview_is_debayered = img, True
+        app.preview_path = ""
+        app.radius.set(5); app.sky_in.set(9); app.sky_out.set(14)
+        app.sat_limit.set(60000)
+        app.observations = []
+        app.chart_placed = []
+        for x, y, a, bv, name in specs:
+            st = {"label": name, "mag": 12.0, "band": "V", "catalog": "Tycho-2", "ra": 30.0, "dec": 0.0}
+            if bv is not None:
+                st["mags"] = {"V": 12.0, "B": 12.0 + bv}
+            app.chart_placed.append((float(x), float(y), st))
+        tx, ty = specs[0][0], specs[0][1]
+        app.target_xy = (float(tx), float(ty))
+        app._star_snr = lambda *_a, **_k: 500.0
+        return app
+
+    def _names(self, app):
+        app._suggest_comps()
+        return [n for n, _dm, _x, _y in app.suggested_comps]
+
+    def test_color_gate_and_weight(self):
+        app = self._setup([(300, 200, 5000, 0.60, "T"),
+                           (150, 150, 5000, 0.95, "OFF COLOR"),    # same brightness, 0.35 redder
+                           (420, 260, 7000, 0.65, "MATCH A"),     # 0.4 mag brighter, colour matched
+                           (200, 280, 3500, 0.55, "MATCH B")])
+        self.assertTrue(self.ca.core.catalog_bv(app.chart_placed[1][2]) is not None)
+        names = self._names(app)
+        self.assertEqual(set(names[:2]), {"MATCH A", "MATCH B"})
+        self.assertIn("OFF COLOR", names)   # filled in at the 0.6 gate (only three candidates)
+        line = [l for l in app._suggested_lines() if "OFF COLOR" in l][0]
+        self.assertIn("closest color here", line)
+
+    def test_edge_margin_preferred(self):
+        app = self._setup([(300, 200, 5000, 0.60, "T"),
+                           (25, 200, 5000, 0.60, "EDGE"),         # 25 px in: < 3 x 14 = 42
+                           (420, 260, 5000, 0.60, "INSIDE")])
+        names = self._names(app)
+        self.assertEqual(names[0], "INSIDE")
+        self.assertIn("EDGE", names)
+        line = [l for l in app._suggested_lines() if "EDGE" in l][0]
+        self.assertIn("px from the edge", line)
+
+    def test_linear_gate(self):
+        app = self._setup([(300, 200, 5000, 0.60, "T"),
+                           (150, 150, 5000, 0.60, "HOT"),
+                           (420, 260, 5000, 0.60, "COOL")])
+        app.preview_path = "/data/L_0001.fits"
+        old = (app._linear_limit, app._raw_peak_at)
+        try:
+            app._linear_limit = lambda: 32000.0
+            app._raw_peak_at = lambda xy: 26000.0 if abs(xy[0] - 150) < 2 else 15000.0
+            names = self._names(app)
+            self.assertEqual(names, ["COOL"])
+            self.assertIn("47% of the linear limit", app._suggested_lines()[1])
+        finally:
+            app._linear_limit, app._raw_peak_at = old
+            app.preview_path = ""
+
+    def test_measured_target_bv_wins(self):
+        import photometry_core as core
+        app = self._setup([(300, 200, 5000, 1.20, "T"),           # catalog says red
+                           (150, 150, 5000, 1.15, "RED"),
+                           (420, 260, 5000, 0.60, "BLUE")])
+        self.assertEqual(self._names(app)[0], "RED")
+        app.observations = [core.Obs(jd=1.0 + k, mag=10.0, merr=0.01, cmag=0.0, kmag=None, airmass=1.1, path="",
+                                     exptime=30, flux_var=1.0, flux_comp=1.0, bv=0.58 + 0.01 * k) for k in range(5)]
+        self.assertEqual(self._names(app)[0], "BLUE")
+        self.assertIn("measured", app._suggested_lines()[1])
+        app.observations = []
+
+
 if __name__ == "__main__":
     unittest.main()

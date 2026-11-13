@@ -12876,8 +12876,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if r is None or si is None or so is None or not (0 < r < si < so):
             return
         edge = so + 3
+        # 2.3.4 (c): suggestions prefer stars at least 3 x the sky-out radius in (as the edge note asks), so a framing
+        # shift between nights does not drop a comp off the frame; nearer stars only fill in when the field is short.
+        safe_edge = 3.0 * so
+        lin = self._linear_limit()
         h, w = self.preview.shape
-        cands, where, star_of = [], {}, {}
+        cands, where, star_of, edge_px = [], {}, {}, {}
         stars = [(x, y, st) for x, y, st in self.chart_placed
                  if not st.get("variable") and st.get("mag") is not None and edge <= x < w - edge and edge <= y < h - edge
                  and math.hypot(x - self.target_xy[0], y - self.target_xy[1]) > 2 * r]
@@ -12917,29 +12921,63 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if not name:
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
+            edge_px[name] = float(min(x, y, (w - 1) - x, (h - 1) - y))
             where[name] = (x, y)
             star_of[name] = st   # 2.2.19 (#15): for the S1 … lines in the panel
         target_star = self._chart_star_at(self.target_xy)
-        t_bv = core.catalog_bv(target_star) if target_star else None
+        t_bv_cat = core.catalog_bv(target_star) if target_star else None
+        # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
+        # one, else the catalog's; the comps' colors are catalog colors either way.
+        t_bv_meas = self._measured_target_bv()
+        t_bv = t_bv_meas if t_bv_meas is not None else t_bv_cat
+        t_bv_from = "measured" if t_bv_meas is not None else ("catalog" if t_bv_cat is not None else "")
         self._target_bv = t_bv
         self._closest_dm = min((abs(c[1] - t_inst) for c in cands), default=None)
         # 2.2.8: a faint target (near the noise floor) gets comps 0.5-2 mag brighter, not equally faint ones.
         t_snr = self._star_snr(self.preview, self.target_xy)
         faint = math.isfinite(t_snr) and t_snr < 30
-        def choose(pool):
+        # 2.3.4 (a): color counts twice the brightness, and the color gate is 0.3 in B-V (a 0.2 mismatch left a
+        # measurable drift on hazy GSC nights); 0.6 only fills in when too few stars pass, and those lines say so.
+        peaks = {}
+
+        def peak_of(name):
+            if name not in peaks:
+                peaks[name] = self._raw_peak_at(where[name]) if lin is not None else float("nan")
+            return peaks[name]
+
+        def linear_ok(name):
+            # 2.3.4 (b): under 75 % of the linear limit on the reference frame, so the sharpest frames stay linear
+            if lin is None or getattr(self, "precalibrated", False) or not self.preview_path:
+                return True
+            pk = peak_of(name)
+            return not (math.isfinite(pk) and pk >= 0.75 * lin)
+
+        def choose(pool, max_dbv):
+            kw = dict(target_bv=t_bv, max_dbv=max_dbv, color_weight=2.0, count=40)
             if faint:
-                got = core.suggest_comps_near(t_inst, pool, count=4, target_bv=t_bv, aim=-1.0, window=(-2.0, -0.5))
-                return got or core.suggest_comps_near(t_inst, pool, count=4, target_bv=t_bv, aim=-1.0,
-                                                      window=(-2.0, 0.3))
-            return core.suggest_comps_near(t_inst, pool, max_dmag=1.0, count=4, target_bv=t_bv)
+                got = core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, -0.5), **kw)
+                got = got or core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, 0.3), **kw)
+            else:
+                got = core.suggest_comps_near(t_inst, pool, max_dmag=1.0, **kw)
+            return [g for g in got if linear_ok(g[0])]
 
         # 2.2.13 (John): AAVSO sequence stars of the right brightness come first; other catalog stars fill in when
-        # the sequence runs short (a faint transit host, a sparse field).
+        # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
+        # within 0.3 in color first, then the rest.
         seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in stars if st.get("seq")}
-        picks = choose([c for c in cands if c[0] in seq_names])
-        if len(picks) < 4:
+        inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
+        relaxed = set()
+        picks = []
+        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (seq_names, 0.3), (None, 0.3),
+                                 (inside, 0.6), (None, 0.6)):
+            if len(picks) >= 4:
+                break
             have = {n for n, _dm in picks}
-            picks += [p for p in choose([c for c in cands if c[0] not in have]) if p[0] not in have][:4 - len(picks)]
+            pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)]
+            got = choose(pool, gate)[:4 - len(picks)]
+            if gate > 0.3:
+                relaxed.update(n for n, _dm in got)
+            picks += got
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
         # 2.2.19 (#15): what the panel's "S1 = … V 11.2, why suggested" lines say.
         self.suggested_info = {}
@@ -12948,22 +12986,33 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.suggested_info[name] = {"mag": st.get("mag"), "band": st.get("band", "V"), "seq": name in seq_names,
                                          "seq_label": (st.get("seq") or {}).get("label"), "dm": dm,
                                          "bv": core.catalog_bv(st) if st else None, "target_bv": t_bv, "faint": faint,
+                                         "target_bv_from": t_bv_from, "relaxed": name in relaxed,
+                                         "edge": edge_px.get(name), "safe_edge": safe_edge,
+                                         "peak": peaks.get(name, float("nan")), "linear": lin,
                                          "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
                                          or st.get("catalog", "")}
         if self.suggested_comps:
             self.log(("Suggested comps (the target is faint, so 0.5–2 mag brighter than it"
                       if faint else "Suggested comps (near the target in brightness")
-                     + (f" and near its color, target B−V {t_bv:.2f}" if t_bv is not None else "")
+                     + (f" and near its color, target B−V {t_bv:.2f} ({t_bv_from})" if t_bv is not None else "")
                      + "; green rings S1, S2 …): "
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best.")
         elif self._closest_dm is not None and self._closest_dm <= 1.0:
             self.log("Labeled stars within 1 mag of the target here all differ from it in color (B−V more than 0.6 "
-                     "apart); pick the closest in brightness and color you can.")
+                     "apart) or are near the linear limit; pick the closest in brightness and color you can.")
         elif self._closest_dm is not None:
             self.log(f"No labeled star within 1 mag of the target here (closest: {self._closest_dm:.1f} mag away); "
                      "pick the closest in brightness and color you can.")
+
+    def _measured_target_bv(self):
+        """2.3.4 (e): the target's measured B-V: the median over the loaded series' points that have one (nights run
+        with "Also measure R and B"), or None with fewer than 3."""
+        vals = [float(o.bv) for o in (self.observations or []) if math.isfinite(getattr(o, "bv", float("nan")))]
+        if len(vals) < 3:
+            return None
+        return float(np.median(vals))
 
     def _suggested_lines(self) -> list:
         """2.2.19 (#15): the panel's lines for the suggested comps, in suggestion order, labeled as on the image:
@@ -12990,7 +13039,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             why = (f"{abs(dm):.1f} mag {'brighter' if dm < 0 else 'fainter'} than the target"
                    + (" (a faint target gets brighter comps)" if info.get("faint") else ""))
             if info.get("bv") is not None and info.get("target_bv") is not None:
-                why += f", B−V {info['bv']:.2f} (target {info['target_bv']:.2f})"
+                frm = info.get("target_bv_from") or ""
+                why += (f", B−V {info['bv']:.2f} (target {info['target_bv']:.2f}"
+                        + (f", {frm}" if frm else "") + ")")
+                if info.get("relaxed"):
+                    why += " — the closest color here (none within 0.3)"
+            elif info.get("bv") is None:
+                why += ", color not in the catalogs"
+            elif info.get("target_bv") is None:
+                why += ", target color not known (tick Also measure R and B)"
+            # 2.3.4 (d): what else it was picked on
+            if info.get("edge") is not None and info.get("safe_edge") and info["edge"] < info["safe_edge"]:
+                why += f", only {info['edge']:.0f} px from the edge"
+            pk, lin = info.get("peak"), info.get("linear")
+            if lin and pk is not None and math.isfinite(pk):
+                why += f", raw peak {pk:,.0f} ADU ({pk / lin:.0%} of the linear limit)"
             role = marked.get(name)
             lines.append(f"{head}: {why}" + (f" — now {role_label(role)}" if role else ""))
         return ["Suggested comps (thick green rings on the image):"] + lines
