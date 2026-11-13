@@ -1640,6 +1640,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.field_variables = []
         self.field_check_sources = []
         self.variable_marks = []
+        self._flip_turn_note = None   # 2.3.4: (frame path, text) when a new reference turned 180°
         self.last_scan = None
         self.highlight_night = None
         self._marks_shape = None         # 2.2.3: shape of the debayered image the markers belong to
@@ -4886,6 +4887,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if note and note not in (OSC_NOTE, MONO_NOTE):
                 cleared.append("the Output page notes")
         reason = why or "New reduction pressed"
+        self._flip_turn_note = None   # 2.3.4 review
         self.clear_target(quiet=True, why=reason)
         self.log("New reduction" + (f" (was {old})" if old else "") + ": " + reason
                  + (f"; also cleared {', '.join(cleared)}" if cleared else "") + ".")
@@ -7676,6 +7678,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.masters = masters
         self.masters_binning = binning
         self.calibrated = calibrated
+        self._flip_turn_note = None   # 2.3.4 review: said only for the calibration that turned the image
         self._carry_marks_to_new_reference(calibrated, path)   # 2.3.4 (#74): before the old image is replaced
         self._forget_target_search()   # 2.2.19 (#9): a new reference frame
         self._preview_foreign = ""   # 2.2.21 (nit f): a new frame, of the target now on the Input page
@@ -7727,7 +7730,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 or os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(path)):
             return ""
         marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
-        if not marked and not self.watch_xy and not self.scan_excluded:
+        if not marked and not self.watch_xy and not self.scan_excluded and not self.variable_marks \
+                and not self.spare_marks:   # review (S1): ✕ marks/spares alone are carried too
             return ""
         try:
             new = core.debayer(calibrated, self.pattern.get(), self.debayer_mode.get())
@@ -7797,7 +7801,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         turned = bool(reg.get("flipped"))
         self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame); markers carried over to "
                  f"it ({'turned 180°, ' if turned else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
-                 + (", ".join(names) if names else "the Discovery exclusions") + "."
+                 + (", ".join(names) if names else ("the Discovery exclusions" if self.scan_excluded else
+                                                    "the variable-star marks")) + "."
                  + (f" Not on the new frame, so taken off: {', '.join(off)}." if off else "")
                  + (f" Frame {new_lab} is on the other side of the meridian flip, so the image is turned 180° from "
                     "before: the markers moved with their stars." if turned else ""))
@@ -11207,11 +11212,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.mode_key == "discovery" or self.preview is None or not self.preview_is_debayered \
                 or not self.chart_placed:
             return
+        if self.busy:
+            return   # review (S3): a run or solve in flight keeps its marks; a solve that lands places the slots
+        if getattr(self, "_preview_foreign", ""):
+            return   # review (S4): the image is of another field than the series: keep its solution
         self.chart_placed = []
         self.chart_solution = None
         self.variable_marks = []
         self.spare_marks = []
         self.suggested_comps = []
+        self._comps_under_token = None   # review (S5): moved-out comps get their spare marks again after the solve
         self._auto_solved_for = None
         self.log("Series loaded on an image already solved: solving it again to place the target and the series' "
                  "comps and check.")
@@ -11220,8 +11230,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.refresh_preview()
         except Exception:
             traceback.print_exc()
-        if getattr(self, "current_step", None) == STEP_PHOTO:
-            self.after(150, self._auto_solve)
+        self.after(150, self._auto_solve)   # review (S2): on any page (Load series is on Input and Output)
 
     def _auto_place_named_slots(self) -> list:
         """2.3.4 (John): after the solve, every comp/check slot that holds a name but no marker (a loaded series, or

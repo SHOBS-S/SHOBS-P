@@ -401,6 +401,40 @@ class TestMarkersAfterSolve(unittest.TestCase):
         finally:
             app._solving = False
 
+    def test_variable_marks_alone_are_carried(self):
+        """Review S1: no markers (Discovery, or no target placed), only the old frame's ✕ marks: still carried."""
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        img2, pts2 = _field(flipped=True, shift=(3.0, 2.0))
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        for r in list(ca.COMP_ROLES) + ["check", "target"]:
+            setattr(app, f"{r}_xy", None)
+        app.watch_xy, app.scan_excluded, app.spare_marks = {}, [], []
+        app.variable_marks = [(float(pts1[3][0]), float(pts1[3][1]), {"name": "V1"})]
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0030.fits"), "moved")
+        vx, vy, _v = app.variable_marks[0]
+        self.assertLess(math.hypot(vx - pts2[3][0], vy - pts2[3][1]), 1.0)
+
+    def test_series_load_resolve_guards(self):
+        """Review S3/S4: not while busy; not when the image is of another field."""
+        img, pts = _field()
+        app = self._solved(img, pts)
+        before = list(app.chart_placed)
+        old_busy = app.busy
+        try:
+            app.busy = True
+            app._resolve_for_loaded_series()
+            self.assertEqual(app.chart_placed, before)
+        finally:
+            app.busy = old_busy
+        app._preview_foreign = "OTHER FIELD"
+        try:
+            app._resolve_for_loaded_series()
+            self.assertEqual(app.chart_placed, before)
+        finally:
+            app._preview_foreign = ""
+
     def test_unalignable_frames_clear_variable_marks(self):
         app, ca = self.app, self.ca
         img1, pts1 = _field()
@@ -425,7 +459,7 @@ class TestMarkersAfterSolve(unittest.TestCase):
         old_after = app.after
         app.after = lambda ms, fn=None, *a: calls.append(fn)
         try:
-            app.current_step = self.ca.STEP_PHOTO
+            app.current_step = self.ca.STEP_INPUT   # review S2: on any page
             app._resolve_for_loaded_series()
         finally:
             app.after = old_after
