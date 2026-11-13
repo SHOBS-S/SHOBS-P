@@ -350,7 +350,7 @@ When the verdict is "detected" and you are happy with the fit:
 6. Click **Save light-curve CSV…** if you want the numbers. With a fit shown, it saves two files: the light-curve CSV
    (the same as on the Variables Output page) and a fit CSV beside it, named like
    `TrES-3b_TG_05-OCT-2026_SHOBS-P_transit_fit.csv`. The fit CSV has the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`,
-   `model`, `residual`, `flag`, `airmass` and `segment`, one row per point in time order. `rel_flux` is the raw
+   `model`, `residual`, `flag`, `airmass`, `segment` and (from 2.3.4) `rel_flux_err_raw`, one row per point in time order. `rel_flux` is the raw
    relative flux (divided by its median, not detrended); the baseline is in `model`. `segment` says `before flip` or
    `after flip` on a night with a meridian flip, and is blank otherwise. Trimmed points are rows too, flagged
    `trimmed`, with no error, model, residual or airmass. With an **Output** folder set, both files get the same number

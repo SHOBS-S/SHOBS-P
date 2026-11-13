@@ -9934,17 +9934,23 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
     # stars' MAGNITUDES, so a star missing from some frames (APASS J024610.5 on 48 % of the 10 Nov GSC frames) moved
     # its level by that star's offset from the rest: a fake 0.05-0.065 mag night offset. Offsets come from the frames
     # where each star and the others are both measured (two passes: the frame median, then the zero-pointed mean).
+    # Review M2: iterated to convergence (a star's offset is measured against a frame reference that includes it, so
+    # with spares on some nights only each pass removes only part of the error).
     zp = np.zeros(data.shape[1])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        for _pass in range(2):
+        for _pass in range(200):
             shifted = data - zp
             frame_ref = np.nanmedian(shifted, axis=1) if _pass == 0 else np.nanmean(shifted, axis=1)
+            step = np.zeros(data.shape[1])
             for c in range(data.shape[1]):
                 d = shifted[:, c] - frame_ref
                 d = d[np.isfinite(d)]
                 if d.size:
-                    zp[c] += float(np.median(d))
+                    step[c] = float(np.median(d))
+            zp += step
+            if _pass > 0 and float(np.max(np.abs(step))) < 1e-6:
+                break
     zdata = data - zp
     # 2.3.4 (#75): the core set is chosen per night: a star in most of one night's frames is in that night's
     # reference, whatever it does on other nights.

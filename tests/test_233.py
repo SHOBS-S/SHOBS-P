@@ -325,7 +325,7 @@ class AppPieces(unittest.TestCase):
         cls.tmp.cleanup()
 
     def test_version_and_no_check_in_tests(self):
-        self.assertEqual(self.ca.APP_VERSION, "2.3.3")
+        self.assertEqual(self.ca.APP_VERSION, "2.3.4")
         self.assertEqual(self.ca.REPO, "SHOBS-S/SHOBS-P")
         self.assertFalse(self.ca.update_check_wanted())   # a bare App() (tests, self-test) never asks GitHub
         # Fable M1: the real program does (main() sets the flag); the env var still turns it off

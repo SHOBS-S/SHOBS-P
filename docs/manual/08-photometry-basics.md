@@ -248,7 +248,7 @@ From 2.3.4 the rules are:
 - **Colour first:** within 0.3 in B−V of the target, and colour counts twice as much as brightness when they are
   ranked. The target's colour is its **measured** B−V when the loaded series has nights with **Also measure R and B**,
   otherwise the catalog's (the line says which). When too few stars pass, stars up to 0.6 apart fill in, and their line
-  says **the closest color here (none within 0.3)**. A star or target with no colour in the catalogs says so.
+  says **the closest color left here (no more within 0.3)**. A star with no colour in the catalogs only fills in (when the target's colour is known), and its line says so.
 - **Linear:** with a **linear ADU** set, the star's brightest raw pixel on the reference frame must be under 75 % of
   it, so the sharpest frames of the night stay linear too.
 - **Inside the frame:** at least 3 × the sky-out radius from every edge, so a framing shift between nights does not

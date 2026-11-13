@@ -152,6 +152,42 @@ class TestCompHealthZeroPoint(unittest.TestCase):
                 self.assertLess(row["night_spread"], 0.005, row)
                 self.assertEqual(row["verdict"], "steady", row)
 
+    def test_spares_on_later_nights_only(self):
+        """Review M2: spares measured on the later nights only (the usual layout) fake no offset, theirs included."""
+        import numpy as np
+        import photometry_core as core
+        rng = np.random.default_rng(5)
+        obs = []
+        nights = ("2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04")
+        for k, night in enumerate(nights):
+            for i in range(50):
+                cloud = 0.3 * rng.random()
+                insts = [m + cloud + rng.normal(0, 0.003) for m in (-9.0, -8.7, -8.4, -9.3, -8.9)]
+                spare = {}
+                if k >= 2:
+                    spare = {f"SP{j}": m + cloud + rng.normal(0, 0.003) for j, m in enumerate((-7.0, -6.8, -7.2))}
+                obs.append(self._obs(night, 2460990.5 + k + i / 1000.0, insts, spare))
+        res = core.comp_health(obs, ["A", "B", "C", "D", "E"], spare_names=["SP0", "SP1", "SP2"])
+        for row in res["summary"]:
+            self.assertLess(row["night_spread"], 0.003, row)
+            self.assertEqual(row["verdict"], "steady", row)
+
+    def test_one_night_star(self):
+        import numpy as np
+        import photometry_core as core
+        rng = np.random.default_rng(6)
+        obs = []
+        for k, night in enumerate(("2026-11-01", "2026-11-02", "2026-11-03")):
+            for i in range(40):
+                cloud = 0.3 * rng.random()
+                insts = [-9.0 + cloud + rng.normal(0, 0.003), -8.5 + cloud + rng.normal(0, 0.003)]
+                spare = {"ONE": -7.0 + cloud + rng.normal(0, 0.003)} if k == 0 else {}
+                obs.append(self._obs(night, 2460990.5 + k + i / 1000.0, insts, spare))
+        res = core.comp_health(obs, ["A", "B"], spare_names=["ONE"])
+        for row in res["summary"]:
+            if row["label"] in ("A", "B"):
+                self.assertLess(row["night_spread"], 0.003, row)
+
     def test_drifting_star_still_flagged(self):
         import numpy as np
         import photometry_core as core
@@ -255,6 +291,45 @@ class TestMarkersAfterSolve(unittest.TestCase):
         self.assertEqual(app._auto_place_named_slots(), [])
         self.assertIsNone(getattr(app, f"{c2}_xy"))
         self.assertIn("not on this frame", app._slot_notes[c2][1])
+
+    def test_auto_place_does_not_ask_and_says_catalog_mag(self):
+        """Review S2/S6: no variable-star question from the solve callback; an empty series magnitude filled from the
+        catalog is said so."""
+        img, pts = _field()
+        app = self._solved(img, pts)
+        for r in list(self.ca.COMP_ROLES) + ["check"]:
+            setattr(app, f"{r}_xy", None)
+            getattr(app, f"{r}_name").set("")
+            getattr(app, f"{r}_mag").set("")
+        asked = []
+        old = app._vet_choice
+        app._vet_choice = lambda *a, **k: asked.append(a)
+        try:
+            c1 = self.ca.COMP_ROLES[0]
+            getattr(app, f"{c1}_name").set("TYC 1-4-1")
+            self.assertEqual(app._auto_place_named_slots(), [c1])
+            self.assertEqual(asked, [])
+            self.assertEqual(getattr(app, f"{c1}_mag").get(), "10.400")
+            self.assertIn("from the catalog", app._slot_notes[c1][1])
+        finally:
+            app._vet_choice = old
+
+    def test_target_moved_off_frame_is_taken_off(self):
+        """Review S5/S4: a carried marker that lands off the new frame is taken off; stale slot notes go."""
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        img2, _p2 = _field(shift=(60.0, 0.0))
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        app.target_xy = (470.0, float(pts1[0][1]))     # 470 + 60 > 500 px wide
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app._slot_notes[c1] = ("X", "✓ C1 … Marker at (1, 1).", False)
+        app.watch_xy = {}
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0009.fits"), "moved")
+        self.assertIsNone(app.target_xy)
+        self.assertIsNotNone(getattr(app, f"{c1}_xy"))
+        self.assertNotIn(c1, app._slot_notes)
 
     def test_markers_follow_new_reference_frame(self):
         app, ca = self.app, self.ca
@@ -375,7 +450,7 @@ class TestSuggestedCompRules(unittest.TestCase):
         self.assertEqual(set(names[:2]), {"MATCH A", "MATCH B"})
         self.assertIn("OFF COLOR", names)   # filled in at the 0.6 gate (only three candidates)
         line = [l for l in app._suggested_lines() if "OFF COLOR" in l][0]
-        self.assertIn("closest color here", line)
+        self.assertIn("no more within 0.3", line)
 
     def test_edge_margin_preferred(self):
         app = self._setup([(300, 200, 5000, 0.60, "T"),
@@ -410,7 +485,8 @@ class TestSuggestedCompRules(unittest.TestCase):
                            (420, 260, 5000, 0.60, "BLUE")])
         self.assertEqual(self._names(app)[0], "RED")
         app.observations = [core.Obs(jd=1.0 + k, mag=10.0, merr=0.01, cmag=0.0, kmag=None, airmass=1.1, path="",
-                                     exptime=30, flux_var=1.0, flux_comp=1.0, bv=0.58 + 0.01 * k) for k in range(5)]
+                                     exptime=30, flux_var=1.0, flux_comp=1.0, bv=0.58 + 0.01 * k, color_cal="bv=field")
+                            for k in range(5)]
         self.assertEqual(self._names(app)[0], "BLUE")
         self.assertIn("measured", app._suggested_lines()[1])
         app.observations = []

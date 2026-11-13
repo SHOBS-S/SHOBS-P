@@ -48,7 +48,7 @@ What to aim for:
 
 - Within about 1 magnitude of the target. A ⚠ note in the panel tells you when a comp is much brighter or fainter. If the field has only much fainter comps, see "Stacking when comps are weak" in chapter 8.
 - Not too close to the frame edge. A comp that drifts off the edge is left out of those frames only (chapter 8, "Comps near the frame edge"), but a comp missing in most frames is left out of the whole night.
-- Similar color (B−V within about 0.5). A comp of another color dims differently with airmass and leaves a slow trend.
+- Similar color (B−V within about 0.3; from 2.3.4 the ⚠ note and the suggestions both use 0.3). A comp of another color dims differently with airmass and leaves a slow trend.
 - Not a known variable. If you click one, SHOBS-P asks whether to use it anyway. Answer **No** unless you have a good reason.
 
 If a comp has no magnitude in any catalog, the panel says so. Type its magnitude in the box beside the name, or pick another star.

@@ -3160,6 +3160,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return
             cache["blocks"] = blocks
             try:
+                if getattr(self, "_suggest_peaks_pending", False):
+                    self._suggest_peaks_pending = False
+                    self._suggest_comps()   # 2.3.4 (review S3): the linear gate needs the raw peaks
+                    self.refresh_preview()
                 self.update_star_panel()
             except Exception:
                 pass
@@ -7719,7 +7723,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 or os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(path)):
             return ""
         marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
-        if not marked and not self.watch_xy:
+        if not marked and not self.watch_xy and not self.scan_excluded:
             return ""
         try:
             new = core.debayer(calibrated, self.pattern.get(), self.debayer_mode.get())
@@ -7740,22 +7744,46 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if reg is None:
             for role, _xy in marked:
                 setattr(self, f"{role}_xy", None)   # names and magnitudes stay: the solve places them again
+                self._slot_notes.pop(role, None)    # review S4: no stale "✓ … Marker at (x, y)" line
             self.watch_xy.clear()
-            self.log(f"Reference: frame {new_lab} replaces {old_lab} (frames rejected in Blink), and the two could not "
+            self.scan_excluded = []
+            self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame), and the two could not "
                      "be aligned, so these markers were taken off: " + ", ".join(names) + ". Comp and check names "
                      "stay and are placed again after the solve, as are watch stars with a catalog name or position.")
             return "cleared"
+        h, w = new.shape[:2]
+
+        def moved(xy, name):
+            st = core.move_star(core.Star(name, float(xy[0]), float(xy[1])), reg, (h, w))
+            return (float(st.x), float(st.y))
+
+        def on_frame(xy):
+            return math.isfinite(xy[0]) and math.isfinite(xy[1]) and 0 <= xy[0] < w and 0 <= xy[1] < h
+
+        off = []
         for role, xy in marked:
-            st = core.move_star(core.Star(role, float(xy[0]), float(xy[1])), reg, tuple(new.shape[:2]))
-            setattr(self, f"{role}_xy", (float(st.x), float(st.y)))
+            nxy = moved(xy, role)
+            self._slot_notes.pop(role, None)   # review S4: its line named the old position
+            if role == "target" and not on_frame(nxy):
+                # review S5: off the new frame: no marker, so the solve's Target placement (or frame search) runs
+                self.target_xy = None
+                off.append("Target")
+                continue
+            setattr(self, f"{role}_xy", nxy)   # comps/check off the frame are dropped by _drop_offframe_slots
         for wname, wxy in list(self.watch_xy.items()):
-            st = core.move_star(core.Star(wname, float(wxy[0]), float(wxy[1])), reg, tuple(new.shape[:2]))
-            self.watch_xy[wname] = (float(st.x), float(st.y))
+            nxy = moved(wxy, wname)
+            if on_frame(nxy):
+                self.watch_xy[wname] = nxy
+            else:
+                self.watch_xy.pop(wname, None)
+                off.append(wname)
+        self.scan_excluded = [nxy for nxy in (moved(v, "x") for v in self.scan_excluded) if on_frame(nxy)]
         if getattr(self, "_auto_target_xy", None) is not None and self.target_xy is not None:
             self._auto_target_xy = self.target_xy
-        self.log(f"Reference: frame {new_lab} replaces {old_lab} (frames rejected in Blink); markers carried over to "
+        self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame); markers carried over to "
                  f"it ({'turned 180°, ' if reg.get('flipped') else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
-                 + ", ".join(names) + ".")
+                 + ", ".join(names) + "."
+                 + (f" Not on the new frame, so taken off: {', '.join(off)}." if off else ""))
         return "moved"
 
     def _calibration_failed(self, message: str, detail: str = ""):
@@ -11199,7 +11227,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 continue
             mag = mag_var.get()
             bands = self.star_bands.get(role)
-            self._set_slot(role, xy, name)
+            self._set_slot(role, xy, name, vet=False)
             if getattr(self, f"{role}_xy") is None:
                 missing.append(name)   # _set_slot refused (already marked as another slot) and said why
                 continue
@@ -11209,9 +11237,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if isinstance(bands, dict):
                 self.star_bands[role] = bands
             got = getattr(self, f"{role}_xy")
+            now = str(mag_var.get()).strip()
+            if str(mag).strip():
+                tail = f"; magnitude {now} kept as loaded."
+            elif now:
+                tail = f"; magnitude {now} from the catalog (the slot had none): check it."   # review S6
+            else:
+                tail = "; type its magnitude."
             self._slot_say(role, f"✓ {role_label(role)} {name} placed after the solve at ({got[0]:.0f}, {got[1]:.0f})"
-                                 + (f"; magnitude {str(mag).strip()} kept as loaded." if str(mag).strip() else
-                                    "; type its magnitude."))
+                                 + tail, bad=not now)
             placed.append(role)
         if placed:
             self.log("Comps/check placed after the solve: " + ", ".join(
@@ -11221,7 +11255,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.refresh_preview()
         return placed
 
-    def _set_slot(self, role: str, xy, text: str):
+    def _set_slot(self, role: str, xy, text: str, vet: bool = True):
         xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centered on its star like a click
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
@@ -11238,7 +11272,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         self._slot_say(role, ("⚠ " if bad else "✓ ") + msg, bad=bad)   # 2.2.14 (item 14)
-        self._vet_choice(role, xy)
+        if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
+            self._vet_choice(role, xy)
 
     def _chart_star_at(self, xy, reach: float = 8.0):
         best = None
@@ -12663,9 +12698,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._restore_discovery_watch()   # 2.2.18 (item 12): this field's remembered Discovery watch stars
         self._locate_watch_stars()
         self._fill_marked_from_chart()
+        auto_slots = []
         if self.mode_key != "discovery":
             self._drop_offframe_slots()   # 2.2.19 (#20): comps/check of an earlier run that are not on this frame
-            self._auto_place_named_slots()   # 2.3.4: a loaded series' comps/check get their markers (no Enter)
+            try:
+                auto_slots = self._auto_place_named_slots()   # 2.3.4: a loaded series' comps/check get their markers
+            except Exception as exc:   # review S1: never stops the rest of the solve (a box mid-edit, say)
+                auto_slots = []
+                self.log(f"Comps/check were not placed after the solve ({type(exc).__name__}: {exc}); press Enter in "
+                         "each name box or click the stars.")
             self._locate_comps_under()    # 2.2.19 (#34): comps moved out by Use comps are measured as spares
         self._suggest_comps()
         self._update_pick_label()
@@ -12689,6 +12730,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "Look at the circles. Are they on real stars, in the pattern the catalogs show?",
             ):
                 self.chart_placed = []
+                for role in auto_slots:
+                    # review S7: comps/check placed from the rejected solution go with it (names and magnitudes stay)
+                    setattr(self, f"{role}_xy", None)
+                    self._slot_notes.pop(role, None)
                 if auto_target and self.target_xy == getattr(self, "_auto_target_xy", None):
                     # 2.2.15 (review): the Target marker this solve placed goes with it.
                     self.target_xy = None
@@ -12940,9 +12985,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # measurable drift on hazy GSC nights); 0.6 only fills in when too few stars pass, and those lines say so.
         peaks = {}
 
+        self._suggest_peaks_pending = False
+
         def peak_of(name):
             if name not in peaks:
                 peaks[name] = self._raw_peak_at(where[name]) if lin is not None else float("nan")
+                if lin is not None and not math.isfinite(peaks[name]) and (getattr(self, "_raw_cache", None) or {}).get(
+                        "loading"):
+                    # review S3: the raw frame is still being read (no window access, e.g. 16-bit FITS with BZERO):
+                    # suggest again when its tiles arrive (_load_raw_blocks)
+                    self._suggest_peaks_pending = True
             return peaks[name]
 
         def linear_ok(name):
@@ -12955,10 +13007,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         def choose(pool, max_dbv):
             kw = dict(target_bv=t_bv, max_dbv=max_dbv, color_weight=2.0, count=40)
             if faint:
-                got = core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, -0.5), **kw)
-                got = got or core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, 0.3), **kw)
-            else:
-                got = core.suggest_comps_near(t_inst, pool, max_dmag=1.0, **kw)
+                got = [g for g in core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, -0.5), **kw)
+                       if linear_ok(g[0])]
+                return got or [g for g in core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, 0.3), **kw)
+                               if linear_ok(g[0])]
+            got = core.suggest_comps_near(t_inst, pool, max_dmag=1.0, **kw)
             return [g for g in got if linear_ok(g[0])]
 
         # 2.2.13 (John): AAVSO sequence stars of the right brightness come first; other catalog stars fill in when
@@ -12973,7 +13026,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if len(picks) >= 4:
                 break
             have = {n for n, _dm in picks}
-            pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)]
+            pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)
+                    # review nit: with the target's colour known, a star of unknown colour only fills in (0.6 passes)
+                    and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
             got = choose(pool, gate)[:4 - len(picks)]
             if gate > 0.3:
                 relaxed.update(n for n, _dm in got)
@@ -13009,7 +13064,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _measured_target_bv(self):
         """2.3.4 (e): the target's measured B-V: the median over the loaded series' points that have one (nights run
         with "Also measure R and B"), or None with fewer than 3."""
-        vals = [float(o.bv) for o in (self.observations or []) if math.isfinite(getattr(o, "bv", float("nan")))]
+        # review nit: calibrated colours only (a field fit or a saved slope), not the comp-colour-only fallback
+        vals = [float(o.bv) for o in (self.observations or []) if math.isfinite(getattr(o, "bv", float("nan")))
+                and core.color_method(o, "bv")]
         if len(vals) < 3:
             return None
         return float(np.median(vals))
@@ -13043,7 +13100,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 why += (f", B−V {info['bv']:.2f} (target {info['target_bv']:.2f}"
                         + (f", {frm}" if frm else "") + ")")
                 if info.get("relaxed"):
-                    why += " — the closest color here (none within 0.3)"
+                    why += " — the closest color left here (no more within 0.3)"
             elif info.get("bv") is None:
                 why += ", color not in the catalogs"
             elif info.get("target_bv") is None:
@@ -13085,9 +13142,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         t_bv = getattr(self, "_target_bv", None)
         star = self._chart_star_at(xy)
         c_bv = core.catalog_bv(star) if star else None
-        if t_bv is not None and c_bv is not None and abs(c_bv - t_bv) > 0.5:
+        if t_bv is not None and c_bv is not None and abs(c_bv - t_bv) > 0.3:   # 2.3.4: 0.3, as the suggestions
             parts.append(f"⚠ B−V {c_bv:.2f} against the target's {t_bv:.2f}: a comp of another color dims differently "
-                         "with airmass, which leaves a slow trend. Prefer one within about 0.5 in B−V.")
+                         "with airmass, which leaves a slow trend. Prefer one within about 0.3 in B−V.")
         return "   ".join(parts)
 
     def _apply_field_check(self, vet, solved, diag):
