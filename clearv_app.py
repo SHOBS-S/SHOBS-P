@@ -7724,7 +7724,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         markers (target, comps, check, watch stars) were placed on the old reference frame, so they are moved to the
         new one with the alignment between the two frames (as the #9 frame search does, core.move_star); when the two
         frames cannot be aligned they are cleared and the log says to click them again. Nothing happens for the same
-        frame, a frame of another size (the binning path rescales), or no markers. Returns "moved", "cleared" or ""."""
+        frame or no markers. A new frame at another binning is scaled first, then aligned (2.3.4 run-through); a frame
+        of another shape is left to the binning path, which clears. Returns "moved", "cleared" or ""."""
         old, old_path = self.preview, self.preview_path
         if old is None or not self.preview_is_debayered or not old_path or not path \
                 or os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(path)):
@@ -7737,11 +7738,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             new = core.debayer(calibrated, self.pattern.get(), self.debayer_mode.get())
         except Exception:
             new = None
-        if new is None or tuple(new.shape[:2]) != tuple(old.shape[:2]):
+        if new is None:
             return ""
+        scale = None
+        if tuple(new.shape[:2]) != tuple(old.shape[:2]):
+            # 2.3.4 (run-through, John 13 Nov): Binning changed in the same Calibrate as a new reference frame (frames
+            # rejected in Blink): scaling alone left the markers at the old frame's spots (×2), which across a meridian
+            # flip is blank sky. Scale first, as the binning path does, then align as for any new reference frame.
+            oh, ow = old.shape[:2]
+            nh, nw = new.shape[:2]
+            sx, sy = nw / float(ow), nh / float(oh)
+            if abs(sx - sy) > 0.02 * max(sx, sy):
+                return ""   # not a plain binning change: apply_debayer's rescale clears the markers and says so
+            self._rescale_marks(tuple(old.shape[:2]), tuple(new.shape[:2]))
+            self._marks_shape = tuple(new.shape[:2])   # done here: apply_debayer must not scale them again
+            scale = (sx, sy)
+            marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
         reg = None
         try:
             ref_src = core.detect_sources(old, max_sources=80)
+            if scale is not None:
+                ref_src = [((x + 0.5) * scale[0] - 0.5, (y + 0.5) * scale[1] - 0.5) for x, y in ref_src]
             src = core.detect_sources(new, max_sources=80)
             if ref_src and src and len(ref_src) >= 3 and len(src) >= 3:
                 reg = core.register_frame(ref_src, src, tuple(new.shape[:2]))

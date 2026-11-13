@@ -206,8 +206,9 @@ class TestCompHealthZeroPoint(unittest.TestCase):
             self.assertEqual(verdict[n], "steady", verdict)
 
 
-def _field(shift=(0.0, 0.0), flipped=False, n=40, shape=(400, 500), seed=3):
-    """A synthetic star field (Gaussian stars on a flat sky) and the star positions on it."""
+def _field(shift=(0.0, 0.0), flipped=False, n=40, shape=(400, 500), seed=3, scale=1):
+    """A synthetic star field (Gaussian stars on a flat sky) and the star positions on it. scale: the same field at
+    another binning (2 = bin 1 of a bin-2 frame: twice the pixels each way)."""
     import numpy as np
     rng = np.random.default_rng(seed)
     h, w = shape
@@ -216,10 +217,14 @@ def _field(shift=(0.0, 0.0), flipped=False, n=40, shape=(400, 500), seed=3):
     if flipped:
         pts = np.column_stack((w - 1 - pts[:, 0], h - 1 - pts[:, 1]))
     pts = pts + np.asarray(shift)
+    if scale != 1:
+        pts = (pts + 0.5) * scale - 0.5
+        h, w = h * scale, w * scale
+        shape = (h, w)
     yy, xx = np.mgrid[0:h, 0:w]
     img = np.full(shape, 300.0)
     for (x, y), a in zip(pts, amp):
-        img += a * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 1.6 ** 2))
+        img += a * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * (1.6 * scale) ** 2))
     img += rng.normal(0, 5, shape)
     return img, pts
 
@@ -434,6 +439,33 @@ class TestMarkersAfterSolve(unittest.TestCase):
             self.assertEqual(app.chart_placed, before)
         finally:
             app._preview_foreign = ""
+
+    def test_binning_change_and_new_reference_in_one_calibrate(self):
+        """Run-through 13 Nov (John): Binning 2 -> 1 with frames 1-3 already rejected, so one Calibrate brought a new
+        size AND a new (flipped) reference. The markers must land on their stars, scaled and turned, and
+        apply_debayer must not scale them a second time."""
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()                                          # bin 2, frame 1
+        img2, pts2 = _field(flipped=True, shift=(3.0, 2.0), scale=2)   # bin 1, frame 4
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        app._marks_shape = tuple(img1.shape)
+        c1 = ca.COMP_ROLES[0]
+        app.target_xy = tuple(pts1[0])
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app.check_xy = tuple(pts1[2])
+        app.watch_xy, app.scan_excluded, app.spare_marks = {}, [], []
+        app.variable_marks = [(float(pts1[3][0]), float(pts1[3][1]), {"name": "V1"})]
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0004.fits"), "moved")
+        for xy, want in ((app.target_xy, pts2[0]), (getattr(app, f"{c1}_xy"), pts2[1]), (app.check_xy, pts2[2]),
+                         (app.variable_marks[0][:2], pts2[3])):
+            self.assertLess(math.hypot(xy[0] - want[0], xy[1] - want[1]), 1.5)
+        self.assertEqual(app._marks_shape, tuple(img2.shape))
+        # what _calibration_done does next: the preview is replaced and debayered; no second scaling
+        app.calibrated = img2
+        app.variable_marks = []   # the test's stand-in mark has no catalog fields for the hover text
+        app.apply_debayer(auto=True)
+        self.assertLess(math.hypot(app.check_xy[0] - pts2[2][0], app.check_xy[1] - pts2[2][1]), 1.5)
 
     def test_unalignable_frames_clear_variable_marks(self):
         app, ca = self.app, self.ca
