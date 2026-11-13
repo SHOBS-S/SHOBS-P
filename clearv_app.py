@@ -3162,7 +3162,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             try:
                 if getattr(self, "_suggest_peaks_pending", False):
                     self._suggest_peaks_pending = False
-                    self._suggest_comps()   # 2.3.4 (review S3): the linear gate needs the raw peaks
+                    self._suggest_quiet = True
+                    try:
+                        self._suggest_comps()   # 2.3.4 (review S3): the linear gate needs the raw peaks
+                    finally:
+                        self._suggest_quiet = False
                     self.refresh_preview()
                 self.update_star_panel()
             except Exception:
@@ -7782,7 +7786,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._auto_target_xy = self.target_xy
         self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame); markers carried over to "
                  f"it ({'turned 180°, ' if reg.get('flipped') else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
-                 + ", ".join(names) + "."
+                 + (", ".join(names) if names else "the Discovery exclusions") + "."
                  + (f" Not on the new frame, so taken off: {', '.join(off)}." if off else ""))
         return "moved"
 
@@ -13046,7 +13050,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                          "peak": peaks.get(name, float("nan")), "linear": lin,
                                          "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
                                          or st.get("catalog", "")}
-        if self.suggested_comps:
+        if getattr(self, "_suggest_quiet", False):
+            if self.suggested_comps:
+                self.log("Suggested comps, checked against the linear limit now that the raw frame is read: "
+                         + ", ".join(n for n, _dm, _x, _y in self.suggested_comps) + ".")
+        elif self.suggested_comps:
             self.log(("Suggested comps (the target is faint, so 0.5–2 mag brighter than it"
                       if faint else "Suggested comps (near the target in brightness")
                      + (f" and near its color, target B−V {t_bv:.2f} ({t_bv_from})" if t_bv is not None else "")
@@ -13143,8 +13151,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         star = self._chart_star_at(xy)
         c_bv = core.catalog_bv(star) if star else None
         if t_bv is not None and c_bv is not None and abs(c_bv - t_bv) > 0.3:   # 2.3.4: 0.3, as the suggestions
-            parts.append(f"⚠ B−V {c_bv:.2f} against the target's {t_bv:.2f}: a comp of another color dims differently "
-                         "with airmass, which leaves a slow trend. Prefer one within about 0.3 in B−V.")
+            relaxed = any(((getattr(self, "suggested_info", None) or {}).get(n) or {}).get("relaxed")
+                          for n, _dm, sx, sy in (self.suggested_comps or [])
+                          if math.hypot(sx - xy[0], sy - xy[1]) < 2.0)
+            if relaxed:   # review nit: a suggestion offered as the closest color the field has
+                parts.append(f"B−V {c_bv:.2f} against the target's {t_bv:.2f}: the closest color this field offers; "
+                             "watch for a slow trend with airmass.")
+            else:
+                parts.append(f"⚠ B−V {c_bv:.2f} against the target's {t_bv:.2f}: a comp of another color dims "
+                             "differently with airmass, which leaves a slow trend. Prefer one within about 0.3 in B−V.")
         return "   ".join(parts)
 
     def _apply_field_check(self, vet, solved, diag):
