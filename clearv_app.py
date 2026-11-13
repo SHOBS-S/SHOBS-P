@@ -11026,8 +11026,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         # 2.3.4 (John's run-through, GSC 03308-00462 9 Nov, bin 2): a V 18 Gaia star 8 px from the
                         # V 12.65 comp took the comp's name and V on a click a few px off center. A catalog star with
                         # no light of its own on the image is not what the user clicked: center on the star seen.
-                        self.log(f"Click centered on {self._chart_star_label(there_star) if there_star else 'the star'}"
-                                 f" there: no star is seen at {self._chart_star_label(here[2])}'s catalog position.")
+                        if there_star is not None:
+                            self.log(f"Click centered on {self._chart_star_label(there_star)}: no star of its own is "
+                                     f"seen at the catalog position of {self._chart_star_label(here[2])} beside it.")
+                        else:
+                            self.log(f"Click centered on the star at ({info['x']:.0f}, {info['y']:.0f}).")
             if not info["found"] and star_pick:
                 # 2.2.18 (item 5): a comp or check is a star you can see; a click a little further out than 2.5 FWHM
                 # (sharp stars, the whole frame in view) still finds it: 1.5 x the aperture radius, as the pre-run check.
@@ -11380,6 +11383,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._vet_choice(role, xy)
 
     FAINT_PICK_DMAG = 2.5   # 2.3.4: a catalog star this much fainter than the star seen needs its own light to win
+    LIGHT_SEEN_REL = 0.25   # 2.3.4 (re-review): light of its own = above the wing by this fraction of the wing too
 
     @staticmethod
     def _chart_star_label(star) -> str:
@@ -11387,7 +11391,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     @staticmethod
     def _chart_dmag(a, b):
-        """2.3.4 (review): a's catalog magnitude minus b's in the same band (the solve's broad band, else V, else the
+        """2.3.4 (review): a's catalog magnitude minus b's in the same band (V, else the solve's broad band, else the
         chart band), or None when no band is known for both."""
         def get(star, key):
             try:
@@ -11395,7 +11399,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except (TypeError, ValueError, AttributeError):
                 return None
             return v if math.isfinite(v) else None
-        for key in ("bright", "V", "mag"):
+        for key in ("V", "bright", "mag"):
             ma, mb = get(a, key), get(b, key)
             if ma is not None and mb is not None:
                 return ma - mb
@@ -11433,7 +11437,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             vals = ndimage.map_coordinates(smooth, [[q[1] - y0 for q in pts], [q[0] - x0 for q in pts]], order=1)
         except Exception:
             return None
-        return bool(vals[0] - min(vals[1:]) > 5.0 * noise / 3.0)
+        # Re-review M-A: the point turned 180 degrees cancels an elongated star (its wing is the same both ways); a
+        # third star on it falls back to the lower of the 90/270 points. The relative term absorbs a small centring
+        # error on a bright wing.
+        ref = max(vals[2], min(vals[1], vals[3]))
+        sky = float(np.median(crop))
+        return bool(vals[0] - ref > max(5.0 * noise / 3.0, self.LIGHT_SEEN_REL * (ref - sky)))
 
     def _faint_catalog_pick_ok(self, here, there_star, centre) -> bool:
         """2.3.4: the 2.2.18 rule (a comp/check click on a catalog star beside a brighter neighbor keeps the click)
@@ -12122,20 +12131,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form."""
         if mode == "target" or not self.chart_placed:
             return ""
-        seeing = self._seeing()
-        tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
         best = None
-        for x, y, star in sorted(self.chart_placed, key=lambda e: math.hypot(e[0] - xy[0], e[1] - xy[1])):
+        for x, y, star in self.chart_placed:
             d = math.hypot(x - xy[0], y - xy[1])
-            if d >= 8:
-                break
-            # 2.3.4 (review S3): further than the seeing from the marker, a catalog star with no light of its own is
-            # only a faint neighbor of the marked star (an invisible V 18 Gaia star 8 px from a V 12.65 comp), never
-            # its name and magnitude.
-            if d > tight and self._light_seen_at((x, y), xy) is False:
-                continue
-            best = (d, star)
-            break
+            if d < 8 and (best is None or d < best[0]):
+                best = (d, star)
         if best is None:
             return ""
         star = best[1]
