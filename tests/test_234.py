@@ -75,5 +75,52 @@ class TestFitCsvErrors(unittest.TestCase):
         self.assertEqual(tui.fit_csv_error_line({"error_scale": float("nan"), "rchi2": 1, "beta": 1}), "")
 
 
+try:
+    import tkinter as _tk
+    _r = _tk.Tk()
+    _r.destroy()
+    HAVE_TK = True
+except Exception:
+    HAVE_TK = False
+
+
+def _app():
+    import clearv_app as ca
+    ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test234.log")
+    app = ca.App()
+    return ca, app
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestStarsPanelWidth(unittest.TestCase):
+    """2.3.4: the Stars panel's ✕ buttons and "V magnitude" header stay inside the panel when its text grows."""
+
+    def _check(self, screen=None):
+        ca, app = _app()
+        try:
+            if screen:
+                app.winfo_screenwidth = lambda: screen
+            app.set_mode("variables")
+            app.update()
+            app.suggest_text.set("S1 TYC 3308-50-1  V 11.26  B-V 0.83  AAVSO sequence star, steady over three nights " * 3)
+            for role in (ca.COMP_ROLES[0], "check"):
+                app.star_status[role].set("Peak 56,000 ADU on the reference frame; near the linear limit " * 3)
+                # a bigger font: the status line asks for more width than the panel was first given
+                app.star_status_labels[role].configure(wraplength=680)
+            app.update()
+            canvas_w = app.panel_scroll.canvas.winfo_width()
+            for role in (ca.COMP_ROLES[0], "check"):
+                x_btn = [w for w in app.star_row_widgets[role] if w.winfo_class() == "TButton"][0]
+                self.assertLessEqual(x_btn.winfo_x() + x_btn.winfo_width(), canvas_w)
+        finally:
+            app.destroy()
+
+    def test_panel_refits_when_text_grows(self):
+        self._check()
+
+    def test_capped_panel_keeps_the_clear_buttons(self):
+        self._check(screen=1200)
+
+
 if __name__ == "__main__":
     unittest.main()

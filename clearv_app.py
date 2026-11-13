@@ -1039,7 +1039,11 @@ class ScrollBody:
     """2.2.2: a body that scrolls (vertically, and sideways when asked) only when it does not fit.
     Build the window's contents into .inner; call .fit() once they are in place, before fit_to_content."""
 
-    def __init__(self, parent, horizontal: bool = False, bg: str = "#ffffff"):
+    def __init__(self, parent, horizontal: bool = False, bg: str = "#ffffff", fit_width: bool = False):
+        # 2.3.4: fit_width keeps the contents exactly as wide as the visible body (never wider, so nothing is cut off
+        # at the right; a grid's stretchy column gives up the room) and narrows wrapped text to match (shrink_wrap).
+        self.fit_width = bool(fit_width)
+        self._shrinkers = []
         self.outer = ttk.Frame(parent, style="Card.TFrame")
         self.canvas = Canvas(self.outer, highlightthickness=0, borderwidth=0, background=bg)
         if sys.platform == "darwin":
@@ -1104,9 +1108,34 @@ class ScrollBody:
                 lab.configure(wraplength=max(240, int(event.width) - self._follow_pad))
             except Exception:
                 pass
+        if self.fit_width:
+            self._narrow(int(event.width))
+            return
         try:
             need = int(self.inner.winfo_reqwidth())
             self.canvas.itemconfigure(self._item, width=max(int(event.width), need))
+        except Exception:
+            pass
+
+    def shrink_wrap(self, labels, pad: int = 40):
+        """2.3.4: wrapped labels that keep their own wrap length while there is room, and wrap tighter (never wider than
+        the body less `pad`) when the body is narrower. Used with fit_width."""
+        for lab in labels:
+            try:
+                self._shrinkers.append((lab, int(float(str(lab.cget("wraplength")) or 0)), int(pad)))
+            except Exception:
+                pass
+
+    def _narrow(self, width: int):
+        if width <= 1:
+            return
+        for lab, own, pad in self._shrinkers:
+            try:
+                lab.configure(wraplength=max(160, min(own, width - pad)) if own > 0 else max(160, width - pad))
+            except Exception:
+                pass
+        try:
+            self.canvas.itemconfigure(self._item, width=width)
         except Exception:
             pass
 
@@ -7934,7 +7963,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.8: with up to 10 comps the Stars and Watch boxes no longer fit; the whole right-hand panel scrolls
         # (scroll bar only when needed; the mouse wheel scrolls it while the pointer is over it, so the image keeps
         # its own wheel zoom). Each comp's full status lines are kept, never shortened.
-        self.panel_scroll = ScrollBody(panel)
+        self.panel_scroll = ScrollBody(panel, fit_width=True)   # 2.3.4: ✕ buttons never cut off at the right
         self.panel_scroll.pack(fill=BOTH, expand=True)
         holder = self.panel_scroll.inner
         self.star_panel = ttk.Frame(holder, style="Card.TFrame")
@@ -7942,6 +7971,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.disc_panel = ttk.Frame(holder, style="Card.TFrame")
         self._build_discovery_panel(self.disc_panel)
         self.star_panel.pack(fill=BOTH, expand=True)
+        self.panel_scroll.shrink_wrap(self._wrapped_labels(holder))   # 2.3.4
         self.after_idle(self._fit_photo_panel)
         plot_host = ttk.Frame(body, style="Card.TFrame")
         plot_host.pack(side=LEFT, fill=BOTH, expand=True)
@@ -7990,6 +8020,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log_toggle.pack(side=RIGHT)
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
         return page
+
+    def _wrapped_labels(self, widget):
+        """2.3.4: every label under `widget` that wraps its text (for ScrollBody.shrink_wrap)."""
+        found = []
+        for child in widget.winfo_children():
+            try:
+                if child.winfo_class() == "TLabel" and int(float(str(child.cget("wraplength")) or 0)) > 0:
+                    found.append(child)
+            except Exception:
+                pass
+            found.extend(self._wrapped_labels(child))
+        return found
 
     def _fit_photo_panel(self):
         """2.2.9 (John): the right-hand panel was a fixed 520 px, which does not grow with Windows display scaling, so
