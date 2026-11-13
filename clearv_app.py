@@ -7727,8 +7727,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         frame or no markers. A new frame at another binning is scaled first, then aligned (2.3.4 run-through); a frame
         of another shape is left to the binning path, which clears. Returns "moved", "cleared" or ""."""
         old, old_path = self.preview, self.preview_path
-        if old is None or not self.preview_is_debayered or not old_path or not path \
+        if old is None or not old_path or not path \
                 or os.path.normcase(os.path.abspath(old_path)) == os.path.normcase(os.path.abspath(path)):
+            return ""
+        if not self.preview_is_debayered:
+            # review (S2): the markers' image never got debayered (that step failed): they cannot be aligned to the
+            # new frame, and scaling alone would leave them on the old frame's spots.
+            gone = [role_label(role) for role, xy in self._marked_roles() if xy is not None]
+            for role, _xy in self._marked_roles():
+                setattr(self, f"{role}_xy", None)
+            self.watch_xy.clear()
+            self.variable_marks, self.spare_marks = [], []
+            if gone:
+                self.log("Reference: a new frame, and the markers' image could not be lined up with it, so these "
+                         "markers were taken off: " + ", ".join(gone) + ". The solve places the comp and check names "
+                         "again.")
+                return "cleared"
             return ""
         marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
         if not marked and not self.watch_xy and not self.scan_excluded and not self.variable_marks \
@@ -7772,6 +7786,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._slot_notes.pop(role, None)    # review S4: no stale "✓ … Marker at (x, y)" line
             self.watch_xy.clear()
             self.scan_excluded = []
+            for rec in (getattr(self, "_comps_under", None) or {}).values():   # review (S1): found again by the solve
+                rec["xy"] = None
             # 2.3.4 (run-through): the old frame's variable ✕ marks and spares would sit on blank sky of the new
             # frame until its solve lands; the solve marks them again.
             self.variable_marks = []
@@ -7813,6 +7829,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.variable_marks = [(*nxy, v) for nxy, v in ((moved((x, y), "v"), v) for x, y, v in self.variable_marks)
                                if on_frame(nxy)]
         self.spare_marks = []
+        for rec in (getattr(self, "_comps_under", None) or {}).values():   # review (S1): moved-out comps too
+            if rec.get("xy") is not None:
+                nxy = moved(rec["xy"], "u")
+                rec["xy"] = nxy if on_frame(nxy) else None
         if getattr(self, "_auto_target_xy", None) is not None and self.target_xy is not None:
             self._auto_target_xy = self.target_xy
         turned = bool(reg.get("flipped"))
