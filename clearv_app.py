@@ -11438,8 +11438,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             return None
         # Re-review M-A: the point turned 180 degrees cancels an elongated star (its wing is the same both ways); a
-        # third star on it falls back to the lower of the 90/270 points. The relative term absorbs a small centring
-        # error on a bright wing.
+        # third star on the 90 or 270 point is ignored (the lower of the two), but one on the 180 point raises the
+        # reference, so a faint star with another star opposite it reads as no light (rare; the safe direction: the
+        # click centers on the bright star with a log line). The relative term absorbs a small centring error.
         ref = max(vals[2], min(vals[1], vals[3]))
         sky = float(np.median(crop))
         return bool(vals[0] - ref > max(5.0 * noise / 3.0, self.LIGHT_SEEN_REL * (ref - sky)))
