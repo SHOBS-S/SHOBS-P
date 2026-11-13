@@ -7,7 +7,7 @@ authors:
     family-names: "Armbrust"
     affiliation: "Shiloh Hill Observatory"
   - name: "Shiloh Hill Observatory"
-version: "2.3.3"
+version: "2.3.4"
 date-released: "2026-11-11"
 doi: "10.5281/zenodo.23417063"
 license: GPL-3.0-or-later

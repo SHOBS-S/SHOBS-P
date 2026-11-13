@@ -1,4 +1,4 @@
-# SHOBS-P User's Manual (version 2.3.3)
+# SHOBS-P User's Manual (version 2.3.4)
 
 > November 2026. Written for SHOBS-P 2.2.18, updated for 2.2.19 (Linux and Mac start files, New reduction,
 > defocused stars, the linear limit, the corner plot and multi-night transit timing, among others) and for 2.2.20
@@ -15,10 +15,11 @@ settings file for Variables reports; the short-night period search; a catalog ou
 warning for comps and the check only, with a better check star) and for 2.3.2 (a site typed for someone else's frames
 is asked about before it is saved; the transit fit waits for Fit transit; Plot bins; the Free shape check per
 parameter; pier sides within 10°; Calibrate runs the Scan folders checks; a roomier Photometry image; the Mac app from
-Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the new-version check; the Export window's result line; Time of max/min listing the saved times, with Elements from saved times), checked against the program. Screenshots were retaken on 2.3.0
+Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the new-version check; the Export window's result line; Time of max/min listing the saved times, with Elements from saved times) and for 2.3.4 (series comps and check placed after the solve; markers that follow a new reference frame; Comp health zero points; the fit CSV's raw error column; how S1–S4 are chosen; starting a new series), checked against the program. Screenshots were retaken on 2.3.0
 > wherever the page or its version line changed, and on 2.3.2 for the pages 2.3.2 changed (the Photometry page, the
 > Transit fit page and the WebObs offer), and on 2.3.3 for the pages 2.3.3 changed (the Credits page and the Time of
-> maximum / minimum window).
+> maximum / minimum window), and on 2.3.4 for the pages 2.3.4 changed (the Photometry page's Stars panel and
+> suggestion lines, the Comp health window, the Colour box).
 > Each chapter is its own file in this folder; this page is the table of contents.
 
 ## Part 1 — Getting to know SHOBS-P
@@ -46,7 +47,7 @@ Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the
 ## Part 3 — Variables mode
 
 9. **[Reduce a variable-star night](09-reduce-a-variable-night.md)** — target, comparison stars (AAVSO sequence first), check star, run, read the light curve.
-10. **[Build a multi-night series](10-build-a-multi-night-series.md)** — add a night, the "same star" and equipment questions, night notes, saving, the backup copy.
+10. **[Build a multi-night series](10-build-a-multi-night-series.md)** — starting a new series (the first night sets the rules), add a night (comps placed after the solve), the "same star" and equipment questions, night notes, saving, the backup copy.
 11. **[Check your comparison stars](11-check-your-comparison-stars.md)** — Comp health, Use comps, correcting a catalog magnitude, spares, zero-point warnings.
 12. **[Flags and bad data](12-flags-and-bad-data.md)** — saturation, cloud, dew/haze (the Keep question), planet transits in a variable's frames, pier side.
 13. **[Look for a period](13-look-for-a-period.md)** — the periodogram, what "significant" means here, aliases, the airmass check.

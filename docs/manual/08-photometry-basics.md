@@ -233,10 +233,30 @@ of a bare "check" (a night added to a series whose check was saved as "check" be
   in and would make a good check".
 
 **Suggested comparison stars** are drawn as thick green rings labeled **S1**, **S2** …: up to four catalog stars close
-to the target in brightness and color, not variable, not near saturation, AAVSO sequence stars first. They are good
-first choices. Under the **Stars** panel, one line per suggestion says what it is and why, for example "S1 = … V 11.20
-(AAVSO sequence 112): 0.3 mag fainter than the target, B−V 0.62 (target 0.60)", and "— now C2" once you use it.
-Chapter 9 says more about choosing comps.
+to the target in color and brightness, not variable, not near saturation or the linear limit, well inside the frame,
+AAVSO sequence stars first. They are good first choices. Under the **Stars** panel, one line per suggestion says what
+it is and why, for example "S1 = … V 11.20 (AAVSO sequence 112): 0.3 mag fainter than the target, B−V 0.62 (target
+0.60, measured), raw peak 18,400 ADU (51% of the linear limit)", and "— now C2" once you use it. Chapter 9 says more
+about choosing comps.
+
+#### How S1–S4 are chosen
+
+From 2.3.4 the rules are:
+
+- **Not a known or suspected variable** (VSX and SIMBAD), and labeled in a catalog with a magnitude in your band.
+- **Brightness:** within 1 mag of the target (for a faint target, 0.5 to 2 mag brighter, about 1 mag brighter best).
+- **Colour first:** within 0.3 in B−V of the target, and colour counts twice as much as brightness when they are
+  ranked. The target's colour is its **measured** B−V when the loaded series has nights with **Also measure R and B**,
+  otherwise the catalog's (the line says which). When too few stars pass, stars up to 0.6 apart fill in, and their line
+  says **the closest color here (none within 0.3)**. A star or target with no colour in the catalogs says so.
+- **Linear:** with a **linear ADU** set, the star's brightest raw pixel on the reference frame must be under 75 % of
+  it, so the sharpest frames of the night stay linear too.
+- **Inside the frame:** at least 3 × the sky-out radius from every edge, so a framing shift between nights does not
+  drop it. Nearer stars only fill in when the field has too few, and their line says how far in they are.
+- **AAVSO sequence stars** that pass come first, then other catalog stars.
+
+What a suggestion cannot know yet is how steady the star is: that shows after the run, in **Comp health…**
+(chapter 11).
 
 **Variables are caught.** If you click a known or suspected variable as a comp or check star, SHOBS-P asks whether to
 use it anyway. **No** removes the marker.

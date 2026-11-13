@@ -190,8 +190,11 @@ form.
   It is in magnitudes, not the transit fit's relative flux.
 - With a fit shown, the same button also writes the **fit CSV** beside it:
   `<planet>_<filter>_<date>_SHOBS-P_transit_fit.csv`, with the columns `BJD_TDB`, `rel_flux`, `rel_flux_err`, `model`,
-  `residual`, `flag`, `airmass` and `segment`. `rel_flux` is the raw relative flux (not detrended); `segment` says
-  `before flip` or `after flip` on a night with a meridian flip. Trimmed points are included and flagged `trimmed`. Without an Output folder it is named after
+  `residual`, `flag`, `airmass`, `segment` and (from 2.3.4) `rel_flux_err_raw`. `rel_flux` is the raw relative flux (not
+  detrended); `segment` says `before flip` or `after flip` on a night with a meridian flip. `rel_flux_err` is the error
+  bar the fit used: the raw error (`rel_flux_err_raw`, from photon noise, sky and scintillation) times the scale **S**,
+  and a `# Errors:` line above the columns gives S, the raw reduced chi-square and the red-noise β, so a reduced
+  chi-square rebuilt from `rel_flux_err` (about 1 by design) is not mistaken for the raw one. Trimmed points are included and flagged `trimmed`. Without an Output folder it is named after
   the light-curve CSV you chose (for example `mine.csv` and `mine_transit_fit.csv`). For a report fit only the fit CSV
   is written; if the report's times stayed in JD_UTC, the first column is `JD_UTC`. For the detrended flux, use the
   CSV in the ExoFOP package. Under the `# Created` line, comment lines starting with `#` give the planet, filter,

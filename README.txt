@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.3
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.4
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -1174,6 +1174,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.4  UI only (numbers as 2.3.0): series comps/check placed after the solve; markers follow a new
+       reference frame after a Blink reject (#74); Comp health zero points (#75); fit CSV error columns (#73);
+       tighter suggested comps (colour, linear limit, edge); Stars panel clear buttons always visible.
 2.3.3  Damaged catalog answers rejected (APASS); new-version check; Export window feedback;
        Rejected frames listed once each; elevation note; Time of max/min starts from saved times.
 2.3.2  UI only (numbers as 2.3.0): typed site for other frames not saved as yours; fit waits for Fit transit;

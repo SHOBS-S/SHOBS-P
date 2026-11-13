@@ -6,7 +6,22 @@ Most variable-star questions need more than one night: a period, a time of minim
 
 A series file keeps every point of every night, with its flags, plus the settings you used: the Star ID, comps and check star with their names and catalog magnitudes, the aperture sizes, the period search range, your night notes, which comps you chose with **Use comps…**, your answers about dew/haze and planet transits, and which nights you have already sent in a report (the **Sent** column, chapter 15). Each night also keeps its mount (alt-az nights have no pier sides) and, for color images that were already debayered, the channel measured.
 
-It does **not** keep star positions on the image. On every new night you mark the target, comps and check star again (the solve and the Target lookup usually make this quick).
+It does **not** keep star positions on the image, but it does keep each comp's and the check star's position on the sky. On every new night the solve places the target from its RA/Dec and, from 2.3.4, the series' comps and check star from their sky positions, so a series night is usually: calibrate, wait for the solve, **Run photometry**.
+
+## Starting a new series
+
+The first night sets the rules for every night after it. Changing the aperture, the comps or the check star later means redoing every night, so choose them with care on night 1:
+
+1. **Aperture.** Press **Suggest…** (chapter 8) and keep the aperture radius at least about 1.5 × the FWHM (2 × for bright or defocused stars). Then keep it for the whole series. An aperture of only about 1.1 × the FWHM loses light that changes with the seeing (on GSC 03308-00462 it cost about 0.2 mag and SHOBS-FLUX called it not photometric).
+2. **Colour.** Tick **Also measure R and B** on night 1, so the series has the target's own B−V. The suggested comps then use it (see "How S1–S4 are chosen" in chapter 8).
+3. **Comps.** Within about 0.2 in B−V and about 1 mag of the target, steady (check them with **Comp health…** after a few nights, chapter 11), and well inside the frame, so a small framing shift on another night does not push them off.
+4. **Check star.** Colour-matched too: a check of another colour drifts with airmass on hazy nights and looks like a problem that is not there.
+5. **Linear limit.** Comps and the check under the **linear ADU** limit on the sharpest frames, not just the reference frame: a night of better seeing makes the same star peak higher.
+6. **Lock it in.** Press **Save series**. If you change any of these later, redo every night with the new choice.
+
+![The aperture suggestion (Suggest…)](img/08-suggest-apertures.png)
+
+![The Colour box with Also measure R and B ticked](img/10-colour-box.png)
 
 ## Start a series
 
@@ -24,7 +39,7 @@ The order matters: load first, reduce second.
 2. A message tells you how many points and nights were loaded, and that the star positions are not stored.
 3. The line at the top of the Input page now reads something like **Series: SZ_Lyn.cvseries — 8 nights, last 13–14 Oct. After the run you'll be asked to add the night.**
 4. Point the Input page at the new night's bias, dark, flat and lights, and blink and calibrate as usual.
-5. On the Photometry page, mark the target, the **same comps** and the **same check star** as before. Names left over from the series show in the Stars panel with **⚠ not marked on this image**; click each star on the image to mark it again. Clicking a comp that the series already knows puts it back into its old slot. If the series has a **Use comps…** choice, the comp rows show the comps in use; the series' other comps are found after the solve and still measured on every frame as spares, so a later **Use comps…** can bring them back (chapter 11).
+5. On the Photometry page, wait for the solve. From 2.3.4 it places the target, the **same comps** and the **same check star** as before, and each row says **✓ … placed after the solve …; magnitude … kept as loaded** (the series' magnitude is kept, never replaced by a catalog's). A star that is not on tonight's frame says so in its row (**⚠ … is not on this frame**): click another star, or clear the slot. A name with no saved position (a series from before 2.2.3) asks you to press **Enter** in its box or click the star. Clicking a comp that the series already knows puts it back into its old slot. If the series has a **Use comps…** choice, the comp rows show the comps in use; the series' other comps are found after the solve and still measured on every frame as spares, so a later **Use comps…** can bring them back (chapter 11).
 6. Use the same aperture sizes as the other nights.
 7. Press **Run photometry**.
 8. When asked **Add these N points as the night of … to the M points already in the series?**, answer **Yes**.

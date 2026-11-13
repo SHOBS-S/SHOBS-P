@@ -64,6 +64,11 @@ Don't reject frames just because the star looks a little fainter; that may be th
 > next photometry run then makes the first kept frame its reference and carries the markers over to it, and the log
 > says so: **Reference: the frame the stars were marked on (…) is rejected, so the first kept frame (…) is the
 > reference; the markers were carried over to it…**
+>
+> If you press **Calibrate** again after rejecting frames, the first kept frame becomes the reference right away. From
+> 2.3.4 the markers follow it, on either side of a meridian flip, and the log says **Reference: frame … replaces …
+> (frames rejected in Blink); markers carried over to it …**. If the two frames cannot be lined up, the markers are taken
+> off but the comp and check names and magnitudes stay, and the solve places them again.
 
 ## Bring a frame back
 

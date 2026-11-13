@@ -48,6 +48,8 @@ Click a row in the table to highlight that star's curve.
 - **pair drifts; add a 3rd star to tell which** — with only two stars, SHOBS-P can see that they disagree but not which one is at fault. Add a spare or a third comp. (On one night the same pair reads **one night; steady pair** or **one night; pair jumps at the flip, add a 3rd star to tell which**.)
 - **too few points** — not enough data to judge.
 
+Each star is put on its own zero point before the others are averaged, and the stars that make up the reference are chosen night by night (a star in most of a night's frames counts for that night). From 2.3.4, a star missing from part of a night therefore no longer shifts the other stars' level for that night (before, a comp on half the frames of one night could fake a 0.05 mag night offset in all the others).
+
 When a star is clearly SUSPECT, SHOBS-P leaves it out of the reference for the others and says so (**Left out of the reference so their drift does not echo in the steady stars: …**). Otherwise one bad star makes all the good ones look as if they drift the other way.
 
 On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both pier sides** have nothing to show. The pier-side line under the table names the stars that read the same on both sides of the pier (good comps for a campaign with meridian flips) and those that step at the flip. If the target steps at the flip while steady comps do not, look at the field position (flat, a ghost, a bright star's halo) rather than the comps.
