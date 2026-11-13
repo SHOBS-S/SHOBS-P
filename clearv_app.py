@@ -11016,9 +11016,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # (a faint comp beside a bright star), so keep the 2.2.8 answer (the click).
                 tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
                 here_star = self._chart_star_at(xy, reach=tight)
-                if here_star is not None and self._chart_star_at((info["x"], info["y"]), reach=tight) is not here_star:
-                    info = core.recenter_info(self.preview, xy[0], xy[1], radius,
-                                              seeing if math.isfinite(seeing) else None)
+                there_star = self._chart_star_at((info["x"], info["y"]), reach=tight)
+                if here_star is not None and there_star is not here_star:
+                    if self._faint_catalog_pick_ok(here_star, there_star):
+                        info = core.recenter_info(self.preview, xy[0], xy[1], radius,
+                                                  seeing if math.isfinite(seeing) else None)
+                    else:
+                        # 2.3.4 (John's run-through, GSC 03308-00462 9 Nov, bin 2): a V 18 Gaia star 8 px from the
+                        # V 12.65 comp took the comp's name and V on a click a few px off center. A catalog star far
+                        # fainter than the star the centring found is not what the user sees: center on the star.
+                        self.log(f"Click centered on {self._chart_star_label(there_star)}: the catalog star at the "
+                                 f"click, {self._chart_star_label(here_star)}, is "
+                                 f"{self._chart_mag(here_star) - self._chart_mag(there_star):.1f} mag fainter and "
+                                 "cannot be the star you see there.")
             if not info["found"] and star_pick:
                 # 2.2.18 (item 5): a comp or check is a star you can see; a click a little further out than 2.5 FWHM
                 # (sharp stars, the whole frame in view) still finds it: 1.5 x the aperture radius, as the pre-run check.
@@ -11369,6 +11379,35 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._slot_say(role, ("⚠ " if bad else "✓ ") + msg, bad=bad)   # 2.2.14 (item 14)
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
             self._vet_choice(role, xy)
+
+    FAINT_PICK_DMAG = 2.5   # 2.3.4: a catalog star this much fainter than its neighbor (10x) is not a click target
+
+    @staticmethod
+    def _chart_mag(star) -> float:
+        """2.3.4: a labeled star's catalog magnitude (its band, else the solve's brightness), NaN when unknown."""
+        for key in ("mag", "bright"):
+            try:
+                v = float((star or {}).get(key))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v):
+                return v
+        return float("nan")
+
+    @staticmethod
+    def _chart_star_label(star) -> str:
+        return str((star or {}).get("auid") or (star or {}).get("label") or "a catalog star")
+
+    def _faint_catalog_pick_ok(self, here_star, there_star) -> bool:
+        """2.3.4: the 2.2.18 rule (a comp/check click on a catalog star beside a brighter neighbor keeps the click)
+        applies only to a star that can be seen there: not one FAINT_PICK_DMAG or more fainter than the neighbor the
+        centring found. With either magnitude unknown the rule applies as before."""
+        if there_star is None:
+            return True
+        here_m, there_m = self._chart_mag(here_star), self._chart_mag(there_star)
+        if not (math.isfinite(here_m) and math.isfinite(there_m)):
+            return True
+        return here_m - there_m < self.FAINT_PICK_DMAG
 
     def _chart_star_at(self, xy, reach: float = 8.0):
         best = None
