@@ -366,6 +366,75 @@ class TestMarkersAfterSolve(unittest.TestCase):
         self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0030.fits"), "moved")
         self.assertLess(math.hypot(app.check_xy[0] - pts2[2][0], app.check_xy[1] - pts2[2][1]), 1.0)
 
+    def test_variable_marks_follow_across_a_flip_and_say_so(self):
+        """Run-through 13 Nov (John): the old frame's variable ✕ marks sat on blank sky of the new frame until its
+        solve landed. They move with the markers; spares go; the step line says the image turned and is not Ready
+        while solving."""
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        img2, pts2 = _field(flipped=True, shift=(3.0, 2.0))
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        app.target_xy = tuple(pts1[0])
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app.check_xy = tuple(pts1[2])
+        app.watch_xy = {}
+        v = {"name": "V1"}
+        app.variable_marks = [(float(pts1[3][0]), float(pts1[3][1]), v)]
+        app.spare_marks = [(1.0, 1.0, {"name": "S"})]
+        self.assertEqual(app._carry_marks_to_new_reference(img2, "/data/lights/L_0030.fits"), "moved")
+        self.assertEqual(len(app.variable_marks), 1)
+        vx, vy, vv = app.variable_marks[0]
+        self.assertIs(vv, v)
+        self.assertLess(math.hypot(vx - pts2[3][0], vy - pts2[3][1]), 1.0)
+        self.assertEqual(app.spare_marks, [])
+        # the new frame as the app shows it while its solve runs
+        app.preview, app.preview_path, app.chart_placed = img2, "/data/lights/L_0030.fits", []
+        app._solving = True
+        try:
+            _n, _d, cur, text = app.photo_steps()
+            self.assertEqual(cur, 0)
+            self.assertIn("Solving", text)
+            self.assertIn("turned 180°", text)
+            self.assertNotIn("Ready", text)
+        finally:
+            app._solving = False
+
+    def test_unalignable_frames_clear_variable_marks(self):
+        app, ca = self.app, self.ca
+        img1, pts1 = _field()
+        import numpy as np
+        blank = np.full(img1.shape, 300.0)
+        app.pattern.set(ca.core.MONO)
+        app.preview, app.preview_is_debayered, app.preview_path = img1, True, "/data/lights/L_0001.fits"
+        c1 = ca.COMP_ROLES[0]
+        setattr(app, f"{c1}_xy", tuple(pts1[1]))
+        app.watch_xy = {}
+        app.variable_marks = [(10.0, 10.0, {"name": "V1"})]
+        self.assertEqual(app._carry_marks_to_new_reference(blank, "/data/lights/L_0030.fits"), "cleared")
+        self.assertEqual(app.variable_marks, [])
+
+    def test_series_loaded_on_a_solved_image_solves_again(self):
+        """Run-through 13 Nov (John): Load series after New reduction on a solved image placed nothing until Solve
+        again; now the image is solved again (which places the target, series comps/check and S1-S4)."""
+        img, pts = _field()
+        app = self._solved(img, pts)
+        app.variable_marks = [(1.0, 1.0, {"name": "V"})]
+        calls = []
+        old_after = app.after
+        app.after = lambda ms, fn=None, *a: calls.append(fn)
+        try:
+            app.current_step = self.ca.STEP_PHOTO
+            app._resolve_for_loaded_series()
+        finally:
+            app.after = old_after
+        self.assertEqual(app.chart_placed, [])
+        self.assertIsNone(app.chart_solution)
+        self.assertEqual(app.variable_marks, [])
+        self.assertIsNone(app._auto_solved_for)
+        self.assertIn(app._auto_solve, calls)
+
     def test_unalignable_frames_take_markers_off_but_keep_names(self):
         app, ca = self.app, self.ca
         img1, pts1 = _field()

@@ -69,6 +69,12 @@ Don't reject frames just because the star looks a little fainter; that may be th
 > 2.3.4 the markers follow it, on either side of a meridian flip, and the log says **Reference: frame … replaces …
 > (frames rejected in Blink); markers carried over to it …**. If the two frames cannot be lined up, the markers are taken
 > off but the comp and check names and magnitudes stay, and the solve places them again.
+>
+> When the new reference is on the other side of the meridian flip, the whole image is turned 180° from what you saw
+> before, so the stars (and their markers) sit in different places on the screen. They are still on the same stars:
+> the log, and the line under the step bar, say **Frame … is on the other side of the meridian flip: the image is
+> turned 180° from before, and the markers moved with their stars.** The red variable-star marks move the same way.
+> While the new frame is being solved, the step line says **Solving the image… wait for it to finish before Run.**
 
 ## Bring a frame back
 

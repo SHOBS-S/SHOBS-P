@@ -7751,6 +7751,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._slot_notes.pop(role, None)    # review S4: no stale "✓ … Marker at (x, y)" line
             self.watch_xy.clear()
             self.scan_excluded = []
+            # 2.3.4 (run-through): the old frame's variable ✕ marks and spares would sit on blank sky of the new
+            # frame until its solve lands; the solve marks them again.
+            self.variable_marks = []
+            self.spare_marks = []
             self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame), and the two could not "
                      "be aligned, so these markers were taken off: " + ", ".join(names) + ". Comp and check names "
                      "stay and are placed again after the solve, as are watch stars with a catalog name or position.")
@@ -7782,12 +7786,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.watch_xy.pop(wname, None)
                 off.append(wname)
         self.scan_excluded = [nxy for nxy in (moved(v, "x") for v in self.scan_excluded) if on_frame(nxy)]
+        # 2.3.4 (run-through, John 13 Nov): the variable ✕ marks belong to the old frame too. Left in place they sat
+        # on blank sky of the new frame until its solve landed (longer when a catalog is slow). They move with the
+        # same alignment, as the binning change moves them; spares are picked again by the solve.
+        self.variable_marks = [(*nxy, v) for nxy, v in ((moved((x, y), "v"), v) for x, y, v in self.variable_marks)
+                               if on_frame(nxy)]
+        self.spare_marks = []
         if getattr(self, "_auto_target_xy", None) is not None and self.target_xy is not None:
             self._auto_target_xy = self.target_xy
+        turned = bool(reg.get("flipped"))
         self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame); markers carried over to "
-                 f"it ({'turned 180°, ' if reg.get('flipped') else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
+                 f"it ({'turned 180°, ' if turned else ''}shift {reg['dx']:+.1f}, {reg['dy']:+.1f} px): "
                  + (", ".join(names) if names else "the Discovery exclusions") + "."
-                 + (f" Not on the new frame, so taken off: {', '.join(off)}." if off else ""))
+                 + (f" Not on the new frame, so taken off: {', '.join(off)}." if off else "")
+                 + (f" Frame {new_lab} is on the other side of the meridian flip, so the image is turned 180° from "
+                    "before: the markers moved with their stars." if turned else ""))
+        if turned:
+            self._flip_turn_note = (path, f"Frame {new_lab} is on the other side of the meridian flip: the image is "
+                                          "turned 180° from before, and the markers moved with their stars.")
         return "moved"
 
     def _calibration_failed(self, message: str, detail: str = ""):
@@ -8254,6 +8270,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                         "you can click the target meanwhile (Target).")
             return names, done, 0, ("Not solved: press Solve again (top right) to retry, or click the target on the "
                                     "image (Target), then the comps.")
+        turn = getattr(self, "_flip_turn_note", None)   # 2.3.4 (run-through): said until the next new frame
+        turn = (" " + turn[1]) if turn and turn[0] == self.preview_path else ""
+        if not solved and solving:
+            # 2.3.4 (run-through): markers carried to a new reference frame: not "Ready" until the solve lands
+            return names, done, 0, "Solving the image… wait for it to finish before Run." + turn
         if not target:
             return names, done, 1, "Solved. Pick Target and click the target star."
         if not comps:
@@ -8262,7 +8283,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                        self.suggested_comps else ".") + not_solved)
         if not check:
             return names, done, 3, "Pick Check and click a check star: a steady star that tests the comps." + not_solved
-        return names, done, 4, "Ready: Run photometry."
+        return names, done, 4, "Ready: Run photometry." + turn
 
     def _place_step_strip(self):
         if not hasattr(self, "step_strip"):
@@ -11177,6 +11198,30 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
         return xy
+
+    def _resolve_for_loaded_series(self):
+        """2.3.4 (run-through, John 13 Nov): Load series on an image that is already solved (e.g. after New reduction)
+        left the target, the series' comps/check and the S1-S4 suggestions unplaced until Solve again, while the step
+        line said "Pick Target". The image is solved again now (on the Photometry page; else when it is next shown),
+        which places them as after any solve."""
+        if self.mode_key == "discovery" or self.preview is None or not self.preview_is_debayered \
+                or not self.chart_placed:
+            return
+        self.chart_placed = []
+        self.chart_solution = None
+        self.variable_marks = []
+        self.spare_marks = []
+        self.suggested_comps = []
+        self._auto_solved_for = None
+        self.log("Series loaded on an image already solved: solving it again to place the target and the series' "
+                 "comps and check.")
+        try:
+            self._update_pick_label()
+            self.refresh_preview()
+        except Exception:
+            traceback.print_exc()
+        if getattr(self, "current_step", None) == STEP_PHOTO:
+            self.after(150, self._auto_solve)
 
     def _auto_place_named_slots(self) -> list:
         """2.3.4 (John): after the solve, every comp/check slot that holds a name but no marker (a loaded series, or
@@ -16995,11 +17040,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             traceback.print_exc()
         nights = sorted({obs.night for obs in observations})
         self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then choose Add.")
+        self._resolve_for_loaded_series()   # 2.3.4 (run-through): an image solved before the load gets the series' stars
         messagebox.showinfo(
             APP_TITLE,
             f"Loaded {len(observations)} points, {len(nights)} night(s).\n\n"
             "Point Input at the new night's bias, dark, flat, and lights, run the flow, and choose Yes when asked to add the night.\n\n"
-            "The star positions are not stored, so mark the target and comps again on the new night's frame.",
+            "After the image is solved, the series' comps and check are placed on their stars by their saved sky "
+            "positions (names and magnitudes as saved). Check them before Run.",
         )
         # 2.2.15 (item 1, review): nights without a planet-transit check get one now (one lookup in the background,
         # one question for all nights with frames in a transit; silent otherwise).
