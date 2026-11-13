@@ -11015,20 +11015,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # A catalog star right at the click that the centring left for a brighter neighbor: the user meant it
                 # (a faint comp beside a bright star), so keep the 2.2.8 answer (the click).
                 tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
-                here_star = self._chart_star_at(xy, reach=tight)
-                there_star = self._chart_star_at((info["x"], info["y"]), reach=tight)
-                if here_star is not None and there_star is not here_star:
-                    if self._faint_catalog_pick_ok(here_star, there_star):
+                here = self._chart_entry_at(xy, reach=tight)
+                centre = (info["x"], info["y"])
+                there_star = self._chart_star_at(centre, reach=tight)
+                if here is not None and here[2] is not there_star:
+                    if self._faint_catalog_pick_ok(here, there_star, centre):
                         info = core.recenter_info(self.preview, xy[0], xy[1], radius,
                                                   seeing if math.isfinite(seeing) else None)
                     else:
                         # 2.3.4 (John's run-through, GSC 03308-00462 9 Nov, bin 2): a V 18 Gaia star 8 px from the
-                        # V 12.65 comp took the comp's name and V on a click a few px off center. A catalog star far
-                        # fainter than the star the centring found is not what the user sees: center on the star.
-                        self.log(f"Click centered on {self._chart_star_label(there_star)}: the catalog star at the "
-                                 f"click, {self._chart_star_label(here_star)}, is "
-                                 f"{self._chart_mag(here_star) - self._chart_mag(there_star):.1f} mag fainter and "
-                                 "cannot be the star you see there.")
+                        # V 12.65 comp took the comp's name and V on a click a few px off center. A catalog star with
+                        # no light of its own on the image is not what the user clicked: center on the star seen.
+                        self.log(f"Click centered on {self._chart_star_label(there_star) if there_star else 'the star'}"
+                                 f" there: no star is seen at {self._chart_star_label(here[2])}'s catalog position.")
             if not info["found"] and star_pick:
                 # 2.2.18 (item 5): a comp or check is a star you can see; a click a little further out than 2.5 FWHM
                 # (sharp stars, the whole frame in view) still finds it: 1.5 x the aperture radius, as the pre-run check.
@@ -11380,34 +11379,87 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
             self._vet_choice(role, xy)
 
-    FAINT_PICK_DMAG = 2.5   # 2.3.4: a catalog star this much fainter than its neighbor (10x) is not a click target
-
-    @staticmethod
-    def _chart_mag(star) -> float:
-        """2.3.4: a labeled star's catalog magnitude (its band, else the solve's brightness), NaN when unknown."""
-        for key in ("mag", "bright"):
-            try:
-                v = float((star or {}).get(key))
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(v):
-                return v
-        return float("nan")
+    FAINT_PICK_DMAG = 2.5   # 2.3.4: a catalog star this much fainter than the star seen needs its own light to win
 
     @staticmethod
     def _chart_star_label(star) -> str:
         return str((star or {}).get("auid") or (star or {}).get("label") or "a catalog star")
 
-    def _faint_catalog_pick_ok(self, here_star, there_star) -> bool:
+    @staticmethod
+    def _chart_dmag(a, b):
+        """2.3.4 (review): a's catalog magnitude minus b's in the same band (the solve's broad band, else V, else the
+        chart band), or None when no band is known for both."""
+        def get(star, key):
+            try:
+                v = float((star or {}).get("mags", {}).get("V") if key == "V" else (star or {}).get(key))
+            except (TypeError, ValueError, AttributeError):
+                return None
+            return v if math.isfinite(v) else None
+        for key in ("bright", "V", "mag"):
+            ma, mb = get(a, key), get(b, key)
+            if ma is not None and mb is not None:
+                return ma - mb
+        return None
+
+    def _light_seen_at(self, p, centre):
+        """2.3.4 (review): True when the image holds light of its own at p (another star, even a peakless shoulder),
+        False when p only sees the wing of the star centred at centre, None when it cannot be told (edge, no image).
+        The 3x3-smoothed light at p against the same wing at p turned 90, 180 and 270 degrees about centre (the
+        lowest of the three: a third star on one of them must not hide the wing); more than 5 sigma above is light."""
+        img = self.preview
+        if img is None:
+            return None
+        dx, dy = p[0] - centre[0], p[1] - centre[1]
+        r = math.hypot(dx, dy)
+        if r < 1.0:
+            return None
+        pts = [(centre[0] + dx, centre[1] + dy), (centre[0] - dy, centre[1] + dx), (centre[0] - dx, centre[1] - dy),
+               (centre[0] + dy, centre[1] - dx)]
+        h, w = img.shape[:2]
+        half = int(math.ceil(max(r + 3, 20)))
+        x0, x1 = int(centre[0]) - half, int(centre[0]) + half + 1
+        y0, y1 = int(centre[1]) - half, int(centre[1]) + half + 1
+        if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+            return None
+        try:
+            from scipy import ndimage
+            crop = np.asarray(img[y0:y1, x0:x1], dtype=float)
+            if not np.isfinite(crop).all():
+                return None
+            noise = 1.4826 * float(np.median(np.abs(crop - np.median(crop))))
+            if not math.isfinite(noise) or noise <= 0:
+                return None
+            smooth = ndimage.uniform_filter(crop, size=3)
+            vals = ndimage.map_coordinates(smooth, [[q[1] - y0 for q in pts], [q[0] - x0 for q in pts]], order=1)
+        except Exception:
+            return None
+        return bool(vals[0] - min(vals[1:]) > 5.0 * noise / 3.0)
+
+    def _faint_catalog_pick_ok(self, here, there_star, centre) -> bool:
         """2.3.4: the 2.2.18 rule (a comp/check click on a catalog star beside a brighter neighbor keeps the click)
-        applies only to a star that can be seen there: not one FAINT_PICK_DMAG or more fainter than the neighbor the
-        centring found. With either magnitude unknown the rule applies as before."""
-        if there_star is None:
+        applies to a star that is there on the image. here = (x, y, star) of the catalog star at the click; centre =
+        where the centring went (onto there_star when that is a catalog star). Review: decided from the image's light,
+        with the catalog as the gate: a star with light of its own is kept however faint; one with none is refused
+        when it is FAINT_PICK_DMAG or more fainter than there_star or there_star is not a catalog star. When the light
+        cannot be told, the magnitudes decide (unknown: kept, as before)."""
+        seen = self._light_seen_at((here[0], here[1]), centre)
+        if seen:
             return True
-        here_m, there_m = self._chart_mag(here_star), self._chart_mag(there_star)
-        if not (math.isfinite(here_m) and math.isfinite(there_m)):
+        dm = self._chart_dmag(here[2], there_star) if there_star is not None else None
+        if seen is False:
+            return there_star is not None and dm is not None and dm < self.FAINT_PICK_DMAG
+        if there_star is None or dm is None:
             return True
-        return here_m - there_m < self.FAINT_PICK_DMAG
+        return dm < self.FAINT_PICK_DMAG
+
+    def _chart_entry_at(self, xy, reach: float = 8.0):
+        """2.3.4: the nearest labeled star within reach as (x, y, star), or None."""
+        best = None
+        for x, y, star in self.chart_placed:
+            d = math.hypot(x - xy[0], y - xy[1])
+            if d < reach and (best is None or d < best[0]):
+                best = (d, (x, y, star))
+        return best[1] if best else None
 
     def _chart_star_at(self, xy, reach: float = 8.0):
         best = None
@@ -12070,11 +12122,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form."""
         if mode == "target" or not self.chart_placed:
             return ""
+        seeing = self._seeing()
+        tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
         best = None
-        for x, y, star in self.chart_placed:
+        for x, y, star in sorted(self.chart_placed, key=lambda e: math.hypot(e[0] - xy[0], e[1] - xy[1])):
             d = math.hypot(x - xy[0], y - xy[1])
-            if d < 8 and (best is None or d < best[0]):
-                best = (d, star)
+            if d >= 8:
+                break
+            # 2.3.4 (review S3): further than the seeing from the marker, a catalog star with no light of its own is
+            # only a faint neighbor of the marked star (an invisible V 18 Gaia star 8 px from a V 12.65 comp), never
+            # its name and magnitude.
+            if d > tight and self._light_seen_at((x, y), xy) is False:
+                continue
+            best = (d, star)
+            break
         if best is None:
             return ""
         star = best[1]
