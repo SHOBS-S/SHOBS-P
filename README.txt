@@ -78,6 +78,30 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.3.4 (with the same stars, every measured number is the same as in 2.3.0; the suggested comps and the
+Comp health window's night offsets can differ; S = shared by every mode, V = Variables, T = Transits; GitHub
+issue numbers in brackets)
+- S  A series night is now solve -> Run: after the solve, a loaded series places its target, its comps and its
+     check star from their sky positions, keeping the series' names and magnitudes ("placed after the solve ...;
+     magnitude ... kept as loaded"). A star not on tonight's frame says so in its row. Loading a series onto an
+     already-solved image (say after New reduction) solves it again at once.
+- S  Markers follow a new reference frame [74]. After frames are rejected in Blink and Calibrate is pressed
+     again, the target, comp, check and variable-star marks move to the first kept frame, on either side of a
+     meridian flip. When that frame is across the flip, the log and the step line say the image is turned 180
+     degrees from before and the markers moved with their stars. A Binning change in the same Calibrate is
+     handled too.
+- S  Tighter suggested comps (S1-S4): colour first (B-V within 0.3 of the target, counted twice as much as
+     brightness; up to 0.6 only fills in, and says so), the target's measured B-V when the series has it, raw peak
+     under 75% of the linear limit, well inside the frame (3 x the sky-out radius from the edges). Each S-line
+     says why the star was picked.
+- S  A comp or check click a few pixels off a bright star, next to a much fainter catalog star you cannot see,
+     now centres on and names the bright star (it could take the faint star's name and magnitude).
+- S  The Stars panel's x buttons and V magnitude header stay visible when the panel is narrow.
+- V  Comp health puts each star on its own zero point and picks the reference stars night by night [75]: a star
+     missing from part of one night no longer fakes a night offset (as much as 0.05 mag) in all the others.
+- T  The transit-fit CSV says rel_flux_err is the scaled error, adds a rel_flux_err_raw column, and gives S, the
+     raw reduced chi-square and beta on a "# Errors:" line [73].
+
 New in 2.3.3 (every measured number on a good catalog answer is the same as in 2.3.0; S = shared by every mode,
 V = Variables)
 - S  Impossible catalog answers are now rejected. On 10 Nov 2026, with CDS down, a VizieR mirror (CfA) sent a
