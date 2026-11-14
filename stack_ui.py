@@ -682,7 +682,7 @@ class StackMixin:
         self._stack_ui_update()
         if announce:
             self.log(self.results_use.get() + f" for {night}.")
-        if self.series_path and getattr(self, "_hold_autosave", None) != night:
+        if self.series_path:   # 2.3.5 (#81): a held night is kept out by _write_series itself
             try:
                 self._write_series(self.series_path)
             except OSError as exc:

@@ -260,3 +260,36 @@ class TestFlipStepHoldWrites(unittest.TestCase):
         words = app._save_series_words()
         self.assertIn("Not saved", words)
         self.assertEqual(open(path, "rb").read(), before)
+
+
+class TestSeriesOnAnotherFieldsImage(unittest.TestCase):
+    """2.3.5 (John, 14 Nov): Load series after New reduction onto the last field's solved image must not drop the
+    series' comps as "not on this frame" (GSC series on an HD 219134 frame)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_235b.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def test_off_and_on(self):
+        from unittest import mock
+        app, ca = self.app, self.ca
+        app.preview = np.zeros((100, 120))
+        app.chart_solution = {"stub": True}
+        role = ca.COMP_ROLES[0]
+        getattr(app, f"{role}_name").set("GSC comp")
+        app.comp_coords = {"GSC comp": (42.0, 50.8)}
+        with mock.patch.object(ca.core, "sky_to_pixel", return_value=(900.0, 700.0)):
+            self.assertTrue(app._series_off_this_image())
+        with mock.patch.object(ca.core, "sky_to_pixel", return_value=(60.0, 40.0)):
+            self.assertFalse(app._series_off_this_image())
+        app.comp_coords = {}
+        self.assertFalse(app._series_off_this_image(), "nothing to tell from: not called foreign")

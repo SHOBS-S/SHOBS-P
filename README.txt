@@ -90,16 +90,18 @@ V = Variables, T = Transits; GitHub issue numbers in brackets)
      solves too (it was taken unseen), with "Not sure: discard it" as the default.
 - S  The header's plate solution puts the target away from the Target marker: asked "Move the Target marker
      there?" (Keep is the default), on every solve.
-- V  A night held back for its flip step [81]: automatic saves (notes, sent marks, a removed or added night,
-     changed comps) are written again, without that night; a night it replaced keeps its earlier version in the
-     file. The series line says "... is held (flip step), not in the file". "Note ... saved." is only said when
-     it was.
+- V  A night held back for its flip step [81]: automatic saves (notes, sent marks, a removed or added night)
+     are written again, without that night; a night it replaced keeps its earlier version in the file (until the
+     comps or catalog magnitudes change: then, as before, nothing is written until Save series). The series line
+     says "... is held (flip step), not in the file". "Note ... saved." is only said when it was.
 - T  Comp-choice check [88]: a comp missing in some frames (off the frame edge) made every refit lose those
      frames, so the check reported a wrong range and a false caution. The refits now use the same frames as the
      main fit (the comps present, on the night's scale, as the photometry does). The note gives the depth with
      all comps and the points used beside the range, and the files call the spread a diagnostic.
 - T  A chosen comp missing in part of the night is named on the Transit page before the fit, and in the fit's
      notes and reports (it changes the ensemble partway through the night).
+- S  Photometry image: the small key inside the image (suggested comp / AAVSO sequence) is gone; the legend
+     column beside the image already names both.
 - S  Self-test [83]: it now ends with "Self-test passed", "N checks failed" or "could not run (setup failed)"
      (it used to say "Done." even after a failure); its exit code says so too.
 - S  Windows setup [83] works like the Mac and Linux one: ready-made packages only (it never compiles), Python

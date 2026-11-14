@@ -11225,6 +11225,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             pass
         return xy
 
+    def _series_off_this_image(self) -> bool:
+        """2.3.5: True when the solved image is another field than the loaded series: some series comp or check has a
+        sky position (comp_coords) and none of them falls on the image. False when nothing can be told."""
+        sol = self.chart_solution
+        if not sol or self.preview is None:
+            return False
+        h, w = self.preview.shape[:2]
+        known = on = 0
+        for role in list(COMP_ROLES) + ["check"]:
+            name = getattr(self, f"{role}_name").get().strip()
+            coords = self.comp_coords.get(name) if name else None
+            if coords is None:
+                continue
+            try:
+                px, py = core.sky_to_pixel(float(coords[0]), float(coords[1]), sol)
+            except Exception:
+                continue
+            known += 1
+            if np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5:
+                on += 1
+        return known > 0 and on == 0
+
     def _resolve_for_loaded_series(self):
         """2.3.4 (run-through, John 13 Nov): Load series on an image that is already solved (e.g. after New reduction)
         left the target, the series' comps/check and the S1-S4 suggestions unplaced until Solve again, while the step
@@ -11237,6 +11259,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return   # review (S3): a run or solve in flight keeps its marks; a solve that lands places the slots
         if getattr(self, "_preview_foreign", ""):
             return   # review (S4): the image is of another field than the series: keep its solution
+        if self._series_off_this_image():
+            # 2.3.5 (John, 14 Nov): after New reduction there is no target to compare, so a series of another star
+            # loaded onto the last field's image was solved again there, and its comps and check were dropped as
+            # "not on this frame" (GSC series on an HD 219134 frame). The image is looked at instead.
+            self._preview_foreign = str(self.star_id.get() or "the series' star").strip()
+            self.log("Series loaded: the image on the Photometry page is another field (none of the series' comps or "
+                     "check is on it). They are placed after Calibrate on this series' lights.")
+            return
         self.chart_placed = []
         self.chart_solution = None
         self.variable_marks = []
@@ -12829,6 +12859,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # button; the chart labels follow the header either way.
                 name = self.star_id.get() or "the target"
                 if getattr(self, "current_step", STEP_PHOTO) != STEP_PHOTO:
+                    # review r2 S3: this solve counts as the page's own, so showing the page starts no second solve
+                    self._auto_solved_for = getattr(self, "_preview_token", 0)
                     self.show_step(STEP_PHOTO)   # review S8: the question is about the image
                 if ask_choice(self, APP_TITLE, f"The plate solution in the FITS header puts {name} {off:.0f} px from "
                                                f"the Target marker, at ({tx:.0f}, {ty:.0f}).\n\nMove the Target "
@@ -15297,6 +15329,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.log(f"Flip step {why['step']:+.3f} mag on this night; the check star and the comps show no "
                          "aperture problem at the flip, so the series was saved as usual.")
         if save_now:
+            # 2.3.5 (review r2 S2): a held night run again and saved (Yes, or no flip step this time) is no longer held.
+            if self._series_holds().pop(night, None) is not None:
+                self.update_series_status()
             try:
                 if self._write_series(self.series_path) is not None:
                     self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}."
@@ -16816,7 +16851,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _hold_stamp(self):
         """2.3.5 (#81, review M3): what a held night's earlier points were reduced against (comps, Use comps choice,
         catalog magnitudes); when it changes, those points no longer match the rest of the series."""
-        return (tuple(self.comps_used or []), tuple(self.active_comps or []),
+        return (getattr(self, "_recompute_count", 0), tuple(self.comps_used or []), tuple(self.active_comps or []),
                 tuple(sorted((str(k), round(float(v), 6)) for k, v in (self.comp_catalog_mags or {}).items()
                              if v is not None)))
 
@@ -16829,7 +16864,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not held:
             return ""
         return (f" ({self._held_names(held)} {'is' if len(held) == 1 else 'are'} held, not in the file: Save series "
-                "adds it.)")
+                f"adds {'it' if len(held) == 1 else 'them'}.)")
 
     def _save_series_words(self) -> str:
         """2.3.5 (#81): write the open series and say what was written, for a status line. Raises OSError."""
@@ -16857,7 +16892,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._last_write_held = []
             if not getattr(self, "_hold_stale_logged", False):
                 self._hold_stale_logged = True
-                self.log(f"Not saved: {self._held_names(sorted(holds))} is held (flip step ⚠) and the comps or "
+                self.log(f"Not saved: {self._held_names(sorted(holds))} {'is' if len(holds) == 1 else 'are'} held "
+                         "(flip step ⚠) and the comps or "
                          "catalog magnitudes changed since, so its earlier version no longer matches the series. "
                          "Save series writes everything.")
             self.update_series_status()
@@ -16965,7 +17001,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.3.5 (#81): one standing line instead of a ⚠ log line at every automatic save.
             return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
                     f"{self._held_names(sorted(held))} {'is' if len(held) == 1 else 'are'} held (flip step ⚠), not "
-                    "in the file: Save series adds it, Remove night… drops it.")
+                    f"in the file: Save series adds {'it' if len(held) == 1 else 'them'}, Remove night… drops "
+                    f"{'it' if len(held) == 1 else 'one'}.")
         return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
                 "After the run you'll be asked to add the night.")   # 2.2.16 (item 12)
 
@@ -18846,7 +18883,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
             self.status.set(f"Note for {night} " + ("set" if text else "removed") + ", but the file was not saved.")
             return
-        self.status.set(f"Note for {night} " + ("saved." if text else "removed.") + words)
+        verb = ("saved." if text else "removed.") if not words.startswith(" Not saved") else ("set." if text else "removed.")
+        self.status.set(f"Note for {night} " + verb + words)
 
     def _name_index(self) -> dict:
         """2.2.14 (item 11): {normalized name: labeled star} for every name a labeled star answers to (its catalogs'
@@ -19305,6 +19343,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return True
 
     def _comp_selection_applied(self, selection: list[str], result: dict) -> bool:
+        self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         self.active_comps = [] if set(selection) == set(self.comps_used) else list(selection)
         try:
             self._comps_follow_in_use()   # 2.2.19 (#34): the Photometry page's comps follow the choice
@@ -19495,6 +19534,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return found
 
     def set_catalog_mags(self, changes: dict, check: str | None = None) -> bool:
+        self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         """2.2.18 (item 3): catalog magnitudes typed in Use comps… for the whole series ({star: V}); check: the check
         star's, or None. The series' values win over the Photometry boxes, so a wrong catalog value (HD 219134's
         rebuild took Gaia V 8.711 for the campaign's 8.728) is corrected here: every point is re-derived from its
