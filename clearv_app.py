@@ -1773,8 +1773,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     traceback.print_exc()
                     log_to_file("Error in a UI step; traceback follows.")
                     log_to_file(traceback.format_exc() + "\n", stamp=False)
-                    if self.busy:
-                        self._end_job()
+                    # (review MF1) the run lock stays as it is: a worker may still be running, and a second run
+                    # must not start beside it. The job's own done-step releases it.
                     try:
                         self.log(f"✖ Something went wrong: {exc}. Details were written to {LOG_FILE}.")
                     except Exception:
@@ -1795,14 +1795,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.20 (item 3): the job's words go on the busy bar (not the status line, which keeps the last result
         # line); a step or a count changes them (_job_words). The run lock (self.busy) is unchanged.
         self.busy_end(getattr(self, "_job_tok", None))
-        self._job_tok = self.busy_begin(label) if bar else None
+        self._close_job_findings(force=True)   # 2.3.6: the job before this one sums up first (review S2: before
+        self._job_tok = self.busy_begin(label) if bar else None   # the status line is cleared for this one)
         if bar:
             self.status.set("")
-        self._close_job_findings()   # 2.3.6: the job before this one sums up first
         self._job_findings = []   # 2.3.6 (#79 item 1): this job's ⚠ / ✖ lines
         return True
 
-    def _end_job(self):
+    def _end_job(self, defer_close: bool = False):
         self.busy = False
         self.config(cursor="")
         self.busy_end(getattr(self, "_job_tok", None))   # 2.2.20 (item 3)
@@ -1811,11 +1811,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # right after releasing the lock (photometry's end-of-run checks) still count: close at the next idle moment.
         if getattr(self, "_job_findings", None) is not None and not getattr(self, "_job_close_pending", False):
             self._job_close_pending = True
-            self.after_idle(self._close_job_findings)
+            if not defer_close:   # a done-step that closes them itself passes defer_close=True
+                self.after_idle(self._close_job_findings)
 
-    def _close_job_findings(self):
+    def _close_job_findings(self, force: bool = False):
         if not getattr(self, "_job_close_pending", False):
             return
+        if getattr(self, "busy", False) and not force:
+            return   # (review) a later job has begun: _start_job already closed this one
         self._job_close_pending = False
         findings = getattr(self, "_job_findings", None) or []
         self._job_findings = None
@@ -2519,7 +2522,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _msg_level(text: str) -> str:
         """2.3.6 (#79 item 1): a Log line's level from its icon. "✖" (or "Error") = error, "⚠" = warn, else note."""
         head = text.lstrip()[:12]
-        if head.startswith("✖") or head.startswith("Error"):
+        if head.startswith("✖") or head.startswith("Error:"):
             return "error"
         if head.startswith("⚠"):
             return "warn"
@@ -2554,7 +2557,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.3.6 (#79 smaller bugs): a number from an entry box; a bad entry raises a ValueError that names the box
         (a DoubleVar raises a TclError, a StringVar a ValueError: both end here)."""
         try:
-            return float(str(var.get()).strip().replace(",", ""))
+            return float(str(var.get()).strip())   # (review MF3) "35,37" is an error, never 3537
         except Exception:
             raise ValueError(f"{label} is not a number. Type a number in that box.") from None
 
@@ -7768,6 +7771,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _calibration_done(self, masters, calibrated, header, path, binning, error):
         self._end_job()
         if error is not None and error[0] == "Canceled":
+            self._job_findings = []   # (review S1) a canceled job sums up nothing
             self.log("Calibration canceled. The old masters (if any) are unchanged.")
             return
         if error is not None:
@@ -11833,7 +11837,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             lin_note = self._linearity_note(role, xy)   # 2.2.19 (#16)
             if lin_note:
                 parts.insert(0, lin_note)
-                if style != "Bad.TLabel":
+                if lin_note.startswith("⚠") and style != "Bad.TLabel":   # 2.3.6 (review nit): plain notes stay plain
                     style = "Warn.TLabel"
             edge_note = self._edge_note(role, xy)   # 2.2.19 (nit)
             if edge_note:
@@ -12885,7 +12889,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if error is not None:
             self.status.set("Not solved: the catalog request failed.")
             if auto:
-                self.log(f"Solve: the catalog request failed ({error}). Click Solve again to retry.")
+                self.log(f"✖ Solve: the catalog request failed ({error}). Click Solve again to retry.")
                 return
             messagebox.showerror(APP_TITLE, f"Solve: {error}")
             return
@@ -15185,10 +15189,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                  "the flip.")
 
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
-        self._end_job()
-        if not cancelled and error is None:
-            # 2.3.6 (#79 item 2): this run's ⚠ lines travel with its result (settings files, report notes)
-            self.after_idle(self._keep_run_findings)
+        """2.3.6 (#79 items 1, 2; review MF2): the job's findings close here, after every end-of-run check, not at
+        the next idle moment (a dialog in the done-step would close them early)."""
+        self._end_job(defer_close=True)
+        ok = False
+        try:
+            ok = self._photometry_done_body(night_points, mode, color_info, cancelled, error)
+        finally:
+            if cancelled or error:
+                self._job_findings = []   # (review S1) a stopped run sums up nothing; its stop line stands
+            self._close_job_findings(force=True)
+            if ok:   # this run's ⚠ lines travel with its result (settings files, report notes)
+                self.run_findings = list(getattr(self, "last_job_findings", None) or [])
+                self.run_findings_night = f"JD{math.floor(night_points[0].jd)}" if night_points else None
+
+    def _photometry_done_body(self, night_points, mode, color_info=None, cancelled=False, error=None) -> bool:
+        """The done-step; True when the run's points went into the series (its findings then go with them)."""
         remeasure, self._remeasure = getattr(self, "_remeasure", None), None   # 2.3.0 (#50)
         if cancelled and remeasure is not None:
             self._onsky_ctx = None
@@ -15197,7 +15213,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if cancelled:
             if error:   # 2.2.16 (item 3): the worker hit an error outside the per-frame guard
                 self._progress_end("Stopped by an error; nothing was added.")
-                self.log(f"Photometry stopped by an error ({error}). Nothing was added to the series.")
+                self.log(f"✖ Photometry stopped by an error ({error}). Nothing was added to the series.")
                 self._restore_series_catalog(stars=True)
                 return
             self._progress_end("Canceled; nothing was added.")
@@ -15206,7 +15222,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         self._progress_end(f"{len(night_points)} points.")
         if remeasure is not None:
-            return self._remeasure_done(remeasure, night_points, mode)   # 2.3.0 (#50)
+            self._remeasure_done(remeasure, night_points, mode)   # 2.3.0 (#50)
+            return False
         if not night_points:
             self._restore_series_catalog(stars=True)
             messagebox.showerror(APP_TITLE, "No frames produced a magnitude. The Calibrate page log says why each frame was skipped.")
@@ -15445,9 +15462,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 if self._write_series(self.series_path) is not None:
                     self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}."
                                     + self._held_words())
+                    self._log_only(f"Auto-saved to {os.path.basename(self.series_path)}."   # (review S4)
+                                   + self._held_words())
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not auto-save the series: {exc}")
         self._check_planet_transits(night, source="run")   # 2.2.15 (item 1): in the background; flags arrive later
+        return True
 
     def _flip_step_suspect(self, night_points, night):
         """2.2.19 (#24, review S4): None when the night has no flip step over FLIP_STEP_MARK; {"step": s, "text": ""}
@@ -16182,7 +16202,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             what = "Binning" if (now[3] is not None and was[3] is not None and now[3] != was[3]
                                  and now[:3] == tuple(was[:3])) else "Aperture"
             text = (f"{what} changed (now r {now[0]:g}, sky {now[1]:g}–{now[2]:g} px, Bin {now[3]:g}): run "
-                    f"photometry again to apply it. {text}." if None not in now else f"⚠ {what} changed: run "
+                    f"photometry again to apply it. {text}." if None not in now else f"{what} changed: run "
                     f"photometry again to apply it. {text}.")
         return text, changed
 
@@ -20092,7 +20112,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             software=f"{APP_TITLE} {APP_VERSION}",
             notes=self.notes.get() + self._sloan_report_note(points)   # 2.2.17 (item 1): '' unless Sloan
             + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points)))
-            + self._findings_report_note(),   # 2.3.6 (#79 item 2)
+            + self._findings_report_note(lead=bool(self.notes.get().strip() or self._sloan_report_note(points)
+                                                   or self.stack_report_note(points, lead=False))),   # 2.3.6 (#79)
             filt=self._filter_code(),
             scint=self._scint_setup(),
         )
@@ -20291,13 +20312,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         found = list(getattr(self, "run_findings", None) or [])
         if not found:
             return []
-        return [f"Findings from the photometry run ({len(found)}, each was a \u26a0 in the Log):"] + \
+        night = getattr(self, "run_findings_night", None)
+        return [f"Findings from the photometry run{' of ' + str(night) if night else ''} ({len(found)}, flagged in "
+                "the Log):"] + \
             [f"  - {t}" for t in found]
 
-    def _findings_report_note(self) -> str:
-        """2.3.6 (#79 item 2): "; 2 findings from the run, see the settings file" for a Variables report's #NOTES."""
+    def _findings_report_note(self, lead: bool = True) -> str:
+        """2.3.6 (#79 item 2): "; 2 findings from the run, see the settings file" for a Variables report's #NOTES
+        (no "; " when nothing comes before it: review S7)."""
         note = self.run_findings_note()
-        return ("; " + note) if note else ""
+        return (("; " if lead else "") + note) if note else ""
 
     def run_findings_note(self) -> str:
         """2.3.6 (#79 item 2): the short form for a report's NOTES ("" when none)."""

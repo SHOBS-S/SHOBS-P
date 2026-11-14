@@ -102,7 +102,8 @@ class TestJobSummary(unittest.TestCase):
         self.assertEqual(app.run_findings_lines(), [])
         self.assertEqual(app._findings_report_note(), "")
 
-    def test_ui_step_error_releases_lock(self):
+    def test_ui_step_error_keeps_lock_and_says_so(self):
+        """Review MF1: a worker may still run, so the lock stays; the error is said."""
         app = self.app
         self.assertTrue(app._start_job("Test job"))
 
@@ -113,10 +114,59 @@ class TestJobSummary(unittest.TestCase):
         for _ in range(40):
             time.sleep(0.03)
             app.update()
-            if not app.busy:
+            if "bad step" in app.status.get():
                 break
-        self.assertFalse(app.busy)
+        self.assertTrue(app.busy)
         self.assertIn("bad step", app.status.get())
+        app._end_job()
+        app.update()
+
+    def test_explicit_close_survives_a_nested_event_loop(self):
+        """Review MF2: a done-step with a dialog (nested loop) still counts the lines after it."""
+        app = self.app
+        self.assertTrue(app._start_job("Test job"))
+        app._end_job(defer_close=True)
+        app.log("⚠ before the dialog")
+        app.update()   # what a messagebox's own loop does
+        app.log("⚠ after the dialog")
+        app._close_job_findings(force=True)
+        self.assertEqual(app.last_job_findings, ["⚠ before the dialog", "⚠ after the dialog"])
+
+    def test_next_job_does_not_show_the_last_jobs_warn(self):
+        """Review S2."""
+        app = self.app
+        self.assertTrue(app._start_job("a"))
+        app.log("⚠ from job a")
+        app._end_job()
+        self.assertTrue(app._start_job("b"))   # before the idle close
+        app.log("b went fine")
+        app._end_job()
+        app.update()
+        self.assertEqual(app.status.get(), "b went fine")
+
+    def test_end_job_twice_or_alone_is_harmless(self):
+        app = self.app
+        app._end_job()
+        app._end_job()
+        app.update()
+        self.assertFalse(app.busy)
+
+    def test_error_summary(self):
+        st = self._job(["⚠ one", "✖ Fit failed."])
+        self.assertTrue(st.startswith("✖ Fit failed."), st)
+        self.assertIn("1 more in the Log", st)
+
+    def test_findings_cleared_by_new_reduction(self):
+        app = self.app
+        app.run_findings = ["⚠ x"]
+        app.new_reduction(ask=False)
+        self.assertEqual(app.run_findings, [])
+
+    def test_variables_note_lead(self):
+        app = self.app
+        app.run_findings = ["⚠ x"]
+        self.assertEqual(app._findings_report_note(lead=False), "1 finding from the run, see the settings file")
+        app.run_findings = []
 
 
 class TestVocabulary(unittest.TestCase):

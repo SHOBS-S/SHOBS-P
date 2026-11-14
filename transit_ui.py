@@ -1142,6 +1142,15 @@ class TransitPage:
         hit = [int(n) for tv, n in zip(tt, nums) if np.any(np.abs(cut - tv) < 1e-7)]
         return frame_ranges(hit) if hit else f"{len(cut)} frames"
 
+    def _findings_apply(self) -> bool:
+        """2.3.6 (review S3): the last run's findings belong to this fit only when it is of that run's night."""
+        if self.report is not None:
+            return False
+        try:
+            return bool(self.night.get()) and self.night.get() == getattr(self.app, "run_findings_night", None)
+        except Exception:
+            return False
+
     def settings_note(self, meta: dict, r: dict) -> str:
         """2.2.19 (#40): the compact one-line form for a report's #NOTES (ASCII)."""
         rep = meta.get("repro") or {}
@@ -1163,7 +1172,7 @@ class TransitPage:
         if "(header EGAIN)" not in gain:
             gain = gain.split(" (")[0]
         parts.append(gain)
-        if self.report is None:   # 2.3.6 (#79 item 2)
+        if self._findings_apply():   # 2.3.6 (#79 item 2)
             parts.append(self.app.run_findings_note())
         return "SHOBS-P settings: " + "; ".join(p for p in parts if p)
 
@@ -2905,7 +2914,7 @@ class TransitPage:
         lines = self.settings_lines(meta, self.result)
         if not lines:
             return ""
-        if self.report is None:   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
+        if self._findings_apply():   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
             lines = lines + self.app.run_findings_lines()
         path = self.app._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")   # never over an older one
         try:
