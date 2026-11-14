@@ -13462,7 +13462,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             parts.append(f"closest available: {abs(dm):.1f} mag {'brighter' if dm < 0 else 'fainter'} (no field "
                          "star is near this target's brightness)")
         elif dm < -1.5:
-            parts.append(f"⚠ {abs(dm):.1f} mag brighter than the target: a much brighter comp reacts differently to "
+            parts.append(f"{abs(dm):.1f} mag brighter than the target: a much brighter comp reacts differently to "
                          "airmass, focus, and calibration errors, and can leave steps or trends. Prefer one within "
                          "about 1 mag" + (" — green rings." if self.suggested_comps else "."))
         elif dm > 1.5:
