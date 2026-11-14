@@ -31,7 +31,7 @@ except ImportError:
 
 MCMC_CHOICES = {"Quick (1,500 steps)": 1500, "Standard (3,000 steps)": 3000, "Thorough (8,000 steps)": 8000}
 GREEN = "#0b6e4f"
-# 2.3.5 (m791): a chosen comp missing in at least this share of the night's frames holds the automatic fit.
+# 2.3.5 (m791): a chosen comp missing in at least this share of the night's frames is named before the fit.
 PART_TIME_MIN_SHARE = 0.05
 PINK = "#c2185b"
 
@@ -728,7 +728,10 @@ class TransitPage:
         """2.3.2 (item 2, John): the transit fit ALWAYS waits for the Fit transit button: after photometry, after
         Use comps…, after another night is picked, after a report is opened. The page says so instead."""
         text = (lead.strip() + " " if lead.strip() else "") + "Set the detrend and press Fit transit."
-        self._notes_text([("info", text)])
+        # 2.3.5 (m791): a chosen comp missing in part of the night is said here, before the fit, where it can still be
+        # acted on (Use comps…), not only as "(missing in N frames)" at the end of the settings line.
+        part_time = self._part_time_comp_text()
+        self._notes_text([("info", text)] + ([("warn", part_time)] if part_time else []))
         if self.result is None:
             self.draw(placeholder=text)
         try:
@@ -1258,19 +1261,8 @@ class TransitPage:
                 self.draw(preview=preview)
                 self._notes_text([("warn", text)])
                 return
-        part_time = self._part_time_comp_text()
-        if auto and part_time:
-            # 2.3.5 (m791): a chosen comp missing part of the night changes the ensemble partway through, so the
-            # automatic fit waits: the one line that matters is on the page, with the two ways on.
-            self.result = None
-            self._fill_table()
-            self.draw(preview=(t, flux, "Fit waiting: a comp is missing part of the night (see the notes)"))
-            self._notes_text([("warn", part_time), ("info", "Fit transit fits with these comps anyway; Use comps… "
-                                                            "on the Output page leaves that comp out.")])
-            self.app.log("Transit fit: not started by itself. " + part_time)
-            self.app.status.set("⚠ Transit fit waiting: a comp is missing part of the night (see the Transit page).")
-            return
-        self._part_time_note = part_time
+        # 2.3.5 (m791): a chosen comp missing in part of the night goes into this fit's notes (and so its reports).
+        self._part_time_note = self._part_time_comp_text()
         if auto:
             if self.app.busy:
                 return

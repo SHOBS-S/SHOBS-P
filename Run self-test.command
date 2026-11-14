@@ -7,13 +7,17 @@ cd "$(dirname "$0")" || exit 1
 bash ./shobs_setup.sh selftest
 code=$?
 echo ''
-if [ "$code" -ne 0 ]; then
-    echo 'The self-test did not pass or could not run. Copy the message above.'
-    echo 'If the test ran, its log is selftest_log.txt in this folder.'
-elif [ -d "$HOME/Downloads" ]; then
-    echo 'Done. The log is selftest_log.txt in this folder (a copy is in your Downloads folder).'
-else
-    echo 'Done. The log is selftest_log.txt in this folder.'
-fi
+# 2.3.5 (#83): say how it went (selftest.py exits 0 passed, 10 checks failed, 11 crashed; 1-7 = setup failed).
+log_where='selftest_log.txt in this folder'
+[ -d "$HOME/Downloads" ] && log_where="$log_where (a copy is in your Downloads folder)"
+case "$code" in
+    0) echo "✔ Self-test passed. The log is $log_where." ;;
+    10) n=$(grep -m1 '^RESULT:' selftest_log.txt 2>/dev/null | grep -oE '[0-9]+' | head -n 1)
+        echo "✖ Self-test: ${n:-some} check$([ "$n" = 1 ] && echo '' || echo 's') failed (the RESULT line above names them)."
+        echo "  Send $log_where." ;;
+    11) echo '✖ The self-test itself crashed (see CRASHED above).'
+        echo "  Send $log_where." ;;
+    *) echo '✖ The self-test could not run (setup failed, see the lines above).' ;;
+esac
 read -r -p 'Press Return to close this window. ' _
 exit "$code"

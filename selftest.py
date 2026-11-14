@@ -521,3 +521,7 @@ if __name__ == "__main__":
                 fh.write(text)
         except OSError:
             pass
+    # 2.3.5 (#83): the exit code says how it went, so the wrappers can say it too (it always exited 0 before):
+    # 0 all passed, 10 some checks failed, 11 the test itself crashed. Setup failures use 1-7 (shobs_setup.sh,
+    # setup_python.ps1), so the three cases stay apart.
+    sys.exit(0 if not FAILS else (11 if "crash" in FAILS else 10))

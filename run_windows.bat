@@ -10,6 +10,6 @@ pause
 exit /b 0
 :fail
 echo.
-echo The app did not start. Leave this window open and copy the message above.
+echo SHOBS-P did not start, or stopped with an error. Leave this window open and copy the message above.
 pause
 exit /b 1

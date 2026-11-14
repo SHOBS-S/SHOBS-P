@@ -129,8 +129,8 @@ To save the package:
    the first frame). Inside it:
    - `…_lightcurve.csv`: columns BJD_TDB, rel_flux, rel_flux_err, airmass, detrended_flux, model, residual.
    - `…_fit.txt`: the fitted values and the notes ExoFOP asks for (telescope and camera, pixel scale, binning (the
-     camera's, and SHOBS-P's processing bin), aperture, transit coverage, and the comparison-star spread as a
-     systematic error). When the planet's TOI status and ExoClock priority were looked up (chapter 16), the summary
+     camera's, and SHOBS-P's processing bin), aperture, transit coverage, and the comp-choice check, the leave-one-comp-out
+     spread, as a diagnostic). When the planet's TOI status and ExoClock priority were looked up (chapter 16), the summary
      at the top has a **TESS TOI** line (with the target's ExoFOP-TESS address) and an **ExoClock** line. On a
      night with a meridian flip it has the *Meridian flip* lines and the *Flip step …* line, and **Detrending** says
      `airmass, meridian flip step` when the step was kept (chapter 17).

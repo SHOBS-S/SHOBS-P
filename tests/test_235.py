@@ -116,3 +116,119 @@ class TestTiedEnsembleMatchesPhotometry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSelftestExitCode(unittest.TestCase):
+    """#83: selftest.py ends with an exit code the wrappers read (0 passed, 10 failed, 11 crashed)."""
+
+    def test_exit_line(self):
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(here, "selftest.py"), encoding="utf-8").read()
+        self.assertIn('sys.exit(0 if not FAILS else (11 if "crash" in FAILS else 10))', src)
+        for name in ("Run self-test.command", "run_linux.sh"):
+            text = open(os.path.join(here, name), encoding="utf-8").read()
+            self.assertIn("✔ Self-test passed", text)
+            self.assertIn("could not run (setup failed", text)
+            self.assertNotIn("Done. The log is", text)
+        ps1 = open(os.path.join(here, "setup_python.ps1"), "rb").read()
+        self.assertTrue(all(b < 128 for b in ps1), "setup_python.ps1 must stay ASCII (Windows PowerShell 5.1)")
+        self.assertIn(b"--only-binary=:all:", ps1)
+        self.assertIn(b"$OK Self-test passed", ps1)
+        bat = open(os.path.join(here, "Run self-test.bat"), "rb").read()
+        self.assertNotIn(b"Done. The log is", bat)
+
+
+class TestPartTimeCompHold(unittest.TestCase):
+    """m791: a chosen comp missing in part of the night is named before the fit and in its notes."""
+
+    def _page(self, drops, n=84, comps=("C1", "C2", "C3", "C4"), out=()):
+        import types
+        import transit_ui as tu
+        obs = [types.SimpleNamespace(night="JD2461000") for _ in range(n)]
+        info = {"comp_drops": drops, "night_out": list(out)}
+        app = types.SimpleNamespace(observations=obs, active_comps=[], comps_used=list(comps),
+                                    _night_info=lambda night: info, _frame_ranges=lambda f: f"{f[0]}–{f[-1]}")
+        page = types.SimpleNamespace(report=None, app=app, night=types.SimpleNamespace(get=lambda: "JD2461000"))
+        return tu.TransitPage._part_time_comp_text(page)
+
+    def test_joanna_case(self):
+        text = self._page({"C4": {"frames": list(range(61, 85)), "reasons": {"off the frame edge": 24}}})
+        self.assertTrue(text.startswith("⚠ C4 is missing in 24 frames"), text)
+        self.assertIn("Use comps…", text)
+
+    def test_one_frame_is_quiet(self):
+        self.assertEqual(self._page({"C4": {"frames": [12], "reasons": {}}}), "")
+
+    def test_check_star_and_whole_night_out_are_not_named(self):
+        self.assertEqual(self._page({"check": {"frames": list(range(30))}}), "")
+        self.assertEqual(self._page({"C4": {"frames": list(range(60))}}, out=("C4",)), "")
+
+
+class TestTwoStarSolveSource(unittest.TestCase):
+    """#80: the two-star question is asked on automatic solves too, with Discard as the safe button."""
+
+    def test_source(self):
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        src = open(os.path.join(here, "clearv_app.py"), encoding="utf-8").read()
+        self.assertNotIn("if n <= 2 and not auto:", src)
+        self.assertIn('[("keep", "On real stars: keep the solve"), ("discard", "Not sure: discard it")],\n'
+                      '                safe="discard") != "keep"', src)
+
+
+class TestFlipStepHoldWrites(unittest.TestCase):
+    """#81: with a night held (flip step ⚠, answered No), automatic saves still write every other change."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_235.log")
+        cls.app = ca.App()
+        cls.app.update()
+        cls.tmp = tempfile.mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _obs(self, night, jd, mag=10.0):
+        return core.Obs(jd=jd, mag=mag, merr=0.01, cmag=0.0, kmag=None, airmass=1.2, path=f"{night}_{jd}.fits",
+                        exptime=60.0, flux_var=0.0, flux_comp=0.0, night=night)
+
+    def test_hold(self):
+        app = self.app
+        path = os.path.join(self.tmp, "held.cvseries")
+        a = [self._obs("JD2461000", 2461000.6 + k * 0.01) for k in range(3)]
+        b_old = [self._obs("JD2461001", 2461001.6, mag=9.0)]
+        b_new = [self._obs("JD2461001", 2461001.6 + k * 0.01, mag=11.0) for k in range(4)]
+        app.observations = a + b_new
+        app.series_path = path
+        app._hold_autosave = "JD2461001"
+        app._hold_prev = {"night": "JD2461001", "points": b_old, "bin": None, "legacy": False}
+        app._hold_logged = False
+        app.night_notes = {"JD2461000": "a note"}
+        words = app._save_series_words()
+        self.assertIn("held", words)
+        _meta, pts = core.load_series(path)
+        by = {}
+        for o in pts:
+            by.setdefault(o.night, []).append(o.mag)
+        self.assertEqual(by["JD2461000"], [10.0, 10.0, 10.0])
+        self.assertEqual(by["JD2461001"], [9.0], "the held night keeps the file's earlier version")
+        self.assertEqual((_meta.get("night_notes") or {}).get("JD2461000"), "a note")
+        self.assertIn("is held", app.series_status_text())
+        self.assertTrue(app.series_unsaved(), "held: the file lacks the new night, so unsaved stays on")
+        # A new night (none before): left out of the file entirely.
+        app._hold_prev = {"night": "JD2461001", "points": []}
+        app._save_series_words()
+        _meta, pts = core.load_series(path)
+        self.assertEqual({o.night for o in pts}, {"JD2461000"})
+        # Save series writes it and ends the hold.
+        app._explicit_save = True
+        try:
+            app._write_series(path)
+        finally:
+            app._explicit_save = False
+        _meta, pts = core.load_series(path)
+        self.assertEqual(sorted(o.mag for o in pts if o.night == "JD2461001"), [11.0] * 4)

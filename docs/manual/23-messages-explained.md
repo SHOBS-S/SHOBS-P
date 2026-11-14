@@ -13,20 +13,26 @@ SHOBS-P talks to you in four places:
 
 ![A warning box after photometry](img/23-edge-caution.png)
 
-Most questions have a default that is the safe choice; just read the whole message before you answer. The messages
+Every question has the safe choice as its default (from 2.3.5): the button that Enter presses is **No**, **Stop**,
+**Cancel** or **These frames only**, never the risky one. Some questions have buttons that say what they do instead of
+Yes and No. Read the whole message before you answer. The messages
 below are the ones new users meet most often, grouped by step. "…" stands for the names and numbers filled in.
 
-## Starting on Linux or a Mac
+## Setting up (Windows, Linux, Mac)
 
-These appear in the Terminal window the first time SHOBS-P starts (chapter 2).
+These appear in the console window of **Create shortcuts.bat** (Windows) or the Terminal window the first time
+SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the same things.
 
 | Message | What it means | What to do |
 |---|---|---|
 | *Looking for a Python that can run SHOBS-P...* then *Trying …* and *usable: Python 3.13.x* or *not usable: …* | SHOBS-P checks each Python it finds, 3.13, 3.12 and 3.11 first. | Nothing; it picks the first one that works. |
-| *⚠ Some packages SHOBS-P needs have no ready-made copy for Python 3.15.x yet (they would have to be compiled, and SHOBS-P never compiles).* *Trying the next Python.* | A brand-new Python has no ready-made packages yet. | Nothing, if another Python follows. Otherwise install Python 3.13. |
+| *Python 3.15.x: some packages SHOBS-P needs have no ready-made copy for it yet (they would have to be compiled, and SHOBS-P never compiles).* *Trying the next Python.* | A brand-new Python has no ready-made packages yet. | Nothing, if another Python follows. Otherwise install Python 3.13 (Mac: 3.14). |
 | *✔ SHOBS-P is set up with Python 3.13.x.* | The setup worked. | Nothing; SHOBS-P opens. |
-| *✖ SHOBS-P could not find a Python it can use (each one tried is listed above, with the reason).* | No Python 3.11 or newer with Tkinter was found. | Mac: install Python 3.13 from python.org. Linux: install Python and its Tkinter package (the message names it). |
-| *✖ SHOBS-P could not set up its packages with any Python on this computer (each one is listed above).* | None of the Pythons could install the packages, often because the only one is too new. | Do what the next lines say (Mac: install Python 3.13 from python.org; your other Pythons can stay). pip's own words are in `pip_log.txt` (chapter 24). |
+| *✖ SHOBS-P could not find a Python it can use (each one tried is listed above, with the reason).* | No Python 3.11 or newer with Tkinter was found. | Windows: install Python 3.13 from python.org (tick **Add python.exe to PATH**). Mac: install Python 3.14 from python.org. Linux: install Python and its Tkinter package (the message names it). |
+| *✖ SHOBS-P could not set up its packages with any Python on this computer (each one is listed above).* | None of the Pythons could install the packages, often because the only one is too new. | Do what the next lines say (Windows: Python 3.13; Mac: Python 3.14 from python.org; your other Pythons can stay). pip's own words are in `pip_log.txt` (chapter 24). |
+| *✖ SHOBS-P is being set up in another window.* (Linux, Mac) | A second start while the first setup still runs. | Wait for that window, then start again. A setup that was cut off frees its lock by itself. |
+| *✖ No screen found (DISPLAY is not set) …* (Linux) | Started without a desktop session. | Start SHOBS-P from your desktop session (chapter 24). |
+| *✔ Self-test passed.* / *✖ Self-test: N checks failed …* / *✖ The self-test could not run …* | How the self-test went (chapter 2). | Failed: send `selftest_log.txt`. Could not run: read the setup lines above. |
 | *✖ The packages could not be downloaded. Check the internet connection and try again.* | No internet, or the download was blocked. | Check the connection, then start again. |
 
 ## Anywhere
@@ -98,7 +104,10 @@ These appear in the Terminal window the first time SHOBS-P starts (chapter 2).
 | *Solve needs to know roughly where the frame is: …* | No pointing in the headers and no RA/Dec typed. | Type the target (or field center) on the Input page. |
 | *… is a known or suspected variable: … Use it anyway?* | A comp or check you clicked is in VSX or SIMBAD. | Usually **No**, and pick another star. |
 | *The aperture (r = 12 px) is much larger than the stars on this frame (FWHM 3.2 px).* | The aperture does not suit the seeing. | **No**, then **Suggest…** to set sizes from the stars. |
-| *Defocused stars: the aperture (r = … px) clips the ring — use r ≥ … px. … Run with the current aperture anyway?* | The stars are donuts and the aperture is too small for them. | **No**, then **Suggest…** (it sizes the aperture to 95 % of the light). |
+| *Defocused stars: the aperture (r = … px) clips the ring — use r ≥ … px. …* | The stars are donuts and the aperture is too small for them. | **Use r = … and run** (the default) sets the suggested sizes (95 % of the light) and runs. |
+| *Only N stars found on the reference frame, too few to align the other frames …* | Clouds or bad focus on the first kept frame. | **Stop** (the default), then check the frame or reject it in Blink. |
+| *The catalogs have only 2 stars here, and both lined up. Two stars can line up by chance. …* | A sparse field. | Look at the circles: **On real stars: keep the solve**, or **Not sure: discard it** (the default) and **Solve again**. |
+| *The plate solution in the FITS header puts … px from the Target marker … Move the Target marker …?* | The header's solution and your marker disagree. | Check the star; **Keep it where it is** is the default. |
 | *There is no star under the Target marker at (x, y).* | The marker is on blank sky. | **No**, and click the star again. |
 | *These have a name in the Stars panel but no marker on this image …* | A name left from an earlier night or series. | **Yes** clears the names; **Cancel** lets you mark them. |
 | *With 3 comps the AAVSO report is an ensemble, and AAVSO requires a check star …* | No check star in Variables mode. | Mark a check star (or continue if you will not report this run). |
@@ -160,7 +169,7 @@ These appear in the Terminal window the first time SHOBS-P starts (chapter 2).
 | ⚠ *No reliable period …* / *No significant period …* | The best peak does not pass the significance tests. | See [13. Look for a period](13-look-for-a-period.md). |
 | *Too short for a period search: one night of … h covers under two cycles of even the shortest period searched …* | One night is too short to test any period. | Add nights, or observe longer. |
 | *This night's meridian-flip step is … mag ⚠ … Save … with this night now?* | The flip step looks like an aperture problem, not the star. | **No** keeps the file on disk unchanged; **Save series** keeps the night later. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md). |
-| Log: *Not saved: … has a flip step ⚠ — Save series to keep it.* | An automatic save skipped the night you held back. | Press **Save series** when you want it in the file. |
+| Series line: *… is held (flip step ⚠), not in the file: Save series adds it, Remove night… drops it.* | You answered **No** to saving a night with a flip step. Automatic saves still write every other change; that night stays as the file had it (its earlier version, if it replaced one). | Press **Save series** when you want it in the file, or **Remove night…**. |
 | Log: *✖ Use comps choice (…) not applied to …: … not measured on any of its frames (another field's comps?) …* | The series' **Use comps…** stars are not in this night's field. | For another star, use **New reduction** on the Input page. |
 | **Range ⚠** … *outside the search* (Period box) | The VSX or marked period lies outside the period search range. | Press **Search … d instead**. |
 

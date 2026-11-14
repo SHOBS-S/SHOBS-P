@@ -18,7 +18,10 @@ To run it:
 2. Double-click **Run self-test.bat** (Windows) or **Run self-test.command** (Mac), or type `./run_selftest.sh` in a
    terminal in that folder (Linux). A console window opens.
 3. Wait a minute or two. The transit fits are the slow part.
-4. Read the last line. It should be `RESULT: ALL PASSED`.
+4. Read the last lines. `RESULT: ALL PASSED` and then `✔ Self-test passed.` mean everything works. `✖ Self-test:
+   N checks failed` means the test ran and some checks failed (the `RESULT` line names them; send
+   `selftest_log.txt`). `✖ The self-test could not run` means setup stopped before the test (the lines above say
+   why).
 
 
 The full log is written to `selftest_log.txt` in the program folder, with a copy, `SHOBS-P_selftest_log.txt`, in
@@ -87,20 +90,23 @@ message above."*
 | Problem | Fix |
 |---|---|
 | Double-clicking the shortcut does nothing. | Start **run_windows.bat** and read the console. If the Python SHOBS-P used was removed or upgraded, run **Create shortcuts.bat** again: it finds a working Python and rebuilds SHOBS-P's own environment. |
-| *"SHOBS-P could not find a Python it can use."* | Each Python it tried is listed above that line with the reason. Install Python 3.11 or newer from python.org (tick **Add python.exe to PATH**), then try again. |
+| *"✖ SHOBS-P could not find a Python it can use."* | Each Python it tried is listed above that line with the reason. Install Python 3.13 from python.org (tick **Add python.exe to PATH**), then try again. |
+| *"Python 3.15.x: some packages SHOBS-P needs have no ready-made copy for it yet …"* (Windows) | Not an error: that Python is too new for some packages. SHOBS-P tries the next Python by itself. If it was the only one, install Python 3.13 and run **Create shortcuts.bat** again. You do not need to remove the newer Python. |
+| *"✖ The packages could not be downloaded. Check the internet connection and try again."* (Windows) | Check the internet connection (and any proxy or firewall), then try again. |
+| *"✖ The packages were installed but do not all load …"* (Windows) | Delete the `SHOBS-P` folder in `%LOCALAPPDATA%` and run **Create shortcuts.bat** again. |
 | The shortcut stopped working after you moved the folder. | Run **Create shortcuts.bat** again from the new place. |
 | *matplotlib is not installed.* where the image should be. | The packages did not install. Run **run_windows.bat**, which installs them, and read any error it shows. |
 | Linux: *"These Pythons are missing Tkinter, the window toolkit"* | Install the package it names (Debian, Ubuntu, Mint: `sudo apt install python3-tk`; Fedora: `sudo dnf install python3-tkinter`; Arch: `sudo pacman -S tk`), then run `./run_linux.sh` again. |
 | Linux: *"SHOBS-P could not make its own environment …"* and a line about the venv package | Debian, Ubuntu, Mint: `sudo apt install python3-venv`, then try again. |
-| Linux: *"This is a Wayland session without XWayland (DISPLAY is not set) …"* or *"No screen found (DISPLAY is not set) …"* | Tk needs X to draw its windows. Install XWayland (package `xwayland`) or log in with an "on Xorg" session; or start SHOBS-P from your desktop session, not over a plain SSH login. |
+| Linux: *"✖ This is a Wayland session without XWayland (DISPLAY is not set) …"* or *"✖ No screen found (DISPLAY is not set) …"* | SHOBS-P stops there. Tk needs X to draw its windows. Install XWayland (package `xwayland`) or log in with an "on Xorg" session; or start SHOBS-P from your desktop session, not over a plain SSH login. |
 | Mac: macOS refuses to open **Start SHOBS-P.command** (a file from an unidentified developer, or one Apple could not check). | Right-click (or Control-click) it, choose **Open**, then **Open** again. Once is enough. On macOS 15 and newer, if there is no **Open**, press **Open Anyway** in System Settings → Privacy & Security. Or type `xattr -d com.apple.quarantine *.command *.sh` in Terminal in the SHOBS-P folder; that clears every start file at once (also **Run self-test.command**). |
-| Mac: *"✖ SHOBS-P could not find a Python it can use …"* | Install Python 3.13 from python.org/downloads/macos (it includes Tk) and double-click again. A Homebrew Python needs its Tk package; the message names it (for example `brew install python-tk@3.13`). |
-| Linux or Mac: *"⚠ Some packages SHOBS-P needs have no ready-made copy for Python 3.15.x yet …"* | Not an error: that Python is too new for some packages. SHOBS-P tries the next Python by itself. If it was the only one, install Python 3.13 (Mac: from python.org; Linux: 3.13, 3.12 or 3.11 with Tkinter) and start again. You do not need to remove the newer Python. |
+| Mac: *"✖ SHOBS-P could not find a Python it can use …"* | Install Python 3.14 from python.org/downloads/macos (it includes Tk) and double-click again (Python 3.13.17, the last 3.13 with a Mac installer, works too). A Homebrew Python needs its Tk package; the message names it (for example `brew install python-tk@3.13`). |
+| Linux or Mac: *"Python 3.15.x: some packages SHOBS-P needs have no ready-made copy for it yet …"* | Not an error: that Python is too new for some packages. SHOBS-P tries the next Python by itself. If it was the only one, install a Python with ready-made packages (Mac: 3.14 from python.org; Linux: 3.13, 3.12 or 3.11 with Tkinter) and start again. You do not need to remove the newer Python. |
 | Linux or Mac: *"✖ SHOBS-P could not set up its packages with any Python on this computer …"* | Read the lines above it: each Python tried is listed with the reason. Usually installing Python 3.13 fixes it. If not, report the problem with `pip_log.txt` attached (see above). |
 | Linux or Mac: *"✖ The packages could not be downloaded. Check the internet connection and try again."* | Check the internet connection (and any proxy or firewall), then start again. |
-| Mac: a window asks to install Apple's "command line developer tools". | SHOBS-P 2.2.20 and newer never compile anything, so this should not happen. If you see it while SHOBS-P sets up, choose **Cancel**, install Python 3.13 from python.org, delete the `SHOBS-P` folder in `~/Library/Application Support` and start again. Report it with `pip_log.txt`. |
+| Mac: a window asks to install Apple's "command line developer tools". | SHOBS-P 2.2.20 and newer never compile anything, so this should not happen. If you see it while SHOBS-P sets up, choose **Cancel**, install Python 3.14 from python.org, delete the `SHOBS-P` folder in `~/Library/Application Support` and start again. Report it with `pip_log.txt`. |
 | Mac: SHOBS-P closed when you closed the Terminal window. | Keep the Terminal window open while SHOBS-P runs. |
-| *"SHOBS-P is being set up in another window …"* (Linux, Mac) | A second start while the first setup was still running. Wait for it to finish, then start again. |
+| *"✖ SHOBS-P is being set up in another window."* (Linux, Mac) | A second start while the first setup was still running. Wait for it to finish, then start again. A setup that was cut off (window closed, computer restarted) frees its lock by itself. |
 | The install seems broken after an update or a Python upgrade. | Start afresh: delete SHOBS-P's own environment folder and start again (chapter 2, "Starting afresh"). Your settings are kept. |
 | The window runs off the screen, or text is cut. | Maximize the window. On a scaled display (125–150%) the lower rows of the Output pages need the full height. In a narrow window (for example half the screen), the Input page's boxes and the Photometry page's **View** box wrap onto more rows instead of hiding. |
 

@@ -66,7 +66,7 @@ except ImportError:
 
 
 APP_TITLE = "Shiloh Hill Observatory – Photometry (SHOBS-P)"
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 # 2.3.3 (#57): the GitHub repository whose releases the new-version check asks about (shobs_update.py)
 REPO = "SHOBS-S/SHOBS-P"
 # 2.3.0 (item 11): the Input page's calibration boxes (a folder of raw frames or one SHOBS-P master each)

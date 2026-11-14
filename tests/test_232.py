@@ -134,7 +134,7 @@ class TestInApp(unittest.TestCase):
         self.boxes["askyesno"].assert_called_once()
         msg = self.boxes["askyesno"].call_args[0][1]
         self.assertIn("km from your saved site", msg)
-        self.assertIn("these frames only", msg)
+        self.assertIn("These frames only", msg)   # 2.3.5: the button's name
         for k, v in JOHN.items():
             self.assertEqual(app.settings.get(k), v, k)
         self.assertIsNotNone(app._own_setup)

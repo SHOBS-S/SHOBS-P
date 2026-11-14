@@ -8,19 +8,22 @@ It takes about ten minutes, most of it waiting for downloads.
 - Windows 10 or 11, a Mac (macOS 12 Monterey or newer), or Linux. The Windows steps come first; Linux and the Mac have their own sections
   below.
 - An internet connection (for the install, and later for star and catalog lookups).
-- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works. On Linux,
-  Python 3.13 is the best choice; on the Mac, Python 3.14 (see below).
+- **Python 3.11 or newer.** Python from python.org is the simplest. Anaconda or Miniconda also works. On Windows
+  and Linux, Python 3.13 is the best choice; on the Mac, Python 3.14 (see below).
 
 ## Install Python (Windows)
 
-1. Go to [python.org/downloads](https://www.python.org/downloads/) and download the latest Python for Windows.
+1. Go to [python.org/downloads/windows](https://www.python.org/downloads/windows/) and download Python 3.13 for
+   Windows. (The very newest Python can be too new: some packages SHOBS-P needs may not have ready-made copies for it
+   yet. SHOBS-P then tries your next Python by itself, and says so.)
 2. Run the installer. On the first screen, tick **Add python.exe to PATH**. This matters: the SHOBS-P start files
    find Python this way.
 3. Click **Install Now** and wait for it to finish.
 
 > **Tip:** If you already have Python 3.11 or newer (from python.org, Anaconda or Miniconda), you can skip this.
-> SHOBS-P checks each Python it finds and uses the first one that has everything it needs, including Tkinter, the
-> window toolkit. SHOBS-P makes its own environment from it (see below), so your Python is normally left as it is.
+> SHOBS-P checks each Python it finds (3.13, 3.12 and 3.11 first, then newer ones) and uses the first one whose
+> packages install ready-made, with Tkinter, the window toolkit. It never compiles anything. SHOBS-P makes its own
+> environment from it (see below), so your Python is normally left as it is.
 
 ## Install SHOBS-P on Windows
 
@@ -36,8 +39,10 @@ It takes about ten minutes, most of it waiting for downloads.
      `usable:` and the one it picked;
    - sets up SHOBS-P's own Python environment in `%LOCALAPPDATA%\SHOBS-P\python-env` (your own Python is left
      untouched);
-   - says `Checking the Python packages SHOBS-P needs...` and downloads them (NumPy, SciPy, Matplotlib, Astropy,
-     photutils, ccdproc and tzdata, the time zone list). This takes a few minutes.
+   - says `Installing the Python packages SHOBS-P needs...` and downloads them, one `getting …` line each (NumPy,
+     SciPy, Matplotlib, Astropy, photutils, ccdproc and tzdata, the time zone list). This takes a few minutes. When
+     a Python has no ready-made copies of some packages, it says so and tries the next Python;
+   - ends with `✔ SHOBS-P is set up with Python 3.13.x.`
 6. When it says `Done. Start SHOBS-P from the Desktop icon or the Start menu.`, press any key to close the window.
 
 You now have a SHOBS-P icon on the Desktop and in the Start menu.
@@ -159,7 +164,9 @@ stay); on Linux, install Python 3.13, 3.12 or 3.11 with Tkinter. Nothing else ne
    type `./run_selftest.sh` in a terminal in that folder.
 2. Wait a minute or two. The transit fits are the slow part. The test changes no settings and no data. A SHOBS-P
    window may open and close by itself; that is part of the test.
-3. The last line should read `RESULT: ALL PASSED`.
+3. The test's own last line reads `RESULT: ALL PASSED`, and the window then ends with `✔ Self-test passed.` and
+   where the log is. If a check failed, it ends with `✖ Self-test: N checks failed` instead (the `RESULT` line
+   above it names them); if setup itself failed, with `✖ The self-test could not run` (the lines above say why).
 
 The test writes its log to `selftest_log.txt` in the SHOBS-P folder, and a copy to `SHOBS-P_selftest_log.txt` in your
 Downloads folder (on Linux and the Mac, when you have one). If you ever report a problem, attach this file.
@@ -171,7 +178,7 @@ is normal: that part of the test is simply skipped.
 > it, make a folder named `selftest_reports` next to `selftest.py` and put reports named `AAVSO_TrES-3b_*.txt`,
 > `AAVSO_KOI-217b_*.txt` or `AAVSO_WASP-12b_*.txt` in it.
 
-If the result says `FAILED`, the lines marked `FAIL` say which part. See chapter 24, Troubleshooting.
+If it says `✖`, the lines marked `FAIL` say which part. See chapter 24, Troubleshooting.
 
 ## Start SHOBS-P
 

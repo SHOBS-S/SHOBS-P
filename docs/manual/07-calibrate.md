@@ -201,15 +201,17 @@ the flats and lights are more than 5° apart. With a derotator it never asks: th
 the derotator at sky angle …** and explains that this is fine.
 
 **The Flat folder mixes camera angles.** One master built from flats at several angles matches none of them exactly.
-**No** stops so you can keep only the flats taken at the lights' angle.
+**Stop** (the default) stops so you can keep only the flats taken at the lights' angle; **Use all these flats** goes
+on.
 
 **The lights look already calibrated.** If the lights were calibrated by another program (file names with `cal` or
 PixInsight's `_c`, floating-point pixels, or calibration keywords in the header), SHOBS-P asks **Skip bias, dark, and
 flat for this run? (Recommended)**. Answer **Yes**; otherwise the bias and dark are taken out twice and the flat is
 divided in twice.
 
-**Some files can't be read.** If a folder holds files SHOBS-P cannot read (RAW, TIFF, JPEG), it lists them and asks
-whether to calibrate without that step. If no light can be read, it stops.
+**Some files can't be read.** If a folder holds files SHOBS-P cannot read (RAW, TIFF, JPEG), it lists them, says which
+step would be lost (for example *no flat would be applied*), and asks **Calibrate anyway?** with **Stop** as the
+default and **Calibrate without them**. If no light can be read, it stops.
 
 ## Messages in the log
 

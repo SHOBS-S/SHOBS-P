@@ -222,7 +222,7 @@ pixel size differs from your boxes, SHOBS-P lists the differences and asks **Use
 yours, and SHOBS-P will not ask again about those same values.
 
 **Your Site boxes are empty.** If the header has a site and yours is empty, SHOBS-P asks **Is that your own site?**
-**Yes** saves it as yours; **No** uses it for these frames only.
+**My site from now on** saves it as yours; **These frames only** (the default) uses it for these frames only.
 
 **A site you typed that is not your saved one.** When you type a site into the Site boxes for someone else's frames
 (a friend's data, or frames whose headers have no site), SHOBS-P does not save it while you type. When you leave the
@@ -233,8 +233,8 @@ saved site, or its elevation is more than 100 m off, SHOBS-P asks:
 >
 > Is this your own site from now on? …
 
-**Yes** saves it, with the Optics boxes, as your setup (SHOBS-SCHED reads the same setup). **No** uses it for these
-frames only: your saved site, optics and camera settings are kept, and nothing you type into the Site or Optics boxes
+**My site from now on** saves it, with the Optics boxes, as your setup (SHOBS-SCHED reads the same setup). **These
+frames only** (the default) uses it for these frames only: your saved site, optics and camera settings are kept, and nothing you type into the Site or Optics boxes
 is saved while the typed site is in use. If you saved an Optics value earlier in the same session (for example the
 other telescope's aperture before its site), it goes back too, and the log names it. The typed site stays in use for
 that Lights folder when its header has no site; your own setup comes back the next time you scan a folder of your own

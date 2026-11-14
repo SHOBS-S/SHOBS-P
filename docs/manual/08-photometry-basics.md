@@ -64,6 +64,17 @@ When solved, the title over the image reads, for example, "Solved · AAVSO chart
 **Solve again** repeats the solve, for example after a catalog did not answer, or after you corrected the focal
 length.
 
+**When only two catalog stars line up.** On a sparse field (a small frame, or a short exposure) the catalogs may have
+only two stars on the frame, and two stars can line up by chance. SHOBS-P then asks, on every solve (also the one that
+runs by itself when the page opens): *"The catalogs have only 2 stars here, and both lined up … Are they on real
+stars?"* Look at the circles. **On real stars: keep the solve** keeps it; **Not sure: discard it** (the default) drops
+the solve and any markers it placed, so nothing is measured at the wrong spots. Then **Solve again**, or click the
+stars and type their magnitudes.
+
+**When the header's plate solution disagrees with the Target marker.** If the FITS header carries a plate solution
+and it puts your target well away from the Target marker, SHOBS-P asks **Move the Target marker to where the plate
+solution puts …?** **Keep it where it is** is the default; **Move it there** moves the marker.
+
 **When the AAVSO sequence is slow.** The AAVSO chart server (VSP, at apps.aavso.org) sometimes answers late or not at
 all. SHOBS-P does not hold up the solve for it: it asks again in the background a few times, and the log says exactly
 what happened, for example "AAVSO sequence did not answer (503 from apps.aavso.org); asking again in the background
@@ -448,9 +459,12 @@ You will not see most of these on most nights. Each window explains its choices.
 - **The aperture is much larger (or smaller) than the stars.** Common after switching telescopes. **No** stops so you
   can press **Suggest…**; the window says what it would use.
 - **Defocused stars: the aperture clips the ring.** On a defocused field, an aperture smaller than the donut loses a
-  different part of the ring in every frame. The question gives the smallest safe r and what **Suggest…** would use,
-  and asks **Run with the current aperture anyway?**
-- **There is no star under a marker.** A marker on blank sky. **No** stops so you can move it.
+  different part of the ring in every frame. The question gives the smallest safe r and what **Suggest…** would use.
+  **Use r = … and run** (the default) sets those sizes and runs; **Run as is** keeps yours; **Cancel** stops.
+- **There is no star under a marker.** A marker on blank sky. **No** (the default) stops so you can move it.
+- **Too few stars to align the frames.** When the reference frame shows fewer than 3 stars (clouds, bad focus), the
+  other frames cannot be aligned to it, and the apertures would not follow any drift. **Stop** (the default) lets you
+  check the frame or reject it in Blink, so another frame becomes the reference; **Run without alignment** goes on.
 - **Names without markers.** A comp or check row has a name but no marker on this image (often left from a series).
   **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.
 - **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P

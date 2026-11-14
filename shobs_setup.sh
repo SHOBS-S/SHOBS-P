@@ -66,7 +66,8 @@ ENV_DIR="$DATA_DIR/python-env"
 ENV_PY="$ENV_DIR/bin/python3"
 RECORD="$DATA_DIR/python.txt"
 if ! mkdir -p "$DATA_DIR"; then
-    echo "SHOBS-P could not make its folder $DATA_DIR"
+    echo "✖ SHOBS-P could not make its folder $DATA_DIR"
+    echo '  Check that your user folder is writable and the disk is not full, then try again.'
     exit 5
 fi
 # 2.3.2 (run-through): the note SHOBS-P.app leaves (the time, a moment before it opens Terminal) is read and removed
@@ -361,19 +362,30 @@ remove_env_dir() {
 
 # --- 0. One setup at a time: a second double-click during the first install must not remove the environment -----
 LOCK="$DATA_DIR/setup.lock"
-release_lock() { rmdir "$LOCK" 2>/dev/null; }
+release_lock() { rm -f "$LOCK/pid" 2>/dev/null; rmdir "$LOCK" 2>/dev/null; }
+# 2.3.5 (#83, s024-s026): the lock holds the setup's process number, so a lock left by a setup that was cut off
+# (window closed, computer restarted) frees itself at once; no folder for the user to delete.
+lock_is_stale() {
+    local pid
+    pid=$(head -n 1 "$LOCK/pid" 2>/dev/null)
+    case "$pid" in
+        ''|*[!0-9]*)
+            # No number: an older SHOBS-P's lock, or one being made this instant. Stale after 2 minutes.
+            [ -n "$(find "$LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ] ;;
+        *) ! kill -0 "$pid" 2>/dev/null ;;
+    esac
+}
 if ! mkdir "$LOCK" 2>/dev/null; then
-    # A lock older than 60 minutes is left over from a setup that was cut off (window closed, computer restarted).
-    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
-        rmdir "$LOCK" 2>/dev/null
+    if lock_is_stale; then
+        release_lock
     fi
     if ! mkdir "$LOCK" 2>/dev/null; then
-        echo 'SHOBS-P is being set up in another window (or was, less than an hour ago).'
-        echo 'Wait for that window to finish, then start SHOBS-P again.'
-        echo "(If no other window is open, delete the folder $LOCK and try again.)"
+        echo '✖ SHOBS-P is being set up in another window.'
+        echo '  Wait for that window to finish, then start SHOBS-P again.'
         exit 7
     fi
 fi
+echo "$$" > "$LOCK/pid" 2>/dev/null
 trap release_lock EXIT
 
 # A fingerprint of what the environment must hold (requirements.txt, + certifi on a Mac), kept as python.txt's
@@ -454,14 +466,14 @@ pip_reaches_index() {
 say_pip_why() {
     case "$PIP_WHY" in
         nobuild)
-            echo "    ⚠ Some packages SHOBS-P needs have no ready-made copy for Python $1 yet"
+            echo "    Python $1: some packages SHOBS-P needs have no ready-made copy for it yet"
             echo '      (they would have to be compiled, and SHOBS-P never compiles).' ;;
         network)
             echo '    ✖ The packages could not be downloaded. Check the internet connection and try again.' ;;
         nopip)
-            echo '    ⚠ This Python has no pip, so SHOBS-P cannot install its packages with it.' ;;
+            echo '    This Python has no pip, so SHOBS-P cannot install its packages with it.' ;;
         *)
-            echo "    ⚠ The packages did not install on Python $1 (pip's own words are in $PIP_LOG)." ;;
+            echo "    The packages did not install on Python $1 (pip's own words are in $PIP_LOG)." ;;
     esac
 }
 
@@ -540,7 +552,7 @@ if [ -z "$PY" ]; then
             remove_env_dir
             # A Python whose packages belong to the system (Debian, Ubuntu, Fedora...) must not get pip's packages.
             if "$BASE" -c "import os, sys, sysconfig; sys.exit(0 if os.path.exists(os.path.join(sysconfig.get_path('stdlib'), 'EXTERNALLY-MANAGED')) else 1)" 2>/dev/null; then
-                echo "    ⚠ SHOBS-P could not make its own environment with this Python, and its packages are"
+                echo "    SHOBS-P could not make its own environment with this Python, and its packages are"
                 echo '      managed by the system, so SHOBS-P will not install into it.'
                 case "$venv_out" in
                     *ensurepip*|*python3*-venv*)
@@ -636,19 +648,22 @@ desktop_quote() {
 }
 
 # Tk draws through X: on Wayland that needs XWayland (which sets DISPLAY).
-no_screen_hint() {
+# 2.3.5 (#83, s062-s064): no screen stops here with ✖ (exit 8), so the hint is the last thing on the screen instead
+# of a Tk traceback after it.
+no_screen_stop() {
     [ "$MAC" = 0 ] && [ -z "$DISPLAY" ] || return 0
     if [ -n "$WAYLAND_DISPLAY" ]; then
-        echo 'This is a Wayland session without XWayland (DISPLAY is not set), and Tk needs X to draw its windows.'
-        echo 'Install XWayland (package xwayland), or log in with an "on Xorg" session, then try again.'
+        echo '✖ This is a Wayland session without XWayland (DISPLAY is not set), and Tk needs X to draw its windows.'
+        echo '  Install XWayland (package xwayland), or log in with an "on Xorg" session, then try again.'
     else
-        echo 'No screen found (DISPLAY is not set): start SHOBS-P from your desktop session.'
+        echo '✖ No screen found (DISPLAY is not set): start SHOBS-P from your desktop session.'
     fi
+    exit 8
 }
 
 case "$ACTION" in
     run)
-        no_screen_hint
+        no_screen_stop
         # 2.3.2 (run-through): started from SHOBS-P.app (APP_NOTE, read above), this Terminal window goes to the Dock
         # as SHOBS-P starts and comes back up when SHOBS-P closes (with the message if it stopped with an error), so
         # no window is left behind in the Dock. A note older than 2 minutes is left over and is not used.
@@ -678,7 +693,7 @@ case "$ACTION" in
                 xvfb-run -a "$PY" "$APP_DIR/selftest.py"
                 exit $?
             fi
-            no_screen_hint
+            no_screen_stop
         fi
         "$PY" "$APP_DIR/selftest.py"
         exit $?

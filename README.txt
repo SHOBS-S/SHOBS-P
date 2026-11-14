@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.4
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.5
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -6,7 +6,7 @@ reports, exoplanet transit fits and AAVSO exoplanet reports, and a field scan th
 
 Quick start
 1. Install Python 3.11 or newer (python.org, "Add python.exe to PATH" ticked; Anaconda also works). Double-click "Create shortcuts.bat"
-   in this folder, then "Run self-test.bat" (it should end with RESULT: ALL PASSED).
+   in this folder, then "Run self-test.bat" (it should end with "Self-test passed").
 2. Try it first: on the Input page press "Try it with sample data…" and pick an empty folder; every box is filled and
    the stars are marked. Then Blink, Calibrate, Photometry, Output.
 3. Your own frames: Input (folders, Scan folders, site and optics once, the target's name then Enter), Blink (reject bad
@@ -77,6 +77,36 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.5 (safety and bugs, from the 14 Nov 2026 message review; with the same stars every measured number is
+the same as in 2.3.0, except the comp-choice check when a comp is missing in some frames; S = shared by every mode,
+V = Variables, T = Transits; GitHub issue numbers in brackets)
+- S  Safe default buttons: every "... anyway?" question now has No (or Stop / Cancel / These frames only) as the
+     button Enter presses, so a stray Enter never does the risky thing. Some questions now have buttons that say
+     what they do: the site questions ("My site from now on" / "These frames only"), calibrating with unreadable
+     files or flats at mixed camera angles, a clipped donut aperture ("Use r = ... and run" sets the suggested
+     aperture for you), and a new question when the reference frame has too few stars to align the others.
+- S  Two-star plate solve [80]: a solve that lined up only two catalog stars is now asked about on automatic
+     solves too (it was taken unseen), with "Not sure: discard it" as the default.
+- S  The header's plate solution puts the target away from the Target marker: asked "Move the Target marker
+     there?" (Keep is the default), on every solve.
+- V  A night held back for its flip step [81]: automatic saves (notes, sent marks, a removed or added night,
+     changed comps) are written again, without that night; a night it replaced keeps its earlier version in the
+     file. The series line says "... is held (flip step), not in the file". "Note ... saved." is only said when
+     it was.
+- T  Comp-choice check [88]: a comp missing in some frames (off the frame edge) made every refit lose those
+     frames, so the check reported a wrong range and a false caution. The refits now use the same frames as the
+     main fit (the comps present, on the night's scale, as the photometry does). The note gives the depth with
+     all comps and the points used beside the range, and the files call the spread a diagnostic.
+- T  A chosen comp missing in part of the night is named on the Transit page before the fit, and in the fit's
+     notes and reports (it changes the ensemble partway through the night).
+- S  Self-test [83]: it now ends with "Self-test passed", "N checks failed" or "could not run (setup failed)"
+     (it used to say "Done." even after a failure); its exit code says so too.
+- S  Windows setup [83] works like the Mac and Linux one: ready-made packages only (it never compiles), Python
+     3.13, 3.12, 3.11 tried first, then the next Python when one has no ready-made packages, and the real reason
+     said (no internet, no ready-made copies for that Python yet, no pip).
+- S  Mac and Linux setup: a setup cut off part way no longer leaves a lock to delete by hand; with no screen
+     (Linux) it stops with the reason instead of a Tk error.
 
 New in 2.3.4 (with the same stars, every measured number is the same as in 2.3.0; the suggested comps and the
 Comp health window's night offsets can differ; S = shared by every mode, V = Variables, T = Transits; GitHub
@@ -1198,6 +1228,9 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.5  Safety and bugs (numbers as 2.3.0 except the comp-choice check with a part-time comp): safe default
+       buttons; two-star solve asked always (#80); held flip-step night no longer blocks saves (#81);
+       comp-choice check on the main fit's frames (#88); self-test result and Windows setup (#83).
 2.3.4  UI only (numbers as 2.3.0): series comps/check placed after the solve; markers follow a new
        reference frame after a Blink reject (#74); Comp health zero points (#75); fit CSV error columns (#73);
        tighter suggested comps (colour, linear limit, edge); Stars panel clear buttons always visible.
