@@ -8,7 +8,7 @@ and self-test console lines, none of which the manual's shots show).
 
 | Shot | Shows the key? | Action |
 |---|---|---|
-| img/08-photometry-solved.jpg | yes (bottom left) | reshoot: SZ Lyn as before (new reduction, Bin 2, r 8/14/22, Comps step) |
-| img/09-marked-stars.jpg | yes (bottom left) | reshoot: SZ Lyn, comps 109/115/117 + check 121 as before |
+| img/08-photometry-solved.jpg | yes (bottom left) | RESHOT 14 Nov 12:14 (2414×1775, example site) |
+| img/09-marked-stars.jpg | yes (bottom left) | RESHOT 14 Nov 12:15 (Solve again after marking, clean log) |
 | img/08-popout-window.jpg | no (zoomed in, key out of view) | reused |
 | 20-discovery-*.jpg / .png | no (Discovery never drew it) | reused |
