@@ -297,3 +297,56 @@ class TestSeriesOnAnotherFieldsImage(unittest.TestCase):
             self.assertFalse(app._series_off_this_image())
         app.comp_coords = {}
         self.assertFalse(app._series_off_this_image(), "nothing to tell from: not called foreign")
+
+
+class TestLoadSeriesTakesStaleMarkersOff(unittest.TestCase):
+    """2.3.5 (John, 14 Nov): Load series onto an image still marked from another series' run must not keep those
+    markers under the series' names (2.3.4 then renamed the series' comps and check after the stars under them)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_235c.log")
+        cls.app = ca.App()
+        cls.app.update()
+        cls.tmp = tempfile.mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def test_changed_names_lose_their_markers(self):
+        from unittest import mock
+        app, ca = self.app, self.ca
+        c1, c2 = ca.COMP_ROLES[0], ca.COMP_ROLES[1]
+        # the file: comps A, B and check K
+        app.observations = []
+        app.series_path = ""
+        getattr(app, f"{c1}_name").set("Star A")
+        getattr(app, f"{c2}_name").set("Star B")
+        app.check_name.set("Star K")
+        path = os.path.join(self.tmp, "s.cvseries")
+        o = core.Obs(jd=2461000.6, mag=10.0, merr=0.01, cmag=0.0, kmag=None, airmass=1.2, path="x.fits",
+                     exptime=60.0, flux_var=0.0, flux_comp=0.0, night="JD2461000")
+        meta = app._meta()
+        meta.update({f"{c1}_name": "Star A", f"{c2}_name": "Star B", "check_name": "Star K"})
+        core.save_series(path, meta, [o])
+        # the screen: another run's markers, with Star A still comp 1 at its spot, comp 2 / check other stars
+        app.observations = []
+        getattr(app, f"{c1}_name").set("Star A")
+        getattr(app, f"{c2}_name").set("Old comp")
+        app.check_name.set("Star B")
+        setattr(app, f"{c1}_xy", (10.0, 10.0))
+        setattr(app, f"{c2}_xy", (20.0, 20.0))
+        app.check_xy = (30.0, 30.0)
+        with mock.patch.object(ca.filedialog, "askopenfilename", return_value=path), \
+                mock.patch.object(ca.messagebox, "askyesno", return_value=True), \
+                mock.patch.object(ca.messagebox, "showinfo"), mock.patch.object(ca.messagebox, "showwarning"):
+            app.load_series()
+        self.assertEqual(getattr(app, f"{c2}_name").get(), "Star B")
+        self.assertEqual(app.check_name.get(), "Star K")
+        self.assertIsNone(getattr(app, f"{c2}_xy"), "marker of another star taken off")
+        self.assertIsNone(app.check_xy, "marker of another star taken off")
+        self.assertEqual(getattr(app, f"{c1}_xy"), (10.0, 10.0), "same name: its marker stays")

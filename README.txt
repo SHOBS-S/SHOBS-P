@@ -102,6 +102,12 @@ V = Variables, T = Transits; GitHub issue numbers in brackets)
      notes and reports (it changes the ensemble partway through the night).
 - S  Photometry image: the small key inside the image (suggested comp / AAVSO sequence) is gone; the legend
      column beside the image already names both.
+- S  Load series onto an image that still carries markers from another run: a slot whose name the series changes
+     loses its old marker (2.3.4 renamed the series' comps and check after the stars under them), and a series of
+     another field leaves the image alone (2.3.4 dropped its comps as "not on this frame"); both are placed after
+     the solve on the series' own lights.
+- V  Time of max/min: when the elements' predicted windows miss (old elements), the night's own extremum is
+     measured, with a note that the elements may be off by part of a cycle.
 - S  Self-test [83]: it now ends with "Self-test passed", "N checks failed" or "could not run (setup failed)"
      (it used to say "Done." even after a failure); its exit code says so too.
 - S  Windows setup [83] works like the Mac and Linux one: ready-made packages only (it never compiles), Python

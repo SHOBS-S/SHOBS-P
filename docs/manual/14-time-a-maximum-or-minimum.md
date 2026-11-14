@@ -23,6 +23,16 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
    be decades old. A time saved against them is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure**.
 
+With Period and Epoch filled in, SHOBS-P looks for the extremum near each time those elements predict in the night.
+Old elements can miss by part of a cycle: VSX epochs are often decades old, and a period error far too small to notice
+grows to an hour or more over tens of thousands of cycles. The predicted window then lands on the other branch of the
+light curve (for a maximum, on the night's minimum). From 2.3.5, when no predicted window holds the extremum, SHOBS-P
+measures the night's own extremum instead and adds a note: *"found away from the time the elements predict …: the
+elements may be off by part of a cycle"*. Its O − C is then large, which is the sign to use your own elements: your
+own period (Output page, Period box) and one of your own well-measured times as the Epoch. Before 2.3.5 it said only
+*"polynomial: no extremum inside the window"*; clearing the **Epoch** box and pressing **Measure** again measures the
+night's own extremum.
+
 ![The Time of maximum / minimum window for GSC 03308-00462: the elements filled by Elements from saved times, a measured maximum, the two saved times listed under the result, and the O − C diagram](img/14-extremum.png)
 
 *The O − C beside each saved time is the one stored when it was saved, against the elements used then; the O − C

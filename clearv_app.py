@@ -17320,10 +17320,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.clear_target(quiet=True, why=f"{os.path.basename(path)} is {why}")
         watch_before = {w.get("name") for w in self.watch_list}
         auids_before = set(self.seq_auids)
+        names_before = {role: name_key(getattr(self, f"{role}_name").get()) for role in COMP_ROLES + ("check",)}
         self._apply_meta(meta)
         for role, (name, mag) in kept_marked.items():
             getattr(self, f"{role}_name").set(name)
             getattr(self, f"{role}_mag").set(mag)
+        # 2.3.5 (John, 14 Nov, GSC _16.3): a marker left from the previous run under a slot whose name the file just
+        # changed is not that star: 2.3.4 kept it, and the solve then renamed the series' comps and check after the
+        # stars under the old markers ("Check name updated from APASS J024816.7+504250 to TYC 3308-208-1"). Those
+        # markers go; the series' stars are placed from their own positions after the solve.
+        stale = []
+        for role in COMP_ROLES + ("check",):
+            if role in kept_marked or getattr(self, f"{role}_xy", None) is None:
+                continue
+            if name_key(getattr(self, f"{role}_name").get()) != names_before.get(role):
+                setattr(self, f"{role}_xy", None)
+                getattr(self, "_slot_notes", {}).pop(role, None)
+                stale.append(role_label(role))
+        if stale:
+            self.log("Series loaded: markers from the previous run taken off " + ", ".join(stale)
+                     + " (the series names other stars there); they are placed from the series after the solve.")
         self.highlight_night = None   # 2.2.15 review: a loaded series opens unzoomed
         # 2.2.15 review: remember what the file brought, so Close series takes it away again.
         self._series_watch_names = {w.get("name") for w in self.watch_list} - watch_before
