@@ -1163,6 +1163,8 @@ class TransitPage:
         if "(header EGAIN)" not in gain:
             gain = gain.split(" (")[0]
         parts.append(gain)
+        if self.report is None:   # 2.3.6 (#79 item 2)
+            parts.append(self.app.run_findings_note())
         return "SHOBS-P settings: " + "; ".join(p for p in parts if p)
 
     # ---- fit -------------------------------------------------------------------------------
@@ -1467,7 +1469,7 @@ class TransitPage:
                 flagged.append("comp choice")
             self.prog_text.set(done_text + ("   " if done_text else "") + f"Comps checked: depth spread "
                                f"{loo['depth_spread'] * 100:.2f} %, Tc spread {loo['tc_spread_s']:.0f} s"
-                               + (f" (⚠ {', '.join(flagged)})" if flagged else ""))
+                               + (f" (stand out: {', '.join(flagged)})" if flagged else ""))
         except Exception as exc:
             self.app.log(f"Comp check not shown: {exc}")
         finally:
@@ -2899,6 +2901,8 @@ class TransitPage:
         lines = self.settings_lines(meta, self.result)
         if not lines:
             return ""
+        if self.report is None:   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
+            lines = lines + self.app.run_findings_lines()
         path = self.app._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")   # never over an older one
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
@@ -3060,7 +3064,7 @@ class TransitPage:
         if not renamed:
             self.app.log(f"ExoFOP package written to {out}, but it could not be renamed to {os.path.basename(final)} "
                          "(a file in it was still open). Rename the folder yourself, or save the package again.")
-            messagebox.showwarning("SHOBS-P", f"The ExoFOP package is complete in\n{out}\nbut the folder could not be "
+            messagebox.showinfo("SHOBS-P", f"The ExoFOP package is complete in\n{out}\nbut the folder could not be "
                                               f"renamed to {os.path.basename(final)}. Rename it yourself, or save "
                                               "the package again.", parent=self.app)
             return

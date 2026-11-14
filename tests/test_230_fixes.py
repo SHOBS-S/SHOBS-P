@@ -622,7 +622,7 @@ class TestCompsWeakRule(unittest.TestCase):
         sug = sc.suggest_n(noise, 10.0, cap, 2000)
         text, warn = sc.suggest_text("variables", noise, sug, cap, 2000, None)
         self.assertTrue(warn)
-        self.assertTrue(text.startswith("⚠ Comps are weak"))
+        self.assertTrue(text.startswith("Comps are weak"))   # 2.3.6 (#79 m719/m720): a plain note
 
     def test_goal_still_stacks_fine_comps(self):
         noise = self._noise(0.00053, 0.00060, 0.0021)

@@ -113,7 +113,7 @@ class TestRules(unittest.TestCase):
         self.assertAlmostEqual(sug["snr_c"], noise["snr_c"] * 10, places=6)
         text, warn = sc.suggest_text("variables", noise, sug, cap, len(pts), None)
         self.assertTrue(warn)
-        self.assertTrue(text.startswith("⚠ Comps are weak"))
+        self.assertTrue(text.startswith("Comps are weak"))   # 2.3.6 (#79 m719/m720): a plain note
         self.assertIn("Stack 100 frames", text)
         self.assertIn("2000 frames → 20 points", text)
         # never fewer than 10 points from a night: 400 frames -> at most 40 per stack, and the line says why

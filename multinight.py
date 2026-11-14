@@ -296,7 +296,7 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None, detren
             n["status"], n["use"] = ("bad", "✖ " + n["error"]), False
             continue
         if want and n.get("planet") and norm_name(n["planet"]) != want:
-            n["status"], n["use"] = ("bad", f"✖ another planet ({n['planet']}), left out"), False
+            n["status"], n["use"] = ("off", f"another planet ({n['planet']}), left out"), False
             continue
         if len(n["t"]) < MIN_POINTS:
             n["status"], n["use"] = ("bad", f"✖ only {len(n['t'])} points (needs {MIN_POINTS})"), False
@@ -304,7 +304,7 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None, detren
         lo, hi = float(n["t"].min()), float(n["t"].max())
         dup = next((k for k in kept if not (hi < k["t"].min() or lo > k["t"].max())), None)
         if dup is not None:
-            n["status"], n["use"] = ("bad", f"✖ same night as {dup['source']}, left out"), False
+            n["status"], n["use"] = ("off", f"same night as {dup['source']}, left out"), False
             continue
         if eph and eph.get("t0") and eph.get("period"):
             chk = tc.transit_window_check(lo, hi, {"t0": eph["t0"], "t0_err": eph.get("t0_err"),
@@ -1371,7 +1371,7 @@ def nights_from_series(app) -> tuple:
         missing = [p for p in files.values() if not os.path.isfile(p)]
         present = {k: p for k, p in files.items() if os.path.isfile(p)}
         for p in missing:
-            messages.append(f"⚠ Night of {label}: {os.path.basename(p)} is not found (moved or deleted)"
+            messages.append(f"Night of {label}: {os.path.basename(p)} is not found (moved or deleted)"
                             + ("; the night is loaded from the series' own points." if radec else "."))
         pts = [o for o in usable if o.night == key]
         try:

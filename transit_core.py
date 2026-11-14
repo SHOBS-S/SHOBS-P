@@ -1646,7 +1646,7 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                                       f"{mean:.3g} ± {sigma:.2g}. The light curve pulls hard against the known shape: "
                                       "look for a trend, a bad comp, or clouds."))
     if best["b"] > 1.0 - k:
-        flags.append(("warn", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
+        flags.append(("info", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
                               "heavily on the b prior."))
     ff = r.get("free_fit")
@@ -1733,10 +1733,10 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         eph_min = r["tc_pred_err"] * 1440
         fit_min = (s["tc"][1] * 1440) if "tc" in s else float("nan")
         if r.get("eph_err_known") is False:
-            flags.append(("warn", "The ephemeris's mid-transit time has no stated uncertainty, so the ± above "
+            flags.append(("info", "The ephemeris's mid-transit time has no stated uncertainty, so the ± above "
                                   "leaves it out; treat the O − C with care."))
         elif eph_min > 10.0 and (not math.isfinite(fit_min) or eph_min > 2.0 * fit_min):
-            flags.append(("warn", f"The predicted mid-transit is uncertain by ±{eph_min:.0f} min (ephemeris "
+            flags.append(("info", f"The predicted mid-transit is uncertain by ±{eph_min:.0f} min (ephemeris "
                                   f"propagated to epoch {r['epoch']}), so this O − C mostly tests the ephemeris."))
     elif r.get("tc_pred") is None:
         flags.append(("info", "No ephemeris (mid-transit time) was available: Tc was started at the lowest "

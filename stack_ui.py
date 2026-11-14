@@ -314,9 +314,8 @@ class StackMixin:
                 self.log(f"Noise check (per frame): target {noise['sig_t'] * 1000:.1f} mmag (SNR {noise['snr_t']:.0f}), "
                          f"comp ensemble {noise['sig_c'] * 1000:.1f} mmag (SNR {noise['snr_c']:.0f}; each comp "
                          + ", ".join(f"{s:.0f}" for s in noise["comp_snr"]) + ") over "
-                         f"{noise['n']} frames; comp noise {noise['ratio']:.2f}× the target's.")
-            self.log(text.replace("⚠ ", "⚠ Stacking: ", 1) if warn else
-                     (text if text.startswith("Stacking") else "Stacking: " + text))
+                         f"{noise['n']} frames; comp noise {noise['ratio']:.2f}× the target's.", keep_status=True)
+            self.log(text if text.startswith("Stacking") else "Stacking: " + text, keep_status=True)
         return sug
 
     # ---- Stack -----------------------------------------------------------------------------------------------
