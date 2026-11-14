@@ -11226,25 +11226,37 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return xy
 
     def _series_off_this_image(self) -> bool:
-        """2.3.5: True when the solved image is another field than the loaded series: some series comp or check has a
-        sky position (comp_coords) and none of them falls on the image. False when nothing can be told."""
+        """2.3.5: True when the solved image is another field than the loaded series: the series' target (Input page
+        RA/Dec) is not on it, and some series comp or check has a sky position (comp_coords) and none of them falls on
+        the image. False when the target is on it, or when nothing can be told."""
         sol = self.chart_solution
         if not sol or self.preview is None:
             return False
         h, w = self.preview.shape[:2]
+
+        def lands(ra, dec):
+            try:
+                px, py = core.sky_to_pixel(float(ra), float(dec), sol)
+            except Exception:
+                return None
+            return bool(np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5)
+        try:
+            target_on = lands(float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get()))
+        except (TypeError, ValueError):
+            target_on = None
+        if target_on:
+            return False   # the series' target is on this image: the same field, whatever its comps do
         known = on = 0
         for role in list(COMP_ROLES) + ["check"]:
             name = getattr(self, f"{role}_name").get().strip()
             coords = self.comp_coords.get(name) if name else None
             if coords is None:
                 continue
-            try:
-                px, py = core.sky_to_pixel(float(coords[0]), float(coords[1]), sol)
-            except Exception:
+            hit = lands(coords[0], coords[1])
+            if hit is None:
                 continue
             known += 1
-            if np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5:
-                on += 1
+            on += int(hit)
         return known > 0 and on == 0
 
     def _resolve_for_loaded_series(self):
@@ -12909,7 +12921,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._locate_watch_stars()
         self._fill_marked_from_chart()
         auto_slots = []
-        if self.mode_key != "discovery":
+        foreign_image = bool(getattr(self, "_preview_foreign", "")) or (
+            getattr(self, "_series_loaded_token", None) == getattr(self, "_preview_token", 0)
+            and self._series_off_this_image())
+        if foreign_image and self.mode_key != "discovery":
+            # 2.3.5 (review r3 S1/S2): a solve of another field's image (Solve again, or the first solve of a frame
+            # that was on the page when a series of another star was loaded) neither drops nor places the series'
+            # comps and check: they belong to that series' own lights.
+            if not getattr(self, "_preview_foreign", ""):
+                self._preview_foreign = str(self.star_id.get() or "the series' star").strip()
+            self.log("Solve: this image is another field than the loaded series; its comps and check are kept and "
+                     "placed after Calibrate on the series' own lights.")
+        elif self.mode_key != "discovery":
             self._drop_offframe_slots()   # 2.2.19 (#20): comps/check of an earlier run that are not on this frame
             try:
                 auto_slots = self._auto_place_named_slots()   # 2.3.4: a loaded series' comps/check get their markers
@@ -16893,8 +16916,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if not getattr(self, "_hold_stale_logged", False):
                 self._hold_stale_logged = True
                 self.log(f"Not saved: {self._held_names(sorted(holds))} {'is' if len(holds) == 1 else 'are'} held "
-                         "(flip step ⚠) and the comps or "
-                         "catalog magnitudes changed since, so its earlier version no longer matches the series. "
+                         "(flip step ⚠) and the comps or catalog magnitudes changed since, so "
+                         f"{'its earlier version no longer matches' if len(holds) == 1 else 'their earlier versions no longer match'} the series. "
                          "Save series writes everything.")
             self.update_series_status()
             return None
@@ -17333,6 +17356,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             traceback.print_exc()
         nights = sorted({obs.night for obs in observations})
         self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then choose Add.")
+        self._series_loaded_token = getattr(self, "_preview_token", 0)   # 2.3.5 (review r3 S2): the image at the load
         self._resolve_for_loaded_series()   # 2.3.4 (run-through): an image solved before the load gets the series' stars
         messagebox.showinfo(
             APP_TITLE,
@@ -19534,12 +19558,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return found
 
     def set_catalog_mags(self, changes: dict, check: str | None = None) -> bool:
-        self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         """2.2.18 (item 3): catalog magnitudes typed in Use comps… for the whole series ({star: V}); check: the check
         star's, or None. The series' values win over the Photometry boxes, so a wrong catalog value (HD 219134's
         rebuild took Gaia V 8.711 for the campaign's 8.728) is corrected here: every point is re-derived from its
         stored instrumental magnitudes (core.apply_catalog_mags), the boxes of the same stars follow, and an open
         series file is written. True when something changed."""
+        self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         changes = {str(k): float(v) for k, v in (changes or {}).items()}
         old_cat = self._comp_catalog()
         lines = []
@@ -21693,6 +21717,19 @@ class ExtremumWindow:
             if any(abs(r["t"] - q["t"]) < 0.05 * (period or 1.0) for q in results):
                 continue
             results.append(r)
+        if not results and guesses != [None]:
+            # 2.3.5 (John, 14 Nov, GSC 03308-00462): elements that have drifted put every predicted window on the
+            # other branch (P 0.15151 d put it on the night's minimum), so "no extremum inside the window" was all
+            # the window said. The night's own extremum is measured instead, and the text says why.
+            try:
+                r = core.measure_extremum(t, vals, kind, period=period, t_guess=None, half_width=hw)
+                r.setdefault("warnings", []).append(
+                    "found away from the time the elements predict (" + "; ".join(sorted(set(problems))) + "): "
+                    "the elements may be off by part of a cycle")
+                problems = []
+                results.append(r)
+            except ValueError as exc:
+                problems.append(str(exc))
         ra, dec, lat, lon = self._coords()
         for r in results:
             try:

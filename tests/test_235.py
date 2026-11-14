@@ -287,6 +287,10 @@ class TestSeriesOnAnotherFieldsImage(unittest.TestCase):
         role = ca.COMP_ROLES[0]
         getattr(app, f"{role}_name").set("GSC comp")
         app.comp_coords = {"GSC comp": (42.0, 50.8)}
+        app.ra_hours.set("2.5")
+        app.dec_deg.set("50.8")
+        with mock.patch.object(ca.core, "sky_to_pixel", side_effect=lambda ra, dec, sol: (60.0, 40.0) if ra < 42 else (900.0, 700.0)):
+            self.assertFalse(app._series_off_this_image(), "target on the image: same field")
         with mock.patch.object(ca.core, "sky_to_pixel", return_value=(900.0, 700.0)):
             self.assertTrue(app._series_off_this_image())
         with mock.patch.object(ca.core, "sky_to_pixel", return_value=(60.0, 40.0)):

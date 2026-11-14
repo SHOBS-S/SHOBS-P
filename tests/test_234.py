@@ -252,6 +252,8 @@ class TestMarkersAfterSolve(unittest.TestCase):
         # a fake plate solution: 1 px = 1 arcsec, RA grows with x (enough for sky_to_pixel and the matching)
         app.chart_solution = {"target_xy": (250.0, 200.0), "scale": 1.0, "angle": 0.0, "ra_deg": 30.0,
                               "dec_deg": 0.0, "auto": True}
+        app.ra_hours.set("2.0")   # 2.3.5: the target's RA/Dec (30.0, 0.0) on this image, as on a solved frame of it
+        app.dec_deg.set("0.0")
         app.chart_placed = []
         for i, (x, y) in enumerate(pts[:12]):
             ra, dec = ca.core.pixel_to_sky(float(x), float(y), app.chart_solution)
