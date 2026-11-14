@@ -31,6 +31,8 @@ except ImportError:
 
 MCMC_CHOICES = {"Quick (1,500 steps)": 1500, "Standard (3,000 steps)": 3000, "Thorough (8,000 steps)": 8000}
 GREEN = "#0b6e4f"
+# 2.3.5 (m791): a chosen comp missing in at least this share of the night's frames holds the automatic fit.
+PART_TIME_MIN_SHARE = 0.05
 PINK = "#c2185b"
 
 
@@ -1155,6 +1157,42 @@ class TransitPage:
         return "SHOBS-P settings: " + "; ".join(p for p in parts if p)
 
     # ---- fit -------------------------------------------------------------------------------
+    def _part_time_comp_text(self) -> str:
+        """2.3.5 (m791): one ⚠ line naming each chosen comp the run left out of some (not all) of this night's frames
+        ("" when none, or for a loaded report). The check star is not a comp and is not named here."""
+        if self.report is not None:
+            return ""
+        app = self.app
+        try:
+            night = self.night.get()
+            info = app._night_info(night) or {}
+        except Exception:
+            return ""
+        chosen = set(app.active_comps or app.comps_used or [])
+        whole = set(info.get("night_out") or [])
+        # A comp lost in a frame or two (a cosmic ray, a brief edge clip) moves nothing: no caution for it (house
+        # rule: ⚠ only for what needs action). PART_TIME_MIN_SHARE of the night's frames, and at least 3.
+        n_night = sum(1 for o in app.observations if o.night == night)
+        least = max(3, int(math.ceil(PART_TIME_MIN_SHARE * n_night)))
+        parts = []
+        for name, rec in (info.get("comp_drops") or {}).items():
+            if name == "check" or name not in chosen or name in whole:
+                continue
+            frames = rec.get("frames") or []
+            if len(frames) < least:
+                continue
+            what = ", ".join(rec.get("reasons") or {}) or "off the frame edge"
+            try:
+                span = app._frame_ranges(frames)
+            except Exception:
+                span = f"{len(frames)}"
+            parts.append(f"{name} is missing in {len(frames)} frame{'s' if len(frames) != 1 else ''} ({what}; "
+                         f"frames {span})")
+        if not parts:
+            return ""
+        return ("⚠ " + "; ".join(parts) + ". The comp ensemble changes partway through the night, which can move the "
+                "depth and Tc. Leave that comp out with Use comps… if the fit looks off.")
+
     def fit(self, auto: bool = False, with_flagged: bool = False):
         if getattr(self, "_checking", False):
             # 2.2.16 (item 6, review): the comp check runs right after "Done"; a status line, not a modal box, and
@@ -1214,12 +1252,25 @@ class TransitPage:
                 self._notes_text([("warn", text), ("info", "Fit transit fits it anyway.")])
                 self.app.log("Transit fit: " + text)
                 return
-            if not messagebox.askyesno("SHOBS-P", text + "\n\nFit anyway?"):
+            if not messagebox.askyesno("SHOBS-P", text + "\n\nFit anyway?", default=messagebox.NO):   # 2.3.5 (m790)
                 self.result = None
                 self._fill_table()
                 self.draw(preview=preview)
                 self._notes_text([("warn", text)])
                 return
+        part_time = self._part_time_comp_text()
+        if auto and part_time:
+            # 2.3.5 (m791): a chosen comp missing part of the night changes the ensemble partway through, so the
+            # automatic fit waits: the one line that matters is on the page, with the two ways on.
+            self.result = None
+            self._fill_table()
+            self.draw(preview=(t, flux, "Fit waiting: a comp is missing part of the night (see the notes)"))
+            self._notes_text([("warn", part_time), ("info", "Fit transit fits with these comps anyway; Use comps… "
+                                                            "on the Output page leaves that comp out.")])
+            self.app.log("Transit fit: not started by itself. " + part_time)
+            self.app.status.set("⚠ Transit fit waiting: a comp is missing part of the night (see the Transit page).")
+            return
+        self._part_time_note = part_time
         if auto:
             if self.app.busy:
                 return
@@ -1507,6 +1558,10 @@ class TransitPage:
         self.app.status.set("✔ Transit fit done.")
         self._fill_table()
         self._count_text()
+        note = getattr(self, "_part_time_note", "")
+        if note and not any(text == note for _lvl, text in result["flags"]):
+            # 2.3.5 (m791): fitted with a part-time comp: said in the notes, so in the saved report too.
+            result["flags"] = [("warn", note)] + list(result["flags"])
         self._notes_text(tc.cautions(result["flags"], result.get("verdict")))
         self.draw()
         self._show_refit_flagged()
@@ -1763,7 +1818,8 @@ class TransitPage:
         if state == "none":
             return messagebox.askyesno(
                 "SHOBS-P", "This fit did not measure a transit:\n\n" + v["reason"] + "\n\nA report from it would "
-                "carry numbers that mean nothing. Save it anyway (for your records, not for submission)?")
+                "carry numbers that mean nothing. Save it anyway (for your records, not for submission)?",
+                default=messagebox.NO)   # 2.3.5 (m809)
         if state == "inconclusive":
             caveat = ("Neither Tc nor the depth is measured (the flip step trades off against both)."
                       if v.get("flip_inconclusive") else "Tc may be worth reporting with that caveat; the depth is not.")

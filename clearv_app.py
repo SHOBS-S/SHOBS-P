@@ -6,6 +6,7 @@ and an AAVSO Extended File Format report (filter CV).
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import math
@@ -949,6 +950,11 @@ def text_wrap_px(widget, chars: int = 95, size: int = 10) -> int:
         return max(320, min(px, int(0.6 * int(widget.winfo_screenwidth()))))
     except Exception:
         return 780
+
+
+def ask_no(title: str, message: str, **kw) -> bool:
+    """2.3.5 (#79 safe defaults): a Yes/No "…anyway?" question whose default button (Enter) is No, the safe answer."""
+    return messagebox.askyesno(title, message, default=messagebox.NO, **kw)
 
 
 def ask_choice(parent, title: str, message: str, choices, safe):
@@ -2804,12 +2810,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._typed_site_pending = False
         here = f"latitude {float(self.lat.get()):.4f}, longitude {float(self.lon.get()):.4f}"
         yours = f"latitude {saved[0]:.4f}, longitude {saved[1]:.4f}"
-        if messagebox.askyesno(
-                APP_TITLE,
+        if ask_choice(
+                self, APP_TITLE,
                 f"The Site boxes now hold {here} ({why}; yours is {yours}).\n\n"
-                "Is this your own site from now on? Yes saves it, with the Optics values you typed, as your setup "
-                "(SHOBS-SCHED reads it too). No uses it for these frames only: your saved site, optics and camera "
-                "settings are kept and come back when you scan a folder of your own lights."):
+                "Is this your own site from now on? 'My site from now on' saves it, with the Optics values you typed, "
+                "as your setup (SHOBS-SCHED reads it too). 'These frames only' uses it for these frames: your saved "
+                "site, optics and camera settings are kept and come back when you scan a folder of your own lights.",
+                [("own", "My site from now on"), ("these", "These frames only")], safe="these") == "own":
             self._save_typed_setup()
             self.log(f"Site saved as yours: {here}.")
             return True
@@ -3842,7 +3849,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             names = ", ".join(self.night_label(n, short=True) for n, _e in before)
             word = "Nights" if len(before) > 1 else "Night"
             verb = "were" if len(before) > 1 else "was"
-            if not messagebox.askyesno(
+            if not ask_no(
                     APP_TITLE,
                     f"{word} {names} {verb} already sent on {' and '.join(dates)} (in {', '.join(files)}); "
                     f"{who} will hold duplicates. Open anyway?\n\n"
@@ -3896,7 +3903,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
         if ask:
             pages = sorted({self.UPLOAD_PAGES.get(e.get("to"), (str(e.get("to")),))[0] for e in entries})
-            if not messagebox.askyesno(
+            if not ask_no(
                     APP_TITLE,
                     f"{self.night_label(night, short=True)} is marked sent to {' and '.join(pages)} "
                     f"({', '.join(sorted({str(e.get('file')) for e in entries}))}).\n\nMark it as not sent? Do this "
@@ -5234,7 +5241,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f". No keeps {name}.")
         if self.busy:
             return   # review: asked again later (Scan, Calibrate); a skipped question is not a No
-        if not messagebox.askyesno(APP_TITLE, ask):
+        if not ask_no(APP_TITLE, ask):   # 2.3.5 (m095): default No, as the OBJECT question
             self._field_question_declined = key
             self.log(f"Kept {name} as the target although the lights point {sep:.0f}° away.")
             return
@@ -6049,11 +6056,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         elif site:
             # No site of your own yet: never save a header's site as yours without asking (it may be a friend's).
             where = "and your Site boxes are empty"
-            far = not messagebox.askyesno(
-                APP_TITLE,
+            far = ask_choice(
+                self, APP_TITLE,
                 f"These lights were taken at latitude {site[0]:.3f}, longitude {site[1]:.3f}"
-                + (f" ({cam})" if cam else "") + ".\n\nIs that your own site? Yes saves it as yours; No uses it "
-                "for these frames only.")
+                + (f" ({cam})" if cam else "") + ".\n\nIs that your own site?",
+                [("own", "My site from now on"), ("these", "These frames only")], safe="these") != "own"
             asked = True
             self._header_site_is_own = not far   # 2.3.2 review N2: Yes saves it below, with no second question
         if far:
@@ -7310,7 +7317,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "Yes: calibrate without the dark this time (bias only). A cooled camera's dark current is usually "
                     "tiny, and the bias still removes the pedestal.\n"
                     "No: use these darks anyway.\n"
-                    "Cancel: stop, and pick darks closer to the lights' exposure on the Input page.")
+                    "Cancel: stop, and pick darks closer to the lights' exposure on the Input page.",
+                    default=messagebox.YES)   # 2.3.5 (x135): Enter = calibrate without the dark, the safe one
                 if answer is None:
                     self.status.set("Calibration not started: choose a dark folder that matches the lights.")
                     return None
@@ -7361,15 +7369,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             flat_rot = core.typical_rotator(flat_rots, mount)
             spread = core.rotator_spread(flat_rots, mount)
             if spread is not None and spread > core.flat_angle_tolerance(mount):
-                if not messagebox.askyesno(
-                        APP_TITLE,
+                if ask_choice(
+                        self, APP_TITLE,
                         f"The Flat folder mixes camera angles: {core.rotator_summary(flat_rots, mount)}.\n\n"
                         "One master flat is built from all of them, so it matches none exactly. "
                         + ("(Alt-az mount: readings are the sky angle the derotator held; small drifts are not "
                            "counted.)" if altaz else "(Readings 180° apart "
                            "are the same camera position across a meridian flip and are not counted as different.)")
-                        + "\n\nCalibrate with these flats anyway? (No: stop, so you can keep only the flats taken at "
-                        "the lights' angle.)"):
+                        + "\n\nCalibrate with these flats anyway? (Stop, so you can keep only the flats taken at "
+                        "the lights' angle.)",
+                        [("go", "Use all these flats"), ("stop", "Stop")], safe="stop") != "go":
                     self.status.set("Calibration not started: the flats were taken at more than one camera angle.")
                     return None
                 self.log(f"Flats at several camera angles ({core.rotator_summary(flat_rots, mount)}): used anyway, as "
@@ -7508,7 +7517,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if not lights:
                 messagebox.showerror(APP_TITLE, text + "\n\nNo light frames can be read.")
                 return
-            if not messagebox.askyesno(APP_TITLE, text + "\n\nThose steps would be skipped. Calibrate anyway?"):
+            # 2.3.5 (m176): say which calibration step is lost, with Stop as the safe button.
+            lost = [what for what, box in (("no bias", "Bias"), ("no dark", "Dark"), ("no dark flat", "Dark flats"),
+                                           ("no flat", "Flat")) if any(line.startswith(box + ":") for line in unreadable)]
+            if ask_choice(self, APP_TITLE, text + "\n\nThose files would be skipped"
+                          + (f" ({', '.join(lost)} would be applied)" if lost else "") + ". Calibrate anyway?",
+                          [("go", "Calibrate without them"), ("stop", "Stop")], safe="stop") != "go":
                 return
         if not lights:
             messagebox.showerror(APP_TITLE, "No light frames found.")
@@ -9351,7 +9365,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         APP_TITLE, f"{what}, and {' and '.join(why)}.\n\nRun in Variables mode instead?\n\n"
                                    "Yes: switch to Variables mode and run there.\nNo: run in Transits mode anyway"
                                    + (" (the night starts a new series; the Variables series is not changed)"
-                                      if series_open else "") + ".\nCancel: don't run.")
+                                      if series_open else "") + ".\nCancel: don't run.", default=messagebox.CANCEL)
                     if answer is None:
                         return False
                     if answer:
@@ -9391,8 +9405,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             answer = messagebox.askyesnocancel(
                 APP_TITLE, f"{self.star_id.get().strip() or 'The target'} hosts {name}, and a transit of {name} is "
                            f"predicted during these lights{when}.\n\nRun in Transits mode instead?\n\n"
-                           "Yes: switch to Transits mode and run there.\nNo: run in Variables mode anyway.\n"
-                           "Cancel: don't run.")
+                           "Yes: switch to Transits mode and run there.\nNo: run in Variables mode anyway "
+                           "(a transit inside these lights is asked about after the run).\n"
+                           "Cancel: don't run.", default=messagebox.CANCEL)
             if answer is None:
                 return False
             if answer:
@@ -9426,12 +9441,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.log(f"Aperture check: defocused stars: the aperture clips the ring — use r ≥ "
                          f"{donut['clip_below']:g} px (Suggest… gives r = {donut['radius']:g}, sky "
                          f"{donut['sky_in']:g}-{donut['sky_out']:g} px).")
-                return messagebox.askyesno(
-                    APP_TITLE, f"Defocused stars: the aperture (r = {r:g} px) clips the ring — use r ≥ "
-                               f"{donut['clip_below']:g} px.\n\nA clipped donut loses a different part of its ring "
-                               "in every frame, which adds noise the comps do not cancel. Suggest… would use r = "
-                               f"{donut['radius']:g}, sky {donut['sky_in']:g}–{donut['sky_out']:g} px.\n\n"
-                               "Run with the current aperture anyway?")
+                pick = ask_choice(
+                    self, APP_TITLE, f"Defocused stars: the aperture (r = {r:g} px) clips the ring — use r ≥ "
+                                     f"{donut['clip_below']:g} px.\n\nA clipped donut loses a different part of its "
+                                     "ring in every frame, which adds noise the comps do not cancel. Suggest… would use "
+                                     f"r = {donut['radius']:g}, sky {donut['sky_in']:g}–{donut['sky_out']:g} px.",
+                    [("use", f"Use r = {donut['radius']:g} and run"), ("asis", "Run as is"), ("stop", "Cancel")],
+                    safe="use")
+                if pick == "use":
+                    # 2.3.5 (m227): the suggested aperture, without the trip to Suggest…
+                    self.radius.set(float(donut["radius"]))
+                    self.sky_in.set(float(donut["sky_in"]))
+                    self.sky_out.set(float(donut["sky_out"]))
+                    self.log(f"Aperture set to the suggested r = {donut['radius']:g}, sky {donut['sky_in']:g}–"
+                             f"{donut['sky_out']:g} px (defocused stars).")
+                return pick != "stop"
             return True
         first_comp = next((getattr(self, f"{r}_xy") for r in self._comp_roles_marked()), None)
         fwhm = self._seeing()  # 2.2.8: field seeing, not the (possibly faint) marked stars
@@ -11531,7 +11555,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         what = "check star" if role == "check" else f"comparison star ({role_label(role)})"
         label = (star or {}).get("auid") or (star or {}).get("label") or "This star"
-        if not messagebox.askyesno(
+        if not ask_no(
             APP_TITLE,
             f"{label} is a known or suspected variable:\n  {core.variable_text({'variable': hits})}\n\n"
             f"A variable {what} shifts every measurement it touches. Use it anyway?",
@@ -12853,11 +12877,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 tx, ty = diag["header_target_xy"]
                 self.log(f"  The header's solution puts {self.star_id.get() or 'the target'} at ({tx:.0f}, {ty:.0f}), "
                          f"{off:.0f} px from the Target marker. Check the marker is on your star.")
-                if not auto:
-                    messagebox.showinfo(APP_TITLE, f"The plate solution in the FITS header puts "
-                                                   f"{self.star_id.get() or 'the target'} {off:.0f} px from the Target "
-                                                   f"marker, at ({tx:.0f}, {ty:.0f}). Check the marker is on your star "
-                                                   "(the chart labels follow the header).")
+                # 2.3.5 (m312): one question on both paths (the automatic one only logged it), Keep as the safe
+                # button; the chart labels follow the header either way.
+                name = self.star_id.get() or "the target"
+                if ask_choice(self, APP_TITLE, f"The plate solution in the FITS header puts {name} {off:.0f} px from "
+                                               f"the Target marker, at ({tx:.0f}, {ty:.0f}).\n\nMove the Target "
+                                               f"marker to where the plate solution puts {name}?",
+                              [("move", "Move it there"), ("keep", "Keep it where it is")], safe="keep") == "move":
+                    self.target_xy = (float(tx), float(ty))
+                    self.log(f"  Target marker moved to ({tx:.0f}, {ty:.0f}), where the header's solution puts it.")
         if diag.get("field_solved"):
             self.log(f"Solve: field solved from star patterns ({solved['hits']} of {solved.get('match_count', n)} "
                      "bright catalog stars matched); no target needed.")
@@ -12919,12 +12947,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"{title}  {hits}/{n} matched  rotation {solved['angle']:.1f}°{flip}  {len(self.chart_placed)} stars labeled",
             fontsize=PHOTO_TITLE_PT)   # 2.2.19 (#10)
         self.photo_canvas.draw_idle()
-        if n <= 2 and not auto:
-            if not messagebox.askyesno(
-                APP_TITLE,
-                f"The catalogs have only {n} stars here, and both lined up. Two stars can line up by chance.\n\n"
+        if n <= 2:
+            # 2.3.5 (#80): asked on automatic solves too (a chance two-star match places every marker wrong, and the
+            # automatic path took it unseen), with labelled buttons whose safe one (discard) answers Enter/Escape.
+            why = ("This solve ran by itself (the page opened or the frame changed). " if auto else "")
+            if ask_choice(
+                self, APP_TITLE,
+                f"{why}The catalogs have only {n} stars here, and both lined up. Two stars can line up by chance.\n\n"
                 "Look at the circles. Are they on real stars, in the pattern the catalogs show?",
-            ):
+                [("keep", "On real stars: keep the solve"), ("discard", "Not sure: discard it")],
+                safe="discard") != "keep":
+                self.log(f"Solve discarded: only {n} catalog stars lined up (could be chance). Solve again, or mark "
+                         "the stars by hand.")
                 self.chart_placed = []
                 for role in auto_slots:
                     # review S7: comps/check placed from the rejected solution go with it (names and magnitudes stay)
@@ -14200,8 +14234,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                                 f"{w}×{h}). Clear it and click the star again.")
                 return False
             if not core.star_under(self.preview, x, y, radius):
-                if not messagebox.askyesno(APP_TITLE, f"There is no star under the {label} marker at ({x:.0f}, {y:.0f}). "
-                                                      "Measure blank sky there anyway?"):
+                if not ask_no(APP_TITLE, f"There is no star under the {label} marker at ({x:.0f}, {y:.0f}). "
+                                         "Measure blank sky there anyway?"):
                     return False
         self._warn_marker_offsets(radius)   # 2.2.18 (item 5)
         ghosts = [(role, label, var.get().strip()) for role, (label, var) in names.items()
@@ -14329,8 +14363,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         elif len(comps) > 1 and check is None and self.mode_key == "transits":
             self.log("No check star marked: fine for a transit fit (a check star only shows whether trends are shared).")
         elif len(comps) > 1 and check is None and stack_run is None:   # 2.3.0 (#54): answered for the frames
-            if not messagebox.askyesno(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
-                                                  "requires a check star for ensemble reports. Continue without one?"):
+            if not ask_no(APP_TITLE, f"With {len(comps)} comps the AAVSO report is an ensemble, and AAVSO "
+                                     "requires a check star for ensemble reports. Continue without one?"):
                 return
 
         mode = self.debayer_mode.get()
@@ -14381,7 +14415,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 reasons.append("no color term has been saved from an earlier night")
             if cat_bv is None:
                 reasons.append("the comps' catalog colors are unknown (no catalog lists B and V for them, or the image is not solved)")
-            if not messagebox.askyesno(
+            if not ask_no(
                 APP_TITLE,
                 "'Also measure R and B' is ticked, but B-V cannot be calibrated on this run:\n  • "
                 + "\n  • ".join(reasons)
@@ -14503,6 +14537,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if answer:
                 self._restore_series_catalog()
                 self._rerun_in_mode(self.series_mode)
+                return
+        if only is None and stack_run is None and self.preview is not None:
+            # 2.3.5 (m406): too few stars on the reference frame to align the others: asked before the run (Stop is
+            # the safe button), not a log line nobody reads while every frame is measured at the first frame's spots.
+            try:
+                n_ref = len(core.detect_sources(self.preview, max_sources=80))
+            except Exception:
+                n_ref = 3
+            if n_ref < 3 and ask_choice(
+                    self, APP_TITLE, f"Only {n_ref} star{'s' if n_ref != 1 else ''} found on the reference frame, too "
+                                     "few to align the other frames: the apertures would stay where they are on this "
+                                     "frame and not follow any drift.\n\nCheck the reference frame (clouds? focus?) or "
+                                     "reject it in Blink so another frame becomes the reference.",
+                    [("run", "Run without alignment"), ("stop", "Stop")], safe="stop") != "run":
+                self._restore_series_catalog()
                 return
         self._series_mode_answered = False
         if not self._start_job(f"Photometry on {len(lights)} {'stacks' if stack_run else 'lights'}…"):
@@ -15150,7 +15199,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             saved_note = (f"\n\nNo also leaves {os.path.basename(self.series_path)} on disk untouched; use Save series "
                           "to keep the new one under a new name.") if self.series_path else ""
             append = messagebox.askyesno(
-                APP_TITLE,
+                default=messagebox.NO if "Careful" in warning else messagebox.YES, title=APP_TITLE, message=
                 f"Add these {len(night_points)} points as the night of "
                 f"{self.night_label(night, short=True, jd=night_points[0].jd)} ({night}) to the {len(self.observations)} points already in the series?\n\n"
                 f"Yes keeps every earlier night. No starts a new series with this night only.{saved_note}{warning}",
@@ -15161,6 +15210,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if append and plan:
             self._apply_same_star_plan(plan, night_points)
         if append:
+            # 2.3.5 (#81): the night as the series had it before this run (none for a new night), so a flip-step
+            # hold can keep that version in the file while the new run waits for Save series.
+            self._hold_candidate = {"night": night, "points": [o for o in self.observations if o.night == night],
+                                    "bin": copy.deepcopy(self.night_bin.get(night)),
+                                    "legacy": night in self.legacy_mixed}
             prev_comps = list(getattr(self, "_prev_stars", ([], ""))[0] or [])
             if prev_comps and list(self.comps_used) != prev_comps:
                 # 2.2.19 (#34; review): measured with other comps than the series' (the Photometry page following a
@@ -15261,7 +15315,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             why = self._flip_step_suspect(night_points, night)
             if why and why.get("text"):
                 step = why["step"]
-                save_now = messagebox.askyesno(
+                save_now = ask_no(
                     APP_TITLE, f"This night's meridian-flip step is {step:+.3f} mag ⚠ (the frames after the flip "
                                f"read {abs(step):.3f} mag {'fainter' if step > 0 else 'brighter'} than those before), "
                                f"and {why['text']}.\n\n"
@@ -15271,15 +15325,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                "(Save series keeps it later; Remove night… takes it out).")
                 if not save_now:
                     self._hold_autosave = night   # review M1: no automatic save may write it later either
+                    cand = getattr(self, "_hold_candidate", None) or {}
+                    self._hold_prev = cand if cand.get("night") == night else {"night": night, "points": []}
+                    self._hold_logged = False
                     self.log(f"Not auto-saved: the night's flip step is {step:+.3f} mag ⚠. "
                              f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
+                    self.update_series_status()
             elif why is not None and why.get("step") is not None:
                 self.log(f"Flip step {why['step']:+.3f} mag on this night; the check star and the comps show no "
                          "aperture problem at the flip, so the series was saved as usual.")
         if save_now:
             try:
                 if self._write_series(self.series_path) is not None:
-                    self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}.")
+                    self.status.set(self.status.get() + f"  Auto-saved to {os.path.basename(self.series_path)}."
+                                    + self._held_words())
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not auto-save the series: {exc}")
         self._check_planet_transits(night, source="run")   # 2.2.15 (item 1): in the background; flags arrive later
@@ -15610,8 +15669,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.draw_output()
         if self.series_path:
             try:
-                if self._write_series(self.series_path) is not None:   # None: held (2.2.19 #24)
-                    self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}.")
+                if self._write_series(self.series_path) is not None:
+                    self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}."
+                                    + self._held_words())
             except OSError as exc:
                 self.log(f"Could not save the series with the planet transit flags: {exc}")
 
@@ -15874,8 +15934,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         saved = ""
         if self.series_path:
             try:
-                saved = (f" Saved to {os.path.basename(self.series_path)}."
-                         if self._write_series(self.series_path) is not None else "")
+                saved = self._save_series_words()
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"{len(new_points)} skipped frame(s) measured and added to {night}.{saved}")
@@ -16783,6 +16842,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      f"{name} dropped from the watch list.")
         self.watch_list = keep
 
+    def _held_words(self) -> str:
+        """2.3.5 (#81): after a write, the words for a night held out of the file ("" when none was)."""
+        hold = getattr(self, "_last_write_held", None)
+        return (f" ({self.night_label(hold, short=True)} is held, not in the file: Save series adds it.)"
+                if hold else "")
+
+    def _save_series_words(self) -> str:
+        """2.3.5 (#81): write the open series and say what was written, for a status line. Raises OSError."""
+        self._write_series(self.series_path)
+        return f" Saved to {os.path.basename(self.series_path)}." + self._held_words()
+
     def _write_series(self, path: str, meta_override: dict | None = None):
         # 2.2.14 (item 17): keep one version back. The first write to a file in a session (Save series, or the
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
@@ -16791,16 +16861,38 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         hold = getattr(self, "_hold_autosave", None)
         if hold and not any(o.night == hold for o in self.observations):
             hold = self._hold_autosave = None   # the held night was removed (Remove night…)
-        if hold and not getattr(self, "_explicit_save", False):
-            # 2.2.19 (#24, review M1): the user said No to saving a night with a flip step ⚠; no automatic save
-            # (planet transit flags, notes, comps…) writes it behind their back. Save series clears the hold.
-            self.log(f"Not saved: {self.night_label(hold, short=True)} has a flip step ⚠ — Save series to keep it.")
-            return None
+        held = bool(hold) and not getattr(self, "_explicit_save", False)
+        self._last_write_held = hold if held else None
         part = path + ".part"
         meta = self._meta()
         if meta_override:
             meta.update(meta_override)   # 2.2.21 (nit j): a report save keeps the series' own site and observer
-        core.save_series(part, meta, self.observations)
+        points = self.observations
+        if held:
+            # 2.2.19 (#24, review M1): the user said No to saving a night with a flip step ⚠; no automatic save
+            # (planet transit flags, notes, comps…) writes it behind their back. 2.3.5 (#81): every other change is
+            # still written; only that night stays as the file had it (its earlier version, or not at all).
+            # Save series writes it and ends the hold.
+            prev = getattr(self, "_hold_prev", None) or {}
+            if prev.get("night") != hold:
+                prev = {"night": hold, "points": []}
+            points = [o for o in self.observations if o.night != hold] + list(prev.get("points") or [])
+            points.sort(key=lambda o: (o.jd if o.jd is not None and math.isfinite(o.jd) else float("inf")))
+            bins = dict(meta.get("night_binning") or {})
+            if prev.get("bin") is not None:
+                bins[hold] = prev["bin"]
+            else:
+                bins.pop(hold, None)
+            meta["night_binning"] = bins
+            legacy = set(meta.get("legacy_mixed_nights") or [])
+            (legacy.add if prev.get("legacy") else legacy.discard)(hold)
+            meta["legacy_mixed_nights"] = sorted(legacy)
+            if not getattr(self, "_hold_logged", False):
+                self._hold_logged = True
+                self.log(f"Saved {os.path.basename(path)} without the new {self.night_label(hold, short=True)} "
+                         f"(held: flip step ⚠). {'Its earlier version stays in the file. ' if prev.get('points') else ''}"
+                         "Save series adds it; Remove night… drops it.")
+        core.save_series(part, meta, points)
         # 2.2.21 (nit j): the site and observer the series is known by: set by Load series and by Save series (the user
         # chose to write the Input page's), or by the first write of a new series; an automatic save (a night added,
         # comps changed) does not change them, so a later report save still asks about a different Input page site.
@@ -16822,7 +16914,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._prev_kept.add(key)   # a new file has nothing to keep; later saves this session keep the first _prev
         os.replace(part, path)
         self.series_path = path
-        self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7)
+        if not held:
+            self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7); held: the file lacks a night
         self.update_series_status()
         return kept
 
@@ -16860,6 +16953,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         year = f" {datetime.now().year}"
         if label.endswith(year):
             label = label[:-len(year)]
+        hold = getattr(self, "_hold_autosave", None)
+        if hold and hold in nights:
+            # 2.3.5 (#81): one standing line instead of a ⚠ log line at every automatic save.
+            return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
+                    f"{self.night_label(hold, short=True)} is held (flip step ⚠), not in the file: Save series "
+                    "adds it, Remove night… drops it.")
         return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
                 "After the run you'll be asked to add the night.")   # 2.2.16 (item 12)
 
@@ -16964,6 +17063,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9): a pending planet check is stale
         self.after_idle(self._stack_ui_update)   # 2.3.0 (#54): a series set aside takes its stacks' switch with it
         self._hold_autosave = None   # 2.2.19 (#24): a held night belongs to the series set aside
+        self._hold_prev = None
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
         self.series_path = ""
@@ -17099,6 +17199,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         finally:
             self._explicit_save = False
         self._hold_autosave = None
+        self._hold_prev = None
+        self.update_series_status()   # 2.3.5 (#81): the series line drops the held night
         self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
                         + f". Next night, load this file before reducing: {path}")
 
@@ -18642,7 +18744,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if clash:
             warn += f"\n\nThese nights are already in the series and will be merged point by point: {', '.join(clash)}."
         if not messagebox.askyesno(
-            APP_TITLE, f"Add {len(obs)} points ({', '.join(new_nights)}) from {os.path.basename(path)}?{warn}"
+            APP_TITLE, f"Add {len(obs)} points ({', '.join(new_nights)}) from {os.path.basename(path)}?{warn}",
+            default=messagebox.NO if warn.strip() else messagebox.YES   # 2.3.5 (m529): Yes only for a clean add
         ):
             return
         if not self.observations and not self.comps_used:
@@ -18687,8 +18790,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         saved = ""
         if self.series_path:
             try:
-                saved = (f" Saved to {os.path.basename(self.series_path)}."
-                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
+                saved = self._save_series_words()
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         nights = sorted({o.night for o in self.observations})
@@ -18726,12 +18828,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         else:
             self.night_notes.pop(night, None)
         self.draw_output()
-        if self.series_path:
-            try:
-                self._write_series(self.series_path)
-            except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
-        self.status.set(f"Note for {night} " + ("saved." if text else "removed."))
+        # 2.3.5 (#81): say what happened to the file (it said "saved." even when nothing was written).
+        if not self.series_path:
+            self.status.set(f"Note for {night} " + ("set" if text else "removed")
+                            + " (the series is not saved yet: Save series keeps it).")
+            return
+        try:
+            words = self._save_series_words()
+        except OSError as exc:
+            messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+            self.status.set(f"Note for {night} " + ("set" if text else "removed") + ", but the file was not saved.")
+            return
+        self.status.set(f"Note for {night} " + ("saved." if text else "removed.") + words)
 
     def _name_index(self) -> dict:
         """2.2.14 (item 11): {normalized name: labeled star} for every name a labeled star answers to (its catalogs'
@@ -19168,7 +19276,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
         no_base = sum(1 for o in self.observations if not math.isfinite(o.target_inst))
         if no_base:
-            if not messagebox.askyesno(APP_TITLE, f"{no_base} point(s) lack the stored values needed to change comps "
+            if not ask_no(APP_TITLE, f"{no_base} point(s) lack the stored values needed to change comps "
                                                   "(their comp magnitudes were not saved) and would be left out. Continue?"):
                 return False
         trial = []
@@ -19182,7 +19290,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             trial += [night for o, e in zip(pts, ens) if not math.isfinite(o.target_inst) or not math.isfinite(e)]
         if trial:
             nights = sorted(set(trial))
-            if not messagebox.askyesno(
+            if not ask_no(
                 APP_TITLE,
                 f"{len(trial)} point(s) on {', '.join(nights)} lack one of the chosen stars (it was not measured that "
                 "night, or not in those frames). They will be flagged 'nocomp' and left out. Continue?"):
@@ -19224,8 +19332,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         saved = ""
         if self.series_path:
             try:
-                saved = (f" Saved to {os.path.basename(self.series_path)}."
-                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
+                saved = self._save_series_words()
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         n_rec = sum(len(v) for v in recover.values())
@@ -19433,8 +19540,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         saved = ""
         if self.series_path:
             try:
-                saved = (f" Saved to {os.path.basename(self.series_path)}."
-                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
+                saved = self._save_series_words()
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set("Catalog magnitudes changed." + saved)
@@ -19598,7 +19704,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except (ValueError, IndexError):
             messagebox.showerror(APP_TITLE, f"'{answer}' is not one of the numbers listed.")
             return
-        if not messagebox.askyesno(APP_TITLE, f"Remove the night of {self.night_label(night, short=True)} ({night}, {counts[night]} points) from the series? This cannot be undone."):
+        if not ask_no(APP_TITLE, f"Remove the night of {self.night_label(night, short=True)} ({night}, "
+                                 f"{counts[night]} points) from the series? This cannot be undone."):
             return
         self.observations = [o for o in self.observations if o.night != night]
         self.legacy_mixed.discard(night)
@@ -19609,8 +19716,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         saved = ""
         if self.series_path:
             try:
-                saved = (f" Saved to {os.path.basename(self.series_path)}."
-                         if self._write_series(self.series_path) is not None else " Not saved (flip step ⚠).")
+                saved = self._save_series_words()
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         self.status.set(f"Removed the night of {self.night_label(night, short=True)}. {len(self.observations)} points left.{saved}")
@@ -19861,7 +19967,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if placeholder_star_name(given.get(name, name)) and not self.seq_auids.get(name):
                 problems.append(f"a comp has no star name (the report would call it “{name}”)")
         if problems:
-            if not messagebox.askyesno(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
+            if not ask_no(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
                 return False
         if not self._name_report_check():
             return False

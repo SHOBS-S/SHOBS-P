@@ -1104,6 +1104,51 @@ def _odd_one_out(shifts) -> int | None:
     return j
 
 
+# 2.3.5 (#88): the same rule as photometry_core.night_ensemble (2.3.0, #50), on a points x comps matrix, so the
+# leave-one-comp-out refits use the frames the main fit uses. The two must stay in step (tests/test_235.py).
+COMP_TIE_MIN_FRAMES = 5
+COMP_NIGHT_SHARE = 0.5
+
+
+def tied_ensemble(cm) -> np.ndarray:
+    """2.3.5 (#88): the comp ensemble per frame on the night's scale, from cm (points x comps, NaN = not measured).
+
+    A frame with every comp keeps the plain mean (so a night with no missing comp gives exactly np.mean). A frame
+    without some comps gets the mean the full set would have had: each comp's offset a_j (its median above the
+    frame level) is taken out of the comps present and the mean offset put back, as night_ensemble does. Comps
+    measured in fewer than COMP_TIE_MIN_FRAMES frames, or in fewer than COMP_NIGHT_SHARE of them, are left out of
+    the whole night (as the photometry does); when that would leave none, they are kept where measured."""
+    m = np.asarray(cm, dtype=float)
+    n = m.shape[0]
+    if m.ndim != 2 or n == 0 or m.shape[1] == 0:
+        return np.full(n, np.nan)
+    counts = np.isfinite(m).sum(axis=0)
+    keep = [j for j, c in enumerate(counts) if c > 0 and not (c < min(COMP_TIE_MIN_FRAMES, n)
+                                                               or c < COMP_NIGHT_SHARE * n)]
+    if not keep:
+        keep = [j for j, c in enumerate(counts) if c > 0]
+    if not keep:
+        return np.full(n, np.nan)
+    mk = m[:, keep]
+    ok = np.isfinite(mk)
+    a = np.zeros(len(keep))
+    with np.errstate(invalid="ignore"):
+        for _ in range(12):
+            level = np.array([float(np.mean(mk[f, ok[f]] - a[ok[f]])) if ok[f].any() else np.nan for f in range(n)])
+            new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
+            new_a -= new_a.mean()
+            if np.allclose(new_a, a, atol=1e-7):
+                a = new_a
+                break
+            a = new_a
+    ens = np.full(n, np.nan)
+    for f in range(n):
+        if not ok[f].any():
+            continue
+        ens[f] = float(np.mean(mk[f])) if ok[f].all() else float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean())
+    return ens
+
+
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
                        detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
                        cancel=None, log=None, flip_step=None) -> dict | None:
@@ -1130,14 +1175,16 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), so every refit uses the same model
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
               flagged_mask=flagged_mask, flip_step=flip_step)
-    with np.errstate(invalid="ignore"):
-        ens_all = np.mean(cm, axis=1)
+    # 2.3.5 (#88): np.mean made the ensemble NaN in every frame where any comp was missing (a comp off the frame
+    # edge), so each refit lost those frames while the main fit kept them.
+    ens_all = tied_ensemble(cm)
     try:
         ref = lsq_fit(t, flux, err, airmass, planet, **kw)
     except Exception as exc:
         say(f"  comp check skipped: no least-squares fit of the full ensemble ({exc})")
         return None
     ref_depth, ref_tc = float(ref["depth"][0]), float(ref["p"]["tc"])
+    ref_n = int(len(ref["t"]))
     ref_sd, ref_st = float(ref["depth"][1]), float(ref["err"].get("tc", float("nan")))
     # 2.2.16 (round-2 review): lsq_fit never scales error bars DOWN (reduced chi-square < 1, as on TOI-2046 b at
     # 0.34-0.44); the noise gate uses the sigma the scatter supports.
@@ -1159,7 +1206,7 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         if progress is not None:
             progress(j + 1, m)
         with np.errstate(invalid="ignore", over="ignore"):
-            ens = np.mean(np.delete(cm, j, axis=1), axis=1)
+            ens = tied_ensemble(np.delete(cm, j, axis=1))
             factor = 10 ** (0.4 * (ens - ens_all))
         # Shift expected from this comp's own white noise alone: the main fit's (least-squares) sigma scaled by the
         # noise the swap adds relative to the light curve's own point-to-point noise.
@@ -1216,18 +1263,24 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         what = " and ".join({"d_depth": "the depth", "d_tc": "Tc"}[k] for k in unnamed)
         why = ("with 2 comps the two refits mirror each other, so neither can be blamed" if m == 2 else
                "no single comp stands out")
-        flags.append(("warn", f"The comp choice moves {what} by more than its statistical error ({why}). Treat "
-                              "the comp spread below as a systematic error, or try other comps."))
+        flags.append(("warn", f"The comp choice moves {what} by more than its statistical error ({why}). Check "
+                              "the comps (Use comps… on the Output page) before reporting; the spread below is a "
+                              "diagnostic, not an error bar."))
     depths = [f["depth"] for f in fits]
     tcs = [f["tc"] for f in fits]
     out = {"n_comps": m, "names": names, "fits": fits, "skipped": skipped, "single": m == 2,
-           "ref": {"depth": ref_depth, "tc": ref_tc}, "depth_min": min(depths), "depth_max": max(depths),
+           "ref": {"depth": ref_depth, "tc": ref_tc, "n_points": ref_n}, "depth_min": min(depths), "depth_max": max(depths),
            "depth_spread": max(depths) - min(depths), "tc_spread_s": (max(tcs) - min(tcs)) * 86400.0,
            "sigma_depth": sd, "sigma_tc": st, "unnamed": unnamed}
     stat = f"; statistical ± {_pct(sd)}" if math.isfinite(sd) else ""
-    note = (f"Comp choice (each of the {m} comps left out in turn, least squares): depth "
-            f"{out['depth_min'] * 100:.2f}–{_pct(out['depth_max'])} (spread {_pct(out['depth_spread'])}{stat}), "
-            f"Tc spread {out['tc_spread_s']:.0f} s.")
+    # 2.3.5 (#88): the full-ensemble depth and points beside the range, so the range can be read against them.
+    note = (f"Comp choice check (each of the {m} comps left out in turn, least squares): depth "
+            f"{out['depth_min'] * 100:.2f}–{_pct(out['depth_max'])} beside {_pct(ref_depth)} with all comps "
+            f"({ref_n} points; spread {_pct(out['depth_spread'])}{stat}), Tc spread {out['tc_spread_s']:.0f} s.")
+    fewer = [f"{f['name']} ({f['n_points']})" for f in fits if f["n_points"] < ref_n]
+    out["fewer"] = fewer
+    if fewer:
+        note += (" Fewer points without " + ", ".join(fewer) + ": the other comps do not cover those frames.")
     if out["single"]:
         note += " With 2 comps each refit uses a single comp."
     if skipped:
@@ -1241,14 +1294,17 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
 
 
 def comp_systematic_text(loo: dict | None) -> str:
-    """2.2.16 (item 6): one line for the fit file: the leave-one-comp-out spread as a systematic (comp choice)."""
+    """2.2.16 (item 6): one line for the fit file: the leave-one-comp-out spread. 2.3.5 (#88): a diagnostic (how
+    much the comp choice moves the result), not an error bar; the label in the files says so."""
     if not loo:
         return ""
     single = " (2 comps: each refit has a single comp)" if loo.get("single") else ""
     flagged = [f["name"] for f in loo.get("fits", []) if f.get("flagged")]
     return (f"depth spread {loo['depth_spread'] * 100:.2f} % ({loo['depth_min'] * 100:.2f} to "
             f"{loo['depth_max'] * 100:.2f} %), Tc spread {loo['tc_spread_s']:.0f} s; leave-one-comp-out over "
-            f"{loo['n_comps']} comps{single}"
+            f"{loo['n_comps']} comps{single}; full ensemble {loo.get('ref', {}).get('depth', float('nan')) * 100:.2f} %"
+            + (f" ({loo['ref']['n_points']} points)" if loo.get("ref", {}).get("n_points") else "")
+            + ("; fewer points without " + ", ".join(loo["fewer"]) if loo.get("fewer") else "")
             + (f"; moved > {COMP_LOO_SIGMA:g} sigma by leaving out {', '.join(flagged)}" if flagged else "")
             + ("; moved > " + f"{COMP_LOO_SIGMA:g} sigma, no single comp to blame" if loo.get("unnamed") else ""))
 
@@ -2562,7 +2618,7 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
             f"  Result: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, depth "
             f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n"
             # 2.2.16 (item 6): the comp-choice spread, beside the statistical errors above.
-            + (f"  Systematic (comp choice): {comp_systematic_text(result['comp_loo'])}\n"
+            + (f"  Comp-choice check (diagnostic): {comp_systematic_text(result['comp_loo'])}\n"
                if result.get("comp_loo") else ""))
 
 
@@ -2628,7 +2684,7 @@ def fit_text(result: dict, meta: dict) -> str:
         lines.append(f"Free-shape check Rp/R* {ff['p']['k']:.4f}, a/R* {ff['p']['a_rs']:.2f}, b {ff['p']['b']:.3f}")
     if result.get("comp_loo"):
         # 2.2.16 (item 6)
-        lines.append("Systematic (comp choice) " + comp_systematic_text(result["comp_loo"]))
+        lines.append("Comp-choice check (diagnostic) " + comp_systematic_text(result["comp_loo"]))
     lines += [f"Meridian flip    {ln}" if i == 0 else f"                 {ln}" for i, ln in enumerate(flip_lines(result))]
     wf = result.get("with_flagged")
     if wf:

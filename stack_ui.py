@@ -357,9 +357,12 @@ class StackMixin:
         cadence = stack_core.cadence_seconds(recs)
         cap = self._stack_cap(src["mode"])
         if math.isfinite(cadence) and n * cadence > 1.5 * cap["seconds"]:
+            # 2.3.5 (m731): default No, and the largest N the time resolution allows.
+            n_ok = int(1.5 * cap["seconds"] // cadence) if cadence > 0 else 0
+            hint = f" N = {n_ok} keeps the time resolution." if n_ok >= 2 else ""
             if not messagebox.askyesno(TITLE, f"Stacks of {n} frames last about {stack_core._dur(n * cadence)}, longer "
                                               f"than the time resolution allows ({cap['text']}): they may blur the "
-                                              "signal.\n\nStack anyway?"):
+                                              f"signal.{hint}\n\nStack anyway?", default=messagebox.NO):
                 return
         groups = stack_core.plan_groups(recs, n, cadence)
         if src.get("scan") and len(groups) < stack_core.MIN_POINTS:
@@ -367,8 +370,11 @@ class StackMixin:
                                         f"{stack_core.MIN_POINTS}. Use a smaller N.")
             return
         if src["mode"] == "transits" and len(groups) < 20:
+            # 2.3.5 (m733): default No, and the largest N that still leaves 20 points.
+            n_ok = next((k for k in range(n - 1, 1, -1) if len(stack_core.plan_groups(recs, k, cadence)) >= 20), 0)
+            hint = f" N = {n_ok} leaves 20 or more." if n_ok else ""
             if not messagebox.askyesno(TITLE, f"That makes only {len(groups)} stacked points; the transit fit needs "
-                                              "20 or more.\n\nStack anyway?"):
+                                              f"20 or more.{hint}\n\nStack anyway?", default=messagebox.NO):
                 return
         pattern, mode = self.pattern.get(), self.debayer_mode.get()
         scale = 1 if pattern == core.MONO else 2
