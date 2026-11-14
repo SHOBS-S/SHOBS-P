@@ -2549,6 +2549,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return   # the job's ⚠ stays on the status line until the job ends
         self.status.set(first)
 
+    @staticmethod
+    def _num_box(var, label: str) -> float:
+        """2.3.6 (#79 smaller bugs): a number from an entry box; a bad entry raises a ValueError that names the box
+        (a DoubleVar raises a TclError, a StringVar a ValueError: both end here)."""
+        try:
+            return float(str(var.get()).strip().replace(",", ""))
+        except Exception:
+            raise ValueError(f"{label} is not a number. Type a number in that box.") from None
+
     def _log_only(self, text: str):
         """2.3.6 (#79 item 1): a Log-only line (detail for the record; the status line keeps what it says)."""
         self.log(text, keep_status=True)
@@ -14412,9 +14421,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if self.check_xy is not None:
                 self._name_check_by_radec()   # 2.3.2 (item 5): never saved as the literal "check"
                 check = self._star(self.check_name.get() or "check", self.check_xy, self.check_mag.get(), False)
-            radius = float(self.radius.get())
-            sky_in = float(self.sky_in.get())
-            sky_out = float(self.sky_out.get())
+            # 2.3.6 (#79 smaller bugs): a box that is not a number names the box, not "could not convert string"
+            radius = self._num_box(self.radius, "Aperture r")
+            sky_in = self._num_box(self.sky_in, "Sky in")
+            sky_out = self._num_box(self.sky_out, "Sky out")
             if not (0 < radius < sky_in < sky_out):
                 raise ValueError("Need aperture r < sky in < sky out")
             for star in comps + ([check] if check is not None else []):
@@ -14429,9 +14439,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             f"{la} and {lb} are marked on the same star. Each one must be a different star; "
                             "the check star in particular must not be one of the comparison stars."
                         )
-            sat_limit = float(self.sat_limit.get())
-            lat = float(self.lat.get()) if self.lat.get().strip() else None
-            lon = float(self.lon.get()) if self.lon.get().strip() else None
+            sat_limit = self._num_box(self.sat_limit, "Saturation")
+            lat = self._num_box(self.lat, "Latitude") if self.lat.get().strip() else None
+            lon = self._num_box(self.lon, "Longitude") if self.lon.get().strip() else None
             if lat is None or lon is None:
                 self.log("No site latitude/longitude on the Input page, so no airmass: AAVSO reports show AMASS na "
                          "and the error bars leave out scintillation. Type your site once (it is remembered).")

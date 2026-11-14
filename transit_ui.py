@@ -2882,8 +2882,12 @@ class TransitPage:
                                     family=True)
         if not path:
             return
-        with core.AsciiWriter(path, newline="\n") as fh:
-            fh.write(tc.aavso_exoplanet_report(self.result, meta))
+        try:   # 2.3.6 (#79 smaller bugs): a save that fails says so instead of dying in the window
+            with core.AsciiWriter(path, newline="\n") as fh:
+                fh.write(tc.aavso_exoplanet_report(self.result, meta))
+        except Exception as exc:
+            messagebox.showerror("SHOBS-P", f"The AAVSO exoplanet report could not be saved:\n{exc}", parent=self.app)
+            return
         self.app.log(f"AAVSO exoplanet report: {path}")
         self._write_settings(path, meta)
         self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)

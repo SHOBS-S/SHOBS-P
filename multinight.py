@@ -319,7 +319,8 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None, detren
                                      "— left out by you"), False
             continue
         if any(lvl == "info" for lvl, _t in n.get("notes", [])) or n.get("time_note"):
-            n["status"] = ("ok", "✔ ready (" + "; ".join([n["time_note"]] if n.get("time_note") else []
+            # 2.3.6 (#79 smaller bugs): brackets, so a night with a time note keeps its info notes too
+            n["status"] = ("ok", "✔ ready (" + "; ".join(([n["time_note"]] if n.get("time_note") else [])
                                                          + [t for lvl, t in n.get("notes", []) if lvl == "info"]) + ")")
         kept.append(n)
     # review (#18): the filter most of the nights in use have (left-out nights do not count)
