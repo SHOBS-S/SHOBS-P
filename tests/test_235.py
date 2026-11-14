@@ -153,7 +153,7 @@ class TestPartTimeCompHold(unittest.TestCase):
 
     def test_joanna_case(self):
         text = self._page({"C4": {"frames": list(range(61, 85)), "reasons": {"off the frame edge": 24}}})
-        self.assertTrue(text.startswith("⚠ C4 is missing in 24 frames"), text)
+        self.assertTrue(text.startswith("C4 is missing in 24 frames"), text)
         self.assertIn("Use comps…", text)
 
     def test_one_frame_is_quiet(self):
@@ -196,39 +196,67 @@ class TestFlipStepHoldWrites(unittest.TestCase):
         return core.Obs(jd=jd, mag=mag, merr=0.01, cmag=0.0, kmag=None, airmass=1.2, path=f"{night}_{jd}.fits",
                         exptime=60.0, flux_var=0.0, flux_comp=0.0, night=night)
 
-    def test_hold(self):
+    def _setup(self, name):
         app = self.app
-        path = os.path.join(self.tmp, "held.cvseries")
+        path = os.path.join(self.tmp, name)
         a = [self._obs("JD2461000", 2461000.6 + k * 0.01) for k in range(3)]
         b_old = [self._obs("JD2461001", 2461001.6, mag=9.0)]
         b_new = [self._obs("JD2461001", 2461001.6 + k * 0.01, mag=11.0) for k in range(4)]
         app.observations = a + b_new
         app.series_path = path
-        app._hold_autosave = "JD2461001"
-        app._hold_prev = {"night": "JD2461001", "points": b_old, "bin": None, "legacy": False}
-        app._hold_logged = False
+        app._holds = {"JD2461001": {"night": "JD2461001", "points": b_old, "bin": None, "legacy": False,
+                                    "stamp": app._hold_stamp(), "logged": False}}
+        app._hold_stale_logged = False
         app.night_notes = {"JD2461000": "a note"}
-        words = app._save_series_words()
-        self.assertIn("held", words)
+        return app, path
+
+    def _nights(self, path):
         _meta, pts = core.load_series(path)
         by = {}
         for o in pts:
             by.setdefault(o.night, []).append(o.mag)
+        return _meta, by
+
+    def test_hold(self):
+        app, path = self._setup("held.cvseries")
+        words = app._save_series_words()
+        self.assertIn("held", words)
+        meta, by = self._nights(path)
         self.assertEqual(by["JD2461000"], [10.0, 10.0, 10.0])
         self.assertEqual(by["JD2461001"], [9.0], "the held night keeps the file's earlier version")
-        self.assertEqual((_meta.get("night_notes") or {}).get("JD2461000"), "a note")
+        self.assertEqual((meta.get("night_notes") or {}).get("JD2461000"), "a note")
         self.assertIn("is held", app.series_status_text())
         self.assertTrue(app.series_unsaved(), "held: the file lacks the new night, so unsaved stays on")
         # A new night (none before): left out of the file entirely.
-        app._hold_prev = {"night": "JD2461001", "points": []}
+        app._holds["JD2461001"]["points"] = []
         app._save_series_words()
-        _meta, pts = core.load_series(path)
-        self.assertEqual({o.night for o in pts}, {"JD2461000"})
+        _meta, by = self._nights(path)
+        self.assertEqual(set(by), {"JD2461000"})
         # Save series writes it and ends the hold.
         app._explicit_save = True
         try:
             app._write_series(path)
         finally:
             app._explicit_save = False
-        _meta, pts = core.load_series(path)
-        self.assertEqual(sorted(o.mag for o in pts if o.night == "JD2461001"), [11.0] * 4)
+        _meta, by = self._nights(path)
+        self.assertEqual(by["JD2461001"], [11.0] * 4)
+
+    def test_two_nights_held(self):
+        app, path = self._setup("two.cvseries")
+        c_new = [self._obs("JD2461002", 2461002.6, mag=12.0)]
+        app.observations += c_new
+        app._holds["JD2461002"] = {"night": "JD2461002", "points": [], "stamp": app._hold_stamp()}
+        app._save_series_words()
+        _meta, by = self._nights(path)
+        self.assertEqual(by.get("JD2461001"), [9.0])
+        self.assertNotIn("JD2461002", by)
+        self.assertIn("are held", app.series_status_text())
+
+    def test_comps_changed_since_hold_writes_nothing(self):
+        app, path = self._setup("stale.cvseries")
+        app._save_series_words()
+        before = open(path, "rb").read()
+        app.comp_catalog_mags = dict(app.comp_catalog_mags or {}, NEWCOMP=11.111)
+        words = app._save_series_words()
+        self.assertIn("Not saved", words)
+        self.assertEqual(open(path, "rb").read(), before)

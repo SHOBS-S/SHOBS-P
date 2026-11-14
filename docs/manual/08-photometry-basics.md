@@ -179,9 +179,9 @@ The legend at the left of the image (one entry per line) lists only the marks dr
 Hold the pointer over any star to see a small box with its name, catalog magnitudes, color and pixel position, and
 a warning if it is a known variable.
 
-Suggested comps and AAVSO sequence stars are easy to mix up on a busy field, so a small key on the image itself (in the
-corner beside the compass) shows the two: **S1, S2 …  suggested comp** and **91 = V 9.1  AAVSO sequence**. Like the
-compass, it follows **Show labels**.
+Suggested comps and AAVSO sequence stars are easy to mix up on a busy field: the legend names both, the suggested comp
+as a thick solid ring labeled S1, S2 … and the sequence star as a thin dashed ring labeled with its V (91 = V 9.1).
+(Before 2.3.5 a second, smaller key on the image itself repeated these two entries.)
 
 ## The step strip
 

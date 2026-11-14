@@ -202,14 +202,17 @@ function Find-UsablePythons {
 # 2.3.5 (#83): ready-made packages only (--only-binary=:all:), as on a Mac or Linux. pip's own words go to
 # pip_log.txt. Returns $true when the packages installed and load; otherwise sets $script:PipWhy to 'network',
 # 'nobuild', 'nopip' or 'other' and returns $false.
-function Install-Packages([string]$Py, [bool]$AsUser) {
+function Install-Packages([string]$Py, [bool]$AsUser, [bool]$Upgrade = $false) {
     $script:PipWhy = ''
     & $Py -m pip --version *> $null
     if ($LASTEXITCODE -ne 0) { $script:PipWhy = 'nopip'; return $false }
     Add-Content -LiteralPath $PipLog -Value "=== $(Get-Date) $Py" -Encoding UTF8 -ErrorAction SilentlyContinue
-    # A newer pip knows more of the ready-made package names; a failure here is fine.
-    & $Py -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | ForEach-Object { "$_" } |
-        Add-Content -LiteralPath $PipLog -Encoding UTF8 -ErrorAction SilentlyContinue
+    # A newer pip knows more of the ready-made package names; a failure here is fine. Only when a new environment
+    # is set up, and never in a Python whose packages belong to Anaconda (review S10).
+    if ($Upgrade -and -not $AsUser) {
+        & $Py -m pip install --disable-pip-version-check --quiet --upgrade pip 2>&1 | ForEach-Object { "$_" } |
+            Add-Content -LiteralPath $PipLog -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
     $pipArgs = @('-m', 'pip', 'install', '--disable-pip-version-check', '--only-binary=:all:', '--progress-bar', 'off')
     if ($AsUser) { $pipArgs += '--user' }
     $pipArgs += @('-r', $Requirements)
@@ -337,7 +340,7 @@ if (-not $py) {
             else { Write-Host '  (its packages are installed into that Python with pip).' }
         }
         Write-Host 'Installing the Python packages SHOBS-P needs...'
-        if (Install-Packages $cand $pipUser) { $py = $cand; break }
+        if (Install-Packages $cand $pipUser $true) { $py = $cand; break }
         Write-PipWhy $baseVer
         if ($script:PipWhy -eq 'network') { [void](Remove-EnvDir); exit 3 }
         if ($script:PipWhy -eq 'nobuild') { $noBuild += $baseVer }

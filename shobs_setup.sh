@@ -362,7 +362,9 @@ remove_env_dir() {
 
 # --- 0. One setup at a time: a second double-click during the first install must not remove the environment -----
 LOCK="$DATA_DIR/setup.lock"
-release_lock() { rm -f "$LOCK/pid" 2>/dev/null; rmdir "$LOCK" 2>/dev/null; }
+drop_lock() { rm -f "$LOCK/pid" 2>/dev/null; rmdir "$LOCK" 2>/dev/null; }
+# Only this setup's own lock (its process number in it): never another window's.
+release_lock() { [ "$(head -n 1 "$LOCK/pid" 2>/dev/null)" = "$$" ] && drop_lock; return 0; }
 # 2.3.5 (#83, s024-s026): the lock holds the setup's process number, so a lock left by a setup that was cut off
 # (window closed, computer restarted) frees itself at once; no folder for the user to delete.
 lock_is_stale() {
@@ -377,7 +379,7 @@ lock_is_stale() {
 }
 if ! mkdir "$LOCK" 2>/dev/null; then
     if lock_is_stale; then
-        release_lock
+        drop_lock
     fi
     if ! mkdir "$LOCK" 2>/dev/null; then
         echo '✖ SHOBS-P is being set up in another window.'

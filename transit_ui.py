@@ -947,6 +947,12 @@ class TransitPage:
         # (comps only: nothing here needs a plate solution, header pointing or a color camera).
         try:
             sel = list(app.active_comps or app.comps_used)
+            # 2.3.5 (review S5): a comp the photometry left out of the whole night is no part of the fit's ensemble.
+            try:
+                out_night = set((app._night_info(night) or {}).get("night_out") or [])
+            except Exception:
+                out_night = set()
+            sel = [n for n in sel if n not in out_night]
             if len(sel) >= 2:
                 try:
                     aliases = app._star_aliases()
@@ -1193,7 +1199,7 @@ class TransitPage:
                          f"frames {span})")
         if not parts:
             return ""
-        return ("⚠ " + "; ".join(parts) + ". The comp ensemble changes partway through the night, which can move the "
+        return ("; ".join(parts) + ". The comp ensemble changes partway through the night, which can move the "
                 "depth and Tc. Leave that comp out with Use comps… if the fit looks off.")
 
     def fit(self, auto: bool = False, with_flagged: bool = False):

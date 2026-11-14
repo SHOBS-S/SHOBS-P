@@ -957,11 +957,11 @@ def ask_no(title: str, message: str, **kw) -> bool:
     return messagebox.askyesno(title, message, default=messagebox.NO, **kw)
 
 
-def ask_choice(parent, title: str, message: str, choices, safe):
+def ask_choice(parent, title: str, message: str, choices, safe, cancel=None):
     """2.2.18 (item 4): a small modal question whose buttons say what they do (a Yes/No could be read either way).
     choices: [(value, button text)], left to right. Escape and closing the window answer `safe`; Enter presses the
     button that has the focus (the safe one at first). The window is sized from its contents and centered on the parent. Returns the value chosen."""
-    result = {"value": safe}
+    result = {"value": safe if cancel is None else cancel}
     win = Toplevel(parent)
     win.title(title)
     try:
@@ -996,8 +996,11 @@ def ask_choice(parent, title: str, message: str, choices, safe):
         # review: Enter presses the focused button (Tab moves the focus), else the safe one.
         widget = getattr(event, "widget", None)
         pick(by_widget.get(str(widget), safe) if widget is not None else safe)
-    win.protocol("WM_DELETE_WINDOW", lambda: pick(safe))
-    win.bind("<Escape>", lambda _e: pick(safe))
+    # 2.3.5 (review S7): Escape and closing the window answer `cancel` when given (a question whose safe default
+    # does something, like "Use r = … and run"), else `safe`.
+    away = safe if cancel is None else cancel
+    win.protocol("WM_DELETE_WINDOW", lambda: pick(away))
+    win.bind("<Escape>", lambda _e: pick(away))
     for key in ("<Return>", "<KP_Enter>"):
         win.bind(key, enter)
     try:
@@ -9447,7 +9450,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                      "ring in every frame, which adds noise the comps do not cancel. Suggest… would use "
                                      f"r = {donut['radius']:g}, sky {donut['sky_in']:g}–{donut['sky_out']:g} px.",
                     [("use", f"Use r = {donut['radius']:g} and run"), ("asis", "Run as is"), ("stop", "Cancel")],
-                    safe="use")
+                    safe="use", cancel="stop")
                 if pick == "use":
                     # 2.3.5 (m227): the suggested aperture, without the trip to Suggest…
                     self.radius.set(float(donut["radius"]))
@@ -10083,7 +10086,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.13 (John): labels stay inside the image (they spilled outside the axes); markers placed off the frame
         # (an old position, a star beyond the edge) no longer widen the view: the whole frame is set explicitly.
         self._draw_compass(img.shape)
-        self._draw_marker_key(img.shape)   # 2.2.19 (#15)
+        # 2.3.5 (John): no key inside the image any more; the legend column beside it names the suggested comps and
+        # the AAVSO sequence stars (2.3.2), so the in-image key (2.2.19, #15) only repeated it.
         for txt in self.photo_ax.texts:
             txt.set_clip_on(True)
             txt.set_clip_box(self.photo_ax.bbox)
@@ -10201,62 +10205,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             _box, label_xy = self._compass_label_xy
             ax.text(corner[0], corner[1], tag, transform=at(*label_xy[tag]), ha="center", va="center",
                     fontsize=COMPASS_FONT_PT, fontweight="bold", color="#ffd24a", path_effects=halo)
-
-    def _marker_key_items(self) -> list:
-        """2.2.19 (#15): which of the two look-alike kinds are on the image now: "suggested" and/or "sequence"."""
-        items = []
-        if self.mode_key == "discovery":
-            return items
-        if self.suggested_comps and self._overlay("suggested"):
-            taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
-            if any(not any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken) for _n, _d, x, y in self.suggested_comps):
-                items.append("suggested")
-        if self._overlay("catalog") and any(st.get("seq") for _x, _y, st in self.chart_placed):
-            items.append("sequence")
-        return items
-
-    def _draw_marker_key(self, shape, ax=None, corner=None):
-        """2.2.19 (#15): a small key on the image itself for the two marks that were mixed up on a busy field (18-19
-        Oct): the suggested comp (thick solid ring, S1 …) and the AAVSO sequence star (thin dashed ring, V label). In
-        the corner beside the compass, tied to Show labels like the compass."""
-        ax = ax or self.photo_ax
-        items = self._marker_key_items()
-        if not items or not self.show_labels.get():
-            return None
-        from matplotlib.lines import Line2D
-        from matplotlib.legend_handler import HandlerPatch
-        from matplotlib.patches import Circle
-
-        class _Ring(HandlerPatch):
-            def create_artists(self, legend, orig, xd, yd, width, height, fontsize, trans):
-                ring = Circle((width / 2.0 - xd, height / 2.0 - yd), min(width, height) * 0.48, fill=False)
-                self.update_prop(ring, orig, legend)
-                ring.set_transform(trans)
-                return [ring]
-
-        handles, texts, handler_map = [], [], {}
-        if "suggested" in items:
-            handles.append(Line2D([], [], ls="none", marker="o", mfc="none", mec=SUGGEST_COLOR, ms=10,
-                                  mew=SUGGEST_RING_MEW))
-            texts.append("S1, S2 …  suggested comp")
-        if "sequence" in items:
-            ring = Circle((0, 0), 1, fill=False, ec=SEQ_COLOR, lw=1.0, ls=(0, (2.2, 1.6)))
-            handles.append(ring)
-            handler_map[ring] = _Ring()
-            texts.append("91 = V 9.1  AAVSO sequence")
-        if corner is None:
-            cx, cy = self._compass_corner(shape)
-            corner = (1.0 - cx, cy)   # the other corner on the compass's side (top or bottom)
-        loc = ("lower " if corner[1] < 0.5 else "upper ") + ("left" if corner[0] < 0.5 else "right")
-        leg = ax.legend(handles, texts, handler_map=handler_map, loc=loc, fontsize=7, framealpha=0.55,
-                        facecolor="#101418", edgecolor="#5d6d76", labelcolor="#e8eef2", borderpad=0.4,
-                        handletextpad=0.5, handlelength=1.4, markerscale=1.0)
-        try:
-            for text, colour in zip(leg.get_texts(), [SUGGEST_COLOR if i == "suggested" else SEQ_COLOR for i in items]):
-                text.set_color(colour)
-        except Exception:
-            pass
-        return leg
 
     def _compass_layout(self, vec, cx, cy):
         """2.2.17 (item 3): the compass in points relative to the image corner it sits in (cx, cy are the corner as
@@ -12880,10 +12828,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # 2.3.5 (m312): one question on both paths (the automatic one only logged it), Keep as the safe
                 # button; the chart labels follow the header either way.
                 name = self.star_id.get() or "the target"
+                if getattr(self, "current_step", STEP_PHOTO) != STEP_PHOTO:
+                    self.show_step(STEP_PHOTO)   # review S8: the question is about the image
                 if ask_choice(self, APP_TITLE, f"The plate solution in the FITS header puts {name} {off:.0f} px from "
                                                f"the Target marker, at ({tx:.0f}, {ty:.0f}).\n\nMove the Target "
                                                f"marker to where the plate solution puts {name}?",
                               [("move", "Move it there"), ("keep", "Keep it where it is")], safe="keep") == "move":
+                    if getattr(self, "_target_missing_frames", None):
+                        self.log("Target: moved to another star; the frames the search found without the old target "
+                                 "are no longer skipped.")
+                    self._forget_target_search()   # review S9: as a click on another star does
                     self.target_xy = (float(tx), float(ty))
                     self.log(f"  Target marker moved to ({tx:.0f}, {ty:.0f}), where the header's solution puts it.")
         if diag.get("field_solved"):
@@ -12951,6 +12905,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.3.5 (#80): asked on automatic solves too (a chance two-star match places every marker wrong, and the
             # automatic path took it unseen), with labelled buttons whose safe one (discard) answers Enter/Escape.
             why = ("This solve ran by itself (the page opened or the frame changed). " if auto else "")
+            if getattr(self, "current_step", STEP_PHOTO) != STEP_PHOTO:
+                self.show_step(STEP_PHOTO)   # review S8: "look at the circles" needs the image in view
             if ask_choice(
                 self, APP_TITLE,
                 f"{why}The catalogs have only {n} stars here, and both lined up. Two stars can line up by chance.\n\n"
@@ -15214,6 +15170,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # hold can keep that version in the file while the new run waits for Save series.
             self._hold_candidate = {"night": night, "points": [o for o in self.observations if o.night == night],
                                     "bin": copy.deepcopy(self.night_bin.get(night)),
+                                    "color": copy.deepcopy(self.color_cal.get(night)),
                                     "legacy": night in self.legacy_mixed}
             prev_comps = list(getattr(self, "_prev_stars", ([], ""))[0] or [])
             if prev_comps and list(self.comps_used) != prev_comps:
@@ -15324,10 +15281,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                "Yes saves it. No keeps the night on screen but leaves the file on disk as it was "
                                "(Save series keeps it later; Remove night… takes it out).")
                 if not save_now:
-                    self._hold_autosave = night   # review M1: no automatic save may write it later either
-                    cand = getattr(self, "_hold_candidate", None) or {}
-                    self._hold_prev = cand if cand.get("night") == night else {"night": night, "points": []}
-                    self._hold_logged = False
+                    # review M1: no automatic save may write it later either. 2.3.5 (#81, review M1/M2): one record
+                    # per held night; a night held again keeps the record of the file's version from the first hold.
+                    holds = self._series_holds()
+                    if night not in holds:
+                        cand = getattr(self, "_hold_candidate", None) or {}
+                        rec = dict(cand) if cand.get("night") == night else {"night": night, "points": []}
+                        rec["stamp"] = self._hold_stamp()
+                        rec["logged"] = False
+                        holds[night] = rec
                     self.log(f"Not auto-saved: the night's flip step is {step:+.3f} mag ⚠. "
                              f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
                     self.update_series_status()
@@ -16842,15 +16804,39 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      f"{name} dropped from the watch list.")
         self.watch_list = keep
 
+    def _series_holds(self) -> dict:
+        """2.3.5 (#81): the nights held out of automatic saves (a flip step ⚠ the user said No to), {night: record}.
+        A record keeps the night as the file had it: "points" (none for a new night), "bin", "color", "legacy",
+        and "stamp" (the comps and catalog magnitudes at the hold)."""
+        holds = getattr(self, "_holds", None)
+        if holds is None:
+            holds = self._holds = {}
+        return holds
+
+    def _hold_stamp(self):
+        """2.3.5 (#81, review M3): what a held night's earlier points were reduced against (comps, Use comps choice,
+        catalog magnitudes); when it changes, those points no longer match the rest of the series."""
+        return (tuple(self.comps_used or []), tuple(self.active_comps or []),
+                tuple(sorted((str(k), round(float(v), 6)) for k, v in (self.comp_catalog_mags or {}).items()
+                             if v is not None)))
+
+    def _held_names(self, nights) -> str:
+        return " and ".join(self.night_label(n, short=True) for n in nights)
+
     def _held_words(self) -> str:
-        """2.3.5 (#81): after a write, the words for a night held out of the file ("" when none was)."""
-        hold = getattr(self, "_last_write_held", None)
-        return (f" ({self.night_label(hold, short=True)} is held, not in the file: Save series adds it.)"
-                if hold else "")
+        """2.3.5 (#81): after a write, the words for nights held out of the file ("" when none was)."""
+        held = getattr(self, "_last_write_held", None) or []
+        if not held:
+            return ""
+        return (f" ({self._held_names(held)} {'is' if len(held) == 1 else 'are'} held, not in the file: Save series "
+                "adds it.)")
 
     def _save_series_words(self) -> str:
         """2.3.5 (#81): write the open series and say what was written, for a status line. Raises OSError."""
-        self._write_series(self.series_path)
+        if self._write_series(self.series_path) is None:
+            held = list(self._series_holds())
+            return (f" Not saved: {self._held_names(held)} {'is' if len(held) == 1 else 'are'} held and the comps "
+                    "changed since; Save series writes everything.")
         return f" Saved to {os.path.basename(self.series_path)}." + self._held_words()
 
     def _write_series(self, path: str, meta_override: dict | None = None):
@@ -16858,11 +16844,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
         # from before this session. The new file is written completely (X.part) before anything is renamed.
-        hold = getattr(self, "_hold_autosave", None)
-        if hold and not any(o.night == hold for o in self.observations):
-            hold = self._hold_autosave = None   # the held night was removed (Remove night…)
-        held = bool(hold) and not getattr(self, "_explicit_save", False)
-        self._last_write_held = hold if held else None
+        holds = self._series_holds()
+        nights_now = {o.night for o in self.observations}
+        for gone in [n for n in holds if n not in nights_now]:
+            holds.pop(gone)   # the held night was removed (Remove night…)
+        held = bool(holds) and not getattr(self, "_explicit_save", False)
+        self._last_write_held = sorted(holds) if held else []
+        if held and any(rec.get("points") and rec.get("stamp") != self._hold_stamp() for rec in holds.values()):
+            # 2.3.5 (#81, review M3): a held night's earlier points were reduced against other comps or catalog
+            # magnitudes than the series now uses; writing them beside the recomputed nights would leave a zero-point
+            # step in the file. As before 2.3.5: no automatic write until Save series.
+            self._last_write_held = []
+            if not getattr(self, "_hold_stale_logged", False):
+                self._hold_stale_logged = True
+                self.log(f"Not saved: {self._held_names(sorted(holds))} is held (flip step ⚠) and the comps or "
+                         "catalog magnitudes changed since, so its earlier version no longer matches the series. "
+                         "Save series writes everything.")
+            self.update_series_status()
+            return None
         part = path + ".part"
         meta = self._meta()
         if meta_override:
@@ -16871,27 +16870,35 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if held:
             # 2.2.19 (#24, review M1): the user said No to saving a night with a flip step ⚠; no automatic save
             # (planet transit flags, notes, comps…) writes it behind their back. 2.3.5 (#81): every other change is
-            # still written; only that night stays as the file had it (its earlier version, or not at all).
-            # Save series writes it and ends the hold.
-            prev = getattr(self, "_hold_prev", None) or {}
-            if prev.get("night") != hold:
-                prev = {"night": hold, "points": []}
-            points = [o for o in self.observations if o.night != hold] + list(prev.get("points") or [])
-            points.sort(key=lambda o: (o.jd if o.jd is not None and math.isfinite(o.jd) else float("inf")))
+            # still written; each held night stays as the file had it (its earlier version, or not at all).
+            # Save series writes them and ends the hold.
+            points = [o for o in self.observations if o.night not in holds]
             bins = dict(meta.get("night_binning") or {})
-            if prev.get("bin") is not None:
-                bins[hold] = prev["bin"]
-            else:
-                bins.pop(hold, None)
-            meta["night_binning"] = bins
+            colors = dict(meta.get("color_cal") or {}) if isinstance(meta.get("color_cal"), dict) else None
             legacy = set(meta.get("legacy_mixed_nights") or [])
-            (legacy.add if prev.get("legacy") else legacy.discard)(hold)
+            for night, rec in holds.items():
+                points += list(rec.get("points") or [])
+                if rec.get("bin") is not None:
+                    bins[night] = rec["bin"]
+                else:
+                    bins.pop(night, None)
+                if colors is not None:
+                    if rec.get("color") is not None:
+                        colors[night] = rec["color"]
+                    else:
+                        colors.pop(night, None)
+                (legacy.add if rec.get("legacy") else legacy.discard)(night)
+                if not rec.get("logged"):
+                    rec["logged"] = True
+                    self.log(f"Saved {os.path.basename(path)} without the new {self.night_label(night, short=True)} "
+                             f"(held: flip step ⚠). {'Its earlier version stays in the file. ' if rec.get('points') else ''}"
+                             "Save series adds it; Remove night… drops it"
+                             + (" (and its earlier version)." if rec.get("points") else "."))
+            points.sort(key=lambda o: (o.jd if o.jd is not None and math.isfinite(o.jd) else float("inf")))
+            meta["night_binning"] = bins
+            if colors is not None:
+                meta["color_cal"] = colors
             meta["legacy_mixed_nights"] = sorted(legacy)
-            if not getattr(self, "_hold_logged", False):
-                self._hold_logged = True
-                self.log(f"Saved {os.path.basename(path)} without the new {self.night_label(hold, short=True)} "
-                         f"(held: flip step ⚠). {'Its earlier version stays in the file. ' if prev.get('points') else ''}"
-                         "Save series adds it; Remove night… drops it.")
         core.save_series(part, meta, points)
         # 2.2.21 (nit j): the site and observer the series is known by: set by Load series and by Save series (the user
         # chose to write the Input page's), or by the first write of a new series; an automatic save (a night added,
@@ -16953,12 +16960,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         year = f" {datetime.now().year}"
         if label.endswith(year):
             label = label[:-len(year)]
-        hold = getattr(self, "_hold_autosave", None)
-        if hold and hold in nights:
+        held = [n for n in self._series_holds() if n in nights]
+        if held:
             # 2.3.5 (#81): one standing line instead of a ⚠ log line at every automatic save.
             return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
-                    f"{self.night_label(hold, short=True)} is held (flip step ⚠), not in the file: Save series "
-                    "adds it, Remove night… drops it.")
+                    f"{self._held_names(sorted(held))} {'is' if len(held) == 1 else 'are'} held (flip step ⚠), not "
+                    "in the file: Save series adds it, Remove night… drops it.")
         return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
                 "After the run you'll be asked to add the night.")   # 2.2.16 (item 12)
 
@@ -17062,8 +17069,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         run, which used them); ones added this session stay."""
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9): a pending planet check is stale
         self.after_idle(self._stack_ui_update)   # 2.3.0 (#54): a series set aside takes its stacks' switch with it
-        self._hold_autosave = None   # 2.2.19 (#24): a held night belongs to the series set aside
-        self._hold_prev = None
+        self._holds = {}   # 2.2.19 (#24): a held night belongs to the series set aside
+        self._hold_stale_logged = False
         kept = self.color_cal.get(keep_night) if keep_night else None
         self.color_cal = {keep_night: kept} if kept else {}
         self.series_path = ""
@@ -17198,8 +17205,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         finally:
             self._explicit_save = False
-        self._hold_autosave = None
-        self._hold_prev = None
+        self._holds = {}
+        self._hold_stale_logged = False
         self.update_series_status()   # 2.3.5 (#81): the series line drops the held night
         self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
                         + f". Next night, load this file before reducing: {path}")

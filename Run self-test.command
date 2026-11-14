@@ -17,6 +17,7 @@ case "$code" in
         echo "  Send $log_where." ;;
     11) echo '✖ The self-test itself crashed (see CRASHED above).'
         echo "  Send $log_where." ;;
+    8) ;;   # no screen: the ✖ line above says so
     *) echo '✖ The self-test could not run (setup failed, see the lines above).' ;;
 esac
 read -r -p 'Press Return to close this window. ' _
