@@ -1434,7 +1434,7 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
         dark_fp = str(h.get("FPRINT", "file"))
         bias_out = str(h.get("BIASSUB", "")).upper() in ("T", "TRUE", "1")
         if masters.bias is None and bias_out:
-            log("  Note: this master dark had the bias taken out, and no bias is given now: the pedestal stays in the "
+            log("  This master dark had the bias taken out, and no bias is given now: the pedestal stays in the "
                 "lights (the sky ring still removes it in photometry).")
         elif masters.bias is not None and not bias_out:
             # The lights and flats lose the bias first; a dark that still holds it would take the pedestal off twice.

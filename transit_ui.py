@@ -1123,7 +1123,7 @@ class TransitPage:
         if rep.get("aperture_mm"):
             lines.append(f"Telescope aperture box when the night was measured: {rep['aperture_mm']}")   # 2.3.1
         if rep.get("flip_like"):
-            lines.append(f"Warning: {rep['flip_like']}")   # 2.3.0 (item 10)
+            lines.append(f"Field turn: {rep['flip_like']}")   # 2.3.6: no "Warning:" level word   # 2.3.0 (item 10)
         if rep.get("stack"):   # 2.3.0 (#54)
             lines.append(f"Stacking: {rep['stack']} (sigma-clipped mean, whole-pixel shifts, never across a flip)")
         wf = r.get("with_flagged")

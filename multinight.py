@@ -1712,7 +1712,7 @@ class MultiNightWindow:
                 self.planet = dict(got)
             self.prog_text.set(f"Ephemeris: {tc.ephemeris_source(self.planet)}.")
         else:
-            self.prog_text.set(f"✖ No ephemeris found for {name}" + (f" ({why})" if why else "")
+            self.prog_text.set(f"⚠ No ephemeris found for {name}" + (f" ({why})" if why else "")
                                + "; type one as the alternative to see O − C.")
         self._show_planet()
         self._reload_failed()

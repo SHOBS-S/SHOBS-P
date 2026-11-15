@@ -466,10 +466,10 @@ class StackMixin:
             h, w = self.preview.shape[:2]
             px = math.radians(summ["turn"]) * math.hypot(h, w) / 2.0
             if px > 1.0:
-                self.log(f"  Note: the field turned by up to {summ['turn']:.2f}° inside a stack (about {px:.1f} px at "
+                self.log(f"  The field turned by up to {summ['turn']:.2f}° inside a stack (about {px:.1f} px at "
                          "the frame's corners): stars far from the center are slightly smeared in the stacks.")
         if summ.get("mode") == "discovery":
-            self.log("  Note: the scan on the stacks cannot see changes faster than one stack "
+            self.log("  The scan on the stacks cannot see changes faster than one stack "
                      f"({stack_core._dur(summ['exp'])} of exposure).")
         run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src, "seeing": seeing}
         self._stack_run_ctx = run
@@ -493,7 +493,7 @@ class StackMixin:
             self.check_used = saved["check_used"]
         if cancelled or run is None:
             self._progress_end("Canceled." if not error else "Stopped by an error.")
-            self.log("Photometry on the stacks " + (f"stopped by an error ({error})" if error else "canceled")
+            self.log(("✖ " if error else "") + "Photometry on the stacks " + (f"stopped by an error ({error})" if error else "canceled")
                      + "; the points stay per frame.")
             return
         self._progress_end(f"{len(night_points)} stacked points.")
@@ -623,7 +623,7 @@ class StackMixin:
                                           self._star_aliases())
                 recomputed = True
             except Exception as exc:
-                self.log(f"Could not apply the chosen comps to the {which} points: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to the {which} points: {exc}")
         self.observations = core.merge_nights([o for o in self.observations if o.night != night], new)
         info = self._night_info(night, create=True)
         # 2.3.0 review fix: what was changed on the set on screen follows to the set now shown: catalog magnitudes
@@ -643,7 +643,7 @@ class StackMixin:
                         self.log(f"  The catalog magnitudes changed in Use comps… applied to the {which} points too "
                                  f"({res['changed']} points).")
                 except Exception as exc:
-                    self.log(f"Could not apply the changed catalog magnitudes to the {which} points: {exc}")
+                    self.log(f"⚠ Could not apply the changed catalog magnitudes to the {which} points: {exc}")
         if cat_now is not None:
             cats[which] = dict(cat_now)
         if info.get("planet_transits") and "transit_flagged" in info:
@@ -685,7 +685,7 @@ class StackMixin:
             try:
                 self._write_series(self.series_path)
             except OSError as exc:
-                self.log(f"Could not auto-save the series: {exc}")
+                self.log(f"⚠ Could not auto-save the series: {exc}")
 
     def _stack_drop_after_remeasure(self, night, night_points):
         """2.3.0 review fix: Measure skipped frames added frames to the night's per-frame points: its stacks no longer

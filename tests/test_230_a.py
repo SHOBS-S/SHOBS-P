@@ -112,7 +112,7 @@ class TestRules(unittest.TestCase):
         self.assertEqual(sug["n_stacks"], 20)
         self.assertAlmostEqual(sug["snr_c"], noise["snr_c"] * 10, places=6)
         text, warn = sc.suggest_text("variables", noise, sug, cap, len(pts), None)
-        self.assertTrue(warn)
+        self.assertFalse(warn)   # 2.3.6 (audit fix, m719–m721): plain colour too
         self.assertTrue(text.startswith("Comps are weak"))   # 2.3.6 (#79 m719/m720): a plain note
         self.assertIn("Stack 100 frames", text)
         self.assertIn("2000 frames → 20 points", text)
@@ -141,7 +141,7 @@ class TestRules(unittest.TestCase):
         self.assertEqual(sg["n_goal"], math.ceil((nf["sig_point"] / 1.0857362e-3) ** 2 - 1e-9))
         self.assertTrue(sg["goal_met"])
         tg, wg = sc.suggest_text("variables", nf, sg, cap, 400, 1.0)
-        self.assertTrue(wg)
+        self.assertFalse(wg)   # 2.3.6 (audit fix, m721): plain colour
         self.assertIn("1 ppt goal", tg)
 
     def test_groups_never_cross_flip_or_gap(self):

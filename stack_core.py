@@ -306,7 +306,7 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
     goal_needs = goal_ppt and (sug["n_goal"] or 1) > 1
     if sug.get("dominate") and n > 1:
         return (f"Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame). Stack {n} frames "
-                f"({span} each) → comps SNR ~{sug['snr_c']:.0f}{tail}?{cap_note}", True)
+                f"({span} each) → comps SNR ~{sug['snr_c']:.0f}{tail}?{cap_note}", False)
     if sug.get("dominate"):
         # 2.3.0 review fix: say what really kept N at 1 (the time cap, or the 10-point minimum of a short night)
         if sug.get("capped") and (sug.get("n_cap") or 1) <= 1:
@@ -317,10 +317,10 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
         else:
             why = f"the time resolution allows no stacking ({cap['text']})"
         return (f"Comps are weak (comp noise {noise['ratio']:.1f}× the target's per frame), but {why}. "
-                "Brighter comps, or longer exposures, would help.", True)
+                "Brighter comps, or longer exposures, would help.", False)
     if goal_needs and n > 1:
         return (f"Per-frame points are about {noise['sig_point'] / 1.0857362e-3:.1f} ppt; your {goal_ppt:g} ppt goal "
-                f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", True)
+                f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", False)
     if noise["ratio"] > 1.0:
         return (f"Comps are fine per frame (comp noise {noise['ratio']:.1f}× the target's, a small part of each "
                 f"point's error): stacking is not needed. Type N to stack anyway.", False)

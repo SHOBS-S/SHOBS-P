@@ -159,7 +159,7 @@ class TestNoiseCheckNits(unittest.TestCase):
         sug = sc.suggest_n(noise, 10.0, cap, 15)
         self.assertEqual(sug["n"], 1)
         text, warn = sc.suggest_text("variables", noise, sug, cap, 15, None)
-        self.assertTrue(warn)
+        self.assertFalse(warn)   # 2.3.6 (audit fix, m719–m721): plain colour too
         self.assertIn("too short to stack", text)
         self.assertNotIn("time resolution", text)
         sug = sc.suggest_n(noise, 10.0, dict(cap, seconds=5.0), 200)
@@ -621,7 +621,7 @@ class TestCompsWeakRule(unittest.TestCase):
         cap = dict(sc.time_cap("discovery"), seconds=3600.0, known=True, text="1 h")
         sug = sc.suggest_n(noise, 10.0, cap, 2000)
         text, warn = sc.suggest_text("variables", noise, sug, cap, 2000, None)
-        self.assertTrue(warn)
+        self.assertFalse(warn)   # 2.3.6 (audit fix, m719–m721): plain colour too
         self.assertTrue(text.startswith("Comps are weak"))   # 2.3.6 (#79 m719/m720): a plain note
 
     def test_goal_still_stacks_fine_comps(self):

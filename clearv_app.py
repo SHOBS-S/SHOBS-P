@@ -2522,6 +2522,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _msg_level(text: str) -> str:
         """2.3.6 (#79 item 1): a Log line's level from its icon. "✖" (or "Error") = error, "⚠" = warn, else note."""
         head = text.lstrip()[:12]
+        # 2.3.6 (audit fix): a short label before the icon ("JD2461353: ⚠ 3 frames skipped") keeps the icon's level
+        m = _re.match(r"\s*[^\n⚠✖:]{1,40}:\s+([⚠✖])", text)
+        if m:
+            head = m.group(1)
         if head.startswith("✖") or head.startswith("Error:"):
             return "error"
         if head.startswith("⚠"):
@@ -4599,8 +4603,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.status.set(f"✔ {p['name']}: P {p['period']:.6f} d.")
         if p.get("cache_note"):   # 2.2.21 (#21): the Archive did not answer; the last good answer was used
             self.planet_source.set(self.planet_source.get() + " " + p["cache_note"])
-            self.status.set(self.status.get() + " " + p["cache_note"])
-            self.log(f"{p['name']}: {p['cache_note']}")
+            self.log(f"{p['name']}: {p['cache_note']}", keep_status=True)
         if hasattr(self, "transit_page"):
             self.transit_page.refresh()
         if "RA/Dec" in filled:
@@ -5188,6 +5191,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             else:
                 text = (f"Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g} to the "
                         f"lights' exposure. Fine for a cooled camera; {light_exp:g} s darks are better.")
+                style = "Hint.TLabel"   # 2.3.6 (audit fix, m087): a plain note, not in the warning colour
         # 2.3.0 (item 11): no bias and no dark flats under scaled darks; dark flats that do not match the flats
         extra = self._darkflat_notes(light_exp, dark_exp)
         if extra:
@@ -5494,8 +5498,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if on_target:
             text = (f"The lights' FITS OBJECT says '{obj}', but they point at the Input target {name}. The OBJECT "
                     "keyword looks mislabeled (the capture program's plan name); the frames themselves are fine.")
-            self.log("Lights: " + text, keep_status=True)
-            self.status.set(text)
+            self.log("Lights: " + text, keep_status=True)   # 2.3.6 (audit fix, m093): the Log only
         else:
             text = (f"The lights' FITS OBJECT says '{obj}', not the Input target {name}"
                     + ("" if obj_where is None else f" ('{obj}' is {core.sky_separation_arcsec(target[0], target[1], *obj_where) / 3600.0:.1f}° away)"
@@ -5610,8 +5613,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"Dec {found['dec_deg']:.4f}° at the current epoch{extra}"
         )
         for cache_note in found.get("cache_notes") or []:   # 2.2.21 (#21): a part of the lookup came from the cache
-            self.log(f"{found['name']}: {cache_note}")
-            self.status.set(self.status.get() + "   " + cache_note)
+            self.log(f"{found['name']}: {cache_note}", keep_status=True)   # 2.3.6 (x089): the Log, not the status line
         # 2.2.15 (GitHub #3): the image was solved before the lookup answered: put the Target marker on it now.
         self._try_auto_target("lookup")
 
@@ -5683,7 +5685,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     self._setup_microobservatory(header, len(lights))
                     return
             except Exception as exc:
-                self.status.set(f"Could not read first light: {exc}")
+                self.log(f"✖ Could not read the first light: {exc}")   # 2.3.6 (audit fix, m105): ✖ and in the Log
                 return
         self.status.set("Folders scanned.")
 
@@ -7447,7 +7449,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                              f"x{light_exp / dark_exp:.3g}." + (" Bias only for this run." if bias else ""))
                     dark = []
                     if not bias and not self.darkflat_dir.get().strip():   # 2.3.0 (item 11): dark flats stand in
-                        self.log("  Note: there are no bias frames either, so the pedestal stays in; the sky annulus "
+                        self.log("  There are no bias frames either, so the pedestal stays in; the sky annulus "
                                  "removes it in photometry, but the flat is a little less exact.")
                 else:
                     self.log(f"Darks scaled x{light_exp / dark_exp:.3g} ({dark_exp:g} s to {light_exp:g} s), as chosen.")
@@ -8737,11 +8739,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                "reference and is solved), then the target is placed or can be clicked.")
         if found is None:
             if result["unknown"] and result["unknown"] >= result["checked"]:
-                self.log(f"Target: {where} is not on this frame by its plate solution, and the next frames carry no "
+                self.log(f"✖ Target: {where} is not on this frame by its plate solution, and the next frames carry no "
                          "plate solution or pointing and could not be aligned with this one, so SHOBS-P cannot tell "
                          f"where it is on them. {fix}")
             else:
-                self.log(f"Target: {name} not found in the first {result['checked'] + 1} frames. Check that the "
+                self.log(f"✖ Target: {name} not found in the first {result['checked'] + 1} frames. Check that the "
                          f"frames match the target. {fix}")
             return
         path, cal, header, at = found
@@ -9961,7 +9963,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._end_job()
         self._progress_end("" if not error else ("Canceled." if error == "Canceled" else "Failed."))
         if error:
-            self.log(f"Aperture test: {error}")
+            self.log(("" if error == "Canceled" else "✖ ") + f"Aperture test: {error}")
             return
         window.show_test(result, seeing, sky_in, sky_out, ref_label)
 
@@ -11850,7 +11852,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 if bv is not None:
                     if bv > core.RED_LIMIT_BV:
                         parts.append(f"very red, B−V {bv:.2f}: red giants often vary, and the color is far from most targets")
-                        style = "Warn.TLabel"
                     else:
                         parts.append(f"✓ B−V {bv:.2f}" + (f" ({src})" if src else ""))
                         style = "Good.TLabel"
@@ -12367,26 +12368,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._update_chart_field()
 
     def _sequence_note(self):
-        """2.2.13 (John): once per set of comps, say when AAVSO sequence stars of the right brightness are on the
-        frame but some comps are not sequence stars. Never blocks."""
-        seq = [n for n in getattr(self, "_seq_names", set()) if n]
-        if not seq or self.mode_key == "discovery":
-            return
-        roles = self._comp_roles_marked()
-        others = []
-        for r in roles:
-            star = self._chart_star_at(getattr(self, f"{r}_xy"))
-            if star is not None and not star.get("seq"):
-                others.append(getattr(self, f"{r}_name").get().strip() or role_label(r))
-        key = tuple(others)
-        if not others or key == getattr(self, "_seq_note_for", None):
-            return
-        self._seq_note_for = key
-        suggested = [n for n, _dm, _x, _y in self.suggested_comps if n in seq]
-        self.log("AAVSO sequence stars are on this frame" + (f" (suggested: {', '.join(suggested)})"
-                 if suggested else "") + f", but {', '.join(others)} {'is' if len(others) == 1 else 'are'} not in "
-                 "the sequence. That is fine; AAVSO reports are more comparable with sequence comps.")
-
+        """2.2.13 (John): once per set of comps, said when AAVSO sequence stars were on the frame but some comps were
+        not sequence stars. 2.3.6 (audit fix, m290): retired; its own text said "That is fine" (a quiet Stars-panel
+        hint in Variables mode is on the 2.3.7 list)."""
+        return
     def _update_chart_field(self):
         """2.2.13 (John): the report's CHART field carries the AAVSO chart ID whenever a marked comp or the check
         star is an AAVSO sequence star (the sequence magnitudes are then what the report used), else 'na'.
@@ -12552,7 +12537,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except (TypeError, ValueError):
                 w_saved, h_saved = self.preview.shape[1] * wcs_factor, self.preview.shape[0] * wcs_factor
             if not (np.isfinite(px_) and np.isfinite(py_) and -50 <= px_ <= w_saved + 50 and -50 <= py_ <= h_saved + 50):
-                self.log(f"Solve: the Input page target ({self.star_id.get().strip() or 'RA/Dec'}) is not in these "
+                self.log(f"⚠ Solve: the Input page target ({self.star_id.get().strip() or 'RA/Dec'}) is not in these "
                          "lights, according to their plate solution; the chart is placed from the solution alone. "
                          "Update the target on the Input page.")
                 field_solve = True
@@ -14326,14 +14311,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 continue
             if not info["off"]:
                 continue
-            warned.append((label, info["offset"]))
             where = f"⚠ {label} marker at ({xy[0]:.1f}, {xy[1]:.1f})"
             if info.get("blended"):
                 # Review: a faint star marked in a brighter one's wing on purpose: report, do not call it a mistake.
-                self.log(f"{where}: the nearest star is {info['offset']:.1f} px away, at ({info['x']:.1f}, "
+                self.log(f"{where.replace('⚠ ', '', 1)}: the nearest star is {info['offset']:.1f} px away, at ({info['x']:.1f}, "
                          f"{info['y']:.1f}). The marker looks like a faint star beside it, measured where it is marked; "
                          "if that is not the star you meant, clear it and click again.")
                 continue
+            warned.append((label, info["offset"]))   # 2.3.6 (audit fix, m377): only real off-center markers
             self.log(f"{where} is {info['offset']:.1f} px from the center of the star there ({info['x']:.1f}, "
                      f"{info['y']:.1f})" + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
                      + ". The frames would be measured beside the star, so it would read faint. Clear it and click the "
@@ -14489,7 +14474,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             lat = self._num_box(self.lat, "Latitude") if self.lat.get().strip() else None
             lon = self._num_box(self.lon, "Longitude") if self.lon.get().strip() else None
             if lat is None or lon is None:
-                self.log("No site latitude/longitude on the Input page, so no airmass: AAVSO reports show AMASS na "
+                self.log("⚠ No site latitude/longitude on the Input page, so no airmass: AAVSO reports show AMASS na "
                          "and the error bars leave out scintillation. Type your site once (it is remembered).")
             ra_hours = float(self.ra_hours.get()) if self.ra_hours.get().strip() else None
             dec_deg = float(self.dec_deg.get()) if self.dec_deg.get().strip() else None
@@ -14745,9 +14730,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 camera = (self.preview_header or {}).get("INSTRUME", "")
                 note = ""
                 if saved_cal.get("camera") and camera and saved_cal["camera"] != camera:
-                    note = f"  Careful: it was made with {saved_cal['camera']}, these frames are {camera}."
+                    note = (f"⚠ Color: the saved color term was made with {saved_cal['camera']}, these frames are "
+                            f"{camera}; it may not fit them. A field fit tonight (more comps with colors) replaces it.")
                 self.log(f"Color: no field fit tonight; the color term saved {saved_cal.get('date', '')[:10]} "
-                         f"({saved_cal.get('star', '')}) will be used with the comps' catalog colors.{note}")
+                         f"({saved_cal.get('star', '')}) will be used with the comps' catalog colors.")
+                if note:   # 2.3.6 (audit fix, m400): its own ⚠ line, no "Careful:"
+                    self.log(note)
         self.spare_marks = [(sp.x, sp.y, sp.name) for sp in spares]
         if spares:
             def spare_words(sp):
@@ -15118,7 +15106,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     core.fill_comp_flux(night_points, names, cat)
                     self._run_night_out = (res.get("night_out") or {})
                 except Exception as exc:
-                    self.call_ui(self.log, f"  (comps left out of some frames: re-derivation skipped: {exc})")
+                    self.call_ui(self.log, f"⚠ Comps left out of some frames: their re-derivation was skipped ({exc}).")
             # 2.2.19 (#9, #30, #24, #16): what the run found about the target's frames, centring and peaks
             try:
                 # 2.3.0 (#54): not again on the stacks (their values are sums, not raw counts; the frames had them)
@@ -15146,7 +15134,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     self.call_ui(self.log, f"  Field rotation: the field turned by {spread:.1f}° on the sensor "
                                            "through the night (alt-az mount); the apertures followed it.")
                 elif not altaz and spread > 5.0:
-                    self.call_ui(self.log, f"  Note: the field turned by {spread:.1f}° on the sensor through the "
+                    self.call_ui(self.log, f"  The field turned by {spread:.1f}° on the sensor through the "
                                            "night. If this is an alt-az mount without a derotator, set Mount to "
                                            "Alt-az in the Optics box (Input page) so the alignment follows the "
                                            "rotation.")
@@ -15283,7 +15271,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.19.1: the on-sky log for SHOBS-FLUX (background thread; never stops the reduction)
         ctx, self._onsky_ctx = getattr(self, "_onsky_ctx", None), None
         if onsky_log and ctx:
-            onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t))
+            onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
@@ -15405,7 +15393,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.19 (#20; TrES-3 b's comps applied to WASP-10 b): a Use comps choice with stars this night never
             # measured (another field's) would mark every frame "nocomp". It is not applied; the night keeps the comps
             # it was measured with, and the log says why.
-            self.log(f"✖ Use comps choice ({', '.join(self.active_comps)}) not applied to {night}: "
+            self.log(f"⚠ Use comps choice ({', '.join(self.active_comps)}) not applied to {night}: "
                      f"{', '.join(unmeasured)} {'was' if len(unmeasured) == 1 else 'were'} not measured on any of its "
                      f"frames (another field's comps?). The night keeps its own comps ({', '.join(self.comps_used)}); "
                      "for another star, use New reduction on the Input page.")
@@ -15416,7 +15404,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.log(f"Applied the chosen comps ({', '.join(self.active_comps)}) to {night}"
                          + (f"; {result['missing']} frame(s) lack one of them and are flagged nocomp." if result["missing"] else "."))
             except ValueError as exc:
-                self.log(f"Could not apply the chosen comps to {night}: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to {night}: {exc}")
         self.legacy_mixed.discard(night)
         self.series_mode = self.mode_key
         self.series_mode_unknown = False   # 2.2.14 (item 19): the file records the mode from now on
@@ -15841,7 +15829,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}."
                                     + self._held_words())
             except OSError as exc:
-                self.log(f"Could not save the series with the planet transit flags: {exc}")
+                self.log(f"⚠ Could not save the series with the planet transit flags: {exc}")
 
     def edit_planet_transits(self):
         """2.2.15 (item 1): leave out or keep a night's frames that fell in a planet transit (the highlighted night,
@@ -15914,7 +15902,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         text = self.comp_skip_text(night)
         if text:
             for line in text.splitlines():
-                self.log(f"{night}: {line}")
+                self.log(f"{night}: {line}", level=self._msg_level(line))   # 2.3.6 (audit fix): the line's own level
         flips = info.get("flip_like") or []
         edge_lines = list(edge_lines or [])
         if not flips and not text and not edge_lines:
@@ -16253,7 +16241,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             text, changed = self.aperture_state_text()
             self.aperture_state.set(text)
-            self.aperture_state_label.configure(foreground="#b35c00" if changed else "#5d6d76")
+            self.aperture_state_label.configure(foreground="#5d6d76")   # 2.3.6 (audit fix, m474): plain
         except Exception:
             text = None
         # 2.2.19 (r2: S3): no text, no line; 2.3.2: shown in the column beside the View box when it has text.
@@ -19008,7 +18996,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 core.recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
             except ValueError as exc:
-                self.log(f"Could not apply the chosen comps to the added file: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}")
         for night, info in (meta.get("color_cal") or {}).items():
             self.color_cal.setdefault(night, info)
         for night, info in (meta.get("night_binning") or {}).items():
@@ -19349,7 +19337,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             try:
                 core.recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
             except ValueError as exc:
-                self.log(f"Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
+                self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
             self.log(f"{old} is {new} (same star): series name"
@@ -20348,11 +20336,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 lines.append(f"Reduced with: SHOBS-P {setup['app_version']}")
         return lines
 
-    def _keep_run_findings(self):
-        """2.3.6 (#79 item 2): after the photometry job's summary: keep its ⚠ / ✖ lines as the run's findings."""
-        self._close_job_findings()
-        self.run_findings = list(getattr(self, "last_job_findings", None) or [])
-
     def run_findings_lines(self) -> list:
         """2.3.6 (#79 item 2): the settings files' "Findings" block ([] when the run raised none)."""
         found = list(getattr(self, "run_findings", None) or [])
@@ -20383,7 +20366,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 fh.write(f"SHOBS-P {APP_VERSION} settings for {os.path.basename(report_path)}\n"
                          + "\n".join(lines) + "\n")
         except Exception as exc:
-            self.log(f"Settings file not written: {exc}")
+            self.log(f"⚠ Settings file not written: {exc}", keep_status=True)   # 2.3.6 (m588): keeps the Saved… line
             return ""
         self.log(f"Settings file: {path}")
         return path

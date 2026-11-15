@@ -147,3 +147,22 @@ class TestApp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAuditFixes236(unittest.TestCase):
+    """2.3.6 audit fixes: a label before the icon keeps the line's level; stacking notes are plain."""
+
+    def test_label_before_icon(self):
+        import clearv_app
+        lv = clearv_app.App._msg_level
+        self.assertEqual(lv("JD2461353: ⚠ 3 frames skipped (no star)"), "warn")
+        self.assertEqual(lv("22–23 Oct: ✖ stopped"), "error")
+        self.assertEqual(lv("Solve: 12 stars matched: ⚠ x"), "note")
+        self.assertEqual(lv("Target: fine"), "note")
+        self.assertEqual(lv("⚠ plain warn"), "warn")
+
+    def test_stack_notes_plain(self):
+        import stack_core as sc
+        src = open(sc.__file__, encoding="utf-8").read()
+        self.assertNotIn('{cap_note}", True)', src)
+        self.assertNotIn('would help.", True)', src)
