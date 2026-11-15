@@ -6,11 +6,11 @@ shows a changed line is retaken; the others are reused. Checked 15 Nov 2026 agai
 
 | Shot | What changed in it | Action |
 |---|---|---|
-| img/03-window-parts.png | log's first line "Note: no dark frames. That step is skipped." (now "No dark frames. …"); Version 2.3.0 | RESHOOT (then redraw the 1–4 labels) |
-| img/07-calibrate-done.png | same "Note:" line; Version 2.3.0 | RESHOOT |
-| img/08-stack-row.png | "⚠ Comps are weak …" (now plain, still orange) | RESHOOT (SZ Lyn, Bin 2, r 13) |
-| img/17-transit-fit-page.png | "⚠ The predicted mid-transit is uncertain …" in the notes (now a plain note) | RESHOOT (TOI-2046 b, 20–21 Oct) |
-| img/23-edge-caution.png | last line "…under the settings row." (now "…beside the View box, under the Aperture line.") | RESHOOT (TrES-3 b 4–5 Jul 2025, check near edge) |
+| img/03-window-parts.png | log's first line "Note: no dark frames. That step is skipped." (now "No dark frames. …"); Version 2.3.0 | RESHOT 15 Nov 15:16 (2404×1775, labels re-applied from the old image) |
+| img/07-calibrate-done.png | same "Note:" line; Version 2.3.0 | RESHOT 15 Nov 15:16 (2406×1775, fresh start, clean log) |
+| img/08-stack-row.png | "⚠ Comps are weak …" (now plain, still orange) | RESHOT 15 Nov 15:05 (HD 219134 2 Nov, r 13/20–30, scintillation off; nothing saved) |
+| img/17-transit-fit-page.png | "⚠ The predicted mid-transit is uncertain …" in the notes (now a plain note) | RESHOT 15 Nov 15:07 (TOI-2046 b 20–21 Oct, from a scrubbed copy of the series) |
+| img/23-edge-caution.png | last line "…under the settings row." (now "…beside the View box, under the Aperture line.") | RESHOT 15 Nov 15:12 (TrES-3 b 0705, lights only; check now named APASS J175240.3+373049; ch 12 example updated) |
 | img/05-input-page.png | Frames box shows no darks line | reused |
 | img/08-stars-panel.png, img/09-marked-stars.jpg | B−V ⚠ kept; "closest available" plain as before | reused |
 | img/09-output-page.png, img/10-series-output.png | Output cautions unchanged; status ⚠ Aperture check unchanged | reused |
