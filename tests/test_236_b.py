@@ -164,5 +164,25 @@ class TestAuditFixes236(unittest.TestCase):
         self.assertNotIn('would help.", True)', src)
 
 
+    def test_skip_share_constant(self):
+        import clearv_app
+        self.assertAlmostEqual(clearv_app.SKIP_FINDING_SHARE, 0.10)
+
+
+    def test_few_skips_plain_many_warn(self):
+        import types
+        import clearv_app
+        def stub(n_skip, n_pts):
+            st = types.SimpleNamespace()
+            st.observations = [types.SimpleNamespace(night="N1", jd=2460000.0 + i) for i in range(n_pts)]
+            info = {"skipped": [{"frame": str(i), "why": "could not align"} for i in range(n_skip)]}
+            st._night_info = lambda night, create=False: info
+            st.recoverable_skips = lambda night: {}
+            st._frame_ranges = lambda labs: ",".join(labs)
+            return clearv_app.App.comp_skip_text(st, "N1")
+        self.assertTrue(stub(2, 98).startswith("2 frames skipped"))     # 2 % of the night: a plain note
+        self.assertTrue(stub(20, 80).startswith("⚠ 20 frames skipped"))  # 20 %: a finding
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1419,6 +1419,10 @@ class NewVersionWindow:
             pass
 
 
+# 2.3.6 (John): skipped frames are a ⚠ finding only above this share of the night's frames
+SKIP_FINDING_SHARE = 0.10
+
+
 class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py)
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
@@ -9126,7 +9130,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             by_why: dict = {}
             for s in skips:
                 by_why.setdefault(core.skip_reason_word(s.get("why", "")), []).append(s.get("frame", ""))
-            parts.append(f"⚠ {len(skips)} frame{'s' if len(skips) != 1 else ''} skipped: " + "; ".join(
+            # 2.3.6 (John, review S2): a few skipped frames are routine, a plain note; ⚠ (a finding in the job
+            # summary, the settings file and the report NOTES) only when more than 10 % of the night was skipped
+            n_pts = sum(1 for o in self.observations if getattr(o, "night", None) == night)
+            big = n_pts == 0 or len(skips) > SKIP_FINDING_SHARE * (len(skips) + n_pts)
+            parts.append(("⚠ " if big else "") + f"{len(skips)} frame{'s' if len(skips) != 1 else ''} skipped: " + "; ".join(
                 f"{why} (frames {self._frame_ranges(labs)})" for why, labs in by_why.items()) + ".")
         drops = info.get("comp_drops") or {}
         for name, rec in drops.items():
