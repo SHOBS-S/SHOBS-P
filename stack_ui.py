@@ -451,7 +451,7 @@ class StackMixin:
             if error == "Canceled":
                 self.log("Stacking canceled; the points stay per frame.")
             else:
-                self.log(f"Stacking failed: {error}. The points stay per frame.")
+                self.log(f"✖ Stacking failed: {error}. The points stay per frame.")
                 messagebox.showerror(TITLE, f"Stacking failed: {error}")
             return
         self._progress_end(f"{len(paths)} stacks.")

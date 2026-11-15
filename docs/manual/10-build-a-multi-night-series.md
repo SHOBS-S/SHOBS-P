@@ -103,7 +103,7 @@ If you load another series, close this one, switch modes, or close the SHOBS-P w
 
 Press **New reduction** on the Input page before you start on another star (chapter 5). It closes the open series (offering a save first) and clears the old star's target, planet, comps, check and watch stars, **Use comps…** choice and rejected frames, and puts the Output page's **Notes** back to the default (*"OSC reduced; not transformed"*). Night notes stay with their nights in the series file. SHOBS-P also offers a new reduction by itself when the lights you choose are another star. This keeps one star's comps from being applied to another star's night.
 
-As a last guard, a **Use comps…** choice whose stars were never measured on a new night is not applied to it. The log says, for example, "✖ Use comps choice (…) not applied to …: … were not measured on any of its frames (another field's comps?). … for another star, use New reduction on the Input page."
+As a last guard, a **Use comps…** choice whose stars were never measured on a new night is not applied to it. The log says, for example, "⚠ Use comps choice (…) not applied to …: … were not measured on any of its frames (another field's comps?). … for another star, use New reduction on the Input page."
 
 When you load a series of a different star, SHOBS-P clears the current target's comps, check star and watch stars, so names from one field never end up in another. If it cannot tell from the positions whether the two names are the same star, it asks; **No** (the default) keeps what is marked.
 

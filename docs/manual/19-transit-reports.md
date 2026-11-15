@@ -98,7 +98,7 @@ Beside the report, SHOBS-P writes:
     bin 3x3 averaged, so 6.91 e- per stored ADU used (from the sky's noise)` (chapter 7).
   - **Stacking**: `stacks of 40 frames (effective exposure 30 s) (sigma-clipped mean, whole-pixel shifts, never across
     a flip)` (chapter 8).
-  - On an alt-az night where the field turned by about 180° between two frames, a row `Warning: field turned 180 deg
+  - On an alt-az night where the field turned by about 180° between two frames, a row `Field turn: field turned 180 deg
     between frames … on an alt-az night (a meridian flip? check Mount)` (chapter 8).
 - `…_field.png`: the reference frame exactly as shot (never turned or mirrored), filling the picture on a smooth
   dark-gray background. The target, comps and check star are marked with their apertures to scale, with a scale

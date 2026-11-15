@@ -145,10 +145,6 @@ class TestApp(unittest.TestCase):
         self.assertIn("scan.dat not saved (Format 'dat' is not supported)", shown[0])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestAuditFixes236(unittest.TestCase):
     """2.3.6 audit fixes: a label before the icon keeps the line's level; stacking notes are plain."""
 
@@ -166,3 +162,7 @@ class TestAuditFixes236(unittest.TestCase):
         src = open(sc.__file__, encoding="utf-8").read()
         self.assertNotIn('{cap_note}", True)', src)
         self.assertNotIn('would help.", True)', src)
+
+
+if __name__ == "__main__":
+    unittest.main()

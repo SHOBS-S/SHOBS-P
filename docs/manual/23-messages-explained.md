@@ -168,6 +168,12 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *That makes only K stacks; a field scan needs at least 10. Use a smaller N.* | Discovery: too few stacks for a scan. | Use a smaller N. |
 | *Run photometry first (Scan field in Discovery): the Stack step uses that run's frames, alignment and noise.* | **Stack** before any run. | Run photometry first. |
 | Log: *⚠ Aperture check on the stacks: …* | The stacked stars are more than 15 % wider than in one frame. | Run **Suggest…** with **Points: Stacked**, set the new aperture and press **Stack** again (the stacks are reused). |
+| Log: *⚠ No site latitude/longitude on the Input page, so no airmass …* | No site is typed. AAVSO reports show AMASS na and the error bars leave out scintillation. | Type your site on the Input page once; it is remembered. |
+| Log: *⚠ Solve: the Input page target (…) is not in these lights …* | The plate solution puts the Input target off these frames. | Check the target on the Input page, or the Lights folder. |
+| Log: *⚠ Color: the saved color term was made with …, these frames are …* | No field fit tonight, and the saved color term comes from another camera. | Trust the colors less, or get a field fit (more comps with colors). |
+| Log: *⚠ Could not apply the chosen comps to …* (also *… to the added file*, *… to the stacked points*) | A **Use comps…** choice could not be put onto that night; it keeps the comps it was measured with. | Read the reason; run **Use comps…** again or measure the night again. |
+| Log: *⚠ Could not save the series …* / *⚠ Could not auto-save the series …* | The series file could not be written (disk full, file open elsewhere, no permission). | Fix the cause and press **Save series**. |
+| Log: *✖ Target: … not found in the first N frames …* | The target was not found on the first frames. | Reject frames without the target in Blink and calibrate again. |
 
 ## Output, Variables mode
 
@@ -189,7 +195,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *Too short for a period search: one night of … h covers under two cycles of even the shortest period searched …* | One night is too short to test any period. | Add nights, or observe longer. |
 | *This night's meridian-flip step is … mag ⚠ … Save … with this night now?* | The flip step looks like an aperture problem, not the star. | **No** keeps the file on disk unchanged; **Save series** keeps the night later. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md). |
 | Series line: *… is held (flip step ⚠), not in the file: Save series adds it, Remove night… drops it.* | You answered **No** to saving a night with a flip step. Automatic saves still write every other change; that night stays as the file had it (its earlier version, if it replaced one). | Press **Save series** when you want it in the file, or **Remove night…**. |
-| Log: *✖ Use comps choice (…) not applied to …: … not measured on any of its frames (another field's comps?) …* | The series' **Use comps…** stars are not in this night's field. | For another star, use **New reduction** on the Input page. |
+| Log: *⚠ Use comps choice (…) not applied to …: … not measured on any of its frames (another field's comps?) …* | The series' **Use comps…** stars are not in this night's field. | For another star, use **New reduction** on the Input page. |
 | **Range ⚠** … *outside the search* (Period box) | The VSX or marked period lies outside the period search range. | Press **Search … d instead**. |
 
 ## Output, Transits mode
@@ -213,6 +219,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Table: **Flip step (ppt)** *… (ΔBIC …, kept)*, or **Flip step** *not needed (ΔBIC …; test step … ppt)* | The flip step's value, or why there is none. | With a kept step, also read **Depth without step (%)** and **Step–depth correlation**. |
 | *Fit a transit first: the corner plot shows that fit's MCMC samples.* | **Save corner plot…** with no fit. | Press **Fit transit** first. |
 | *✔ Fit of the stacked points (kept from before).* (or *per-frame*) | You switched **Points** to a set fitted before; its fit is shown again. | Nothing. |
+| *⚠ No ephemeris found for … ; type one as the alternative to see O − C.* (Multi-night window) | No ephemeris came back. The joint fit still runs. | Type an ephemeris to see O − C. |
 | *A joint fit needs at least two usable nights of the same planet (see the Status column).* | **Multi-night…**: fewer than two nights are ready. | Read each night's **Status** and add nights. |
 
 ## Discovery mode

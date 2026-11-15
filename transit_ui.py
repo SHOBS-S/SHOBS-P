@@ -2922,7 +2922,7 @@ class TransitPage:
                 fh.write(f"SHOBS-P {getattr(self.app, 'app_version', '')} settings for "
                          f"{os.path.basename(report_path)}\n" + "\n".join(lines) + "\n")
         except Exception as exc:
-            self.app.log(f"Settings file not written: {exc}")
+            self.app.log(f"⚠ Settings file not written: {exc}", keep_status=True)   # 2.3.6 (review S4, as m588)
             return ""
         self.app.log(f"Settings file: {path}")
         return path
