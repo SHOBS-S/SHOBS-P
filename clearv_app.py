@@ -3643,8 +3643,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             write()
             return True
-        except OSError as exc:
-            why = exc.strerror or type(exc).__name__
+        except (OSError, ValueError) as exc:   # (review N3) savefig: ValueError for an unknown file type
+            why = (exc.strerror if isinstance(exc, OSError) else None) or str(exc) or type(exc).__name__
             text = (f"✖ {os.path.basename(path)} not saved ({why}). Save to another folder, or close the program "
                     "that has the file open.")
             self.log(text)
@@ -5228,8 +5228,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.19 (#20): comps and the check kept from an earlier run (names left in their slots) that are not on this
         frame are dropped, and logged. A slot counts as off the frame when its marker lies outside the image, or, on a
         solved image, its star's sky position (comp_coords) falls outside it. Names without a known position stay
-        (they still say "not marked on this image"). 2.3.6 (m088): with a series loaded the names stay in their slots
-        (only the marker goes) and one ⚠ line names them."""
+        (they still say "not marked on this image"). 2.3.6 (m088): with a series open the line is a ⚠ (tonight's comp
+        set differs from the series)."""
         img = self.preview
         if shape is None:
             if img is None:
@@ -5238,7 +5238,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         h, w = shape[:2]
         sol = self.chart_solution if self.chart_placed or (self.chart_solution or {}).get("auto") else None
         dropped = []
-        keep_names = bool(getattr(self, "series_path", ""))   # 2.3.6 (m088): the slots hold a loaded series' comps
+        series_loaded = bool(getattr(self, "series_path", "") or getattr(self, "observations", None))   # 2.3.6
         for role in list(COMP_ROLES) + ["check"]:
             name = getattr(self, f"{role}_name").get().strip()
             xy = getattr(self, f"{role}_xy")
@@ -5253,17 +5253,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     off = False
             if off:
                 dropped.append(f"{role_label(role)} {name or '(unnamed)'}")
-                if keep_names and name:
-                    # 2.3.6 (m088): a loaded series' comp keeps its name and magnitude in its own slot; only the
-                    # marker goes, so it is not measured tonight (only marked comps are) and the slot stays the
-                    # series' own
-                    setattr(self, f"{role}_xy", None)
-                    getattr(self, "_slot_typed", {}).pop(role, None)
-                else:
-                    self.clear_mark(role, redraw=False)
-        if dropped and keep_names:
-            self.log("⚠ Not on this frame, so not measured tonight (the series keeps them): " + ", ".join(dropped)
-                     + ". Leave them, or click another star in that slot, or ✕ to clear it.")
+                self.clear_mark(role, redraw=False)
+        if dropped and series_loaded:
+            # 2.3.6 (m088, wording only; review S1: keeping the name in its slot can change which comps are
+            # measured, so that waits for 2.4.0, #72): with a series open, tonight's comp set differs from it
+            self.log("⚠ Not on this frame, so taken out of tonight's comps (not measured): " + ", ".join(dropped)
+                     + ". Click another star to add a comp if you need one.")
         elif dropped:
             self.log("Cleared, left from an earlier run and not on this frame: " + ", ".join(dropped) + ".")
             if hasattr(self, "pick_label"):

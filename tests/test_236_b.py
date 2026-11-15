@@ -1,6 +1,6 @@
 """2.3.6 (#79 smaller bugs, part 2): open_link keeps its friendly status line (m041-m044), an empty Lights folder is
 not blamed on Blink (m383), the dark question words the pedestal by whether there is a bias (m161), the missing
-color band is named (m331), a loaded series' comps not on this frame keep their slots (m088), and the Discovery /
+color band is named (m331), a series comp not on this frame gets a ⚠ line (m088), and the Discovery /
 Variables exports say a disk error in words (unguarded saves)."""
 import os
 import sys
@@ -87,6 +87,9 @@ class TestApp(unittest.TestCase):
 
     def _slots_off_frame(self, series_path):
         app = self.app
+        old_preview, old_path = app.preview, app.series_path
+        self.addCleanup(lambda: (setattr(app, "preview", old_preview), setattr(app, "series_path", old_path),
+                                 app.clear_mark("comp", redraw=False)))
         app.preview = np.zeros((100, 120), dtype=float)
         app.series_path = series_path
         app.comp_name.set("APASS J000000.0+000000")
@@ -97,16 +100,14 @@ class TestApp(unittest.TestCase):
             dropped = app._drop_offframe_slots()
         return dropped, lines
 
-    def test_series_comp_keeps_its_slot(self):
+    def test_series_comp_off_frame_is_a_warning(self):
+        # (review S1) the slot is still cleared, as in 2.3.5 (numbers freeze); only the words change
         app = self.app
         dropped, lines = self._slots_off_frame("/tmp/some_series.csv")
         self.assertEqual(len(dropped), 1)
         self.assertIsNone(app.comp_xy)
-        self.assertEqual(app.comp_name.get(), "APASS J000000.0+000000")
-        self.assertEqual(app.comp_mag.get(), "11.20")
-        self.assertTrue(lines and lines[0].startswith("⚠ Not on this frame"), lines)
-        app.series_path = ""
-        app.clear_mark("comp", redraw=False)
+        self.assertEqual(app.comp_name.get(), "")
+        self.assertTrue(lines and lines[0].startswith("⚠ Not on this frame, so taken out of tonight's comps"), lines)
 
     def test_leftover_without_series_is_cleared(self):
         app = self.app
@@ -114,6 +115,14 @@ class TestApp(unittest.TestCase):
         self.assertEqual(len(dropped), 1)
         self.assertEqual(app.comp_name.get(), "")
         self.assertTrue(lines and lines[0].startswith("Cleared, left from an earlier run"), lines)
+
+    def test_stack_run_with_no_frames(self):
+        app = self.app
+        shown = []
+        with mock.patch.object(app, "_typed_site_check", return_value=None), \
+                mock.patch.object(self.ca.messagebox, "showerror", side_effect=lambda t, m, **k: shown.append(m)):
+            app.run_photometry(stack_run={"paths": []})
+        self.assertEqual(shown[-1:], ["No frames to measure."])
 
     def test_guarded_write_says_disk_error(self):
         app = self.app
@@ -127,6 +136,13 @@ class TestApp(unittest.TestCase):
         self.assertEqual(len(shown), 1)
         self.assertIn("field_scan_candidates.csv not saved (Permission denied)", shown[0])
         self.assertIn("close the program", shown[0])
+        shown.clear()
+
+        def bad_type():
+            raise ValueError("Format 'dat' is not supported")
+        with mock.patch.object(self.ca.messagebox, "showerror", side_effect=lambda t, m, **k: shown.append(m)):
+            self.assertFalse(app.guarded_write("/x/scan.dat", bad_type))
+        self.assertIn("scan.dat not saved (Format 'dat' is not supported)", shown[0])
 
 
 if __name__ == "__main__":
