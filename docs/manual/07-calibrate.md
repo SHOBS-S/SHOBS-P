@@ -89,7 +89,7 @@ What SHOBS-P does with them:
   - With darks that match the lights' exposure, the lights become light − dark exactly, with no warning.
   - With darks that must be scaled, the lights become light − dark flat − (dark − dark flat) × t_light / t_dark, so
     only the darks' own signal is scaled. The log says so in a note under the "Calibration:" line.
-  - The log line "Note: no bias frames. That step is skipped." does not appear when dark flats are given.
+  - The log line "No bias frames. That step is skipped." does not appear when dark flats are given.
 - **Bias and dark flats both given**: the dark flats are used for the flats, and the bias for the lights and darks.
   The log says *"Bias and dark flats are both given: …"*.
 - **Flats that are already calibrated** (for example PixInsight `_c` files): the dark flats are not used, and the log
@@ -197,8 +197,8 @@ taken at the lights' angle or clear the **Flat** row. On a German equatorial mou
 different angle (chapter 4).
 
 On an **alt-az** mount without a derotator there is no flip, so readings 180° apart are a real turn; SHOBS-P asks when
-the flats and lights are more than 5° apart. With a derotator it never asks: the log says **Caution: flats taken with
-the derotator at sky angle …** and explains that this is fine.
+the flats and lights are more than 5° apart. With a derotator it never asks: the log says **Flats taken with the
+derotator at sky angle …, lights at …°. That is fine: …**
 
 **The Flat folder mixes camera angles.** One master built from flats at several angles matches none of them exactly.
 **Stop** (the default) stops so you can keep only the flats taken at the lights' angle; **Use all these flats** goes
@@ -223,19 +223,19 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
   SHOBS-P does not subtract bias, dark or dark flats from them again.
 - **"Meridian flip before frame 222 (30° to 210°) …"**: the rotator reading changed by 180° at a flip. The same flats
   fit both sides. Each star may show a small step at the flip; SHOBS-P lines this up later.
-- **"Note: the camera rotator moved during these lights …"**: the camera really turned during the night. One set of
+- **"The camera rotator moved during these lights …"**: the camera really turned during the night. One set of
   flats can only match one angle, so expect steps in the light curve there. On an alt-az mount every change over 2°
   counts as a move, never as a flip.
 - **"Mount: Alt-az …"** (written when you scan the folders): which mount is used for these lights, and whether it came
   from the headers or the **Mount** box.
 - **"Zenith keyhole: the field reached altitude …"** (also written at the scan): on an alt-az mount the field went above 85°, where the mount's
   azimuth speed and the field rotation get extreme. Check those frames on the Blink page.
-- **"Note: the camera binned these frames (XBINNING=2) …"**: your color camera did the binning. Some capture
+- **"The camera binned these frames (XBINNING=2) …"**: your color camera did the binning. Some capture
   programs mix red, green and blue when they bin a color sensor; capture unbinned and set **Binning** in SHOBS-P
   instead. (Not shown for MicroObservatory frames, which are binned by design, or for a monochrome camera.)
 - **"The lights carry a plate solution in their FITS headers: Solve uses it directly."**: good news; the solve will
   be quick.
-- **"Caution: the FITS FILTER is 'Ha', which SHOBS-P cannot calibrate …"**: see chapter 4, "Filters SHOBS-P cannot
+- **"⚠ The FITS FILTER is 'Ha', which SHOBS-P cannot calibrate …"**: see chapter 4, "Filters SHOBS-P cannot
   use".
 
 ## When calibration fails

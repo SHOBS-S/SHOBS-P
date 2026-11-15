@@ -63,7 +63,7 @@ The line does not appear when the star is not in VSX at all (then there is nothi
 **⚠ The notes name HD 219134, which is not in this reduction.**
 The **Notes** box names a star that is not your target, planet, comps or check star, most likely left over from the
 star you reduced before. The question shows the notes and asks **Save anyway?** The default is **No**: the report is
-not saved, and the status line says **✖ Not saved: fix the Notes (Output page), then save again.** Correct the Notes
+not saved, and the status line says **Not saved: fix the Notes (Output page), then save again.** Correct the Notes
 box and press **Save AAVSO report** again. Answer **Yes** only if you meant to name that star (for example, a nearby
 star you mention on purpose). The same question comes before an AAVSO exoplanet report or an ExoFOP package.
 

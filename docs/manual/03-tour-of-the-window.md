@@ -127,9 +127,13 @@ something looks wrong, read the log first.
 
 SHOBS-P tells you about problems in a few ways, from mild to serious:
 
-- **Notes in the log** start with "Note:" and are for your information.
-- **Cautions** start with "Caution:" or "⚠", and are printed in orange or red in the panels. They mean "this result
-  may be affected; look at it". The program carries on.
+- **Notes** have no sign and are for your information. Most go to the log only; nothing needs doing.
+- **Cautions** start with **⚠** and are printed in orange or red in the panels. They mean "this result may be
+  affected; look at it, and probably act". SHOBS-P keeps ⚠ for that, so a ⚠ is worth reading. The program carries on.
+  While a job runs, its ⚠ stays on the status line until the job ends; then the line names it, or says
+  *⚠ N things need a look (see the Log)*.
+- **✖** means something stopped or failed (a step did not run, a file was not saved); **✔** means a step is done as
+  you asked. See [23. Messages explained](23-messages-explained.md).
 - **Questions** open a small window with **Yes** / **No** (sometimes **Cancel**). Each question explains both
   answers, for example:
 

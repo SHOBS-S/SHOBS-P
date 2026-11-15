@@ -49,7 +49,7 @@ SHOBS-P reads FITS (`.fits`, `.fit`, `.fts`, also gzip and fpack-compressed) and
 holds only files it cannot read, such as camera RAW or TIFF, the log says so.
 
 **Darks of another exposure.** When the darks' exposure differs from the lights', an orange line under the Frames box
-says so as soon as you choose the folders, for example **⚠ Darks 60 s, lights 120 s: the master dark is scaled ×2 to
+says so as soon as you choose the folders, for example **Darks 60 s, lights 120 s: the master dark is scaled ×2 to
 the lights' exposure. Fine for a cooled camera; 120 s darks are better.** When the dark would be scaled more than 3
 times, the line is red (✖) and Calibrate will ask about it. Once you have chosen at Calibrate to scale these darks,
 the line turns gray (✔).
@@ -68,7 +68,7 @@ Two more lines can appear in the same place as the dark-exposure line:
 
 - **⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights
   scales the camera's offset too). Add bias frames or dark flats, or use darks at the lights' exposure.**
-- **⚠ Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.**
+- **Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.**
 
 **Using a saved master.** Bias, Dark, Dark flats and Flat each have a **Master file…** button. Use it to pick one master file that
 SHOBS-P built on an earlier night (they are in the `SHOBS-P masters` subfolder of your calibration folders). Masters

@@ -371,7 +371,7 @@ When the verdict is "detected" and you are happy with the fit:
 **Notes that name another star.** Before it saves the AAVSO exoplanet report or the ExoFOP package of your own
 photometry, SHOBS-P reads the **Notes** box (in Variable View). If the notes name a star that is not in this
 reduction (often a leftover from the last star), it asks, for example *"⚠ The notes name HD 219134, which is not in this reduction. … Save anyway?"*. **No** (the default)
-saves nothing and the status line says *"✖ Not saved: fix the Notes (Output page), then save again."* The target,
+saves nothing and the status line says *"Not saved: fix the Notes (Output page), then save again."* The target,
 planet, comps and check star never set it off. A new reduction puts the notes back to *"OSC reduced; not
 transformed"* (or *"Monochrome camera; not transformed"*).
 
@@ -442,7 +442,7 @@ You do not need to save a fit CSV for each night first.
 When a night has a fit CSV or an AAVSO exoplanet report saved for it (**Save light-curve CSV…** or **Save AAVSO
 exoplanet report…** on this page), the series remembers the file, and its Tc fills the **Single-night Tc** column.
 For a night with neither, SHOBS-P fits that night alone in the background, as for an older fit CSV. If a remembered
-file is no longer on disk (moved or deleted), a line in orange under the buttons names it, for example *"⚠ Night of
+file is no longer on disk (moved or deleted), a line in orange under the buttons names it, for example *"Night of
 18–19 Oct 2026: TOI-2046b_CV_18-OCT-2026_SHOBS-P_transit_fit.csv is not found (moved or deleted); the night is loaded
 from the series' own points."* The other nights load as usual. A night that cannot be made from the points (no
 RA/Dec or site, or too few points) is loaded from its file instead, or listed with **✖** and the reason.
@@ -458,8 +458,9 @@ A Variables-mode series never offers **Fit the series' nights…**.
    exoplanet reports (from SHOBS-P or EXOTIC, `.txt`) or SHOBS-P fit CSVs (`…_transit_fit.csv`). The night fitted on
    the Transit fit page joins them when **Include the Transit fit page's night** is ticked. (It is unticked when
    the series' nights are loaded, since that night is one of them.)
-2. Check the list. The **Status** column says **✔ ready** for each usable night. A night of another planet, the same
-   night twice, fewer than 20 points, or no transit predicted during the data is left out (**✖** and the reason). A
+2. Check the list. The **Status** column says **✔ ready** for each usable night. A night of another planet or the same
+   night twice is left out with the reason in plain words (nothing is wrong; it just does not belong in this fit). A
+   night with fewer than 20 points, or no transit predicted during the data, is left out with **✖** and the reason. A
    night in another filter than most gets a ⚠; consider **Depth and limb darkening per filter**. **Leave out / put
    back** (or a double-click) and **Remove** change the list. If the table is wider than the window, use the
    sideways scroll bar under it. The **Single-night Tc (BJD_TDB)** column gives each night's own Tc. For a fit CSV

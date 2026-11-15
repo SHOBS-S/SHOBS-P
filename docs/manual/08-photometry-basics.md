@@ -317,7 +317,7 @@ The rings are drawn on the image as you type, so you can see whether a neighbor 
 
 **What was measured.** After a run, a gray line under the aperture boxes says what the photometry was measured with, for
 example "Measured with r 8, sky 14–22 px (Bin 1)". If you then change the aperture, sky or **Binning** boxes, the line
-turns orange: "⚠ Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
+turns orange: "Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
 next run.
 
 **Aperture kept from another target.** The aperture boxes keep their values from the last target. On a new image,
@@ -521,14 +521,14 @@ ensemble, over every good frame, from the run's own error model. The log gets th
 
 The line reads (N and the numbers are examples):
 
-- **The comps are weak** (orange, with ⚠): *"⚠ Comps are weak (comp noise 4.7× the target's per frame). Stack 20
+- **The comps are weak** (orange): *"Comps are weak (comp noise 4.7× the target's per frame). Stack 20
   frames (60 s each) → comps SNR ~193; 200 frames → 10 points?"* It may add why N is what it is: *"Capped at 57 frames
   by the time resolution (1/50 of the 2.40-h period = 2.9 min); the comp rule wanted 100."*, *"Kept to 20 frames so the
   night still has at least 10 points."*, *"The 2 ppt goal is not met (about 2.6 ppt per point)."* or *"(3 frames left
   out of stacks: 2 sat, 1 cloud.)"*.
-- **The comps are weak but the time cap allows no stacking**: *"⚠ Comps are weak (…), but the time resolution allows
+- **The comps are weak but the time cap allows no stacking**: *"Comps are weak (…), but the time resolution allows
   no stacking (…). Brighter comps, or longer exposures, would help."*
-- **The comps are fine, but your precision goal is not reached per frame**: *"⚠ Per-frame points are about 3.1 ppt;
+- **The comps are fine, but your precision goal is not reached per frame**: *"Per-frame points are about 3.1 ppt;
   your 2 ppt goal needs stacks of 3 frames (9 s each); …"*
 - **The comps are fine** (gray): *"Comps are fine per frame (comp noise 35% of the target's): stacking is not needed.
   Type N to stack anyway."*

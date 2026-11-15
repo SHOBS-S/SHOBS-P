@@ -3,13 +3,28 @@
 SHOBS-P talks to you in four places:
 
 - **The status bar** at the bottom of the window: the latest news, one line. While SHOBS-P works, the busy bar at its
-  left end says what it is doing (chapter 3); when the job ends, the line says how it went, starting with ✔ (done),
-  ✖ (failed) or ⚠ (done, but look). After a report save it also holds a button for the upload page.
+  left end says what it is doing (chapter 3). While a job runs, a ⚠ or ✖ stays on the status line until the job
+  ends, so a later routine line never hides it. When the job ends, the line says how it went: the one ⚠ or ✖ itself,
+  or *⚠ N things need a look (see the Log)* when there were several (or *✖ … (and N more in the Log)*). After a
+  report save it also holds a button for the upload page.
 - **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**). Every
-  status line goes here too, often with more detail. When something looks wrong, read the log first.
+  status line goes here too, often with more detail, and so do the routine notes that never reach the status line.
+  When something looks wrong, read the log first.
 - **Message boxes**: a question (Yes / No, sometimes Cancel) when SHOBS-P needs a decision, a warning when it found a
   problem, an error when it cannot go on.
 - **Notes and cautions on the Output pages**: lines starting with **⚠** are cautions about the result.
+
+**What the signs mean** (from 2.3.6, the same everywhere):
+
+- **⚠** something needs a look, and probably an action, before you trust or send the result. SHOBS-P keeps ⚠ for
+  that; it is never used for routine news.
+- **✖** something stopped or failed: a step did not run, a file was not saved, a lookup gave up.
+- **✔** a step is done as you asked.
+- **No sign**: a plain note. It is there for the record; nothing needs doing.
+
+A photometry run's ⚠ and ✖ lines travel with the result. The settings file saved beside a report lists them under
+*Findings from the photometry run …*, and the report's notes say how many there were (for example *2 findings from
+the run, see the settings file*), so whoever reads the report later sees them too.
 
 ![A warning box after photometry](img/23-edge-caution.png)
 
@@ -43,6 +58,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *Wait for the current run to finish (or cancel it) before switching modes.* | Same, for the mode buttons. | Wait or cancel. |
 | *Something went wrong: … Details were written to ….shobs_p.log.* | An unexpected error. | Note what you were doing and see [24. Troubleshooting](24-troubleshooting.md). |
 | *Could not open a browser: go to …* | The upload or ExoFOP page could not open. | Copy the address into your browser. |
+| *✖ … not saved (…). Save to another folder, or close the program that has the file open.* | A file you asked to save could not be written (open in Excel, no permission, disk full). Nothing was recorded as saved. | Do what it says, then save again. |
 | *The output folder could not be used (…); choose where to save.* | The Output folder is missing or read-only. | Pick another folder on the Input page. |
 
 ## Input
@@ -58,9 +74,9 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *SIMBAD from cache (fetched 12 Oct 2026); the live service did not answer (503).* (end of the status line, and in the log; also *VSX from cache …*, *NASA Exoplanet Archive from cache …* under the planet boxes) | The service did not answer, so the last good answer for this name was used. | Nothing; a live answer replaces it next time. See "When a service is down" in [24. Troubleshooting](24-troubleshooting.md). |
 | *✖ …: SIMBAD and VSX did not answer (…) — type RA/Dec, or Look up again.* | The lookup services did not answer (no connection, or the service is down). | Type RA/Dec, or press **Look up again** later. The planet lookup says the same about the NASA Exoplanet Archive. |
 | *✖ TOI-2046: SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look up again.* (under RA/Dec and on the status bar) | The lookup has waited 60 seconds with no answer; the busy bar stops. | Type RA/Dec, or press **Look up again** later. If the answer still comes in, it is used. For a planet the line is under the planet boxes and says *… the NASA Exoplanet Archive did not answer within 60 s — type the values or Look up again.* |
-| *⚠ Darks 60 s, lights 120 s: the master dark is scaled ×2 …* (under the Frames box) | The darks' exposure differs from the lights'. ✖ in red when it would be scaled more than 3 times. | Point **Dark** at darks of the lights' exposure if you have them. |
+| *Darks 60 s, lights 120 s: the master dark is scaled ×2 …* (under the Frames box) | The darks' exposure differs from the lights'. Fine for a cooled camera. With **✖** in red (*… would be scaled ×…, which stamps its noise on every light*) it would be scaled too far, and Calibrate asks. | Point **Dark** at darks of the lights' exposure if you have them. |
 | *⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights scales the camera's offset too). …* (under the Frames box) | The darks must be scaled, and nothing tells SHOBS-P the camera's offset. | Add bias frames or dark flats (**Dark flats** row), or use darks at the lights' exposure. See [7. Calibrate](07-calibrate.md). |
-| *⚠ Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.* | The dark flats do not match the flats. | Take dark flats at the flats' exposure. They are still used meanwhile. |
+| *Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.* | The dark flats do not match the flats. | Take dark flats at the flats' exposure. They are still used meanwhile. |
 | *Dark flats folder cleared. Calibration will skip it.* (status bar) | You pressed **✕** on the Dark flats row. | Nothing. |
 | *✖ No planets found for … at the NASA Exoplanet Archive (none listed under that name, or the Archive did not answer). Type the planet's name, or press Look up again on the Star ID.* (Transits, under the Planet box) | A Star ID lookup found no planet of that star. | Type the planet's name in **Planet**, or look up again later. See [16. Prepare for a transit night](16-plan-a-transit-night.md). |
 | *✖ …: the NASA Exoplanet Archive did not answer within 60 s — type the planet's name, or Look up again on the Star ID.* | The star's planet list did not come within 60 seconds. | Type the planet's name, or press **Look up again** later. |
@@ -77,9 +93,9 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Message | What it means | What to do |
 |---|---|---|
 | *2 dark frames (60 s) are in the Lights folder, and the Dark box is empty. Use them as darks?* | Calibration frames were saved with the lights. | **Yes** uses them for this run (the files stay where they are). See [7. Calibrate](07-calibrate.md). |
-| *Dark folder '…': The darks are 30 s and the lights 120 s, so the master dark is scaled x4 …* | The darks are far from the lights' exposure. | **Yes** calibrates without the dark (fine for most cooled cameras); **Cancel** lets you pick better darks. |
+| *Dark folder '…': The darks are 30 s and the lights 120 s, so the master dark is scaled x4 …* | The darks are far from the lights' exposure. The Yes line says what happens without the dark: with bias frames the bias removes the camera's offset; without them the sky ring does it in photometry. | **Yes** (the default) calibrates without the dark (fine for most cooled cameras); **No** uses them anyway; **Cancel** lets you pick better darks. |
 | *The flats were taken at rotator angle X° and the lights at Y°.* | The camera was turned between flats and lights; the flat corrects the wrong pattern. | Use flats taken at the lights' angle if you have them. On a German equatorial mount a meridian flip (180°) does not cause this. On an alt-az mount without a derotator (the message adds *alt-az mount, so no meridian flip explains it*) it is a real turn. |
-| Log: *Caution: flats taken with the derotator at sky angle …* | An alt-az mount with a derotator. | Nothing: the message explains that this is fine. |
+| Log: *Flats taken with the derotator at sky angle …, lights at …°. That is fine: …* | An alt-az mount with a derotator. | Nothing. |
 | Log: *These lights are color images (already debayered and calibrated): the bias, dark and flat entries are not used for them.* | Information. | Nothing. |
 | *The Flat folder mixes camera angles: …* | Flats from more than one camera angle. | Keep only the flats taken at the lights' angle. |
 | *These lights look already calibrated: … Skip bias, dark, and flat for this run? (Recommended)* | The files show signs of earlier calibration. | **Yes**, or they are calibrated twice. |
@@ -110,6 +126,8 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *The plate solution in the FITS header puts … px from the Target marker … Move the Target marker …?* | The header's solution and your marker disagree. | Check the star; **Keep it where it is** is the default. |
 | *There is no star under the Target marker at (x, y).* | The marker is on blank sky. | **No**, and click the star again. |
 | *These have a name in the Stars panel but no marker on this image …* | A name left from an earlier night or series. | **Yes** clears the names; **Cancel** lets you mark them. |
+| *No light frames in the Lights folder (Input page). …* / *Every light frame is rejected in Blink. …* (Run photometry) | There is nothing to measure: the folder is empty, or Blink set every frame aside. | Pick the folder that holds the lights, or un-reject frames on the Blink page. |
+| Log: *⚠ Not on this frame, so taken out of tonight's comps (not measured): C2 …* | A series is open and one of its comps (or its check) is off this frame, so tonight's comp set differs from the series'. The slot is cleared. | Nothing, if the other comps are enough. Click another star to add a comp if you need one. Without a series open the line is a plain *Cleared, left from an earlier run …*. |
 | *With 3 comps the AAVSO report is an ensemble, and AAVSO requires a check star …* | No check star in Variables mode. | Mark a check star (or continue if you will not report this run). |
 | *No transit of … is predicted during these lights …* | Transits mode, but the frames miss the transit. | Check the planet and date; use Variables mode for a variability run. |
 | *… hosts …, and a transit of … is predicted during these lights …* | Variables mode on a planet host during a transit. | **Yes** switches to Transits mode. |
@@ -122,6 +140,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Log and status line: *AAVSO sequence from cache (fetched 12 Oct 2026); the live service did not answer (503). Chart X28123AB (goes in the AAVSO report).* | AAVSO's chart server did not answer, so the last sequence for this field was used, with its chart ID. | Nothing; the report is as usual. |
 | *Variable-star check (SIMBAD; VSX not reached): …* (Field box and log) | VSX could not be reached (VizieR and AAVSO's VSX both down, nothing saved for this field). Only SIMBAD was checked. | **Solve again** later to check against VSX. |
 | Log: *Variable-star check: VSX from AAVSO's VSX API (VizieR did not answer).* or *VSX from cache (fetched …) …* | VizieR's copy of VSX did not answer; AAVSO's own VSX, or the last saved list for this field, was used. | Nothing. |
+| Log: *No catalog here gives B magnitudes, so color (B-V) cannot be calibrated on this field.* (or *… V …*, *… B or V …*) | The catalogs that answered have no magnitudes in that band for this field. | Nothing; the night is not color-corrected. **Solve again** later if a catalog was down. |
 | *⚠ raw peak … ADU is over the linear limit (…): the camera's response bends there, so this star reads too faint …* (Stars panel) | The star is too bright for your camera's linear range (**linear ADU**). | Pick a fainter comp; for the target, shorter exposures or more defocus. |
 | *⚠ only … px from the frame edge: its sky ring … needs the star at least … px in …* (Stars panel) | The comp or check star is too near the edge. | Pick a star further in (for the check, the line may name a green ring S1, S2 … farther in). |
 | Log (under *Catalogs: …*): *II/336/apass9 from vizier.cfa.harvard.edu looked wrong (40 of 40 stars brighter than V 4 …); not used, asking the next mirror.* | A VizieR mirror sent a damaged copy of APASS (from 2.3.3 such an answer is turned away: two stars brighter than V 4, more than 10 brighter than V 6, most stars brighter than V 6, or mostly 99.999 / 999999 placeholders). | Nothing; the next mirror is asked. If every copy that answered was damaged, APASS's stars are missing this time: **Solve again** later. |
@@ -141,8 +160,8 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *⚠ N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them.* | Every comp was lost in those frames, and **Use comps…** has since dropped those comps; Use comps does not measure frames. | Press **Measure skipped frames** at the right of the line. |
 | *The N skipped frames of … are not in the Lights folder on the Input page now (or no image is loaded), so they cannot be measured on their own. …* | **Measure skipped frames** needs that night's frames. | Open that night's frames, or press **Run photometry** to measure the whole night again. |
 | *⚠ The field turned by 180° between frames … — that looks like a meridian flip. Is the Mount set right (German equatorial)? …* | **Mount** is **Alt-az**, but the field turned half a turn between two frames. | If it was a flip, set **Mount** to **German equatorial** (Input page, Optics box) and run photometry again. |
-| *⚠ Comps are weak (comp noise 4.7× the target's per frame). Stack 20 frames …?* (Stack row) | The comps' noise, not the target's, limits each point. | Press **Stack**, or choose brighter comps. See "Stacking when comps are weak" in [8. Photometry page basics](08-photometry-basics.md). |
-| *⚠ Comps are weak (…), but the time resolution allows no stacking (…). Brighter comps, or longer exposures, would help.* | A stack would hide the signal. | Use brighter comps or longer exposures next time. |
+| *Comps are weak (comp noise 4.7× the target's per frame). Stack 20 frames …?* (Stack row) | The comps' noise, not the target's, limits each point. | Press **Stack**, or choose brighter comps. See "Stacking when comps are weak" in [8. Photometry page basics](08-photometry-basics.md). |
+| *Comps are weak (…), but the time resolution allows no stacking (…). Brighter comps, or longer exposures, would help.* | A stack would hide the signal. | Use brighter comps or longer exposures next time. |
 | *Comps are fine per frame (…): stacking is not needed. Type N to stack anyway.* | Information. | Nothing. |
 | *Stacks of N frames last about …, longer than the time resolution allows (…): they may blur the signal. Stack anyway?* | The N you typed is longer than the time cap. | **No**, and use a smaller N, unless you know the signal is slow. |
 | *That makes only K stacked points; the transit fit needs 20 or more. Stack anyway?* | Transits: too few stacks for the fit. | **No**, and use a smaller N. |
@@ -164,7 +183,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *This series was observed from …; the Input page has …. Keep the series' site?* | A report save is about to rewrite the series file, and the Input page's site or observer code differ from the series' own. | **Yes** keeps the series' site and observer code in the file (usually right). **No** writes the Input page's into the series. |
 | *Reduce a night of … first; the field image comes from a reduction (the Photometry page's frame).* | **Save field image** (or a report save) after **Load series…**: the frame on the Photometry page is another star's, or there is none. | Calibrate a night of the series' star, then save the field image again. With a report, the line is in the log and the report itself is saved. |
 | Log: *AAVSO chart not saved (…): the field image is saved alone. Save field image again later to fetch the chart.* | The AAVSO chart server did not answer (time-out, no internet). After a report save this goes to the log only; the status line keeps the saved line and the upload button. | Press **Save field image** later. |
-| *✖ Not saved: fix the Notes (Output page), then save again.* | You answered **No** to the notes question. | Correct the **Notes** box on the Output page and save again. |
+| *Not saved: fix the Notes (Output page), then save again.* | You answered **No** to the notes question. | Correct the **Notes** box on the Output page and save again. |
 | *Night … was already sent on … (in …); AAVSO will hold duplicates. Open anyway?* | Asked by **Open AAVSO WebObs…** (and the exoplanet and ExoFOP upload buttons): the report you saved last holds a night already sent. | Upload only the nights not sent yet. If that night was never really sent, double-click it in the night table to unmark it. See [15. Submit to AAVSO](15-submit-to-aavso.md). |
 | ⚠ *No reliable period …* / *No significant period …* | The best peak does not pass the significance tests. | See [13. Look for a period](13-look-for-a-period.md). |
 | *Too short for a period search: one night of … h covers under two cycles of even the shortest period searched …* | One night is too short to test any period. | Add nights, or observe longer. |
