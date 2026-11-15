@@ -232,8 +232,8 @@ names it by its sky position when you press **Run photometry**, the way APASS na
 `J020351.8+464115`. The log says so, and that name goes into the series, the reports and the settings file instead
 of a bare "check" (a night added to a series whose check was saved as "check" before 2.3.2 keeps the series' name). The line under each row says where the magnitude came from and adds checks:
 
-- its color (B−V) and a warning if it is very red;
-- how much brighter or fainter than the target it is, with a warning if it is more than about 1 magnitude away;
+- its color (B−V) and a note if it is very red;
+- how much brighter or fainter than the target it is, with a note if it is more than about 1 magnitude away;
 - "not a known or suspected variable (VSX + SIMBAD)", or a red ⚠ if it is one;
 - with a **linear ADU** set, a caution when the star's brightest raw pixel is over or near the linear limit, for
   example "⚠ raw peak 41,200 ADU is over the linear limit (36,000): the camera's response bends there, so this star
@@ -317,7 +317,7 @@ The rings are drawn on the image as you type, so you can see whether a neighbor 
 
 **What was measured.** After a run, a gray line under the aperture boxes says what the photometry was measured with, for
 example "Measured with r 8, sky 14–22 px (Bin 1)". If you then change the aperture, sky or **Binning** boxes, the line
-turns orange: "Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
+changes to: "Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
 next run.
 
 **Aperture kept from another target.** The aperture boxes keep their values from the last target. On a new image,
@@ -521,7 +521,7 @@ ensemble, over every good frame, from the run's own error model. The log gets th
 
 The line reads (N and the numbers are examples):
 
-- **The comps are weak** (orange): *"Comps are weak (comp noise 4.7× the target's per frame). Stack 20
+- **The comps are weak** (a plain note): *"Comps are weak (comp noise 4.7× the target's per frame). Stack 20
   frames (60 s each) → comps SNR ~193; 200 frames → 10 points?"* It may add why N is what it is: *"Capped at 57 frames
   by the time resolution (1/50 of the 2.40-h period = 2.9 min); the comp rule wanted 100."*, *"Kept to 20 frames so the
   night still has at least 10 points."*, *"The 2 ppt goal is not met (about 2.6 ppt per point)."* or *"(3 frames left
@@ -577,7 +577,7 @@ same photometry runs on the stacks; in Discovery, the field scan does). The log 
     Points: Stacked is selected; Per frame (on the Stack row) switches back.
 
 When some stacks are short, the log adds *"The last stack of a run (before a flip, a gap, or the end) can be
-partial."* When the field turned inside a stack (an alt-az mount), it adds a note on how far, for example *"Note: the
+partial."* When the field turned inside a stack (an alt-az mount), it adds a note on how far, for example *"The
 field turned by up to 0.30° inside a stack (about 1.4 px at the frame's corners) …"*.
 
 **The aperture on the stacks.** Stacked stars can be a little wider than in one frame. The log line *"Aperture check on

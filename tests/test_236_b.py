@@ -179,9 +179,45 @@ class TestAuditFixes236(unittest.TestCase):
             st._night_info = lambda night, create=False: info
             st.recoverable_skips = lambda night: {}
             st._frame_ranges = lambda labs: ",".join(labs)
+            st._night_frame_count = lambda night: clearv_app.App._night_frame_count(st, night)
             return clearv_app.App.comp_skip_text(st, "N1")
         self.assertTrue(stub(2, 98).startswith("2 frames skipped"))     # 2 % of the night: a plain note
         self.assertTrue(stub(20, 80).startswith("⚠ 20 frames skipped"))  # 20 %: a finding
+
+    def test_skip_share_counts_frames_not_stacks(self):
+        """Release review S2: 5 skips of 300 frames stay plain when the night shows 30 stacks."""
+        import types
+        import clearv_app
+        st = types.SimpleNamespace()
+        st.observations = [types.SimpleNamespace(night="N1", jd=2460000.0 + i) for i in range(30)]
+        st._stack_sets = {"N1": {"frame": [object()] * 295, "stack": st.observations, "meta": {"frames": 295, "n": 10}}}
+        st.stack_meta = lambda night: {"n": 10, "frames": 295}
+        st.points_choice = types.SimpleNamespace(get=lambda: "stack")
+        info = {"skipped": [{"frame": str(i), "why": "could not align"} for i in range(5)]}
+        st._night_info = lambda night, create=False: info
+        st.recoverable_skips = lambda night: {}
+        st._frame_ranges = lambda labs: ",".join(labs)
+        st._night_frame_count = lambda night: clearv_app.App._night_frame_count(st, night)
+        self.assertEqual(st._night_frame_count("N1"), 295)
+        self.assertTrue(clearv_app.App.comp_skip_text(st, "N1").startswith("5 frames skipped"))
+        st._stack_sets = {}   # a saved stacked series: the stacking record's frame count
+        self.assertEqual(st._night_frame_count("N1"), 295)
+        st.stack_meta = lambda night: {"n": 10}   # no count kept: points x frames per stack
+        self.assertEqual(st._night_frame_count("N1"), 300)
+
+    def test_variables_findings_only_for_run_night(self):
+        """Release review S3: a Variables report or settings file carries the run's findings only when its points
+        include the run's night."""
+        import types
+        import clearv_app
+        st = types.SimpleNamespace(run_findings=["⚠ x"], run_findings_night="JD1")
+        st.run_findings_note = lambda: clearv_app.App.run_findings_note(st)
+        st._findings_apply_to = lambda pts: clearv_app.App._findings_apply_to(st, pts)
+        here = [types.SimpleNamespace(night="JD1")]
+        other = [types.SimpleNamespace(night="JD2")]
+        self.assertIn("1 finding from the run", clearv_app.App._findings_report_note(st, True, here))
+        self.assertEqual(clearv_app.App._findings_report_note(st, True, other), "")
+        self.assertEqual(clearv_app.App._findings_report_note(st, True, None), "")
 
 
 if __name__ == "__main__":

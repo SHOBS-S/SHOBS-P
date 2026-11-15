@@ -97,7 +97,12 @@ class TestJobSummary(unittest.TestCase):
         self.assertTrue(lines[0].startswith("Findings from the photometry run (2"))
         self.assertEqual(lines[1], "  - ⚠ C2 is missing in 24 frames")
         self.assertEqual(app.run_findings_note(), "2 findings from the run, see the settings file")
-        self.assertEqual(app._findings_report_note(), "; 2 findings from the run, see the settings file")
+        # release review S3: only with points of the run's night
+        import types
+        app.run_findings_night = "JD2461353"
+        pts = [types.SimpleNamespace(night="JD2461353")]
+        self.assertEqual(app._findings_report_note(points=pts), "; 2 findings from the run, see the settings file")
+        self.assertEqual(app._findings_report_note(points=[types.SimpleNamespace(night="JD1")]), "")
         app.run_findings = []
         self.assertEqual(app.run_findings_lines(), [])
         self.assertEqual(app._findings_report_note(), "")
@@ -164,8 +169,10 @@ class TestJobSummary(unittest.TestCase):
 
     def test_variables_note_lead(self):
         app = self.app
-        app.run_findings = ["⚠ x"]
-        self.assertEqual(app._findings_report_note(lead=False), "1 finding from the run, see the settings file")
+        import types
+        app.run_findings, app.run_findings_night = ["⚠ x"], "JD2461353"
+        self.assertEqual(app._findings_report_note(lead=False, points=[types.SimpleNamespace(night="JD2461353")]),
+                         "1 finding from the run, see the settings file")
         app.run_findings = []
 
 

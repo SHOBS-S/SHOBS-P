@@ -5269,9 +5269,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + ". Click another star to add a comp if you need one.")
         elif dropped:
             self.log("Cleared, left from an earlier run and not on this frame: " + ", ".join(dropped) + ".")
-            if hasattr(self, "pick_label"):
-                self._update_pick_label()
-                self.update_star_panel()
+        if dropped and hasattr(self, "pick_label"):   # 2.3.6 (release review S4): both branches, as in 2.3.5
+            self._update_pick_label()
+            self.update_star_panel()
         return dropped
 
     def _other_target_why(self, star, ra_hours=None, dec_deg=None) -> str:
@@ -9113,6 +9113,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "by half a turn between two frames. If it was a flip, set Mount to German equatorial in the Optics "
                 "box (Input page) and run photometry again, so the frames after the flip are treated as after it.")
 
+    def _night_frame_count(self, night: str) -> int:
+        """2.3.6 (release review S2): how many frames the night's measured points stand for. Per-frame points count
+        one each; when the night shows stacks, the per-frame set (or the stacking record's frame count) is used, so
+        the skipped-frames share is the same whichever Points choice is on screen."""
+        n_obs = sum(1 for o in self.observations if getattr(o, "night", None) == night)
+        try:
+            sets = getattr(self, "_stack_sets", {}).get(night) or {}
+            meta = self.stack_meta(night) if hasattr(self, "stack_meta") else None
+            showing = bool(meta) or bool(sets and not sets.get("scan") and self.points_choice.get() == "stack")
+            if not showing:
+                return n_obs
+            if sets.get("frame"):
+                return len(sets["frame"])
+            rec = meta or sets.get("meta") or {}
+            if int(rec.get("frames") or 0) > 0:
+                return int(rec["frames"])
+            return n_obs * max(int(rec.get("n") or 1), 1)
+        except Exception:
+            return n_obs
+
     def comp_skip_text(self, night: str = "") -> str:
         """2.3.0 (#50): the Photometry page's line about this night's measurement: frames skipped (how many and why),
         comps left out of some frames, and, when Use comps no longer uses a comp that caused skips, that those frames
@@ -9132,7 +9152,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 by_why.setdefault(core.skip_reason_word(s.get("why", "")), []).append(s.get("frame", ""))
             # 2.3.6 (John, review S2): a few skipped frames are routine, a plain note; ⚠ (a finding in the job
             # summary, the settings file and the report NOTES) only when more than 10 % of the night was skipped
-            n_pts = sum(1 for o in self.observations if getattr(o, "night", None) == night)
+            n_pts = self._night_frame_count(night)   # 2.3.6 (release review S2): frames, not points shown
             big = n_pts == 0 or len(skips) > SKIP_FINDING_SHARE * (len(skips) + n_pts)
             parts.append(("⚠ " if big else "") + f"{len(skips)} frame{'s' if len(skips) != 1 else ''} skipped: " + "; ".join(
                 f"{why} (frames {self._frame_ranges(labs)})" for why, labs in by_why.items()) + ".")
@@ -19946,6 +19966,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                  f"{counts[night]} points) from the series? This cannot be undone."):
             return
         self.observations = [o for o in self.observations if o.night != night]
+        if getattr(self, "run_findings_night", None) == night:   # 2.3.6 (release review S3): they go with the night
+            self.run_findings, self.run_findings_night = [], None
         self.legacy_mixed.discard(night)
         self.color_cal.pop(night, None)
         self.night_bin.pop(night, None)
@@ -20157,7 +20179,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             notes=self.notes.get() + self._sloan_report_note(points)   # 2.2.17 (item 1): '' unless Sloan
             + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points)))
             + self._findings_report_note(lead=bool(self.notes.get().strip() or self._sloan_report_note(points)
-                                                   or self.stack_report_note(points, lead=False))),   # 2.3.6 (#79)
+                                                   or self.stack_report_note(points, lead=False)),
+                                       points=points),   # 2.3.6 (#79; release review S3: only the run's night)
             filt=self._filter_code(),
             scint=self._scint_setup(),
         )
@@ -20360,9 +20383,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "the Log):"] + \
             [f"  - {t}" for t in found]
 
-    def _findings_report_note(self, lead: bool = True) -> str:
+    def _findings_apply_to(self, points) -> bool:
+        """2.3.6 (release review S3): the last run's findings go only with a report or settings file whose points
+        include the run's night (the transit side's _findings_apply does the same)."""
+        night = getattr(self, "run_findings_night", None)
+        if not night or not getattr(self, "run_findings", None):
+            return False
+        return any(getattr(o, "night", None) == night for o in (points or []))
+
+    def _findings_report_note(self, lead: bool = True, points=None) -> str:
         """2.3.6 (#79 item 2): "; 2 findings from the run, see the settings file" for a Variables report's #NOTES
-        (no "; " when nothing comes before it: review S7)."""
+        (no "; " when nothing comes before it: review S7). Release review S3: only when the points hold the run's
+        night."""
+        if not self._findings_apply_to(points):
+            return ""
         note = self.run_findings_note()
         return (("; " if lead else "") + note) if note else ""
 
@@ -20374,7 +20408,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _write_variables_settings(self, report_path: str, points: list) -> str:
         """<report stem>_settings.txt beside a Variables AAVSO report. Never costs the report (logged on failure)."""
         try:
-            lines = self.variables_settings_lines(points) + self.run_findings_lines()   # 2.3.6 (#79 item 2)
+            lines = self.variables_settings_lines(points) + (
+                self.run_findings_lines() if self._findings_apply_to(points) else [])   # 2.3.6 (#79 item 2; S3)
             path = self._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(f"SHOBS-P {APP_VERSION} settings for {os.path.basename(report_path)}\n"

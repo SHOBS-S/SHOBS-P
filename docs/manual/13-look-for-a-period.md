@@ -33,8 +33,8 @@ Choose a range that fits your star and your data:
 The **Period from** box chooses what the search uses: **Every point**, or **5 min bins**, **10 min bins** (the default) or **30 min bins**. Bins make each night count by the hours you observed, not by how many frames you took, and they stop thousands of correlated frames from making a peak look more certain than it is. Keep the default unless you are after a period of less than about an hour; then use **5 min bins** or **Every point**. If there are fewer than 8 bins, SHOBS-P uses every point. The Period box's **Basis** line says what was used.
 
 Bins smear a period shorter than about ten bins. So when the VSX or a marked period is that short, or the best peak
-found from bins is, SHOBS-P searches every point instead, and a **Bins ⚠** line in the Period box says so (for
-example "⚠ 0.039 d spans only 5.6 10-min bins: searched every point instead").
+found from bins is, SHOBS-P searches every point instead, and a **Bins** line in the Period box says so (for
+example "0.039 d spans only 5.6 10-min bins: searched every point instead").
 
 ### Check-star correction
 

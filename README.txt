@@ -1,4 +1,4 @@
-Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.5
+Shiloh Hill Observatory – Photometry (SHOBS-P)  2.3.6
 ======================================================
 
 Desktop app (Windows 10/11, macOS, Linux) for photometry with color (OSC) and monochrome cameras: variable-star light curves and AAVSO
@@ -77,6 +77,23 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
   (see New in 2.1).
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
+
+New in 2.3.6 (messages, from the 14 Nov 2026 message review [79]; screen and file text only: every measured
+number is the same as in 2.3.5; S = shared by every mode, V = Variables, T = Transits)
+- S  One vocabulary for messages: ⚠ = something to look at or act on, ✖ = it did not work, ✔ = done, no sign =
+     a plain note. Routine notes (darks, dark flats, comps fainter or brighter than the target, weak comps, a
+     changed aperture, a few skipped frames) are plain, in the plain colour; the "Note:", "Careful:" and
+     "Warning:" prefixes are gone. Chapter 23 of the manual lists every message and its sign.
+- S  Leveled log and job summary: each job (calibrate, photometry, stack, fit, save) ends with one line that says
+     how it went, and its ⚠ lines are collected as the run's findings.
+- S  Findings travel with the result: a report's NOTES says "N findings from the run, see the settings file",
+     and the settings file (and the transit fit report) lists them, only for the night the run measured.
+- S  Skipped frames are a ⚠ finding only when more than 10 % of the night was skipped; a few skips are a plain
+     note. A comp left out of the whole night is ⚠; out of part of the night is a plain note.
+- S  Smaller fixes: number boxes and the aperture/site boxes name the box with a bad entry; disk errors on save
+     and export are said in words (and the AAVSO exoplanet report save no longer fails silently); an empty Lights
+     folder is no longer blamed on Blink; the dark question words the pedestal by bias; a missing color band is
+     named; link buttons keep the status line; Multi-night's ready line keeps its notes.
 
 New in 2.3.5 (safety and bugs, from the 14 Nov 2026 message review; with the same stars every measured number is
 the same as in 2.3.0, except the comp-choice check when a comp is missing in some frames; S = shared by every mode,
@@ -1236,6 +1253,8 @@ binned, debayered image. If you change binning, rebuild the masters. "raw sat AD
 A single night cannot pin down a long period; the Output page warns under 1.5 cycles.
 
 History
+2.3.6  Messages (numbers as 2.3.5): one ⚠ / ✖ / ✔ vocabulary, plain notes plain; leveled log and job
+       summary; findings in reports and settings files; skipped frames ⚠ only above 10 % of the night (#79).
 2.3.5  Safety and bugs (numbers as 2.3.0 except the comp-choice check with a part-time comp): safe default
        buttons; two-star solve asked always (#80); held flip-step night no longer blocks saves (#81);
        comp-choice check on the main fit's frames (#88); self-test result and Windows setup (#83).
