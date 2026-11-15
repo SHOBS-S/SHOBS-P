@@ -3637,6 +3637,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._family_path(start, safe)
         return path
 
+    def guarded_write(self, path: str, write, parent=None) -> bool:
+        """2.3.6 (#79 smaller bugs): run write() for a file the user asked to save; a disk error (file open in
+        another program, no permission, disk full) is said in words with what to do, never a raw traceback."""
+        try:
+            write()
+            return True
+        except OSError as exc:
+            why = exc.strerror or type(exc).__name__
+            text = (f"✖ {os.path.basename(path)} not saved ({why}). Save to another folder, or close the program "
+                    "that has the file open.")
+            self.log(text)
+            kw = {"parent": parent} if parent is not None else {}
+            messagebox.showerror(APP_TITLE, text.lstrip("✖ "), **kw)
+            return False
+
     def saved_notice(self, path: str, advice: str = ""):
         """After a save: with an output folder the status bar says where it went (no dialog to click away);
         without one, the usual dialog."""
@@ -3659,10 +3674,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             ok = False
         if ok is False:
             self.status.set(f"Could not open a browser: go to {url}")
-            self.log(f"Could not open a browser for {url}")
+            self.log(f"Could not open a browser: go to {url}", keep_status=True)   # 2.3.6 (m041/m042)
             return False
         self.status.set(f"Opened {what or url} in your browser.")
-        self.log(f"Opened {url}")
+        self.log(f"Opened {url}", keep_status=True)   # 2.3.6 (m043/m044): the friendlier status line stays
         return True   # 2.2.18 (item 10): the upload buttons mark "sent" only after this
 
     def offer_upload(self, path: str, button: str, url: str, where: str, note: str = "", page_button: bool = False):
@@ -5213,7 +5228,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.19 (#20): comps and the check kept from an earlier run (names left in their slots) that are not on this
         frame are dropped, and logged. A slot counts as off the frame when its marker lies outside the image, or, on a
         solved image, its star's sky position (comp_coords) falls outside it. Names without a known position stay
-        (they still say "not marked on this image")."""
+        (they still say "not marked on this image"). 2.3.6 (m088): with a series loaded the names stay in their slots
+        (only the marker goes) and one ⚠ line names them."""
         img = self.preview
         if shape is None:
             if img is None:
@@ -5222,6 +5238,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         h, w = shape[:2]
         sol = self.chart_solution if self.chart_placed or (self.chart_solution or {}).get("auto") else None
         dropped = []
+        keep_names = bool(getattr(self, "series_path", ""))   # 2.3.6 (m088): the slots hold a loaded series' comps
         for role in list(COMP_ROLES) + ["check"]:
             name = getattr(self, f"{role}_name").get().strip()
             xy = getattr(self, f"{role}_xy")
@@ -5236,9 +5253,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     off = False
             if off:
                 dropped.append(f"{role_label(role)} {name or '(unnamed)'}")
-                self.clear_mark(role, redraw=False)
-        if dropped:
-            self.log("Dropped from an earlier run, not on this frame: " + ", ".join(dropped) + ".")
+                if keep_names and name:
+                    # 2.3.6 (m088): a loaded series' comp keeps its name and magnitude in its own slot; only the
+                    # marker goes, so it is not measured tonight (only marked comps are) and the slot stays the
+                    # series' own
+                    setattr(self, f"{role}_xy", None)
+                    getattr(self, "_slot_typed", {}).pop(role, None)
+                else:
+                    self.clear_mark(role, redraw=False)
+        if dropped and keep_names:
+            self.log("⚠ Not on this frame, so not measured tonight (the series keeps them): " + ", ".join(dropped)
+                     + ". Leave them, or click another star in that slot, or ✕ to clear it.")
+        elif dropped:
+            self.log("Cleared, left from an earlier run and not on this frame: " + ", ".join(dropped) + ".")
             if hasattr(self, "pick_label"):
                 self._update_pick_label()
                 self.update_star_panel()
@@ -7399,11 +7426,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             problem = core.dark_scale_problem(dark_exp, light_exp)
             if problem:
                 folder = os.path.basename(os.path.normpath(self.dark_dir.get())) or "the Dark folder"
+                # 2.3.6 (m161): say "the bias removes the pedestal" only when there is a bias (or dark flats)
+                if bias:
+                    yes_line = ("Yes: calibrate without the dark this time (bias only). A cooled camera's dark current "
+                                "is usually tiny, and the bias still removes the pedestal.\n")
+                elif self.darkflat_dir.get().strip():
+                    yes_line = ("Yes: calibrate without the dark this time. A cooled camera's dark current is usually "
+                                "tiny; there are no bias frames, so the pedestal stays in the lights and the sky "
+                                "annulus removes it in photometry.\n")
+                else:
+                    yes_line = ("Yes: calibrate without the dark this time. A cooled camera's dark current is usually "
+                                "tiny; there are no bias frames either, so the pedestal stays in, the sky annulus "
+                                "removes it in photometry, and the flat is a little less exact.\n")
                 answer = messagebox.askyesnocancel(
                     APP_TITLE,
-                    f"Dark folder '{folder}':\n\n{problem}\n\n"
-                    "Yes: calibrate without the dark this time (bias only). A cooled camera's dark current is usually "
-                    "tiny, and the bias still removes the pedestal.\n"
+                    f"Dark folder '{folder}':\n\n{problem}\n\n" + yes_line +
                     "No: use these darks anyway.\n"
                     "Cancel: stop, and pick darks closer to the lights' exposure on the Input page.",
                     default=messagebox.YES)   # 2.3.5 (x135): Enter = calibrate without the dark, the safe one
@@ -7412,7 +7449,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     return None
                 if answer:
                     self.log(f"Darks left out: {dark_exp:g} s darks for {light_exp:g} s lights would be scaled "
-                             f"x{light_exp / dark_exp:.3g}. Bias only for this run.")
+                             f"x{light_exp / dark_exp:.3g}." + (" Bias only for this run." if bias else ""))
                     dark = []
                     if not bias and not self.darkflat_dir.get().strip():   # 2.3.0 (item 11): dark flats stand in
                         self.log("  Note: there are no bias frames either, so the pedestal stays in; the sky annulus "
@@ -13146,7 +13183,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.log(f"  Sloan {band} run: comps and reports use {band} magnitudes; the B-V / V-R color calibration "
                      "is not used.")
         elif counts["B"] == 0 or counts["V"] == 0:
-            self.log("  No catalog here gives B magnitudes, so color (B-V) cannot be calibrated on this field.")
+            # 2.3.6 (m331): name the band that is missing (it said B even when V was the one missing)
+            missing = " or ".join(b for b in ("B", "V") if counts[b] == 0)
+            self.log(f"  No catalog here gives {missing} magnitudes, so color (B-V) cannot be calibrated on this "
+                     "field.")
         elif counts["R"] == 0:
             self.log("  B and V present: B-V can be calibrated. No R, so V-R cannot.")
         if self.mode_key == "discovery":
@@ -14371,7 +14411,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             keep = set(only)
             lights = [p for p in lights if p in keep]
         if not lights:
-            messagebox.showerror(APP_TITLE, "No light frames left after the blink reject.")
+            # 2.3.6 (m383): say which it is: an empty Lights folder, or every frame rejected in Blink
+            if stack_run or only is not None:
+                text = "No frames to measure."
+            elif self._split_lights_cached()[0]:
+                text = "Every light frame is rejected in Blink. Un-reject some on the Blink page, then run again."
+            else:
+                text = "No light frames in the Lights folder (Input page). Pick the folder that holds the lights."
+            messagebox.showerror(APP_TITLE, text)
             return
         if self.masters is None:
             messagebox.showerror(APP_TITLE, "Build calibration masters first.")
@@ -20192,8 +20239,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._save_one_night = False
         if not path:
             return False
-        with core.AsciiWriter(path) as fh:
-            fh.write(self._report_text(points))
+
+        def write():
+            with core.AsciiWriter(path) as fh:
+                fh.write(self._report_text(points))
+        if not self.guarded_write(path, write):   # 2.3.6 (#79 smaller bugs)
+            return False
         self._write_variables_settings(path, points)   # 2.3.1 (nit): Variables reports get a settings file too
         self._note_report(points, path, scope)
         self._field_image_with_report(path)   # 2.2.19 (#28)
@@ -20871,8 +20922,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                     filetypes=[("PNG", "*.png")], family=True)
         finally:
             self._save_one_night = False
-        if path:
-            self._save_png_with_header(path)
+        if path and self.guarded_write(path, lambda: self._save_png_with_header(path)):   # 2.3.6
             self.status.set(f"Wrote {path}")
 
     def _save_png_with_header(self, path: str):
@@ -22241,18 +22291,22 @@ class WatchWindow:
                                             filetypes=[("CSV", "*.csv")], parent=self.win)
         if not path:
             return
-        rows = 0
-        with core.AsciiWriter(path) as fh:
-            fh.write(f"# {APP_TITLE} {APP_VERSION}: watch stars, measured against the comps in use; untransformed\n")
-            fh.write(core.created_line() + "\n")
-            fh.write("star,jd,mag,night,file\n")
-            for w in self.app.watch_list:
-                obs, mags = self.app.watch_series(w["name"])
-                for o, m in zip(obs, mags):
-                    fh.write(f"{w['name'].replace(',', ' ')},{o.jd:.6f},{m:.4f},{o.night},"
-                             f"{os.path.basename(o.path).replace(',', '_')}\n")
-                    rows += 1
-        self.app.status.set(f"Wrote {rows} rows to {path}")
+        rows = [0]
+
+        def write():
+            with core.AsciiWriter(path) as fh:
+                fh.write(f"# {APP_TITLE} {APP_VERSION}: watch stars, measured against the comps in use; "
+                         "untransformed\n")
+                fh.write(core.created_line() + "\n")
+                fh.write("star,jd,mag,night,file\n")
+                for w in self.app.watch_list:
+                    obs, mags = self.app.watch_series(w["name"])
+                    for o, m in zip(obs, mags):
+                        fh.write(f"{w['name'].replace(',', ' ')},{o.jd:.6f},{m:.4f},{o.night},"
+                                 f"{os.path.basename(o.path).replace(',', '_')}\n")
+                        rows[0] += 1
+        if self.app.guarded_write(path, write, self.win):
+            self.app.status.set(f"Wrote {rows[0]} rows to {path}")
 
 
 EXPORT_SETUPS_FILE = os.path.join(os.path.expanduser("~"), ".shiloh_photometry_exports.json")
@@ -23224,32 +23278,31 @@ class ScanView:
             return
         title = self.fig.suptitle(self._summary_line() + f"   Created {core.dtg()}", fontsize=9, x=0.01, ha="left")
         try:
-            self.fig.savefig(path, dpi=150, facecolor="#ffffff", bbox_inches="tight")
+            ok = self.app.guarded_write(path, lambda: self.fig.savefig(path, dpi=150, facecolor="#ffffff",
+                                                                       bbox_inches="tight"), self.win)
         finally:
             title.remove()
             self.canvas.draw_idle()
-        self.app.status.set(f"Wrote {path}")
+        if ok:
+            self.app.status.set(f"Wrote {path}")
 
     def save_csv(self):
         """2.2.9: what the plot shows, one row per measured star."""
         path = self.app.output_path(self._scan_stem() + ".csv", title="Save CSV", defaultextension=".csv",
                                     filetypes=[("CSV", "*.csv")], parent=self.win)
-        if path:
-            core.write_scan_stars(path, self.r)
+        if path and self.app.guarded_write(path, lambda: core.write_scan_stars(path, self.r), self.win):
             self.app.status.set(f"Wrote {path}")
 
     def export_candidates(self):
         path = self.app.output_path("field_scan_candidates.csv", title="Save CSV", defaultextension=".csv",
                                             filetypes=[("CSV", "*.csv")], parent=self.win)
-        if path:
-            core.write_scan_candidates(path, self.r)
+        if path and self.app.guarded_write(path, lambda: core.write_scan_candidates(path, self.r), self.win):
             self.app.status.set(f"Wrote {path}")
 
     def export_curves(self):
         path = self.app.output_path("field_scan_lightcurves.csv", title="Save CSV", defaultextension=".csv",
                                             filetypes=[("CSV", "*.csv")], parent=self.win)
-        if path:
-            core.write_scan_lightcurves(path, self.r)
+        if path and self.app.guarded_write(path, lambda: core.write_scan_lightcurves(path, self.r), self.win):
             self.app.status.set(f"Wrote {path}")
 
 
