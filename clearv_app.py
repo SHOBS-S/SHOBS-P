@@ -15942,6 +15942,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             flips = []
         text = "\n".join([("⚠ " + self.flip_like_text(fl)) for fl in flips] + ([text] if text else []))
         self.skip_text.set(text)
+        try:   # 2.3.6 (John, S2): a few skipped frames are a plain note, so the line is in the plain colour too
+            self.skip_label.configure(style="Warn.TLabel" if "⚠" in text else "Hint.TLabel")
+        except Exception:
+            pass
         recover = bool(text) and "no longer a comp" in text
         try:
             if recover:
