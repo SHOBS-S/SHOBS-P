@@ -185,7 +185,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Log: *✖ Target: … not found in the first N frames …* | The target should be on the frames, but was not found on the first ones. | Reject frames without the target in Blink and calibrate again. |
 | Blink: *Reading frame 37… (12 of 210 read)* on the busy bar; *playing at about 0.8 s/frame (the frames are still being read)* on the frame line | Blink is waiting for a frame that is still being read (first pass, large frames, slow disk). The window stays usable. | Nothing; after the first pass it runs at the chosen speed. |
 | Blink: *… unreadable: not a readable FITS file (damaged or cut short)* | That frame cannot be shown. | Reject it, or copy the file again. |
-| *Chart ID in this report: … * (**Save with this chart ID** / **Edit…** / **Don't save**) | **Save AAVSO report** shows the chart ID that goes in the report (never empty; `na` when the comps are not from an AAVSO chart). | Go on, or **Edit…** to type the ID of the AAVSO chart you used (chapter 15). |
+| *Chart ID in this report: … * (**Save with this chart ID** / **Edit…** / **Don't save**) | **Save AAVSO report** shows the chart ID that goes in the report when it is `na`, typed, or from a saved series (never empty; `na` when the comps are not from an AAVSO chart). A chart ID from the AAVSO sequence of the marked stars saves without asking. | Go on, or **Edit…** to type the ID of the AAVSO chart you used (chapter 15). |
 
 ## Output, Variables mode
 

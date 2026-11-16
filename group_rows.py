@@ -41,6 +41,9 @@ GROUPS = (
       "variables": "View: how the plots are drawn. Display only: no number changes."}),
 )
 GROUP_KEYS = tuple(g[0] for g in GROUPS)
+# 2.4.0 (John, 16 Nov): Comps and Analysis share one row, to give the plot back some height. The sharing group's
+# label and controls follow the host group's controls in the same wrapping row. {group: host group}
+SHARED_ROW = {"analysis": "comps"}
 GROUP_LABELS = {g[0]: g[1] for g in GROUPS}
 
 
@@ -136,6 +139,56 @@ class FlowBox:
         return max(1, len(self._key[0])) if self._key else 1
 
 
+class GroupView:
+    """One group's view of a FlowBox that two groups share (SHARED_ROW): the group keeps its own controls, words and
+    show/hide, while the layout is the shared row's. A sharing (non-host) group's label goes into the row just before
+    its first control, so it follows the host group's controls however late they are added."""
+
+    def __init__(self, box: FlowBox, lead_label=None, lead_pad: int = 6):
+        self.box = box
+        self.frame = box.frame
+        self.mine = []
+        self._lead, self._lead_pad = lead_label, lead_pad
+
+    @property
+    def items(self):
+        return [it for it in self.box.items if any(it[0] is w for w in self.mine)]
+
+    @property
+    def hidden(self):
+        return {w for w in self.box.hidden if any(w is m for m in self.mine)}
+
+    def add(self, widget, pad: int = 6, wrap: bool = False, shown: bool = True):
+        if self._lead is not None:
+            lead, self._lead = self._lead, None
+            self.box.add(lead, pad=self._lead_pad)
+        self.mine.append(widget)
+        return self.box.add(widget, pad=pad, wrap=wrap, shown=shown)
+
+    def show(self, widget, shown: bool = True):
+        self.box.show(widget, shown)
+
+    def is_shown(self, widget) -> bool:
+        return self.box.is_shown(widget)
+
+    def shown_widgets(self) -> list:
+        return [w for w in self.box.shown_widgets() if any(w is m for m in self.mine)]
+
+    def flow(self, width=None):
+        self.box.flow(width)
+
+    def rows(self) -> int:
+        return self.box.rows()
+
+    @property
+    def _key(self):
+        return self.box._key
+
+    @_key.setter
+    def _key(self, value):
+        self.box._key = value
+
+
 class GroupRows:
     """The seven group rows of an Output page. boxes[key] is the group's FlowBox; put a control in with
     add(key, widget) after making it with parent(key) as its parent."""
@@ -145,6 +198,19 @@ class GroupRows:
         self.frame = ttk.Frame(parent, style=style)
         self.boxes, self.labels, self.rows, self.separators, self.tips = {}, {}, {}, [], {}
         for i, (key, label, tips) in enumerate(GROUPS):
+            host = SHARED_ROW.get(key)
+            if host is not None:
+                shared = self.boxes[host].box
+                lab = ttk.Label(shared.frame, text=label, style="Hint.TLabel", padding=(12, 3, 0, 0))
+                self.rows[key], self.labels[key] = self.rows[host], lab
+                self.boxes[key] = GroupView(shared, lead_label=lab)
+                self.tips[key] = tips.get(page, "")
+                if tooltip is not None and self.tips[key]:
+                    try:
+                        tooltip(lab, self.tips[key])
+                    except Exception:
+                        pass
+                continue
             if i:
                 sep = ttk.Separator(self.frame, orient="horizontal")
                 sep.pack(fill=X, pady=(0, 1))
@@ -155,6 +221,8 @@ class GroupRows:
             lab.pack(side=LEFT, anchor="n", pady=(3, 0))
             box = FlowBox(row, style=style)
             box.frame.pack(side=LEFT, fill=X, expand=True)
+            if key in SHARED_ROW.values():
+                box = GroupView(box)
             self.rows[key], self.labels[key], self.boxes[key] = row, lab, box
             self.tips[key] = tips.get(page, "")
             if tooltip is not None and self.tips[key]:

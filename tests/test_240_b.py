@@ -354,6 +354,19 @@ class TestApp(unittest.TestCase):
             self.assertEqual(asked[0][2], "save")
             with mock.patch.object(self.ca, "ask_choice", lambda *a, **k: "stop"):
                 self.assertFalse(app._chart_id_at_save())
+            # John 16 Nov: a chart ID filled in from the AAVSO sequence saves without asking
+            old_auto = getattr(app, "_chart_auto", None)
+            try:
+                app._chart_auto = "X12345AB"
+                app.chart.set("X12345AB")
+                never = mock.Mock(side_effect=AssertionError("asked"))
+                with mock.patch.object(self.ca, "ask_choice", never):
+                    self.assertTrue(app._chart_id_at_save())
+                app.chart.set("X999TYPED")           # typed by hand: asks again
+                with mock.patch.object(self.ca, "ask_choice", lambda *a, **k: "save") as _m:
+                    self.assertTrue(app._chart_id_at_save())
+            finally:
+                app._chart_auto = old_auto
         finally:
             app.chart.set(old)
         src = _src()

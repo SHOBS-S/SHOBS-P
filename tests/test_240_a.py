@@ -110,10 +110,13 @@ class TestOutputPages(unittest.TestCase):
             self.assertEqual(tuple(groups.boxes), group_rows.GROUP_KEYS)
             self.assertEqual([str(groups.labels[k].cget("text")) for k in groups.boxes],
                              ["Data", "Points", "Corrections", "Fit", "Comps", "Analysis", "View"])
-            for lab in groups.labels.values():
+            for key, lab in groups.labels.items():
                 self.assertEqual(str(lab.cget("style")), "Hint.TLabel")
-                self.assertEqual(int(lab.cget("width")), group_rows.LABEL_WIDTH)
-            self.assertEqual(len(groups.separators), 6)       # a hairline between rows, none above or below
+                if key not in group_rows.SHARED_ROW:      # the left column; a sharing group's label sits in the row
+                    self.assertEqual(int(lab.cget("width")), group_rows.LABEL_WIDTH)
+            # John 16 Nov: Comps and Analysis share a row, so six rows and five hairlines, none above or below
+            self.assertIs(groups.rows["analysis"], groups.rows["comps"])
+            self.assertEqual(len(groups.separators), 5)
             for key in groups.boxes:
                 self.assertTrue(groups.tips[key])
             for key in ("points", "corrections"):

@@ -47,8 +47,9 @@ What changes between modes:
 ### How the two Output pages are laid out (from 2.4.0)
 
 The Variables Output page and the Transit fit page arrange their controls the same way. Above the plot, the controls
-sit in seven rows, one per job, each with a small gray label at its left end and a thin line between rows. The rows
-are the same, in the same order, on both pages:
+sit in seven groups, one per job, each with a small gray label and a thin line between rows. **Comps** and
+**Analysis** share one row (the **Analysis** label follows the comp buttons), so there are six rows. The groups are
+the same, in the same order, on both pages:
 
 | Group | Transit fit page | Variables Output page |
 |---|---|---|

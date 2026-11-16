@@ -45,8 +45,8 @@ stops with *"Enter your site's latitude and longitude on the Input page first (t
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 
-From 2.4.0 the controls above the plot are grouped by what they do, in seven labelled rows (**Data**, **Points**,
-**Corrections**, **Fit**, **Comps**, **Analysis**, **View**), the same rows in the same order as on the Variables
+From 2.4.0 the controls above the plot are grouped by what they do, in seven labelled groups (**Data**, **Points**,
+**Corrections**, **Fit**, **Comps**, **Analysis**, **View**; **Comps** and **Analysis** share a row), the same rows in the same order as on the Variables
 Output page (chapter 9). Under the plot is the save area only. A running fit shows on the busy bar in the status
 strip; the page has no progress bar of its own.
 

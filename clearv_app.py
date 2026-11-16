@@ -12838,7 +12838,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return after != before
 
     def _chart_id_at_save(self) -> bool:
-        """2.4.0 (#97): Save AAVSO shows the chart ID that goes in the report, with an Edit. False = don't save."""
+        """2.4.0 (#97): Save AAVSO shows the chart ID that goes in the report, with an Edit. False = don't save.
+        John (16 Nov): it asks only when the ID is na or typed by hand (or came from a saved series, which doesn't
+        record which); a chart ID SHOBS-P filled in from the AAVSO sequence of the marked stars saves without
+        asking, and the Log says which ID went in."""
+        cid = self.chart_id()
+        if cid.lower() != "na" and cid == getattr(self, "_chart_auto", None):
+            self.log(f"Chart ID in this report: {self.chart_id_words()}.", keep_status=True)
+            return True
         while True:
             cid = self.chart_id()
             answer = ask_choice(

@@ -1,20 +1,20 @@
 # 2.4.0 step 1 (Output pages) screenshots
 
-2.4.0 step 1 regroups the controls on both Output pages (#98): seven labelled rows above the plot (Data, Points,
+2.4.0 step 1 regroups the controls on both Output pages (#98): seven labelled groups in six rows above the plot (Comps and Analysis share a row, John 16 Nov) (Data, Points,
 Corrections, Fit, Comps, Analysis, View) and the save area under it. Every shot that shows either Output page's
 controls has changed and must be retaken (house rule: never reuse an image of a page that changed). Windows, dialogs
 and saved files that did not change are reused. Listed from the code at the s1-output branch; nothing is reshot yet.
 
 | Shot | What changed in it | Action |
 |---|---|---|
-| img/09-output-page.png | Variables Output page: seven group rows above the plots; one Results row under them (Save series, Save AAVSO report, Notes, …); Refit period green in the Fit row | RESHOOT |
+| img/09-output-page.png | Variables Output page: six group rows above the plots (Comps + Analysis share one); one Results row under them (Save series, Save AAVSO report, Notes, …); Refit period green in the Fit row | RESHOOT |
 | img/10-series-output.png | same page with a series | RESHOOT |
 | img/10-night-zoom.png | same page, one night clicked (check whether the crop shows the control rows; reshoot if it does) | RESHOOT if the rows are in the crop |
 | img/12-flagged-points.png | Output page light curve (reshoot if the control rows are in the crop; the "Leave flagged points out (sat, drift, cloud)" label is new) | RESHOOT if the rows are in the crop |
 | img/13-period.png | Period box, phase plot, periodogram (reshoot if the Period search row is in the crop: it is now the Fit row) | RESHOOT if the rows are in the crop |
 | img/15-no-auid.png | the No AUID line under the Results row: the row now starts with Save series and has the Notes box | RESHOOT |
 | img/15-webobs-offer.png | Output page after a report save: Results row changed; Save field image now reads "Field image saved ✓" (grayed) | RESHOOT |
-| img/17-transit-fit-page.png | Transit fit page: seven group rows; Fit the series' nights… in the Analysis row; Refit with flagged frames in the Points row | RESHOOT |
+| img/17-transit-fit-page.png | Transit fit page: six group rows (Comps + Analysis share one); Fit the series' nights… in the Analysis row; Refit with flagged frames in the Points row | RESHOOT |
 | img/17-flip-step.png | Transit fit page on a flip night (same new rows) | RESHOOT |
 | img/17-trim.png | the Trim controls are now the Points row | RESHOOT |
 | img/17-exoclock-buttons.png | Results row: Fit the series' nights… is gone from it | RESHOOT |

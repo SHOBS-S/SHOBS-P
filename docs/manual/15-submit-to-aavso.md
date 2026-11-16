@@ -82,8 +82,10 @@ Answer **Yes**. WebObs may not match another spelling to the star. The report an
 spelling, but the **Star ID** box changes to it only once the report is saved. If you cancel anywhere afterwards, the
 old name stays. The log then says **Star ID set to “HD 219134” (AAVSO's spelling), as used in the saved report.**
 
-**Chart ID in this report: X36281ABC (from the AAVSO sequence of the marked stars).**
-Every save shows the chart ID that goes into the report's `CHART` field. **Save with this chart ID** goes on.
+**Chart ID in this report: na (no AAVSO sequence star is marked as a comp or the check).**
+When the chart ID is `na`, typed by hand, or came from a saved series, the save shows the chart ID that goes into
+the report's `CHART` field. (A chart ID SHOBS-P filled in from the AAVSO sequence of the marked stars saves without
+this question; the Log names it.) **Save with this chart ID** goes on.
 **Edit…** lets you type another one (see **Set up once**) and asks again. **Don't save** stops. With `na`, the
 question reminds you that AAVSO takes `na` only when the comparison magnitudes are not from an AAVSO chart or
 sequence.
