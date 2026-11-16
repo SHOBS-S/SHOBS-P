@@ -99,9 +99,23 @@ The page heading names the star, for example **Output – Variability: SZ Lyn**.
 1. **Three summary boxes**: **Series**, **Period** and **Color**.
 2. **The night table**, one row per night.
 3. **Cautions**, in amber, each starting with ⚠.
-4. **Three rows of settings** (period search, quality control, tools) and one view switch. After a night is stacked, the row with **Airmass-corrected night means** ends with **Results use: Stacked (N frames)** or **Results use: Per frame** (see chapter 8).
+4. **Seven rows of controls**, one per job, each with a small gray label at its left: **Data**, **Points**, **Corrections**, **Fit**, **Comps**, **Analysis** and **View** (the table below). After a night is stacked, the **View** row ends with **Results use: Stacked (N frames)** or **Results use: Per frame** (see chapter 8).
 5. **Four plots**.
-6. **Two button rows**: **Series** and, under it, **Results**.
+6. **The save area**: one **Results** row with the save buttons.
+
+From 2.4.0 the controls are grouped by what they do, in the same rows and the same order as on the Transit fit page (chapter 17):
+
+| Row | What it holds |
+|---|---|
+| **Data** | **Load series**, **Close series**, **Add series file…**, **Remove night…**, **Night notes…** (chapter 10) |
+| **Points** | **Leave flagged points out (sat, drift, cloud)**, **Cloud flag: more than … % below the night's median** with **Apply**, **Transmission loss…**, **Planet transits…** (chapter 12) |
+| **Corrections** | **Line up segments (nights, meridian flip)**, **Line up flip only (keep nights)**, **Pier side as segments**, **Check-star correction (fold and period)** (chapters 12 and 13) |
+| **Fit** | **Period search (days)**, **Period from**, and the colored **Refit period** button (chapter 13) |
+| **Comps** | **Comp health…**, **Use comps…** (chapter 11) |
+| **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
+| **View** | **Time axis**, **Bin**, **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
+
+Hover over a row's label to read what the row is for. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment so you can see that it did. On a narrow window a row wraps onto a second line.
 
 ### The Series box
 
@@ -152,14 +166,16 @@ On a single night, the fold and periodogram are often grayed with a note that on
 
 ## Save your results
 
-The **Results** row has:
+Under the plots is the save area: the **Results** row. It has:
 
-- **Save AAVSO report**: see chapter 15. **Open AAVSO WebObs…** beside it opens the AAVSO's upload page. When VSX knows your star but has no AUID for it, an orange line under this row says **⚠ No AUID: WebObs will reject this report. …** (chapter 15).
+- **Save series**: keeps this night (or the whole series) for later; see chapter 10.
+- **Save AAVSO report**: see chapter 15. The **Notes** box beside it holds the report's notes. **Open AAVSO WebObs…** opens the AAVSO's upload page. When VSX knows your star but has no AUID for it, an orange line under this row says **⚠ No AUID: WebObs will reject this report. …** (chapter 15).
 - **Save light-curve CSV**: every point, including flagged ones with their flag word. A long series can take a few seconds; the CSV is written in the background, the busy bar says, for example, **Saving the light-curve CSV (412 points)…**, and then the status bar says **✔ Saved …**.
 - **Export…**: a CSV for other programs, with a choice of time system (JD, HJD or BJD_TDB), magnitudes or flux, binning, and extra columns. After **Export…** the window itself says what it wrote, for example **Exported 245 rows to …\GSC_03308-00462_HJD_UTC_mag.csv** (from 2.3.3), or why it could not write (a file open in Excel, say).
 - **Save plot PNG**: the four plots with the summary boxes and cautions above them.
-- **Save field image**: a picture of the reference frame as shot (not turned), with yellow **N** and **E** arrows showing where north and east lie, a scale bar, and the target, comps and check star marked with their apertures. (On an unsolved image the arrows are replaced by "Orientation unknown (the image is not solved)".) The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report.
-- **Refit period**: runs the period search again.
+- **Save field image**: a picture of the reference frame as shot (not turned), with yellow **N** and **E** arrows showing where north and east lie, a scale bar, and the target, comps and check star marked with their apertures. (On an unsolved image the arrows are replaced by "Orientation unknown (the image is not solved)".) The AAVSO chart of the same field is fetched and saved beside it when the AAVSO's chart server answers, so you can compare the two. **Save AAVSO report** saves both by itself, next to the report: the field image comes with the report. After that the button reads **Field image saved ✓** and is grayed out (hover over it for the file's path), so a second, identical image is never made. If the image was saved but the chart server did not answer, the button reads **Fetch AAVSO chart** and fetches only the chart, beside the image. A new night, a new reduction, another series or a changed star marker makes it **Save field image** again.
+
+**Refit period** is now in the **Fit** row above the plots.
 
 If you set an **Output** folder on the Input page, these files go there without a dialog, and the report, CSV, plot and field image of one set of results share a number so they belong together. Without an Output folder, the save dialog opens in the folder you last saved to (this session) with the next free name already filled in. A name typed with a number after the extension (such as `…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`, and never overwrites a file. Chapter 22 lists every file SHOBS-P writes.
 

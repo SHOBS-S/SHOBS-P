@@ -164,6 +164,7 @@ class StackMixin:
         if lab is not None:
             try:
                 lab.configure(text=self.results_use.get() if shown else "")
+                self.out_groups.boxes["view"].flow()   # 2.4.0 (#98): the label sits in the View group's row
             except Exception:
                 pass
 

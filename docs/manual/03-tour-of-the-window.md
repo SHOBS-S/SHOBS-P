@@ -44,6 +44,31 @@ What changes between modes:
 - **Output**: Variables shows **Output – Variability**, Transits shows **Output – Transit fit**, Discovery shows
   **Output – Field scan**.
 
+### How the two Output pages are laid out (from 2.4.0)
+
+The Variables Output page and the Transit fit page arrange their controls the same way. Above the plot, the controls
+sit in seven rows, one per job, each with a small gray label at its left end and a thin line between rows. The rows
+are the same, in the same order, on both pages:
+
+| Group | Transit fit page | Variables Output page |
+|---|---|---|
+| **Data** | **Night**, **Open AAVSO exoplanet report (EXOTIC)…**, **Close report** | **Load series**, **Close series**, **Add series file…**, **Remove night…**, **Night notes…** |
+| **Points** | **Trim** from/to, **Trim and refit**, **Clear trim**, **Refit with flagged frames** | **Leave flagged points out**, **Cloud flag** % and **Apply**, **Transmission loss…**, **Planet transits…** |
+| **Corrections** | **Detrend** airmass / time slope, **meridian flip at the largest gap** | **Line up segments**, **Line up flip only**, **Pier side as segments**, **Check-star correction** |
+| **Fit** | **MCMC**, **Fit transit**, **Cancel** | **Period search (days)**, **Period from**, **Refit period** |
+| **Comps** | **Comp health…**, **Use comps…** | **Comp health…**, **Use comps…** |
+| **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Time of max/min…** |
+| **View** | **credible bands**, **Plot bins** | **Time axis**, **Bin**, **Mark periods** and **Show**, **Airmass-corrected night means** |
+
+- **Points** and **Corrections** hold the settings that feed the result. Hover over a row's label to read what the
+  row is for.
+- Only one button above the plot is colored: **Fit transit** on the Transit fit page, **Refit period** on the
+  Variables page. It is the one that makes the result.
+- **View** changes only how the plot is drawn. No number changes.
+- Under the plot is the **save area** only: the **Results** row with the save buttons, the upload pages, and
+  **Back** / **Transit View** / **Variable View**.
+- On a narrow window a row wraps onto a second line, like text.
+
 ## The five steps
 
 Every mode works through the same five steps:
