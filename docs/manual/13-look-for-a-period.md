@@ -14,11 +14,11 @@ On the **Output – Variability** page:
 
 ## Set the search
 
-1. In **Period search (days)**, type the shortest and longest period to try. The defaults are 0.02 to 20 days. (Before
+1. In **Period search (days)**, in the **Fit** row, type the shortest and longest period to try. The defaults are 0.02 to 20 days. (Before
    2.2.19 the shortest was 0.05 d, which missed many short-period pulsators. A series saved with that old default now
    searches from 0.02 d, and the log says so.)
 2. Press **Enter**, or click into another box. The search runs again with the new range. (It does not rerun while you
-   are still typing, or when you leave a box without changing it.) **Refit period** also runs it again.
+   are still typing, or when you leave a box without changing it.) **Refit period**, the colored button at the end of the same row, also runs it again. When the period line changes, the **Period** box is highlighted for a moment.
 
 Choose a range that fits your star and your data:
 
@@ -106,7 +106,7 @@ Ways to break an alias:
 
 To see how a particular period fares, for example the VSX period or an alias:
 
-1. Type one or more periods in **Mark periods (days, comma separated)**, for example `0.12053, 0.13790`.
+1. Type one or more periods, comma separated, in **Mark periods (days)** in the **View** row, for example `0.12053, 0.13790`.
 2. Press **Show**.
 
 Each appears as a purple dotted line on the periodogram, and the Period box gives its power (**Marked … d → power …**).
@@ -126,7 +126,7 @@ The check needs airmass: from the frames' headers, or worked out from the target
 
 ### Airmass-corrected night means (display only)
 
-Tick **Airmass-corrected night means (plot only, never in reports)** to see the effect on the light curve. Small filled orange diamonds show each night's mean; large hollow ones show the same mean with the airmass trend taken out. Hover over one to see both values. These values are only drawn: they never go into the period search, a report or a CSV.
+Tick **Airmass-corrected night means** (in the **View** row; plot only, never in reports) to see the effect on the light curve. Small filled orange diamonds show each night's mean; large hollow ones show the same mean with the airmass trend taken out. Hover over one to see both values. These values are only drawn: they never go into the period search, a report or a CSV.
 
 ---
 

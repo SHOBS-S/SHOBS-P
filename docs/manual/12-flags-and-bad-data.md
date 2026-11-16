@@ -6,7 +6,7 @@ This chapter explains each flag, how to change the cloud limit, the dew/haze que
 
 ## Leaving flagged points out
 
-On the Output page, the box **Leave flagged points (sat, drift, cloud) out of the period and report (planet-transit frames never go in a report)** is ticked by default. Leave it ticked.
+On the Output page, the box **Leave flagged points out (sat, drift, cloud)**, in the **Points** row, is ticked by default. (Before 2.4.0 its label spelled out the rest, which is now its tooltip: flagged points are left out of the period and the report, and planet-transit frames never go in a report.) Leave it ticked.
 
 If you untick it, flagged points go into the period search and the AAVSO report too, each with its flag word in the report's notes. Planet-transit frames stay out of reports either way.
 
@@ -32,7 +32,7 @@ The night table's **Flags** column counts them per night, for example `12 cloud,
 
 A cloud dims all the stars, but not quite equally: the target and comps pass under the cloud's edge at slightly different times. So SHOBS-P flags frames where the comps' light drops too far below the night's median.
 
-The limit is the box **Cloud flag: comp light more than … % below the night's median**. The default is 20.
+The limit is the box **Cloud flag: more than … % below the night's median** in the **Points** row (it compares the comps' light with the night's median). The default is 20.
 
 To change it:
 

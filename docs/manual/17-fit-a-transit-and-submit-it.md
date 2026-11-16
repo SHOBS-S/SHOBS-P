@@ -41,28 +41,42 @@ depends on the number of frames and comps.
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 
-In 2.3.0 the tools row starts with **Nearby-binary (NEB) check…** (Tonight's transits and the Transit planner are
-gone), and the corner plot moved to the Results row as **Save corner plot…**. A running fit shows on the busy bar in
-the status strip; the page has no progress bar of its own.
+From 2.4.0 the controls above the plot are grouped by what they do, in seven labelled rows (**Data**, **Points**,
+**Corrections**, **Fit**, **Comps**, **Analysis**, **View**), the same rows in the same order as on the Variables
+Output page (chapter 9). Under the plot is the save area only. A running fit shows on the busy bar in the status
+strip; the page has no progress bar of its own.
 
 ## The page, top to bottom
 
 - **Planet line**: the planet's period, duration, depth and shape, and where they came from.
-- **Night**: which night of your photometry is fitted (for example *"KELT-16 b · night of 5–6 Oct 2026"*). The newest
+- **Data** row. **Night**: which night of your photometry is fitted (for example *"KELT-16 b · night of 5–6 Oct 2026"*). The newest
   night is chosen. Picking another one clears the fit; press **Fit transit** to fit it. The hint beside it counts the points: usable, in this fit,
   flagged, trimmed.
-- **Open AAVSO exoplanet report (EXOTIC)…**: fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
-- **Detrend**: **airmass** (on by default) and **time slope** (off). These are baseline trends fitted together with
+- **Open AAVSO exoplanet report (EXOTIC)…** (same row): fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
+  **Close report** appears beside the Night box while a report is open.
+- **Points** row: **Trim** (below), and **Refit with flagged frames** when the night has cloud-flagged frames the fit
+  left out.
+- **Corrections** row. **Detrend**: **airmass** (on by default) and **time slope** (off). These are baseline trends fitted together with
   the transit. Add **time slope** only when the baseline clearly drifts and airmass does not explain it. With both
   ticked ("Both"), the two trends can together absorb a transit. When that happens, SHOBS-P refits with each trend
   alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32). Untick
   time slope and fit again only if that trend is not real …"*.
-- **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
+  When the data have no airmass, **airmass** is unticked and grayed out, and the row says why: *no airmass: site not
+  set* (enter the site's latitude and longitude on the Input page) or *no airmass in these data* (a report without an
+  airmass column). The fit never used airmass in that case; from 2.4.0 the box says so. With airmass again, the box
+  is live and your earlier choice is back.
+  For an opened report the row also has **meridian flip at the largest gap**.
+- **Fit** row. **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.
-- **Fit transit** runs the fit again with the current settings. **Cancel** stops it.
-- The tools row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Comp health…**, **Use comps…** (all below),
-  the **credible bands** box and the **Plot bins** box (see "Read the plot").
-- **Trim** row (below).
+- **Fit transit** (the one colored button above the plot) runs the fit with the current settings. **Cancel** stops
+  it. The fit always waits for this button. If you change a **Points** or **Corrections** setting while a fit is
+  shown, the button reads **Refit (settings changed)** and the shown fit's numbers (the verdict, the quality line,
+  the table and the result line) turn gray: they are still the earlier fit's, until you press the button. Setting the
+  box back makes them black again.
+- **Comps** row: **Comp health…**, **Use comps…** (below).
+- **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…** and **Fit the series' nights…** (all below).
+  **Fit the series' nights…** is grayed unless a Transits series with two or more nights is open.
+- **View** row: the **credible bands** box and the **Plot bins** box (see "Read the plot"). Display only.
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
   *"✖ Fit failed."* or *"Canceled."*, and then the comp-check result (below). On a night with a meridian flip it also
@@ -70,10 +84,9 @@ the status strip; the page has no progress bar of its own.
   "A meridian flip in the night").
 - The **Results** row: **Save AAVSO exoplanet report…**, **Open AAVSO Exoplanet Database…**, **Save ExoFOP
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
-  PNG…**, **Save corner plot…**, **Save field image…** and **Fit the series' nights…**, with **Variable View  ▶** at
-  the right. **Multi-night
-  fit…** is grayed unless a Transits series with two or more nights is open (see *Fit several nights together*
-  below).
+  PNG…**, **Save corner plot…** and **Save field image…**, with **Variable View  ▶** at the right. After **Save AAVSO
+  exoplanet report…** has saved the field image with the report, **Save field image…** reads **Field image saved ✓**
+  and is grayed out (or **Fetch AAVSO chart** when only the chart is missing; chapter 19).
 - Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
   (chapter 16), for example *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* and
   *"ExoClock: LOW priority (24 recent observations)"*. Click the TOI line to open the target's ExoFOP-TESS page, and
@@ -376,7 +389,7 @@ planet, comps and check star never set it off. A new reduction puts the notes ba
 transformed"* (or *"Monochrome camera; not transformed"*).
 
 Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
-the AAVSO chart of the field when it answers) beside it. Chapter 19 describes them.
+the AAVSO chart of the field when it answers) beside it: the field image comes with the report. Chapter 19 describes them.
 
 ### Send it to ExoClock
 
@@ -426,9 +439,9 @@ notes. Chapter 19 describes every file and the upload sites.
 One night gives one transit time. Several nights of the same planet, fitted together, give a better shape, a time for
 every night, and a check of the ephemeris. There are two ways in:
 
-- **Fit the series' nights…** (Results row) when a **Transits series** is open with two or more nights. The window opens
+- **Fit the series' nights…** (**Analysis** row) when a **Transits series** is open with two or more nights. The window opens
   with every night of the series already in the table, one row per night (*"series: night of 15–16 Oct 2026"*).
-- **Multi-night…** (tools row, under the fit options) for reports and fit CSVs, yours or other observers'.
+- **Multi-night…** (beside it in the **Analysis** row) for reports and fit CSVs, yours or other observers'.
 
 Both open the same **multi-night transit analysis** window.
 
@@ -448,7 +461,7 @@ from the series' own points."* The other nights load as usual. A night that cann
 RA/Dec or site, or too few points) is loaded from its file instead, or listed with **✖** and the reason.
 
 After you save a report, fit CSV or ExoClock file for a night of a series with two or more nights, the line under the
-plot says, for example, *"This series has 3 transit nights; Fit the series' nights… (Results row) fits them together."*
+plot says, for example, *"This series has 3 transit nights; Fit the series' nights… (Analysis row) fits them together."*
 
 A Variables-mode series never offers **Fit the series' nights…**.
 

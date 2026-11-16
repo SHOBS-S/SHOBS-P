@@ -87,14 +87,14 @@ A note travels with a night: in the night table's **Note** column, in the light-
 
 ## Other series tools
 
-All of these are in the **Series** row on the Output page. When the series has a file, each of them saves the file straight away.
+All of these are in the **Data** row at the top of the Output page's controls (from 2.4.0; **Save series** stays under the plots, in the **Results** row). When the series has a file, each of them saves the file straight away.
 
 - **Add series file…** merges another saved series into the one that is open, for example a night you saved on its own. You see how many points and which nights will be added, with warnings if the comps or reduction differ. Series from Variables and Transits modes cannot be merged.
 - **Remove night…** removes one night. The list shows each night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`. Type its number and confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
 In Transits mode, a series of one planet with two or more nights can be fitted together: **Fit the series' nights…** on the
-Transit fit page's Results row opens the Multi-night window with every night of the series (chapter 17). The series
+Transit fit page's **Analysis** row opens the Multi-night window with every night of the series (chapter 17). The series
 also remembers each night's saved fit CSV and AAVSO exoplanet report, and the alternative ephemeris you typed there.
 
 If you load another series, close this one, switch modes, or close the SHOBS-P window while there are unsaved changes, SHOBS-P offers to save first: **Yes** saves, **No** goes on without saving, **Cancel** keeps the series open. When you close the window, it asks only if a series file has unsaved changes or a series of two or more nights has never been saved.
@@ -130,7 +130,8 @@ page shows.
 **Save field image** draws the frame on the Photometry page, so it needs a reduction of the series' own star. After
 **Load series…** of another star than the one you last reduced (or with no frame at all), it does not draw the other
 star's field under this series' name; it says *"Reduce a night of SZ Lyn first; the field image comes from a
-reduction (the Photometry page's frame)."* Calibrate a night of the series' star, then save the field image.
+reduction (the Photometry page's frame)."* Calibrate a night of the series' star, then save the field image. (After **Save AAVSO report** has saved the
+field image with the report, the button reads **Field image saved ✓**; chapter 9.)
 
 ## The backup copy (`_prev`)
 

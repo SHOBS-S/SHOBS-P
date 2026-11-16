@@ -109,7 +109,10 @@ Beside the report, SHOBS-P writes:
   only its own marker is drawn, with no extra sequence ring beside it. The log says *"Field image saved (as shot,
   N/E arrows): …"*. When the AAVSO's chart server answers, the AAVSO chart of the same field and size is saved next
   to it as `…_aavso_chart.png`. That chart is north up and east left, so use the arrows to match the two. If the
-  chart server does not answer, the log says so and **Save field image…** fetches it again later. No field image is
+  chart server does not answer, the log says so and the **Save field image…** button reads **Fetch AAVSO chart**:
+  press it later to fetch just the chart. The field image comes with the report, so once the report is saved the
+  button reads **Field image saved ✓** and is grayed out (its tooltip gives the path); it never makes a second,
+  identical `…_2_field.png` (from 2.4.0). A new night or reduction makes it **Save field image…** again. No field image is
   made for an opened EXOTIC report's fit, nor from another star's frame after **Load series…** (the log says
   *"Reduce a night of … first; the field image comes from a reduction …"*; chapter 10).
 
@@ -200,7 +203,7 @@ form.
   CSV in the ExoFOP package. Under the `# Created` line, comment lines starting with `#` give the planet, filter,
   fitted Tc and verdict, the O − C, what the columns hold, and the time of the meridian flip if there was one.
   **Multi-night…** reads the night back from them (chapter 17).
-- **Save field image…** saves the field image on its own (see above).
+- **Save field image…** saves the field image on its own, before any report is saved (see above).
 
 ![A field image as saved](img/19-field-image.png)
 

@@ -613,7 +613,7 @@ button, chooses which set is the night's:
 
 - **Per frame** and **Stacked** (grayed until there are stacks). Switching is instant.
 - Under them, **Results use: Per frame** or **Results use: Stacked (20 frames)**. The Output page shows the same text
-  at the right end of the row with the **Airmass-corrected night means** box (empty until the night is stacked).
+  at the end of its **View** row, after the **Airmass-corrected night means** box (empty until the night is stacked).
 
 Everything after photometry uses the chosen set: the Output page, the period search and **Time of max/min**, **Comp
 health…**, the AAVSO report and light-curve CSV, **Save series**, the transit fit and the ExoClock, EXOTIC and ExoFOP

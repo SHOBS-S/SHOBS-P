@@ -19,13 +19,14 @@ In the Output page's **Notes** box, the default note is **OSC reduced; not trans
 
 The file is named like `AAVSO_SZ_Lyn_TG_14-OCT-2026_SHOBS-P.txt`: the star, the filter code, and the UTC date (or a date range such as `16-SEP-2026_to_06-OCT-2026` for several nights). With an Output folder, an existing file is never overwritten; a new copy gets `_2`, `_3` and so on.
 
-Beside the report, SHOBS-P also saves a field image (`…_field.png`): the frame as shot, with yellow **N** and **E**
+The field image comes with the report: beside it, SHOBS-P also saves a field image (`…_field.png`): the frame as shot, with yellow **N** and **E**
 arrows showing where north and east lie, and the target, comps and check star marked. When the AAVSO's chart server answers, the AAVSO chart of the same field is
 saved next to it (`…_aavso_chart.png`), so you can check that your comps are the chart's stars. The chart is fetched in
 the background after the report is saved; whatever happens to it goes into the log only, so the status line keeps
 **Saved AAVSO_….txt — upload to AAVSO WebObs with Open AAVSO WebObs… on the Results row.** If the chart server does not
-answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; press **Save field image** later
-to fetch it.
+answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; the **Save field image** button
+then reads **Fetch AAVSO chart**, and pressing it later fetches just the chart. Once both are saved the button reads
+**Field image saved ✓** and is grayed out, so you never get a second, identical `…_2_field.png` (from 2.4.0).
 
 It also saves a settings file (`…_settings.txt`, from 2.3.1): night by night, the aperture and sky radii, binning,
 comps and check measured, frames skipped and left out, calibration, gain, telescope aperture and stacking, with the
@@ -126,7 +127,7 @@ The marks are saved in the series file. The same marks and warning apply to the 
 
 ## Which points go in
 
-- Only **used** points: flagged points are left out while **Leave flagged points (sat, drift, cloud) out of the period and report …** is ticked (chapter 12).
+- Only **used** points: flagged points are left out while **Leave flagged points out (sat, drift, cloud)** is ticked (chapter 12).
 - Frames flagged during a planet transit are **always** left out. The log says how many.
 - The magnitudes are as measured against your comps. The line-up checkboxes, the check-star correction and the airmass-corrected night means do not change the report.
 
