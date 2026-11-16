@@ -32,7 +32,8 @@ the background after the report is saved; whatever happens to it goes into the l
 **Saved AAVSO_….txt — upload to AAVSO WebObs with Open AAVSO WebObs… on the Results row.** If the chart server does not
 answer, the log says *"AAVSO chart not saved (…): the field image is saved alone."*; the **Save field image** button
 then reads **Fetch AAVSO chart**, and pressing it later fetches just the chart. Once both are saved the button reads
-**Field image saved ✓** and is grayed out, so you never get a second, identical `…_2_field.png` (from 2.4.0).
+**Field image saved ✓** and is grayed out, so you never get a second, identical `…_2_field.png` (from 2.4.0). A new
+photometry run, other marks or other aperture radii make the button live again.
 
 It also saves a settings file (`…_settings.txt`, from 2.3.1): night by night, the aperture and sky radii, binning,
 comps and check measured, frames skipped and left out, calibration, gain, telescope aperture and stacking, with the
@@ -86,7 +87,8 @@ old name stays. The log then says **Star ID set to “HD 219134” (AAVSO's spel
 When the chart ID is `na`, typed by hand, or came from a saved series, the save shows the chart ID that goes into
 the report's `CHART` field. (A chart ID SHOBS-P filled in from the AAVSO sequence of the marked stars saves without
 this question; the Log names it.) **Save with this chart ID** goes on.
-**Edit…** lets you type another one (see **Set up once**) and asks again. **Don't save** stops. With `na`, the
+**Edit…** lets you type another one (see **Set up once**) and asks again. **Don't save** stops, and so do Esc and
+closing the question's window. With `na`, the
 question reminds you that AAVSO takes `na` only when the comparison magnitudes are not from an AAVSO chart or
 sequence.
 

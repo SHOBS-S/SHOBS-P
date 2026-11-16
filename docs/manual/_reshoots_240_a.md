@@ -5,6 +5,11 @@ Corrections, Fit, Comps, Analysis, View) and the save area under it. Every shot 
 controls has changed and must be retaken (house rule: never reuse an image of a page that changed). Windows, dialogs
 and saved files that did not change are reused. Listed from the code at the s1-output branch; nothing is reshot yet.
 
+Step 1 review (16 Nov): both Output pages lost a few pixels of vertical padding (the hairlines between the group
+rows, around the plot, above the Results row), so the plot is a little taller; the Period box's title reads
+**Period: updated** while it is highlighted. Every shot of these pages is on the RESHOOT list below already; take
+them from the build with the review fixes in.
+
 | Shot | What changed in it | Action |
 |---|---|---|
 | img/09-output-page.png | Variables Output page: six group rows above the plots (Comps + Analysis share one); one Results row under them (Save series, Save AAVSO report, Notes, …); Refit period green in the Fit row | RESHOOT |

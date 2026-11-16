@@ -115,6 +115,8 @@ STALE_GRAY = "#9aa7b0"
 # 2.4.0 (#96): why Detrend airmass is greyed out.
 NO_AIRMASS_SITE = "no airmass: site not set"
 NO_AIRMASS_DATA = "no airmass in these data"
+# review: the site is set now but the night's points carry no airmass: the photometry ran before the site was typed
+NO_AIRMASS_RERUN = "no airmass in these data (run photometry again with the site set)"
 
 
 class TransitPage:
@@ -132,7 +134,7 @@ class TransitPage:
         ttk.Label(card, text="Output – Transit fit", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.planet_text = StringVar(value=planet_summary(None))
         planet_label = ttk.Label(card, textvariable=self.planet_text, style="Hint.TLabel", wraplength=700, justify=LEFT)
-        planet_label.pack(anchor=W, fill=X, pady=(2, 6))
+        planet_label.pack(anchor=W, fill=X, pady=(2, 3))   # step 1 review: tighter, for the plot's height
         # Wrap to the window, never wider: a long fixed wrap made the page wider than some screens (2.2).
         card.bind("<Configure>", lambda e: planet_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         self._fit_signature = None        # the data the shown fit was made from
@@ -305,7 +307,7 @@ class TransitPage:
         self.prog_row = prog
         # 2.2.9: the save buttons sit below the plot in a "Results" row, as on the Variables Output page (John).
         results = ttk.Frame(card, style="Card.TFrame")
-        results.pack(fill=X, side="bottom", pady=(6, 0))
+        results.pack(fill=X, side="bottom", pady=(3, 0))
         self.results_row = results
         ttk.Label(results, text="Results", style="Hint.TLabel", width=LABEL_WIDTH).pack(side=LEFT, anchor="n")
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
@@ -399,10 +401,10 @@ class TransitPage:
         self._show_heads()
         card.bind("<Configure>", lambda e: self.verdict_label.configure(wraplength=max(e.width - 40, 300)), add="+")
         body = ttk.Frame(card, style="Card.TFrame")
-        body.pack(fill=BOTH, expand=True, pady=(4, 0))
+        body.pack(fill=BOTH, expand=True, pady=(2, 0))
         self.body = body
         strip = ttk.Frame(body, style="Card.TFrame")
-        strip.pack(fill=X, side="bottom", pady=(6, 0))
+        strip.pack(fill=X, side="bottom", pady=(3, 0))
         self.strip = strip
         # 2.2.11 (John): the table fills the strip; cautions, when there are any, take a third on the right.
         tablebox = ttk.Frame(strip, style="Card.TFrame")
@@ -673,7 +675,7 @@ class TransitPage:
                 return ""
             if any(o.airmass is not None and math.isfinite(float(o.airmass)) for o in obs):
                 return ""
-            return NO_AIRMASS_DATA if self._site_set() else NO_AIRMASS_SITE
+            return NO_AIRMASS_RERUN if self._site_set() else NO_AIRMASS_SITE
         except Exception:
             return ""
 

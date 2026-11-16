@@ -282,6 +282,8 @@ class TestOutputPages(unittest.TestCase):
 
     def test_period_line_flashes_when_it_updates(self):
         app = self.app
+        app._fill_summary(["s"], ["Period 0.1100 d"], ["c"], [], [])   # step 1 review: the first fill of an empty
+        self.pump(app.PERIOD_FLASH_MS + 1500, lambda: not getattr(app, "_period_flashing", False))   # box: no flash
         n0 = getattr(app, "period_flash_count", 0)
         snap = (["s"], ["Period 0.1205 d"], ["c"], [], [])
         app._fill_summary(*snap)
@@ -323,7 +325,8 @@ class TestOutputPages(unittest.TestCase):
             app.lat.set("35.4")
             app.lon.set("-81.9")
             tp._update_airmass_box()
-            self.assertEqual(tp.airmass_hint.get(), "no airmass in these data")
+            self.assertEqual(tp.airmass_hint.get(),   # step 1 review: says what to do
+                             "no airmass in these data (run photometry again with the site set)")
             self.assertTrue(tp.detrend_airmass_check.instate(["disabled"]))
             # airmass again: live, and the user's earlier tick is back
             app.observations = self._obs([1.1 + 0.01 * i for i in range(30)])

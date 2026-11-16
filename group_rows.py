@@ -213,7 +213,7 @@ class GroupRows:
                 continue
             if i:
                 sep = ttk.Separator(self.frame, orient="horizontal")
-                sep.pack(fill=X, pady=(0, 1))
+                sep.pack(fill=X)   # review: no padding under the hairline (the plot gets the height)
                 self.separators.append(sep)
             row = ttk.Frame(self.frame, style=style)
             row.pack(fill=X)

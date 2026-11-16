@@ -126,7 +126,7 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
 | **View** | **Time axis**, **Bin**, **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
 
-Hover over a row's label to read what the row is for. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment so you can see that it did. On a narrow window a row wraps onto a second line.
+Hover over a row's label to read what the row is for. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**, so you can see that it did. On a narrow window a row wraps onto a second line.
 
 ### The Series box
 

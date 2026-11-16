@@ -683,6 +683,20 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "per_filter": per_filter}
 
 
+def page_airmass_default(page) -> bool:
+    """The Multi-night window's starting 'airmass' tick: the Transit fit page's own choice. When the page has
+    greyed and unticked its box because the night it shows has no airmass (#96), that untick is not the user's
+    choice: the nights fitted here may well have airmass, so the user's wanted value is read instead."""
+    if page is None:
+        return True
+    try:
+        if getattr(page, "_airmass_off_why", ""):
+            return bool(getattr(page, "_airmass_wanted", True))
+        return bool(page.detrend_airmass.get())
+    except Exception:
+        return True
+
+
 def quick_single_tc(n: dict, planet: dict, detrend_airmass: bool = True, detrend_time: bool = False) -> tuple:
     """2.2.20 (#45): (Tc, sigma) of one night alone by least squares (transit_core.lsq_fit: Jacobian errors after the
     usual rescaling), for the Single-night Tc column of a file that does not carry its own Tc. About a quarter of a
@@ -1559,7 +1573,7 @@ class MultiNightWindow:
 
         opts = ttk.Frame(upper, style="Card.TFrame")
         opts.pack(fill=X, pady=(6, 2))
-        self.detrend_airmass = BooleanVar(value=bool(page.detrend_airmass.get()) if page is not None else True)
+        self.detrend_airmass = BooleanVar(value=page_airmass_default(page))
         self.detrend_time = BooleanVar(value=bool(page.detrend_time.get()) if page is not None else False)
         ttk.Label(opts, text="Detrend", style="Card.TLabel").pack(side=LEFT)
         # 2.2.20 (#45): the nights' cautions follow the airmass box

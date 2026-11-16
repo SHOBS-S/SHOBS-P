@@ -1633,6 +1633,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._blink_pos = 0             # where the reader reads from (the frame wanted next)
         self._blink_index_of = {}       # {path: place in the Blink list}
         self._blink_failed = {}         # {(path, binning): why it could not be read, in plain words}
+        self._blink_failed_stamp = {}   # {(path, binning): the file's (size, mtime) when the read failed}
         self._blink_busy_tok = None     # the busy bar's "Reading frame 37…"
         self._blink_show_job = None     # a frame asked for by hand that is still being read
         self._blink_last_shown = 0.0
@@ -6568,7 +6569,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._blink_labels = dict(zip(self.blink_paths, core.frame_labels_for(self.blink_paths)))   # 2.2.17 (round 2)
         self._blink_index_of = {p: i for i, p in enumerate(self.blink_paths)}   # 2.4.0 (#100)
         self._blink_failed = {}
+        self._blink_failed_stamp = {}
         self._blink_pace = 0.0
+        self._blink_busy("")   # review: a "Reading frame N…" left from the list before never outlives its list
         self._start_blink_preload()
         self.show_blink()
 
@@ -6758,6 +6761,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     # 2.4.0 (#94): plain words on the Blink page; the library's own text in the log file
                     log_to_file(f"Blink: {os.path.basename(path)}: {type(exc).__name__}: {exc}  "
                                 "[debug: the library's own text]")
+                    self._blink_failed_stamp[key] = self._blink_file_stamp(path)
                     self._blink_failed[key] = core.plain_read_error(exc, path) or str(exc)
                     continue
                 if gen != self._blink_gen:
@@ -6767,6 +6771,30 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         self._blink_reader = threading.Thread(target=work, daemon=True)
         self._blink_reader.start()
+
+    @staticmethod
+    def _blink_file_stamp(path):
+        """The file's (size, modified time), or None when it cannot be asked (gone, drive away)."""
+        try:
+            st = os.stat(path)
+            return (int(st.st_size), int(st.st_mtime_ns))
+        except Exception:
+            return None
+
+    def _blink_retry(self, path, by_hand: bool = False) -> bool:
+        """Review (2.4.0 step 1): a frame that could not be read is tried again, as 2.3.6 did on each view: when it
+        is asked for by hand (Previous / Next, a frame picked from the rejected list), or when the file has changed
+        since the failed read (a copy that was still running, a drive that came back). Playback passing the frame
+        does not read it again unless the file changed, so a damaged frame never stalls a loop. True = its failure
+        was forgotten and the reader will read it again."""
+        key = self._blink_key(path)
+        if key not in self._blink_failed:
+            return False
+        if not by_hand and self._blink_file_stamp(path) == self._blink_failed_stamp.get(key):
+            return False
+        self._blink_failed_stamp.pop(key, None)
+        self._blink_failed.pop(key, None)
+        return True
 
     def _blink_set_pos(self, index: int):
         """2.4.0 (#100): tell the reader which frame is wanted next, and start it when it has stopped and a frame
@@ -6809,6 +6837,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self.blink_paths:
             return
         self.blink_index = (self.blink_index + delta) % len(self.blink_paths)
+        self._blink_retry(self.blink_paths[self.blink_index], by_hand=True)
         self.show_blink()
 
     def stop_blink(self):
@@ -7020,6 +7049,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.blink_playing = False
         self._cancel_blink_timer()
         self.blink_index = self.blink_paths.index(path)
+        self._blink_retry(path, by_hand=True)
         self.show_blink()
 
     def keep_listed_frame(self):
@@ -7032,12 +7062,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def show_blink(self):
         if not self.blink_paths:
+            # review: the list emptied while a frame was awaited: the wait is over, so is the busy bar's
+            self._blink_busy("")
             self.blink_label.set("No lights in the lights folder.")
             self._update_rejected_list()
             return
         path = self.blink_paths[self.blink_index]
         rejected = path in self.rejected
         key = self._blink_key(path)
+        self._blink_retry(path)   # review: a failed frame whose file has changed since is read again
         # 2.4.0 (#100): the frame comes from the reader thread, never from a read here. Not in memory yet: say so
         # (the Blink line and the busy bar) and draw it as soon as the reader has it.
         job = getattr(self, "_blink_show_job", None)
@@ -8762,26 +8795,42 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         known = False
         for path in dict.fromkeys(sample):
             try:
-                point = core.header_pointing(core.read_header(path))
+                point = core.header_pointing_j2000(core.read_header(path))   # review: a header of the date -> J2000
             except Exception:
                 point = None
             if point is None:
                 continue
             known = True
-            if core.great_circle_deg(point[0], point[1], ra, dec) <= 1.5 * field_deg:
+            # review: never tighter than POINTING_FLOOR_DEG (a header pointing is only good to a fraction of a degree)
+            if core.great_circle_deg(point[0], point[1], ra, dec) <= max(1.5 * field_deg, self.POINTING_FLOOR_DEG):
                 return True
         return False if known else None
+
+    POINTING_FLOOR_DEG = 1.0   # a header's pointing is never called "off the target" for less than this
+
+    def _optics_scale_arcsec(self):
+        """Arcsec per Photometry-image pixel from the Optics boxes (pixel size, focal length), the binning the image
+        was made at and the color camera's 2x2 superpixel; None when the boxes are empty."""
+        try:
+            superpixel = 1 if self.pattern.get() == core.MONO else 2
+            scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * max(int(self._image_binning()), 1) \
+                * superpixel
+            return scale if math.isfinite(scale) and scale > 0 else None
+        except Exception:
+            return None
 
     def _header_pointing_note(self):
         """2.4.0 (#99): before the solve, compare where the reference frame's header says the telescope pointed
         (RA/DEC, OBJECT) with the target on the Input page: one Log line when they are more than a field apart
-        (the field from the Optics boxes; 2° when they are empty). Said once for a frame and target."""
+        (the field from the Optics boxes, by the same scale as the field image's: binning and the color camera's
+        superpixel included; 2° when they are empty; never less than 1°). A header that says its coordinates are
+        of the date, not J2000, is brought to J2000 first. Said once for a frame and target."""
         try:
             if self.mode_key == "discovery" or self.preview is None or self._radec_is_fill():
                 return
             ra, dec = float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get())
             header = self.preview_header or {}
-            point = core.header_pointing(header)
+            point = core.header_pointing_j2000(header)
             if point is None or not (math.isfinite(ra) and math.isfinite(dec)):
                 return
             key = (self.preview_path, round(ra, 4), round(dec, 4))
@@ -8789,21 +8838,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return
             field = 2.0
             try:
-                focal, pixel = float(self._setup_value("focal_mm")), float(self._setup_value("pixel_um"))
+                # review: the scale the field image uses (_field_scale_arcsec's Optics formula)
+                scale = self._optics_scale_arcsec()
                 camera_bin = 1
-                for k in ("XBINNING", "BINNING", "XBIN"):
-                    if header.get(k) is not None:
-                        camera_bin = max(int(float(header.get(k))), 1)
-                        break
-                binning = max(int(self.binning.get() or 1), 1)
-                side = max(self.preview.shape[:2])
-                est = side * pixel / focal * 206.265 * camera_bin * binning / 3600.0
-                if math.isfinite(est) and est > 0:
-                    field = max(est, 0.1)
+                for k in ("XBINNING", "BINNING", "XBIN"):   # the camera's own binning, as the solve reads it
+                    if header.get(k) not in (None, ""):
+                        try:
+                            camera_bin = max(int(float(header.get(k))), 1)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+                if scale:
+                    est = max(self.preview.shape[:2]) * scale * camera_bin / 3600.0
+                    if math.isfinite(est) and est > 0:
+                        field = est
             except Exception:
                 pass
             sep = core.great_circle_deg(point[0], point[1], ra, dec)
-            if sep <= field:
+            if sep <= max(field, self.POINTING_FLOOR_DEG):
                 return
             self._header_pointing_said = key
             name = self.star_id.get().strip() or "the target"
@@ -8859,9 +8911,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._target_off_words = ""
             if off is not None and off["case"] == "far":
                 later = self._later_frames_point_near(ra, dec, off["field_deg"])
-                if not later:
-                    self.log(self._far_from_target_text(off, name, ra, dec, all_frames=later is False))
+                if later is False:
+                    self.log(self._far_from_target_text(off, name, ra, dec))
                     return False
+                # review: a later frame points at the target (True), or the other frames' headers carry no
+                # pointing (None): look at the next frames as 2.3.6 did, and say how far off this one is
+                self._target_off_words = (f"this frame is centered {core.angle_words(off['sep_deg'])} from the "
+                                          f"target, which lies to the {off['way']}")
             elif off is not None and off["case"] == "near":
                 self._target_off_words = (f"the target is {core.angle_words(off['beyond_deg'])} beyond the "
                                           f"{off['way']} edge")
@@ -12855,7 +12911,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                    "typed them from an AAVSO chart, choose Edit and type that chart's ID."
                    if cid.lower() == "na" else
                    "This is the AAVSO chart the comparison magnitudes come from."),
-                [("save", "Save with this chart ID"), ("edit", "Edit…"), ("stop", "Don't save")], safe="save")
+                [("save", "Save with this chart ID"), ("edit", "Edit…"), ("stop", "Don't save")], safe="save",
+                cancel="stop")   # review: Escape or the window's X is "Don't save", never a save
             if answer == "save":
                 return True
             if answer != "edit":
@@ -14887,8 +14944,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         elif stack_run is None:
             if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
                 return
-            if not self._transit_site_guard():   # 2.4.0 (#95): asked before the run, not refused after it
-                return
             self._sequence_note()
         try:
             binning = max(int(self.binning.get()), 1)
@@ -14955,6 +15010,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             dec_deg = float(self.dec_deg.get()) if self.dec_deg.get().strip() else None
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
+            return
+        # 2.4.0 (#95): Transits mode with no site is asked about before the run, not refused after it. Review: asked
+        # after the checks above, so "Run photometry only" is never followed by one of their errors.
+        if only is None and stack_run is None and not self._transit_site_guard():
             return
         # 2.2.14 (GitHub #4): a check star is not usual in transit work, so Transits mode does not ask; the AAVSO
         # ensemble rule is about variable-star reports.
@@ -15708,9 +15767,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         the next idle moment (a dialog in the done-step would close them early)."""
         self._end_job(defer_close=True)
         ok = False
+        if not cancelled:
+            # review (#101): a run that ended has new measurements, so the image saved with an earlier report is
+            # no longer this run's: Save field image is live again (forgotten before the done-step saves anything)
+            self._field_saved = None
         try:
             ok = self._photometry_done_body(night_points, mode, color_info, cancelled, error)
         finally:
+            try:
+                self.update_field_buttons()
+            except Exception:
+                pass
             if cancelled or error:
                 self._job_findings = []   # (review S1) a stopped run sums up nothing; its stop line stands
             self._close_job_findings(force=True)
@@ -17932,19 +17999,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.4.0 (#100, item 4): a large series (thousands of points, dozens of nights) takes a few seconds to load,
         # most of it the period search and the drawing: the busy bar says so, step by step.
         name = os.path.basename(path)
-        tok = self.busy_begin(f"Loading {name}… reading the file")
+        bar = {"tok": self.busy_begin(f"Loading {name}… reading the file")}
         self._busy_show_now()
 
         def step(words):
+            # None ends the bar (the load is over, or a question waits for an answer: nothing is being worked on
+            # then); words after that start it again
             if words is None:
-                self.busy_end(tok)
+                self.busy_end(bar["tok"])
+                bar["tok"] = None
+            elif bar["tok"] is None:
+                bar["tok"] = self.busy_begin(f"Loading {name}… {words}")
+                self._busy_show_now()
             else:
-                self.busy_words(tok, f"Loading {name}… {words}")
+                self.busy_words(bar["tok"], f"Loading {name}… {words}")
                 self._busy_show_now()
         try:
             self._load_series_file(path, step)
         finally:
-            self.busy_end(tok)
+            self.busy_end(bar["tok"])
 
     def _busy_show_now(self):
         """2.4.0 (#100): draw the busy bar and its words now, for a step that keeps the window's own thread (the
@@ -17977,11 +18050,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if why and not sure:
             # review: names alone cannot see aliases (HIP 114622 is HD 219134): ask; No (the default) keeps the field.
             cur = self.star_id.get().strip()
+            step(None)   # review: no busy bar behind a question (the load waits for the answer, it is not working)
             sure = messagebox.askyesno(
                 APP_TITLE, f"{os.path.basename(path)} is a series of {meta.get('star_id')}; the Input page's target is "
                            f"{cur}. Without positions to compare, SHOBS-P cannot tell whether they are the same star "
                            f"(another catalog's name?).\n\nYes: they are different stars: clear {cur}'s comps, check "
                            "star and watch stars.\nNo: the same star: keep what is marked.", default="no")
+            step("the stars and settings")
             if not sure:
                 self.log(f"Kept the marked stars: {meta.get('star_id')} taken as another name of {cur}.")
         kept_marked = {}
@@ -18197,7 +18272,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.3.0 (#54): which point set the results use (the Points switch on the Photometry page); empty until stacked
         self.out_points_label = groups.add("view", ttk.Label(g, text="", style="Hint.TLabel"))
         host = ttk.Frame(card, style="Card.TFrame")
-        host.pack(fill=BOTH, expand=True, pady=6)
+        host.pack(fill=BOTH, expand=True, pady=2)
         if Figure is None:
             self.out_canvas = None
         else:
@@ -18215,7 +18290,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # Save series stays here (John); the report's Notes box sits beside Save AAVSO report. The buttons wrap like
         # text when the page is narrow.
         nav = ttk.Frame(card, style="Card.TFrame")
-        nav.pack(fill=X, side="bottom", before=host, pady=(6, 0))
+        nav.pack(fill=X, side="bottom", before=host, pady=(3, 0))
         # 2.2.20 (item 4): "⚠ No AUID" under the Results row (Variables mode, VSX knows the star but gave no AUID).
         self._no_auid_nav = nav
         self.no_auid_label = ttk.Label(card, text=NO_AUID_WARNING, style="Warn.TLabel", justify=LEFT)
@@ -19051,7 +19126,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _build_summary(self, card):
         holder = ttk.Frame(card, style="Card.TFrame")
-        holder.pack(fill=X, pady=(4, 4))
+        # step 1 review: tighter vertical padding on this page (here, the table, the plot and the Results row), so
+        # the plot keeps more of a small screen's height; nothing is moved or hidden
+        holder.pack(fill=X, pady=(2, 2))
         boxes = ttk.Frame(holder, style="Card.TFrame")
         boxes.pack(fill=X)
         self.summary_vars = {}
@@ -19064,10 +19141,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.summary_vars[key] = var
             if key == "period":
                 self.period_label = lab   # 2.4.0 (#98): flashes when the period line updates
+                self.period_box = box     # review: its title says "updated" for the flash (never color alone)
                 # 2.2.19 (#19): shown when the VSX or a marked period lies outside the search range.
                 self.period_fix_button = ttk.Button(box, text="", command=self._apply_period_range_fix)
         table_row = ttk.Frame(holder, style="Card.TFrame")
-        table_row.pack(fill=X, pady=(6, 0))
+        table_row.pack(fill=X, pady=(4, 0))
         cols = [c for c, _l, _w in self.SUMMARY_COLUMNS]
         self.night_table = ttk.Treeview(table_row, columns=cols, show="headings", height=3, selectmode="browse")
         for col, label, width in self.SUMMARY_COLUMNS:
@@ -19081,7 +19159,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.night_table.bind("<ButtonRelease-1>", self._on_night_click)
         self.night_table.bind("<Double-1>", self._on_night_double)   # 2.2.18 (item 10): unmark "sent"
         self.spread_text = StringVar(value="")
-        ttk.Label(holder, textvariable=self.spread_text, style="Card.TLabel").pack(anchor=W, pady=(4, 0))
+        ttk.Label(holder, textvariable=self.spread_text, style="Card.TLabel").pack(anchor=W, pady=(2, 0))
         self.caution_text = StringVar(value="")
         ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500, justify=LEFT).pack(anchor=W)
 
@@ -19309,10 +19387,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     PERIOD_FLASH_MS = 900
     PERIOD_FLASH_BG = "#dcefe0"
+    PERIOD_BOX_TITLE = "Period"
+    PERIOD_FLASH_TITLE = "Period: updated"
 
     def _flash_period_line(self):
         """2.4.0 (#98): the Period box's text is highlighted for a moment when it changes (a setting in Points,
-        Corrections or Fit refitted the period by itself). Display only."""
+        Corrections or Fit refitted the period by itself), and the box's title reads "Period: updated" for that
+        moment (color never stands alone). Display only."""
         lab = getattr(self, "period_label", None)
         if lab is None:
             return
@@ -19321,6 +19402,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if job is not None:
                 self.after_cancel(job)
             lab.configure(background=self.PERIOD_FLASH_BG)
+            box = getattr(self, "period_box", None)
+            if box is not None:
+                box.configure(text=self.PERIOD_FLASH_TITLE)
             self._period_flashing = True
             self.period_flash_count = getattr(self, "period_flash_count", 0) + 1
 
@@ -19329,6 +19413,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._period_flashing = False
                 try:
                     lab.configure(background="")
+                    if box is not None:
+                        box.configure(text=self.PERIOD_BOX_TITLE)
                 except Exception:
                     pass
             self._period_flash_job = self.after(self.PERIOD_FLASH_MS, off)
@@ -19342,8 +19428,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.summary_vars["series"].set("\n".join(series_lines))
         period_before = self.summary_vars["period"].get()
         self.summary_vars["period"].set("\n".join(period_lines))
-        if self.summary_vars["period"].get() != period_before:
-            self._flash_period_line()   # 2.4.0 (#98): this page refits by itself; the flash says it did
+        # 2.4.0 (#98): this page refits by itself; the flash says it did. Review: the first fill of an empty box
+        # ("—", a series just loaded) is no update and does not flash.
+        if self.summary_vars["period"].get() != period_before and period_before.strip() not in ("", "—"):
+            self._flash_period_line()
         self.summary_vars["color"].set("\n".join(color_lines) or "—")
         table = self.night_table
         table.delete(*table.get_children())
@@ -21042,13 +21130,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return float(sol["scale"]) * float(sol.get("scale_factor", 1.0) or 1.0), True
         except (TypeError, ValueError):
             pass
-        try:
-            superpixel = 1 if self.pattern.get() == core.MONO else 2
-            scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * max(int(self._image_binning()), 1) \
-                * superpixel
-            return (scale, False) if math.isfinite(scale) and scale > 0 else (None, False)
-        except Exception:
-            return None, False
+        return self._optics_scale_arcsec(), False
 
     def _header_compass(self, shape):
         """2.2.19 (#28): north/east unit vectors and arcsec per image pixel from the lights' own plate solution (FITS
@@ -21291,8 +21373,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if info is None:
             return None
         marks = tuple((round(float(m[0]), 1), round(float(m[1]), 1), str(m[2]), str(m[4])) for m in info.get("marks") or [])
+        radii = tuple(str(self._setup_value(n)).strip() for n in ("radius", "sky_in", "sky_out"))   # review
         return (getattr(self, "_preview_token", 0), getattr(self, "_series_gen", 0), self.preview_path or "",
-                info.get("title"), marks, len(info.get("seq") or []))
+                info.get("title"), marks, len(info.get("seq") or []), radii)
 
     @staticmethod
     def _field_chart_file(chart_path: str) -> str:

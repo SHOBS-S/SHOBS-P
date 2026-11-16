@@ -18,7 +18,7 @@ On the **Output – Variability** page:
    2.2.19 the shortest was 0.05 d, which missed many short-period pulsators. A series saved with that old default now
    searches from 0.02 d, and the log says so.)
 2. Press **Enter**, or click into another box. The search runs again with the new range. (It does not rerun while you
-   are still typing, or when you leave a box without changing it.) **Refit period**, the colored button at the end of the same row, also runs it again. When the period line changes, the **Period** box is highlighted for a moment.
+   are still typing, or when you leave a box without changing it.) **Refit period**, the colored button at the end of the same row, also runs it again. When the period line changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**.
 
 Choose a range that fits your star and your data:
 

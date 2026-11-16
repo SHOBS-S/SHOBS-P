@@ -5781,6 +5781,47 @@ def header_pointing(header: dict):
     return ra % 360.0, dec
 
 
+def header_equinox_year(header: dict):
+    """The year the header's RA/Dec are given for, when the header says so and it is not J2000: EQUINOX (or the
+    older EPOCH) as a number or 'J2026.5' / 'B1950'. None when the header does not say, or says 2000 / ICRS."""
+    for key in ("EQUINOX", "EPOCH"):
+        v = header.get(key)
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            year = float(str(v).strip().lstrip("JjBb"))
+        except (TypeError, ValueError):
+            continue
+        if not (1800.0 <= year <= 2200.0):
+            continue
+        return None if abs(year - 2000.0) < 0.01 else year
+    return None
+
+
+def header_pointing_j2000(header: dict):
+    """header_pointing, brought to J2000 when the header says its coordinates are of another equinox (a mount that
+    writes the coordinates of the date: about 0.37° from J2000 in 2026). For comparing with a J2000 target; a
+    header that does not name its equinox is taken as it stands."""
+    point = header_pointing(header)
+    if point is None:
+        return None
+    year = header_equinox_year(header)
+    if year is None:
+        return point
+    try:
+        from astropy.coordinates import FK5, SkyCoord
+        from astropy.time import Time
+        import astropy.units as u
+        c = SkyCoord(point[0] * u.deg, point[1] * u.deg, frame=FK5(equinox=Time(year, format="jyear")))
+        c = c.transform_to(FK5(equinox=Time(2000.0, format="jyear")))
+        ra, dec = float(c.ra.deg), float(c.dec.deg)
+        if math.isfinite(ra) and math.isfinite(dec):
+            return ra % 360.0, dec
+    except Exception:
+        pass
+    return point
+
+
 def _triangles(pts: np.ndarray, k: int = 6):
     """Triangles from each point and pairs of its k nearest neighbors: vertex indices ordered so that vertex 0 is
     opposite the shortest side and vertex 2 opposite the longest, plus the scale-free shape (L1/L3, L2/L3)
@@ -6840,11 +6881,14 @@ READ_ERR_LOCKED = "the file can't be opened (in use by another program, or no pe
 READ_ERR_MEMORY = "not enough memory to read this frame"
 READ_ERR_DISK = "the file can't be read (disk or network error)"
 READ_ERR_NO_IMAGE = "no image in the file"
+# review (2.4.0 step 1): a message that reading a damaged file can give, and so can the work on a frame after it
+# was read; without knowing which, no cause is claimed
+READ_ERR_UNSURE = "could not be read (see .shobs_p.log)"
 READ_ERR_WORDS = (READ_ERR_DAMAGED, READ_ERR_EMPTY, READ_ERR_GONE, READ_ERR_LOCKED, READ_ERR_MEMORY, READ_ERR_DISK,
-                  READ_ERR_NO_IMAGE)
+                  READ_ERR_NO_IMAGE, READ_ERR_UNSURE)
 _READ_ERR_TEXT = (   # (words found in the library's message, lower case; the plain reason)
     (("no simple card", "ignore_missing_simple", "does not appear to be a valid fits", "missing end card",
-      "corrupt fits", "may have been truncated", "buffer is too small", "cannot reshape array",
+      "corrupt fits", "may have been truncated",
       "unexpected end of file", "header is not a multiple", "unparsable card", "not a valid fits",
       "invalid xisf", "not an xisf"), READ_ERR_DAMAGED),
     (("empty or corrupt", "empty file"), READ_ERR_EMPTY),
@@ -6852,10 +6896,33 @@ _READ_ERR_TEXT = (   # (words found in the library's message, lower case; the pl
     (("permission denied", "being used by another process", "access is denied", "winerror 5]", "winerror 32]"),
      READ_ERR_LOCKED),
     (("unable to allocate", "out of memory", "cannot allocate memory"), READ_ERR_MEMORY),
-    (("input/output error", "i/o error", "network name", "network path", "device is not ready", "errno 5]",
-      "errno 22]"), READ_ERR_DISK),
+    (("input/output error", "i/o error", "network name", "network path", "device is not ready", "errno 5]"),
+     READ_ERR_DISK),
     (("is not a 2-d image (shape ())", "no image data"), READ_ERR_NO_IMAGE),
 )
+# Loose words: numpy and the system say these for a cut-short file or a failing disk, and also for trouble in the
+# processing of a frame that was read well. The plain cause is given only when the error was raised inside the file
+# reader (_raised_while_reading); otherwise READ_ERR_UNSURE.
+_READ_ERR_LOOSE = (
+    (("buffer is too small", "cannot reshape array"), READ_ERR_DAMAGED),
+    (("errno 22]",), READ_ERR_DISK),
+)
+_READER_FUNCS = ("read_fits", "read_xisf", "read_header")
+
+
+def _raised_while_reading(err) -> bool:
+    """Was this exception raised inside the file reader (read_fits / read_xisf / read_header here, or astropy's
+    FITS reader)? False for a text, or an exception that was never raised."""
+    tb = getattr(err, "__traceback__", None)
+    here = os.path.normcase(os.path.abspath(__file__))
+    fits_dir = os.path.join("astropy", "io", "fits")
+    while tb is not None:
+        code = tb.tb_frame.f_code
+        name = os.path.normcase(os.path.abspath(code.co_filename))
+        if (name == here and code.co_name in _READER_FUNCS) or fits_dir in name:
+            return True
+        tb = tb.tb_next
+    return False
 
 
 def plain_read_error(err, path: str = "") -> str:
@@ -6877,6 +6944,11 @@ def plain_read_error(err, path: str = "") -> str:
         if any(w in low for w in words):
             found = plain
             break
+    if not found:
+        for words, plain in _READ_ERR_LOOSE:
+            if any(w in low for w in words):
+                found = plain if _raised_while_reading(err) else READ_ERR_UNSURE
+                break
     if not found and isinstance(err, EOFError):
         found = READ_ERR_DAMAGED
     if found in (READ_ERR_DAMAGED, READ_ERR_EMPTY) and path:

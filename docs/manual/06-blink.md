@@ -42,7 +42,8 @@ long way, or picking a frame from the rejected list, shows **Reading frame …**
 
 A frame that cannot be read is named in plain words in the frame line, for example **Frame 37
 Light_0037.fit  unreadable: not a readable FITS file (damaged or cut short)**. Blinking goes on with the next
-frame.
+frame. Step to that frame again with **Previous** or **Next** (or pick it from the rejected list) and Blink reads it
+once more; it also reads it again by itself when the file has changed (a copy that was still running).
 
 The line above the picture describes the frame on screen, for example:
 

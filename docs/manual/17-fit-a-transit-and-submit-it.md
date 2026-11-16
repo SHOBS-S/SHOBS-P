@@ -66,9 +66,11 @@ strip; the page has no progress bar of its own.
   alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32). Untick
   time slope and fit again only if that trend is not real …"*.
   When the data have no airmass, **airmass** is unticked and grayed out, and the row says why: *no airmass: site not
-  set* (enter the site's latitude and longitude on the Input page) or *no airmass in these data* (a report without an
-  airmass column). The fit never used airmass in that case; from 2.4.0 the box says so. With airmass again, the box
-  is live and your earlier choice is back.
+  set* (enter the site's latitude and longitude on the Input page), *no airmass in these data (run photometry again
+  with the site set)* (the site is set now, but the photometry ran before it was) or *no airmass in these data* (a
+  report without an airmass column). The fit never used airmass in that case; from 2.4.0 the box says so. With
+  airmass again, the box is live and your earlier choice is back. The Multi-night window starts with your own
+  choice, not with the grayed-out box.
   For an opened report the row also has **meridian flip at the largest gap**.
 - **Fit** row. **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.

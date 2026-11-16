@@ -41,8 +41,10 @@ class TestPlainReadError(unittest.TestCase):
         self.assertEqual(core.plain_read_error(OSError(RAW)), core.READ_ERR_DAMAGED)
         self.assertEqual(core.plain_read_error(RAW), "not a readable FITS file (damaged or cut short)")
         self.assertEqual(core.plain_read_error(OSError("Header missing END card.")), core.READ_ERR_DAMAGED)
+        # step 1 review: these words also come from processing; without the reader in the traceback no cause is
+        # claimed (tests/test_240_c.py has the reader's side)
         self.assertEqual(core.plain_read_error(TypeError("buffer is too small for requested array")),
-                         core.READ_ERR_DAMAGED)
+                         core.READ_ERR_UNSURE)
 
     def test_other_common_errors(self):
         self.assertEqual(core.plain_read_error(FileNotFoundError(2, "No such file or directory")), core.READ_ERR_GONE)
@@ -80,9 +82,15 @@ class TestPlainReadError(unittest.TestCase):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            with self.assertRaises(Exception) as ctx:
+            # step 1 review: caught as the app catches it, traceback and all (assertRaises takes it off, and the
+            # reader in the traceback is what tells a cut-short file from trouble in the processing)
+            try:
                 core.read_fits(cut)
-        self.assertEqual(core.plain_read_error(ctx.exception, cut), core.READ_ERR_DAMAGED, repr(ctx.exception))
+            except Exception as exc:
+                got = exc
+            else:
+                self.fail("a cut-short file was read")
+        self.assertEqual(core.plain_read_error(got, cut), core.READ_ERR_DAMAGED, repr(got))
 
     def test_skip_reason_word_maps_old_series(self):
         # a series saved by 2.3.6 holds the library's text: shown in plain words from now on
@@ -224,7 +232,7 @@ class TestSourceWording(unittest.TestCase):
         i = s.index("    def load_series(self):")
         j = s.index("    def _load_series_file", i)
         self.assertIn("self.busy_begin(", s[i:j])
-        self.assertIn("self.busy_end(tok)", s[i:j])
+        self.assertIn('self.busy_end(bar["tok"])', s[i:j])   # step 1 review: the bar can pause for a question
         k = s.index("    def _page_output", j)
         self.assertIn('step("the period search")', s[j:k])
 
@@ -264,7 +272,7 @@ class TestApp(unittest.TestCase):
         asked = []
 
         def answer(value):
-            def ask(parent, title, message, choices, safe):
+            def ask(parent, title, message, choices, safe, cancel=None):
                 asked.append((message, [t for _v, t in choices], safe))
                 return value
             return ask
@@ -343,7 +351,7 @@ class TestApp(unittest.TestCase):
             app.chart.set("na")
             asked = []
 
-            def ask(parent, title, message, choices, safe):
+            def ask(parent, title, message, choices, safe, cancel=None):
                 asked.append((message, choices, safe))
                 return "edit" if len(asked) == 1 else "save"
             with mock.patch.object(self.ca, "ask_choice", ask), \

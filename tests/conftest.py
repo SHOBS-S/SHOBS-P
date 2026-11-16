@@ -18,7 +18,7 @@ def _ask_choice_without_a_window():
         yield
         return
 
-    def answer(parent, title, message, choices, safe):
+    def answer(parent, title, message, choices, safe, cancel=None):
         ask = ca.messagebox.askyesno
         if isinstance(ask, mock.Mock):
             if ask(title, message):
