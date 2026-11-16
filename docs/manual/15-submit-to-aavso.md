@@ -7,7 +7,13 @@ SHOBS-P writes reports in the **AAVSO Extended File Format**, ready to upload wi
 On the Input page, in the **AAVSO report** box:
 
 - **Observer code**: your AAVSO observer code. Without it the report says `na`, and WebObs will not accept it under your name.
-- **Chart ID**: the AAVSO chart your comparison magnitudes come from. When any comp or the check star is an AAVSO sequence star, SHOBS-P fills in the chart ID from the solve. If you typed one yourself, it is left alone. Use `na` for comps not from an AAVSO chart.
+
+The **Chart ID** (the AAVSO chart your comparison magnitudes come from) is not typed on the Input page. When any comp or the check star is an AAVSO sequence star, SHOBS-P takes the chart ID from the solve; otherwise it is `na`, which is what AAVSO expects for comps that are not from an AAVSO chart. It is never empty. You see it in two places, each with an **Edit…** button:
+
+- under the comps in the **Stars** panel of the Photometry page: **AAVSO chart ID: X36281ABC (from the AAVSO sequence of the marked stars)**, or **na (no AAVSO sequence star is marked as a comp or the check)**, or **… (typed)**, or **… (from the saved series)**;
+- in a question when you press **Save AAVSO report** (below).
+
+Use **Edit…** only for the typed cases: AAVSO's chart server was down at the solve, or you typed the comparison magnitudes yourself from an AAVSO chart. Type the ID printed on that chart. An ID you typed is left alone by later solves. Leave the box empty to go back to SHOBS-P's own value.
 
 In the Output page's **Notes** box, the default note is **OSC reduced; not transformed** for a color camera, or **Monochrome camera; not transformed** for a mono camera. It goes into every line of the report. Add anything AAVSO's reviewers should know, but keep it short. **New reduction** on the Input page puts the note back to this default, so one star's notes do not travel to the next star's report.
 
@@ -76,9 +82,15 @@ Answer **Yes**. WebObs may not match another spelling to the star. The report an
 spelling, but the **Star ID** box changes to it only once the report is saved. If you cancel anywhere afterwards, the
 old name stays. The log then says **Star ID set to “HD 219134” (AAVSO's spelling), as used in the saved report.**
 
+**Chart ID in this report: X36281ABC (from the AAVSO sequence of the marked stars).**
+Every save shows the chart ID that goes into the report's `CHART` field. **Save with this chart ID** goes on.
+**Edit…** lets you type another one (see **Set up once**) and asks again. **Don't save** stops. With `na`, the
+question reminds you that AAVSO takes `na` only when the comparison magnitudes are not from an AAVSO chart or
+sequence.
+
 **Before you upload:** followed by a list. Each item is something AAVSO may reject or misfile:
 
-- **AAVSO observer code is empty**, **Chart ID is empty**, **Star ID is empty**: fill them in on the Input page.
+- **AAVSO observer code is empty**, **Star ID is empty**: fill them in on the Input page. (There is no "Chart ID is empty" any more: the chart ID is `na` until a sequence star or you give it a value.)
 - **the series mixes filters**: report each filter separately (chapter 10).
 - **ensemble report (more than one comp) without a check star; AAVSO requires one**: mark a check star and run again.
 - **a comp has no star name**: the comp would be called something like `comp1`. Give it its catalog name.
@@ -149,7 +161,7 @@ The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE
 | KNAME, KMAG | The check star's name and instrumental magnitude |
 | AMASS | The airmass, or `na` without a site and pointing |
 | GROUP | `na` |
-| CHART | The Chart ID |
+| CHART | The chart ID (`na` when the comps are not from an AAVSO chart) |
 | NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep; for stacked points, `points are stacks of 40 frames (effective exposure 30 s)` |
 
 For stacked points (chapter 8, "Stacking when comps are weak"), each line is one stack: its time is the mean of its

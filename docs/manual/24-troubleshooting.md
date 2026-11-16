@@ -54,6 +54,10 @@ The file also holds every line of the program's own log (below), each with the d
 look back at an earlier session. When it grows past 5 MB, it is renamed `.shobs_p.log.1` and a new one starts; only
 that one older file is kept.
 
+When a frame cannot be read, the program's log gives the reason in plain words (*"not a readable FITS file (damaged
+or cut short)"*). The FITS library's own error text for that frame is written to `.shobs_p.log` only, on a line ending
+with *[debug: the library's own text]*; send that line along when you report a problem with a file.
+
 The file name starts with a dot, so Windows Explorer may hide it. Type `%USERPROFILE%\.shobs_p.log` into the
 Explorer address bar to open it.
 

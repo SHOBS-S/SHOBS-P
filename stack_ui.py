@@ -300,7 +300,8 @@ class StackMixin:
         out = recs and len(kept) < len(recs)
         if out:
             parts = ", ".join(f"{n} {why}" for why, n in sorted(stack_core.left_out_counts(recs).items()))
-            text += f" ({len(recs) - len(kept)} frames left out of stacks: {parts}.)"
+            n_out = len(recs) - len(kept)   # 2.4.0 (nit): "1 frame", "2 frames"
+            text += f" ({n_out} frame{'s' if n_out != 1 else ''} left out of stacks: {parts}.)"
         self.stack_line.set(text)
         try:
             self.stack_line_label.configure(style="Warn.TLabel" if warn else "Hint.TLabel")

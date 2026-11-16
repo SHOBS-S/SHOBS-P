@@ -7,7 +7,7 @@ If you want to add this night to nights you already have, load the series *befor
 ## Before you start
 
 - Choose **Variables** in the mode list on the left (navy).
-- On the Input page, fill in the **AAVSO report** box once: your **Observer code**, and the **Chart ID** if you know it. SHOBS-P fills in the chart ID for you when you use AAVSO sequence stars as comps (see below), so you can leave it empty.
+- On the Input page, fill in the **AAVSO report** box once: your **Observer code**. The chart ID is not typed there: SHOBS-P fills it in after the solve, and shows it under the comps on the Photometry page (see **The AAVSO chart ID** below).
 - Type your site in the **Site** box once. It is remembered. Without it there is no airmass, so the AAVSO report shows AMASS `na`, the error bars leave out scintillation, and the airmass check of the period (chapter 13) cannot run.
 
 ## Set the target
@@ -63,6 +63,17 @@ The check star is a steady star measured exactly like the target. It does not go
 2. Click a steady star, ideally another sequence star of similar brightness. Its name and magnitude fill in like a comp's.
 
 ![The Photometry page with target, three comps and a check star marked on a solved image](img/09-marked-stars.jpg)
+
+### The AAVSO chart ID
+
+Under the comp and check rows of the **Stars** panel, one line shows the chart ID that will go into the AAVSO report, with an **Edit…** button beside it:
+
+- **AAVSO chart ID: X36281ABC (from the AAVSO sequence of the marked stars)**: a marked comp or the check star is an AAVSO sequence star, so the report names that sequence's chart. Nothing to do.
+- **AAVSO chart ID: na (no AAVSO sequence star is marked as a comp or the check)**: `na` is right when your comparison magnitudes come from another catalog.
+- **… (typed)**: you typed it with **Edit…**. Later solves leave a typed ID alone.
+- **… (from the saved series)**: it came with a series you loaded.
+
+Press **Edit…** only when the comparison magnitudes come from an AAVSO chart that SHOBS-P could not fetch itself: the chart server was down at the solve, or you typed the magnitudes from a printed chart. Type the ID printed on the chart. Leave the box empty to go back to SHOBS-P's own value. The chart ID is never empty, and it is shown once more when you save the report (chapter 15).
 
 ## Run photometry
 

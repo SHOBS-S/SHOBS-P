@@ -6832,6 +6832,63 @@ def fill_comp_flux(points: list[Obs], comp_names: list[str], catalog: dict) -> i
     return changed
 
 
+# 2.4.0 (#94): a frame that cannot be read is named in plain words; the library's own text goes to the log file only.
+READ_ERR_DAMAGED = "not a readable FITS file (damaged or cut short)"
+READ_ERR_EMPTY = "an empty file (0 bytes: the save or the copy did not finish)"
+READ_ERR_GONE = "the file is no longer there (moved, renamed or deleted)"
+READ_ERR_LOCKED = "the file can't be opened (in use by another program, or no permission)"
+READ_ERR_MEMORY = "not enough memory to read this frame"
+READ_ERR_DISK = "the file can't be read (disk or network error)"
+READ_ERR_NO_IMAGE = "no image in the file"
+READ_ERR_WORDS = (READ_ERR_DAMAGED, READ_ERR_EMPTY, READ_ERR_GONE, READ_ERR_LOCKED, READ_ERR_MEMORY, READ_ERR_DISK,
+                  READ_ERR_NO_IMAGE)
+_READ_ERR_TEXT = (   # (words found in the library's message, lower case; the plain reason)
+    (("no simple card", "ignore_missing_simple", "does not appear to be a valid fits", "missing end card",
+      "corrupt fits", "may have been truncated", "buffer is too small", "cannot reshape array",
+      "unexpected end of file", "header is not a multiple", "unparsable card", "not a valid fits",
+      "invalid xisf", "not an xisf"), READ_ERR_DAMAGED),
+    (("empty or corrupt", "empty file"), READ_ERR_EMPTY),
+    (("no such file", "cannot find the file", "cannot find the path", "winerror 2]", "winerror 3]"), READ_ERR_GONE),
+    (("permission denied", "being used by another process", "access is denied", "winerror 5]", "winerror 32]"),
+     READ_ERR_LOCKED),
+    (("unable to allocate", "out of memory", "cannot allocate memory"), READ_ERR_MEMORY),
+    (("input/output error", "i/o error", "network name", "network path", "device is not ready", "errno 5]",
+      "errno 22]"), READ_ERR_DISK),
+    (("is not a 2-d image (shape ())", "no image data"), READ_ERR_NO_IMAGE),
+)
+
+
+def plain_read_error(err, path: str = "") -> str:
+    """2.4.0 (#94): a frame-read error in plain words ("not a readable FITS file (damaged or cut short)"), or ""
+    when `err` (an exception or its text) is not a read error we know: the caller then keeps the text it has.
+    Already-plain reasons come back as they are. path: when given, a 0-byte file is named as empty."""
+    text = str(err or "")
+    if text in READ_ERR_WORDS:
+        return text
+    if isinstance(err, FileNotFoundError):
+        return READ_ERR_GONE
+    if isinstance(err, PermissionError):
+        return READ_ERR_LOCKED
+    if isinstance(err, MemoryError):
+        return READ_ERR_MEMORY
+    low = text.lower()
+    found = ""
+    for words, plain in _READ_ERR_TEXT:
+        if any(w in low for w in words):
+            found = plain
+            break
+    if not found and isinstance(err, EOFError):
+        found = READ_ERR_DAMAGED
+    if found in (READ_ERR_DAMAGED, READ_ERR_EMPTY) and path:
+        try:
+            found = READ_ERR_EMPTY if os.path.getsize(path) == 0 else READ_ERR_DAMAGED
+        except OSError:
+            pass
+    elif found == READ_ERR_EMPTY:
+        found = READ_ERR_DAMAGED   # "Empty or corrupt FITS file" without the file to look at
+    return found
+
+
 def skip_reason_word(why: str) -> str:
     """2.3.0 (#50): a skipped frame's reason in a few words, so frames with the same cause group together ('target
     not on the frame', 'every comp lost', 'could not align', else the reason itself without numbers)."""
@@ -6843,6 +6900,9 @@ def skip_reason_word(why: str) -> str:
         return "every comp lost (" + ", ".join(sorted({r for r in re.findall(r": ([^;)]+)", w)})) + ")"
     if w.startswith("could not align"):
         return "could not align"
+    plain = plain_read_error(w)   # 2.4.0 (#94): also for series saved before 2.4.0 (the library's raw text)
+    if plain:
+        return plain
     return re.sub(r"\s*\([^)]*\d[^)]*\)", "", w).strip() or "skipped"
 
 
@@ -8543,6 +8603,77 @@ def sky_separation_arcsec(ra1: float, dec1: float, ra2: float, dec2: float) -> f
     d_ra = math.radians(((ra1 - ra2 + 180.0) % 360.0) - 180.0) * math.cos(math.radians((dec1 + dec2) / 2.0))
     d_dec = math.radians(dec1 - dec2)
     return math.degrees(math.hypot(d_ra, d_dec)) * 3600.0
+
+
+# ---- 2.4.0 (#99): how far the frames point from the target, in plain words -------------------------------------
+def great_circle_deg(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
+    """The angle between two sky positions in degrees, right at any distance (sky_separation_arcsec is for stars
+    close together)."""
+    r1, d1, r2, d2 = (math.radians(v) for v in (ra1, dec1, ra2, dec2))
+    a = math.sin((d2 - d1) / 2.0) ** 2 + math.cos(d1) * math.cos(d2) * math.sin((r2 - r1) / 2.0) ** 2
+    return math.degrees(2.0 * math.asin(min(1.0, math.sqrt(max(0.0, a)))))
+
+
+def compass_from(ra1: float, dec1: float, ra2: float, dec2: float) -> str:
+    """Which way position 2 lies from position 1 on the sky: north, north-east, east … (east = larger RA)."""
+    r1, d1, r2, d2 = (math.radians(v) for v in (ra1, dec1, ra2, dec2))
+    y = math.sin(r2 - r1) * math.cos(d2)
+    x = math.cos(d1) * math.sin(d2) - math.sin(d1) * math.cos(d2) * math.cos(r2 - r1)
+    bearing = math.degrees(math.atan2(y, x)) % 360.0   # 0 = north, 90 = east
+    names = ("north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west")
+    return names[int((bearing + 22.5) // 45.0) % 8]
+
+
+def radec_colons(ra_deg: float, dec_deg: float) -> str:
+    """'06:52:08 +18:12:51' (a true minus sign for southern declinations), to the nearest second."""
+    total = int(round((ra_deg % 360.0) / 15.0 * 3600.0)) % 86400
+    ra = f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+    dsec = int(round(abs(dec_deg) * 3600.0))
+    sign = "\u2212" if dec_deg < 0 and dsec else "+"
+    return f"{ra} {sign}{dsec // 3600:02d}:{dsec % 3600 // 60:02d}:{dsec % 60:02d}"
+
+
+def angle_words(deg: float) -> str:
+    """An angle on the sky in the unit that reads best: 26.4°, 4′, 25″."""
+    if deg >= 1.0:
+        return f"{deg:.1f}°"
+    if deg * 60.0 >= 1.0:
+        arcmin = deg * 60.0
+        return f"{arcmin:.0f}′" if arcmin >= 3.0 else f"{arcmin:.1f}′"
+    return f"{max(deg * 3600.0, 1.0):.0f}″"
+
+
+def target_vs_frame(ra_deg: float, dec_deg: float, shape: tuple, solution: dict) -> dict | None:
+    """2.4.0 (#99): where the target lies relative to a solved frame. Returns None when the solution cannot say, else
+    {"case": "on" | "near" | "far", "center": (RA deg, Dec deg) of the frame, "sep_deg": target to frame center,
+    "field_deg": the frame's longer side, "beyond_deg": how far past the nearest edge (0 when on), "way": compass
+    direction from the frame center to the target}. far = more than one field width beyond the edge."""
+    try:
+        h, w = int(shape[0]), int(shape[1])
+        scale = float(solution["scale"]) * float(solution.get("scale_factor", 1.0))   # arcsec per pixel
+        cra, cdec = pixel_to_sky((w - 1) / 2.0, (h - 1) / 2.0, solution)
+        if not (scale > 0 and math.isfinite(scale) and math.isfinite(cra) and math.isfinite(cdec)):
+            return None
+        field = max(w, h) * scale / 3600.0
+        sep = great_circle_deg(cra, cdec, ra_deg, dec_deg)
+        out = {"center": (cra, cdec), "sep_deg": sep, "field_deg": field, "beyond_deg": 0.0, "case": "on",
+               "way": compass_from(cra, cdec, ra_deg, dec_deg)}
+        half_diag = 0.5 * math.hypot(w, h) * scale / 3600.0
+        if sep > half_diag + field or sep > 20.0:
+            # the flat-sky pixel mapping is not to be trusted this far out: the angle itself is the answer
+            out.update(case="far", beyond_deg=max(0.0, sep - half_diag))
+            return out
+        x, y = sky_to_pixel(ra_deg, dec_deg, solution)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
+        dx = max(0.0 - x, x - (w - 1), 0.0)
+        dy = max(0.0 - y, y - (h - 1), 0.0)
+        beyond = math.hypot(dx, dy) * scale / 3600.0
+        if beyond > 0:
+            out.update(case="far" if beyond > field else "near", beyond_deg=beyond)
+        return out
+    except Exception:
+        return None
 
 
 def format_radec(ra_deg: float, dec_deg: float) -> str:

@@ -35,7 +35,7 @@ The status bar then reminds you: **Next night, load this file before reducing**.
 
 The order matters: load first, reduce second.
 
-1. On the Input page, press **Load series…** and open the series file. (The Output page has the same button, **Load series**.)
+1. On the Input page, press **Load series…** and open the series file. (The Output page has the same button, **Load series**.) A large series (thousands of points over dozens of nights) takes a few seconds; the busy bar at the lower left says what is being done: **Loading SZ_Lyn.cvseries… reading the file**, then **… the period search**, then **… drawing the light curve**.
 2. A message tells you how many points and nights were loaded, and that the comps and check are placed on their stars after the image is solved. If the Photometry page already has a solved image (say you pressed **New reduction** and then loaded the series), SHOBS-P solves it again at once, so the target, the series' comps and check and the suggested comps are placed without pressing **Solve again**.
 3. The line at the top of the Input page now reads something like **Series: SZ_Lyn.cvseries — 8 nights, last 13–14 Oct. After the run you'll be asked to add the night.**
 4. Point the Input page at the new night's bias, dark, flat and lights, and blink and calibrate as usual.

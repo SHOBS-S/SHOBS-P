@@ -50,7 +50,8 @@ about ±8 minutes, depending on the star's position and the time of year.
 AAVSO requires one for **ensemble** reports.
 
 **Chart ID** — The ID of the AAVSO chart (from the Variable Star Plotter) whose comparison stars you used. `na` when
-the comps are not from an AAVSO chart.
+the comps are not from an AAVSO chart. SHOBS-P fills it in after the solve and shows it under the comps on the
+Photometry page and at **Save AAVSO report**, each with an **Edit…** button.
 
 **χ²ν (reduced chi-square)** — How the scatter of the points around the model compares with their error bars. About
 1 is right. Well below 1: the error bars are too big. Well above 1: there is noise the error bars leave out.

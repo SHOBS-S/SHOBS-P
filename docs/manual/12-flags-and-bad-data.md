@@ -141,6 +141,18 @@ A **spare** near the edge gets only a line in the Log: spares are measured but n
 
 When the first frames of a night miss the target (the telescope still settling, for example), SHOBS-P makes the first frame that holds it the reference (chapter 8). The run then skips every frame on which the target is off the frame or too near its edge, and lists them at the end: "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames were skipped." When that is more than a fifth of the night, the line starts with ⚠ and adds a hint: a run of frames at the start points to the pointing, scattered ones to tracking or clouds.
 
+When the target is not on the solved reference frame at all, SHOBS-P says how far off it is (from 2.4.0):
+
+- **More than about one field width away**: one line, for example *"✖ The frames are centered at 06:52:08 +18:12:51, 26.4° from ATO J103.0204-08.2002 (06:52:05 −08:12:01). The target isn't in this night's frames. Check the telescope's target coordinates (and the target on the Input page)."* The telescope was sent somewhere else (a wrong entry in its plan, for example). Nothing in these frames can be measured for that target, and rejecting frames in Blink does not help.
+- **Just off the edge**: the log says how far and which way, for example *"… is not on this frame by its plate solution (the target is 4′ beyond the north edge); looking for it on the next 10 frames…"*. If a later frame holds it, that frame becomes the reference as described above.
+- **On the frame, but no star there**: *"Target: no star where the plate solution puts …; click the target."*
+
+Even before the solve, when Calibrate has made the reference frame, SHOBS-P compares the pointing in the frame's header (RA/DEC, and the OBJECT name) with the target on the Input page. More than a field apart, the log says so once: *"⚠ The frame's header says the telescope pointed at 06:52:08 +18:12:51 (OBJECT …), 26.4° from … on the Input page."*
+
+## A frame that cannot be read
+
+A light frame that is damaged or was cut short while it was saved or copied is skipped. The reason is in plain words: *"skipped Light_0037.fit: not a readable FITS file (damaged or cut short)"*. It is said once in the log and once in the report's settings file (*Frames skipped at photometry*), and the Photometry page's skipped-frames line counts it. Other reasons you may see: *an empty file (0 bytes: the save or the copy did not finish)*, *the file is no longer there (moved, renamed or deleted)*, *the file can't be opened (in use by another program, or no permission)*, *the file can't be read (disk or network error)*, *not enough memory to read this frame*. The FITS library's own wording is kept in the log file only (chapter 24). Copy the frame again from the camera or the capture computer if you still have it; otherwise leave it out.
+
 ## Centring of defocused stars
 
 On a defocused (donut) field, the log reports after each run how much each aperture's center jittered from frame to frame, for example "Centring (defocused stars): frame-to-frame jitter of each aperture's center (rms): target 0.12 px, C1 0.15 px, …". Over 0.5 px it becomes a ⚠ caution: the aperture cuts a different part of the donut each time, which adds noise the comps do not cancel. Try a larger aperture (**Suggest…**).

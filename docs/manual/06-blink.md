@@ -28,7 +28,21 @@ The frames shown are **raw**: not calibrated. Hot pixels, gradients and dust sha
 2. Press **Blink** to play the frames. Press **Blink** again to pause, or **Stop** to stop.
 3. Use **Previous** and **Next** to step one frame at a time. At the end, the list wraps round to the start.
 
-SHOBS-P reads frames ahead in the background, so after the first pass, blinking is quick.
+SHOBS-P reads the frames in the background, starting at the frame on screen and keeping ahead of it. Blinking
+starts as soon as the next frame is ready; it does not wait for the whole night. When a frame is not ready yet (the
+first pass over a long night of large frames, or a slow disk), the busy bar at the lower left says **Reading frame
+37… (12 of 210 read)**, playback waits for it, and the window stays usable: you can press **Stop**, step, or reject
+a frame at any time. While playback is held back like this, the frame line ends with **playing at about 0.8 s/frame
+(the frames are still being read)**: that is the speed you are really getting, slower than the **Speed** you chose.
+After the first pass, blinking runs at the chosen speed.
+
+On a very long night, not every frame fits in memory at once. SHOBS-P then keeps the frames around the one on
+screen (those just ahead and a few just shown) and reads the others again when you get to them. Stepping back a
+long way, or picking a frame from the rejected list, shows **Reading frame …** for a moment.
+
+A frame that cannot be read is named in plain words in the frame line, for example **Frame 37
+Light_0037.fit  unreadable: not a readable FITS file (damaged or cut short)**. Blinking goes on with the next
+frame.
 
 The line above the picture describes the frame on screen, for example:
 

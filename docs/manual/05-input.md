@@ -147,9 +147,11 @@ where the frames point; a few arcminutes off is fine.
 
 - **Observer code**: your AAVSO observer code. It goes into every AAVSO report. It is remembered between sessions,
   and saved with a series too.
-- **Chart ID**: the AAVSO chart (sequence) your comparison stars come from. You usually don't need to type it: when
-  you pick an AAVSO sequence star as a comparison or check star, SHOBS-P fills it in. When none of your comparison
-  or check stars are AAVSO sequence stars, it is `na`.
+
+The **Chart ID** is not on this page any more (from 2.4.0). Nothing could fill it here, before the image was solved.
+It now shows beside the comparison stars on the Photometry page, and again when you save the AAVSO report, each with
+an **Edit…** button (chapter 9 and chapter 15). A series saved by an older version still brings its chart ID with
+it.
 
 ## Site and Optics
 
