@@ -1,0 +1,19 @@
+# 2.4.0 step 1 (builder B) screenshots
+
+Changes that show in pictures: the **Chart ID** box is gone from the Input page (#97); the **Stars** panel of the
+Photometry page has a new line under the check row, **AAVSO chart ID: … [Edit…]** (#97). Blink (#100), the site
+question (#95) and the new target lines (#99, #94) change words, not layouts. None of these shots has been retaken
+(the builder cannot take them).
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/05-input-page.png | 05 | AAVSO report box: no **Chart ID** row (Observer code only) | RESHOOT |
+| img/03-window-parts.png | 03 | shows the Input page? then the same box | CHECK, reshoot if the AAVSO report box is in view |
+| img/08-stars-panel.png | 08 | new **AAVSO chart ID** line with **Edit…** under the Check row | RESHOOT |
+| img/08-photometry-solved.jpg | 08 | Stars panel: the new line (`na …` before comps are marked) | RESHOOT |
+| img/09-marked-stars.jpg | 09 | Stars panel: the new line (a chart ID from the sequence) | RESHOOT |
+| img/08-stack-row.png, img/08-points-stacked.png, img/23-edge-caution.png, img/20-discovery-photometry.jpg | 08, 03, 20 | Photometry page: the Stars panel is in view? then the new line | CHECK, reshoot if the Stars panel shows |
+| img/06-blink-page.jpg | 06 | layout unchanged (frame line and picture as before) | reuse |
+| NEW (optional) img/15-chart-id-question.png | 15 | the **Chart ID in this report: …** question at Save AAVSO report | new shot, if wanted |
+| NEW (optional) img/17-no-site-question.png | 17 | **No site is set, so the transit fit can't run.** with its two buttons | new shot, if wanted |
+| all others | | nothing of builder B's in view | reuse |

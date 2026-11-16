@@ -36,8 +36,12 @@ burn-in… 600 of 1,000"*, then *"Fitting the transit: MCMC step… 1,200 of 3,0
 it is all done, the bar goes and the status line says *"✔ Transit fit done; comps checked."* How long it takes
 depends on the number of frames and comps.
 
-> **Caution:** The fit needs your site's latitude and longitude for BJD times. Without them it stops with
-> *"Enter your site's latitude and longitude on the Input page first (they are needed for BJD times)."*
+The fit needs your site's latitude and longitude, for its BJD times. From 2.4.0 SHOBS-P asks about this before the
+photometry, not after it: when you press **Run photometry** in Transits mode with an empty Site box, it says *"No
+site is set, so the transit fit can't run."* **Set the site now** shows the Input page with the cursor in the
+**Latitude** box; type the site and press **Run photometry** again. **Run photometry only** measures the night
+anyway; set the site afterwards and the fit runs on the same points. (Pressing **Fit transit** with no site still
+stops with *"Enter your site's latitude and longitude on the Input page first (they are needed for BJD times)."*)
 
 ![The Transit fit page after a fit](img/17-transit-fit-page.png)
 

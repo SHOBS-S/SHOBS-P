@@ -192,7 +192,7 @@ SHOBS-P keeps a small settings file in your user folder (`C:\Users\<you>\.shobs_
 **Not remembered between sessions** (they start empty or at their defaults each time):
 
 - all five folders on the Input page, including **Output**;
-- the target and **Chart ID**;
+- the target (and the AAVSO chart ID, which SHOBS-P fills in after the solve; chapter 9);
 - **Binning**, the **Bayer pattern** and the **Channel**;
 - the aperture sizes, marked stars and rejected frames.
 
