@@ -278,6 +278,10 @@ MODES = {
                   "hint": "#d8bfd6", "subtitle": "Every star in the field,\nlooking for variables",
                   "banner": "DISCOVERY  ·  measure every star in the field and flag the ones that vary"},
 }
+# 2.4.0 (John 16 Nov): shown in a box when a report's _settings.txt can't be written (the Log starts hidden)
+SETTINGS_NOT_WRITTEN = ("⚠ The report {name} was saved, but its settings file (…_settings.txt) could not be "
+                        "written:\n\n{exc}\n\nThe report itself is complete. The settings file only records how the "
+                        "night was reduced; check that the folder is writable and has room.")
 BUSY_GREEN = "#4caf50"   # 2.2.20 (item 3): the busy bar on the dark status strip
 
 
@@ -21139,6 +21143,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                          + "\n".join(lines) + "\n")
         except Exception as exc:
             self.log(f"⚠ Settings file not written: {exc}", keep_status=True)   # 2.3.6 (m588): keeps the Saved… line
+            # 2.4.0 (John 16 Nov): the Log starts hidden now, so this one also gets a box (the report is saved; its
+            # settings record is not)
+            try:
+                messagebox.showwarning(APP_TITLE, SETTINGS_NOT_WRITTEN.format(name=os.path.basename(report_path),
+                                                                              exc=exc), parent=self)
+            except Exception:
+                pass
             return ""
         self.log(f"Settings file: {path}")
         return path

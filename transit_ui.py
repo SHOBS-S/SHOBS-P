@@ -3107,6 +3107,12 @@ class TransitPage:
                          f"{os.path.basename(report_path)}\n" + "\n".join(lines) + "\n")
         except Exception as exc:
             self.app.log(f"⚠ Settings file not written: {exc}", keep_status=True)   # 2.3.6 (review S4, as m588)
+            try:   # 2.4.0 (John 16 Nov): the Log starts hidden now, so this one also gets a box
+                from clearv_app import SETTINGS_NOT_WRITTEN
+                messagebox.showwarning("SHOBS-P", SETTINGS_NOT_WRITTEN.format(
+                    name=os.path.basename(report_path), exc=exc), parent=self.frame)
+            except Exception:
+                pass
             return ""
         self.app.log(f"Settings file: {path}")
         return path

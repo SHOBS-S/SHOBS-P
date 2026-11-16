@@ -786,3 +786,24 @@ class TestWithApp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSettingsNotWrittenPromoted(unittest.TestCase):
+    """John 16 Nov: with the Log hidden by default, '⚠ Settings file not written' also gets a message box."""
+
+    def test_both_places_show_a_box(self):
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name, marker in (("clearv_app.py", "    def _write_variables_settings"),
+                             ("transit_ui.py", "Settings file not written")):
+            src = open(os.path.join(here, name), encoding="utf-8").read()
+            i = src.index(marker)
+            block = src[i:i + 2500] if name == "clearv_app.py" else src[i - 200:i + 800]
+            self.assertIn("SETTINGS_NOT_WRITTEN", block, name)
+            self.assertIn("showwarning", block, name)
+
+    def test_wording(self):
+        import clearv_app as ca
+        text = ca.SETTINGS_NOT_WRITTEN.format(name="AAVSO_X.txt", exc="disk full")
+        self.assertTrue(text.startswith("⚠ The report AAVSO_X.txt was saved"))
+        self.assertIn("disk full", text)
+        self.assertIn("report itself is complete", text)

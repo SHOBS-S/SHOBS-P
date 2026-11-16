@@ -62,6 +62,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | *Could not open a browser: go to …* | The upload or ExoFOP page could not open. | Copy the address into your browser. |
 | *✖ … not saved (…). Save to another folder, or close the program that has the file open.* | A file you asked to save could not be written (open in Excel, no permission, disk full). Nothing was recorded as saved. | Do what it says, then save again. |
 | *The output folder could not be used (…); choose where to save.* | The Output folder is missing or read-only. | Pick another folder on the Input page. |
+| *⚠ The report … was saved, but its settings file (…_settings.txt) could not be written: …* (message box, and in the Log) | After an AAVSO report or a transit report save, the `_settings.txt` beside it could not be written (folder read-only or full). The report itself is complete. From 2.4.0 this shows in a box too, since the Log starts hidden. | Check the folder has room and can be written to. |
 
 ## Input
 
