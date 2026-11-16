@@ -29,8 +29,9 @@ From top to bottom:
 - **The step strip**: what is done and what to do next.
 - **The image** on the left, with its legend in a column at its left, and the **Stars** and **Watch stars** panels on the right.
 - **The run row**: a gray line with the last run's summary (for example "Photometry done in 1:52. 38 points."),
-  **Cancel run**, and **Hide log** / **Show log**, with the log under it. While a run is going, its progress is on the
-  busy bar at the bottom of the window (chapter 3).
+  **Cancel run**, and **Show log** / **Hide log**. The log is hidden at first (from 2.4.0); **Show log** puts it
+  under this row, and your choice is remembered. While a run is going, its progress is on the busy bar at the bottom
+  of the window (chapter 3).
 - **Back** and **Next: Output** at the bottom.
 
 In Discovery mode the page is called **Photometry: field scan**, the left of the tools row reads **Click a star to**
@@ -135,8 +136,8 @@ move to a second monitor. The window has the same **● Target**, **● Comps (C
 there.
 
 **Small image?** On a small frame (MicroObservatory's, for example), or with Windows display scaling at 125 % or 150 %,
-the image area can get short and wide. SHOBS-P then gives the image room first: the log under it shrinks (down to 3
-lines). If the image is still small, press **Pop out** in the View box, or **Hide log**. (Up to 2.3.1 a line under
+the image area can get short and wide. SHOBS-P then gives the image room first: the log under it, when it is shown,
+shrinks (down to 3 lines). If the image is still small, press **Pop out** in the View box, or **Hide log**. (Up to 2.3.1 a line under
 the image said so; from 2.3.2 that line is gone, so the image gets its height.)
 
 While the image is out, the page shows **Image is in its own window (Bring back in the View box).** and the **Pop out**

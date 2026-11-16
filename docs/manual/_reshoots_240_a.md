@@ -10,6 +10,10 @@ rows, around the plot, above the Results row), so the plot is a little taller; t
 **Period: updated** while it is highlighted. Every shot of these pages is on the RESHOOT list below already; take
 them from the build with the review fixes in.
 
+John, 16 Nov: the two lines under the night table (Variables) and the two under the Results row (Transit fit) take
+room only while they have text. Shots of either page with those lines empty change by a line or two of height; they
+are on the RESHOOT list already.
+
 | Shot | What changed in it | Action |
 |---|---|---|
 | img/09-output-page.png | Variables Output page: six group rows above the plots (Comps + Analysis share one); one Results row under them (Save series, Save AAVSO report, Notes, …); Refit period green in the Fit row | RESHOOT |

@@ -16,4 +16,5 @@ question (#95) and the new target lines (#99, #94) change words, not layouts. No
 | img/06-blink-page.jpg | 06 | layout unchanged (frame line and picture as before) | reuse |
 | NEW (optional) img/15-chart-id-question.png | 15 | the **Chart ID in this report: …** question at Save AAVSO report | new shot, if wanted |
 | NEW (optional) img/17-no-site-question.png | 17 | **No site is set, so the transit fit can't run.** with its two buttons | new shot, if wanted |
+| every shot of the Photometry page (img/08-*, img/09-marked-stars.jpg, img/20-discovery-photometry.jpg, img/23-edge-caution.png, and any other with the dark log under the image) | 03, 08, 09, 20, 23 | John, 16 Nov: the log under the image starts hidden; the run row's button reads **Show log** and the image is taller | RESHOOT (with the log hidden, as a new install shows it) |
 | all others | | nothing of builder B's in view | reuse |

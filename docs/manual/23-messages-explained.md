@@ -7,7 +7,7 @@ SHOBS-P talks to you in four places:
   ends, so a later routine line never hides it. When the job ends, the line says how it went: the one ⚠ or ✖ itself,
   or *⚠ N things need a look (see the Log)* when there were several (or *✖ … (and N more in the Log)*). After a
   report save it also holds a button for the upload page.
-- **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**). Every
+- **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**; hidden until you press **Show log**, from 2.4.0). Every
   status line goes here too, often with more detail, and so do the routine notes that never reach the status line.
   When something looks wrong, read the log first.
 - **Message boxes**: a question (Yes / No, sometimes Cancel) when SHOBS-P needs a decision, a warning when it found a

@@ -97,6 +97,8 @@ strip; the page has no progress bar of its own.
   (chapter 16), for example *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* and
   *"ExoClock: LOW priority (24 recent observations)"*. Click the TOI line to open the target's ExoFOP-TESS page, and
   the ExoClock line to open the planet's ExoClock page. They help you choose where to send the result (below).
+  From 2.4.0 each line takes room only while it has something to say: with no planet looked up there are no empty
+  lines there, and the plot is that much taller.
 
 ## Read the verdict
 

@@ -156,6 +156,8 @@ Hover over a row's label to read what the row is for. A setting in **Points**, *
 
 Click a row to zoom the light curve and check-star plot to that night. Click it again to show all nights.
 
+Two lines can appear under the table: the spread of the nightly means (with two or more nights), and an orange ⚠ line with the series' cautions. From 2.4.0 each takes room only while it has something to say, so the plots are a little taller without them and move down a line when one appears.
+
 ![One night of a ten-night series, clicked in the night table](img/10-night-zoom.png)
 
 > **Caution:** While a night is highlighted, **Save AAVSO report** and **Save light-curve CSV** ask whether to save that night only or the whole series, and **Save plot PNG** saves what is on screen. Click the row again when you want the whole series.

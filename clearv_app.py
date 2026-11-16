@@ -8523,12 +8523,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.photo_log = Text(self.photo_logf, height=7, wrap="none", font=(core.MONO_FONT, 9), bg="#1e1e1e", fg="#dcdcdc",
                               insertbackground="#dcdcdc")
         self.photo_log.pack(fill=X)
-        self.photo_logf.pack(fill=X, side="bottom", before=body, pady=(4, 0))
+        # 2.4.0 step 1 (John, 16 Nov): the log starts hidden (the busy bar and the status line carry a run; the image
+        # gets the room). Show log / Hide log is the user's own choice from then on, kept in the settings file
+        # (photo_log_shown); a settings file without the key (a new install, or any earlier version) starts hidden.
+        log_shown = (getattr(self, "settings", None) or {}).get(self.PHOTO_LOG_KEY) is True
+        if log_shown:
+            self.photo_logf.pack(fill=X, side="bottom", before=body, pady=(4, 0))
         self.photo_prog_row = ttk.Frame(card, style="Card.TFrame")
         self.photo_prog_row.pack(fill=X, side="bottom", before=body, pady=(4, 0))
         self.progress_text = StringVar(value="")
         ttk.Label(self.photo_prog_row, textvariable=self.progress_text, style="Hint.TLabel").pack(side=LEFT)
-        self.log_toggle = ttk.Button(self.photo_prog_row, text="Hide log", command=self.toggle_photo_log)
+        self.log_toggle = ttk.Button(self.photo_prog_row, text="Hide log" if log_shown else "Show log",
+                                     command=self.toggle_photo_log)
         self.log_toggle.pack(side=RIGHT)
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
         return page
@@ -10489,14 +10495,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._photo_fit = fit
         return fit
 
+    PHOTO_LOG_KEY = "photo_log_shown"   # settings file: True = the Photometry page's log is shown; absent = hidden
+
     def toggle_photo_log(self):
-        if self.photo_logf.winfo_ismapped():
+        # winfo_manager, not winfo_ismapped: the choice also counts while another page is in front
+        shown = not bool(self.photo_logf.winfo_manager())
+        if not shown:
             self.photo_logf.pack_forget()
             self.log_toggle.configure(text="Show log")
         else:
             self.photo_logf.pack(fill=X, side="bottom", before=self.photo_prog_row, pady=(4, 0))
             self.log_toggle.configure(text="Hide log")
             self.photo_log.see(END)
+        try:   # the user's own choice is kept for the next start
+            if self.settings.get(self.PHOTO_LOG_KEY) != shown:
+                self.settings[self.PHOTO_LOG_KEY] = shown
+                self._save_settings()
+        except Exception:
+            pass
 
     @staticmethod
     def _clock(seconds: float) -> str:
@@ -19158,10 +19174,37 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         scroll.pack(side=LEFT, fill=Y)
         self.night_table.bind("<ButtonRelease-1>", self._on_night_click)
         self.night_table.bind("<Double-1>", self._on_night_double)   # 2.2.18 (item 10): unmark "sent"
+        # 2.4.0 step 1 (John, 16 Nov): the two lines under the night table take room only while they say something
+        # (an empty line each cost the plot 17 px on a small screen). They follow their text by themselves (a trace
+        # on the variable), so every place that sets one shows or hides its line: a series loaded or closed, a mode
+        # switch, a new reduction.
+        self._summary_table_row = table_row
         self.spread_text = StringVar(value="")
-        ttk.Label(holder, textvariable=self.spread_text, style="Card.TLabel").pack(anchor=W, pady=(2, 0))
+        self.spread_label = ttk.Label(holder, textvariable=self.spread_text, style="Card.TLabel")
         self.caution_text = StringVar(value="")
-        ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500, justify=LEFT).pack(anchor=W)
+        self.caution_label = ttk.Label(holder, textvariable=self.caution_text, style="Warn.TLabel", wraplength=1500,
+                                       justify=LEFT)
+        for var in (self.spread_text, self.caution_text):
+            var.trace_add("write", lambda *_a: self._show_summary_lines())
+        self._show_summary_lines()
+
+    def _show_summary_lines(self):
+        """The spread line and the caution line under the night table: shown while they have text, hidden (no
+        empty line) while they have none. The spread line stays above the caution line."""
+        try:
+            spread, caution = self.spread_label, self.caution_label
+            if self.spread_text.get().strip():
+                if not spread.winfo_manager():
+                    spread.pack(anchor=W, pady=(2, 0), after=self._summary_table_row)
+            elif spread.winfo_manager():
+                spread.pack_forget()
+            if self.caution_text.get().strip():
+                if not caution.winfo_manager():
+                    caution.pack(anchor=W)   # last in the holder: under the spread line when both show
+            elif caution.winfo_manager():
+                caution.pack_forget()
+        except Exception:
+            pass
 
     def _on_night_click(self, event):
         """Click a night to highlight it on the plots (2.2.15: the light curve zooms to it); click it again to show

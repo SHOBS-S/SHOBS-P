@@ -145,9 +145,12 @@ its own bar in its lower left, chapter 17.)
 
 ## The log
 
-The Calibrate page has a large dark log box, and the Photometry page has a smaller copy of it (**Hide log** /
-**Show log**). Every message SHOBS-P writes goes there, with more detail than the status line has room for. When
-something looks wrong, read the log first.
+The Calibrate page has a large dark log box, and the Photometry page has a smaller copy of it under the image.
+From 2.4.0 the Photometry page's copy starts hidden, so the image gets the room: the busy bar shows a run's progress
+and the status line shows its messages, ⚠ and ✖ included. Press **Show log** on the run row to see it, and **Hide
+log** to put it away; SHOBS-P remembers your choice for the next start. Every message SHOBS-P writes goes to the
+log, shown or hidden, with more detail than the status line has room for. When something looks wrong, read the log
+first (the Calibrate page's log is always there).
 
 ## Warnings, cautions and questions
 

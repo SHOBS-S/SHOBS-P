@@ -621,6 +621,158 @@ class TestWithApp(unittest.TestCase):
         self.assertEqual(seen[2], "Loading x.cvseries… the stars and settings")
         self.assertFalse(app.busy_bar.busy)
 
+    # ---- John, 16 Nov: the hint lines take room only while they say something --------------------------------
+    def test_variables_lines_hide_when_empty(self):
+        app = self.app
+        spread, caution = app.spread_label, app.caution_label
+        old = (app.spread_text.get(), app.caution_text.get())
+        try:
+            app.spread_text.set("")
+            app.caution_text.set("")
+            self.assertEqual(spread.winfo_manager(), "")
+            self.assertEqual(caution.winfo_manager(), "")
+            app.caution_text.set("⚠ check star varies")              # the caution alone
+            self.assertEqual(caution.winfo_manager(), "pack")
+            self.assertEqual(spread.winfo_manager(), "")
+            app.spread_text.set("Spread of nightly means 0.0123 mag")   # then the spread: above the caution
+            self.assertEqual(spread.winfo_manager(), "pack")
+            order = [w for w in spread.master.pack_slaves() if w in (app._summary_table_row, spread, caution)]
+            self.assertEqual(order, [app._summary_table_row, spread, caution])
+            app.spread_text.set("   ")                                  # blank is empty
+            self.assertEqual(spread.winfo_manager(), "")
+            app.caution_text.set("")
+            self.assertEqual(caution.winfo_manager(), "")
+        finally:
+            app.spread_text.set(old[0])
+            app.caution_text.set(old[1])
+
+    def test_fill_summary_shows_and_hides_the_lines(self):
+        # the one place the texts are set: series load and close, a mode switch and a new reduction all end here
+        app = self.app
+        snap = getattr(app, "_summary_snapshot", None)
+        keep = (app.summary_vars["series"].get(), app.summary_vars["period"].get(), app.summary_vars["color"].get(),
+                app.spread_text.get(), app.caution_text.get())
+
+        def row(night, value):
+            r = {c: "—" for c, _l, _w in app.SUMMARY_COLUMNS}
+            r.update(night=night, value=value, err=0.004)
+            return r
+        try:
+            app._fill_summary(["s"], ["—"], ["c"], [row("JD1", 10.10), row("JD2", 10.14)], ["one caution"])
+            self.assertEqual(app.spread_label.winfo_manager(), "pack")
+            self.assertEqual(app.caution_label.winfo_manager(), "pack")
+            self.assertTrue(app.caution_text.get().startswith("⚠ one caution"))
+            app._fill_summary(["s"], ["—"], ["c"], [], [])              # the series closed: no empty lines left
+            self.assertEqual(app.spread_label.winfo_manager(), "")
+            self.assertEqual(app.caution_label.winfo_manager(), "")
+        finally:
+            app._fill_summary([keep[0]], [keep[1]], [keep[2]], [], [])
+            app.spread_text.set(keep[3])
+            app.caution_text.set(keep[4])
+            app._summary_snapshot = snap
+
+    def test_summary_texts_are_set_only_through_their_variables(self):
+        # the lines follow a trace on the variable, so no setter can leave a line hidden or an empty one showing
+        for name, s in (("clearv_app.py", _src()), ("transit_ui.py", _src("transit_ui.py"))):
+            self.assertNotIn("spread_label.configure(text", s, name)
+            self.assertNotIn("caution_label.configure(text", s, name)
+        s = _src()
+        self.assertIn('var.trace_add("write", lambda *_a: self._show_summary_lines())', s)
+        self.assertIn('var.trace_add("write", lambda *_a: self._show_target_lines())', _src("transit_ui.py"))
+
+    def test_transit_lines_hide_when_empty(self):
+        tp = self.app.transit_page
+        toi, exo, row = tp._tstat_labels["toi"], tp._tstat_labels["exoclock"], tp.tstat_row
+        old = (tp.toi_line.get(), tp.exoclock_line.get())
+        try:
+            tp.toi_line.set("")
+            tp.exoclock_line.set("")
+            self.assertEqual(row.winfo_manager(), "")                  # no empty row either
+            tp.exoclock_line.set("ExoClock: LOW priority (24 recent observations)")
+            self.assertEqual(row.winfo_manager(), "pack")
+            self.assertEqual(exo.winfo_manager(), "pack")
+            self.assertEqual(toi.winfo_manager(), "")
+            tp.toi_line.set("TOI-2046.01 · CP (confirmed)")            # above the ExoClock line
+            self.assertEqual(row.pack_slaves(), [toi, exo])
+            self.assertEqual(str(row.pack_info()["side"]), "bottom")
+            tp.exoclock_line.set("")
+            self.assertEqual(row.pack_slaves(), [toi])
+            tp.toi_line.set("")
+            self.assertEqual(row.winfo_manager(), "")
+        finally:
+            tp.toi_line.set(old[0])
+            tp.exoclock_line.set(old[1])
+
+    def test_show_target_status_brings_the_lines_back(self):
+        app, tp = self.app, self.app.transit_page
+        try:
+            with mock.patch.object(tp, "_target_status_shown",
+                                   lambda: {"toi": {"text": "TOI-2046.01 · CP (confirmed)", "url": "https://x"},
+                                            "exoclock": {"text": "ExoClock: LOW priority"}}):
+                tp.show_target_status()
+            self.assertEqual(tp.tstat_row.winfo_manager(), "pack")
+            self.assertEqual(tp.tstat_row.pack_slaves(), [tp._tstat_labels["toi"], tp._tstat_labels["exoclock"]])
+            with mock.patch.object(tp, "_target_status_shown", lambda: {}):   # another planet, a mode switch
+                tp.show_target_status()
+            self.assertEqual(tp.tstat_row.winfo_manager(), "")
+        finally:
+            tp.show_target_status()
+
+    # ---- John, 16 Nov: the Photometry page's log starts hidden; the choice is remembered ---------------------
+    def test_photo_log_toggle_remembers_the_choice(self):
+        app = self.app
+        was = bool(app.photo_logf.winfo_manager())
+        had = app.settings.get(app.PHOTO_LOG_KEY, "absent")
+        saves = []
+        try:
+            with mock.patch.object(app, "_save_settings", lambda: saves.append(app.settings.get(app.PHOTO_LOG_KEY))):
+                if was:
+                    app.toggle_photo_log()
+                    saves.clear()
+                self.assertEqual(app.photo_logf.winfo_manager(), "")
+                self.assertEqual(str(app.log_toggle.cget("text")), "Show log")
+                app.toggle_photo_log()
+                self.assertEqual(app.photo_logf.winfo_manager(), "pack")
+                self.assertEqual(str(app.log_toggle.cget("text")), "Hide log")
+                self.assertIs(app.settings[app.PHOTO_LOG_KEY], True)
+                app.toggle_photo_log()
+                self.assertEqual(app.photo_logf.winfo_manager(), "")
+                self.assertIs(app.settings[app.PHOTO_LOG_KEY], False)
+                self.assertEqual(saves, [True, False])
+                # hidden or shown, every line still goes into the box and onto the status line
+                app.log("⚠ a test caution for the hidden log")
+                self.assertIn("⚠ a test caution for the hidden log", app.photo_log.get("1.0", "end"))
+                self.assertEqual(app.status.get(), "⚠ a test caution for the hidden log")
+        finally:
+            with mock.patch.object(app, "_save_settings", lambda: None):
+                if bool(app.photo_logf.winfo_manager()) != was:
+                    app.toggle_photo_log()
+            if had == "absent":
+                app.settings.pop(app.PHOTO_LOG_KEY, None)
+            else:
+                app.settings[app.PHOTO_LOG_KEY] = had
+
+    def _start_with_settings(self, settings):
+        ca = self.ca
+        with mock.patch.object(ca.App, "_load_settings", lambda self: dict(settings)), \
+                mock.patch.object(ca.App, "_save_settings", lambda self: None):
+            other = ca.App()
+            try:
+                other.update()
+                return bool(other.photo_logf.winfo_manager()), str(other.log_toggle.cget("text"))
+            finally:
+                other.destroy()
+
+    def test_photo_log_starts_hidden_without_the_key(self):
+        # a new install, or the settings file of any earlier version (none of them wrote the key)
+        self.assertEqual(self._start_with_settings({}), (False, "Show log"))
+        self.assertEqual(self._start_with_settings({"mode": "variables", "series_dir": "x"}), (False, "Show log"))
+
+    def test_photo_log_follows_a_saved_choice(self):
+        self.assertEqual(self._start_with_settings({"photo_log_shown": True}), (True, "Hide log"))
+        self.assertEqual(self._start_with_settings({"photo_log_shown": False}), (False, "Show log"))
+        self.assertEqual(self._start_with_settings({"photo_log_shown": "yes"}), (False, "Show log"))   # only True
+
     # ---- 8 ----
     def test_group_rows_are_still_six(self):
         app, tp = self.app, self.app.transit_page

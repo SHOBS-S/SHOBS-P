@@ -354,17 +354,21 @@ class TransitPage:
             pass
         # 2.2.21 (#32, item 14): the planet's TESS TOI status (a link to its ExoFOP-TESS page) and ExoClock priority
         # (a link to its ExoClock page), under the Results row; the App looks them up with the planet.
+        # 2.4.0 step 1 (John, 16 Nov): the two lines take room only while they say something (an empty line each
+        # cost the plot 17 px on a small screen); they follow their text by themselves (_show_target_lines).
         tstat = ttk.Frame(card, style="Card.TFrame")
-        tstat.pack(fill=X, side="bottom", before=results)
+        self.tstat_row = tstat
         self.toi_line = StringVar(value="")
         self.exoclock_line = StringVar(value="")
         self._tstat_labels = {}
         for which, var in (("toi", self.toi_line), ("exoclock", self.exoclock_line)):
             lab = ttk.Label(tstat, textvariable=var, style="Hint.TLabel", justify=LEFT)
-            lab.pack(anchor=W, padx=(0, 0))
             lab.bind("<Button-1>", lambda _e, w=which: app._open_target_status_link(w)
                      if self._target_status_shown().get(w, {}).get("url") else None)
             self._tstat_labels[which] = lab
+        for var in (self.toi_line, self.exoclock_line):
+            var.trace_add("write", lambda *_a: self._show_target_lines())
+        self._show_target_lines()
         # 2.2.20 (item 3, house rule): no bar on this page; the fit's and the comp check's steps and counts are the
         # words of the main window's busy bar (status strip, lower left). This row keeps the result line only.
         self.prog_text = StringVar(value="")
@@ -1524,6 +1528,33 @@ class TransitPage:
             self._loo_shown = False
             self.prog_text.set("")
             self._show_progress()
+
+    def _show_target_lines(self):
+        """The TESS TOI line and the ExoClock line under the Results row: shown while they have text, hidden (no
+        empty line, and no empty row) while they have none. The TOI line stays above the ExoClock line."""
+        try:
+            toi, exo = self._tstat_labels["toi"], self._tstat_labels["exoclock"]
+            if self.exoclock_line.get().strip():
+                if not exo.winfo_manager():
+                    exo.pack(anchor=W)
+            elif exo.winfo_manager():
+                exo.pack_forget()
+            if self.toi_line.get().strip():
+                if not toi.winfo_manager():
+                    if exo.winfo_manager():
+                        toi.pack(anchor=W, before=exo)
+                    else:
+                        toi.pack(anchor=W)
+            elif toi.winfo_manager():
+                toi.pack_forget()
+            row = self.tstat_row
+            if toi.winfo_manager() or exo.winfo_manager():
+                if not row.winfo_manager():
+                    row.pack(fill=X, side="bottom", before=self.results_row)
+            elif row.winfo_manager():
+                row.pack_forget()
+        except Exception:
+            pass
 
     def _show_progress(self):
         """2.2.10 (John): the row only while it has something to say. 2.2.20 (item 3): no bar here (the main
