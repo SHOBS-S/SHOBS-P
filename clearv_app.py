@@ -47,6 +47,7 @@ import numpy as np
 import busy_bar   # 2.2.20 (item 3)
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
+from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows   # 2.4.0 (#98)
 import photometry_core as core
 import transit_core as tcore
 import stack_core   # 2.3.0 (#54)
@@ -17210,7 +17211,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                        "first if it has unsaved changes), and a series of another star clears this target's comps, "
                        "check and watch stars.")
 
-    def _add_tooltip(self, widget, text: str):
+    def _add_tooltip(self, widget, text):
         """2.2.16 (item 12): a small hover note on a widget (shown after a short pause, gone when the pointer leaves).
         Wraps at about 50 characters of the UI font, so it sizes itself on any screen."""
         state = {"tip": None, "job": None}
@@ -17220,6 +17221,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if state["tip"] is not None:
                 return
             tip = None
+            # 2.4.0 (#96, #101): the words may be a function (a tooltip that follows the widget's state); no words,
+            # no tooltip.
+            try:
+                words = text() if callable(text) else text
+            except Exception:
+                words = ""
+            if not words:
+                return
             try:
                 # review: everything measured before the window exists; pixel offsets scaled with the display.
                 wrap = text_wrap_px(widget, 50)
@@ -17229,7 +17238,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 tip = Toplevel(widget)
                 tip.wm_overrideredirect(True)
                 tip.wm_geometry(f"+{x}+{y}")
-                ttk.Label(tip, text=text, style="Hint.TLabel", justify=LEFT, padding=int(6 * k), relief="solid",
+                ttk.Label(tip, text=words, style="Hint.TLabel", justify=LEFT, padding=int(6 * k), relief="solid",
                           borderwidth=1, wraplength=wrap).pack()
                 state["tip"] = tip
             except Exception:
@@ -17574,79 +17583,125 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         ttk.Label(card, textvariable=self.output_heading, font=(core.UI_FONT, 16, "bold"),
                   style="Card.TLabel").pack(anchor=W)
         self._build_summary(card)
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill=X)
-        ttk.Label(row, text="Period search (days)", style="Card.TLabel").pack(side=LEFT)
+        # 2.4.0 (#98): the controls in function groups, one labelled row per group, the same groups in the same order
+        # as on the Transit fit page (group_rows): Data, Points, Corrections, Fit, Comps, Analysis, View. Only Refit
+        # period is green up here; the saves stay under the plot.
+        groups = GroupRows(card, "variables", tooltip=self._add_tooltip)
+        groups.frame.pack(fill=X, pady=(0, 2))
+        self.out_groups = groups
+
+        # ---- 1. Data: the series and its nights (Save series stays under the plot, with the other saves)
+        g = groups.parent("data")
+        load_out = groups.add("data", ttk.Button(g, text="Load series", command=self.load_series))
+        self._add_tooltip(load_out, self.LOAD_SERIES_TIP)   # 2.2.16 (item 12)
+        # 2.2.16 (item 15): Close series here too (same as the Input page's), enabled only with a series open.
+        self.close_series_button_out = groups.add("data", ttk.Button(g, text="Close series",
+                                                                     command=self.close_series))
+        self.update_series_status()
+        groups.add("data", ttk.Button(g, text="Add series file…", command=self.add_series_file))
+        groups.add("data", ttk.Button(g, text="Remove night…", command=self.remove_night))
+        groups.add("data", ttk.Button(g, text="Night notes…", command=self.edit_night_note))
+
+        # ---- 2. Points: which points go into the period and the report
+        g = groups.parent("points")
+        # 2.4.0 (#98): short words on the box, the rest in its tooltip, so the group keeps to one line where it can.
+        skip_box = groups.add("points", ttk.Checkbutton(
+            g, text="Leave flagged points out (sat, drift, cloud)",
+            variable=self.skip_flagged, command=self.refit_period), pad=14)
+        self._add_tooltip(skip_box, "Leaves the flagged points (saturated, drifted, cloud) out of the period and the "
+                                    "report. Frames taken during a planet's transit never go in a report.")
+        cloud_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(cloud_box, text="Cloud flag: more than", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        ttk.Entry(cloud_box, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
+        ttk.Label(cloud_box, text="% below the night's median", style="Card.TLabel").pack(side=LEFT, padx=(4, 6))
+        ttk.Button(cloud_box, text="Apply", command=self.refit_period).pack(side=LEFT)
+        groups.add("points", cloud_box)
+        # 2.2.14 (item 18): keep or leave out a night's transmission-loss (dew/haze) points.
+        groups.add("points", ttk.Button(g, text="Transmission loss…", command=self.edit_transmission))
+        # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
+        groups.add("points", ttk.Button(g, text="Planet transits…", command=self.edit_planet_transits))
+
+        # ---- 3. Corrections: how nights and segments are lined up
+        g = groups.parent("corrections")
+        groups.add("corrections", ttk.Checkbutton(
+            g, text="Line up segments (nights, meridian flip)",
+            variable=self.norm_segments, command=self.refit_period), pad=14)
+        groups.add("corrections", ttk.Checkbutton(
+            g, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period), pad=14)
+        # 2.2.14 (item 20): each pier side (camera angle) normalized on its own across the campaign.
+        groups.add("corrections", ttk.Checkbutton(
+            g, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period), pad=14)
+        groups.add("corrections", ttk.Checkbutton(
+            g, text="Check-star correction (fold and period)", variable=self.use_check_zp,
+            command=self.refit_period))
+
+        # ---- 4. Fit: the period search; the one green button above the plot
+        g = groups.parent("fit")
+        range_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(range_box, text="Period search (days)", style="Card.TLabel").pack(side=LEFT)
         self.period_entries = []
         for k, var in enumerate((self.min_period, self.max_period)):
             if k:
-                ttk.Label(row, text="to", style="Card.TLabel").pack(side=LEFT)
-            entry = ttk.Entry(row, textvariable=var, width=6)
+                ttk.Label(range_box, text="to", style="Card.TLabel").pack(side=LEFT)
+            entry = ttk.Entry(range_box, textvariable=var, width=6)
             entry.pack(side=LEFT, padx=4)
             # 2.2.18 (item 16): Enter refits; leaving the box refits only when the range changed.
             entry.bind("<Return>", lambda _e: self._period_box_changed(force=True))
             entry.bind("<KP_Enter>", lambda _e: self._period_box_changed(force=True))
             entry.bind("<FocusOut>", lambda _e: self._period_box_changed())
             self.period_entries.append(entry)
-        ttk.Checkbutton(
-            row, text="Line up segments (nights, meridian flip)",
-            variable=self.norm_segments, command=self.refit_period,
-        ).pack(side=LEFT, padx=(14, 4))
-        ttk.Label(row, text="Time axis", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        axis_box = ttk.Combobox(row, textvariable=self.time_axis, values=("JD", "UTC", "Local time"), width=10, state="readonly")
-        axis_box.pack(side=LEFT)
-        axis_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
-        ttk.Label(row, text="Notes", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        ttk.Entry(row, textvariable=self.notes, width=42).pack(side=LEFT, fill=X, expand=True)
-
-        qc = ttk.Frame(card, style="Card.TFrame")
-        qc.pack(fill=X, pady=(4, 0))
-        ttk.Checkbutton(
-            qc, text="Leave flagged points (sat, drift, cloud) out of the period and report (planet-transit frames "
-                     "never go in a report)",
-            variable=self.skip_flagged, command=self.refit_period,
-        ).pack(side=LEFT)
-        ttk.Label(qc, text="Cloud flag: comp light more than", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        ttk.Entry(qc, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
-        ttk.Label(qc, text="% below the night's median", style="Card.TLabel").pack(side=LEFT, padx=(4, 6))
-        ttk.Button(qc, text="Apply", command=self.refit_period).pack(side=LEFT)
-        # 2.2.14 (item 18): keep or leave out a night's transmission-loss (dew/haze) points.
-        ttk.Button(qc, text="Transmission loss…", command=self.edit_transmission).pack(side=LEFT, padx=(6, 0))
-        # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
-        ttk.Button(qc, text="Planet transits…", command=self.edit_planet_transits).pack(side=LEFT, padx=(6, 0))
-
-        tools = ttk.Frame(card, style="Card.TFrame")
-        tools.pack(fill=X, pady=(4, 0))
-        ttk.Checkbutton(
-            tools, text="Check-star correction (fold and period)", variable=self.use_check_zp, command=self.refit_period,
-        ).pack(side=LEFT)
-        ttk.Checkbutton(
-            tools, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period,
-        ).pack(side=LEFT, padx=(14, 0))
-        # 2.2.14 (item 20): each pier side (camera angle) normalized on its own across the campaign.
-        ttk.Checkbutton(
-            tools, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period,
-        ).pack(side=LEFT, padx=(14, 0))
-        ttk.Label(tools, text="Bin", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        bin_box = ttk.Combobox(tools, textvariable=self.bin_choice, values=BIN_CHOICES, width=10, state="readonly")
-        bin_box.pack(side=LEFT)
-        bin_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
-        ttk.Label(tools, text="Mark periods (days, comma separated)", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        ttk.Entry(tools, textvariable=self.mark_periods, width=26).pack(side=LEFT)
-        ttk.Button(tools, text="Show", command=self.draw_output).pack(side=LEFT, padx=(4, 0))
-        ttk.Label(tools, text="Period from", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
-        pbin_box = ttk.Combobox(tools, textvariable=self.period_bins, values=PERIOD_BIN_CHOICES, width=12, state="readonly")
+        groups.add("fit", range_box, pad=10)
+        from_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(from_box, text="Period from", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        pbin_box = ttk.Combobox(from_box, textvariable=self.period_bins, values=PERIOD_BIN_CHOICES, width=12,
+                                state="readonly")
         pbin_box.pack(side=LEFT)
         pbin_box.bind("<<ComboboxSelected>>", lambda _e: self.refit_period())
-        # 2.2.17 (item 10; review: its own line, so the period-search row keeps its width on a high-DPI screen):
-        # each night's mean with the airmass trend taken out, on the plot only.
-        view = ttk.Frame(card, style="Card.TFrame")
-        view.pack(fill=X, pady=(2, 0))
-        ttk.Checkbutton(view, text="Airmass-corrected night means (plot only, never in reports)",
-                        variable=self.airmass_view, command=self.draw_output).pack(side=LEFT)
+        groups.add("fit", from_box, pad=10)
+        self.refit_period_button = groups.add("fit", ttk.Button(g, text="Refit period", style="Accent.TButton",
+                                                                command=self.refit_period))
+
+        # ---- 5. Comps
+        g = groups.parent("comps")
+        groups.add("comps", ttk.Button(g, text="Comp health…", command=self.show_comp_health))
+        groups.add("comps", ttk.Button(g, text="Use comps…", command=self.choose_comps))
+
+        # ---- 6. More analysis
+        g = groups.parent("analysis")
+        groups.add("analysis", ttk.Button(g, text="Watch stars…", command=self.show_watch))
+        # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
+        groups.add("analysis", ttk.Button(g, text="Time of max/min…", command=self.show_extremum))
+
+        # ---- 7. View only: nothing here changes a number
+        g = groups.parent("view")
+        axis_frame = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(axis_frame, text="Time axis", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        axis_box = ttk.Combobox(axis_frame, textvariable=self.time_axis, values=("JD", "UTC", "Local time"), width=10,
+                                state="readonly")
+        axis_box.pack(side=LEFT)
+        axis_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
+        groups.add("view", axis_frame, pad=14)
+        bin_frame = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(bin_frame, text="Bin", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        bin_box = ttk.Combobox(bin_frame, textvariable=self.bin_choice, values=BIN_CHOICES, width=10, state="readonly")
+        bin_box.pack(side=LEFT)
+        bin_box.bind("<<ComboboxSelected>>", lambda _e: self.draw_output())
+        groups.add("view", bin_frame, pad=14)
+        mark_frame = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(mark_frame, text="Mark periods (days)", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        mark_entry = ttk.Entry(mark_frame, textvariable=self.mark_periods, width=26)
+        mark_entry.pack(side=LEFT)
+        self._add_tooltip(mark_entry, "One or more periods in days, comma separated (for example 0.12053, 0.13790); "
+                                      "Show draws them on the periodogram.")
+        ttk.Button(mark_frame, text="Show", command=self.draw_output).pack(side=LEFT, padx=(4, 0))
+        groups.add("view", mark_frame, pad=14)
+        # 2.2.17 (item 10): each night's mean with the airmass trend taken out, on the plot only.
+        means_box = groups.add("view", ttk.Checkbutton(g, text="Airmass-corrected night means",
+                                                       variable=self.airmass_view, command=self.draw_output), pad=14)
+        self._add_tooltip(means_box, "Each night's mean with the airmass trend taken out. On the plot only, never in "
+                                     "reports.")
         # 2.3.0 (#54): which point set the results use (the Points switch on the Photometry page); empty until stacked
-        self.out_points_label = ttk.Label(view, text="", style="Hint.TLabel")
-        self.out_points_label.pack(side=RIGHT)
+        self.out_points_label = groups.add("view", ttk.Label(g, text="", style="Hint.TLabel"))
         host = ttk.Frame(card, style="Card.TFrame")
         host.pack(fill=BOTH, expand=True, pady=6)
         if Figure is None:
@@ -17662,44 +17717,42 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.out_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.out_canvas.mpl_connect("motion_notify_event", self._on_hover)
             self.out_canvas.mpl_connect("resize_event", self._refit_lc_title)   # 2.2.14 (item 16)
+        # 2.4.0 (#98): under the plot is the save area only: the saves, the upload page, and Back / Transit View.
+        # Save series stays here (John); the report's Notes box sits beside Save AAVSO report. The buttons wrap like
+        # text when the page is narrow.
         nav = ttk.Frame(card, style="Card.TFrame")
-        nav.pack(fill=X, side="bottom", before=host, pady=(4, 0))
-        series_row = ttk.Frame(card, style="Card.TFrame")
-        series_row.pack(fill=X, side="bottom", before=nav, pady=(6, 0))
-        ttk.Label(series_row, text="Series", style="Hint.TLabel", width=8).pack(side=LEFT)
-        ttk.Button(series_row, text="Save series", command=self.save_series).pack(side=LEFT)
-        load_out = ttk.Button(series_row, text="Load series", command=self.load_series)
-        load_out.pack(side=LEFT, padx=(6, 0))
-        self._add_tooltip(load_out, self.LOAD_SERIES_TIP)   # 2.2.16 (item 12)
-        # 2.2.16 (item 15): Close series here too (same as the Input page's), enabled only with a series open.
-        self.close_series_button_out = ttk.Button(series_row, text="Close series", command=self.close_series)
-        self.close_series_button_out.pack(side=LEFT, padx=6)
-        self.update_series_status()
-        ttk.Button(series_row, text="Add series file…", command=self.add_series_file).pack(side=LEFT)
-        ttk.Button(series_row, text="Remove night…", command=self.remove_night).pack(side=LEFT, padx=6)
-        ttk.Button(series_row, text="Night notes…", command=self.edit_night_note).pack(side=LEFT)
-        ttk.Button(series_row, text="Comp health…", command=self.show_comp_health).pack(side=LEFT, padx=6)
-        ttk.Button(series_row, text="Use comps…", command=self.choose_comps).pack(side=LEFT)
-        ttk.Button(series_row, text="Watch stars…", command=self.show_watch).pack(side=LEFT, padx=6)
-        # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
-        ttk.Button(series_row, text="Time of max/min…", command=self.show_extremum).pack(side=LEFT)
+        nav.pack(fill=X, side="bottom", before=host, pady=(6, 0))
         # 2.2.20 (item 4): "⚠ No AUID" under the Results row (Variables mode, VSX knows the star but gave no AUID).
         self._no_auid_nav = nav
         self.no_auid_label = ttk.Label(card, text=NO_AUID_WARNING, style="Warn.TLabel", justify=LEFT)
-        ttk.Label(nav, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
-        ttk.Button(nav, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso).pack(side=LEFT)
-        # 2.2.15 (item 8): AAVSO's upload page for the saved report.
-        ttk.Button(nav, text="Open AAVSO WebObs…", command=self.open_webobs).pack(side=LEFT, padx=(6, 0))
-        ttk.Button(nav, text="Save light-curve CSV", command=self.save_csv).pack(side=LEFT, padx=6)
-        ttk.Button(nav, text="Export…", command=self.open_export).pack(side=LEFT)
-        ttk.Button(nav, text="Save plot PNG", command=self.save_png).pack(side=LEFT, padx=6)
-        ttk.Button(nav, text="Save field image", command=self.save_field_image).pack(side=LEFT, padx=(0, 6))   # #28
-        ttk.Button(nav, text="Refit period", command=self.refit_period).pack(side=LEFT)
+        ttk.Label(nav, text="Results", style="Hint.TLabel", width=GROUP_LABEL_WIDTH).pack(side=LEFT, anchor="n",
+                                                                                         pady=(3, 0))
         self.output_back = ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO))
-        self.output_back.pack(side=RIGHT)
+        self.output_back.pack(side=RIGHT, anchor="n")
         # Transits mode reaches this page from the transit fit (light-curve details); this takes you back.
         self.back_to_transit = ttk.Button(nav, text="◀  Transit View", style="Accent.TButton",
                                           command=lambda: self.show_step(STEP_OUTPUT))
+        saves = FlowBox(nav)
+        saves.frame.pack(side=LEFT, fill=X, expand=True)
+        self.out_saves = saves
+        g = saves.frame
+        saves.add(ttk.Button(g, text="Save series", command=self.save_series), pad=14)
+        saves.add(ttk.Button(g, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso))
+        notes_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(notes_box, text="Notes", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        notes_entry = ttk.Entry(notes_box, textvariable=self.notes, width=30)
+        notes_entry.pack(side=LEFT)
+        self._add_tooltip(notes_entry, "Notes for the AAVSO report (its NOTES field).")
+        saves.add(notes_box)
+        # 2.2.15 (item 8): AAVSO's upload page for the saved report.
+        saves.add(ttk.Button(g, text="Open AAVSO WebObs…", command=self.open_webobs))
+        saves.add(ttk.Button(g, text="Save light-curve CSV", command=self.save_csv))
+        saves.add(ttk.Button(g, text="Export…", command=self.open_export))
+        saves.add(ttk.Button(g, text="Save plot PNG", command=self.save_png))
+        # 2.2.19 (#28). 2.4.0 (#101): once the night's report has saved it, the button reads "Field image saved ✓"
+        # (greyed), or "Fetch AAVSO chart" when only the chart is missing (field_image_action).
+        self.field_button = saves.add(ttk.Button(g, text="Save field image", command=self.field_image_action))
+        self.register_field_button(self.field_button, "Save field image")
         return page
 
     def transit_page_on_screen(self) -> bool:
@@ -17711,7 +17764,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """Transits mode: the light-curve details page (the Variables Output page) for the open series."""
         self._variable_view = True   # 2.2.17 (item 4)
         self.page_frames[STEP_OUTPUT].lift()
-        self.back_to_transit.pack(side=RIGHT, padx=(8, 0), before=self.output_back)
+        self.back_to_transit.pack(side=RIGHT, anchor="n", padx=(8, 0), before=self.output_back)
         self.draw_output()
         self.status.set("Variable View: light-curve details, comps, and check star. ◀ Transit View (bottom right) "
                         "returns to the fit.")
@@ -18019,6 +18072,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def draw_output(self):
         self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
+        self.update_field_buttons()   # 2.4.0 (#101): a new night, reduction or series makes Save field image live
         if self.out_canvas is None:
             return
         for ax in (self.out_ax1, self.out_ax2, self.out_ax3, self.out_ax4):
@@ -18511,9 +18565,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             box = self._group(boxes, title)
             box.pack(side=LEFT, fill=Y, padx=(0, 8))
             var = StringVar(value="—")
-            ttk.Label(box, textvariable=var, style="Box.TLabel", justify=LEFT).pack(anchor=W)
+            lab = ttk.Label(box, textvariable=var, style="Box.TLabel", justify=LEFT)
+            lab.pack(anchor=W)
             self.summary_vars[key] = var
             if key == "period":
+                self.period_label = lab   # 2.4.0 (#98): flashes when the period line updates
                 # 2.2.19 (#19): shown when the VSX or a marked period lies outside the search range.
                 self.period_fix_button = ttk.Button(box, text="", command=self._apply_period_range_fix)
         table_row = ttk.Frame(holder, style="Card.TFrame")
@@ -18757,12 +18813,43 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
 
+    PERIOD_FLASH_MS = 900
+    PERIOD_FLASH_BG = "#dcefe0"
+
+    def _flash_period_line(self):
+        """2.4.0 (#98): the Period box's text is highlighted for a moment when it changes (a setting in Points,
+        Corrections or Fit refitted the period by itself). Display only."""
+        lab = getattr(self, "period_label", None)
+        if lab is None:
+            return
+        try:
+            job = getattr(self, "_period_flash_job", None)
+            if job is not None:
+                self.after_cancel(job)
+            lab.configure(background=self.PERIOD_FLASH_BG)
+            self._period_flashing = True
+            self.period_flash_count = getattr(self, "period_flash_count", 0) + 1
+
+            def off():
+                self._period_flash_job = None
+                self._period_flashing = False
+                try:
+                    lab.configure(background="")
+                except Exception:
+                    pass
+            self._period_flash_job = self.after(self.PERIOD_FLASH_MS, off)
+        except Exception:
+            pass
+
     def _fill_summary(self, series_lines, period_lines, color_lines, rows, cautions):
         # 2.2.3: kept so Save plot PNG can draw the same blocks above the plots.
         self._summary_snapshot = {"series": list(series_lines), "period": list(period_lines),
                                   "color": list(color_lines), "rows": [dict(r) for r in rows], "cautions": list(cautions)}
         self.summary_vars["series"].set("\n".join(series_lines))
+        period_before = self.summary_vars["period"].get()
         self.summary_vars["period"].set("\n".join(period_lines))
+        if self.summary_vars["period"].get() != period_before:
+            self._flash_period_line()   # 2.4.0 (#98): this page refits by itself; the flash says it did
         self.summary_vars["color"].set("\n".join(color_lines) or "—")
         table = self.night_table
         table.delete(*table.get_children())
@@ -20604,7 +20691,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.19 (#28): Save field image (Output page), and automatically with a saved variable or transit report: a
         PNG of the Photometry page's frame with the target, comps and check marked (draw_field_figure), and, in the
         background, AAVSO's VSP chart of the same field and size saved next to it. Offline (or VSP down) the field
-        image is still saved and the log says the chart is missing. Returns the field PNG's path ('' if none)."""
+        image is still saved and the log says the chart is missing. Returns the field PNG's path ('' if none).
+        2.4.0 (#101): the image saved with a report is remembered (_field_saved), so the Save field image buttons
+        say it is saved instead of making a second, identical one."""
         why = self._field_frame_problem()
         if why:
             # 2.2.21 (nit f): never another star's frame under this target's name.
@@ -20637,37 +20726,153 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log(f"Field image saved ({orient}): {path}")
         if not report_path:
             self.saved_notice(path, "Compare it with the AAVSO chart of the field (saved beside it when VSP answers).")
-        if fetch_chart and info.get("center") is not None and info.get("fov_arcmin"):
-            ra, dec = info["center"]
-            fov = float(info["fov_arcmin"])
-            tok = self.busy_begin("Fetching the AAVSO chart of the field…")   # 2.2.20 (item 3)
+        can_chart = info.get("center") is not None and bool(info.get("fov_arcmin"))
+        if report_path:
+            # 2.4.0 (#101): this reduction's field image now exists beside its report.
+            self._field_saved = {"path": path, "chart": chart_path, "key": self._field_state_key(info),
+                                 "fetching": False, "can_chart": can_chart}
+        if fetch_chart and can_chart:
             # 2.2.21 (nit b): with a report, the chart's answer (saved, or a time-out) goes to the Log only: the
             # report's "Saved … upload to AAVSO WebObs" line and its Open … button stay on the status line.
-            quiet = bool(report_path)
-
-            def work():
-                try:
-                    data, payload = core.vsp_chart_image(ra / 15.0, dec, fov)
-                    target = chart_path
-                    if data[:3] == b"\xff\xd8\xff":
-                        target = os.path.splitext(chart_path)[0] + ".jpg"
-                    elif b"<svg" in data[:400]:
-                        target = os.path.splitext(chart_path)[0] + ".svg"
-                    with open(target, "wb") as fh:
-                        fh.write(data)
-                    self.call_ui(self.log, f"AAVSO chart {payload.get('chartid') or ''} of the same field "
-                                           f"({fov:.0f}′, N up, E left) saved beside it: {target}", quiet)
-                except Exception as exc:
-                    why = exc.short() if isinstance(exc, core.VSPError) else str(exc)
-                    self.call_ui(self.log, f"AAVSO chart not saved ({why}): the field image is saved alone. Save field "
-                                           "image again later to fetch the chart.", quiet)
-                finally:
-                    self.call_ui(self.busy_end, tok)
-
-            threading.Thread(target=work, daemon=True).start()
+            self._fetch_field_chart(info, chart_path, quiet=bool(report_path),
+                                    state=self._field_saved if report_path else None)
         elif fetch_chart:
             self.log("AAVSO chart not fetched: the field's position is unknown (Solve, or the target's RA/Dec).")
+        self.update_field_buttons()
         return path
+
+    def _fetch_field_chart(self, info: dict, chart_path: str, quiet: bool = False, state: dict | None = None,
+                           alone: bool = False):
+        """The AAVSO VSP chart of the field image's field, fetched in the background and saved at chart_path (.png,
+        or .jpg / .svg as VSP sends it). state: the saved field image's record (2.4.0, #101), so the buttons follow
+        the fetch. alone: the chart is fetched for a field image already on disk (Fetch AAVSO chart)."""
+        ra, dec = info["center"]
+        fov = float(info["fov_arcmin"])
+        tok = self.busy_begin("Fetching the AAVSO chart of the field…")   # 2.2.20 (item 3)
+        if state is not None:
+            state["fetching"] = True
+
+        def done(text, ok):
+            if state is not None:
+                state["fetching"] = False
+            self.log(text, quiet)
+            if alone and ok:
+                self.status.set("✔ AAVSO chart saved beside the field image.")
+            self.update_field_buttons()
+
+        def work():
+            try:
+                data, payload = core.vsp_chart_image(ra / 15.0, dec, fov)
+                target = chart_path
+                if data[:3] == b"\xff\xd8\xff":
+                    target = os.path.splitext(chart_path)[0] + ".jpg"
+                elif b"<svg" in data[:400]:
+                    target = os.path.splitext(chart_path)[0] + ".svg"
+                with open(target, "wb") as fh:
+                    fh.write(data)
+                self.call_ui(done, f"AAVSO chart {payload.get('chartid') or ''} of the same field "
+                                   f"({fov:.0f}′, N up, E left) saved beside it: {target}", True)
+            except Exception as exc:
+                why = exc.short() if isinstance(exc, core.VSPError) else str(exc)
+                again = "Fetch AAVSO chart" if state is not None else "Save field image"
+                self.call_ui(done, f"AAVSO chart not saved ({why}): the field image is saved alone. {again} "
+                                   "again later to fetch the chart.", False)
+            finally:
+                self.call_ui(self.busy_end, tok)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- 2.4.0 (#101): the Save field image buttons follow the image saved with the report ---------------------------
+    FIELD_SAVED_TEXT = "Field image saved ✓"
+    FIELD_CHART_TEXT = "Fetch AAVSO chart"
+
+    def _field_state_key(self, info: dict | None = None):
+        """What a saved field image shows: the Photometry page's frame, the series, and the marked stars. A new
+        night, a new reduction, another series or other marks change it, and Save field image is live again."""
+        if info is None:
+            try:
+                info = self.field_image_info()
+            except Exception:
+                info = None
+        if info is None:
+            return None
+        marks = tuple((round(float(m[0]), 1), round(float(m[1]), 1), str(m[2]), str(m[4])) for m in info.get("marks") or [])
+        return (getattr(self, "_preview_token", 0), getattr(self, "_series_gen", 0), self.preview_path or "",
+                info.get("title"), marks, len(info.get("seq") or []))
+
+    @staticmethod
+    def _field_chart_file(chart_path: str) -> str:
+        """The saved chart's path ('' when there is none): .png, or .jpg / .svg as VSP sent it."""
+        base = os.path.splitext(chart_path or "")[0]
+        for ext in (".png", ".jpg", ".svg"):
+            if base and os.path.exists(base + ext):
+                return base + ext
+        return ""
+
+    def field_image_state(self) -> tuple:
+        """("save", ""): Save field image works as always (no report's image yet, or it is of another frame or
+        other marks, or the file is gone). ("saved", why): the night's report saved it; nothing to do.
+        ("chart", why): the image is there but its AAVSO chart is not (the fetch failed)."""
+        st = getattr(self, "_field_saved", None)
+        if not st:
+            return "save", ""
+        if not os.path.exists(st["path"]) or st.get("key") is None or st["key"] != self._field_state_key():
+            self._field_saved = None
+            return "save", ""
+        chart = self._field_chart_file(st["chart"])
+        if chart:
+            return "saved", f"Saved with the report: {st['path']}\nAAVSO chart: {chart}"
+        if st.get("fetching"):
+            return "saved", f"Saved with the report: {st['path']}\nThe AAVSO chart is being fetched."
+        if not st.get("can_chart"):
+            return "saved", (f"Saved with the report: {st['path']}\nNo AAVSO chart: the field's position is unknown "
+                             "(Solve, or the target's RA/Dec).")
+        return "chart", (f"The field image is saved with the report: {st['path']}\nIts AAVSO chart is missing (the "
+                         "fetch failed): this fetches the chart and saves it beside the image.")
+
+    def register_field_button(self, button, text: str):
+        """A Save field image button (Variables Output page, Transit fit page) that follows field_image_state."""
+        if not hasattr(self, "_field_buttons"):
+            self._field_buttons = []
+        self._field_buttons.append((button, text))
+        self._add_tooltip(button, lambda: self.field_image_state()[1])
+        self.update_field_buttons()
+
+    def update_field_buttons(self):
+        try:
+            state, _why = self.field_image_state()
+        except Exception:
+            state = "save"
+        for button, text in getattr(self, "_field_buttons", []):
+            try:
+                button.configure(text={"saved": self.FIELD_SAVED_TEXT, "chart": self.FIELD_CHART_TEXT}.get(state, text))
+                button.state(["disabled"] if state == "saved" else ["!disabled"])
+            except Exception:
+                pass
+        for box in (getattr(self, "out_saves", None),):
+            if box is not None:
+                box.flow()
+        tp = getattr(self, "transit_page", None)
+        if tp is not None:
+            try:
+                tp._results_key = None
+                tp._flow_results(tp._results_box.winfo_width())
+            except Exception:
+                pass
+
+    def field_image_action(self) -> str:
+        """The Save field image buttons: save the image (as always); or, when the night's report has saved it, do
+        nothing (the button is greyed out) or fetch only its missing AAVSO chart. Never a second, identical image."""
+        state, _why = self.field_image_state()
+        if state == "save":
+            return self.save_field_image()
+        st = self._field_saved
+        if state == "chart" and not st.get("fetching"):
+            info = self.field_image_info()
+            if info is not None and info.get("center") is not None and info.get("fov_arcmin"):
+                self._fetch_field_chart(info, st["chart"], quiet=False, state=st, alone=True)
+                self.update_field_buttons()
+        return st["path"]
 
     def _field_frame_problem(self) -> str:
         """2.2.21 (nit f): why the Photometry page's frame cannot be this target's field image ("" when it can): a

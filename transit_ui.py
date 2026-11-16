@@ -21,6 +21,7 @@ import photometry_core as core
 import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
+from group_rows import LABEL_WIDTH, GroupRows   # 2.4.0 (#98): the Output pages' function groups
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -107,6 +108,15 @@ def fit_progress_words(phase, done, total) -> str:
     "Fitting the transit: MCMC step… 1,200 of 3,000" (the second count matches the MCMC menu, 2.2.12)."""
     return f"Fitting the transit: MCMC {'burn-in' if phase == 'burn-in' else 'step'}… {int(done):,} of {int(total):,}"
 
+# 2.4.0 (#98): the Fit button's words; the second while a Points or Corrections setting differs from the shown fit's.
+FIT_TEXT = "Fit transit"
+REFIT_TEXT = "Refit (settings changed)"
+STALE_GRAY = "#9aa7b0"
+# 2.4.0 (#96): why Detrend airmass is greyed out.
+NO_AIRMASS_SITE = "no airmass: site not set"
+NO_AIRMASS_DATA = "no airmass in these data"
+
+
 class TransitPage:
     """Output page in Transits mode."""
 
@@ -128,62 +138,152 @@ class TransitPage:
         self._fit_signature = None        # the data the shown fit was made from
         self._auto_tried = None           # the data an automatic fit was last started for
 
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill=X, pady=2)
-        ttk.Label(row, text="Night", style="Card.TLabel").pack(side=LEFT)
+        # 2.4.0 (#98): the controls in function groups, one labelled row per group, the same groups in the same order
+        # as on the Variables Output page (group_rows): Data, Points, Corrections, Fit, Comps, Analysis, View. Only
+        # Fit transit is green up here; the save buttons stay under the plot.
+        groups = GroupRows(card, "transits", tooltip=getattr(app, "_add_tooltip", None))
+        groups.frame.pack(fill=X, pady=(0, 2))
+        self.groups = groups
+
+        # ---- 1. Data: the night, or an opened report
+        g = groups.parent("data")
+        night_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(night_box, text="Night", style="Card.TLabel").pack(side=LEFT)
         self.night = StringVar()
         # 2.2.7: the box shows "K2-113 b · night of 5–6 Oct 2026"; self.night keeps the JD key behind it.
         self.night_label = StringVar()
         self._night_keys = {}
-        self.night_box = ttk.Combobox(row, textvariable=self.night_label, width=36, state="readonly")
-        self.night_box.pack(side=LEFT, padx=(4, 6))
+        self.night_box = ttk.Combobox(night_box, textvariable=self.night_label, width=36, state="readonly")
+        self.night_box.pack(side=LEFT, padx=(4, 0))
         self.night_box.bind("<<ComboboxSelected>>", lambda _e: self._night_picked())
-        ttk.Button(row, text="Open AAVSO exoplanet report (EXOTIC)…", command=self.open_report).pack(side=LEFT, padx=6)
-        self.close_report_button = ttk.Button(row, text="Close report", command=self.close_report)
+        groups.add("data", night_box)
+        self.close_report_button = groups.add("data", ttk.Button(g, text="Close report", command=self.close_report),
+                                              shown=False)
+        groups.add("data", ttk.Button(g, text="Open AAVSO exoplanet report (EXOTIC)…", command=self.open_report), pad=8)
         self.source_text = StringVar(value="")
-        ttk.Label(row, textvariable=self.source_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
+        groups.add("data", ttk.Label(g, textvariable=self.source_text, style="Hint.TLabel", justify=LEFT), wrap=True)
 
-        row2 = ttk.Frame(card, style="Card.TFrame")
-        row2.pack(fill=X, pady=2)
+        # ---- 2. Points: which frames go into the fit
+        # 2.2.17 (item 5): leave out a stretch of time and refit (no new reduction, same comps).
+        g = groups.parent("points")
+        trim_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(trim_box, text="Trim", style="Card.TLabel").pack(side=LEFT)
+        ttk.Label(trim_box, text="from", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
+        self.trim_from = StringVar(value="")
+        from_box = ttk.Entry(trim_box, textvariable=self.trim_from, width=13)
+        from_box.pack(side=LEFT)
+        ttk.Label(trim_box, text="to", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
+        self.trim_to = StringVar(value="")
+        to_box = ttk.Entry(trim_box, textvariable=self.trim_to, width=13)
+        to_box.pack(side=LEFT)
+        for box in (from_box, to_box):
+            try:
+                box.bind("<Return>", lambda _e: self.trim_and_refit())
+            except Exception:
+                pass
+        groups.add("points", trim_box, pad=8)
+        groups.add("points", ttk.Button(g, text="Trim and refit", command=self.trim_and_refit))
+        groups.add("points", ttk.Button(g, text="Clear trim", command=self.clear_trim))
+        # 2.2.13: put the night's cloud-flagged frames back (error bars doubled); shown only when there are some.
+        # 2.4.0 (#98): with the other points-in/out controls (it was on the Fit row).
+        self.refit_flagged_button = groups.add("points", ttk.Button(
+            g, text=f"Refit with flagged frames (errors ×{tc.FLAGGED_ERR_FACTOR:g})",
+            command=lambda: self.fit(with_flagged=True)), shown=False)
+        self.trim_text = StringVar(value="")
+        groups.add("points", ttk.Label(g, textvariable=self.trim_text, style="Hint.TLabel", justify=LEFT), wrap=True)
+        self._trims = []          # [(BJD_TDB from, to)]; ±inf for an open end
+        self._drag = None         # the span last dragged across the plot (exact BJD behind the boxes' clock text)
+        self._time_map = None     # (BJD_TDB sorted, BJD − JD UTC there, exact?) of the source shown
+        self._span = None
+        self._update_trim_text()
+
+        # ---- 3. Corrections: trends taken out by the fit
+        g = groups.parent("corrections")
         self.detrend_airmass = BooleanVar(value=True)
         self.detrend_time = BooleanVar(value=False)
-        ttk.Label(row2, text="Detrend", style="Card.TLabel").pack(side=LEFT)
-        ttk.Checkbutton(row2, text="airmass", variable=self.detrend_airmass).pack(side=LEFT, padx=(4, 0))
-        ttk.Checkbutton(row2, text="time slope", variable=self.detrend_time).pack(side=LEFT, padx=(6, 0))
-        ttk.Label(row2, text="MCMC", style="Card.TLabel").pack(side=LEFT, padx=(16, 4))
-        self.mcmc = StringVar(value="Standard (3,000 steps)")
-        ttk.Combobox(row2, textvariable=self.mcmc, values=list(MCMC_CHOICES), width=22, state="readonly").pack(side=LEFT)
-        ttk.Button(row2, text="Fit transit", style="Accent.TButton", command=self.fit).pack(side=LEFT, padx=10)
-        ttk.Button(row2, text="Cancel", command=app.cancel_job).pack(side=LEFT)
-        # 2.2.13: put the night's cloud-flagged frames back (error bars doubled); shown only when there are some.
-        self.refit_flagged_button = ttk.Button(row2, text=f"Refit with flagged frames (errors ×"
-                                                          f"{tc.FLAGGED_ERR_FACTOR:g})",
-                                               command=lambda: self.fit(with_flagged=True))
+        det_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(det_box, text="Detrend", style="Card.TLabel").pack(side=LEFT)
+        self.detrend_airmass_check = ttk.Checkbutton(det_box, text="airmass", variable=self.detrend_airmass,
+                                                     command=self._airmass_clicked)
+        self.detrend_airmass_check.pack(side=LEFT, padx=(4, 0))
+        ttk.Checkbutton(det_box, text="time slope", variable=self.detrend_time).pack(side=LEFT, padx=(6, 0))
+        groups.add("corrections", det_box, pad=8)
+        # 2.4.0 (#96): without airmass the box is greyed out and unticked, with the reason beside it.
+        self._airmass_wanted = True       # the user's own choice, put back when the data have airmass again
+        self._airmass_off_why = ""
+        self.airmass_hint = StringVar(value="")
+        self.airmass_hint_label = groups.add("corrections", ttk.Label(g, textvariable=self.airmass_hint,
+                                                                      style="Hint.TLabel"), pad=8, shown=False)
+        try:
+            app._add_tooltip(self.detrend_airmass_check, lambda: self._airmass_off_why)
+        except Exception:
+            pass
         # 2.2.13: a report carries no flip segment: the user can say its largest gap is the meridian flip.
         self.flip_at_gap = BooleanVar(value=False)
-        self.flip_at_gap_check = ttk.Checkbutton(row2, text="meridian flip at the largest gap",
-                                                 variable=self.flip_at_gap)
+        self.flip_at_gap_check = groups.add("corrections", ttk.Checkbutton(
+            g, text="meridian flip at the largest gap", variable=self.flip_at_gap), shown=False)
         self._data_extra = {}
 
-        row4 = ttk.Frame(card, style="Card.TFrame")
-        row4.pack(fill=X, pady=(2, 2))
-        # 2.3.0 (#52): Tonight's transits and the Transit planner are gone; the NEB check leads the row.
-        ttk.Button(row4, text="Nearby-binary (NEB) check…", command=lambda: NebWindow(app, self)).pack(side=LEFT,
-                                                                                                    padx=(0, 6))
-        # 2.2.19 (#18): several nights of the planet fitted together; timing per epoch and an updated ephemeris.
-        ttk.Button(row4, text="Multi-night…", command=self.open_multinight).pack(side=LEFT)
+        # ---- 4. Fit: the one green button above the plot
+        g = groups.parent("fit")
+        mcmc_box = ttk.Frame(g, style="Card.TFrame")
+        ttk.Label(mcmc_box, text="MCMC", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
+        self.mcmc = StringVar(value="Standard (3,000 steps)")
+        ttk.Combobox(mcmc_box, textvariable=self.mcmc, values=list(MCMC_CHOICES), width=22,
+                     state="readonly").pack(side=LEFT)
+        groups.add("fit", mcmc_box, pad=10)
+        self.fit_button = groups.add("fit", ttk.Button(g, text=FIT_TEXT, style="Accent.TButton", command=self.fit),
+                                     pad=10)
+        groups.add("fit", ttk.Button(g, text="Cancel", command=app.cancel_job))
+        # 2.4.0 (#98): a Points or Corrections setting changed since the shown fit: the button says so and the fit's
+        # numbers go grey until it is pressed. The fit itself still always waits for the button (2.3.2 item 2).
+        self._fit_settings = None         # (detrend airmass, time slope, flip at the gap) of the shown fit
+        self._stale_shown = False
+        for var in (self.detrend_airmass, self.detrend_time, self.flip_at_gap):
+            try:
+                var.trace_add("write", lambda *_a: self._settings_changed())
+            except Exception:
+                pass
+
+        # ---- 5. Comps
         # 2.2.17 (item 4): Variable View's comp windows here too; a Use comps change refits the transit.
-        self.comp_health_button = ttk.Button(row4, text="Comp health…", command=self.open_comp_health)
-        self.comp_health_button.pack(side=LEFT, padx=(12, 0))
-        self.use_comps_button = ttk.Button(row4, text="Use comps…", command=self.open_use_comps)
-        self.use_comps_button.pack(side=LEFT, padx=(6, 0))
+        g = groups.parent("comps")
+        self.comp_health_button = groups.add("comps", ttk.Button(g, text="Comp health…",
+                                                                 command=self.open_comp_health))
+        self.use_comps_button = groups.add("comps", ttk.Button(g, text="Use comps…", command=self.open_use_comps),
+                                           pad=8)
+        self.comp_hint = StringVar(value="")
+        self.comp_hint_label = groups.add("comps", ttk.Label(g, textvariable=self.comp_hint, style="Hint.TLabel",
+                                                             justify=LEFT), wrap=True)
+        try:
+            self.comp_hint.trace_add("write", lambda *_a: self.groups.boxes["comps"].flow())
+            self.source_text.trace_add("write", lambda *_a: self.groups.boxes["data"].flow())
+            self.trim_text.trace_add("write", lambda *_a: self.groups.boxes["points"].flow())
+        except Exception:
+            pass
+
+        # ---- 6. More analysis
+        g = groups.parent("analysis")
+        # 2.3.0 (#52): Tonight's transits and the Transit planner are gone; the NEB check leads the row.
+        groups.add("analysis", ttk.Button(g, text="Nearby-binary (NEB) check…",
+                                          command=lambda: NebWindow(app, self)))
+        # 2.2.19 (#18): several nights of the planet fitted together; timing per epoch and an updated ephemeris.
+        groups.add("analysis", ttk.Button(g, text="Multi-night…", command=self.open_multinight))
+        # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights).
+        # 2.4.0 (#98): beside Multi-night… (it was in the Results row).
+        self.multinight_series_button = groups.add("analysis", ttk.Button(
+            g, text="Fit the series' nights…", command=self.open_multinight_series))
+        self.multinight_series_button.state(["disabled"])
+
+        # ---- 7. View only
+        g = groups.parent("view")
         # 2.2.19 (#31): credible bands on the plot (on by default). 2.3.0 (John): the corner plot button is now
         # "Save corner plot…" in the Results row, before Save field image….
         self.show_bands = BooleanVar(value=True)
-        ttk.Checkbutton(row4, text="credible bands", variable=self.show_bands,
-                        command=lambda: self.draw() if self.result else None).pack(side=LEFT, padx=(12, 0))
+        groups.add("view", ttk.Checkbutton(g, text="credible bands", variable=self.show_bands,
+                                           command=lambda: self.draw() if self.result else None), pad=12)
         # 2.3.2 (item 6): the plot's bin width (display only: the fit, beta and the 10-min rms use every frame).
-        bins_box = ttk.Frame(row4, style="Card.TFrame")
+        bins_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(bins_box, text="Plot bins", style="Card.TLabel").pack(side=LEFT)
         self.plot_bins = StringVar(value=PLOT_BIN_CHOICES[0])
         bins_combo = ttk.Combobox(bins_box, textvariable=self.plot_bins, values=list(PLOT_BIN_CHOICES), width=7,
@@ -193,47 +293,12 @@ class TransitPage:
             bins_combo.bind("<<ComboboxSelected>>", lambda _e: self._plot_bins_changed())
         except Exception:
             pass
-        bins_box.pack(side=LEFT, padx=(12, 0))
+        groups.add("view", bins_box)
         self._last_preview = None
-        self.comp_hint = StringVar(value="")
-        self.comp_hint_label = ttk.Label(row4, textvariable=self.comp_hint, style="Hint.TLabel",
-                                         justify=LEFT)   # 2.2.19 (r2: nit): wraps at the row's width (_flow_row4)
-        self.comp_hint_label.pack(side=LEFT, padx=8)
-        # 2.2.19 (#18 review): the tools row wraps like text when the page is narrow (125 % on a 1366-px screen).
-        self._row4, self._row4_key = row4, None
-        try:
-            row4.bind("<Configure>", lambda e: self._flow_row4(e.width), add="+")
-            self.comp_hint.trace_add("write", lambda *_a: self._flow_row4(self._row4.winfo_width()))
-        except Exception:
-            pass
+        # 2.2.19 (#18 review): the rows wrap like text when the page is narrow (125 % on a 1366-px screen); since
+        # 2.4.0 each group row does (group_rows.FlowBox). _row4 is kept as the name of the old tools row's frame.
+        self._row4 = groups.parent("comps")
         self._refit_pending = False
-
-        # 2.2.17 (item 5): leave out a stretch of time and refit (no new reduction, same comps).
-        trim_row = ttk.Frame(card, style="Card.TFrame")
-        trim_row.pack(fill=X, pady=(2, 2))
-        ttk.Label(trim_row, text="Trim", style="Card.TLabel").pack(side=LEFT)
-        ttk.Label(trim_row, text="from", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
-        self.trim_from = StringVar(value="")
-        from_box = ttk.Entry(trim_row, textvariable=self.trim_from, width=13)
-        from_box.pack(side=LEFT)
-        ttk.Label(trim_row, text="to", style="Card.TLabel").pack(side=LEFT, padx=(6, 2))
-        self.trim_to = StringVar(value="")
-        to_box = ttk.Entry(trim_row, textvariable=self.trim_to, width=13)
-        to_box.pack(side=LEFT)
-        for box in (from_box, to_box):
-            try:
-                box.bind("<Return>", lambda _e: self.trim_and_refit())
-            except Exception:
-                pass
-        ttk.Button(trim_row, text="Trim and refit", command=self.trim_and_refit).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(trim_row, text="Clear trim", command=self.clear_trim).pack(side=LEFT, padx=(6, 0))
-        self.trim_text = StringVar(value="")
-        ttk.Label(trim_row, textvariable=self.trim_text, style="Hint.TLabel").pack(side=LEFT, padx=8)
-        self._trims = []          # [(BJD_TDB from, to)]; ±inf for an open end
-        self._drag = None         # the span last dragged across the plot (exact BJD behind the boxes' clock text)
-        self._time_map = None     # (BJD_TDB sorted, BJD − JD UTC there, exact?) of the source shown
-        self._span = None
-        self._update_trim_text()
 
         prog = ttk.Frame(card, style="Card.TFrame")
         prog.pack(fill=X, side="bottom", pady=(4, 0))
@@ -242,7 +307,7 @@ class TransitPage:
         results = ttk.Frame(card, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(6, 0))
         self.results_row = results
-        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT, anchor="n")
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=LABEL_WIDTH).pack(side=LEFT, anchor="n")
         # Bottom right, the same place as "Transit View" on the Variables page (2.2.1).
         ttk.Button(results, text="Variable View  ▶", style="Accent.TButton", command=app.show_variables_view).pack(
             side=RIGHT, anchor="n")
@@ -274,10 +339,13 @@ class TransitPage:
         # like the other Save… buttons.
         _rbutton(text="Save corner plot…", command=self.open_corner)
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
-        _rbutton(text="Save field image…", command=app.save_field_image)
-        # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights)
-        self.multinight_series_button = _rbutton(text="Fit the series' nights…", command=self.open_multinight_series)
-        self.multinight_series_button.state(["disabled"])
+        # 2.4.0 (#101): once the night's report has saved it, the button reads "Field image saved ✓" (greyed), or
+        # "Fetch AAVSO chart" when only the chart is missing (App.field_image_action).
+        self.field_button = _rbutton(text="Save field image…", command=app.field_image_action)
+        try:
+            app.register_field_button(self.field_button, "Save field image…")
+        except Exception:
+            pass
         try:
             rbox.bind("<Configure>", lambda e: self._flow_results(e.width), add="+")
         except Exception:
@@ -350,6 +418,7 @@ class TransitPage:
         self.table.tag_configure("warn", foreground="#b35c00")
         self.table.tag_configure("gray", foreground="#9aa7b0")
         self.table.tag_configure("graywarn", foreground="#d9b38c")
+        self.table.tag_configure("stale", foreground=STALE_GRAY)
         yscroll = ttk.Scrollbar(tablebox, orient="vertical", command=self.table.yview)
         # A sideways scroll bar only when the window is too narrow for the columns.
         self.table_xscroll = ttk.Scrollbar(tablebox, orient="horizontal", command=self.table.xview)
@@ -410,31 +479,10 @@ class TransitPage:
                                 PLOT_BIN_CHOICES[0], cadence_h)
 
     def _flow_row4(self, width: int):
-        """Lay the Transit tools row out in as many lines as its width needs (clearv_app.flow_rows)."""
-        try:
-            from clearv_app import flow_rows
-            kids = list(self._row4.winfo_children())
-            if width and width > 1:
-                # 2.2.19 (r2: nit): a long hint wraps inside the row instead of widening the page
-                try:
-                    self.comp_hint_label.configure(wraplength=max(120, int(width) - 16))
-                except Exception:
-                    pass
-            pads = [12 if w is self.comp_health_button else 8 for w in kids]
-            widths = [int(w.winfo_reqwidth()) + p for w, p in zip(kids, pads)]
-            rows = flow_rows(widths, max(int(width), 1) if width and width > 1 else None)
-            key = tuple(tuple(r) for r in rows)
-            if key == self._row4_key:
-                return
-            self._row4_key = key
-            for w in kids:
-                w.pack_forget()
-                w.grid_forget()
-            for r, row in enumerate(rows):
-                for c, i in enumerate(row):
-                    kids[i].grid(row=r, column=c, sticky=W, padx=(0, pads[i]), pady=(0, 2))
-        except Exception:
-            pass
+        """Lay the rows out again in as many lines as the width needs. 2.4.0 (#98): every group row wraps by itself
+        (group_rows.FlowBox); this keeps the old name and lays them all out."""
+        for box in self.groups.boxes.values():
+            box.flow(width if width and width > 1 else None)
 
     def _flow_results(self, width: int):
         """2.2.19 (r2: S2): lay the Results row's save buttons out in as many lines as its width needs."""
@@ -476,7 +524,7 @@ class TransitPage:
         import multinight
         if len(multinight.series_transit_nights(self.app)) < 2:
             messagebox.showinfo("SHOBS-P", "Fit the series' nights… needs a Transits series with at least two nights. "
-                                           "Multi-night… (above) takes reports and fit CSVs instead.")
+                                           "Multi-night… (beside it) takes reports and fit CSVs instead.")
             return None
         win = self.open_multinight()
         win.load_series_nights()
@@ -504,7 +552,7 @@ class TransitPage:
         """2.2.21 (#44): after a save, a short line pointing at Fit the series' nights… when the series has 2+ nights."""
         n = self.update_series_button()
         if n >= 2 and self.report is None:
-            text = f"This series has {n} transit nights; Fit the series' nights… (Results row) fits them together."
+            text = f"This series has {n} transit nights; Fit the series' nights… (Analysis row) fits them together."
             self.series_hint.set(text)
             self.app.log(text, keep_status=True)   # 2.2.21 review: keep the save line and upload offer
 
@@ -531,7 +579,12 @@ class TransitPage:
         self._check_stale(auto=shown)
         self._count_text()
         self._update_comp_buttons()
+        self._update_airmass_box()   # 2.4.0 (#96)
         self.update_series_button()   # 2.2.21 (#44)
+        try:
+            self.app.update_field_buttons()   # 2.4.0 (#101)
+        except Exception:
+            pass
 
     def _target_status_shown(self) -> dict:
         """2.2.21 (#32, item 14): the App's TOI/ExoClock answer when it is for the planet this page fits, else {}."""
@@ -592,32 +645,124 @@ class TransitPage:
             self.banner.set(f"Fitting {report_kind(r.get('header'))}: {name}, {self._report_date()}, {len(r['t'])} "
                             f"points from {os.path.basename(r.get('path', ''))}." + kept
                             + (" " + r["time_note"] if r.get("time_note") else ""))   # 2.2.17 review
-            try:
-                self.close_report_button.pack(side=LEFT, padx=(0, 6), after=self.night_box)
-            except Exception:
-                pass
+            self.groups.show("data", self.close_report_button, True)
             self._show_flip_check(True)
             app.set_report_note(f"The Transit fit page is showing {report_kind(r.get('header'))} for {name}, not the "
                                 "photometry set up here.")
         else:
             self.banner.set("")
-            try:
-                self.close_report_button.pack_forget()
-            except Exception:
-                pass
+            self.groups.show("data", self.close_report_button, False)
             self._show_flip_check(False)
             app.set_report_note("")
         self._update_comp_buttons()
+        self._update_airmass_box()   # 2.4.0 (#96)
+
+    # ---- 2.4.0 (#96): Detrend airmass follows whether the data have airmass ----------------
+    def _airmass_missing(self) -> str:
+        """'' when the shown source has airmass (or there is nothing to judge yet), else why not. The fit drops the
+        airmass term exactly when no point has a finite airmass (transit_core), so that is the test here."""
+        try:
+            if self.report is not None:
+                am = self.report.get("airmass")
+                if am is None or not np.isfinite(np.asarray(am, dtype=float)).any():
+                    return NO_AIRMASS_DATA
+                return ""
+            night = self.night.get()
+            obs = [o for o in self.app.observations if o.night == night] if night else []
+            if not obs:
+                return ""
+            if any(o.airmass is not None and math.isfinite(float(o.airmass)) for o in obs):
+                return ""
+            return NO_AIRMASS_DATA if self._site_set() else NO_AIRMASS_SITE
+        except Exception:
+            return ""
+
+    def _site_set(self) -> bool:
+        try:
+            float(self.app.lat.get())
+            float(self.app.lon.get())
+            return True
+        except Exception:
+            return False
+
+    def _airmass_clicked(self):
+        """The user's own tick, kept so it comes back when a source without airmass is left."""
+        if not self._airmass_off_why:
+            self._airmass_wanted = bool(self.detrend_airmass.get())
+
+    def _update_airmass_box(self):
+        """Grey out and untick 'airmass' when the data have none (the fit would run with 'Detrend: none' while the
+        box said airmass); with airmass again, the box is live and the user's earlier choice is back."""
+        try:
+            why = self._airmass_missing()
+            if why:
+                if not self._airmass_off_why:
+                    self._airmass_wanted = bool(self.detrend_airmass.get())
+                self._airmass_off_why = why
+                if self.detrend_airmass.get():
+                    self.detrend_airmass.set(False)
+                self.detrend_airmass_check.state(["disabled"])
+                self.airmass_hint.set(why)
+                self.groups.show("corrections", self.airmass_hint_label, True)
+            elif self._airmass_off_why:
+                self._airmass_off_why = ""
+                self.detrend_airmass_check.state(["!disabled"])
+                self.detrend_airmass.set(bool(self._airmass_wanted))
+                self.airmass_hint.set("")
+                self.groups.show("corrections", self.airmass_hint_label, False)
+        except Exception:
+            pass
+
+    # ---- 2.4.0 (#98): the "refit needed" cue ------------------------------------------------
+    def _settings_key(self) -> tuple:
+        """The Points and Corrections settings a fit reads when it starts (a trim starts its own refit)."""
+        return (bool(self.detrend_airmass.get()), bool(self.detrend_time.get()), bool(self.flip_at_gap.get()))
+
+    def fit_is_stale(self) -> bool:
+        """A fit is shown and a Points or Corrections setting now differs from the one it was made with."""
+        return (self.result is not None and self._fit_settings is not None
+                and self._settings_key() != self._fit_settings)
+
+    def _settings_changed(self):
+        if self.fit_is_stale() != self._stale_shown:
+            self._fill_table()
+            if self.fit_is_stale():
+                try:
+                    self.app.status.set("Settings changed since this fit: press Refit (settings changed) to fit "
+                                        "with them. The numbers shown are the earlier fit's.")
+                except Exception:
+                    pass
+
+    def _show_stale(self):
+        """The Fit button's words and the grey of the shown fit's result lines (the table rows are tagged in
+        _fill_table). Never starts a fit."""
+        stale = self.fit_is_stale()
+        self._stale_shown = stale
+        try:
+            self.fit_button.configure(text=REFIT_TEXT if stale else FIT_TEXT)
+            self.groups.boxes["fit"]._key = None
+            self.groups.boxes["fit"].flow()
+        except Exception:
+            pass
+        try:
+            if stale:
+                for lab in (self.verdict_label, self.quality_label, self.prog_label):
+                    lab.configure(foreground=STALE_GRAY)
+            else:
+                self.quality_label.configure(foreground="#33424d")
+                self.prog_label.configure(foreground="")
+        except Exception:
+            pass
 
     def _show_flip_check(self, report_loaded: bool):
         """2.2.13: the "meridian flip at the largest gap" box, only for a loaded report (photometry has its flip
         segment) and only while the flip step is enabled."""
         try:
             if report_loaded and tc.FLIP_STEP_ENABLED:
-                self.flip_at_gap_check.pack(side=LEFT, padx=(12, 0))
+                self.groups.show("corrections", self.flip_at_gap_check, True)
             else:
                 self.flip_at_gap.set(False)
-                self.flip_at_gap_check.pack_forget()
+                self.groups.show("corrections", self.flip_at_gap_check, False)
         except Exception:
             pass
 
@@ -625,10 +770,8 @@ class TransitPage:
         """2.2.13: the refit button only when the night has flagged frames the fit left out (never for a report)."""
         try:
             fl = (self._data_extra or {}).get("flagged") if self.report is None else None
-            if fl is not None and len(fl["t"]) and self.result is not None:
-                self.refit_flagged_button.pack(side=LEFT, padx=(6, 0))
-            else:
-                self.refit_flagged_button.pack_forget()
+            self.groups.show("points", self.refit_flagged_button,
+                             bool(fl is not None and len(fl["t"]) and self.result is not None))
         except Exception:
             pass
 
@@ -654,6 +797,7 @@ class TransitPage:
         self._fill_table()
         self.draw()
         self.source_night = self.night.get()
+        self._update_airmass_box()   # 2.4.0 (#96): the night is known now
         self._count_text()
         self.planet_text.set(planet_summary(self.current_planet()))
         if auto:
@@ -1229,6 +1373,7 @@ class TransitPage:
             return
         if self.report is None:
             self._trim_source_check()   # review: a series change drops the trim
+        self._update_airmass_box()   # 2.4.0 (#96): the box never says airmass when the data have none
         planet = self.current_planet()
         if not planet:
             if not auto:
@@ -1289,6 +1434,7 @@ class TransitPage:
             return
         try:   # 2.2.20 (review): an error before the worker starts must not leave the run lock or the bar stuck
             self._pending_signature = self._signature()
+            self._pending_settings = self._settings_key()   # 2.4.0 (#98)
             steps = MCMC_CHOICES.get(self.mcmc.get(), 3000)
             da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
             # 2.2.13: the flip segment, and the flagged frames (left out and listed, or put back with doubled errors).
@@ -1554,6 +1700,7 @@ class TransitPage:
         result["_serial"] = next(_FIT_SERIAL)   # 2.2.17 review: names this fit for the numbered save set
         self.result = result
         self._fit_signature = getattr(self, "_pending_signature", None)
+        self._fit_settings = getattr(self, "_pending_settings", None)   # 2.4.0 (#98)
         self.meta_for_files = meta
         s = result["summary"]
         self.prog_text.set(f"✔ Done: Tc {s['tc'][0]:.5f} ± {s['tc'][1]:.5f}, Rp/R* {s['k'][0]:.4f} ± {s['k'][1]:.4f}, "
@@ -1840,6 +1987,7 @@ class TransitPage:
     def _fill_table(self):
         self._set_columns()
         self._show_verdict()
+        self._show_stale()   # 2.4.0 (#98): after the verdict (it sets its own colour)
         self.table.delete(*self.table.get_children())
         r = self.result
         p = self.current_planet() or {}
@@ -1933,8 +2081,11 @@ class TransitPage:
                 if key in text:
                     warn_names.add(label)
         undetected = bool(r) and _state(r.get("verdict")) == "none"
+        stale = self.fit_is_stale()
         for row in rows:
-            if undetected:
+            if stale:
+                tags = ("stale",)   # 2.4.0 (#98): the earlier fit's numbers, grey until Refit is pressed
+            elif undetected:
                 tags = ("graywarn",) if row[0] in warn_names else ("gray",)
             else:
                 tags = ("warn",) if row[0] in warn_names else ()
