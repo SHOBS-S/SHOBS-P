@@ -87,6 +87,16 @@ class BusyBar(ttk.Frame):
         except tk.TclError:
             pass
 
+    def show_now(self) -> None:
+        """SHOBS-P 2.4.0: show the bar at once, without the SHOW_AFTER_MS wait: for a step that is known to be long
+        and keeps the Tk thread (the timer could not fire until it ends). The caller then runs update_idletasks()."""
+        try:
+            if self._show_job is not None:
+                self.after_cancel(self._show_job)
+        except tk.TclError:
+            pass
+        self._show()
+
     def _show(self) -> None:
         self._show_job = None
         if not self.jobs or self.shown:

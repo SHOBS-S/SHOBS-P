@@ -1473,7 +1473,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.output_dir = StringVar()
         self.observer = StringVar(value=str(self.settings.get("observer_code", "") or ""))   # 2.2.18 (item 11)
         self.star_id = StringVar()
-        self.chart = StringVar()
+        # 2.4.0 (#97): never empty. 'na' until a marked comp or the check is an AAVSO sequence star (then that
+        # sequence's chart ID), or the user types one (Edit beside the comps, or at Save AAVSO). Same settings key.
+        self.chart = StringVar(value="na")
+        self.chart_line = StringVar(value="")
+        self.chart.trace_add("write", lambda *_a: self._update_chart_line())
         self.comp_name = StringVar()
         self.comp_mag = StringVar()
         self.check_name = StringVar()
@@ -1622,6 +1626,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._blink_cache = {}
         self._blink_cache_order = []
         self._blink_gen = 0
+        # 2.4.0 (#100): the reader follows the play position; frames are never read on the window's own thread
+        self._blink_lock = threading.RLock()   # the cache is filled by the reader thread
+        self._blink_reader = None
+        self._blink_pos = 0             # where the reader reads from (the frame wanted next)
+        self._blink_index_of = {}       # {path: place in the Blink list}
+        self._blink_failed = {}         # {(path, binning): why it could not be read, in plain words}
+        self._blink_busy_tok = None     # the busy bar's "Reading frame 37…"
+        self._blink_show_job = None     # a frame asked for by hand that is still being read
+        self._blink_last_shown = 0.0
+        self._blink_pace = 0.0          # seconds per frame really played, when slower than the setting
         self._blink_artist = None
         self.blink_speed = StringVar(value=self._blink_speed_text(self.settings.get("blink_seconds", 1.0)))
         self.blink_speed.trace_add("write", lambda *_: self._remember_blink_speed())
@@ -2568,6 +2582,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return float(str(var.get()).strip())   # (review MF3) "35,37" is an error, never 3537
         except Exception:
             raise ValueError(f"{label} is not a number. Type a number in that box.") from None
+
+    def _say_frame_skip(self, prefix: str, path: str, exc, log_only: bool = False) -> str:
+        """2.4.0 (#94): the Log line for a frame a step could not use; returns the reason to keep. A frame that
+        cannot be read gets plain words ("not a readable FITS file (damaged or cut short)") in the Log once per
+        frame (a second step meeting the same file says nothing more), and the library's own text goes to the log
+        file only. Any other reason is logged as before. Safe from a worker thread."""
+        name = os.path.basename(path)
+        plain = core.plain_read_error(exc, path)
+        if not plain:
+            self.call_ui(self._log_only if log_only else self.log, f"{prefix} {name}: {exc}")
+            return str(exc)
+        log_to_file(f"{prefix.strip()} {name}: {type(exc).__name__}: {exc}  [debug: the library's own text]")
+        said = getattr(self, "_unreadable_said", None)
+        if said is None:
+            said = self._unreadable_said = set()
+        if path not in said:
+            said.add(path)
+            self.call_ui(self._log_only if log_only else self.log, f"{prefix} {name}: {plain}")
+        return plain
 
     def _log_only(self, text: str):
         """2.3.6 (#79 item 1): a Log-only line (detail for the record; the status line keeps what it says)."""
@@ -4333,7 +4366,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         report = self._group(right, "AAVSO report")
         report.pack(fill=X)
         self._field(report, 0, "Observer code", self.observer, width=14)
-        self._field(report, 1, "Chart ID", self.chart, width=14, hint="na for non-AAVSO comps")
+        # 2.4.0 (#97): the Chart ID is not asked here any more (nothing could fill it at Input); it shows beside the
+        # comps on the Photometry page and again at Save AAVSO, each with an Edit.
         report.columnconfigure(1, weight=1)
 
         # 2.2.9: Site and Optics are two boxes.
@@ -4921,7 +4955,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.catalog_epoch = None   # 2.2.14 (item 13)
         self.catalog_var_type = ""
         self.extremum_csv = self.extremum_csv_star = ""   # review: a new target starts its own times CSV
-        self.chart.set("")
+        self._chart_auto = "na"   # 2.4.0 (#97): a new target starts at 'na' (never empty), filled after the solve
+        self.chart.set("na")
         if hasattr(self, "pick_label"):
             self._update_pick_label()
             self.update_star_panel()
@@ -6530,6 +6565,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "not flats)."] if in_flats else []) + notes))
         self.blink_index = min(self.blink_index, max(0, len(self.blink_paths) - 1))
         self._blink_labels = dict(zip(self.blink_paths, core.frame_labels_for(self.blink_paths)))   # 2.2.17 (round 2)
+        self._blink_index_of = {p: i for i, p in enumerate(self.blink_paths)}   # 2.4.0 (#100)
+        self._blink_failed = {}
+        self._blink_pace = 0.0
         self._start_blink_preload()
         self.show_blink()
 
@@ -6586,16 +6624,49 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return value
         return core.stretch_to_uint8(small, stretch, step=4), exptime, small, dict(stretch)
 
-    def _blink_store(self, key, value):
-        if key not in self._blink_cache:
-            self._blink_cache_order.append(key)
-        self._blink_cache[key] = value
-        # Keep memory bounded (about 1.5 GB of pictures and float16 copies, ~500 Bin 1 frames); the oldest go first.
+    BLINK_KEEP_BEHIND = 10   # frames just shown that stay in memory, for stepping back
+
+    def _blink_limit(self, value=None) -> int:
+        """How many Blink frames fit in memory (about 1.5 GB of pictures and float16 copies), at least 50."""
+        if value is None:
+            with self._blink_lock:
+                value = next(iter(self._blink_cache.values()), None)
+        if value is None:
+            return 50
         size = sum(getattr(v, "nbytes", 0) for v in value if isinstance(v, np.ndarray))
-        limit = max(50, int(BLINK_CACHE_BYTES // max(1, size)))
-        while len(self._blink_cache_order) > limit:
-            old = self._blink_cache_order.pop(0)
-            self._blink_cache.pop(old, None)
+        return max(50, int(BLINK_CACHE_BYTES // max(1, size)))
+
+    def _blink_store(self, key, value):
+        """Keep a frame's picture. Memory stays bounded; 2.4.0 (#100): the frames dropped are the ones farthest
+        behind the play position (already shown), never the ones just ahead of it, so a long night never empties
+        the window around the frame on screen. Called by the reader thread: no Tk here."""
+        with self._blink_lock:
+            if key not in self._blink_cache:
+                self._blink_cache_order.append(key)
+            self._blink_cache[key] = value
+            limit = self._blink_limit(value)
+            if len(self._blink_cache) <= limit:
+                return
+            index_of, n, pos = self._blink_index_of, max(1, len(self.blink_paths)), self._blink_pos
+            behind = min(self.BLINK_KEEP_BEHIND, limit // 5)
+
+            def rank(k):   # the highest goes first
+                i = index_of.get(k[0])
+                if i is None or k[1] != key[1]:
+                    return (2, 0)          # another folder's frame, or read at another binning
+                d = (i - pos) % n          # how far ahead of the play position
+                if d >= n - behind:
+                    return (0, d)          # just shown: kept for stepping back
+                return (1, d)              # far ahead, or shown long ago (the largest d): shown long ago goes first
+            while len(self._blink_cache) > limit:
+                victim = max((k for k in self._blink_cache if k != key), key=rank, default=None)
+                if victim is None:
+                    break
+                self._blink_cache.pop(victim, None)
+                try:
+                    self._blink_cache_order.remove(victim)
+                except ValueError:
+                    pass
 
     def _blink_stretch_changed(self):
         """2.2.15: a new Blink stretch. The frame on screen is redrawn now; the other cached frames are redrawn from
@@ -6604,7 +6675,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         gen = self._blink_restretch_gen
         stretch = dict(self.stretch["blink"])
         self.show_blink()
-        items = [(k, v) for k, v in self._blink_cache.items() if len(v) > 3 and v[3] != stretch]
+        with self._blink_lock:   # 2.4.0 (#100): the reader thread fills the cache
+            items = [(k, v) for k, v in self._blink_cache.items() if len(v) > 3 and v[3] != stretch]
         if not items:
             return
 
@@ -6622,11 +6694,36 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         threading.Thread(target=work, daemon=True).start()
 
     def _blink_put_restretched(self, key, value, gen):
-        if gen == self._blink_restretch_gen and key in self._blink_cache:
-            self._blink_cache[key] = value
+        with self._blink_lock:
+            if gen == self._blink_restretch_gen and key in self._blink_cache:
+                self._blink_cache[key] = value
 
-    def _start_blink_preload(self):
-        """Read the frames ahead of the one on screen in a background thread."""
+    def _blink_next_to_read(self, binning: int, paths=None):
+        """2.4.0 (#100): the first frame from the play position on that is not in memory yet (and has not failed),
+        within the window that fits in memory; None when the window is full. Any thread."""
+        paths = self.blink_paths if paths is None else paths
+        n = len(paths)
+        if not n:
+            return None
+        limit = self._blink_limit()
+        ahead = n if n <= limit else max(1, limit - min(self.BLINK_KEEP_BEHIND, limit // 5) - 1)
+        pos = self._blink_pos
+        cache, failed = self._blink_cache, self._blink_failed
+        for d in range(ahead):
+            path = paths[(pos + d) % n]
+            key = (path, binning)
+            if key not in cache and key not in failed:
+                return path
+        return None
+
+    def _start_blink_preload(self, restart: bool = True):
+        """The reader: a background thread that reads frames from the play position on. 2.4.0 (#100): it follows
+        the position (playback, a step back, a jump to a listed frame), keeps reading ahead of it and stops when the
+        window around it is in memory; _blink_set_pos starts it again when the position moves. restart=False keeps
+        a reader that is running."""
+        reader = getattr(self, "_blink_reader", None)
+        if not restart and reader is not None and reader.is_alive():
+            return
         self._blink_gen += 1
         gen = self._blink_gen
         paths = list(self.blink_paths)
@@ -6636,28 +6733,74 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             binning = max(int(self.binning.get()), 1)
         except Exception:
             binning = 1
-        start = self.blink_index
+        if restart:
+            self._blink_pos = self.blink_index
         self._blink_preload_bin = binning
 
         def work():
-            order = paths[start:] + paths[:start]
-            for path in order:
-                if gen != self._blink_gen:
-                    return
-                key = (path, binning)
-                if key in self._blink_cache:
+            idle = 0
+            while gen == self._blink_gen:
+                path = self._blink_next_to_read(binning, paths)
+                if path is None:
+                    # the window around the play position is in memory: stay a moment for the position to move on
+                    # (playback opens one place per frame), then end; _blink_set_pos starts a reader when needed
+                    idle += 1
+                    if idle > 40:
+                        return
+                    time.sleep(0.05)
                     continue
+                idle = 0
+                key = (path, binning)
                 try:
                     value = self._blink_picture(path, binning)
-                except Exception:
+                except Exception as exc:
+                    # 2.4.0 (#94): plain words on the Blink page; the library's own text in the log file
+                    log_to_file(f"Blink: {os.path.basename(path)}: {type(exc).__name__}: {exc}  "
+                                "[debug: the library's own text]")
+                    self._blink_failed[key] = core.plain_read_error(exc, path) or str(exc)
                     continue
                 if gen != self._blink_gen:
                     return
-                self.call_ui(self._blink_store, key, value)
+                self._blink_store(key, value)
                 time.sleep(0.001)
 
-        self._blink_worker = threading.Thread(target=work, daemon=True)
-        self._blink_worker.start()
+        self._blink_reader = threading.Thread(target=work, daemon=True)
+        self._blink_reader.start()
+
+    def _blink_set_pos(self, index: int):
+        """2.4.0 (#100): tell the reader which frame is wanted next, and start it when it has stopped and a frame
+        of the window around that position is not in memory (or the binning changed)."""
+        self._blink_pos = int(index)
+        if not self.blink_paths:
+            return
+        key = self._blink_key(self.blink_paths[min(max(int(index), 0), len(self.blink_paths) - 1)])
+        if key[1] != getattr(self, "_blink_preload_bin", key[1]):
+            self._start_blink_preload()   # the binning changed: read again
+            self._blink_pos = int(index)
+            return
+        reader = getattr(self, "_blink_reader", None)
+        if (reader is None or not reader.is_alive()) and self._blink_next_to_read(key[1]) is not None:
+            self._start_blink_preload(restart=False)
+
+    def _blink_reading_words(self, path) -> str:
+        """The busy bar's words while a frame is being read: "Reading frame 37… (12 of 210 read)"."""
+        n = len(self.blink_paths)
+        binning = self._blink_key(path)[1]
+        with self._blink_lock:
+            have = sum(1 for k in self._blink_cache if k[1] == binning and k[0] in self._blink_index_of)
+        return f"Reading frame {self.frame_label(path)}… ({have} of {n} read)"
+
+    def _blink_busy(self, words: str = ""):
+        """2.4.0 (#100): the busy bar shows the wait for a frame ("" ends it)."""
+        tok = getattr(self, "_blink_busy_tok", None)
+        if not words:
+            if tok is not None:
+                self.busy_end(tok)
+            self._blink_busy_tok = None
+        elif tok is None:
+            self._blink_busy_tok = self.busy_begin(words)
+        else:
+            self.busy_words(tok, words)
 
     def step_blink(self, delta):
         if not self.blink_paths or self._blink_folder() != self._blink_loaded_from:
@@ -6670,11 +6813,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def stop_blink(self):
         self.blink_playing = False
         self._cancel_blink_timer()
+        self._blink_pace = 0.0
+        self._blink_busy("")
         self.status.set("Blink stopped.")
 
     def _cancel_blink_timer(self):
         job = getattr(self, "_blink_job", None)
         self._blink_job = None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        job = getattr(self, "_blink_show_job", None)   # 2.4.0 (#100): a frame asked for that is still being read
+        self._blink_show_job = None
         if job is not None:
             try:
                 self.after_cancel(job)
@@ -6687,35 +6839,55 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._cancel_blink_timer()      # never two timer chains (that would double the speed)
         self.blink_playing = not self.blink_playing
         if self.blink_playing:
-            self._blink_wait = 0
+            self._blink_waited = False
+            self._blink_last_shown = 0.0
+            self._blink_pace = 0.0
             self._blink_tick()
+        else:
+            self._blink_pace = 0.0
+            self._blink_busy("")
+
+    BLINK_POLL_MS = 60   # how often a waiting playback looks whether the reader has the next frame
 
     def _blink_tick(self):
+        """Playback: show the next frame when its time has come and the reader has it. 2.4.0 (#100): a frame is
+        never read here (that froze the window on a long night of big frames): when the next frame is not in memory
+        yet the busy bar says "Reading frame 37…" and playback waits for the reader, however long it takes, so it
+        slows to the reader's pace; the Blink line then says the speed really played."""
         self._blink_job = None
         if not self.blink_playing or not self.blink_paths:
+            self._blink_busy("")
             return
         nxt = (self.blink_index + 1) % len(self.blink_paths)
-        key = self._blink_key(self.blink_paths[nxt])
-        if key[1] != getattr(self, "_blink_preload_bin", key[1]):
-            self._start_blink_preload()          # the binning changed since the frames were read
-        if key not in self._blink_cache:
-            worker = getattr(self, "_blink_worker", None)
-            self._blink_wait = getattr(self, "_blink_wait", 0) + 1
-            if worker is not None and worker.is_alive() and self._blink_wait < 10:
-                # Still being read in the background: wait a moment instead of stalling the window.
-                self.blink_label.set(f"Reading frame {self.frame_label(self.blink_paths[nxt])} …")
-                self._blink_job = self.after(100, self._blink_tick)
-                return
-            # Waited a second, or the reader has finished (an unreadable frame, or one dropped from memory):
-            # show it the slow way (show_blink reads it, or says it is unreadable) and carry on; if the reader
-            # had finished, start it again from here to refill what was dropped.
-            if worker is None or not worker.is_alive():
-                self.blink_index = nxt
-                self._start_blink_preload()
-        self._blink_wait = 0
+        path = self.blink_paths[nxt]
+        key = self._blink_key(path)
+        self._blink_set_pos(nxt)   # the reader reads from the wanted frame on
+        if key not in self._blink_cache and key not in self._blink_failed:
+            self._blink_waited = True
+            self._blink_busy(self._blink_reading_words(path))
+            self._blink_job = self.after(self.BLINK_POLL_MS, self._blink_tick)
+            return
+        now = time.monotonic()
+        seconds = self._blink_seconds()
+        last = getattr(self, "_blink_last_shown", 0.0)
+        took = now - last if last else 0.0
+        if getattr(self, "_blink_waited", False) and took > 1.25 * seconds:
+            # smoothed, so the number on the Blink line does not flicker from frame to frame
+            self._blink_pace = took if not self._blink_pace else 0.6 * self._blink_pace + 0.4 * took
+        elif not getattr(self, "_blink_waited", False):
+            self._blink_pace = 0.0
+        waited, self._blink_waited = getattr(self, "_blink_waited", False), False
+        self._blink_last_shown = now
         self.blink_index = nxt
         self.show_blink()
-        self._blink_job = self.after(int(self._blink_seconds() * 1000), self._blink_tick)
+        # the busy bar stays while playback runs at the reader's pace (no flicker between frames)
+        after = self.blink_paths[(nxt + 1) % len(self.blink_paths)]
+        after_key = self._blink_key(after)
+        if waited and after_key not in self._blink_cache and after_key not in self._blink_failed:
+            self._blink_busy(self._blink_reading_words(after))
+        else:
+            self._blink_busy("")
+        self._blink_job = self.after(int(seconds * 1000), self._blink_tick)
 
     # ---- 2.2.17 (item 6): frame numbers from the file names; explicit reject / keep; the rejected list ----------
     def frame_label(self, path) -> str:
@@ -6865,17 +7037,38 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         path = self.blink_paths[self.blink_index]
         rejected = path in self.rejected
         key = self._blink_key(path)
+        # 2.4.0 (#100): the frame comes from the reader thread, never from a read here. Not in memory yet: say so
+        # (the Blink line and the busy bar) and draw it as soon as the reader has it.
+        job = getattr(self, "_blink_show_job", None)
+        self._blink_show_job = None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._blink_set_pos(self.blink_index)
         cached = self._blink_cache.get(key)
         if cached is None:
-            try:
-                cached = self._blink_picture(path, key[1])
-            except Exception as exc:
-                self.blink_label.set(f"{os.path.basename(path)}  unreadable: {exc}")
+            why = self._blink_failed.get(key)
+            if why is not None:
+                self._blink_busy("")
+                self.blink_label.set(f"Frame {self.frame_label(path)}   {os.path.basename(path)}  unreadable: {why}"
+                                     f"   ({self.blink_index + 1} of {len(self.blink_paths)} in the list)")
+                self._update_rejected_list()
                 return
-            self._blink_store(key, cached)
+            words = self._blink_reading_words(path)
+            self.blink_label.set(f"{words}   ({self.blink_index + 1} of {len(self.blink_paths)} in the list)   "
+                                 f"{os.path.basename(path)}")
+            self._blink_busy(words)
+            self._blink_show_job = self.after(self.BLINK_POLL_MS, self.show_blink)
+            return
+        if not self.blink_playing:
+            self._blink_busy("")
         if len(cached) > 3 and cached[3] != self.stretch["blink"]:
             cached = self._blink_restretch(cached, self.stretch["blink"])   # 2.2.15: drawn with another stretch
-            self._blink_cache[key] = cached
+            with self._blink_lock:
+                if key in self._blink_cache:
+                    self._blink_cache[key] = cached
         pic, exptime = cached[0], cached[1]
         mark = "REJECTED" if rejected else "keep"
         # 2.2.17 (item 6): the frame's own number from its file name and its local time first; the list position
@@ -6885,6 +7078,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"Frame {label}" + (f"  {clock}" if clock else "") + f"   {mark}   ({self.blink_index + 1} of "
             f"{len(self.blink_paths)} in the list, {len(self._rejected_in_list())} rejected)   "
             f"{os.path.basename(path)}  exp {exptime:.1f}s"
+            + (f"   playing at about {self._blink_pace:.1f} s/frame (the frames are still being read)"
+               if self.blink_playing and self._blink_pace > 1.25 * self._blink_seconds() else "")
         )
         self._update_rejected_list()
         if self.blink_canvas is None:
@@ -7838,6 +8033,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"Calibrated preview: {os.path.basename(path)}  shape {calibrated.shape}  "
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         , keep_status=True)
+        self._header_pointing_note()   # 2.4.0 (#99): the header's pointing against the Input page's target
         pat = core.header_bayer(header or {})
         if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on color images (said at Scan/Calibrate)
             self.pattern.set(pat)
@@ -8539,6 +8735,85 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.update_star_panel()
             self.refresh_preview()
 
+    def _far_from_target_text(self, off: dict, name: str, ra: float, dec: float, all_frames: bool = True) -> str:
+        """2.4.0 (#99): the one ✖ line for frames that point more than a field width from the target."""
+        c = off["center"]
+        if all_frames:
+            head, tail = "The frames are centered at", "The target isn't in this night's frames."
+        else:   # the other frames' headers carry no pointing: only this frame is known
+            head, tail = "The reference frame is centered at", "The target isn't on it."
+        return (f"✖ {head} {core.radec_colons(c[0], c[1])}, {core.angle_words(off['sep_deg'])} from {name} "
+                f"({core.radec_colons(ra, dec)}). {tail} Check the telescope's target coordinates (and the target "
+                "on the Input page).")
+
+    def _later_frames_point_near(self, ra: float, dec: float, field_deg: float):
+        """2.4.0 (#99): do other frames of the night point at the target, by their header pointing? True: at least
+        one is within about a field of it (the reference frame alone was off: a slew still going); False: none is;
+        None: their headers carry no pointing. A few headers spread over the night, read without the pixels."""
+        try:
+            lights = [p for p in self._lights() if p != self.preview_path]
+        except Exception:
+            lights = []
+        if not lights:
+            return None
+        step = max(1, len(lights) // 5)
+        sample = lights[::step][:5] + [lights[-1]]
+        known = False
+        for path in dict.fromkeys(sample):
+            try:
+                point = core.header_pointing(core.read_header(path))
+            except Exception:
+                point = None
+            if point is None:
+                continue
+            known = True
+            if core.great_circle_deg(point[0], point[1], ra, dec) <= 1.5 * field_deg:
+                return True
+        return False if known else None
+
+    def _header_pointing_note(self):
+        """2.4.0 (#99): before the solve, compare where the reference frame's header says the telescope pointed
+        (RA/DEC, OBJECT) with the target on the Input page: one Log line when they are more than a field apart
+        (the field from the Optics boxes; 2° when they are empty). Said once for a frame and target."""
+        try:
+            if self.mode_key == "discovery" or self.preview is None or self._radec_is_fill():
+                return
+            ra, dec = float(self.ra_hours.get()) * 15.0, float(self.dec_deg.get())
+            header = self.preview_header or {}
+            point = core.header_pointing(header)
+            if point is None or not (math.isfinite(ra) and math.isfinite(dec)):
+                return
+            key = (self.preview_path, round(ra, 4), round(dec, 4))
+            if getattr(self, "_header_pointing_said", None) == key:
+                return
+            field = 2.0
+            try:
+                focal, pixel = float(self._setup_value("focal_mm")), float(self._setup_value("pixel_um"))
+                camera_bin = 1
+                for k in ("XBINNING", "BINNING", "XBIN"):
+                    if header.get(k) is not None:
+                        camera_bin = max(int(float(header.get(k))), 1)
+                        break
+                binning = max(int(self.binning.get() or 1), 1)
+                side = max(self.preview.shape[:2])
+                est = side * pixel / focal * 206.265 * camera_bin * binning / 3600.0
+                if math.isfinite(est) and est > 0:
+                    field = max(est, 0.1)
+            except Exception:
+                pass
+            sep = core.great_circle_deg(point[0], point[1], ra, dec)
+            if sep <= field:
+                return
+            self._header_pointing_said = key
+            name = self.star_id.get().strip() or "the target"
+            obj = str(header.get("OBJECT") or "").strip()
+            self.log(f"⚠ The frame's header says the telescope pointed at {core.radec_colons(point[0], point[1])}"
+                     + (f" (OBJECT {obj})" if obj else "") + f", {core.angle_words(sep)} from {name} "
+                     f"({core.radec_colons(ra, dec)}) on the Input page. Check the target on the Input page, or the "
+                     "telescope's target coordinates.")
+        except Exception:
+            pass
+
     def _auto_target_marker(self, why: str = "solve") -> bool:
         """2.2.15 (GitHub #3): once the image is solved and the target's RA/Dec are known, put the Target marker on the
         target (centered on the star like a click) unless one is placed already. Returns True when it placed one."""
@@ -8576,10 +8851,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             edge = 4.0
         where = f"{name} ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)})"
         if not (math.isfinite(xy[0]) and math.isfinite(xy[1]) and 0 <= xy[0] < w and 0 <= xy[1] < h):
+            # 2.4.0 (#99): how far off, and which way. More than about a field width away, the night's frames are
+            # of another part of the sky (a wrong entry in the telescope's plan): one plain ✖ line, no search of
+            # the next frames and no Blink advice.
+            off = core.target_vs_frame(ra, dec, (h, w), self.chart_solution)
+            self._target_off_words = ""
+            if off is not None and off["case"] == "far":
+                later = self._later_frames_point_near(ra, dec, off["field_deg"])
+                if not later:
+                    self.log(self._far_from_target_text(off, name, ra, dec, all_frames=later is False))
+                    return False
+            elif off is not None and off["case"] == "near":
+                self._target_off_words = (f"the target is {core.angle_words(off['beyond_deg'])} beyond the "
+                                          f"{off['way']} edge")
+            said = f" ({self._target_off_words})" if self._target_off_words else ""
             # 2.2.19 (#9): step forward to the first frame that holds the target (a telescope still settling)
             if self._start_target_search(ra, dec, name, where, xy, edge):
                 return False
-            self.log(f"Target: {where} is not on this frame by its plate solution; click the target by hand.")
+            self.log(f"Target: {where} is not on this frame by its plate solution{said}; click the target by hand "
+                     "on a frame that shows it.")
             return False
         if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
             self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
@@ -8673,8 +8963,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self._start_job(f"Looking for {name} on the next frames…"):
             return False
         self._progress_start(len(todo), f"Looking for {name}")
-        self.log(f"Target: {where} is not on this frame by its plate solution; looking for it on the next "
-                 f"{len(todo)} frame(s)…")
+        off_words = getattr(self, "_target_off_words", "") or ""   # 2.4.0 (#99): how far off, and which way
+        self.log(f"Target: {where} is not on this frame by its plate solution"
+                 + (f" ({off_words})" if off_words else "") + "; looking for it on the next "
+                 f"{len(todo)} frame{'s' if len(todo) != 1 else ''}…")
         binning = max(int(self.binning.get() or 1), 1)
         pattern, mode, masters = self.pattern.get(), self.debayer_mode.get(), self.masters
         precal = self.precalibrated
@@ -8687,7 +8979,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         def work():
             result = {"found": None, "checked": 0, "unknown": 0, "how": "", "todo": todo, "start": start,
-                      "lights": lights, "name": name, "where": where, "cap": cap}
+                      "lights": lights, "name": name, "where": where, "cap": cap, "off_words": off_words}
             try:
                 prev_src, chain = ref_src, None
                 for k, path in enumerate(todo, 1):
@@ -8746,6 +9038,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.log(f"✖ Target: {where} is not on this frame by its plate solution, and the next frames carry no "
                          "plate solution or pointing and could not be aligned with this one, so SHOBS-P cannot tell "
                          f"where it is on them. {fix}")
+            elif result.get("off_words"):
+                # 2.4.0 (#99): just off the edge: say how far and which way; Blink only helps when later frames
+                # do hold the target
+                n = result["checked"]
+                self.log(f"✖ Target: on the reference frame {result['off_words']}, and {name} is not on the next "
+                         f"{n} frame{'s' if n != 1 else ''} either. The telescope was pointed that far off: check "
+                         "its target coordinates and centering. If later frames do hold the target, reject the "
+                         "frames without it in Blink and Calibrate again.")
             else:
                 self.log(f"✖ Target: {name} not found in the first {result['checked'] + 1} frames. Check that the "
                          f"frames match the target. {fix}")
@@ -9133,7 +9433,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             return n_obs
 
-    def comp_skip_text(self, night: str = "") -> str:
+    def comp_skip_text(self, night: str = "", said=None) -> str:
         """2.3.0 (#50): the Photometry page's line about this night's measurement: frames skipped (how many and why),
         comps left out of some frames, and, when Use comps no longer uses a comp that caused skips, that those frames
         can be measured now. '' when nothing was skipped or left out."""
@@ -9150,12 +9450,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             by_why: dict = {}
             for s in skips:
                 by_why.setdefault(core.skip_reason_word(s.get("why", "")), []).append(s.get("frame", ""))
+            # 2.4.0 (#94): for the Log (said = the frames whose unreadable-file line is in the Log already), the
+            # unreadable frames are not said a second time; the page's line and the settings file keep them
+            n_said = 0
+            if said:
+                for why in [w for w in by_why if w in core.READ_ERR_WORDS]:
+                    if all(s.get("path") in said for s in skips if core.skip_reason_word(s.get("why", "")) == why):
+                        n_said += len(by_why.pop(why))
             # 2.3.6 (John, review S2): a few skipped frames are routine, a plain note; ⚠ (a finding in the job
             # summary, the settings file and the report NOTES) only when more than 10 % of the night was skipped
             n_pts = self._night_frame_count(night)   # 2.3.6 (release review S2): frames, not points shown
             big = n_pts == 0 or len(skips) > SKIP_FINDING_SHARE * (len(skips) + n_pts)
-            parts.append(("⚠ " if big else "") + f"{len(skips)} frame{'s' if len(skips) != 1 else ''} skipped: " + "; ".join(
-                f"{why} (frames {self._frame_ranges(labs)})" for why, labs in by_why.items()) + ".")
+            n_line = len(skips) - n_said
+            if by_why:
+                parts.append(("⚠ " if big else "") + f"{n_line} frame{'s' if n_line != 1 else ''} skipped: "
+                             + "; ".join(f"{why} (frame{'s' if len(labs) != 1 else ''} {self._frame_ranges(labs)})"
+                                         for why, labs in by_why.items()) + ".")
+            elif big:   # more than 10 % of the night unreadable is a finding, even with each frame said already
+                parts.append(f"⚠ {len(skips)} frame{'s' if len(skips) != 1 else ''} skipped (unreadable files, "
+                             "named above).")
         drops = info.get("comp_drops") or {}
         for name, rec in drops.items():
             label = "check star" if name == "check" else name
@@ -9173,6 +9486,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 parts.append(f"⚠ {len(frames)} frame{'s' if len(frames) != 1 else ''} were skipped because of {name}, "
                              "which is no longer a comp — Run photometry again to measure them.")
         return "\n".join(parts)
+
+    def comp_skip_log_text(self, night: str = "") -> str:
+        """2.4.0 (#94): comp_skip_text for the Log: without the unreadable frames the Log named as they were met."""
+        return self.comp_skip_text(night, said=getattr(self, "_unreadable_said", None))
 
     def recoverable_skips(self, night: str) -> dict:
         """2.3.0 (#50): {comp name: [frame paths]} for this night's frames skipped only because of comps that the
@@ -9487,6 +9804,49 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log(f"Switched to {MODES[mode]['name']} mode for this run.")
         self.after(150, self.run_photometry)
         return False
+
+    def _transit_site_guard(self) -> bool:
+        """2.4.0 (#95): Transits mode with no site: the transit fit needs the site (BJD times), so ask before the
+        photometry, not after it (the run took two minutes and the fit was then refused). True = run the photometry
+        (the site is set, or the user chose photometry only); False = don't run (Set the site now: the Input page
+        is shown with the cursor in the Latitude box)."""
+        if self.mode_key != "transits":
+            return True
+        if self.lat.get().strip() and self.lon.get().strip():
+            return True
+        answer = ask_choice(
+            self, APP_TITLE,
+            "No site is set, so the transit fit can't run.\n\nThe fit times the transit in BJD, and that needs "
+            "your site's latitude and longitude (Input page, Site box). The photometry itself can run without "
+            "them; set the site afterwards and the fit will run on the same points.",
+            [("site", "Set the site now"), ("run", "Run photometry only")], safe="site")
+        if answer == "run":
+            self.log("Photometry only, as chosen: no site is set, so the transit fit can't run until the latitude "
+                     "and longitude are typed in the Site box (Input page).", keep_status=True)
+            return True
+        self.goto_site_box()
+        return False
+
+    def goto_site_box(self):
+        """2.4.0 (#95): show the Input page with the cursor in the first empty Site box (Latitude, else Longitude)."""
+        try:
+            self.show_step(STEPS.index("Input"))
+        except Exception:
+            pass
+        entries = list(getattr(self, "_site_entries", ()) or ())
+        want = None
+        for entry, var in zip(entries, (self.lat, self.lon)):
+            if not var.get().strip():
+                want = entry
+                break
+        want = want or (entries[0] if entries else None)
+        if want is not None:
+            try:
+                want.focus_set()
+                want.icursor(END)
+            except Exception:
+                pass
+        self.status.set("Type your site's latitude and longitude in the Site box, then Run photometry again.")
 
     def _mode_guard(self, lights) -> bool:
         """2.2.14 (item 19): before photometry, catch a run started in the wrong mode (14 Oct: HD 219134 run in
@@ -9923,7 +10283,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         for r in radii + extra:  # all apertures or none, so every aperture has the same frames
                             rows[r].append(frame_rows[r])
                     except Exception as exc:
-                        self.call_ui(self.log, f"  aperture test skipped {os.path.basename(path)}: {exc}")
+                        self._say_frame_skip("  aperture test skipped", path, exc)   # 2.4.0 (#94)
                     self.call_ui(self._progress, i)
                 result = core.aperture_test_stats({r: np.array(rows[r]) for r in radii if rows[r]}, ref_label,
                                                   has_comp2=not np.isnan(xy[2, 0]))
@@ -11745,14 +12105,23 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.star_row_widgets[role] = widgets
             name_var.trace_add("write", lambda *_, k=role: self._slot_name_changed(k))   # 2.2.16 (item 8)
         stars.columnconfigure(1, weight=1)
+        # 2.4.0 (#97): the AAVSO chart ID, next to the comps it belongs to (it was a box on the Input page), with
+        # a small Edit for the typed cases (the chart server down; comp magnitudes typed from an AAVSO chart).
+        chart_row = ttk.Frame(stars, style="Card.TFrame")
+        chart_row.grid(row=1 + 2 * len(rows), column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        ttk.Label(chart_row, textvariable=self.chart_line, style="Hint.TLabel", wraplength=380, justify=LEFT).pack(
+            side=LEFT)
+        self.chart_edit_button = ttk.Button(chart_row, text="Edit…", width=6, command=self.edit_chart_id)
+        self.chart_edit_button.pack(side=LEFT, padx=(8, 0))
+        self._update_chart_line()
         self.field_check_text = StringVar(value="Variable-star check: Solve to check the field against VSX and SIMBAD.")
         ttk.Label(stars, textvariable=self.field_check_text, style="Hint.TLabel", wraplength=460, justify=LEFT).grid(
-            row=1 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
+            row=2 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(8, 0))
         # 2.2.19 (#15): one line per suggested comp, labeled as on the image (S1, S2 …).
         self.suggest_text = StringVar(value="")
         ttk.Label(stars, textvariable=self.suggest_text, style="Good.TLabel", wraplength=text_wrap_px(stars, 62),
                   justify=LEFT).grid(
-            row=2 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
+            row=3 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
 
         watch = self._group(panel, "Watch stars")
         watch.pack(fill=BOTH, expand=True, pady=(10, 0))
@@ -12414,8 +12783,76 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         current = self.chart.get().strip()
         auto = getattr(self, "_chart_auto", None)
         if current in ("", "na") or current == auto:
-            self.chart.set(chart_id or "na")
             self._chart_auto = chart_id or "na"
+            self.chart.set(chart_id or "na")
+        else:
+            self._update_chart_line()
+
+    def chart_id(self) -> str:
+        """2.4.0 (#97): the report's chart ID, never empty: 'na' when nothing is set (also for settings and series
+        saved before 2.4.0 with an empty Chart ID)."""
+        return self.chart.get().strip() or "na"
+
+    def chart_id_words(self) -> str:
+        """2.4.0 (#97): the chart ID with where it came from, for the line beside the comps and the Save question."""
+        cid = self.chart_id()
+        if cid.lower() == "na":
+            return "na (no AAVSO sequence star is marked as a comp or the check)"
+        if cid == getattr(self, "_chart_auto", None):
+            return f"{cid} (from the AAVSO sequence of the marked stars)"
+        if cid == getattr(self, "_chart_loaded", None):
+            return f"{cid} (from the saved series)"
+        return f"{cid} (typed)"
+
+    def _update_chart_line(self):
+        try:
+            self.chart_line.set("AAVSO chart ID: " + self.chart_id_words())
+        except Exception:
+            pass
+
+    def edit_chart_id(self) -> bool:
+        """2.4.0 (#97): type the chart ID by hand (the chart server was down; comp magnitudes typed from an AAVSO
+        chart). An empty answer goes back to SHOBS-P's own (the sequence's chart ID, or na). True when it changed."""
+        before = self.chart_id()
+        text = simpledialog.askstring(
+            APP_TITLE,
+            "Chart ID for the AAVSO report (the ID printed on the AAVSO chart or sequence your comparison "
+            "magnitudes come from, like X36281ABC).\n\nLeave it empty to let SHOBS-P fill it in: the chart ID of "
+            "the AAVSO sequence when a marked comp or the check is a sequence star, else na.",
+            initialvalue="" if before.lower() == "na" else before, parent=self)
+        if text is None:
+            return False
+        text = "".join(str(text).split())   # a chart ID has no blanks (the report's fields are comma separated)
+        text = text.replace(",", "")
+        if not text or text.lower() == "na":
+            self._chart_auto = None
+            self.chart.set("na")
+            self._update_chart_field()
+        else:
+            self.chart.set(text)
+            self._update_chart_line()
+        after = self.chart_id()
+        if after != before:
+            self.log(f"Chart ID for the AAVSO report: {self.chart_id_words()}.", keep_status=True)
+        return after != before
+
+    def _chart_id_at_save(self) -> bool:
+        """2.4.0 (#97): Save AAVSO shows the chart ID that goes in the report, with an Edit. False = don't save."""
+        while True:
+            cid = self.chart_id()
+            answer = ask_choice(
+                self, APP_TITLE,
+                f"Chart ID in this report: {self.chart_id_words()}.\n\n"
+                + ("AAVSO takes na when the comparison magnitudes are not from an AAVSO chart or sequence. If you "
+                   "typed them from an AAVSO chart, choose Edit and type that chart's ID."
+                   if cid.lower() == "na" else
+                   "This is the AAVSO chart the comparison magnitudes come from."),
+                [("save", "Save with this chart ID"), ("edit", "Edit…"), ("stop", "Don't save")], safe="save")
+            if answer == "save":
+                return True
+            if answer != "edit":
+                return False
+            self.edit_chart_id()
 
     def _bands_for(self, role: str, name: str) -> dict:
         """Catalog magnitudes in every band for a comp, if it was picked from a chart."""
@@ -13953,7 +14390,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             for ch in ("green", "red", "blue"):
                                 chans[ch].append(crow[ch])
                     except Exception as exc:
-                        self.call_ui(self._log_only, f"  scan skipped {os.path.basename(path)}: {exc}")
+                        self._say_frame_skip("  scan skipped", path, exc, log_only=True)   # 2.4.0 (#94)
                     self.call_ui(self._progress, i)   # 2.2.20 (item 3): "Field scan… 12 of 38" on the busy bar
                 if len(rows) < 10:
                     raise ValueError(f"only {len(rows)} frames could be measured; a scan needs at least 10")
@@ -14409,6 +14846,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         self._remeasure = None
+        self._unreadable_said = set()   # 2.4.0 (#94): each unreadable frame is named once per run
         self._typed_site_check(action="Run photometry")   # 2.3.2 (item 1)
         self._prune_rejected()   # 2.2.19 (#20)
         self._run_mount = None   # 2.2.18 (item 8): set once the run starts (below)
@@ -14440,6 +14878,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._series_mode_answered = True   # 2.3.0 (#50): the frames go into the open night, in its mode
         elif stack_run is None:
             if not self._mode_guard(lights):   # 2.2.14 (item 19): includes the 2.2.9 transit-in-the-lights check
+                return
+            if not self._transit_site_guard():   # 2.4.0 (#95): asked before the run, not refused after it
                 return
             self._sequence_note()
         try:
@@ -14709,7 +15149,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self._start_job(f"Photometry on {len(lights)} {'stacks' if stack_run else 'lights'}…"):
             self._restore_series_catalog()
             return
-        if no_site:
+        if no_site and self.mode_key == "transits":
+            # 2.4.0 (#95): in Transits mode the line says what matters there first (the fit), then the rest
+            self.log("⚠ No site latitude/longitude on the Input page, so the transit fit can't run on this night "
+                     "(its BJD times need the site); there is also no airmass, and the error bars leave out "
+                     "scintillation. Type your site once (it is remembered).")
+        elif no_site:
             self.log("⚠ No site latitude/longitude on the Input page, so no airmass: AAVSO reports show AMASS na "
                      "and the error bars leave out scintillation. Type your site once (it is remembered).")
         if only is not None:
@@ -15108,9 +15553,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         + f"{shift_text}  {obs.flag}",
                     )
                 except Exception as exc:
-                    self.call_ui(self.log, f"  skipped {os.path.basename(path)}: {exc}")
+                    # 2.4.0 (#94): a frame that cannot be read is named in plain words, once; the library's own
+                    # text goes to the log file only
+                    why = self._say_frame_skip("  skipped", path, exc)
                     # 2.3.0 (#50): every skipped frame and why, for the Photometry page and the settings file
-                    skipped.append({"path": path, "why": str(exc),
+                    skipped.append({"path": path, "why": why,
                                     "comps": list(getattr(exc, "names", []) or []),
                                     "target": path in target_off})
                 self.call_ui(self._progress, i)
@@ -15931,7 +16378,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         info = self._night_info(night)
         text = self.comp_skip_text(night)
         if text:
-            for line in text.splitlines():
+            # 2.4.0 (#94): the Log does not repeat the unreadable frames it named as they were met
+            log_fn = getattr(self, "comp_skip_log_text", None)
+            log_text = log_fn(night) if log_fn is not None else text
+            for line in log_text.splitlines():
                 self.log(f"{night}: {line}", level=self._msg_level(line))   # 2.3.6 (audit fix): the line's own level
         flips = info.get("flip_like") or []
         edge_lines = list(edge_lines or [])
@@ -16898,6 +17348,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for key in self._META_STRINGS:
             if meta.get(key) not in (None, ""):
                 getattr(self, key).set(meta[key])
+        self._chart_loaded = self.chart.get().strip()   # 2.4.0 (#97): "from the saved series" beside the comps
+        self._update_chart_line()
         # 2.2.5: a series' target already has its RA/Dec; don't look it up again when the Star ID box loses focus.
         if meta.get("star_id") and meta.get("ra_hours"):
             self._last_lookup_name = str(meta["star_id"]).strip()
@@ -17461,13 +17913,45 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         path = filedialog.askopenfilename(**kwargs)
         if not path:
             return
+        # 2.4.0 (#100, item 4): a large series (thousands of points, dozens of nights) takes a few seconds to load,
+        # most of it the period search and the drawing: the busy bar says so, step by step.
+        name = os.path.basename(path)
+        tok = self.busy_begin(f"Loading {name}… reading the file")
+        self._busy_show_now()
+
+        def step(words):
+            if words is None:
+                self.busy_end(tok)
+            else:
+                self.busy_words(tok, f"Loading {name}… {words}")
+                self._busy_show_now()
+        try:
+            self._load_series_file(path, step)
+        finally:
+            self.busy_end(tok)
+
+    def _busy_show_now(self):
+        """2.4.0 (#100): draw the busy bar and its words now, for a step that keeps the window's own thread (the
+        bar otherwise waits a quarter second and for the window to be idle)."""
+        bar = getattr(self, "busy_bar", None)
+        try:
+            if bar is not None and bar.busy:
+                bar.show_now()
+            self.update_idletasks()
+        except Exception:
+            pass
+
+    def _load_series_file(self, path: str, step):
+        """The rest of Load series, with the busy bar's words changed at each step (step(None) ends the bar)."""
         self._remember_series_dir(path)
         self.extremum_csv = self.extremum_csv_star = ""   # 2.2.14 review: the next times CSV follows this series
         try:
             meta, observations = core.load_series(path)
         except Exception as exc:
+            step(None)
             messagebox.showerror(APP_TITLE, f"Could not read {os.path.basename(path)}:\n{exc}")
             return
+        step(f"{len(observations)} points, the stars and settings")
         if self.observations or self.series_path:
             self._clear_series_state()   # 2.2.15 review: nothing of the series set aside goes into this one
         self._slot_typed = {}   # 2.2.16 (item 8, review): the series' names are not typed here
@@ -17540,9 +18024,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 traceback.print_exc()
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
+        step("the period search")
         self._refresh_period()
         self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7): the series as on disk
+        step("drawing the light curve")
         self.draw_output()
+        step(None)
         self._warn_legacy(self.legacy_mixed, os.path.basename(path))
         try:
             self._stack_files_note()   # 2.3.0 review fix (#54): stack files pruned from the cache: said, not needed
@@ -20181,7 +20668,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.star_id.get() or "target",
             comps,
             check,
-            self.chart.get(),
+            self.chart_id(),   # 2.4.0 (#97): never empty ('na')
             software=f"{APP_TITLE} {APP_VERSION}",
             notes=self.notes.get() + self._sloan_report_note(points)   # 2.2.17 (item 1): '' unless Sloan
             + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points))),
@@ -20197,8 +20684,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         problems = []
         if not self.observer.get().strip():
             problems.append("AAVSO observer code is empty")
-        if not self.chart.get().strip():
-            problems.append("Chart ID is empty")
         if not self.star_id.get().strip():
             problems.append("Star ID is empty")
         good = core.suggest_star_name(self.star_id.get())
@@ -20240,6 +20725,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self._name_report_check():
             return False
         if not self._notes_check():   # 2.2.20 (#46)
+            return False
+        if not self._chart_id_at_save():   # 2.4.0 (#97): the chart ID shown once more, with an Edit
             return False
         scope = self._save_scope("AAVSO report")
         if scope is None:
@@ -20571,8 +21058,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if arcsec:
             parts.append(f"{'' if exact else '≈'}{arcsec:.2f}″/px, field {fov[0]:.1f}′ × {fov[1]:.1f}′")
         parts.append(f"rings: aperture r {r:g} and sky {si:g}–{so:g} px to scale")
-        if self.chart.get().strip():
-            parts.append(f"AAVSO chart {self.chart.get().strip()}")
+        if self.chart_id().lower() != "na":   # 2.4.0 (#97): 'na' is the default now, not a chart
+            parts.append(f"AAVSO chart {self.chart_id()}")
         parts.append(f"SHOBS-P {APP_VERSION}")
         return {"title": f"{star} — field" + (f", {date} UT" if date else ""), "subtitle": " · ".join(parts),
                 "radius": r, "sky_in": si, "sky_out": so, "north": vec[0] if vec else None,
