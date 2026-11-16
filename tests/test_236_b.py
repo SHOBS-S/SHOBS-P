@@ -219,6 +219,30 @@ class TestAuditFixes236(unittest.TestCase):
         self.assertEqual(clearv_app.App._findings_report_note(st, True, other), "")
         self.assertEqual(clearv_app.App._findings_report_note(st, True, None), "")
 
+    def test_series_report_findings_only_on_run_night_rows(self):
+        """2.3.6 run-through item 6: a whole-series Variables report puts the run's findings note only on the
+        rows of the run's night (HD 219134 26 Sep-16 Nov had it on all 28 nights)."""
+        import types
+        import clearv_app
+        import photometry_core as core
+        st = types.SimpleNamespace(run_findings=["! x"], run_findings_night="JD2")
+        st.run_findings_note = lambda: clearv_app.App.run_findings_note(st)
+        st._findings_apply_to = lambda pts: clearv_app.App._findings_apply_to(st, pts)
+        st._findings_report_note = lambda lead=True, points=None: clearv_app.App._findings_report_note(st, lead, points)
+        obs = [core.Obs(jd=2461309.5 + i, mag=5.5, merr=0.02, cmag=-10.6, kmag=-9.5, airmass=1.1, path="", exptime=1.0, flux_var=1.0, flux_comp=1.0, night=n)
+               for i, n in enumerate(["JD1", "JD1", "JD2"])]
+        nn = clearv_app.App._findings_night_notes(st, obs)
+        self.assertEqual(list(nn), ["JD2"])
+        rows = [r for r in core.aavso_report(obs, "JABA", "HD 219134", core.Star("C1", 0, 0), None, "na",
+                                             notes="OSC reduced; not transformed", night_notes=nn).splitlines()
+                if not r.startswith("#")]
+        self.assertEqual(len(rows), 3)
+        self.assertNotIn("finding", rows[0]); self.assertNotIn("finding", rows[1])
+        self.assertTrue(rows[2].endswith("OSC reduced; not transformed; 1 finding from the run; see the settings file; "
+                                         "night JD2"), rows[2])
+        st.run_findings_night = "JD9"   # run night not in the report: no note anywhere
+        self.assertEqual(clearv_app.App._findings_night_notes(st, obs), {})
+
 
 if __name__ == "__main__":
     unittest.main()

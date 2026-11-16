@@ -20177,12 +20177,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.chart.get(),
             software=f"{APP_TITLE} {APP_VERSION}",
             notes=self.notes.get() + self._sloan_report_note(points)   # 2.2.17 (item 1): '' unless Sloan
-            + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points)))
-            + self._findings_report_note(lead=bool(self.notes.get().strip() or self._sloan_report_note(points)
-                                                   or self.stack_report_note(points, lead=False)),
-                                       points=points),   # 2.3.6 (#79; release review S3: only the run's night)
+            + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points))),
             filt=self._filter_code(),
             scint=self._scint_setup(),
+            night_notes=self._findings_night_notes(points),   # 2.3.6 run-through item 6: only the run night's rows
         )
 
     def save_aavso(self):
@@ -20392,13 +20390,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return any(getattr(o, "night", None) == night for o in (points or []))
 
     def _findings_report_note(self, lead: bool = True, points=None) -> str:
-        """2.3.6 (#79 item 2): "; 2 findings from the run, see the settings file" for a Variables report's #NOTES
-        (no "; " when nothing comes before it: review S7). Release review S3: only when the points hold the run's
-        night."""
+        """2.3.6 (#79 item 2): "2 findings from the run, see the settings file" (with a leading "; " when lead) for a
+        Variables report. Release review S3: only when the points hold the run's night. Run-through item 6: the
+        report puts it on the run night's rows only, via _findings_night_notes."""
         if not self._findings_apply_to(points):
             return ""
         note = self.run_findings_note()
         return (("; " if lead else "") + note) if note else ""
+
+    def _findings_night_notes(self, points=None) -> dict:
+        """2.3.6 run-through item 6: {run night: findings note} for core.aavso_report, so a whole-series report
+        puts the last run's findings only on that night's rows, never on the other nights'."""
+        note = self._findings_report_note(lead=False, points=points)
+        return {self.run_findings_night: note} if note else {}
 
     def run_findings_note(self) -> str:
         """2.3.6 (#79 item 2): the short form for a report's NOTES ("" when none)."""

@@ -7413,8 +7413,12 @@ def aavso_report(
     notes: str = "OSC reduced; not transformed",
     filt: str = "CV",
     scint: dict | None = None,
+    night_notes: dict | None = None,
 ) -> str:
     """AAVSO Extended File Format, comma delimited, DATE=JD.
+
+    night_notes (2.3.6 run-through item 6): extra NOTES text for the rows of one night only, e.g. the last run's
+    findings note, which must not ride on the other nights of a whole-series report.
 
     comp is one Star or a list of Stars. Two or more comps are reported as an ensemble
     (CNAME=ENSEMBLE, CMAG=na), which AAVSO requires to carry a check star.
@@ -7448,6 +7452,10 @@ def aavso_report(
         am = f"{obs.airmass:.4f}" if obs.airmass is not None and math.isfinite(obs.airmass) else "na"
         cmag = "na" if ensemble or not math.isfinite(obs.cmag) else f"{obs.cmag:.3f}"
         note = base_notes
+        extra = (night_notes or {}).get(obs.night) if obs.night else None
+        if extra:
+            extra = extra.replace(",", ";").replace("|", ";").strip()
+            note = (note + "; " if note else "") + extra
         if obs.night:
             note = (note + "; " if note else "") + f"night {obs.night}"
         if obs.flag:
