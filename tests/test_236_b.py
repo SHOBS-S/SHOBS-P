@@ -243,6 +243,21 @@ class TestAuditFixes236(unittest.TestCase):
         st.run_findings_night = "JD9"   # run night not in the report: no note anywhere
         self.assertEqual(clearv_app.App._findings_night_notes(st, obs), {})
 
+    def test_plain_skip_note_no_popup(self):
+        """2.3.6 run-through (John 16 Nov): 1 skipped frame is a plain note: no warning box; a ⚠ skip line still
+        pops up."""
+        import types
+        from unittest import mock
+        import clearv_app
+        for text, want in (("1 frame skipped: could not align (frames 11).", 0),
+                           ("⚠ 40 frames skipped: could not align (frames 1-40).", 1)):
+            st = types.SimpleNamespace(log=lambda *a, **k: None, _msg_level=lambda ln: "info",
+                                       _night_info=lambda n: {}, comp_skip_text=lambda n, t=text: t,
+                                       label_nights=lambda n: n, flip_like_text=lambda fl: "")
+            with mock.patch.object(clearv_app.messagebox, "showwarning") as warn:
+                clearv_app.App._warn_run_skips(st, "JD1")
+            self.assertEqual(warn.call_count, want, text)
+
 
 if __name__ == "__main__":
     unittest.main()
