@@ -15937,9 +15937,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         edge_lines = list(edge_lines or [])
         if not flips and not text and not edge_lines:
             return
-        # 2.3.6 run-through (John 16 Nov, "plain note please"): a plain note (e.g. 1 frame skipped, under 10 % of the
-        # night) never pops up a warning box; it stays in the Log and on the Photometry page's skip line
-        if not flips and not edge_lines and not any(ln.lstrip().startswith(("⚠", "✖")) for ln in text.splitlines()):
+        # 2.3.6 run-through (John 16 Nov, "plain note please"): a plain skipped-frames note (10 % of the night or
+        # less) never pops up a warning box; it stays in the Log and on the Photometry page's skip line. Only that
+        # line: comps or the check left out of some frames still get the box (Fable review).
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not flips and not edge_lines and lines and all(
+                not ln.startswith(("⚠", "✖")) and _re.match(r"^\d+ frames? skipped:", ln) for ln in lines):
             return
         body = ["⚠ " + self.flip_like_text(fl) for fl in flips] + ([text] if text else [])
         if edge_lines:

@@ -250,7 +250,11 @@ class TestAuditFixes236(unittest.TestCase):
         from unittest import mock
         import clearv_app
         for text, want in (("1 frame skipped: could not align (frames 11).", 0),
-                           ("⚠ 40 frames skipped: could not align (frames 1-40).", 1)):
+                           ("⚠ 40 frames skipped: could not align (frames 1-40).", 1),
+                           ("C3 left out of 19 frames (no flux above sky; frames 5-23); those frames use the other "
+                            "comps.", 1),
+                           ("1 frame skipped: could not align (frames 11).\ncheck star left out of 40 frames "
+                            "(off the frame edge; frames 1-40); no check value there.", 1)):
             st = types.SimpleNamespace(log=lambda *a, **k: None, _msg_level=lambda ln: "info",
                                        _night_info=lambda n: {}, comp_skip_text=lambda n, t=text: t,
                                        label_nights=lambda n: n, flip_like_text=lambda fl: "")
