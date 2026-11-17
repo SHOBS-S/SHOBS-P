@@ -143,3 +143,13 @@ The MicroObservatory setup question now says *pixel 6.8 µm (the camera's pixel;
 | any shot of the MicroObservatory setup question | 05 | new Optics line | RESHOOT if one exists |
 | any shot of the Input page Optics box with MicroObservatory frames scanned | 05 | Pixel size 6.8 (was 13.6) | RESHOOT if one exists |
 | img/08-photometry-solved.jpg (if a MOBS night) | 08 | nothing (it was solved with 6.8 µm typed by hand) | reuse |
+
+## MicroObservatory elevation from the header (HEIGHT)
+
+The MicroObservatory setup question now reads the header's elevation (`HEIGHT`, 1268 m) instead of the approximate
+2340 m, so its site line says *elevation 1268 m (from the FITS header)*.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the MicroObservatory setup question | 05 | elevation 1268 m from the header, no "elevation approximate" | RESHOOT if one exists |
+| all others | | nothing of this in view | reuse |

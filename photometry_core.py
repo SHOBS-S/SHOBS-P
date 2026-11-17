@@ -648,6 +648,11 @@ def header_site(header: dict):
         elev = num("ALTITUDE")   # Unistellar: "altitude in meters of observing site" (elsewhere often pointing altitude)
     if lat is None or lon is None:
         return None
+    if elev is None and abs(lat - MOBS_SITE[0]) < 0.1 and abs(abs(lon) - abs(MOBS_SITE[1])) < 0.1:
+        # 2.4.0 step 3: MicroObservatory writes its elevation as HEIGHT ("Local elevation above sea level, in
+        # meters", 1268 m: Whipple Observatory's base camp, where the telescopes are). Read only at that site, since
+        # HEIGHT means other things in other headers.
+        elev = num("HEIGHT")
     return lat, lon, elev
 
 

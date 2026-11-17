@@ -268,6 +268,7 @@ their site, focal length and frame size. The question shows the optics it would 
 **about 5.0″ per pixel**, and the question says so. (Before 2.4.0 the box got 13.6 µm, the binned pixel, which the
 solve then multiplied by the header's binning again: 10″ per pixel, and the frames did not solve unless you typed
 6.8 µm yourself. Older MicroObservatory files that name no binning still get 13.6 µm, which is right for them.)
+The site comes from the header too, including its elevation (`HEIGHT`, 1268 m at Whipple Observatory's base camp; from 2.4.0, before which SHOBS-P used an approximate 2340 m). Files with no elevation still get 2340 m.
 Their site and optics are never saved as yours. Their time zone is set to
 `America/Phoenix` (Arizona, no daylight saving), and yours comes back with your own setup.
 
