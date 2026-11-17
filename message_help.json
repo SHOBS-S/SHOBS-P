@@ -987,6 +987,14 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Photon noise: … , measured on the single frames that went into the stacks (a stack is their sum: the same gain)",
+    "… x N for the stacks …, measured on the stacks themselves (the single frames could not give it)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Measuring the gain from the night's sky (… frame pairs)…"
    ],
    "todo": "Nothing; the Photon noise line follows."

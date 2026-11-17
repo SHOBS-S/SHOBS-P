@@ -298,7 +298,7 @@ def _cloudy_night(n=16, cloudy=range(4, 11), amp=0.06, seed=51):
 
 class TestWhitenessGuard(unittest.TestCase):
     """Mike Fitzgerald's review of the method: structure the background model misses (a passing cloud, moonlight)
-    adds variance and biases the gain low; a pair whose whiteness ratio is over 1.10 is dropped."""
+    adds variance and biases the gain low; a pair whose whiteness ratio is over 1.05 is dropped (John's choice)."""
 
     def test_white_noise_ratio_is_one(self):
         rng = np.random.default_rng(4)
@@ -327,6 +327,102 @@ class TestWhitenessGuard(unittest.TestCase):
         self.assertIn("pairs dropped: the sky had structure the background model missed", m["why"])
 
 
+class TestStackedRunUsesTheFramesGain(unittest.TestCase):
+    """John's choice: a stacked run takes the gain measured on the single frames that went into the stacks; else on
+    the stacks with the darks' floor x STACKN; else the lower limit. A stack is a sum (stack_core.write_stack: STACKSCL
+    SUM), so the electrons per image unit are the frames' own: Bin 2 mono, g = 2 e-/ADU -> 8."""
+
+    def _night(self, d):
+        from astropy.io import fits
+        lights, darks, _b = synth_night(n=32, g=2.0, rn_e=10.0, dark_e=20.0, shape=(360, 420), sky=(800.0, 900.0),
+                                        seed=61)
+        ld, dd, sd = (os.path.join(d, x) for x in ("Lights", "Darks", "stacks"))
+        for f in (ld, dd, sd):
+            os.makedirs(f)
+        frames = []
+        for i, img in enumerate(lights):
+            p = os.path.join(ld, f"L{i:03d}.fits")
+            fits.writeto(p, img, fits.Header({"EXPTIME": 60.0}))
+            frames.append(p)
+        for i, img in enumerate(darks):
+            fits.writeto(os.path.join(dd, f"D{i}.fits"), img, fits.Header({"EXPTIME": 60.0}))
+        master = (0.5 * (darks[0] + darks[1])).astype(np.float32)
+        stacks = _write_stacks(sd, lights, master, 4, 2)
+        masters = core.Masters(dark=core.bin_plain(master, 2), dark_exptime=60.0)
+        return frames, stacks, masters, dd
+
+    def _setup(self, fake, stacks, masters, frames, logs):
+        import clearv_app
+        return clearv_app.App._photon_noise_setup(fake, stacks, 2, core.MONO, "luminance", masters, False, [], 4.0,
+                                                  8.0, 13.0, log=logs.append, stacks=True, stack_frames=frames)
+
+    def _fake(self, dd):
+        import clearv_app
+        fake = _fake_app(dark_dir=dd)
+        fake.preview = None
+        fake.log = lambda t: None
+        for name in ("_sky_gain_measure", "_flux_gain_check"):
+            setattr(fake, name, (lambda n: lambda *a, **k: getattr(clearv_app.App, n)(fake, *a, **k))(name))
+        return fake
+
+    def setUp(self):
+        self._mono = core._SENSOR["mono"]
+        core.set_mono(True)
+
+    def tearDown(self):
+        core.set_mono(self._mono)
+
+    def test_bin2_stacked_run_takes_the_frames_gain(self):
+        import stack_core
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack_core, "STACK_CACHE_DIR", os.path.join(d, "stacks")):
+            frames, stacks, masters, dd = self._night(d)
+            logs = []
+            s = self._setup(self._fake(dd), stacks, masters, frames, logs)
+            self.assertEqual(s["sky_method"], "measured")
+            self.assertLess(abs(s["electrons"] / 8.0 - 1), 0.04, s["electrons"])
+            self.assertEqual(s["sky_meas"]["floor_source"], "darks")
+            self.assertEqual(s["sky_meas"]["basis"], "frames")
+            self.assertIn("measured on the single frames that went into the stacks", s["note"])
+            self.assertIn("Measuring the gain from the night's sky (24 frame pairs)…", logs)
+            # read noise per camera pixel is the frames' own: sqrt(10^2 + 20) e-
+            self.assertAlmostEqual(s["sky_meas"]["rn_e"], math.sqrt(120), delta=1.0)
+
+    def test_frames_unreadable_uses_the_stacks_with_the_darks_floor_x_n(self):
+        import stack_core
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack_core, "STACK_CACHE_DIR", os.path.join(d, "stacks")):
+            _frames, stacks, masters, dd = self._night(d)
+            gone = [os.path.join(d, "gone", f"L{i}.fits") for i in range(32)]
+            s = self._setup(self._fake(dd), stacks, masters, gone, [])
+            self.assertEqual(s["sky_method"], "measured")
+            self.assertLess(abs(s["electrons"] / 8.0 - 1), 0.06, s["electrons"])
+            self.assertEqual(s["sky_meas"]["basis"], "stacks")
+            self.assertEqual(s["sky_meas"]["stack_n"], 4)
+            self.assertIn("x 4 for the stacks", s["note"])
+            self.assertIn("measured on the stacks themselves", s["note"])
+            self.assertAlmostEqual(s["sky_meas"]["rn_e"], math.sqrt(120), delta=1.5)
+
+    def test_neither_falls_back_and_says_both(self):
+        import stack_core
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(stack_core, "STACK_CACHE_DIR", os.path.join(d, "stacks")):
+            _frames, stacks, masters, _dd = self._night(d)
+            gone = [os.path.join(d, "gone", f"L{i}.fits") for i in range(32)]
+            fake = self._fake("")
+            with mock.patch("photometry_core.sky_electrons_estimate", return_value=(5.0, 400.0)):
+                s = self._setup(fake, stacks[:3], masters, gone, [])
+            self.assertEqual(s["sky_method"], "lower limit")
+            self.assertIn("It could not be measured from the night's sky: not on the single frames (", s["note"])
+            self.assertIn("nor on the stacks (", s["note"])
+
+    def test_run_passes_the_stacks_frames(self):
+        with open(os.path.join(HERE, "clearv_app.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("gain_inputs=gain_inputs, stack_frames=stack_frames)", src)
+        self.assertIn('for m in (stack_run.get("meta") or {}).get(sp, {}).get("members", []):', src)
+        import stack_core
+        self.assertIn("(sum scale)", stack_core.write_stack.__code__.co_consts.__repr__() + open(
+            os.path.join(HERE, "stack_core.py"), encoding="utf-8").read())
+
+
 class TestManual(unittest.TestCase):
     def test_chapter_23_and_8(self):
         with open(os.path.join(HERE, "docs", "manual", "23-messages-explained.md"), encoding="utf-8") as fh:
@@ -338,6 +434,8 @@ class TestManual(unittest.TestCase):
             ch8 = " ".join(fh.read().split())
         self.assertIn("at least twice the read noise", ch8)
         self.assertIn("neighbouring pixels", ch8)
+        self.assertIn("more than 5 % larger", ch8)
+        self.assertIn("single frames that went into the stacks", ch8)
         self.assertIn("stacks", ch8.split("### The gain behind the error bars")[1].split("### Comps near")[0])
 
 

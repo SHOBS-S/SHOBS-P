@@ -3482,7 +3482,8 @@ def _sky_meas_brief(meas: dict | None) -> dict | None:
         return float(f"{x:.{nd}g}") if math.isfinite(x) else None
     p = meas.get("ptc") or {}
     return {"k": f(meas.get("k")), "k_lo": f(meas.get("k_lo")), "k_hi": f(meas.get("k_hi")),
-            "k_err": f(meas.get("k_err"), 2), "dropped": int(meas.get("dropped_structure") or 0),
+            "k_err": f(meas.get("k_err"), 2), "dropped": int(meas.get("dropped_structure") or 0), "basis": meas.get("basis") or "",
+            "stack_n": int(meas.get("stack_n") or 0),
             "pairs": int(meas.get("n_pairs") or 0), "floor": f(meas.get("floor_var")),
             "floor_source": meas.get("floor_source") or "", "rn_e": f(meas.get("rn_e")),
             "ptc_g": f(p.get("g")) if p.get("ok") else None, "ptc_g_err": f(p.get("g_err"), 2) if p.get("ok") else None}

@@ -3727,6 +3727,8 @@ def sky_meas_words(pn: dict | None) -> str:
     if m.get("floor") is not None:
         parts.append(f"{sg.floor_words(m.get('floor_source', ''))} {math.sqrt(m['floor']):.3g} units "
                      f"{sg.floor_from_words(m.get('floor_source', ''))}".rstrip())
+    if m.get("basis"):   # a stacked run: on the frames that went into the stacks, or on the stacks
+        parts.append(sg.basis_words({"basis": m["basis"]}))
     if m.get("dropped"):   # Mike Fitzgerald's whiteness guard
         parts.append(sg.structure_words(int(m["dropped"])))
     if m.get("ptc_g"):

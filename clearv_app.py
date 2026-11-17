@@ -15834,6 +15834,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # frames, which takes a few seconds on big frames.
         noise_stars = [target] + comps
         night_lights = (self._lights() if only is not None and stack_run is None else None)
+        # 2.4.0 (#104, John's choice): a stacked run takes the gain measured on the single frames that went into the
+        # stacks (a stack is their sum: the same electrons per image unit)
+        stack_frames = None
+        if stack_run is not None:
+            stack_frames, seen = [], set()
+            for sp in lights:
+                for m in (stack_run.get("meta") or {}).get(sp, {}).get("members", []):
+                    fp = m.get("path")
+                    if fp and fp not in seen:
+                        seen.add(fp)
+                        stack_frames.append(fp)
         gain_inputs = self._sky_gain_inputs()   # Tk variables: read here, on the main thread
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
@@ -15860,7 +15871,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                                    noise_stars, radius, sky_in, sky_out,
                                                    log=lambda text: self.call_ui(self.log, text),
                                                    all_lights=night_lights, stacks=stack_run is not None,
-                                                   gain_inputs=gain_inputs)
+                                                   gain_inputs=gain_inputs, stack_frames=stack_frames)
             electrons = noise_setup.get("electrons")
             if getattr(self, "_onsky_ctx", None) is not None:
                 # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
@@ -17201,14 +17212,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return text if near or miss else ""
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
-                            sky_out, log=None, all_lights=None, stacks: bool = False, gain_inputs=None) -> dict:
+                            sky_out, log=None, all_lights=None, stacks: bool = False, gain_inputs=None,
+                            stack_frames=None) -> dict:
         """2.2.17 (item 8): electrons per image unit for this run's photon noise (core.photon_noise_setup), from the
         first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once.
         2.4.0 (#104): the gain is MEASURED from the night's sky first (_sky_gain_measure: sky_gain.py, idea by Mike
         Fitzgerald); the single-frame lower limit is kept as the fallback. Runs in the photometry worker (it reads a
         sample of frames): log is the thread-safe log; all_lights = the night's whole frame list (a Measure skipped
         frames run measures the same frames as the night's own run, so the gain is the same); gain_inputs =
-        _sky_gain_inputs(), read on the main thread (Tk variables)."""
+        _sky_gain_inputs(), read on the main thread (Tk variables).
+        2.4.0 (#104, John's choice): a stacked run (stacks=True) measures the gain on stack_frames, the single frames
+        that went into the stacks, calibrated as single frames (a stack is their sum: stack_core.write_stack keeps the
+        sum scale, so the electrons per image unit are the frames'); when that cannot be had, on the stacks with the
+        darks' floor x STACKN; else the lower limit. The log line says which."""
         log = log or self.log
         if gain_inputs is None:
             gain_inputs = self._sky_gain_inputs()
@@ -17225,13 +17241,32 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
         meas = None
-        if bias_removed:
+        why_frames = ""
+        if bias_removed and stacks and stack_frames:
+            try:   # the single frames first, as the frames' own run measures them
+                fh = core.read_header(stack_frames[0])
+                meas = self._sky_gain_measure(list(stack_frames), binning, pattern, mode, masters, precalibrated,
+                                              False, fh, gain_inputs, log=log)
+            except Exception as exc:
+                traceback.print_exc()
+                meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
+            if meas.get("ok"):
+                meas = dict(meas, basis="frames")
+            else:
+                why_frames = meas.get("why", "")
+                meas = None
+        if bias_removed and meas is None:
             try:
                 meas = self._sky_gain_measure(all_lights or lights, binning, pattern, mode, masters, precalibrated,
                                               stacks, header, gain_inputs, log=log)
             except Exception as exc:   # never stops a run: the lower limit is used
                 traceback.print_exc()
                 meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
+            if stacks and stack_frames:
+                meas = dict(meas, basis="stacks" if meas.get("ok") else "")
+                if not meas.get("ok"):
+                    meas["why"] = (f"not on the single frames ({why_frames}), nor on the stacks "
+                                   f"({meas.get('why', '')})")
         try:
             setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
                                             sky_level, sky_meas=meas)
@@ -17286,8 +17321,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             exp = float("nan")
         inputs = inputs if inputs is not None else self._sky_gain_inputs()
         sat = None if stacks else inputs.get("sat")   # review S1: a stack is a sum; its frames' peaks were checked
-        dark_dir = "" if (stacks or precalibrated) else inputs.get("dark_dir", "")
-        bias_dir = "" if (stacks or precalibrated) else inputs.get("bias_dir", "")
+        dark_dir = "" if precalibrated else inputs.get("dark_dir", "")
+        bias_dir = "" if precalibrated else inputs.get("bias_dir", "")
+        n_sum, skip = 1, set()
+        if stacks:
+            # 2.4.0 (#104, John's choice): on stacks the floor is the darks' at the frames' exposure x STACKN (a stack
+            # is the sum of its frames); stacks of another N (a partial last one) are left out
+            try:
+                exp = float(header.get("STACKEXP") or float("nan"))
+                n_sum = int(header.get("STACKN") or 0)
+            except Exception:
+                n_sum = 0
+            if n_sum < 1 or not math.isfinite(exp):
+                dark_dir = bias_dir = ""
+                n_sum = 1
+            else:
+                for p in lights:
+                    try:
+                        if int(core.read_header(p).get("STACKN") or 0) != n_sum:
+                            skip.add(p)
+                    except Exception:
+                        skip.add(p)
         key = (tuple(lights), int(binning or 1), pattern, mode, bool(stacks), repr(getattr(masters, "used", "")),
                dark_dir, bias_dir, sat)
         cache = getattr(self, "_sky_gain_cache", None)
@@ -17315,7 +17369,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 errs.append(e)
             fl, fe = sg.floor_combine(vals, errs)
             if fl is not None:
-                floor, floor_err, floor_src = fl, fe, src
+                floor, floor_err, floor_src = fl * n_sum, fe * n_sum, src
                 break
         try:
             raw_px = int(header.get("NAXIS1") or 0) * int(header.get("NAXIS2") or 0)
@@ -17328,13 +17382,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         def full_load(path):
             return core.debayer(stack_load_frame(path, binning, masters)[2], pattern, mode)
         load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load, whole=whole)
-        n_pairs = len(sg.pick_pairs(len(lights), max_pairs))
+        n_pairs = len(sg.pick_pairs(len([p for p in lights if p not in skip]), max_pairs))
         if log is not None and n_pairs:
             log(f"Measuring the gain from the night's sky ({n_pairs} frame pair{'s' if n_pairs != 1 else ''})…")
         meas = sg.measure_night(lights, load, sat=sat, floor_var=floor, floor_source=floor_src,
-                                max_pairs=max_pairs, floor_err=floor_err)
+                                max_pairs=max_pairs, floor_err=floor_err, skip=skip)
+        if stacks and floor_src in ("darks", "bias"):
+            meas["stack_n"] = n_sum
         if meas.get("ok"):
-            meas["rn_e"] = sg.read_noise_e(meas["floor_var"], meas["k"], binning, pattern, mode)
+            meas["rn_e"] = sg.read_noise_e(meas["floor_var"] / n_sum, meas["k"], binning, pattern, mode)
         self._sky_gain_cache = (key, masters, meas)
         return meas
 

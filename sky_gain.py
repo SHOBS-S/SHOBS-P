@@ -60,7 +60,7 @@ EDGE_PX = 4                 # the window's edge is masked
 DETECT_SIGMA = 2.0
 DILATE_PX = 4
 MIN_SKY_OVER_FLOOR = 2.0    # review N1: a pair counts only when its variance is at least this x the floor
-WHITE_MAX = 1.10            # Mike Fitzgerald's whiteness guard: a pair whose ratio is over this is dropped
+WHITE_MAX = 1.05            # Mike Fitzgerald's whiteness guard: a pair whose ratio is over this is dropped
 NEAR_SAT_SIGMA = 5.0        # review nit: the sky within this many sigma of the saturation level is masked
 METHOD_WORDS = "background model and source mask, idea by Mike Fitzgerald"
 
@@ -491,10 +491,25 @@ def summary(meas: dict) -> str:
     rn_e = meas.get("rn_e")
     if rn_e is not None and math.isfinite(rn_e):
         text += f", about {rn_e:.3g} e- per camera pixel"
+    if meas.get("stack_n"):
+        text += f" x {int(meas['stack_n'])} for the stacks"
     if meas.get("dropped_structure"):
         text += f"; {structure_words(int(meas['dropped_structure']))}"
     text += ")"
+    basis = basis_words(meas)
+    if basis:
+        text += f", {basis}"
     return text
+
+
+def basis_words(meas: dict) -> str:
+    """2.4.0 (#104): for a stacked run, what the gain was measured on ("" for a run on frames)."""
+    b = (meas or {}).get("basis")
+    if b == "frames":
+        return "measured on the single frames that went into the stacks (a stack is their sum: the same gain)"
+    if b == "stacks":
+        return "measured on the stacks themselves (the single frames could not give it)"
+    return ""
 
 
 def ptc_words(meas: dict) -> str:

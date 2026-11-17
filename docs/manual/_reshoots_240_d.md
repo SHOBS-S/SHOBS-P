@@ -98,3 +98,13 @@ under the one-frame lower limit. No dialog, panel or button changes.
 | any shot of the Photometry log just after a run starts | 08 | a *Measuring the gain from the night's sky (… frame pairs)…* line now comes before the *Photon noise* line | RESHOOT if one shows the log at that point (none found) |
 | img/17-transit-fit-page.png and the other ch 17 transit shots | 17 | nothing (EGAIN night: the gain note is unchanged) | reuse |
 | all others | | nothing of these fixes in view | reuse |
+
+## #104 follow-up (cloud guard at 1.05; stacks use the frames' gain)
+
+Log and settings-file words only (a stacked run's *Photon noise* line ends *…, measured on the single frames that went
+into the stacks …*). Nothing on screen besides the Log changes.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the Photometry log after a run on stacks | 08 | the *Photon noise* line's ending | RESHOOT if one exists (none found) |
+| all others | | nothing of this in view | reuse |
