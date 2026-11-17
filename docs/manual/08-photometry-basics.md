@@ -278,11 +278,17 @@ From 2.3.4 the rules are:
   drifts, for example "All stay at least 36 px from the frame edge all night (the field drifts up to 78 px; checked
   on all 78 lights)."
   - **How the drift is found.** When the loaded series was measured on these lights, from its own frame positions
-    (every frame; nothing is read). Otherwise SHOBS-P reads the lights right after Calibrate, in the background, and
-    lines up their stars with the frame on the page: **every** light when the frames are small (a MicroObservatory
-    night of 78 frames of 650 × 500 px takes about a second), or 8 of them — the night's first and last and six
-    between — for big frames (300 frames of 6248 × 4176 px: a few seconds, while the image is being solved). It is
-    done once per frame on the page; the green rings appear when it is done. With 8 frames checked, a frame in
+    (every frame; nothing is read), as long as it covers nearly all of them (95 %; not a run you canceled partway)
+    and was measured at the **Binning** of the image on the page. Otherwise SHOBS-P reads the lights right after
+    Calibrate, in the background, and lines up their stars with the frame on the page: **every** light when the
+    frames are small, or 8 of them — the night's first and last and six between — for big frames. Measured times:
+    about 7 seconds for a MicroObservatory night of 78 frames of 650 × 500 px, about 4 seconds for 8 of 300 frames of
+    6248 × 4176 px (on a modest 2-core computer; a fast PC takes less, a slow or network drive more). Meanwhile the
+    busy bar in the lower left says *Checking the night's drift… frame 3 of 8*, and any green rings already shown
+    stay until the new ones are ready. It is done once per frame on the page. If the drift cannot be found at all
+    (too few stars on the frame, or the lights cannot be read or lined up), the Log says *The night's drift could not
+    be checked (…); only this frame's edge was checked.*, and the suggestions are checked on the frame on the page
+    alone. With 8 frames checked, a frame in
     between can drift a little further (a sudden jump of the mount), which the margin of 3 × the sky-out radius
     covers in most cases; the lines say how many frames were checked.
   - With a single light (or an image from another field) only the frame on the page is checked.
@@ -300,6 +306,12 @@ once, in a box and on the star's line in the Stars panel, for example *"⚠ Comp
 (Comp 2: 0.3″ apart). The check star tests the comps, so it can't also be one of them. …"*. This catches a position
 or name typed into the wrong row as well as a click. Clear one of the two markers (✕ in the Stars panel, or
 right-click it) and pick another star. Until then **Run photometry** refuses, with the same words.
+If the two have the same name but their markers are clearly apart (10″ or more; 10 px before the solve), they are two
+stars that share a name (catalogs sometimes repeat a label), or one marker is on the wrong star: SHOBS-P then says
+*"⚠ Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two
+different stars, but the results would not tell them apart. …"*. Type another name in one of the boxes (its catalog
+number, for example), or clear the marker that is on the wrong star and pick again. **Run photometry** waits for that
+too.
 
 ### Place a star by name
 

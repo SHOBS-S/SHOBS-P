@@ -111,7 +111,9 @@ Beside the report, SHOBS-P writes:
     its width), the **shape priors used** (the published values with SHOBS-P's minimum widths, which can be wider
     than the catalog's), the **catalog** and where the ephemeris came from, and the **lookup**: when the NASA
     Exoplanet Archive (or ExoFOP) answered, `from the lookup cache (fetched …)` when it did not, `typed on the Input
-    page`, or `not looked up (the report's own values)` for a fit of an opened report. A fit of an opened report now
+    page`, or `not looked up (the report's own values)` for a fit of an opened report. When you typed over some of
+    the looked-up values on the Input page before fitting, the row names them: `…(live); typed over on the Input page
+    after it: period, b`. A fit of an opened report now
     gets a settings file too, holding these rows. The report's own `#PRIORS` line keeps its usual, shorter form, and
     the `#NOTES` line does not grow: the full values are here.
 - `…_field.png`: the reference frame exactly as shot (never turned or mirrored), filling the picture on a smooth

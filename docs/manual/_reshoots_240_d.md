@@ -108,3 +108,38 @@ into the stacks …*). Nothing on screen besides the Log changes.
 |---|---|---|---|
 | any shot of the Photometry log after a run on stacks | 08 | the *Photon noise* line's ending | RESHOOT if one exists (none found) |
 | all others | | nothing of this in view | reuse |
+
+## Fable review fixes (#78 N2–N4, #68 N7, #93, #65, #105 nits)
+
+While the night's drift is read after Calibrate, the busy bar in the lower left says *Checking the night's drift…
+frame 3 of 8* and green rings already shown stay; a drift check that finds nothing gets a plain Log note; the loaded
+series' positions are used only when they cover nearly all lights at the page's binning. A comp and the check star
+with the same name but markers clearly apart get *… have the same name …* words. The fit inputs' lookup row names
+values typed over after the lookup. The NEB check of a same-star report with no RA/Dec says it needs the RA/Dec.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/08-photometry-solved.jpg | 08 | only if shot within the few seconds after Calibrate: the status strip's busy bar would show *Checking the night's drift…* | CHECK when retaken for #78: shoot after the bar has gone |
+| any shot of the status strip right after Calibrate | 07, 08 | the busy bar may show the drift words | CHECK, reshoot if the words are in view |
+| all others | | nothing of these fixes in view (text-file rows, boxes that need a deliberate mistake) | reuse |
+
+## #106 (the boxes' rounding no longer drops a looked-up error)
+
+The a/R* and b priors now use the lookup's published uncertainty when the catalog value has more decimals than the
+Input page box shows. Only fits of such planets can move (priors only); the boxes and pages look the same.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/17-transit-fit-page.png, img/17-flip-step.png, img/17-trim.png, img/17-refit-needed.png | 17 | only if that planet's catalog a/R\*, b or Rp/R\* has more decimals than the box: the fit's numbers and the notes' *Priors* line may move | CHECK when retaken: compare the Priors line with step 2's; RESHOOT if any number changed |
+| all others | | nothing of #106 in view | reuse |
+
+## #107 (MicroObservatory pixel from the binned header scale)
+
+The MicroObservatory setup question now says *pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about
+5.0"/px)* on current headers, and the Pixel size box gets 6.8 µm (was 13.6 µm, which made the solve use 10"/px).
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the MicroObservatory setup question | 05 | new Optics line | RESHOOT if one exists |
+| any shot of the Input page Optics box with MicroObservatory frames scanned | 05 | Pixel size 6.8 (was 13.6) | RESHOOT if one exists |
+| img/08-photometry-solved.jpg (if a MOBS night) | 08 | nothing (it was solved with 6.8 µm typed by hand) | reuse |

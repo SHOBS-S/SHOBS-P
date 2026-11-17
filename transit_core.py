@@ -2702,6 +2702,9 @@ def fit_inputs_lines(result: dict) -> list:
         when = "typed on the Input page"
     else:
         when = "not recorded"
+    if pl.get("typed_over") and (pl.get("from_cache") or pl.get("looked_up")):
+        # Fable nit: values typed over on the Input page after the lookup are not the lookup's
+        when += "; typed over on the Input page after it: " + ", ".join(pl["typed_over"])
     out.append(f"Fit input lookup: {when}")
     return [_ascii_line(x) for x in out]
 
