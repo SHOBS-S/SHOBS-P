@@ -22912,6 +22912,14 @@ class ExtremumWindow:
         self.csv_path = app.extremum_csv if app.extremum_csv and (
             core.same_star_text(app.extremum_csv_star, self._star())
             or os.path.basename(app.extremum_csv) == core.extremum_csv_name(self._star())) else ""
+        # 2.4.0 (#65, John 11 Nov): a star with saved times starts from them: Period = the one last used, Epoch = the
+        # first saved maximum (or minimum, by Type). VSX stays the fallback (no saved time of this type).
+        self._kind_quiet = False
+        self._redraw_job = None
+        self._prefill_from_csv(auto=True)
+        self.kind.trace_add("write", lambda *_a: self._kind_changed())
+        for var in (self.period, self.epoch, self.system):
+            var.trace_add("write", lambda *_a: self._elements_changed())
         self.fig = None
         if Figure is not None:
             self.fig = make_constrained_figure((10.5, 4.0))
@@ -22922,6 +22930,36 @@ class ExtremumWindow:
         self._show_csv()
         self.draw()
         fit_to_content(win)
+
+    def _kind_changed(self):
+        """2.4.0 (#65): switching Type takes the epoch from that type's first saved time, unless the elements were
+        typed (they are the user's own)."""
+        if self._kind_quiet:
+            return
+        p, e = self._elements()
+        if p and e and self._elements_source(p, e) == "typed":
+            return
+        self._prefill_from_csv(auto=True)
+
+    def _elements_changed(self):
+        """2.4.0 (#65): the saved-times list and the O−C diagram follow the elements in the boxes (shortly after
+        typing stops)."""
+        try:
+            if self._redraw_job is not None:
+                self.win.after_cancel(self._redraw_job)
+            self._redraw_job = self.win.after(400, self._elements_redraw)
+        except Exception:
+            pass
+
+    def _elements_redraw(self):
+        self._redraw_job = None
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:
+            return
+        self._show_csv()
+        self.draw()
 
     # -- inputs ---------------------------------------------------------------------------
     def _elements(self):
@@ -22992,7 +23030,11 @@ class ExtremumWindow:
             self.app.catalog_epoch = e
         self.system.set("HJD")
         self.app.catalog_var_type = found.get("var_type") or self.app.catalog_var_type
-        self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        self._kind_quiet = True   # 2.4.0 (#65): VSX's elements were asked for; the Type follows without a refill
+        try:
+            self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        finally:
+            self._kind_quiet = False
         self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
 
     # -- measuring ------------------------------------------------------------------------
@@ -23136,15 +23178,22 @@ class ExtremumWindow:
         except Exception:
             return []
 
-    def _prefill_from_csv(self):
+    def _prefill_from_csv(self, auto: bool = False) -> bool:
         """2.3.3 (nit, 10 Nov): Elements from saved times: Period = the one last used, Epoch = the first saved time of
         the chosen type (so the CSV need not be opened to find it). The elements can still be typed over or fetched
-        with Elements from VSX."""
+        with Elements from VSX. 2.4.0 (#65): also on open and on a Type switch (auto=True); with no saved time of
+        this type the boxes are left as they are (VSX's, when VSX gave them). True when the boxes were filled."""
         kind = "max" if self.kind.get() == "maximum" else "min"
         got = core.extremum_csv_elements(self._csv_rows(), kind)
         if not got:
-            self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times CSV")
-            return
+            if not auto:
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times "
+                                "CSV")
+            elif self._csv_rows():
+                p, e = self._elements()
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} yet; "
+                                + (f"{self._elements_source(p, e)} elements" if p and e else "type the elements"))
+            return False
         if got.get("period"):
             self.period.set(f"{got['period']:.8f}")
         self.epoch.set(f"{got['epoch']:.5f}")
@@ -23156,7 +23205,9 @@ class ExtremumWindow:
         word = "maximum" if kind == "max" else "minimum"
         self.source.set(f"from the times CSV: epoch = first saved {word}"
                         + (", period last used" if got.get("period") else "; period from VSX"
-                           if self.period.get().strip() else "; type the period"))
+                           if self.period.get().strip() else "; type the period")
+                        + ("  (Elements from VSX for VSX's)" if auto and self.app.catalog_period else ""))
+        return True
 
     def _show_csv(self):
         path = self._default_csv()
@@ -23165,10 +23216,17 @@ class ExtremumWindow:
             return
         rows = self._csv_rows()
         text = f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})"
-        lines = core.extremum_times_lines(rows)   # 2.3.3 (nit, 10 Nov): the saved times themselves
+        # 2.3.3 (nit, 10 Nov): the saved times themselves. 2.4.0 (#65): each O−C against the elements in the boxes,
+        # as the O−C diagram has it (a row's own stored O−C is added when it differs).
+        period, epoch = self._elements()
+        elements = (period, epoch, self.system.get()) if period and epoch else None
+        lines = core.extremum_times_lines(rows, elements=elements)
         if lines:
             more = len(rows) - len(lines)
-            text += "\n" + "\n".join("   " + ln for ln in lines) + (f"\n   … and {more} earlier" if more > 0 else "")
+            head = (f"   O−C against P {period:.8f}, E {epoch:.5f} ({self.system.get()}), as in the diagram:"
+                    if elements else "   O−C as saved (each row against its own elements):")
+            text += "\n" + head + "\n" + "\n".join("   " + ln for ln in lines) + (
+                f"\n   … and {more} earlier" if more > 0 else "")
         self.csv_text.set(text)
 
     def save(self):

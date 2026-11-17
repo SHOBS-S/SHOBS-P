@@ -1069,6 +1069,30 @@
    "todo": "For another star, use New reduction on the Input page."
   },
   {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "from the times CSV: epoch = first saved maximum, period last used"
+   ],
+   "todo": "Nothing; Elements from VSX puts VSX's in instead. See 14. Time a maximum or minimum."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "no saved maxima yet; VSX elements",
+    "… typed elements",
+    "… type the elements"
+   ],
+   "todo": "Nothing, or type the elements."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "O−C against P …, E … (HJD), as in the diagram:",
+    "… O−C +0.0 min (saved +9.4 against VSX HJD)"
+   ],
+   "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
+  },
+  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"

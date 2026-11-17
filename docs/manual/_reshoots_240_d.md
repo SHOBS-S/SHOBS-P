@@ -33,3 +33,14 @@ CSV header. Nothing on screen changes; no fit number changes.
 | Shot | Chapter | What changed in it | Action |
 |---|---|---|---|
 | all | | nothing of #93 in view (no shot shows these files) | reuse |
+
+## #65 (Time of max/min starts from the saved times)
+
+The window opens with Period and Epoch from the star's saved times (label *from the times CSV: epoch = first saved
+maximum, period last used*), and the saved-times list under the result now has a heading line (*O−C against P …,
+E … (HJD), as in the diagram:*) and gives each time's O − C against the boxes' elements, with *(saved … against …)*
+where the stored value differs.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/14-extremum.png | 14 | the label beside the elements, the list's new heading line and its O − C values (GSC 03308-00462's 9 Nov maximum now reads O−C +0.0 with *(saved +9.4 against …)*, matching the diagram); the caption was rewritten. Take it on opening the window, without pressing **Elements from saved times** | RESHOOT |

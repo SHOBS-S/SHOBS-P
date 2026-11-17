@@ -354,9 +354,10 @@ class AppPieces(unittest.TestCase):
             app.extremum_csv, app.extremum_csv_star = path, "GSC 03308-00462"
             w = self.ca.ExtremumWindow(app)
             try:
-                # opens on VSX's elements, as 2.3.0 (numbers freeze): the saved times are listed, not used by themselves
-                self.assertEqual(w.epoch.get(), "2452000.50000")
+                # 2.4.0 (#65): opens on the saved times' elements (2.3.3 opened on VSX's: numbers freeze then)
+                self.assertEqual(w.epoch.get(), "2461353.81255")
                 self.assertIn("2461353.81255", w.csv_text.get())
+                w.epoch.set("2452000.50000")
                 w._prefill_from_csv()
                 self.assertEqual(w.epoch.get(), "2461353.81255")
                 self.assertEqual(w.period.get(), "0.11664000")

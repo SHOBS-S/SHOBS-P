@@ -353,5 +353,117 @@ class TestFitInputs(unittest.TestCase):
         self.assertIn('"looked_up": info.get("looked_up")', _src())
 
 
+class TestSavedTimesLines(unittest.TestCase):
+    """#65: the saved-times list's O−C against the current elements."""
+    ROWS = [
+        {"star": "GSC 03308-00462", "type": "max", "hjd": 2461353.81255, "error_min": 20.8, "o_c_min": 9.4,
+         "period_d": 0.149082, "elements": "VSX HJD", "night": "JD2461353"},
+        {"star": "GSC 03308-00462", "type": "max", "hjd": 2461354.85761, "error_min": 24.4, "o_c_min": -6.8,
+         "period_d": 0.11664, "elements": "saved HJD", "night": "JD2461354"},
+    ]
+
+    def test_against_the_boxes(self):
+        import photometry_core as core
+        lines = core.extremum_times_lines(self.ROWS, elements=(0.11664, 2461353.81255, "HJD"))
+        self.assertIn("O\u2212C +0.0 min (saved +9.4 against VSX HJD)", lines[0])   # the epoch itself: 0
+        oc = core.extremum_row_oc(self.ROWS[1], 0.11664, 2461353.81255, "HJD")
+        self.assertIn(f"O\u2212C {oc:+.1f} min", lines[1])
+        # the diagram's own sum gives the same
+        want = core.o_minus_c(2461354.85761, 0.11664, 2461353.81255)["oc_min"]
+        self.assertAlmostEqual(oc, want)
+
+    def test_without_elements_as_saved(self):
+        import photometry_core as core
+        lines = core.extremum_times_lines(self.ROWS)
+        self.assertIn("O\u2212C +9.4 min", lines[0])
+        self.assertNotIn("saved", lines[0])
+
+    def test_minimum_half_cycles_and_bjd(self):
+        import photometry_core as core
+        row = {"type": "min", "hjd": 2461000.55, "bjd_tdb": 2461000.551, "elements": "saved BJD"}
+        self.assertAlmostEqual(core.extremum_row_oc(row, 1.0, 2461000.0, "BJD"), 0.051 * 1440, places=4)   # half cycle 0.5
+        self.assertIsNone(core.extremum_row_oc({"type": "max"}, 1.0, 2461000.0))
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestExtremumWindowOpens(unittest.TestCase):
+    """#65: the window opens on the saved times' elements; Type refreshes the epoch; VSX stays the fallback."""
+
+    @classmethod
+    def setUpClass(cls):
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_240_e.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _window(self, rows, d):
+        import photometry_core as core
+        app = self.app
+        path = os.path.join(d, core.extremum_csv_name("GSC 03308-00462"))
+        for r in rows:
+            core.save_extremum_row(path, dict(r))
+        app.star_id.set("GSC 03308-00462")
+        app.catalog_period, app.catalog_epoch = 0.149082, 2452000.5
+        app.catalog_var_type = "DSCT"
+        app.extremum_csv, app.extremum_csv_star = path, "GSC 03308-00462"
+        return self.ca.ExtremumWindow(app)
+
+    def test_open_type_switch_and_list(self):
+        rows = TestSavedTimesLines.ROWS + [
+            {"star": "GSC 03308-00462", "type": "min", "hjd": 2461353.87, "error_min": 15.0, "o_c_min": 1.0,
+             "period_d": 0.11664, "elements": "saved HJD", "night": "JD2461353"}]
+        with tempfile.TemporaryDirectory() as d:
+            w = self._window(rows, d)
+            try:
+                self.assertEqual(w.kind.get(), "maximum")
+                self.assertEqual(w.epoch.get(), "2461353.81255")   # the first saved maximum
+                self.assertEqual(w.period.get(), "0.11664000")      # the period last used
+                self.assertEqual(w._elements_source(*w._elements()), "saved")
+                self.assertIn("first saved maximum", w.source.get())
+                text = w.csv_text.get()
+                self.assertIn("O\u2212C against P 0.11664000, E 2461353.81255 (HJD), as in the diagram:", text)
+                self.assertIn("(saved +9.4 against VSX HJD)", text)
+                w.kind.set("minimum")
+                self.assertEqual(w.epoch.get(), "2461353.87000")    # that type's first saved time
+                self.assertIn("first saved minimum", w.source.get())
+                # typed elements are the user's own: a Type switch leaves them
+                w.epoch.set("2461353.90000")
+                w.kind.set("maximum")
+                self.assertEqual(w.epoch.get(), "2461353.90000")
+            finally:
+                w.win.destroy()
+                self.app.star_id.set("")
+
+    def test_vsx_is_the_fallback(self):
+        rows = [{"star": "GSC 03308-00462", "type": "min", "hjd": 2461353.87, "period_d": 0.11664,
+                 "elements": "saved HJD"}]
+        with tempfile.TemporaryDirectory() as d:
+            w = self._window(rows, d)
+            try:
+                self.assertEqual(w.kind.get(), "maximum")
+                self.assertEqual(w.epoch.get(), "2452000.50000")   # no saved maximum: VSX's
+                self.assertEqual(w.period.get(), "0.14908200")
+                self.assertIn("no saved maxima yet; VSX elements", w.source.get())
+            finally:
+                w.win.destroy()
+                self.app.star_id.set("")
+
+    def test_vsx_lookup_type_does_not_refill(self):
+        with tempfile.TemporaryDirectory() as d:
+            w = self._window(TestSavedTimesLines.ROWS, d)
+            try:
+                w._lookup_done({"period_days": 0.149082, "epoch_jd": 2452000.5, "var_type": "EA"}, None)
+                self.assertEqual(w.kind.get(), "minimum")
+                self.assertEqual(w.epoch.get(), "2452000.50000")   # VSX's, as asked for
+            finally:
+                w.win.destroy()
+                self.app.star_id.set("")
+
+
 if __name__ == "__main__":
     unittest.main()
