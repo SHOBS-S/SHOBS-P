@@ -409,6 +409,64 @@ example "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames
 To stop, press **Cancel run**. Nothing is added: the gray line beside **Cancel run** says, for example, "Photometry
 done in 0:12. Canceled; nothing was added."
 
+### The gain behind the error bars
+
+Each point's error bar counts the photons the star and the sky gave, so SHOBS-P needs the camera gain: how many
+electrons one image unit holds. When the headers give it (EGAIN, written by NINA, ASIAIR, SharpCap, MaxIm and most
+other capture programs), that is used. When they don't (MicroObservatory frames, some older software), SHOBS-P 2.4.0
+**measures the gain from the night's own sky** at the start of the run, before the frames are measured:
+
+1. It takes up to 24 pairs of neighbouring frames spread through the night (12 pairs on frames over 8 megapixels),
+   calibrated just as the run calibrates them, and looks at a central part of each (about 360,000 pixels; a whole
+   MicroObservatory frame).
+2. On each frame it fits a smooth background (the sky with its gradients) and takes it off, then finds the stars and
+   masks them with a few pixels to spare, together with saturated pixels and the edge.
+3. It subtracts the two frames of each pair. The sky's photon noise is different in the two frames, but everything
+   fixed on the sensor (hot pixels, each pixel's own sensitivity, the master dark and flat) is the same in both and
+   cancels. Half the variance of the difference is then the sky's photon noise plus the read noise.
+4. The read noise comes from two raw darks at the lights' exposure in the **Dark** folder: their difference holds
+   exactly the noise the lights carry without light (read noise plus the dark current's noise). Without such darks,
+   two bias frames give the read noise alone (the gain then comes out a little low, the safe side). Without either,
+   the photon-transfer line (step 5) gives it.
+5. Gain = sky level ÷ (variance − read noise²) for each pair; the night's value is the median, with the spread of the
+   middle two thirds of the pairs. As a cross-check, SHOBS-P fits a **photon-transfer line** (variance against sky
+   level across the night: its slope is 1 ÷ gain, its intercept the read noise squared; Janesick 2007). It is
+   shown only when the night's sky changed enough to pin the slope down to better than 15 %.
+
+The background model and source mask, and taking the read noise from the darks first, are **Mike Fitzgerald's idea**
+(EXOTIC, November 2026).
+
+The log's **Photon noise** line then says, for example (Joanna Puszkarska's WASP-50 b MicroObservatory night):
+*"Photon noise: the headers give no EGAIN (camera gain in e-/ADU), so the gain is measured from the night's sky:
+39.3 electrons per image unit (from 24 frame pairs, 38.9-39.4; read + dark noise 1.16 units from the darks, about
+45.4 e- per camera pixel). Method: background model and source mask, idea by Mike Fitzgerald. Photon-transfer check
+across the night: 37.1 +/- 2.7 electrons per image unit (the sky level ranged 1.1x over the pairs)."*
+
+When the gain cannot be measured (fewer than 4 frames, or no darks or bias frames and a sky that hardly changed),
+SHOBS-P falls back to the estimate it used before 2.4.0: the sky level ÷ the sky's variance in the stars' sky rings
+on one frame. Read noise, faint stars and the pixels' own pattern add variance to that, so it is a **lower limit**
+(28.7 on the same night in SHOBS-P 2.3.0) and the error bars come out on the safe (large) side. The line then says *"…so the gain
+comes from the sky's own noise on one frame (28.7 electrons per image unit, a lower limit: error bars on the safe
+side). It could not be measured from the night's sky: …"* with the reason. Darks at the lights' exposure in the Dark
+folder are the easiest way to get a measurement.
+
+With EGAIN in the headers, EGAIN is used and the night's measurement is a check: the line adds, for example, *"The
+night's sky measures … electrons per image unit (0.97 x that; from 24 frame pairs)."* When the two differ by more
+than 1.5 times either way, and the measurement's own spread does not reach EGAIN's value, a caution goes to the
+Findings list (see [23. Messages explained](23-messages-explained.md)). On frames the camera binned, the measurement
+also tells whether the camera summed or averaged the binned pixels (see "Camera binning and the gain" in
+[7. Calibrate](07-calibrate.md)).
+
+If you use SHOBS-FLUX and it has a camera profile for this camera at the same gain setting, offset and binning, the
+log adds a plain note comparing the profile's bench gain and read noise with the night's, for example *"SHOBS-FLUX
+camera profile zwo-asi2600mc-air__g100__o50__bin1: gain 0.25 e-/ADU (measured); the night's sky gives 0.26 e-/ADU,
+they agree (within 4 %)."*
+
+The measurement takes a second or two on small frames and a few seconds on 26-megapixel frames. It runs at the start
+of the run (the busy bar says **Photometry on … lights…** meanwhile), on a sample of frames, never as an extra pass
+over the whole night. **Measure skipped frames** measures the same frames as the night's own run, so the added
+frames get the same gain.
+
 ### Comps near the frame edge
 
 When the field drifts during the night, a comparison star near the edge can slide partly off the frame. SHOBS-P then

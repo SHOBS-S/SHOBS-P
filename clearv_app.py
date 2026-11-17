@@ -21307,6 +21307,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             masters = setup.get("masters") or []
             lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
             lines.append(tu.gain_note(setup.get("photon_noise")))
+            if tu.sky_check_line(setup.get("photon_noise")):   # 2.4.0 (#104): EGAIN nights, the sky's measurement
+                lines.append(tu.sky_check_line(setup.get("photon_noise")))
+            if (setup.get("photon_noise") or {}).get("flux_check"):   # 2.4.0 (#104): the SHOBS-FLUX profile
+                lines.append(str(setup["photon_noise"]["flux_check"]))
             if setup.get("aperture_mm"):
                 # review S6: the error bars use the box at report time (the Scintillation line above)
                 lines.append(f"Telescope aperture box when the night was measured: {float(setup['aperture_mm']):g} mm")

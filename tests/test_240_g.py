@@ -285,6 +285,26 @@ class TestReportWords(unittest.TestCase):
         self.assertIn("lower limit", out["note"])
 
 
+class TestChapter23(unittest.TestCase):
+    def test_new_cautions_have_what_to_do_words(self):
+        import findings
+        hints = findings.load_hints()
+        meas = dict(TestNoiseSetupWords.MEAS)
+        for k, words in ((2.0, "EGAIN is too small"), (0.4, "Fix EGAIN in the capture program")):
+            s = core.photon_noise_setup({"EGAIN": 1.0}, 1, core.MONO, "luminance", None, True, False, 0.5, 500.0,
+                                        sky_meas=dict(meas, k=k, k_lo=0.98 * k, k_hi=1.02 * k))
+            self.assertIn(words, findings.match_hint("⚠ " + s["warning"], hints) or "")
+        old = core.photon_noise_setup({"EGAIN": 1.0}, 1, core.MONO, "luminance", None, True, False, 3.0, 500.0)
+        self.assertTrue(findings.match_hint("⚠ " + old["warning"], hints))
+
+    def test_manual_credits_mike(self):
+        for ch in ("08-photometry-basics.md", "26-credits-and-citing.md"):
+            with open(os.path.join(HERE, "docs", "manual", ch), encoding="utf-8") as fh:
+                self.assertIn("Mike Fitzgerald", fh.read(), ch)
+        self.assertIn("Mike Fitzgerald", core.credits_text())
+        self.assertIn("Mike Fitzgerald", _src("README.txt"))
+
+
 class TestFluxProfileCheck(unittest.TestCase):
     def test_profile_found_and_compared(self):
         import shobs_profile as sp
