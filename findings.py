@@ -30,12 +30,24 @@ HELP_FILE = os.path.join(HERE, "message_help.json")
 
 ICONS = ("⚠", "✖")
 _LEAD = re.compile(r"^\s*(?:[⚠✖✔]\s*)+")
+# (review S4) a short label before the icon ("Transit fit: ⚠ …", "JD2461353: ⚠ …"), as clearv_app._msg_level reads it
+_LABEL = re.compile(r"^\s*([^\n⚠✖:]{1,40}):\s+(?=[⚠✖])")
+MAX_MATCH_CHARS = 600       # (review N3) a message's first 600 characters are plenty to know it
 MIN_LITERAL = 12            # a manual pattern needs this many fixed characters to match anything
 
 
 def bare(text: str) -> str:
-    """The message without its leading icon(s) and surrounding blanks."""
-    return _LEAD.sub("", str(text or "")).strip()
+    """The message without its leading label and icon(s) and surrounding blanks."""
+    return _LEAD.sub("", _LABEL.sub("", str(text or ""))).strip()
+
+
+def shown_text(text: str) -> str:
+    """The words the list shows after its own icon: the label kept, its icon dropped (no "⚠ Transit fit: ⚠ …")."""
+    text = str(text or "")
+    m = _LABEL.match(text)
+    if m:
+        return f"{m.group(1).strip()}: {_LEAD.sub('', text[m.end():]).strip()}"
+    return bare(text)
 
 
 # ---- the manual's "What to do" words ----------------------------------------------------------------------------
@@ -86,31 +98,53 @@ def load_hints(path: str = HELP_FILE) -> list[dict]:
         return []   # no file (a developer checkout without it): the panel simply has no "what to do" lines
 
 
+# (review S3) chapter 23 shows many messages with example values ("C2", "60 s", "N frames", "(x, y)"): those parts
+# match any value, as "…" does. Numbers (with their decimal point, comma, colon, sign), a lone N or M, a comp/check
+# slot (C2, K) and "(x, y)" become "…".
+_EXAMPLE = re.compile(r"\(x, y\)|(?<![\w.])[+−-]?\d[\d,.:]*\d?(?![\w])|\b[NM]\b|\bC\d\b")
+
+
 def _pattern_regex(pat: str):
+    pat = _EXAMPLE.sub("…", pat)
     pieces = [re.escape(p.strip()) for p in pat.split("…")]
     body = r".*?".join(p for p in pieces if p)
     if not body:
         return None, 0
     lead = "" if pat.lstrip().startswith("…") else r"^"
     literal = sum(len(p.strip()) for p in pat.split("…"))
+    body = body.replace(r"\ ", r"\s+")   # line breaks and double blanks in the code's message match one blank
     try:
         return re.compile(lead + body, re.S), literal
     except re.error:
         return None, 0
 
 
+_COMPILED: dict = {}
+
+
+def _compiled(hints: list[dict]) -> list:
+    """(review N3) each hint list's patterns compiled once: [(regex, fixed length, todo)], longest first."""
+    key = id(hints)
+    got = _COMPILED.get(key)
+    if got is None or got[0] is not hints:
+        rows = []
+        for row in hints or []:
+            for pat in row["patterns"]:
+                rx, literal = _pattern_regex(pat)
+                if rx is not None and literal >= MIN_LITERAL:
+                    rows.append((rx, literal, row["todo"]))
+        rows.sort(key=lambda r: -r[1])
+        got = _COMPILED[key] = (hints, rows)
+    return got[1]
+
+
 def match_hint(text: str, hints: list[dict]) -> str:
     """The manual's "what to do" for this message, or "" (the best = the longest fixed text that matches)."""
-    msg = bare(text)
-    best, best_len = "", 0
-    for row in hints or []:
-        for pat in row["patterns"]:
-            rx, literal = _pattern_regex(pat)
-            if rx is None or literal < MIN_LITERAL or literal <= best_len:
-                continue
-            if rx.search(msg):
-                best, best_len = row["todo"], literal
-    return best
+    msg = bare(text)[:MAX_MATCH_CHARS]
+    for rx, _literal, todo in _compiled(hints):
+        if rx.search(msg):
+            return todo
+    return ""
 
 
 def step_key(label: str) -> str:
@@ -174,11 +208,12 @@ class FindingsList:
         """A step starts (again): its findings from the last time go; other steps' stay."""
         self.drop_step(step)
 
-    def drop_step(self, step: str):
+    def drop_step(self, step: str, level: str | None = None):
+        """That step's findings go (only those of that level, when given: a canceled job keeps its ✖)."""
         if not step:
             return
         before = len(self.items)
-        self.items = [f for f in self.items if f.step != step]
+        self.items = [f for f in self.items if f.step != step or (level is not None and f.level != level)]
         if len(self.items) != before:
             self._changed()
 
@@ -263,7 +298,25 @@ class FindingsWindow:
         self.clear_btn.pack(side="left")
         win.bind("<Escape>", lambda _e: self.close())
         win.protocol("WM_DELETE_WINDOW", self.close)
-        self.store.listeners.append(self.refresh)
+        self._pending = None
+        self.store.listeners.append(self.refresh_soon)
+        win.bind("<Destroy>", self._destroyed, add="+")   # (review N4) any way it goes, it stops listening
+        self.refresh()
+
+    def _destroyed(self, event):
+        if event.widget is self.win:
+            try:
+                self.store.listeners.remove(self.refresh_soon)
+            except ValueError:
+                pass
+
+    def refresh_soon(self):
+        """(review N2) many changes in a row redraw once, at the next idle moment."""
+        if self._pending is None and self.alive():
+            self._pending = self.win.after_idle(self._refresh_pending)
+
+    def _refresh_pending(self):
+        self._pending = None
         self.refresh()
 
     def _show_log(self):
@@ -288,7 +341,7 @@ class FindingsWindow:
 
     def close(self):
         try:
-            self.store.listeners.remove(self.refresh)
+            self.store.listeners.remove(self.refresh_soon)
         except ValueError:
             pass
         try:
@@ -307,6 +360,7 @@ class FindingsWindow:
             self.clear_btn.state(["disabled"] if not n else ["!disabled"])
         except Exception:
             pass
+        top = t.yview()[0]   # (review S5) a ✓ Done or a new finding keeps the place the user was reading
         t.configure(state="normal")
         for child in t.winfo_children():
             child.destroy()
@@ -316,7 +370,7 @@ class FindingsWindow:
                      "meta")
         for f in list(self.store.items):
             t.insert("end", f.icon + " ", f.level)
-            t.insert("end", bare(f.text) + ("" if f.times == 1 else f"  (×{f.times})") + "\n", "msg")
+            t.insert("end", shown_text(f.text) + ("" if f.times == 1 else f"  (×{f.times})") + "\n", "msg")
             meta = f.when + (f" · {f.where.rstrip('…. ')}" if f.where else "") + "    "
             t.insert("end", meta, "meta")
             btn = ttk.Button(t, text="✓ Done", style="Toolbutton", command=lambda f=f: self.store.dismiss(f))
@@ -327,6 +381,8 @@ class FindingsWindow:
                 t.insert("end", f.hint + "\n", "todo")
             t.insert("end", "\n", "gap")
         t.configure(state="disabled")
+        t.update_idletasks()
+        t.yview_moveto(top)
 
 
 def _px(widget, n: float) -> int:

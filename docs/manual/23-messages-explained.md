@@ -7,7 +7,7 @@ SHOBS-P talks to you in five places:
   ends, so a later routine line never hides it. When the job ends, the line says how it went: the one ⚠ or ✖ itself,
   or *⚠ N things need a look (click to see them)* when there were several (or *✖ … (and N more: click to see them)*).
   After a report save it also holds a button for the upload page.
-- **The Findings list** (from 2.4.0): every ⚠ and ✖, kept until you tick it off or run that step again, with what
+- **The Findings list** (from 2.4.0): every ⚠ and ✖ written to the log, kept until you tick it off or run that step again, with what
   to do in the words of this chapter. The **⚠ N to look at** link at the right end of the status line opens it
   (chapter 3).
 - **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**; hidden until you press **Show log**, from 2.4.0). Every

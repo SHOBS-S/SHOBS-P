@@ -145,7 +145,7 @@ its own bar in its lower left, chapter 17.)
 
 ### Findings: what needs a look
 
-From 2.4.0, every ⚠ and ✖ also goes on a list called **Findings**, so you never have to dig for one in the log. While
+From 2.4.0, every ⚠ and ✖ that SHOBS-P writes to the log also goes on a list called **Findings**, so you never have to dig for one in the log. While
 anything is on it, an amber underlined link sits at the right end of the status line, for example **⚠ 3 to look at**
 (**✖ …** when one of them is an error). Later messages never replace it. Click it, or click the status line when it
 says *⚠ N things need a look (click to see them)*, to open the **Findings** window:
@@ -159,7 +159,8 @@ says *⚠ N things need a look (click to see them)*, to open the **Findings** wi
   keeps the list.
 
 Running a step again replaces that step's findings from last time, so the list is always about your latest runs; a
-clean rerun clears them. A step you cancel or that stops leaves nothing on the list. Plain notes never go on it: only
+clean rerun clears them. A step you cancel leaves nothing on the list; a step stopped by an error leaves only its ✖,
+which says why it stopped. Plain notes never go on it: only
 things that need a look, and probably an action. The log still keeps every line (chapter 22).
 
 ![The Findings window after a photometry run](img/03-findings.png)

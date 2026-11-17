@@ -64,6 +64,14 @@ class TestModel(unittest.TestCase):
         f.start_step("")   # a job with no key never wipes the outside-a-job findings
         self.assertEqual(len(f), 2)
 
+    def test_drop_step_by_level_keeps_errors(self):
+        """(review S1) a stopped job's ⚠ go; its ✖ (why it stopped) stays."""
+        f = findings.FindingsList(hints=[])
+        f.add("warn", "⚠ w", step="Photometry on # lights")
+        f.add("error", "✖ Photometry stopped by an error (boom).", step="Photometry on # lights")
+        f.drop_step("Photometry on # lights", level="warn")
+        self.assertEqual([x.text for x in f.items], ["✖ Photometry stopped by an error (boom)."])
+
     def test_dismiss_and_clear(self):
         f = findings.FindingsList(hints=[])
         a = f.add("warn", "⚠ a")
@@ -91,6 +99,35 @@ class TestHints(unittest.TestCase):
             "⚠ Not on this frame, so taken out of tonight's comps (not measured): C2 TYC 4006-1008-1", HINTS),
             "Nothing, if the other comps are enough.")
         self.assertEqual(findings.match_hint("⚠ something the manual does not list", HINTS), "")
+
+    def test_example_values_match_any_value(self):
+        """(review S3) chapter 23 writes example values (C2, 60 s, N frames, (x, y)); any value matches them."""
+        rows = [{"patterns": ["Not on this frame, so taken out of tonight's comps (not measured): C2 …"], "todo": "A"},
+                {"patterns": ["Darks 60 s, lights 120 s: the master dark is scaled ×2 …"], "todo": "B"},
+                {"patterns": ["Check marker at (x, y) is N px from the star …"], "todo": "C"}]
+        self.assertEqual(findings.match_hint(
+            "⚠ Not on this frame, so taken out of tonight's comps (not measured): C3 TYC 1-2-3", rows), "A")
+        self.assertEqual(findings.match_hint(
+            "Darks 30 s, lights 180 s: the master dark is scaled ×6 for the lights", rows), "B")
+        self.assertEqual(findings.match_hint("⚠ Check marker at (512.3, 300.1) is 14 px from the star there", rows), "C")
+        self.assertEqual(findings.match_hint("⚠ Darks are fine", rows), "")
+
+    def test_label_before_the_icon(self):
+        """(review S4) "Transit fit: ⚠ …" matches its row and is shown with one icon, the label kept."""
+        rows = [{"patterns": ["The report's times are JD_UTC, not BJD_TDB …"], "todo": "T"}]
+        line = "Transit fit: ⚠ The report's times are JD_UTC, not BJD_TDB, and the star's position is not known"
+        self.assertEqual(findings.match_hint(line, rows), "T")
+        self.assertEqual(findings.shown_text(line),
+                         "Transit fit: The report's times are JD_UTC, not BJD_TDB, and the star's position is not known")
+        self.assertEqual(findings.shown_text("⚠ plain"), "plain")
+
+    def test_long_line_is_quick(self):
+        """(review N3) a pathological long line cannot stall the UI: only its first characters are matched."""
+        import time as _t
+        rows = [{"patterns": ["a b c d e f g h i j k l m … n o p q r s"], "todo": "x"}]
+        t0 = _t.monotonic()
+        findings.match_hint("⚠ " + "a b c d e f g h i j k l m " * 2000, rows)
+        self.assertLess(_t.monotonic() - t0, 1.0)
 
     def test_short_patterns_never_match(self):
         self.assertEqual(findings.match_hint("⚠ outlier at frame 12", [{"patterns": ["outlier"], "todo": "x"}]), "")
@@ -190,6 +227,46 @@ class TestApp(unittest.TestCase):
         app.update()
         self.assertEqual(len(app.findings), 0)
 
+    def test_stopped_by_error_keeps_its_cross(self):
+        """(review S1) photometry stopped by an error logs its ✖ inside the job, then discards the job's findings."""
+        app = self.app
+        self.assertTrue(app._start_job("Photometry on 12 lights…"))
+        app.log("⚠ a caution before the error")
+        app._end_job(defer_close=True)
+        app.log("✖ Photometry stopped by an error (boom). Nothing was added to the series.")
+        app._discard_job_findings()
+        app._close_job_findings(force=True)
+        app.update()
+        self.assertEqual([f.text for f in app.findings.items],
+                         ["✖ Photometry stopped by an error (boom). Nothing was added to the series."])
+        self.assertEqual(app.findings_var.get(), "✖ 1 to look at")
+
+    def test_same_line_twice_counts_once(self):
+        """(review S6) the status line's count agrees with the panel."""
+        self._job("Testing apertures…", ["⚠ same", "⚠ same", "⚠ other"])
+        self.assertEqual(self.app.status.get(), "⚠ 2 things need a look (click to see them)")
+        self.assertEqual(self.app.findings_var.get(), "⚠ 2 to look at")
+        self._job("Testing apertures…", ["⚠ same", "⚠ same"])
+        self.assertEqual(self.app.status.get(), "⚠ same")
+
+    def test_status_line_is_a_link_only_for_a_finding(self):
+        """(review N5)"""
+        app = self.app
+        app.log("⚠ needs a look")
+        self.assertTrue(app._status_opens_findings())
+        app.status.set("Saved the series.")
+        self.assertFalse(app._status_opens_findings())
+        self.assertEqual(str(app.status_label.cget("cursor")), "")
+
+    def test_summary_line_not_tagged_in_log_file(self):
+        """(review N1) the count line is a note in the log file; only real findings are [WARN] / [ERROR]."""
+        self._job("Testing apertures…", ["⚠ first x", "⚠ second x"])
+        with open(self.ca.LOG_FILE, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("[WARN] ⚠ first x", text)
+        self.assertNotIn("[WARN] ⚠ 2 things need a look", text)
+        self.assertIn("⚠ 2 things need a look", text)
+
     def test_log_file_tags(self):
         app = self.app
         app.log("plain note line")
@@ -228,7 +305,7 @@ class TestApp(unittest.TestCase):
         win.close()
         app.update()
         self.assertFalse(win.alive())
-        self.assertNotIn(win.refresh, app.findings.listeners)
+        self.assertNotIn(win.refresh_soon, app.findings.listeners)
 
 
 if __name__ == "__main__":

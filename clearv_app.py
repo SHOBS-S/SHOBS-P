@@ -1836,11 +1836,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _discard_job_findings(self):
         """(review S1) a canceled or stopped job sums up nothing: its ⚠ lines leave the status line's count and the
-        Findings panel (they stay in the Log). The stop line itself is logged after this, outside the job."""
+        Findings panel (they stay in the Log). 2.4.0 review S1: a ✖ stays on the panel (a run stopped by an error
+        logs its ✖ inside the job, before this is called), so the reason it stopped is never lost."""
         self._job_findings = []
         store = getattr(self, "findings", None)
         if store is not None:
-            store.drop_step(getattr(self, "_job_step", ""))
+            store.drop_step(getattr(self, "_job_step", ""), level="warn")
 
     def _end_job(self, defer_close: bool = False):
         self.busy = False
@@ -1860,11 +1861,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if getattr(self, "busy", False) and not force:
             return   # (review) a later job has begun: _start_job already closed this one
         self._job_close_pending = False
-        findings = getattr(self, "_job_findings", None) or []
+        found = getattr(self, "_job_findings", None) or []
         self._job_findings = None
-        self.last_job_findings = [t for _lv, t in findings]
-        summary = self._job_summary(findings)
-        if summary and len(findings) > 1:
+        self.last_job_findings = [t for _lv, t in found]
+        summary = self._job_summary(found)
+        if summary and len(dict.fromkeys(found)) > 1:
             self.log(summary, finding=False)   # 2.4.0 (#102): the count line is not a finding of its own
         elif summary:
             self.status.set(summary)
@@ -2233,7 +2234,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.status_label = ttk.Label(status_row, textvariable=self.status, style="Status.TLabel")
         self.status_label.pack(side=LEFT)
         # the end-of-job line ("⚠ 3 things need a look (click to see them)") opens the list too
-        self.status_label.bind("<Button-1>", lambda _e: self.open_findings() if len(self.findings) else None)
+        self.status_label.bind("<Button-1>", lambda _e: self.open_findings() if self._status_opens_findings() else None)
         self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
         self._status_offer = ("", "")   # (status text it belongs to, URL)
         self.status.trace_add("write", lambda *_: self._status_changed())
@@ -2595,7 +2596,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         and the log file tags it [WARN] / [ERROR] so a run can be grepped afterwards."""
         level = level or self._msg_level(text)
         # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
-        log_to_file(text if level == "note" else f"[{level.upper()}] {text}")
+        log_to_file(text if level == "note" or not finding else f"[{level.upper()}] {text}")
         for box in (self.log_box, getattr(self, "photo_log", None)):
             if box is None:
                 continue
@@ -2651,11 +2652,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.3.6 (#79 item 1): a Log-only line (detail for the record; the status line keeps what it says)."""
         self.log(text, keep_status=True)
 
-    def _job_summary(self, findings) -> str:
+    def _job_summary(self, found) -> str:
         """2.3.6 (#79 item 1): the end-of-job line: the one ⚠ itself, or "⚠ N things need a look (click to see them)".
-        2.4.0 (#102): the details are in the Findings panel (a click on the status line), not only in the Log."""
-        errors = [t for lv, t in findings if lv == "error"]
-        warns = [t for lv, t in findings if lv == "warn"]
+        2.4.0 (#102): the details are in the Findings panel (a click on the status line), not only in the Log. The same
+        line twice counts once (review S6), as the panel lists it once."""
+        found = list(dict.fromkeys(found))
+        errors = [t for lv, t in found if lv == "error"]
+        warns = [t for lv, t in found if lv == "warn"]
         if errors:
             return errors[-1] if len(errors) + len(warns) == 1 else \
                 f"✖ {errors[-1].lstrip('✖ ').strip()} (and {len(errors) + len(warns) - 1} more: click to see them)"
@@ -3804,7 +3807,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if self.open_link(url) and page:
                 self._mark_sent(page, plan)
 
+    def _status_opens_findings(self) -> bool:
+        """(review N5) the status line is a link to the Findings list only while it shows a ⚠ / ✖ and the list has
+        something on it; a plain note there is just words."""
+        store = getattr(self, "findings", None)
+        return bool(store is not None and len(store) and self.status.get().lstrip()[:1] in ("⚠", "✖"))
+
     def _status_changed(self):
+        try:   # 2.4.0 (#102, review N5)
+            self.status_label.configure(cursor="hand2" if self._status_opens_findings() else "")
+        except Exception:
+            pass
         text, url = getattr(self, "_status_offer", ("", ""))
         if url and self.status.get() != text:
             self._status_offer = ("", "")
@@ -3822,7 +3835,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.findings_link.pack(side=RIGHT, padx=(10, 0), before=self.update_label)
             elif not text and self.findings_link.winfo_manager():
                 self.findings_link.pack_forget()
-            self.status_label.configure(cursor="hand2" if text else "")
+            self.status_label.configure(cursor="hand2" if self._status_opens_findings() else "")
         except Exception:
             pass
 
@@ -9167,6 +9180,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.log(f"✖ Target: the search on the next frames stopped ({result['error']}); click the target by hand.")
             return
         if result.get("cancelled"):   # review S5d
+            self._discard_job_findings()   # 2.4.0 (#102, review S2)
             self.log("Target: the search on the next frames was canceled; click the target by hand on a frame that "
                      "shows it.")
             return
@@ -10492,6 +10506,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._end_job()
         self._progress_end("" if not error else ("Canceled." if error == "Canceled" else "Failed."))
         if error:
+            if error == "Canceled":
+                self._discard_job_findings()   # 2.4.0 (#102, review S2)
             self.log(("" if error == "Canceled" else "✖ ") + f"Aperture test: {error}")
             return
         window.show_test(result, seeing, sky_in, sky_out, ref_label)
@@ -14757,6 +14773,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._end_job()
         if error is not None and error[0] == "Canceled":
             self._progress_end("Canceled.")
+            self._discard_job_findings()   # 2.4.0 (#102, review S2)
             self.log("Field scan canceled.")
             return
         self._progress_end("" if error is None else "Failed.")

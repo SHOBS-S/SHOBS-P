@@ -29,7 +29,8 @@ PATTERNS_OUT = ("*.pyc", "*.log", "*.zip", "*~", ".DS_Store")
 EXECUTABLE = ("*.sh", "*.command")
 
 
-APP_PATTERNS = ("*.py", "*.sh", "*.command", "*.ps1", "*.bat", "requirements.txt")
+APP_PATTERNS = ("*.py", "*.sh", "*.command", "*.ps1", "*.bat", "requirements.txt",
+                "message_help.json")   # 2.4.0 (#102): the Findings panel's What to do words
 
 
 def git_files(src: str, *extra: str) -> list[str] | None:

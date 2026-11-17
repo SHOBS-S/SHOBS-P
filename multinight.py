@@ -2100,6 +2100,7 @@ class MultiNightWindow:
         self.busy.end(getattr(self, "_fit_tok", None))
         if error is not None:
             if error[0] == "Canceled":
+                self.app._discard_job_findings()   # 2.4.0 (#102, review S2)
                 self.prog_text.set("Canceled.")
                 self._placeholder("Canceled: Fit nights runs it again.")
             else:

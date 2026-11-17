@@ -451,6 +451,7 @@ class StackMixin:
         if error:
             self._progress_end("Canceled." if error == "Canceled" else "Failed.")
             if error == "Canceled":
+                self._discard_job_findings()   # 2.4.0 (#102, review S2)
                 self.log("Stacking canceled; the points stay per frame.")
             else:
                 self.log(f"✖ Stacking failed: {error}. The points stay per frame.")
@@ -494,6 +495,7 @@ class StackMixin:
             self.comps_used = list(saved["comps_used"])
             self.check_used = saved["check_used"]
         if cancelled or run is None:
+            self._discard_job_findings()   # 2.4.0 (#102, review S1/S2): its ⚠ go; the ✖ stop line below stays
             self._progress_end("Canceled." if not error else "Stopped by an error.")
             self.log(("✖ " if error else "") + "Photometry on the stacks " + (f"stopped by an error ({error})" if error else "canceled")
                      + "; the points stay per frame.")

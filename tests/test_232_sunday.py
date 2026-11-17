@@ -229,6 +229,10 @@ class TestMacApp(unittest.TestCase):
                 info = [i for i in z.infolist() if i.filename.endswith("/Create shortcut.command")]
                 self.assertEqual(len(info), 1)
                 self.assertEqual((info[0].external_attr >> 16) & 0o777, 0o755)
+                # 2.4.0 (#102, review S7): the Findings panel's help words ship with the app
+                names = z.namelist()
+                self.assertTrue(any(n.endswith("/message_help.json") for n in names), names)
+                self.assertTrue(any(n.endswith("/findings.py") for n in names))
 
 
 @unittest.skipUnless(_have_tk(), "needs a display")

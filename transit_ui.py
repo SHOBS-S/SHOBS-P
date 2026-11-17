@@ -1641,6 +1641,8 @@ class TransitPage:
                 return   # the page shows another fit (or other data) now: its own text stays
             self.prog_text.set(done_text)
             if error is not None:
+                if error == "Canceled":
+                    self.app._discard_job_findings()   # 2.4.0 (#102, review S2)
                 self.app.log(("Comp check canceled." if error == "Canceled" else f"Comp check skipped: {error}"))
                 return
             if not loo:
@@ -1678,6 +1680,8 @@ class TransitPage:
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
+            if error[0] == "Canceled":
+                self.app._discard_job_findings()   # 2.4.0 (#102, review S2)
             self.prog_text.set("Canceled." if error[0] == "Canceled" else "✖ Fit failed.")
             self._show_progress()     # before any dialog, so the bar is not left showing behind it
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
