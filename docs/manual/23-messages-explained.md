@@ -229,6 +229,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Message | What it means | What to do |
 |---|---|---|
 | *Enter your site's latitude and longitude on the Input page first …* | Needed for BJD times. | Type your site once. |
+| *The NEB check works on one star: its transit depth, its position and the neighbors on the solved image. The report shown is of …, but the Input page and the solved image are of ….* (from 2.4.0) | **Nearby-binary (NEB) check…** with an opened report of another star than the Input page's. | **Close report** to check the Input page's star, or set the report's star up on the Input page and solve one of its frames. |
 | *…: N usable points. Run photometry in Transits mode first (or open an exoplanet report).* | Fewer than 20 points. | Run photometry, or check the flags. |
 | *The photometry, the comps, or the planet changed since the last fit, so that fit was cleared.* | The fit no longer matches the data. | Press **Fit transit**. |
 | *The comps are still being checked (a few seconds). Save the … when that is done …* | The leave-one-comp-out check is running. | Wait a moment and save again. |

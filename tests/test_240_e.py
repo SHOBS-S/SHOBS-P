@@ -147,6 +147,27 @@ class TestWrongPlanet(unittest.TestCase):
         self.assertEqual(args[0], {})
         self.assertNotIn("HD 189733 b", args[1:])
 
+    # ---- #105: the NEB check never mixes two stars ----
+    def test_neb_one_star(self):
+        import transit_ui as tu
+        app, tp = self.app, self.app.transit_page
+        self._hd189733()
+        tp.report = _report()                     # K2-113 b: another star than the Input page's
+        self.assertTrue(tu.NebWindow.report_of_another_star(tp))
+        with mock.patch.object(tu.messagebox, "showinfo") as box, mock.patch.object(tu, "Toplevel") as top:
+            tu.NebWindow(app, tp)
+        top.assert_not_called()
+        self.assertIn("The report shown is of K2-113 b", box.call_args[0][1])
+        self.assertIn("HD 189733 b", box.call_args[0][1])
+        # a report of the Input page's own planet: its depth with the Input page's position
+        rep = _report()
+        rep["planet"] = dict(rep["planet"], name="HD 189733 b", host="HD 189733")
+        tp.report = rep
+        self.assertFalse(tu.NebWindow.report_of_another_star(tp))
+        self.assertEqual(tp._report_radec(), app.target_radec_deg())
+        tp.report = None
+        self.assertFalse(tu.NebWindow.report_of_another_star(tp))
+
     # ---- #82 ----
     def _other_star_lookup(self, switched):
         app = self.app

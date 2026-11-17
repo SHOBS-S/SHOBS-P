@@ -3851,6 +3851,13 @@ class CornerWindow:
         self.app.saved_notice(path)
 
 
+# 2.4.0 (#105): the NEB check with a report of another star open (one star's depth, position and field, never two)
+NEB_OTHER_STAR = ("The NEB check works on one star: its transit depth, its position and the neighbors on the solved "
+                  "image. The report shown is of {report}, but the Input page and the solved image are of {mine}.\n\n"
+                  "To check {mine}, press Close report first. To check {report}, set it up on the Input page (type "
+                  "its name and press Enter) and solve one of its frames.")
+
+
 class NebWindow:
     """Nearby eclipsing binaries: could a neighbor star, blended in TESS's big pixels, make this signal?"""
 
@@ -3863,8 +3870,20 @@ class NebWindow:
             messagebox.showinfo("SHOBS-P", "The NEB check needs the transit depth: enter the planet on the Input page "
                                            "(Lookup), or fit the transit first.")
             return
+        if NebWindow.report_of_another_star(page):
+            # 2.4.0 (#105): the depth, the position and the neighbors (the solved image) must be of one star: a report
+            # of another star than the Input page's has none of its own here (it gave the report's depth against the
+            # Input page's RA/Dec and field).
+            rp = (page.report.get("planet") or {})
+            name = rp.get("name") or rp.get("host") or "another planet"
+            mine = app.planet_name.get().strip() or app.star_id.get().strip() or "the Input page's target"
+            messagebox.showinfo("SHOBS-P", NEB_OTHER_STAR.format(report=name, mine=mine))
+            return
         try:
-            self.ra, self.dec = app.target_radec_deg(planet)
+            if page.report is not None:
+                self.ra, self.dec = page._report_radec()   # the report's star = the Input page's (checked above)
+            else:
+                self.ra, self.dec = app.target_radec_deg(planet)
         except Exception as exc:
             messagebox.showinfo("SHOBS-P", f"The NEB check needs the target's RA/Dec: {exc}")
             return
@@ -3911,6 +3930,12 @@ class NebWindow:
         self.tree.pack(fill=BOTH, expand=True, pady=(6, 0))
         self.rows = []
         self.update()
+
+    @staticmethod
+    def report_of_another_star(page) -> bool:
+        """2.4.0 (#105): a report is shown on the page and SHOBS-P cannot tie its star to the Input page's (the
+        Input page and the planet lookup name another star)."""
+        return page.report is not None and page._report_radec() is None
 
     def _target_mag(self):
         best = None

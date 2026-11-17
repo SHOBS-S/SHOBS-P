@@ -44,3 +44,12 @@ where the stored value differs.
 | Shot | Chapter | What changed in it | Action |
 |---|---|---|---|
 | img/14-extremum.png | 14 | the label beside the elements, the list's new heading line and its O − C values (GSC 03308-00462's 9 Nov maximum now reads O−C +0.0 with *(saved +9.4 against …)*, matching the diagram); the caption was rewritten. Take it on opening the window, without pressing **Elements from saved times** | RESHOOT |
+
+## #105 (the NEB check never mixes two stars)
+
+A new message box when the NEB check is opened with a report of another star shown. No shot shows the NEB window or
+this box.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| all | | nothing of this in view | reuse |

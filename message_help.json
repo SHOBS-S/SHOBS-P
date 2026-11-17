@@ -1102,6 +1102,13 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "The NEB check works on one star: its transit depth, its position and the neighbors on the solved image. The report shown is of …, but the Input page and the solved image are of …."
+   ],
+   "todo": "Close report to check the Input page's star, or set the report's star up on the Input page and solve one of its frames."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "…: N usable points. Run photometry in Transits mode first (or open an exoplanet report)."
    ],
    "todo": "Run photometry, or check the flags."
