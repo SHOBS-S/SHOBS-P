@@ -1,15 +1,19 @@
 # 23. Messages explained
 
-SHOBS-P talks to you in four places:
+SHOBS-P talks to you in five places:
 
 - **The status bar** at the bottom of the window: the latest news, one line. While SHOBS-P works, the busy bar at its
   left end says what it is doing (chapter 3). While a job runs, a ⚠ or ✖ stays on the status line until the job
   ends, so a later routine line never hides it. When the job ends, the line says how it went: the one ⚠ or ✖ itself,
-  or *⚠ N things need a look (see the Log)* when there were several (or *✖ … (and N more in the Log)*). After a
-  report save it also holds a button for the upload page.
+  or *⚠ N things need a look (click to see them)* when there were several (or *✖ … (and N more: click to see them)*).
+  After a report save it also holds a button for the upload page.
+- **The Findings list** (from 2.4.0): every ⚠ and ✖, kept until you tick it off or run that step again, with what
+  to do in the words of this chapter. The **⚠ N to look at** link at the right end of the status line opens it
+  (chapter 3).
 - **The log**: on the Calibrate page, and under the image on the Photometry page (**Show log** / **Hide log**; hidden until you press **Show log**, from 2.4.0). Every
   status line goes here too, often with more detail, and so do the routine notes that never reach the status line.
-  When something looks wrong, read the log first.
+  It is the full record for troubleshooting; anything that needs you is also on the Findings list. In the log file
+  (chapter 22) a ⚠ line is tagged `[WARN]` and a ✖ line `[ERROR]`, so they are easy to search for.
 - **Message boxes**: a question (Yes / No, sometimes Cancel) when SHOBS-P needs a decision, a warning when it found a
   problem, an error when it cannot go on.
 - **Notes and cautions on the Output pages**: lines starting with **⚠** are cautions about the result.

@@ -68,7 +68,7 @@ class TestJobSummary(unittest.TestCase):
 
     def test_several_warns_counted(self):
         st = self._job(["⚠ one", "note", "⚠ two", "⚠ three"])
-        self.assertEqual(st, "⚠ 3 things need a look (see the Log)")
+        self.assertEqual(st, "⚠ 3 things need a look (click to see them)")
         self.assertEqual(len(self.app.last_job_findings), 3)
 
     def test_no_warns_status_is_last_line(self):
@@ -159,7 +159,7 @@ class TestJobSummary(unittest.TestCase):
     def test_error_summary(self):
         st = self._job(["⚠ one", "✖ Fit failed."])
         self.assertTrue(st.startswith("✖ Fit failed."), st)
-        self.assertIn("1 more in the Log", st)
+        self.assertIn("1 more: click to see them", st)
 
     def test_findings_cleared_by_new_reduction(self):
         app = self.app

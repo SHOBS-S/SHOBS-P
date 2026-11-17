@@ -143,14 +143,37 @@ its own bar in its lower left, chapter 17.)
 ![The status bar while photometry runs: the busy bar and its words at the left end](img/03-busy-bar.png)
 *The busy bar during a photometry run.*
 
+### Findings: what needs a look
+
+From 2.4.0, every ⚠ and ✖ also goes on a list called **Findings**, so you never have to dig for one in the log. While
+anything is on it, an amber underlined link sits at the right end of the status line, for example **⚠ 3 to look at**
+(**✖ …** when one of them is an error). Later messages never replace it. Click it, or click the status line when it
+says *⚠ N things need a look (click to see them)*, to open the **Findings** window:
+
+- one entry per finding: its ⚠ or ✖, the message itself, the time, and the step that found it (for example
+  *Photometry on 165 lights*);
+- **What to do**, for the messages listed in [23. Messages explained](23-messages-explained.md), in the same words as
+  that chapter;
+- **✓ Done** beside each entry takes it off the list; **Clear all** empties it; **Show log** shows the log (the
+  Photometry page's, when that page is in front, otherwise the Calibrate page's); **Close** closes the window and
+  keeps the list.
+
+Running a step again replaces that step's findings from last time, so the list is always about your latest runs; a
+clean rerun clears them. A step you cancel or that stops leaves nothing on the list. Plain notes never go on it: only
+things that need a look, and probably an action. The log still keeps every line (chapter 22).
+
+![The Findings window after a photometry run](img/03-findings.png)
+*The Findings window: two cautions from a photometry run and a file that could not be saved.*
+
 ## The log
 
 The Calibrate page has a large dark log box, and the Photometry page has a smaller copy of it under the image.
 From 2.4.0 the Photometry page's copy starts hidden, so the image gets the room: the busy bar shows a run's progress
 and the status line shows its messages, ⚠ and ✖ included. Press **Show log** on the run row to see it, and **Hide
 log** to put it away; SHOBS-P remembers your choice for the next start. Every message SHOBS-P writes goes to the
-log, shown or hidden, with more detail than the status line has room for. When something looks wrong, read the log
-first (the Calibrate page's log is always there).
+log, shown or hidden, with more detail than the status line has room for. The log is the full record, for
+troubleshooting (and for anyone you send it to); it is never the only place SHOBS-P tells you about a problem: those
+are on the Findings list.
 
 ## Warnings, cautions and questions
 
@@ -160,7 +183,8 @@ SHOBS-P tells you about problems in a few ways, from mild to serious:
 - **Cautions** start with **⚠** and are printed in orange or red in the panels. They mean "this result may be
   affected; look at it, and probably act". SHOBS-P keeps ⚠ for that, so a ⚠ is worth reading. The program carries on.
   While a job runs, its ⚠ stays on the status line until the job ends; then the line names it, or says
-  *⚠ N things need a look (see the Log)*.
+  *⚠ N things need a look (click to see them)*. Every ⚠ and ✖ also goes on the **Findings** list (above), with what
+  to do.
 - **✖** means something stopped or failed (a step did not run, a file was not saved); **✔** means a step is done as
   you asked. See [23. Messages explained](23-messages-explained.md).
 - **Questions** open a small window with **Yes** / **No** (sometimes **Cancel**). Each question explains both
