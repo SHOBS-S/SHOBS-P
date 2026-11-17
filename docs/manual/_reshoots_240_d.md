@@ -85,3 +85,16 @@ gets a new METHODS entry, below the part in the shot.
 | img/17-flip-step.png, img/17-trim.png, img/17-refit-needed.png | 17 | as above | CHECK as above |
 | img/26-credits-page.png | 26 | new METHODS entry "Gain from the night's sky" (below the visible part: SOFTWARE and the first catalogs show) | reuse |
 | any shot of the Photometry log with a *Photon noise:* line from a no-EGAIN (MicroObservatory) night | 08 | the line now reads *…so the gain is measured from the night's sky: …* | RESHOOT if one exists (none found) |
+
+## #104 Fable review fixes (S1, N1, N5, N6, nits) and the whiteness guard
+
+Log and settings-file words only: a new *Measuring the gain from the night's sky (… frame pairs)…* line before the
+*Photon noise* line (every run that measures the gain, EGAIN nights included), *… pairs dropped: the sky had structure
+…* when the whiteness guard drops pairs, *+/- …* for a photon-transfer floor, a plain note when the measurement is
+under the one-frame lower limit. No dialog, panel or button changes.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the Photometry log just after a run starts | 08 | a *Measuring the gain from the night's sky (… frame pairs)…* line now comes before the *Photon noise* line | RESHOOT if one shows the log at that point (none found) |
+| img/17-transit-fit-page.png and the other ch 17 transit shots | 17 | nothing (EGAIN night: the gain note is unchanged) | reuse |
+| all others | | nothing of these fixes in view | reuse |

@@ -17228,7 +17228,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if bias_removed:
             try:
                 meas = self._sky_gain_measure(all_lights or lights, binning, pattern, mode, masters, precalibrated,
-                                              stacks, header, gain_inputs)
+                                              stacks, header, gain_inputs, log=log)
             except Exception as exc:   # never stops a run: the lower limit is used
                 traceback.print_exc()
                 meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
@@ -17270,57 +17270,72 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return {"dark_dir": self.dark_dir.get().strip(), "bias_dir": self.bias_dir.get().strip(), "sat": sat}
 
     def _sky_gain_measure(self, lights, binning, pattern, mode, masters, precalibrated, stacks, header,
-                          inputs=None) -> dict:
+                          inputs=None, log=None) -> dict:
         """2.4.0 (#104): the gain measured from the night's sky (sky_gain.measure_night) on up to 24 neighbouring frame
         pairs (12 on frames over 8 Mpx), each read and calibrated only in a central window, with the noise floor from
         two raw darks of the lights' exposure (else two bias frames, else the photon-transfer line). Kept for the same
-        frames, calibration and channel, so a second run (or Measure skipped frames) gives the same number."""
+        frames, calibration and channel, so a second run (or Measure skipped frames) gives the same number.
+        Fable review S1: stacks are read as the run reads them (stack_ui.load_frame: as they are, never binned or
+        calibrated again), with no saturation cut (they are on the scale of a sum). N6: frames that must be read whole
+        (XISF, compressed or extension FITS, stacks) get at most 12 pairs, and the log says the measurement started."""
         import sky_gain as sg
+        from stack_ui import is_stack_path
         try:
             exp = float(core.header_exptime(header))
         except Exception:
             exp = float("nan")
         inputs = inputs if inputs is not None else self._sky_gain_inputs()
-        sat = inputs.get("sat")
+        sat = None if stacks else inputs.get("sat")   # review S1: a stack is a sum; its frames' peaks were checked
         dark_dir = "" if (stacks or precalibrated) else inputs.get("dark_dir", "")
         bias_dir = "" if (stacks or precalibrated) else inputs.get("bias_dir", "")
-        key = (tuple(lights), int(binning or 1), pattern, mode, id(masters), repr(getattr(masters, "used", "")),
+        key = (tuple(lights), int(binning or 1), pattern, mode, bool(stacks), repr(getattr(masters, "used", "")),
                dark_dir, bias_dir, sat)
         cache = getattr(self, "_sky_gain_cache", None)
-        if cache and cache[0] == key:
-            return cache[1]
+        if cache and cache[0] == key and cache[1] is masters:   # review nit: the same masters object, not its id
+            return cache[2]
+
+        def whole(path):   # review S1: stacks are read as they are (as the run reads them)
+            return bool(stacks) or is_stack_path(path)
         flat_only = core.Masters(flat=getattr(masters, "flat", None)) if masters is not None else core.Masters()
         floor_load = sg.window_loader(binning, flat_only, pattern, mode)
-        floor, floor_src = None, ""
+        floor, floor_err, floor_src = None, None, ""
         for folder, src in ((dark_dir, "darks"), (bias_dir, "bias")):
             if not folder:
                 continue
             frames = core.calibration_source(folder)[0]
             if src == "darks":   # read + dark noise only at the lights' own exposure
                 frames = [f for f in frames if _same_exposure(f, exp)]
-            vals = []
+            vals, errs = [], []
             for a, b in list(zip(frames[0::2], frames[1::2]))[:3]:
                 try:
-                    vals.append(sg.floor_from_pair(floor_load(a), floor_load(b)))
+                    v, e = sg.floor_from_pair(floor_load(a), floor_load(b), with_err=True)
                 except Exception:
                     continue
-            vals = [v for v in vals if math.isfinite(v) and v > 0]
-            if vals:
-                floor, floor_src = float(np.median(vals)), src
+                vals.append(v)
+                errs.append(e)
+            fl, fe = sg.floor_combine(vals, errs)
+            if fl is not None:
+                floor, floor_err, floor_src = fl, fe, src
                 break
         try:
             raw_px = int(header.get("NAXIS1") or 0) * int(header.get("NAXIS2") or 0)
         except Exception:
             raw_px = 0
+        max_pairs = sg.max_pairs_for(raw_px)
+        if lights and (whole(lights[0]) or not sg.plain_fits_2d(lights[0])):
+            max_pairs = min(max_pairs, sg.MAX_PAIRS // 2)   # review N6: read whole, so at most 12 pairs
 
         def full_load(path):
             return core.debayer(stack_load_frame(path, binning, masters)[2], pattern, mode)
-        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load)
+        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load, whole=whole)
+        n_pairs = len(sg.pick_pairs(len(lights), max_pairs))
+        if log is not None and n_pairs:
+            log(f"Measuring the gain from the night's sky ({n_pairs} frame pair{'s' if n_pairs != 1 else ''})…")
         meas = sg.measure_night(lights, load, sat=sat, floor_var=floor, floor_source=floor_src,
-                                max_pairs=sg.max_pairs_for(raw_px))
+                                max_pairs=max_pairs, floor_err=floor_err)
         if meas.get("ok"):
             meas["rn_e"] = sg.read_noise_e(meas["floor_var"], meas["k"], binning, pattern, mode)
-        self._sky_gain_cache = (key, meas)
+        self._sky_gain_cache = (key, masters, meas)
         return meas
 
     def _flux_gain_check(self, header, setup, meas, binning, pattern, mode, flat) -> str:

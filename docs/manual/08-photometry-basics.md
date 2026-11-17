@@ -448,16 +448,28 @@ other capture programs), that is used. When they don't (MicroObservatory frames,
    calibrated just as the run calibrates them, and looks at a central part of each (about 360,000 pixels; a whole
    MicroObservatory frame).
 2. On each frame it fits a smooth background (the sky with its gradients) and takes it off, then finds the stars and
-   masks them with a few pixels to spare, together with saturated pixels and the edge.
+   masks them with a few pixels to spare, together with saturated pixels and the edge. Where the sky itself comes
+   within a few times its own noise of the saturation level, that sky is masked too (its brightest noise would be
+   cut off and the gain would come out high).
 3. It subtracts the two frames of each pair. The sky's photon noise is different in the two frames, but everything
    fixed on the sensor (hot pixels, each pixel's own sensitivity, the master dark and flat) is the same in both and
-   cancels. Half the variance of the difference is then the sky's photon noise plus the read noise.
+   cancels. Half the variance of the difference is then the sky's photon noise plus the read noise. As a check that
+   what is left really is plain noise, SHOBS-P compares that variance with the one from differences of neighbouring
+   pixels: for plain noise the two agree, while a passing cloud, moonlight or other structure the background missed
+   adds to the first and hardly to the second. A pair where the first is more than 10 % larger is dropped, and the
+   log says how many were (*"3 pairs dropped: the sky had structure the background model missed, e.g. cloud or
+   moonlight"*). This check is Mike Fitzgerald's too.
 4. The read noise comes from two raw darks at the lights' exposure in the **Dark** folder: their difference holds
    exactly the noise the lights carry without light (read noise plus the dark current's noise). Without such darks,
    two bias frames give the read noise alone (the gain then comes out a little low, the safe side). Without either,
    the photon-transfer line (step 5) gives it.
-5. Gain = sky level ÷ (variance − read noise²) for each pair; the night's value is the median, with the spread of the
-   middle two thirds of the pairs. As a cross-check, SHOBS-P fits a **photon-transfer line** (variance against sky
+5. Gain = sky level ÷ (variance − read noise²) for each pair. A pair counts only when its sky variance is at least
+   twice the read noise² (the sky's noise at least as large as the read noise): on a fainter sky a small error in the
+   read noise, for example darks a little warmer than the lights, would move the gain a lot, so SHOBS-P falls back
+   instead and says *"the sky is too faint against the read + dark noise …"*. The night's value is the median, with
+   the spread of the middle two thirds of the pairs, widened by how well the read noise itself is known. When the
+   read noise comes from the photon-transfer line, the log gives the gain as *"… +/- … electrons per image unit"*,
+   the line's own uncertainty, and the EGAIN check below uses that. As a cross-check, SHOBS-P fits a **photon-transfer line** (variance against sky
    level across the night: its slope is 1 ÷ gain, its intercept the read noise squared; Janesick 2007). It is
    shown only when the night's sky changed enough to pin the slope down to better than 15 %.
 
@@ -490,9 +502,20 @@ log adds a plain note comparing the profile's bench gain and read noise with the
 camera profile zwo-asi2600mc-air__g100__o50__bin1: gain 0.25 e-/ADU (measured); the night's sky gives 0.26 e-/ADU,
 they agree (within 4 %)."*
 
-The measurement takes a second or two on small frames and a few seconds on 26-megapixel frames. It runs at the start
+If the measured gain comes out under the one-frame lower limit (below), which should not happen, the line adds a plain
+note: *"Note: this is under the one-frame lower limit (…), which should not happen; …"*. The frames then change from
+one to the next by more than the sky's noise (thin clouds, a moving gradient, poor tracking).
+
+**Stacks.** When you run photometry on stacks (the Stack step), the gain is measured on the stacks themselves, read
+as they are, exactly as the run reads them (never binned or calibrated a second time). A stack holds the sum of its
+frames, so the gain per image unit is the frames' own. The darks are not used for stacks: the read noise comes from
+the photon-transfer line, so stacks of a night whose sky hardly changed fall back to the lower limit.
+
+The measurement takes a second or two on small frames and a few seconds on 26-megapixel frames; the log says
+*"Measuring the gain from the night's sky (24 frame pairs)…"* when it starts. It runs at the start
 of the run (the busy bar says **Photometry on … lights…** meanwhile), on a sample of frames, never as an extra pass
-over the whole night. **Measure skipped frames** measures the same frames as the night's own run, so the added
+over the whole night. Frames it has to read whole (XISF, compressed FITS, stacks) get at most 12 pairs, as do frames
+over 8 megapixels. **Measure skipped frames** measures the same frames as the night's own run, so the added
 frames get the same gain.
 
 ### Comps near the frame edge
