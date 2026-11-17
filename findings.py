@@ -99,9 +99,9 @@ def load_hints(path: str = HELP_FILE) -> list[dict]:
 
 
 # (review S3) chapter 23 shows many messages with example values ("C2", "60 s", "N frames", "(x, y)"): those parts
-# match any value, as "…" does. Numbers (with their decimal point, comma, colon, sign), a lone N or M, a comp/check
-# slot (C2, K) and "(x, y)" become "…".
-_EXAMPLE = re.compile(r"\(x, y\)|(?<![\w.])[+−-]?\d[\d,.:]*\d?(?![\w])|\b[NM]\b|\bC\d\b")
+# match any value, as "…" does. Numbers (with their decimal point, comma, colon, sign), a lone N, M or K, a comp slot
+# (C2), a scale factor (x4) and "(x, y)" become "…".
+_EXAMPLE = re.compile(r"\(x, y\)|(?<![\w.])[+−-]?\d[\d,.:]*\d?(?![\w])|\b[NMK]\b|\bC\d\b|\bx\d+\b")
 
 
 def _pattern_regex(pat: str):

@@ -1838,7 +1838,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """(review S1) a canceled or stopped job sums up nothing: its ⚠ lines leave the status line's count and the
         Findings panel (they stay in the Log). 2.4.0 review S1: a ✖ stays on the panel (a run stopped by an error
         logs its ✖ inside the job, before this is called), so the reason it stopped is never lost."""
-        self._job_findings = []
+        if getattr(self, "_job_findings", None) is not None:   # (re-review) never reopens a job already closed
+            self._job_findings = []
         store = getattr(self, "findings", None)
         if store is not None:
             store.drop_step(getattr(self, "_job_step", ""), level="warn")
@@ -3811,7 +3812,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """(review N5) the status line is a link to the Findings list only while it shows a ⚠ / ✖ and the list has
         something on it; a plain note there is just words."""
         store = getattr(self, "findings", None)
-        return bool(store is not None and len(store) and self.status.get().lstrip()[:1] in ("⚠", "✖"))
+        return bool(store is not None and len(store) and self._msg_level(self.status.get()) != "note")
 
     def _status_changed(self):
         try:   # 2.4.0 (#102, review N5)
