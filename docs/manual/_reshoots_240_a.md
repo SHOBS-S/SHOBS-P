@@ -40,3 +40,26 @@ New shots worth adding (not in the manual yet):
 | img/17-refit-needed.png | Transit fit page with "Refit (settings changed)" on the Fit button and the fit's numbers gray (chapter 17) |
 | img/17-no-airmass.png | Corrections row with airmass grayed out and "no airmass: site not set" (chapter 17) |
 | img/09-field-image-saved.png | Results row after Save AAVSO report: "Field image saved ✓" grayed out (chapters 9 / 15) |
+
+## Done 17 Nov 2026 (build-240 9d8e660, example site 40/−100, Claude via computer use, 2404×1775)
+
+RESHOT: 09-output-page (SZ Lyn 13–14 Oct, Bin 2, per frame: the old shot was stacked 4, nothing in ch 9 depends on it),
+10-series-output (scrubbed HD 219134 example series, Bin Night), 10-night-zoom (6–7 Oct clicked), 12-flagged-points
+(crop of the SZ Lyn page: rows are in it), 13-period (crop of the HD 219134 page: rows are in it), 17-transit-fit-page
+(TOI-2046 b 20–21 Oct, same numbers as 2.3.6), 17-exoclock-buttons, 17-trim (19:16–19:37), 17-flip-step (HD 189733 b
+0723 reduced fresh at 203 mm: depth 2.65 %, flip step −20.0 ± 1.4 ppt kept, ΔBIC 373; validation 2.64 / −20.2),
+18-inconclusive-verdict (K2-113 b report, same numbers), 19-exotic-side-by-side (TrES-3 b EXOTIC 04-SEP, Tc .64756 as
+before; see nit below). NEW: 17-refit-needed.
+
+LEFT: 15-webobs-offer and NEW 09-field-image-saved: apps.aavso.org answered 500 for the AAVSO chart all session, so the
+Results row shows "Fetch AAVSO chart" instead of "Field image saved ✓"; retake once the chart comes back.
+15-no-auid: ASASSN-V J185009.93+281035.4 now has an AUID, so the No AUID line no longer appears; needs another star
+without an AUID (or keep the 2.3.6 shot with a note).
+SKIPPED (optional): 17-no-airmass: with the TOI-2046 series loaded, airmass stayed available after blanking the site
+(the series carries each night's site), so the grayed state did not show.
+
+NITS FOUND: (1) after closing an EXOTIC/SHOBS-P report and reopening another, the TOI-2046 b TOI and ExoClock lines stay
+under the Results row (they belong to the photometry night, not the report); visible in 19-exotic-side-by-side, so
+retake that shot after the fix. (2) With the K2-113 b report still open on the Transit page, New reduction + HD 189733 b
+on the Input page, Run photometry warned "No transit of K2-113 b is predicted during these lights": the run used the
+open report's planet, not the Input page's. The report page also still said "Your TOI-2046 b photometry is kept".
