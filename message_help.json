@@ -655,6 +655,45 @@
   {
    "section": "Photometry",
    "patterns": [
+    "drifts toward the frame edge later in the night: … px in on this frame, but only … px on frame …; stars at least … px in all night …",
+    "… (checked on 8 of the night's … lights) …"
+   ],
+   "todo": "Pick a star further in, or one of the green rings S1, S2 … (they stay clear all night)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "drifts off the frame later in the night: it is off the frame edge on frames … , so it is not measured there — pick a star further in",
+    "… drifts to the frame edge later in the night: its sky ring … runs past the edge on frames …"
+   ],
+   "todo": "Pick a star further in."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Suggested comps (…): … All stay at least … px from the frame edge all night (the field drifts up to … px; checked on all … lights).",
+    "checked on 8 of the … lights",
+    "from the loaded series' … frames"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Only 3 comps suggested: 1 more star of the right brightness comes nearer the frame edge during the night than the … px a comp needs to stay clear: … (… px on frame …). They are not suggested."
+   ],
+   "todo": "Nothing; use the suggestions there are. If you want a fourth comp, pick one by hand that stays in (its Stars panel line warns if it does not)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No comp can be suggested: the stars of the right brightness all come nearer the frame edge during the night than the … px a comp needs to stay clear: … Pick comps by hand further in, or reject the frames where the field drifted farthest."
+   ],
+   "todo": "Pick comps by hand further in (the Stars panel says how each one fares), or reject the frames where the field drifted farthest in Blink and Calibrate again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "II/336/apass9 from vizier.cfa.harvard.edu looked wrong (40 of 40 stars brighter than V 4 …); not used, asking the next mirror."
    ],
    "todo": "Nothing; the next mirror is asked. If every copy that answered was damaged, APASS's stars are missing this time: Solve again later."

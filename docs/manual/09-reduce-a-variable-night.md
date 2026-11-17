@@ -47,7 +47,7 @@ Why several comps? With two or more, SHOBS-P averages them into an *ensemble*. O
 What to aim for:
 
 - Within about 1 magnitude of the target. A ⚠ note in the panel tells you when a comp is much brighter or fainter. If the field has only much fainter comps, see "Stacking when comps are weak" in chapter 8.
-- Not too close to the frame edge. A comp that drifts off the edge is left out of those frames only (chapter 8, "Comps near the frame edge"), but a comp missing in most frames is left out of the whole night.
+- Not too close to the frame edge. A comp that drifts off the edge is left out of those frames only (chapter 8, "Comps near the frame edge"), but a comp missing in most frames is left out of the whole night. From 2.4.0 the green rings S1, S2 … never include a star that the night's drift takes near the edge, and the Stars panel line of a star you click says when the field drifts it toward or off the edge in later frames (chapter 8, "How S1–S4 are chosen").
 - Similar color (B−V within about 0.3; from 2.3.4 the ⚠ note and the suggestions both use 0.3). A comp of another color dims differently with airmass and leaves a slow trend.
 - Not a known variable. If you click one, SHOBS-P asks whether to use it anyway. Answer **No** unless you have a good reason.
 
