@@ -987,6 +987,43 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Photon noise: … , measured on the single frames that went into the stacks (a stack is their sum: the same gain)",
+    "… x N for the stacks …, measured on the stacks themselves (the single frames could not give it)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Measuring the gain from the night's sky (… frame pairs)…"
+   ],
+   "todo": "Nothing; the Photon noise line follows."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… N pairs dropped: the sky had structure the background model missed, e.g. cloud or moonlight",
+    "Photon noise"
+   ],
+   "todo": "Nothing when the gain was still measured. When too few pairs were left, the lower limit is used; frames from a clearer part of the night help."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… the sky is too faint against the read + dark noise (the sky's own noise has to be at least as large as the read + dark noise, and it was in only … of … frame pairs) …"
+   ],
+   "todo": "Nothing needed: the error bars are on the safe side. Longer exposures (a brighter sky per frame) allow a measurement."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Note: this is under the one-frame lower limit (…), which should not happen; the frames may change from one to the next by more than the sky's noise …"
+   ],
+   "todo": "Nothing urgent: the error bars are then on the large side. Check the night's frames in Blink for clouds."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "No photon-transfer check: the night's sky level changed too little to give a slope."
    ],
    "todo": "Nothing; the gain is still measured."

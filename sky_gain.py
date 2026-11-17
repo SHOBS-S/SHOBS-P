@@ -19,11 +19,24 @@ WASP-50 MicroObservatory night). This module measures it instead:
    the lights' exposure, std(d1 - d2) / sqrt 2, which is exactly what the lights carry; else from two bias frames
    (read noise only: the dark current's noise is left in the gain, so it comes out a little low, the safe side);
    else from the photon-transfer intercept (step 4); else there is none.
-4. Per pair g = S / (v - floor); the night's value is the median, with the 16-84 % spread. A photon-transfer line
-   v = S / g + c over the pairs (weighted, Janesick 2007) is the cross-check; it is reported only when the night's sky
-   range constrains its slope to better than 15 %.
+4. Per pair g = S / (v - floor); the night's value is the median, with the 16-84 % spread, widened by the floor's own
+   uncertainty (Fable review N1; with the photon-transfer floor, by that line's gain error, N5). A pair counts only
+   when its sky variance is at least twice the floor (the sky's noise at least the floor's): below that a small error
+   in the floor (darks a little warmer than the lights) moves the gain a lot (review N1: 2.3x on an uncooled camera
+   with a faint sky). A photon-transfer line v = S / g + c over the pairs (weighted, Janesick 2007) is the
+   cross-check; it is reported only when the night's sky range constrains its slope to better than 15 %.
 5. With no floor and no usable photon-transfer line, or fewer than 3 usable pairs, there is no measurement: the
    caller falls back to the old single-frame lower limit and says so.
+
+Whiteness guard (Mike Fitzgerald's review of the method): the estimator assumes the masked, background-subtracted
+difference is white noise. A passing cloud, reflected moonlight or other structure the background mesh misses adds
+variance and makes the gain LOW. Each pair's var(difference) is compared with the variance from neighbouring-pixel
+differences (var(d[:, 1:] - d[:, :-1]) / 2, and the same along y; both pixels unmasked): white noise gives 1, smooth
+structure more. The smaller of the x and y ratios is used (a camera's readout pattern can push one direction alone:
+MicroObservatory darks give x 0.88, y 0.98); a pair over WHITE_MAX is dropped and the count is said.
+
+Stacks (the Stack step's files) are read as they are, never binned or calibrated again (review S1), exactly as the run
+reads them; they are on the scale of a sum, so the electrons per image unit are the frames' own.
 
 Units: everything is in SHOBS-P image units (binned, calibrated, debayered), the same units the photometry measures,
 so the result plugs into photometry_core.photon_noise_setup as electrons per image unit like the old estimate did.
@@ -46,6 +59,9 @@ WINDOW_PX = 360_000         # analysis window per frame (image pixels), central;
 EDGE_PX = 4                 # the window's edge is masked
 DETECT_SIGMA = 2.0
 DILATE_PX = 4
+MIN_SKY_OVER_FLOOR = 2.0    # review N1: a pair counts only when its variance is at least this x the floor
+WHITE_MAX = 1.05            # Mike Fitzgerald's whiteness guard: a pair whose ratio is over this is dropped
+NEAR_SAT_SIGMA = 5.0        # review nit: the sky within this many sigma of the saturation level is masked
 METHOD_WORDS = "background model and source mask, idea by Mike Fitzgerald"
 
 
@@ -116,12 +132,29 @@ def _read_rows(path: str, y0: int, y1: int, x0: int, x1: int):
     return win, header
 
 
-def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None, max_px: int = WINDOW_PX):
+def plain_fits_2d(path: str) -> bool:
+    """True when a window of the file can be read without loading it whole (a plain 2-D FITS image, not
+    compressed, image in the primary HDU)."""
+    from astropy.io import fits
+    if not str(path).lower().endswith((".fit", ".fits", ".fts")):
+        return False
+    try:
+        with fits.open(path, memmap=True, do_not_scale_image_data=True) as hdul:
+            hdu = hdul[0]
+            return bool(hdu.header.get("NAXIS") == 2 and not isinstance(hdu, fits.CompImageHDU)
+                        and int(hdu.header.get("NAXIS1") or 0) > 0 and int(hdu.header.get("NAXIS2") or 0) > 0)
+    except Exception:
+        return False
+
+
+def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None, max_px: int = WINDOW_PX,
+                  whole=None):
     """load(path) for measure_night: the frame calibrated exactly as the run calibrates it (photometry_core.bin_image,
     calibrate_frame with the run's masters, debayer), but only a central window of it (at most max_px image pixels),
     with the masters cut to the same window, so a 26 Mpx frame costs a fraction of a full calibration.
-    full_load(path) -> calibrated, debayered image is used for anything else (stacks, XISF, compressed or 3-plane
-    files); its central window is taken."""
+    full_load(path) -> calibrated, debayered image is used for anything else (XISF, compressed or 3-plane files)
+    and for every path whole(path) is true for (review S1: the Stack step's stacks, already calibrated and binned);
+    its central window is taken."""
     import dataclasses
     import photometry_core as core
     b = max(int(binning or 1), 1)
@@ -131,6 +164,12 @@ def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None
 
     def load(path):
         got = None
+        if whole is not None and whole(path):
+            if full_load is None:
+                raise ValueError("no loader for this file")
+            img = np.asarray(full_load(path), dtype=np.float32)
+            y0, y1, x0, x1 = window(img.shape, max_px, 1)
+            return img[y0:y1, x0:x1]
         try:
             from astropy.io import fits
             h = fits.getheader(path) if str(path).lower().endswith((".fit", ".fits", ".fts")) else None
@@ -167,7 +206,9 @@ def mesh_size(shape) -> int:
 
 def prep_frame(img: np.ndarray, sat: float | None = None) -> dict:
     """A calibrated frame (or window of one) -> {"resid": frame minus its background model (NaN where masked),
-    "mask": stars, saturated / bad pixels and the edge, "level": the background's median, "masked": fraction}."""
+    "mask": stars, saturated / bad pixels and the edge, "level": the background's median, "masked": fraction}.
+    Review nit: where the sky itself comes within NEAR_SAT_SIGMA of sat, the pixels at sat are the sky's own upper
+    noise tail, not stars; cutting them would make the variance low and the gain high, so that sky is masked too."""
     from astropy.stats import SigmaClip
     from photutils.background import Background2D, MedianBackground
     from photutils.segmentation import detect_sources
@@ -188,6 +229,10 @@ def prep_frame(img: np.ndarray, sat: float | None = None) -> dict:
     smooth = gaussian_filter(r0, 2.0 / 2.3548, truncate=2.5)   # FWHM 2 px, as make_2dgaussian_kernel(2.0, 5)
     rms = float(bkg.background_rms_median)
     mask = bad.copy()
+    if sat is not None and math.isfinite(float(sat)):
+        near = back + NEAR_SAT_SIGMA * np.asarray(bkg.background_rms, dtype=np.float32) >= float(sat)
+        if near.any():
+            mask |= near
     if rms > 0 and math.isfinite(rms):
         seg = detect_sources(smooth, DETECT_SIGMA * rms, 5, mask=bad)   # n_pixels (npixels before photutils 3)
         if seg is not None:
@@ -217,17 +262,54 @@ def pair_stats(a: dict, b: dict) -> tuple:
     return 0.5 * (sa + sb), 0.5 * v
 
 
-def floor_from_pair(f1: np.ndarray, f2: np.ndarray) -> float:
+def whiteness(a: dict, b: dict) -> float:
+    """Mike Fitzgerald's whiteness ratio of a prepared pair: var(difference) / (var(neighbouring-pixel differences) / 2),
+    the smaller of x and y (masks OR'd for both pixels; sigma-clipped). About 1 for white noise; NaN when unusable."""
+    if a["resid"].shape != b["resid"].shape:
+        return float("nan")
+    d = a["resid"] - b["resid"]   # NaN where either is masked, so a neighbour difference is NaN when either is
+    v = clipped_var(d)
+    vx, vy = clipped_var(d[:, 1:] - d[:, :-1]), clipped_var(d[1:, :] - d[:-1, :])
+    ratios = [v / (n / 2.0) for n in (vx, vy) if math.isfinite(n) and n > 0]
+    if not ratios or not math.isfinite(v):
+        return float("nan")
+    return float(min(ratios))
+
+
+def structure_words(n: int) -> str:
+    return (f"{n} pair{'s' if n != 1 else ''} dropped: the sky had structure the background model missed, e.g. cloud "
+            "or moonlight")
+
+
+def floor_from_pair(f1: np.ndarray, f2: np.ndarray, with_err: bool = False):
     """Noise floor (variance per image pixel) from two frames without light taken the same way as the lights (two
-    darks of the lights' exposure: read + dark-current noise; two bias frames: read noise): clipped var(f1-f2)/2."""
+    darks of the lights' exposure: read + dark-current noise; two bias frames: read noise): clipped var(f1-f2)/2.
+    with_err: (floor, its statistical error floor * sqrt(2 / pixels used))."""
+    nan = float("nan")
     a, b = np.asarray(f1, dtype=np.float64), np.asarray(f2, dtype=np.float64)
     if a.shape != b.shape:
-        return float("nan")
+        return (nan, nan) if with_err else nan
     e = EDGE_PX
     d = a - b
     if min(d.shape) > 4 * e:
         d = d[e:-e, e:-e]
-    return 0.5 * clipped_var(d)
+    fl = 0.5 * clipped_var(d)
+    if not with_err:
+        return fl
+    n = int(np.isfinite(d).sum())
+    return fl, (fl * math.sqrt(2.0 / n) if n > 0 and math.isfinite(fl) else nan)
+
+
+def floor_combine(values, errors=()) -> tuple:
+    """(floor, error) from up to a few frame pairs' floors: the median, with the larger of the pairs' own error (over
+    sqrt n) and their scatter (over sqrt n). (None, 0) when none is usable."""
+    v = np.asarray([x for x in values if x is not None and math.isfinite(x) and x > 0], dtype=float)
+    if not v.size:
+        return None, 0.0
+    e = np.asarray([x for x in errors if x is not None and math.isfinite(x) and x >= 0], dtype=float)
+    stat = float(np.median(e)) / math.sqrt(v.size) if e.size else 0.0
+    scat = float(np.std(v, ddof=1)) / math.sqrt(v.size) if v.size > 1 else 0.0
+    return float(np.median(v)), max(stat, scat)
 
 
 def pick_pairs(n: int, max_pairs: int = MAX_PAIRS) -> list:
@@ -267,41 +349,68 @@ def ptc_fit(levels, variances) -> dict:
     return out
 
 
-def night_gain(levels, variances, floor_var: float | None = None, floor_source: str = "") -> dict:
-    """The night's gain from the pairs' (S, v). floor_source: "darks", "bias" or "" (none known).
-    {"ok", "k", "k_lo", "k_hi", "n_pairs", "floor_var", "floor_source" ("darks" / "bias" / "ptc" / ""), "ptc",
-    "why"}. k in electrons per image unit; not ok -> the caller uses the old lower limit."""
+def night_gain(levels, variances, floor_var: float | None = None, floor_source: str = "",
+               floor_err: float | None = None, dropped_structure: int = 0) -> dict:
+    """The night's gain from the pairs' (S, v). floor_source: "darks", "bias" or "" (none known); floor_err: the
+    floor's own error (variance units), which widens k_lo / k_hi.
+    {"ok", "k", "k_lo", "k_hi", "k_err" (the photon-transfer gain error when the floor is that line's, else NaN),
+    "n_pairs", "floor_var", "floor_err", "floor_source" ("darks" / "bias" / "ptc" / ""), "ptc", "why"}. k in electrons
+    per image unit; not ok -> the caller uses the old lower limit. dropped_structure: pairs the whiteness guard dropped
+    (said in "why" when too few are left; kept as "dropped_structure")."""
     S, v = np.asarray(levels, dtype=float), np.asarray(variances, dtype=float)
     keep = np.isfinite(S) & np.isfinite(v) & (S > 0) & (v > 0)
     S, v = S[keep], v[keep]
     nan = float("nan")
     ptc = ptc_fit(S, v)
-    out = {"ok": False, "k": nan, "k_lo": nan, "k_hi": nan, "n_pairs": int(S.size), "floor_var": nan,
-           "floor_source": "", "ptc": ptc, "why": "", "levels": S.tolist(), "variances": v.tolist()}
+    out = {"ok": False, "k": nan, "k_lo": nan, "k_hi": nan, "k_err": nan, "n_pairs": int(S.size), "floor_var": nan,
+           "floor_err": nan, "floor_source": "", "ptc": ptc, "why": "", "levels": S.tolist(), "variances": v.tolist(),
+           "dropped_structure": int(dropped_structure or 0)}
     if S.size < MIN_PAIRS:
         out["why"] = f"only {S.size} usable frame pair{'s' if S.size != 1 else ''}"
+        if dropped_structure:
+            out["why"] += f" ({structure_words(int(dropped_structure))})"
         return out
     fl = float(floor_var) if floor_var is not None and math.isfinite(float(floor_var)) and floor_var >= 0 else None
     src = floor_source if fl is not None else ""
+    fe = float(floor_err) if (fl is not None and floor_err is not None and math.isfinite(float(floor_err))
+                              and floor_err > 0) else 0.0
     if fl is None and ptc["ok"] and ptc["intercept"] > 0:
         fl, src = ptc["intercept"], "ptc"
+        fe = 0.0   # the line's own gain error is used for the range instead (review N5)
     if fl is None:
         out["why"] = ("no darks or bias frames for the read noise, and the night's sky range is too small for a "
                       "photon-transfer line")
         return out
+    # review N1: only pairs whose sky noise is at least the floor's (variance >= 2 x floor)
+    use = np.isfinite(S) & (v >= MIN_SKY_OVER_FLOOR * fl) & (v > fl)
     with np.errstate(divide="ignore", invalid="ignore"):
-        g = S / (v - fl)
-    g = g[np.isfinite(g) & (g > 0) & (v > 1.05 * fl)]
-    if g.size < MIN_PAIRS:
-        out["why"] = "the sky is too faint against the read noise"
+        g_all = S / (v - fl)
+    use &= np.isfinite(g_all) & (g_all > 0)
+    if int(use.sum()) < MIN_PAIRS:
+        out["why"] = (f"the sky is too faint against the {floor_words(src)} (the sky's own noise has to be at least "
+                      f"as large as the {floor_words(src)}, and it was in only {int(use.sum())} of {S.size} frame "
+                      "pairs), so a small error in the read noise would change the gain a lot")
+        out["floor_var"], out["floor_source"] = fl, src
         return out
-    out.update({"ok": True, "k": float(np.median(g)), "k_lo": float(np.percentile(g, 16)),
-                "k_hi": float(np.percentile(g, 84)), "n_pairs": int(g.size), "floor_var": fl, "floor_source": src})
+    Su, vu = S[use], v[use]
+    g = g_all[use]
+    k = float(np.median(g))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        g_lo = Su / (vu - fl + fe)                 # a lower floor: a lower gain
+        d_hi = vu - fl - fe
+        g_hi = np.where(d_hi > 0, Su / np.where(d_hi > 0, d_hi, 1.0), np.inf)
+    lo, hi = float(np.percentile(g_lo, 16)), float(np.percentile(g_hi, 84))
+    k_err = nan
+    if src == "ptc" and math.isfinite(ptc.get("g_err", nan)):
+        k_err = float(ptc["g_err"])                 # review N5: the photon-transfer line's own error
+        lo, hi = min(lo, k - k_err), max(hi, k + k_err)
+    out.update({"ok": True, "k": k, "k_lo": lo, "k_hi": hi, "k_err": k_err, "n_pairs": int(g.size), "floor_var": fl,
+                "floor_err": fe if src != "ptc" else float(ptc.get("intercept_err", nan)), "floor_source": src})
     return out
 
 
 def measure_night(paths, load, sat: float | None = None, floor_var: float | None = None, floor_source: str = "",
-                  max_pairs: int = MAX_PAIRS, skip=None) -> dict:
+                  max_pairs: int = MAX_PAIRS, skip=None, floor_err: float | None = None) -> dict:
     """The night's gain from up to max_pairs neighbouring pairs of `paths` (in time order). load(path) -> the
     calibrated image window (raises on a frame it cannot read). skip: paths never used (bad frames). Each frame is
     read and prepared once. Returns night_gain's dict plus "pairs_tried"."""
@@ -319,16 +428,23 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
         return cache[i]
 
     S, V = [], []
-    for i, j in pairs:
+    dropped = 0
+    for n, (i, j) in enumerate(pairs):
         a, b = prepared(i), prepared(j)
+        cache.pop(i, None)   # pairs go forward in time: frame i is not needed again
+        if n + 1 >= len(pairs) or pairs[n + 1][0] != j:
+            cache.pop(j, None)   # review nit: nor is j when the next pair does not start at it
         if a is None or b is None:
             continue
         s, v = pair_stats(a, b)
         if math.isfinite(s) and math.isfinite(v):
+            r = whiteness(a, b)
+            if math.isfinite(r) and r > WHITE_MAX:   # Mike Fitzgerald's whiteness guard
+                dropped += 1
+                continue
             S.append(s)
             V.append(v)
-        cache.pop(i, None)   # pairs go forward in time: frame i is not needed again
-    out = night_gain(S, V, floor_var, floor_source)
+    out = night_gain(S, V, floor_var, floor_source, floor_err, dropped)
     out["pairs_tried"] = len(pairs)
     return out
 
@@ -364,13 +480,36 @@ def summary(meas: dict) -> str:
     k = meas["k"]
     n = meas["n_pairs"]
     rn = math.sqrt(meas["floor_var"]) if math.isfinite(meas.get("floor_var", float("nan"))) else float("nan")
-    text = (f"{k:.3g} electrons per image unit (from {n} frame pairs, {meas['k_lo']:.3g}-{meas['k_hi']:.3g}; "
-            f"{floor_words(meas['floor_source'])} {rn:.3g} units {floor_from_words(meas['floor_source'])}")
+    k_err = meas.get("k_err")
+    if meas.get("floor_source") == "ptc" and k_err is not None and math.isfinite(k_err):
+        # review N5: the photon-transfer floor's gain error is the honest spread
+        text = (f"{k:.3g} +/- {k_err:.2g} electrons per image unit (from {n} frame pairs; "
+                f"{floor_words(meas['floor_source'])} {rn:.3g} units {floor_from_words(meas['floor_source'])}")
+    else:
+        text = (f"{k:.3g} electrons per image unit (from {n} frame pairs, {meas['k_lo']:.3g}-{meas['k_hi']:.3g}; "
+                f"{floor_words(meas['floor_source'])} {rn:.3g} units {floor_from_words(meas['floor_source'])}")
     rn_e = meas.get("rn_e")
     if rn_e is not None and math.isfinite(rn_e):
         text += f", about {rn_e:.3g} e- per camera pixel"
+    if meas.get("stack_n"):
+        text += f" x {int(meas['stack_n'])} for the stacks"
+    if meas.get("dropped_structure"):
+        text += f"; {structure_words(int(meas['dropped_structure']))}"
     text += ")"
+    basis = basis_words(meas)
+    if basis:
+        text += f", {basis}"
     return text
+
+
+def basis_words(meas: dict) -> str:
+    """2.4.0 (#104): for a stacked run, what the gain was measured on ("" for a run on frames)."""
+    b = (meas or {}).get("basis")
+    if b == "frames":
+        return "measured on the single frames that went into the stacks (a stack is their sum: the same gain)"
+    if b == "stacks":
+        return "measured on the stacks themselves (the single frames could not give it)"
+    return ""
 
 
 def ptc_words(meas: dict) -> str:

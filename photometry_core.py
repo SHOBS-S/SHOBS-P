@@ -3482,6 +3482,8 @@ def _sky_meas_brief(meas: dict | None) -> dict | None:
         return float(f"{x:.{nd}g}") if math.isfinite(x) else None
     p = meas.get("ptc") or {}
     return {"k": f(meas.get("k")), "k_lo": f(meas.get("k_lo")), "k_hi": f(meas.get("k_hi")),
+            "k_err": f(meas.get("k_err"), 2), "dropped": int(meas.get("dropped_structure") or 0), "basis": meas.get("basis") or "",
+            "stack_n": int(meas.get("stack_n") or 0),
             "pairs": int(meas.get("n_pairs") or 0), "floor": f(meas.get("floor_var")),
             "floor_source": meas.get("floor_source") or "", "rn_e": f(meas.get("rn_e")),
             "ptc_g": f(p.get("g")) if p.get("ok") else None, "ptc_g_err": f(p.get("g_err"), 2) if p.get("ok") else None}
@@ -3519,6 +3521,20 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
     except Exception:   # never stops a run
         _sg = None
     meas_words = (_sg.summary(meas) if (_sg and meas) else "")
+    # 2.4.0 (Fable review nit): a measured gain whose whole range is under the one-frame lower limit should not happen
+    ll_note = ""
+    if meas is not None and math.isfinite(sky_ll) and sky_ll > 0:
+        try:
+            k_hi = float(meas.get("k_hi", sky_k))
+        except (TypeError, ValueError):
+            k_hi = sky_k
+        if math.isfinite(k_hi) and k_hi < sky_ll:
+            ll_note = (f" Note: this is under the one-frame lower limit ({sky_ll:.3g}), which should not happen; the "
+                       "frames may change from one to the next by more than the sky's noise (thin clouds, a moving "
+                       "gradient, poor tracking).")
+            ll_note += (" This check is then less certain." if (header_e_per_adu(header) is not None
+                                                                and not precalibrated)
+                        else " The error bars are then on the safe (large) side.")
     ptc_words = (_sg.ptc_words(meas) if (_sg and meas) else "")
     extra = {"sky_method": method if math.isfinite(sky_k) and sky_k > 0 else "",
              "sky_meas": _sky_meas_brief(meas), "sky_k_lower_limit": sky_ll}
@@ -3568,7 +3584,7 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
         if meas is not None:
             # 2.4.0 (#104): a measurement, so the check is tighter (see the docstring)
             note += (f" The night's sky measures {sky_k:.3g} electrons per image unit ({sky_k / at:.2f} x that; "
-                     f"from {meas['n_pairs']} frame pairs).")
+                     f"from {meas['n_pairs']} frame pairs).") + ll_note
             lo, hi = float(meas.get("k_lo", sky_k)), float(meas.get("k_hi", sky_k))
             sky_e = sky_level * at if math.isfinite(sky_level) else float("nan")
             if sky_k > MEAS_CHECK * at and lo > MEAS_CHECK * at:
@@ -3606,7 +3622,7 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                 "sky_k": sky_k, "warning": "", **extra,
                 "note": f"Photon noise: {why}, so the gain is measured from the night's sky: {meas_words}. Method: "
                         f"{_sg.METHOD_WORDS if _sg else 'background model and source mask'}."
-                        + (f" {ptc_words}" if ptc_words else "") + ped_note}
+                        + (f" {ptc_words}" if ptc_words else "") + ll_note + ped_note}
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:
         why_not = str((sky_meas or {}).get("why") or "")
         safe = ("a lower limit: error bars on the safe side" if not (precalibrated or pedestal)
