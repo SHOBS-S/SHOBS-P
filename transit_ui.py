@@ -3114,10 +3114,13 @@ class TransitPage:
         """2.2.19 (#40): <report stem>_settings.txt beside the report: the full settings block. Never costs the
         report (logged on failure)."""
         lines = self.settings_lines(meta, self.result)
-        if not lines:
+        # 2.4.0 (#93): the fit's exact inputs at full precision (for a report's fit too, which has no other settings)
+        inputs = tc.fit_inputs_lines(self.result) if self.result else []
+        if not lines and not inputs:
             return ""
         if self._findings_apply():   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
             lines = lines + self.app.run_findings_lines()
+        lines = lines + inputs
         path = self.app._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")   # never over an older one
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
@@ -3449,6 +3452,8 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     sl = fit_csv_error_line(r)
     if sl:
         out.append(sl)
+    if (r or {}).get("planet") is not None and "summary" in (r or {}):
+        out += ["# " + ln for ln in tc.fit_inputs_lines(r)]   # 2.4.0 (#93): the exact inputs, full precision
     t_flip = fit_csv_flip_time(r, meta)
     if t_flip is not None:
         out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")

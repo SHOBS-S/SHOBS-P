@@ -100,6 +100,16 @@ Beside the report, SHOBS-P writes:
     a flip)` (chapter 8).
   - On an alt-az night where the field turned by about 180° between two frames, a row `Field turn: field turned 180 deg
     between frames … on an alt-az night (a meridian flip? check Mount)` (chapter 8).
+  - **Fit inputs** (from 2.4.0): the exact values the fit started from, at full precision, so a later rerun can be
+    checked for identical inputs. One row each: `Fit input period: 2.21857 +/- 1e-06 d`, **t0** and its error,
+    **a/R\*** and **b** with their errors, the published **Rp/R\*** and depth, **T14**, the **Teff** and band the limb
+    darkening was taken for (`V / clear table`, or `Sloan i' (Claret 2004)`), the **limb darkening prior** (u1, u2 and
+    its width), the **shape priors used** (the published values with SHOBS-P's minimum widths, which can be wider
+    than the catalog's), the **catalog** and where the ephemeris came from, and the **lookup**: when the NASA
+    Exoplanet Archive (or ExoFOP) answered, `from the lookup cache (fetched …)` when it did not, `typed on the Input
+    page`, or `not looked up (the report's own values)` for a fit of an opened report. A fit of an opened report now
+    gets a settings file too, holding these rows. The report's own `#PRIORS` line keeps its usual, shorter form, and
+    the `#NOTES` line does not grow: the full values are here.
 - `…_field.png`: the reference frame exactly as shot (never turned or mirrored), filling the picture on a smooth
   dark-gray background. The target, comps and check star are marked with their apertures to scale, with a scale
   bar at the bottom right. Yellow **N** and **E** arrows in the top-right corner show where north and east lie on
@@ -136,7 +146,8 @@ To save the package:
      spread, as a diagnostic). When the planet's TOI status and ExoClock priority were looked up (chapter 16), the summary
      at the top has a **TESS TOI** line (with the target's ExoFOP-TESS address) and an **ExoClock** line. On a
      night with a meridian flip it has the *Meridian flip* lines and the *Flip step …* line, and **Detrending** says
-     `airmass, meridian flip step` when the step was kept (chapter 17).
+     `airmass, meridian flip step` when the step was kept (chapter 17). From 2.4.0 it ends with a **Fit inputs (full
+     precision)** block: the same rows as the settings file's *Fit input* rows (above).
    - `…_plot.png`: the transit plot.
 
 The package is a plain folder, not a zip, and it does not contain the AAVSO report; save that separately if you want

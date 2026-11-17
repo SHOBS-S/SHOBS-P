@@ -396,7 +396,9 @@ saves nothing and the status line says *"Not saved: fix the Notes (Output page),
 planet, comps and check star never set it off. A new reduction puts the notes back to *"OSC reduced; not
 transformed"* (or *"Monochrome camera; not transformed"*).
 
-Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
+Saving the report also writes a `…_settings.txt` with the reduction settings and the fit's exact inputs (period, t0,
+a/R\*, b and the rest at full precision, with the catalog and the lookup date, so a rerun can be checked for the same
+inputs), and a field image (`…_field.png`, plus
 the AAVSO chart of the field when it answers) beside it: the field image comes with the report. Chapter 19 describes them.
 
 ### Send it to ExoClock

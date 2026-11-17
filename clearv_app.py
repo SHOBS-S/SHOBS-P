@@ -4973,7 +4973,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
              "b": num(self.pl_b), "teff": num(self.pl_teff), "source": info.get("source") or "Input page",
              "reference": info.get("reference", ""), "vmag": info.get("vmag"), "tmag": info.get("tmag"),
              "ra": info.get("ra"), "dec": info.get("dec"),
-             "from_cache": info.get("from_cache")}   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "from_cache": info.get("from_cache"),   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "looked_up": info.get("looked_up")}   # 2.4.0 (#93): when the live lookup answered (fit inputs)
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)

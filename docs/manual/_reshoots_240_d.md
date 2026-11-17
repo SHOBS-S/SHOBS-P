@@ -23,3 +23,13 @@ Run photometry refuses with the same words. No existing shot shows the case (it 
 |---|---|---|---|
 | img/08-stars-panel.png | 08 | nothing (no clash in the shot) | reuse |
 | all others | | nothing of #68 in view | reuse |
+
+## #93 (the fit's exact inputs in the result files)
+
+Text files only: a *Fit inputs (full precision)* block at the end of the ExoFOP `_fit.txt`, *Fit input …* rows in the
+transit report's `_settings.txt` (a fit of an opened report now gets one too) and `# Fit input …` lines in the fit
+CSV header. Nothing on screen changes; no fit number changes.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| all | | nothing of #93 in view (no shot shows these files) | reuse |

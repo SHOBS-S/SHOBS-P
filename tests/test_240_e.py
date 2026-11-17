@@ -280,5 +280,78 @@ class TestCheckIsNotAComp(unittest.TestCase):
         self.assertIn("self._say_check_clash(role)", set_slot)
 
 
+class TestFitInputs(unittest.TestCase):
+    """#93: the exact inputs at full precision in the fit text, the fit CSV header and the settings file."""
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        import transit_core as tc
+        sys.path.insert(0, os.path.join(ROOT, "tests"))
+        from test_230_b import PLANET, synth_night
+        cls.tc, cls.np = tc, np
+        t, f, e, am, _af = synth_night(0.0, seed=3)
+        cls.data = (t, f, e, am)
+        cls.planet = dict(PLANET, a_rs=5.344123456789, a_rs_err=0.16, b=0.0831234567, b_err=0.07,
+                          source="NASA Exoplanet Archive", reference="Wang et al. 2019",
+                          looked_up="15 Nov 2026 14:03 UTC")
+        cls.r = tc.fit_transit(t, f, e, am, cls.planet, mcmc_steps=200)
+
+    def test_lines_full_precision(self):
+        lines = self.tc.fit_inputs_lines(self.r)
+        text = "\n".join(lines)
+        self.assertTrue(text.isascii(), text)
+        self.assertIn("Fit input period: 2.21857 +/- 1e-06 d", text)
+        self.assertIn("Fit input t0: 2461000.0 +/- 0.0002 (BJD_TDB)", text)
+        self.assertIn("Fit input a/R*: 5.344123456789 +/- 0.16", text)
+        self.assertIn("Fit input b: 0.0831234567 +/- 0.07", text)
+        self.assertIn("Fit input published Rp/R*: 0.155", text)
+        self.assertIn("Fit input T14: 0.076 d", text)
+        self.assertIn("Fit input Teff for limb darkening: 5050.0 K; band V / clear table", text)
+        u1, u2, w = self.r["ld_prior"]
+        self.assertIn(f"Fit input limb darkening prior: u1 {u1!r}, u2 {u2!r}, width {w!r}", text)
+        self.assertIn("Fit input shape priors used: a_rs 5.344123456789 +/- 0.16", text)
+        self.assertIn("Fit input catalog: NASA Exoplanet Archive (Wang et al. 2019)", text)
+        self.assertIn("Fit input lookup: 15 Nov 2026 14:03 UTC (live)", text)
+
+    def test_cache_and_report_sources(self):
+        r = dict(self.r, planet=dict(self.r["planet"], from_cache="12 Oct 2026", looked_up=None))
+        self.assertIn("from the lookup cache (fetched 12 Oct 2026", "\n".join(self.tc.fit_inputs_lines(r)))
+        r = dict(self.r, planet=dict(self.r["planet"], source="the report's priors", looked_up=None))
+        self.assertIn("not looked up (the report's own values)", "\n".join(self.tc.fit_inputs_lines(r)))
+        r = dict(self.r, planet=dict(self.r["planet"], teff=None, looked_up=None, source="Input page"))
+        text = "\n".join(self.tc.fit_inputs_lines(r))
+        self.assertIn("not known (5800 K assumed)", text)
+        self.assertIn("Fit input lookup: typed on the Input page", text)
+
+    def test_fit_text_and_csv(self):
+        import transit_ui
+        text = self.tc.fit_text(self.r, {"version": "2.4.0", "filter": "V"})
+        self.assertIn("\nFit inputs (full precision)\n  period: 2.21857 +/- 1e-06 d\n", text)
+        self.assertIn("  lookup: 15 Nov 2026 14:03 UTC (live)", text)
+        com = transit_ui.fit_csv_comments(self.r, {"filter": "V"})
+        self.assertIn("# Fit input a/R*: 5.344123456789 +/- 0.16", com)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "Synthb_V_01-JAN-2026_SHOBS-P_transit_fit.csv")
+            transit_ui.write_fit_csv(path, self.r, meta={"filter": "V"})
+            import multinight
+            night = multinight.load_fit_csv(path)   # the extra comment lines never upset the reader
+            self.assertEqual(len(night["t"]), len(self.r["t"]))
+            self.assertEqual(night["planet"], "Synth b")
+
+    def test_no_fit_number_changes(self):
+        t, f, e, am = self.data
+        plain = {k: v for k, v in self.planet.items() if k not in ("looked_up", "source", "reference")}
+        r2 = self.tc.fit_transit(t, f, e, am, plain, mcmc_steps=200)
+        for name in ("tc", "k", "depth", "a_rs", "b"):
+            self.assertEqual(self.r["summary"][name], r2["summary"][name])
+
+    def test_settings_file_gets_the_inputs(self):
+        body = _src("transit_ui.py").split("    def _write_settings(self", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("tc.fit_inputs_lines(self.result)", body)
+        # the lookup stamp reaches the fit through the Input page
+        self.assertIn('"looked_up": info.get("looked_up")', _src())
+
+
 if __name__ == "__main__":
     unittest.main()
