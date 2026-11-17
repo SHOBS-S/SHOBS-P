@@ -434,6 +434,14 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Comp 2 and the check star are the same star (Comp 2: the same name, … / 0.3″ apart). The check star tests the comps, so it can't also be one of them. …",
+    "Run photometry"
+   ],
+   "todo": "Clear one of the two (✕ in the Stars panel, or right-click its marker) and pick another star. Run photometry refuses until then."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "1 Not solved"
    ],
    "todo": "Press Solve again for the full diagnosis. Check the Optics box (focal length, pixel size, binning) and the RA/Dec. You can still click stars and type magnitudes."

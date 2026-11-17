@@ -13,3 +13,13 @@ No to a planet of another star the previous planet comes back (or the value boxe
 | img/19-exotic-side-by-side.png | 19 | a report of another planet open: the *TOI-… / ExoClock: …* lines under the Results row are gone (they showed the photometry night's TOI-2046 b beside a TrES-3 b report) | RESHOOT |
 | img/16-planet-box.png | 16 | only if the shot shows the line under the Planet box after **No** to a planet of another star (new words) | CHECK, reshoot if so |
 | img/05-input-page.png | 05 | nothing of this in view (the Planet box line is the lookup's) | reuse |
+
+## #68 (the check star is never a comp)
+
+A new box and Stars-panel line when a comp and the check star are the same star (same name, or within about 2″), and
+Run photometry refuses with the same words. No existing shot shows the case (it needs a deliberate mistake).
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/08-stars-panel.png | 08 | nothing (no clash in the shot) | reuse |
+| all others | | nothing of #68 in view | reuse |

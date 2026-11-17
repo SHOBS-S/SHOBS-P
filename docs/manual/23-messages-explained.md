@@ -126,6 +126,7 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 | Message | What it means | What to do |
 |---|---|---|
 | *Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image.* | You clicked the image before calibrating. | Calibrate. |
+| *⚠ Comp 2 and the check star are the same star (Comp 2: the same name, … / 0.3″ apart). The check star tests the comps, so it can't also be one of them. …* (a box when the star is picked, the star's line in the Stars panel, and again at **Run photometry**) | A comp and the check star have the same catalog name, or their markers are within about 2″ (2 px before the solve). Often a position or name typed into the wrong row. | Clear one of the two (✕ in the Stars panel, or right-click its marker) and pick another star. Run photometry refuses until then. |
 | Step strip **1 Not solved**, or *Not solved: no lock (h of n catalog stars matched).* | The plate solve failed. | Press **Solve again** for the full diagnosis. Check the Optics box (focal length, pixel size, binning) and the RA/Dec. You can still click stars and type magnitudes. |
 | *Solve needs to know roughly where the frame is: …* | No pointing in the headers and no RA/Dec typed. | Type the target (or field center) on the Input page. |
 | *… is a known or suspected variable: … Use it anyway?* | A comp or check you clicked is in VSX or SIMBAD. | Usually **No**, and pick another star. |

@@ -196,5 +196,89 @@ class TestWrongPlanet(unittest.TestCase):
         self.assertIn("wait for the current step", app.planet_source.get())
 
 
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestCheckIsNotAComp(unittest.TestCase):
+    """#68."""
+
+    @classmethod
+    def setUpClass(cls):
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_240_e.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        app = self.app
+        for r in list(self.ca.COMP_ROLES) + ["check"]:
+            app.clear_mark(r, redraw=False)
+        app.chart_solution, app.chart_placed = None, []
+
+    def _mark(self, role, name, xy):
+        setattr(self.app, f"{role}_xy", xy)
+        getattr(self.app, f"{role}_name").set(name)
+
+    def test_same_name(self):
+        self._mark("comp", "TYC 3308-462-1", (100.0, 100.0))
+        self._mark("comp2", "Gaia DR3 439068910332260352", (300.0, 300.0))
+        self._mark("check", "Gaia DR3 439068910332260352", (500.0, 500.0))
+        clash = self.app.check_comp_clash()
+        self.assertEqual([r for r, _ in clash], ["comp2"])
+        text = self.app.check_clash_text()
+        self.assertIn("Comp 2 and the check star are the same star", text)
+        self.assertIn("Run photometry waits", text)
+
+    def test_placeholder_names_are_not_a_match(self):
+        self._mark("comp", "comp", (100.0, 100.0))
+        self._mark("check", "check", (500.0, 500.0))
+        self.assertEqual(self.app.check_comp_clash(), [])
+
+    def test_same_spot_without_a_solve(self):
+        self._mark("comp", "A", (100.0, 100.0))
+        self._mark("check", "B", (101.0, 100.5))
+        self.assertEqual([r for r, _ in self.app.check_comp_clash()], ["comp"])
+        self._mark("check", "B", (110.0, 100.0))
+        self.assertEqual(self.app.check_comp_clash(), [])
+
+    def test_within_2_arcsec_on_the_sky(self):
+        app = self.app
+        app.chart_solution, app.chart_placed = {"auto": True}, [(0, 0, {})]
+        scale = 1.0 / 3600.0   # 1 arcsec per pixel (in degrees)
+        with mock.patch.object(self.ca.core, "pixel_to_sky", side_effect=lambda x, y, sol: (x * scale, y * scale)):
+            self._mark("comp", "A", (100.0, 100.0))
+            self._mark("check", "B", (101.5, 100.0))    # 1.5 arcsec: the same star
+            self.assertEqual([r for r, _ in app.check_comp_clash()], ["comp"])
+            self.assertIn("1.5\u2033 apart", app.check_clash_text())
+            self._mark("check", "B", (103.0, 100.0))    # 3 arcsec: another star
+            self.assertEqual(app.check_comp_clash(), [])
+
+    def test_said_at_pick_time(self):
+        app = self.app
+        self._mark("check", "Gaia DR3 1", (500.0, 500.0))
+        self._mark("comp2", "Gaia DR3 1", (500.0, 500.0))
+        with mock.patch.object(self.ca.messagebox, "showwarning") as box:
+            self.assertTrue(app._say_check_clash("comp2"))
+        box.assert_called_once()
+        self.assertTrue(app._slot_notes["comp2"][1].startswith("\u26a0 Comp 2 and the check star"))
+        self.assertTrue(app.status.get().startswith("\u26a0 Comp 2 and the check star"))
+        with mock.patch.object(self.ca.messagebox, "showwarning") as box:
+            self.assertFalse(app._say_check_clash("target"))
+        box.assert_not_called()
+
+    def test_run_refuses(self):
+        body = _src().split("    def run_photometry(self", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("clash = self.check_clash_text() if check is not None else \"\"", body)
+        self.assertIn("raise ValueError(\"\\u26a0 \" + clash)", body)
+        # and at pick time: a click and a typed name or position both say it
+        src = _src()
+        self.assertIn("if not self._say_check_clash(mode):", src)
+        set_slot = src.split("    def _set_slot(self", 1)[1].split("\n    def ", 1)[0]
+        self.assertIn("self._say_check_clash(role)", set_slot)
+
+
 if __name__ == "__main__":
     unittest.main()

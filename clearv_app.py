@@ -385,6 +385,7 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+CHECK_SAME_ARCSEC = 2.0     # 2.4.0 (#68): a comp within this of the check star (or with its name) is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
 
@@ -11838,7 +11839,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"{role_label(mode)}: {no_v}")
             self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
-            self._vet_choice(mode, xy)
+            if not self._say_check_clash(mode):   # 2.4.0 (#68)
+                self._vet_choice(mode, xy)
 
     def _no_catalog_v_note(self, role: str) -> str:
         """2.2.14 (item 4): why a marked comp has no catalog V on a solved image ('' when it has one, or when the image
@@ -11868,6 +11870,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
             self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
                                  "then Enter places the name).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
+            self._say_check_clash(role)   # 2.4.0 (#68): renamed to the check star's (or a comp's) name
             return
         if self.preview is None or not self.preview_is_debayered:
             self._slot_say(role, f"Calibrate first, so {text} can be found on the image.")
@@ -12139,6 +12142,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
+        if self._say_check_clash(role):   # 2.4.0 (#68): the check typed into a comp slot, or a comp into the check's
+            return
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
             self._vet_choice(role, xy)
 
@@ -12297,6 +12302,75 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"A variable {what} shifts every measurement it touches. Use it anyway?",
         ):
             self.clear_mark(role)
+
+    def check_comp_clash(self) -> list:
+        """2.4.0 (#68): the comps that are the same star as the check star: the same name (a real catalog name, not
+        "check" or "comp2"), or markers within CHECK_SAME_ARCSEC on the sky (2 px without a plate solution). Returns
+        [(role, words)], e.g. ("comp2", "the same name, Gaia DR3 439068910332260352")."""
+        cname = self.check_name.get().strip()
+        cxy = self.check_xy
+        if cxy is None and placeholder_star_name(cname):
+            return []
+        sol = self.chart_solution if (self.chart_placed or (self.chart_solution or {}).get("auto")) else None
+        csky = None
+        if cxy is not None and sol:
+            try:
+                csky = core.pixel_to_sky(cxy[0], cxy[1], sol)
+            except Exception:
+                csky = None
+        out = []
+        for r in COMP_ROLES:
+            name = getattr(self, f"{r}_name").get().strip()
+            xy = getattr(self, f"{r}_xy")
+            if xy is None and not name:
+                continue
+            if name and not placeholder_star_name(name) and not placeholder_star_name(cname) \
+                    and (name_key(name) == name_key(cname) or name_core(name) == name_core(cname)):
+                out.append((r, f"the same name, {cname}"))
+                continue
+            if xy is None or cxy is None:
+                continue
+            sep = None
+            if csky is not None:
+                try:
+                    ra, dec = core.pixel_to_sky(xy[0], xy[1], sol)
+                    sep = core.sky_separation_arcsec(csky[0], csky[1], ra, dec)
+                except Exception:
+                    sep = None
+            if sep is not None and math.isfinite(sep):
+                if sep < CHECK_SAME_ARCSEC:
+                    out.append((r, f"{sep:.1f}\u2033 apart"))
+            elif math.hypot(xy[0] - cxy[0], xy[1] - cxy[1]) < 2.0:
+                out.append((r, "on the same spot of the image"))
+        return out
+
+    def check_clash_text(self) -> str:
+        """2.4.0 (#68): the plain words for a comp that is also the check star ('' when there is none)."""
+        clash = self.check_comp_clash()
+        if not clash:
+            return ""
+        roles = " and ".join(role_label(r) for r, _ in clash)
+        why = "; ".join(f"{role_label(r)}: {w}" for r, w in clash)
+        one = len(clash) == 1
+        return (f"{roles} and the check star are the same star ({why}). The check star tests the comps, so it "
+                f"can't also be one of them. Change {'one of them' if one else 'them'}: clear the marker (\u2715 in "
+                "the Stars panel, or right-click it) and pick another star. Run photometry waits until then.")
+
+    def _say_check_clash(self, role: str) -> bool:
+        """2.4.0 (#68): at pick time, a comp just placed on the check star (or the check on a comp) is said at once,
+        in a box and on the slot's own line. True when there is a clash."""
+        if role != "check" and not comp_number(role):
+            return False
+        text = self.check_clash_text()
+        if not text:
+            return False
+        self._slot_say(role, "\u26a0 " + text, bad=True)
+        self.status.set("\u26a0 " + text)   # the panel redraw above may have put its own line there
+        try:
+            messagebox.showwarning(APP_TITLE, text)
+        except Exception:
+            pass
+        return True
 
     # ---- star panel (Photometry page) ---------------------------------------------------
     def _build_star_panel(self, panel):
@@ -15184,6 +15258,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             f"{la} and {lb} are marked on the same star. Each one must be a different star; "
                             "the check star in particular must not be one of the comparison stars."
                         )
+            clash = self.check_clash_text() if check is not None else ""
+            if clash:
+                raise ValueError("\u26a0 " + clash)   # 2.4.0 (#68): same name, or within about 2\u2033
             sat_limit = self._num_box(self.sat_limit, "Saturation")
             lat = self._num_box(self.lat, "Latitude") if self.lat.get().strip() else None
             lon = self._num_box(self.lon, "Longitude") if self.lon.get().strip() else None
