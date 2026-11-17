@@ -389,6 +389,15 @@ CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the im
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
 
 
+def _same_exposure(path: str, exptime: float) -> bool:
+    """2.4.0 (#104): a calibration frame taken at this exposure (within 1 %)."""
+    try:
+        e = float(core.header_exptime(core.read_header(path)))
+    except Exception:
+        return False
+    return math.isfinite(exptime) and exptime > 0 and abs(e - exptime) <= 0.01 * exptime
+
+
 def _fainter_text(dm: float) -> str:
     """2.2.14 (item 6): '2.8 mag fainter than the target' (or brighter), from the stars' instrumental magnitudes."""
     if dm is None or not math.isfinite(float(dm)):
@@ -15486,13 +15495,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             rej_labels = core.distinct_frame_labels(rej_lights)   # 2.3.3 (#63): each file once, each label its own
             self.log(f"Rejected frames ({len(rej_labels)}): " + core.frame_list_text(rej_labels))
         # 2.2.17 (item 8): photon noise in electrons (EGAIN, binning, superpixel, flat); said once in the log.
-        noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
-                                               [target] + comps, radius, sky_in, sky_out)
-        electrons = noise_setup.get("electrons")
-        if getattr(self, "_onsky_ctx", None) is not None:
-            # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
-            self._onsky_ctx["noise"] = noise_setup
-            self._onsky_ctx["flat_applied"] = getattr(masters, "flat", None) is not None and not precalibrated
+        # 2.4.0 (#104): worked out at the start of the worker (below): the gain is measured on a sample of the night's
+        # frames, which takes a few seconds on big frames.
+        noise_stars = [target] + comps
+        night_lights = (self._lights() if only is not None and stack_run is None else None)
+        gain_inputs = self._sky_gain_inputs()   # Tk variables: read here, on the main thread
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
@@ -15513,6 +15520,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         def work_inner():
             nonlocal target, comps, check, spares, watch, ref_sources, ref_img, cal_xy, ref_label
+            # 2.4.0 (#104): the photon noise setup, with the gain measured from the night's sky (see above)
+            noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
+                                                   noise_stars, radius, sky_in, sky_out,
+                                                   log=lambda text: self.call_ui(self.log, text),
+                                                   all_lights=night_lights, stacks=stack_run is not None,
+                                                   gain_inputs=gain_inputs)
+            electrons = noise_setup.get("electrons")
+            if getattr(self, "_onsky_ctx", None) is not None:
+                # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
+                self._onsky_ctx["noise"] = noise_setup
+                self._onsky_ctx["flat_applied"] = getattr(masters, "flat", None) is not None and not precalibrated
             night_points = []
             cal_samples = {"bv": [], "vr": []}   # (obs, relative colors, comps' relative color)
             cancelled = False
@@ -16848,9 +16866,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return text if near or miss else ""
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
-                            sky_out) -> dict:
+                            sky_out, log=None, all_lights=None, stacks: bool = False, gain_inputs=None) -> dict:
         """2.2.17 (item 8): electrons per image unit for this run's photon noise (core.photon_noise_setup), from the
-        first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once."""
+        first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once.
+        2.4.0 (#104): the gain is MEASURED from the night's sky first (_sky_gain_measure: sky_gain.py, idea by Mike
+        Fitzgerald); the single-frame lower limit is kept as the fallback. Runs in the photometry worker (it reads a
+        sample of frames): log is the thread-safe log; all_lights = the night's whole frame list (a Measure skipped
+        frames run measures the same frames as the night's own run, so the gain is the same); gain_inputs =
+        _sky_gain_inputs(), read on the main thread (Tk variables)."""
+        log = log or self.log
+        if gain_inputs is None:
+            gain_inputs = self._sky_gain_inputs()
         try:
             header = core.read_header(lights[0]) if lights else {}
         except Exception:
@@ -16863,22 +16889,122 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             sky_k, sky_level = core.sky_electrons_estimate(self.preview, stars, radius, sky_in, sky_out, with_level=True)
         except Exception:
             pass
+        meas = None
+        if bias_removed:
+            try:
+                meas = self._sky_gain_measure(all_lights or lights, binning, pattern, mode, masters, precalibrated,
+                                              stacks, header, gain_inputs)
+            except Exception as exc:   # never stops a run: the lower limit is used
+                traceback.print_exc()
+                meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
         try:
             setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
-                                            sky_level)
+                                            sky_level, sky_meas=meas)
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
                                                                   "the pre-2.2.17 error model is used."}
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
+        if setup.get("sky_method"):   # 2.4.0 (#104): measured from the night's sky, or the one-frame lower limit
+            self._noise_model["sky_method"] = setup["sky_method"]
+            if setup.get("sky_meas"):
+                self._noise_model["sky_meas"] = dict(setup["sky_meas"])
         if setup.get("camera_bin", 1) > 1:   # 2.3.0 (#53): camera binning and how it combined the pixels
             self._noise_model.update({"camera_bin": setup.get("camera_bin"),
                                       "camera_bin_mode": setup.get("camera_bin_mode"),
                                       "e_per_stored_adu": setup.get("e_per_stored_adu")})
-        self.log(setup.get("note", ""))
+        log(setup.get("note", ""))
         if setup.get("warning"):
-            self.log("⚠ " + setup["warning"])
+            log("⚠ " + setup["warning"])
+        try:   # 2.4.0 (#104): the SHOBS-FLUX camera profile's bench values, when there is one
+            flux = self._flux_gain_check(header, setup, meas, binning, pattern, mode, flat)
+        except Exception:
+            flux = ""
+        if flux:
+            log(flux)
+            self._noise_model["flux_check"] = flux
         return setup
+
+    def _sky_gain_inputs(self) -> dict:
+        """2.4.0 (#104): what _sky_gain_measure needs from the window (Tk variables: main thread only)."""
+        lin = self._linear_limit()
+        try:
+            sat = float(lin) if lin else float(self.sat_limit.get())
+        except Exception:
+            sat = None
+        return {"dark_dir": self.dark_dir.get().strip(), "bias_dir": self.bias_dir.get().strip(), "sat": sat}
+
+    def _sky_gain_measure(self, lights, binning, pattern, mode, masters, precalibrated, stacks, header,
+                          inputs=None) -> dict:
+        """2.4.0 (#104): the gain measured from the night's sky (sky_gain.measure_night) on up to 24 neighbouring frame
+        pairs (12 on frames over 8 Mpx), each read and calibrated only in a central window, with the noise floor from
+        two raw darks of the lights' exposure (else two bias frames, else the photon-transfer line). Kept for the same
+        frames, calibration and channel, so a second run (or Measure skipped frames) gives the same number."""
+        import sky_gain as sg
+        try:
+            exp = float(core.header_exptime(header))
+        except Exception:
+            exp = float("nan")
+        inputs = inputs if inputs is not None else self._sky_gain_inputs()
+        sat = inputs.get("sat")
+        dark_dir = "" if (stacks or precalibrated) else inputs.get("dark_dir", "")
+        bias_dir = "" if (stacks or precalibrated) else inputs.get("bias_dir", "")
+        key = (tuple(lights), int(binning or 1), pattern, mode, id(masters), repr(getattr(masters, "used", "")),
+               dark_dir, bias_dir, sat)
+        cache = getattr(self, "_sky_gain_cache", None)
+        if cache and cache[0] == key:
+            return cache[1]
+        flat_only = core.Masters(flat=getattr(masters, "flat", None)) if masters is not None else core.Masters()
+        floor_load = sg.window_loader(binning, flat_only, pattern, mode)
+        floor, floor_src = None, ""
+        for folder, src in ((dark_dir, "darks"), (bias_dir, "bias")):
+            if not folder:
+                continue
+            frames = core.calibration_source(folder)[0]
+            if src == "darks":   # read + dark noise only at the lights' own exposure
+                frames = [f for f in frames if _same_exposure(f, exp)]
+            vals = []
+            for a, b in list(zip(frames[0::2], frames[1::2]))[:3]:
+                try:
+                    vals.append(sg.floor_from_pair(floor_load(a), floor_load(b)))
+                except Exception:
+                    continue
+            vals = [v for v in vals if math.isfinite(v) and v > 0]
+            if vals:
+                floor, floor_src = float(np.median(vals)), src
+                break
+        try:
+            raw_px = int(header.get("NAXIS1") or 0) * int(header.get("NAXIS2") or 0)
+        except Exception:
+            raw_px = 0
+
+        def full_load(path):
+            return core.debayer(stack_load_frame(path, binning, masters)[2], pattern, mode)
+        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load)
+        meas = sg.measure_night(lights, load, sat=sat, floor_var=floor, floor_source=floor_src,
+                                max_pairs=sg.max_pairs_for(raw_px))
+        if meas.get("ok"):
+            meas["rn_e"] = sg.read_noise_e(meas["floor_var"], meas["k"], binning, pattern, mode)
+        self._sky_gain_cache = (key, meas)
+        return meas
+
+    def _flux_gain_check(self, header, setup, meas, binning, pattern, mode, flat) -> str:
+        """2.4.0 (#104): the run's gain (and read noise) against a SHOBS-FLUX camera profile's bench values for this
+        camera, gain setting, offset and binning, when such a profile exists: a plain note ("" when there is none)."""
+        if not header:
+            return ""
+        import shobs_profile as sp
+        import sky_gain as sg
+        cam_id = sp.setup_key(header).get("camera_id")
+        prof = sp.find_camera_profile(cam_id) if cam_id else None
+        if not prof:
+            return ""
+        channel = {"green": "G", "red": "R", "blue": "B"}.get(mode) if (pattern or "").upper() != core.MONO else None
+        g_flux, g_rec = sp.camera_value(prof, "gain_e_per_adu", channel)
+        rn_flux, rn_rec = sp.camera_value(prof, "read_noise_e", channel)
+        return sg.flux_words(cam_id, meas, setup, g_flux, (g_rec or {}).get("source", ""), rn_flux,
+                             (rn_rec or {}).get("source", ""),
+                             core.electrons_per_unit(1.0, binning, pattern, mode, flat))
 
     def measured_aperture(self, night: str = "") -> dict | None:
         """2.2.19 (#41): what a night's photometry was measured with ({"radius", "sky_in", "sky_out", "binning",
