@@ -243,6 +243,12 @@ of a bare "check" (a night added to a series whose check was saved as "check" be
   edge: its sky ring (out to 22 px) needs the star at least 27 px in, with room for drift — pick a star further in".
   For the check star it also names a suggested comp ring farther in, for example "…; S2 (TYC 3089-883-1) is farther
   in and would make a good check".
+- (2.4.0) for a comp or check star that is fine on this frame but **drifts toward or off the edge later in the
+  night**, the frames where it happens, for example "⚠ drifts toward the frame edge later in the night: 60 px in on
+  this frame, but only 32 px on frame #2; stars at least 36 px in all night (3 × the sky-out radius) stay clear of
+  the edge and the weakest part of the flat", or "⚠ drifts off the frame later in the night: it is off the frame
+  edge on frames 61–84, so it is not measured there — pick a star further in". When only some of the night's frames
+  were checked (big frames), the line says so: "(checked on 8 of the night's 300 lights)". See "How S1–S4 are chosen" below for how the drift is found.
 
 **Suggested comparison stars** are drawn as thick green rings labeled **S1**, **S2** …: up to four catalog stars close
 to the target in color and brightness, not variable, not near saturation or the linear limit, well inside the frame,
@@ -263,8 +269,23 @@ From 2.3.4 the rules are:
   says **the closest color left here (no more within 0.3)**. A star with no colour in the catalogs only fills in (when the target's colour is known), and its line says so.
 - **Linear:** with a **linear ADU** set, the star's brightest raw pixel on the reference frame must be under 75 % of
   it, so the sharpest frames of the night stay linear too.
-- **Inside the frame:** at least 3 × the sky-out radius from every edge, so a framing shift between nights does not
-  drop it. Nearer stars only fill in when the field has too few, and their line says how far in they are.
+- **Inside the frame all night (2.4.0):** at least 3 × the sky-out radius from every edge on **every frame of the
+  night**, not only on the frame on the page. A star that the night's drift takes nearer the edge than that is
+  **never** suggested, however short the field is: you then get fewer than four suggestions, and the Log says which
+  stars were left out and how near the edge they come, for example "Only 3 comps suggested: 1 more star of the right
+  brightness comes nearer the frame edge during the night than the 42 px a comp needs to stay clear: APASS
+  J025600.7-110545 (6 px on frame 67). They are not suggested." The suggestions line ends with how far the field
+  drifts, for example "All stay at least 36 px from the frame edge all night (the field drifts up to 78 px; checked
+  on all 78 lights)."
+  - **How the drift is found.** When the loaded series was measured on these lights, from its own frame positions
+    (every frame; nothing is read). Otherwise SHOBS-P reads the lights right after Calibrate, in the background, and
+    lines up their stars with the frame on the page: **every** light when the frames are small (a MicroObservatory
+    night of 78 frames of 650 × 500 px takes about a second), or 8 of them — the night's first and last and six
+    between — for big frames (300 frames of 6248 × 4176 px: a few seconds, while the image is being solved). It is
+    done once per frame on the page; the green rings appear when it is done. With 8 frames checked, a frame in
+    between can drift a little further (a sudden jump of the mount), which the margin of 3 × the sky-out radius
+    covers in most cases; the lines say how many frames were checked.
+  - With a single light (or an image from another field) only the frame on the page is checked.
 - **AAVSO sequence stars** that pass come first, then other catalog stars.
 
 What a suggestion cannot know yet is how steady the star is: that shows after the run, in **Comp health…**

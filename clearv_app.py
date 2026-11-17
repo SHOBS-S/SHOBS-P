@@ -3253,7 +3253,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
         need = sky_out + 5.0
         safe = 3.0 * sky_out
-        if dist < need:
+        drift = self._series_drift()
+        night = self._drift_clearance(xy, drift) if drift else None
+        if night is not None and night[0] < min(dist, safe):
+            # 2.4.0 (#78): fine on this frame, but the field drifts and takes the star toward or off the edge
+            near_px, at, per = night
+            r_ap = self._num(self.radius) or 0.0
+            lost = [lab for lab, d_ in per if d_ < r_ap + 1.0]   # as core.aperture_clip_reason: off the frame
+            cut = [lab for lab, d_ in per if d_ < sky_out]
+            checked = ("" if drift.get("how") == "series" or drift.get("every") else
+                       f" (checked on {len(drift['regs'])} of the night's {drift.get('of', 0)} lights)")
+            if lost or cut:
+                which = lost or cut
+                note = ("⚠ drifts off the frame later in the night: it is off the frame edge" if lost else
+                        f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) runs "
+                        "past the edge") + (f" on frame{'s' if len(which) != 1 else ''} "
+                                            f"{core.frame_list_text(which, 12)}{checked}"
+                                            + (", so it is not measured there" if lost else "")
+                                            + " — pick a star further in")
+            else:
+                note = (f"⚠ drifts toward the frame edge later in the night: {dist:.0f} px in on this frame, but only "
+                        f"{near_px:.0f} px on frame {at}{checked}; stars at least {safe:.0f} px in all night (3 × the "
+                        "sky-out radius) stay clear of the edge and the weakest part of the flat")
+        elif dist < need:
             note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
                     f"star at least {need:.0f} px in, with room for drift — pick a star further in")
         elif dist < safe:
@@ -3277,8 +3299,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
         k_inst = self._inst_at(xy)
         best = None
+        info_all = getattr(self, "suggested_info", None) or {}
         for k, (name, _dm, x, y) in enumerate(self.suggested_comps):
-            if min(x, y, (w - 1) - x, (h - 1) - y) < safe:
+            night = (info_all.get(name) or {}).get("edge")   # 2.4.0 (#78): its closest approach over the night
+            if min(x, y, (w - 1) - x, (h - 1) - y) < safe or (night is not None and night < safe):
                 continue
             if any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken) or math.hypot(x - xy[0], y - xy[1]) < 2.0:
                 continue
@@ -8166,6 +8190,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         , keep_status=True)
         self._header_pointing_note()   # 2.4.0 (#99): the header's pointing against the Input page's target
+        try:
+            self._series_drift()   # 2.4.0 (#78): read the drift frames now, so they are ready when comps are suggested
+        except Exception:
+            pass
         pat = core.header_bayer(header or {})
         if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on color images (said at Scan/Calibrate)
             self.pattern.set(pat)
@@ -13901,6 +13929,118 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         cache[key] = -2.5 * math.log10(f) if f > 0 else float("nan")
         return cache[key]
 
+    # ---- 2.4.0 (#78): the night's drift, so a suggested comp never drifts toward the frame edge ----------------------
+    def _series_drift(self, start: bool = True):
+        """2.4.0 (#78): how the field moves on the sensor over the night, from the reference frame (the image on the
+        page) to the other lights. From the loaded series' own frame positions when it was measured on these lights
+        (every frame; nothing is read), else from up to core.DRIFT_SAMPLES lights (the night's first, last and some
+        between; core.frame_drift: averaged down, no calibration), read once in the background and cached.
+        Returns None while those frames are being read (start=True starts it; _drift_done suggests again), else
+        {"regs": [(frame label, registration in preview px), ...], "how": "series" | "frames" | "", "of": lights,
+        "failed": frames that could not be aligned}. "regs" is empty when there is nothing to check (one frame,
+        another field's image, no file)."""
+        empty = {"regs": [], "how": "", "of": 0, "failed": 0}
+        path = getattr(self, "preview_path", "") or ""
+        if self.preview is None or not path or getattr(self, "_preview_foreign", ""):
+            return empty
+        try:
+            lights = list(self._lights())
+        except Exception:
+            lights = []
+        others = [p for p in lights if p != path]
+        if not others:
+            return empty
+        h, w = self.preview.shape[:2]
+        # The loaded series' frame shifts, when it holds this frame and the night's others (target positions; a
+        # meridian flip or field rotation needs more than a shift, so those read frames instead).
+        lightset = set(lights) | {path}
+        obs = [o for o in (self.observations or []) if getattr(o, "path", "") in lightset
+               and len((getattr(o, "pos", None) or {}).get("t") or []) == 2]
+        ref_o = next((o for o in obs if o.path == path), None)
+        rotating = False
+        try:
+            rotating = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ
+        except Exception:
+            rotating = False
+        if ref_o is not None and len(obs) >= 3 and not rotating and not any(
+                getattr(o, "segment", "") == "flip" for o in obs):
+            tx, ty = (float(v) for v in ref_o.pos["t"])
+            rest = [o for o in obs if o is not ref_o]
+            labels = core.frame_labels_for([o.path for o in rest])   # one folder look-up, not one per frame
+            regs = [(lab or os.path.basename(o.path),
+                     {"dx": float(o.pos["t"][0]) - tx, "dy": float(o.pos["t"][1]) - ty, "angle": 0.0,
+                      "flipped": False}) for o, lab in zip(rest, labels)]
+            return {"regs": regs, "how": "series", "of": len(obs), "failed": 0}
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return empty
+        key = (path, stamp, tuple(others), rotating)
+        cache = getattr(self, "_drift_cache", None)
+        if cache is None or cache.get("key") != key:
+            if not start:
+                return None
+            cache = self._drift_cache = {"key": key, "state": "loading", "result": None}
+
+            def work():
+                try:
+                    res = core.frame_drift(path, others, rotating=rotating, sample=True,
+                                           cancel=lambda: getattr(self, "_drift_cache", None) is not cache)
+                except Exception as exc:
+                    res = {"error": f"{type(exc).__name__}: {exc}"}
+                self.call_ui(self._drift_done, cache, res)
+
+            threading.Thread(target=work, daemon=True).start()
+        if cache["state"] == "loading":
+            return None
+        res = cache.get("result") or {}
+        raw_shape = res.get("raw_shape")
+        if not raw_shape or res.get("error"):
+            return dict(empty, of=len(lights), failed=len(others))
+        f = w / float(raw_shape[1])
+        if abs(h / float(raw_shape[0]) - f) > 0.02 * f:
+            return dict(empty, of=len(lights), failed=len(others))   # not the same pixel grid (a crop?)
+        good = [(p, reg) for p, reg in res.get("regs", []) if reg is not None]
+        labels = core.frame_labels_for([p for p, _reg in good])
+        regs = [(lab or os.path.basename(p), core.scale_registration(reg, f)) for (p, reg), lab in zip(good, labels)]
+        # "every": every light was looked at (small frames), so the words need not say how many were checked
+        return {"regs": regs, "how": "frames", "of": len(lights), "every": len(res.get("regs", [])) >= len(others),
+                "failed": sum(1 for _p, reg in res.get("regs", []) if reg is None)}
+
+    def _drift_done(self, cache: dict, result: dict):
+        """2.4.0 (#78): the drift frames are read: suggest the comps that were waiting for them, and refresh the
+        marked comps' notes."""
+        if getattr(self, "_drift_cache", None) is not cache:
+            return
+        cache["state"], cache["result"] = "done", result
+        if result.get("error"):
+            log_to_file(f"Drift check: the frames could not be read ({result['error']}).")
+        if getattr(self, "_suggest_drift_pending", False):
+            self._suggest_drift_pending = False
+            self._suggest_comps()
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
+        elif any(getattr(self, f"{r}_xy", None) is not None for r in COMP_ROLES + ("check",)):
+            self.update_star_panel()
+
+    def _drift_clearance(self, xy, drift=None):
+        """2.4.0 (#78): for one point on the reference frame: (closest approach to the frame edge over the night in
+        px, the frame label there or "" for this frame, [(label, distance) for every frame checked]), or None when
+        the drift is not known (yet)."""
+        if xy is None or self.preview is None:
+            return None
+        drift = self._series_drift(start=True) if drift is None else drift
+        if not drift or not drift.get("regs"):
+            return None
+        regs = [reg for _lab, reg in drift["regs"]]
+        h, w = self.preview.shape[:2]
+        pts = np.asarray([xy], dtype=float)
+        near, where = core.edge_clearance(pts, (h, w), regs)
+        per = [(lab, float(core.edge_clearance(pts, (h, w), [reg])[0][0])) for lab, reg in drift["regs"]]
+        k = int(where[0])
+        return float(near[0]), (drift["regs"][k][0] if k >= 0 else ""), per
+
     def _suggest_comps(self):
         """Labeled stars within about 1 mag of the target, not variable, not saturated, not crowded at the edge."""
         self.suggested_comps = []
@@ -13918,10 +14058,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         edge = so + 3
         # 2.3.4 (c): suggestions prefer stars at least 3 x the sky-out radius in (as the edge note asks), so a framing
         # shift between nights does not drop a comp off the frame; nearer stars only fill in when the field is short.
+        # 2.4.0 (#78): over the WHOLE night (the drift from this frame to the night's other lights), and no longer
+        # only preferred: a star that comes nearer the edge than this on any frame checked is never suggested.
         safe_edge = 3.0 * so
+        drift = self._series_drift()
+        self._suggest_drift_pending = drift is None
+        if drift is None:
+            return   # the drift frames are being read: _drift_done suggests then (a second or two)
         lin = self._linear_limit()
         h, w = self.preview.shape
-        cands, where, star_of, edge_px = [], {}, {}, {}
+        cands, where, star_of, edge_px, edge_at = [], {}, {}, {}, {}
         stars = [(x, y, st) for x, y, st in self.chart_placed
                  if not st.get("variable") and st.get("mag") is not None and edge <= x < w - edge and edge <= y < h - edge
                  and math.hypot(x - self.target_xy[0], y - self.target_xy[1]) > 2 * r]
@@ -13962,8 +14108,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
             edge_px[name] = float(min(x, y, (w - 1) - x, (h - 1) - y))
+            edge_at[name] = ""
             where[name] = (x, y)
             star_of[name] = st   # 2.2.19 (#15): for the S1 … lines in the panel
+        if drift["regs"] and cands:
+            # 2.4.0 (#78): each candidate's closest approach to the edge over the frames checked
+            near, at = core.edge_clearance([(c[2], c[3]) for c in cands], (h, w), [g for _l, g in drift["regs"]])
+            for c, d_, k_ in zip(cands, near, at):
+                edge_px[c[0]] = float(d_)
+                edge_at[c[0]] = drift["regs"][int(k_)][0] if k_ >= 0 else ""
         target_star = self._chart_star_at(self.target_xy)
         t_bv_cat = core.catalog_bv(target_star) if target_star else None
         # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
@@ -14011,13 +14164,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         # 2.2.13 (John): AAVSO sequence stars of the right brightness come first; other catalog stars fill in when
         # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
-        # within 0.3 in color first, then the rest.
+        # within 0.3 in color first, then the rest. 2.4.0 (#78): only stars that stay at least safe_edge in all night
+        # (no pool lets a star nearer the edge back in; the field gets fewer suggestions instead, and the log says so).
         seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in stars if st.get("seq")}
         inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
         relaxed = set()
         picks = []
-        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (seq_names, 0.3), (None, 0.3),
-                                 (inside, 0.6), (None, 0.6)):
+        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
             if len(picks) >= 4:
                 break
             have = {n for n, _dm in picks}
@@ -14029,6 +14182,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 relaxed.update(n for n, _dm in got)
             picks += got
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
+        # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
+        have = {n for n, _dm in picks}
+        edge_left = [] if len(picks) >= 4 else [
+            n for n, _dm in choose([c for c in cands if c[0] not in inside and c[0] not in have], 0.6)]
+        self._suggest_edge_left = {n: (edge_px.get(n), edge_at.get(n, "")) for n in edge_left}
+        self._suggest_drift = drift
         # 2.2.19 (#15): what the panel's "S1 = … V 11.2, why suggested" lines say.
         self.suggested_info = {}
         for name, dm in picks:
@@ -14038,6 +14197,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                          "bv": core.catalog_bv(st) if st else None, "target_bv": t_bv, "faint": faint,
                                          "target_bv_from": t_bv_from, "relaxed": name in relaxed,
                                          "edge": edge_px.get(name), "safe_edge": safe_edge,
+                                         "edge_at": edge_at.get(name, ""), "drift_how": drift.get("how", ""),
                                          "peak": peaks.get(name, float("nan")), "linear": lin,
                                          "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
                                          or st.get("catalog", "")}
@@ -14052,13 +14212,47 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + "; green rings S1, S2 …): "
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
-                     + ". Comps like the target cancel airmass, focus, and calibration errors best.")
-        elif self._closest_dm is not None and self._closest_dm <= 1.0:
+                     + ". Comps like the target cancel airmass, focus, and calibration errors best."
+                     + self._drift_words(drift, safe_edge))
+        if not getattr(self, "_suggest_quiet", False) and edge_left:
+            # 2.4.0 (#78): say why there are fewer than four, by name; a warning only when none is left at all
+            far = ", ".join(f"{n} ({max(d_, 0.0):.0f} px" + (f" on frame {lab}" if lab else "") + ")"
+                            for n, (d_, lab) in list(self._suggest_edge_left.items())[:4])
+            during = " during the night" if drift.get("regs") else ""
+            if self.suggested_comps:
+                self.log(f"Only {len(self.suggested_comps)} comp{'s' if len(self.suggested_comps) != 1 else ''} "
+                         f"suggested: {len(edge_left)} more star{'s' if len(edge_left) != 1 else ''} of the right "
+                         f"brightness come{'s' if len(edge_left) == 1 else ''} nearer the frame edge{during} "
+                         f"than the {safe_edge:.0f} px a comp needs to stay clear: {far}. They are not suggested.")
+            else:
+                self.log(f"⚠ No comp can be suggested: the stars of the right brightness all come nearer the frame "
+                         f"edge{during} than the {safe_edge:.0f} px a comp needs to stay clear: {far}. "
+                         "Pick comps by hand further in, or reject the frames where the field drifted farthest.")
+            return
+        if self.suggested_comps or getattr(self, "_suggest_quiet", False):
+            return
+        if self._closest_dm is not None and self._closest_dm <= 1.0:
             self.log("Labeled stars within 1 mag of the target here all differ from it in color (B−V more than 0.6 "
                      "apart) or are near the linear limit; pick the closest in brightness and color you can.")
         elif self._closest_dm is not None:
             self.log(f"No labeled star within 1 mag of the target here (closest: {self._closest_dm:.1f} mag away); "
                      "pick the closest in brightness and color you can.")
+
+    @staticmethod
+    def _drift_words(drift, safe_edge: float) -> str:
+        """2.4.0 (#78): ' All stay at least 36 px from the frame edge all night (the field drifts up to 64 px over
+        the 78 lights; checked on 8 of them).' for the suggestions line, or '' when no drift was checked."""
+        regs = (drift or {}).get("regs") or []
+        if not regs:
+            return ""
+        most = max(math.hypot(g["dx"], g["dy"]) for _l, g in regs)
+        flip = any(g.get("flipped") for _l, g in regs)
+        how = (f"from the loaded series' {drift.get('of', len(regs) + 1)} frames" if drift.get("how") == "series"
+               else f"checked on all {drift.get('of', len(regs) + 1)} lights" if drift.get("every")
+               else f"checked on {len(regs)} of the {drift.get('of', len(regs) + 1)} lights")
+        return (f" All stay at least {safe_edge:.0f} px from the frame edge all night (the field "
+                + ("turns at the meridian flip and " if flip else "") + f"drifts up to {most:.0f} px; {how}"
+                + (f"; {drift['failed']} could not be aligned" if drift.get("failed") else "") + ").")
 
     def _measured_target_bv(self):
         """2.3.4 (e): the target's measured B-V: the median over the loaded series' points that have one (nights run
@@ -14105,8 +14299,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             elif info.get("target_bv") is None:
                 why += ", target color not known (tick Also measure R and B)"
             # 2.3.4 (d): what else it was picked on
-            if info.get("edge") is not None and info.get("safe_edge") and info["edge"] < info["safe_edge"]:
-                why += f", only {info['edge']:.0f} px from the edge"
+            # (2.4.0 #78: a suggestion is never nearer the edge than safe_edge, all night, so no edge words here)
             pk, lin = info.get("peak"), info.get("linear")
             if lin and pk is not None and math.isfinite(pk):
                 why += f", raw peak {pk:,.0f} ADU ({pk / lin:.0%} of the linear limit)"

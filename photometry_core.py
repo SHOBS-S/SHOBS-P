@@ -2939,6 +2939,115 @@ def register_rotating(ref_sources, sources, shape: tuple[int, int], last_sources
     return reg
 
 
+# ---- 2.4.0 (#78): the night's drift, for the suggested comps ----------------------------------------------------
+DRIFT_SAMPLES = 8          # frames read to find how the field drifts over the night (first, last and between)
+DRIFT_PIXEL_BUDGET = 8 * 6248 * 4176   # small frames: more of them, up to the pixels of 8 ASI2600 frames (all of a
+                                       # 78-frame MicroObservatory night, whose robotic pointing jumps between frames)
+DRIFT_VIEW_WIDTH = 1200    # frames are averaged down to about this width for the drift check (fast on 6248 px)
+
+
+def drift_sample_count(shape, n_frames: int) -> int:
+    """2.4.0 (#78): how many lights the drift check reads: DRIFT_SAMPLES, or more for small frames (as many as fit in
+    DRIFT_PIXEL_BUDGET pixels), never more than there are."""
+    px = max(1, int(shape[0]) * int(shape[1]))
+    return int(min(n_frames, max(DRIFT_SAMPLES, DRIFT_PIXEL_BUDGET // px)))
+
+
+def drift_sample_paths(lights: list, ref_path: str = "", n: int = DRIFT_SAMPLES) -> list:
+    """2.4.0 (#78): the lights read for the drift check: the night's first and last, and the rest spread evenly
+    between (at most n; the reference frame itself is not read again)."""
+    others = [p for p in (lights or []) if p != ref_path]
+    if len(others) <= n:
+        return list(others)
+    idx = sorted({int(round(i)) for i in np.linspace(0, len(others) - 1, n)})
+    return [others[i] for i in idx]
+
+
+def drift_view(img: np.ndarray) -> tuple[np.ndarray, int]:
+    """2.4.0 (#78): a small, clean copy of a raw frame for finding its shift: averaged down by k (to about
+    DRIFT_VIEW_WIDTH px wide; a Bayer mosaic is mixed into one value, which is fine for finding stars), then a 3 x 3
+    median so hot pixels (the same on every frame, so they would vote for no shift) drop out. Returns (image, k)."""
+    k = max(1, int(round(img.shape[1] / float(DRIFT_VIEW_WIDTH))))
+    small = bin_plain(np.asarray(img, dtype=np.float32), k)
+    from scipy import ndimage
+    return ndimage.median_filter(small, size=3), k
+
+
+def frame_drift(ref_path: str, paths: list, rotating: bool = False, cancel=None, sample: bool = False) -> dict:
+    """2.4.0 (#78): how the field moved from the reference frame to each of `paths`, cheaply (drift_view; no
+    calibration). sample=True: only drift_sample_paths of them (drift_sample_count for this frame size). Returns
+    {"raw_shape": (h, w), "regs": [(path, reg or None), ...]}, each reg in raw-frame pixels (register_frame's dx, dy,
+    angle, flipped); None where a frame could not be read, had another size or could not be aligned. rotating: an
+    alt-az mount without a derotator (register_rotating)."""
+    raw, _h = read_fits(ref_path)
+    raw_shape = tuple(raw.shape[:2])
+    if sample:
+        paths = drift_sample_paths(paths, ref_path, drift_sample_count(raw_shape, len(paths)))
+    ref, k = drift_view(raw)
+    del raw
+    ref_src = detect_sources(ref, max_sources=80)
+    out = {"raw_shape": raw_shape, "regs": []}
+    if len(ref_src) < 3:
+        out["regs"] = [(p, None) for p in paths]
+        return out
+    last = None
+    for p in paths:
+        if cancel is not None and cancel():
+            break
+        reg = None
+        try:
+            data, _hd = read_fits(p)
+            if tuple(data.shape[:2]) == raw_shape:
+                small, _k = drift_view(data)
+                src = detect_sources(small, max_sources=80)
+                if rotating:
+                    reg = register_rotating(ref_src, src, small.shape, *(last or (None, None)))
+                else:
+                    reg = register_frame(ref_src, src, small.shape)
+                if reg is not None:
+                    last = (src, reg)
+            del data
+        except Exception:
+            reg = None
+        if reg is not None:
+            reg = {"dx": reg["dx"] * k, "dy": reg["dy"] * k, "angle": float(reg.get("angle", 0.0)),
+                   "flipped": bool(reg.get("flipped")), "votes": reg.get("votes"), "of": reg.get("of")}
+        out["regs"].append((p, reg))
+    return out
+
+
+def scale_registration(reg: dict | None, factor: float) -> dict | None:
+    """2.4.0 (#78): a registration found on one pixel grid, on a grid `factor` times as fine (e.g. raw frame ->
+    binned, debayered preview: factor = preview width / raw width). The angle and flip are the same."""
+    if reg is None:
+        return None
+    out = dict(reg)
+    out["dx"], out["dy"] = float(reg["dx"]) * factor, float(reg["dy"]) * factor
+    return out
+
+
+def edge_clearance(xy, shape: tuple[int, int], regs: list) -> tuple[np.ndarray, np.ndarray]:
+    """2.4.0 (#78): each point's closest approach to the frame edge over the reference frame (where xy are) and the
+    frames with registrations regs (move_points; None entries are skipped). Returns (closest distance in px, which
+    frame: -1 for the reference, else the index into regs). A point off the frame has a negative distance."""
+    pts = np.asarray(xy, dtype=float).reshape(-1, 2)
+    h, w = shape[:2]
+
+    def dist(p):
+        return np.minimum(np.minimum(p[:, 0], p[:, 1]), np.minimum((w - 1) - p[:, 0], (h - 1) - p[:, 1]))
+
+    best = dist(pts)
+    where = np.full(len(pts), -1, dtype=int)
+    for i, reg in enumerate(regs or []):
+        if reg is None:
+            continue
+        d = dist(move_points(pts, reg, (h, w)))
+        closer = d < best
+        best = np.where(closer, d, best)
+        where = np.where(closer, i, where)
+    return best, where
+
+
 def raw_peak_near(raw: np.ndarray, star: "Star", radius: float, total_bin: int) -> float:
     """Brightest raw (unbinned, uncalibrated) pixel around a star given in final-image coordinates.
 

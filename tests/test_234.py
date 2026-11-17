@@ -595,9 +595,8 @@ class TestSuggestedCompRules(unittest.TestCase):
                            (420, 260, 5000, 0.60, "INSIDE")])
         names = self._names(app)
         self.assertEqual(names[0], "INSIDE")
-        self.assertIn("EDGE", names)
-        line = [l for l in app._suggested_lines() if "EDGE" in l][0]
-        self.assertIn("px from the edge", line)
+        # 2.4.0 (#78): no fallback lets a star nearer the edge than 3 x the sky-out radius back in (it was a fill-in)
+        self.assertNotIn("EDGE", names)
 
     def test_linear_gate(self):
         app = self._setup([(300, 200, 5000, 0.60, "T"),
