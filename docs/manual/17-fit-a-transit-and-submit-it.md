@@ -339,7 +339,11 @@ To clear the neighbors:
 2. Run photometry on a transit night and fit the transit.
 3. Open the NEB check again. Each watched neighbor now has a **Measured drop** and a verdict.
 
-The check needs a solved image and the transit depth.
+The check needs a solved image and the transit depth. The depth, the target's position and the neighbors always come
+from one star. With your photometry shown they are the Input page's. With an opened report (chapter 19) shown, the
+check runs only when the report is of the Input page's star, and then uses the report's depth. For a report of
+another star, it says so and does not run (from 2.4.0; before, it mixed that report's depth with the Input page's
+star and field). Press **Close report** to check the Input page's star.
 
 ## Per-frame or stacked points
 
@@ -396,7 +400,9 @@ saves nothing and the status line says *"Not saved: fix the Notes (Output page),
 planet, comps and check star never set it off. A new reduction puts the notes back to *"OSC reduced; not
 transformed"* (or *"Monochrome camera; not transformed"*).
 
-Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
+Saving the report also writes a `…_settings.txt` with the reduction settings and the fit's exact inputs (period, t0,
+a/R\*, b and the rest at full precision, with the catalog and the lookup date, so a rerun can be checked for the same
+inputs), and a field image (`…_field.png`, plus
 the AAVSO chart of the field when it answers) beside it: the field image comes with the report. Chapter 19 describes them.
 
 ### Send it to ExoClock

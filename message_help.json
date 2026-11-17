@@ -155,6 +155,27 @@
   {
    "section": "Input",
    "patterns": [
+    "… orbits …, not …: kept …, its series and its planet …. To use … instead, type it in the Planet box again and press Enter (you are asked again)."
+   ],
+   "todo": "Check the planet's name. To use the other planet after all, type it again and press Enter, and answer Yes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… orbits …, not …: kept … and its series; …'s values were not filled in. Check the planet's name, or press Look up again beside the Planet box to be asked again."
+   ],
+   "todo": "Check the name, or press Look up again and answer Yes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… orbits …, not …: wait for the current step to finish, then …"
+   ],
+   "todo": "Wait, then do what the line says."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "no such folder"
    ],
    "todo": "Finish typing the path, or use Browse. The count updates a moment after you stop typing, or when you press Enter."
@@ -409,6 +430,14 @@
     "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image."
    ],
    "todo": "Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2 and the check star are the same star (Comp 2: the same name, … / 0.3″ apart). The check star tests the comps, so it can't also be one of them. …",
+    "Run photometry"
+   ],
+   "todo": "Clear one of the two (✕ in the Stars panel, or right-click its marker) and pick another star. Run photometry refuses until then."
   },
   {
    "section": "Photometry",
@@ -1040,11 +1069,42 @@
    "todo": "For another star, use New reduction on the Input page."
   },
   {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "from the times CSV: epoch = first saved maximum, period last used"
+   ],
+   "todo": "Nothing; Elements from VSX puts VSX's in instead. See 14. Time a maximum or minimum."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "no saved maxima yet; VSX elements",
+    "… typed elements",
+    "… type the elements"
+   ],
+   "todo": "Nothing, or type the elements."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "O−C against P …, E … (HJD), as in the diagram:",
+    "… O−C +0.0 min (saved +9.4 against VSX HJD)"
+   ],
+   "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
+  },
+  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"
    ],
    "todo": "Type your site once."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The NEB check works on one star: its transit depth, its position and the neighbors on the solved image. The report shown is of …, but the Input page and the solved image are of …."
+   ],
+   "todo": "Close report to check the Input page's star, or set the report's star up on the Input page and solve one of its frames."
   },
   {
    "section": "Output, Transits mode",

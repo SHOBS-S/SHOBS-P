@@ -273,6 +273,13 @@ What a suggestion cannot know yet is how steady the star is: that shows after th
 **Variables are caught.** If you click a known or suspected variable as a comp or check star, SHOBS-P asks whether to
 use it anyway. **No** removes the marker.
 
+**The check star is never a comp.** If a comp and the check star turn out to be the same star (the same catalog
+name, or markers within about 2″ of each other on a solved image; 2 pixels before the solve), SHOBS-P says so at
+once, in a box and on the star's line in the Stars panel, for example *"⚠ Comp 2 and the check star are the same star
+(Comp 2: 0.3″ apart). The check star tests the comps, so it can't also be one of them. …"*. This catches a position
+or name typed into the wrong row as well as a click. Clear one of the two markers (✕ in the Stars panel, or
+right-click it) and pick another star. Until then **Run photometry** refuses, with the same words.
+
 ### Place a star by name
 
 You can also type a star instead of clicking it:

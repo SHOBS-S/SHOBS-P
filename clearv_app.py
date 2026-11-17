@@ -385,6 +385,7 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+CHECK_SAME_ARCSEC = 2.0     # 2.4.0 (#68): a comp within this of the check star (or with its name) is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
 
@@ -4637,8 +4638,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example "
                                                "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
+        # 2.4.0 (#82): the name of the planet now in the boxes (the box itself already holds the new name)
+        self._planet_name_before = getattr(self, "_last_planet_lookup", None) or ""
         self._last_planet_lookup = name   # 2.2.14 (item 2)
         self._lookup_busy_start("planet", name, "NASA Exoplanet Archive")   # 2.2.19 (nit)
+        self._status_before_lookup = dict(getattr(self, "target_status", None) or {})   # 2.4.0 (#82): put back on No
         self._show_target_status({})   # 2.2.21 (#32, item 14): the last planet's TOI/ExoClock lines go
 
         def work():
@@ -4680,6 +4684,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.planet_source.set("Lookup failed.")
             messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
             return
+        before = self._planet_snapshot()   # 2.4.0 (#82): put back if a planet of another star is answered No
         self.planet_info = dict(p)
         self._planet_to_fields(p)
         self._last_planet_lookup = self.planet_name.get().strip()   # 2.2.14 (item 2): the resolved name counts too
@@ -4700,16 +4705,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
             switched = self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
                                          keep_planet=True)
-            if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: wait for the "
-                                       "current step to finish, then press Enter in the planet box again.")
-                self._last_planet_lookup = None
-                return
-            if switched is None:
-                # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
-                                       "and its series. Check the planet's name, or answer Yes to start a new "
-                                       "reduction.")
+            if switched in ("busy", None):
+                # 2.4.0 (#82): the other star's planet never stays in the Planet boxes (a Transits fit then used its
+                # ephemeris and shape for this star's night): the previous planet comes back, else the values empty.
+                pname = p.get("name") or name
+                prev = self._restore_planet(before, typed=name)
+                lead = f"⚠ {pname} orbits {p['host']}, not {old_star}: "
+                if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
+                    text = (lead + "wait for the current step to finish, then " +
+                            (f"type {pname} in the Planet box again and press Enter." if prev else
+                             "press Enter in the Planet box again."))
+                elif prev:
+                    text = (lead + f"kept {old_star}, its series and its planet {prev}. To use {pname} instead, type "
+                                   "it in the Planet box again and press Enter (you are asked again).")
+                else:
+                    text = (lead + f"kept {old_star} and its series; {pname}'s values were not filled in. Check the "
+                                   "planet's name, or press Look up again beside the Planet box to be asked again.")
+                self.planet_source.set(text)
+                # Busy: Enter or leaving the box asks again. No: only a changed name or Look up again asks again (a
+                # click elsewhere must not bring the question straight back).
+                self._last_planet_lookup = None if switched == "busy" else self.planet_name.get().strip()
+                if hasattr(self, "transit_page"):
+                    self.transit_page.refresh()
                 return
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
@@ -4892,6 +4909,40 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
 
+    _PLANET_VARS = ("planet_name", "pl_period", "pl_t0", "pl_t14", "pl_depth", "pl_k", "pl_a_rs", "pl_b", "pl_teff")
+
+    def _planet_snapshot(self) -> dict:
+        """2.4.0 (#82): the Planet boxes, the lookup behind them and its TOI / ExoClock lines, as they are now."""
+        vars_ = {k: getattr(self, k).get() for k in self._PLANET_VARS}
+        # The Planet box already holds the name just typed: the boxes' planet is the last lookup's.
+        vars_["planet_name"] = ((getattr(self, "planet_info", None) or {}).get("name")
+                                or getattr(self, "_planet_name_before", "") or "")
+        return {"vars": vars_,
+                "info": dict(getattr(self, "planet_info", None) or {}),
+                "status": dict(getattr(self, "_status_before_lookup", None) or {})}
+
+    def _restore_planet(self, snap: dict, typed: str = "") -> str:
+        """2.4.0 (#82): after No to a planet of another star. The previous planet (one with a period) comes back
+        whole; with none, the value boxes are emptied and the typed name stays, so no fit can use the other star's
+        ephemeris. Returns the restored planet's name ('' when the boxes were emptied)."""
+        old = snap.get("vars") or {}
+        try:
+            had = float(old.get("pl_period") or "nan") > 0
+        except ValueError:
+            had = False
+        if had:
+            for k in self._PLANET_VARS:
+                getattr(self, k).set(old.get(k, ""))
+            self.planet_info = dict(snap.get("info") or {})
+            self._show_target_status(snap.get("status") or {})
+            return old.get("planet_name", "").strip() or "the previous planet"
+        self.planet_name.set(typed or self.planet_name.get())
+        for k in self._PLANET_VARS[1:]:
+            getattr(self, k).set("")
+        self.planet_info = {}
+        self._show_target_status({})
+        return ""
+
     def _planet_to_fields(self, p: dict):
         def put(var, value, fmt):
             var.set(fmt.format(value) if isinstance(value, (int, float)) and math.isfinite(value) else "")
@@ -4922,7 +4973,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
              "b": num(self.pl_b), "teff": num(self.pl_teff), "source": info.get("source") or "Input page",
              "reference": info.get("reference", ""), "vmag": info.get("vmag"), "tmag": info.get("tmag"),
              "ra": info.get("ra"), "dec": info.get("dec"),
-             "from_cache": info.get("from_cache")}   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "from_cache": info.get("from_cache"),   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "looked_up": info.get("looked_up")}   # 2.4.0 (#93): when the live lookup answered (fit inputs)
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)
@@ -5117,7 +5169,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.close_series(asked=True)
             if self.observations:
                 return False
+        tp = getattr(self, "transit_page", None)
+        if tp is not None and tp.report is not None:
+            # 2.4.0 (#105): a report left open on the Transit fit page belongs to the old work: closed, so its planet
+            # never stands in for the next night's and its banner never names the cleared photometry.
+            try:
+                tp.close_report(quiet=True)
+            except Exception:
+                traceback.print_exc()
+            report_closed = True
+        else:
+            report_closed = False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        if report_closed:
+            cleared.append("the report open on the Transit fit page")
         self.run_findings = []   # 2.3.6 (#79 item 2): findings belong to the run that raised them
         try:   # 2.4.0 (#102, John 17 Nov): a new reduction starts with an empty Findings list
             self.findings.clear()
@@ -9890,7 +9955,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.mode_key != "transits" or not lights:
             return True
         page = getattr(self, "transit_page", None)
-        planet = page.current_planet() if page is not None else None
+        # 2.4.0 (#105): the Input page's planet, never a report left open on the Transit fit page
+        planet = page.input_planet() if page is not None else None
         if not planet:
             return True
         try:
@@ -10019,7 +10085,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_mode_answered = False   # 2.2.14 (item 19, review): set when this guard already asked about it
         if self.mode_key == "transits" and lights:
             page = getattr(self, "transit_page", None)
-            planet = page.current_planet() if page is not None else None
+            planet = page.input_planet() if page is not None else None   # 2.4.0 (#105): never a report's planet
             why = self._target_variable_reasons()
             series_open = self.observations and self.series_mode == "variables" and not self.series_mode_unknown
             span = self._lights_span(lights)
@@ -11774,7 +11840,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"{role_label(mode)}: {no_v}")
             self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
-            self._vet_choice(mode, xy)
+            if not self._say_check_clash(mode):   # 2.4.0 (#68)
+                self._vet_choice(mode, xy)
 
     def _no_catalog_v_note(self, role: str) -> str:
         """2.2.14 (item 4): why a marked comp has no catalog V on a solved image ('' when it has one, or when the image
@@ -11804,6 +11871,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
             self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
                                  "then Enter places the name).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
+            self._say_check_clash(role)   # 2.4.0 (#68): renamed to the check star's (or a comp's) name
             return
         if self.preview is None or not self.preview_is_debayered:
             self._slot_say(role, f"Calibrate first, so {text} can be found on the image.")
@@ -12075,6 +12143,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
+        if self._say_check_clash(role):   # 2.4.0 (#68): the check typed into a comp slot, or a comp into the check's
+            return
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
             self._vet_choice(role, xy)
 
@@ -12233,6 +12303,75 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"A variable {what} shifts every measurement it touches. Use it anyway?",
         ):
             self.clear_mark(role)
+
+    def check_comp_clash(self) -> list:
+        """2.4.0 (#68): the comps that are the same star as the check star: the same name (a real catalog name, not
+        "check" or "comp2"), or markers within CHECK_SAME_ARCSEC on the sky (2 px without a plate solution). Returns
+        [(role, words)], e.g. ("comp2", "the same name, Gaia DR3 439068910332260352")."""
+        cname = self.check_name.get().strip()
+        cxy = self.check_xy
+        if cxy is None and placeholder_star_name(cname):
+            return []
+        sol = self.chart_solution if (self.chart_placed or (self.chart_solution or {}).get("auto")) else None
+        csky = None
+        if cxy is not None and sol:
+            try:
+                csky = core.pixel_to_sky(cxy[0], cxy[1], sol)
+            except Exception:
+                csky = None
+        out = []
+        for r in COMP_ROLES:
+            name = getattr(self, f"{r}_name").get().strip()
+            xy = getattr(self, f"{r}_xy")
+            if xy is None and not name:
+                continue
+            if name and not placeholder_star_name(name) and not placeholder_star_name(cname) \
+                    and (name_key(name) == name_key(cname) or name_core(name) == name_core(cname)):
+                out.append((r, f"the same name, {cname}"))
+                continue
+            if xy is None or cxy is None:
+                continue
+            sep = None
+            if csky is not None:
+                try:
+                    ra, dec = core.pixel_to_sky(xy[0], xy[1], sol)
+                    sep = core.sky_separation_arcsec(csky[0], csky[1], ra, dec)
+                except Exception:
+                    sep = None
+            if sep is not None and math.isfinite(sep):
+                if sep < CHECK_SAME_ARCSEC:
+                    out.append((r, f"{sep:.1f}\u2033 apart"))
+            elif math.hypot(xy[0] - cxy[0], xy[1] - cxy[1]) < 2.0:
+                out.append((r, "on the same spot of the image"))
+        return out
+
+    def check_clash_text(self) -> str:
+        """2.4.0 (#68): the plain words for a comp that is also the check star ('' when there is none)."""
+        clash = self.check_comp_clash()
+        if not clash:
+            return ""
+        roles = " and ".join(role_label(r) for r, _ in clash)
+        why = "; ".join(f"{role_label(r)}: {w}" for r, w in clash)
+        one = len(clash) == 1
+        return (f"{roles} and the check star are the same star ({why}). The check star tests the comps, so it "
+                f"can't also be one of them. Change {'one of them' if one else 'them'}: clear the marker (\u2715 in "
+                "the Stars panel, or right-click it) and pick another star. Run photometry waits until then.")
+
+    def _say_check_clash(self, role: str) -> bool:
+        """2.4.0 (#68): at pick time, a comp just placed on the check star (or the check on a comp) is said at once,
+        in a box and on the slot's own line. True when there is a clash."""
+        if role != "check" and not comp_number(role):
+            return False
+        text = self.check_clash_text()
+        if not text:
+            return False
+        self._slot_say(role, "\u26a0 " + text, bad=True)
+        self.status.set("\u26a0 " + text)   # the panel redraw above may have put its own line there
+        try:
+            messagebox.showwarning(APP_TITLE, text)
+        except Exception:
+            pass
+        return True
 
     # ---- star panel (Photometry page) ---------------------------------------------------
     def _build_star_panel(self, panel):
@@ -15120,6 +15259,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             f"{la} and {lb} are marked on the same star. Each one must be a different star; "
                             "the check star in particular must not be one of the comparison stars."
                         )
+            clash = self.check_clash_text() if check is not None else ""
+            if clash:
+                raise ValueError("\u26a0 " + clash)   # 2.4.0 (#68): same name, or within about 2\u2033
             sat_limit = self._num_box(self.sat_limit, "Saturation")
             lat = self._num_box(self.lat, "Latitude") if self.lat.get().strip() else None
             lon = self._num_box(self.lon, "Longitude") if self.lon.get().strip() else None
@@ -22770,6 +22912,14 @@ class ExtremumWindow:
         self.csv_path = app.extremum_csv if app.extremum_csv and (
             core.same_star_text(app.extremum_csv_star, self._star())
             or os.path.basename(app.extremum_csv) == core.extremum_csv_name(self._star())) else ""
+        # 2.4.0 (#65, John 11 Nov): a star with saved times starts from them: Period = the one last used, Epoch = the
+        # first saved maximum (or minimum, by Type). VSX stays the fallback (no saved time of this type).
+        self._kind_quiet = False
+        self._redraw_job = None
+        self._prefill_from_csv(auto=True)
+        self.kind.trace_add("write", lambda *_a: self._kind_changed())
+        for var in (self.period, self.epoch, self.system):
+            var.trace_add("write", lambda *_a: self._elements_changed())
         self.fig = None
         if Figure is not None:
             self.fig = make_constrained_figure((10.5, 4.0))
@@ -22780,6 +22930,36 @@ class ExtremumWindow:
         self._show_csv()
         self.draw()
         fit_to_content(win)
+
+    def _kind_changed(self):
+        """2.4.0 (#65): switching Type takes the epoch from that type's first saved time, unless the elements were
+        typed (they are the user's own)."""
+        if self._kind_quiet:
+            return
+        p, e = self._elements()
+        if p and e and self._elements_source(p, e) == "typed":
+            return
+        self._prefill_from_csv(auto=True)
+
+    def _elements_changed(self):
+        """2.4.0 (#65): the saved-times list and the O−C diagram follow the elements in the boxes (shortly after
+        typing stops)."""
+        try:
+            if self._redraw_job is not None:
+                self.win.after_cancel(self._redraw_job)
+            self._redraw_job = self.win.after(400, self._elements_redraw)
+        except Exception:
+            pass
+
+    def _elements_redraw(self):
+        self._redraw_job = None
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:
+            return
+        self._show_csv()
+        self.draw()
 
     # -- inputs ---------------------------------------------------------------------------
     def _elements(self):
@@ -22850,7 +23030,11 @@ class ExtremumWindow:
             self.app.catalog_epoch = e
         self.system.set("HJD")
         self.app.catalog_var_type = found.get("var_type") or self.app.catalog_var_type
-        self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        self._kind_quiet = True   # 2.4.0 (#65): VSX's elements were asked for; the Type follows without a refill
+        try:
+            self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        finally:
+            self._kind_quiet = False
         self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
 
     # -- measuring ------------------------------------------------------------------------
@@ -22994,15 +23178,22 @@ class ExtremumWindow:
         except Exception:
             return []
 
-    def _prefill_from_csv(self):
+    def _prefill_from_csv(self, auto: bool = False) -> bool:
         """2.3.3 (nit, 10 Nov): Elements from saved times: Period = the one last used, Epoch = the first saved time of
         the chosen type (so the CSV need not be opened to find it). The elements can still be typed over or fetched
-        with Elements from VSX."""
+        with Elements from VSX. 2.4.0 (#65): also on open and on a Type switch (auto=True); with no saved time of
+        this type the boxes are left as they are (VSX's, when VSX gave them). True when the boxes were filled."""
         kind = "max" if self.kind.get() == "maximum" else "min"
         got = core.extremum_csv_elements(self._csv_rows(), kind)
         if not got:
-            self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times CSV")
-            return
+            if not auto:
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times "
+                                "CSV")
+            elif self._csv_rows():
+                p, e = self._elements()
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} yet; "
+                                + (f"{self._elements_source(p, e)} elements" if p and e else "type the elements"))
+            return False
         if got.get("period"):
             self.period.set(f"{got['period']:.8f}")
         self.epoch.set(f"{got['epoch']:.5f}")
@@ -23014,7 +23205,9 @@ class ExtremumWindow:
         word = "maximum" if kind == "max" else "minimum"
         self.source.set(f"from the times CSV: epoch = first saved {word}"
                         + (", period last used" if got.get("period") else "; period from VSX"
-                           if self.period.get().strip() else "; type the period"))
+                           if self.period.get().strip() else "; type the period")
+                        + ("  (Elements from VSX for VSX's)" if auto and self.app.catalog_period else ""))
+        return True
 
     def _show_csv(self):
         path = self._default_csv()
@@ -23023,10 +23216,17 @@ class ExtremumWindow:
             return
         rows = self._csv_rows()
         text = f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})"
-        lines = core.extremum_times_lines(rows)   # 2.3.3 (nit, 10 Nov): the saved times themselves
+        # 2.3.3 (nit, 10 Nov): the saved times themselves. 2.4.0 (#65): each O−C against the elements in the boxes,
+        # as the O−C diagram has it (a row's own stored O−C is added when it differs).
+        period, epoch = self._elements()
+        elements = (period, epoch, self.system.get()) if period and epoch else None
+        lines = core.extremum_times_lines(rows, elements=elements)
         if lines:
             more = len(rows) - len(lines)
-            text += "\n" + "\n".join("   " + ln for ln in lines) + (f"\n   … and {more} earlier" if more > 0 else "")
+            head = (f"   O−C against P {period:.8f}, E {epoch:.5f} ({self.system.get()}), as in the diagram:"
+                    if elements else "   O−C as saved (each row against its own elements):")
+            text += "\n" + head + "\n" + "\n".join("   " + ln for ln in lines) + (
+                f"\n   … and {more} earlier" if more > 0 else "")
         self.csv_text.set(text)
 
     def save(self):

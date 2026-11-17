@@ -16,11 +16,15 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 2. In **Night**, choose the night. It starts on the highlighted night, or the last one.
 3. In **Type**, choose **maximum** or **minimum**. SHOBS-P sets this from the VSX variable type: minimum for eclipsing binaries, maximum for pulsators and the rest.
 4. Leave **Half-window (min)** blank. SHOBS-P then picks how much of the light curve on each side of the extremum to fit. Type a number of minutes only if the automatic window catches something it should not, such as a nearby shoulder of the light curve.
-5. Check **Period (d)** and **Epoch**. They hold VSX's elements from the Star ID lookup; if they are empty, press
-   **Elements from VSX**. For a star with times already saved in its times CSV (below), **Elements from saved times**
-   (from 2.3.3) fills **Period** with the one used last and **Epoch** with the first saved maximum (or minimum, by the
-   **Type** box), and the label says **from the times CSV**. That is often better than VSX's elements, whose epoch can
-   be decades old. A time saved against them is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
+5. Check **Period (d)** and **Epoch**. For a star with times already saved in its times CSV (below), the window
+   opens with them filled from those times (from 2.4.0; 2.3.3 had only the button): **Period** is the one used last
+   and **Epoch** the first saved maximum (or minimum, by the **Type** box), and the label says **from the times CSV:
+   epoch = first saved maximum, period last used**. That is often better than VSX's elements, whose epoch can be
+   decades old. Switching **Type** takes the epoch from that type's first saved time, unless you typed the elements
+   yourself (then they stay). With no saved time of the chosen type, the boxes hold VSX's elements from the Star ID
+   lookup and the label says, for example, **no saved maxima yet; VSX elements**; if they are empty, press **Elements
+   from VSX**. **Elements from VSX** and **Elements from saved times** switch between the two at any time. A time
+   saved against the saved times' elements is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure**.
 
 With Period and Epoch filled in, SHOBS-P looks for the extremum near each time those elements predict in the night.
@@ -35,9 +39,10 @@ night's own extremum.
 
 ![The Time of maximum / minimum window for GSC 03308-00462: the elements filled by Elements from saved times, a measured maximum, the two saved times listed under the result, and the O − C diagram](img/14-extremum.png)
 
-*The O − C beside each saved time is the one stored when it was saved, against the elements used then; the O − C
-diagram recomputes every point against the elements in the boxes. They differ when the elements have changed, as for the
-first time here (saved against an earlier period).*
+*The saved-times list under the result works out each time's O − C against the elements in the boxes, as the O − C
+diagram does, so the two always agree (the list's first line names the elements). When a time was saved against other
+elements (VSX's, or an earlier period), its line adds the O − C stored then, for example* `O−C +0.0 min (saved +9.4
+against VSX HJD)`*. With no elements in the boxes the list shows each row's O − C as stored.*
 
 ## Read the result
 
@@ -63,13 +68,21 @@ If no elements are given, the result says **No elements: type the period and epo
 
 The file is called `<Star>_times_of_extremum.csv` (for example `SZ_Lyn_times_of_extremum.csv`). It goes next to the series file, or in the Output folder. The line under the result shows which file is in use and how many times of this star it holds, and, from 2.3.3, lists the saved times themselves (type, HJD and error, O − C, night; the last eight), so you need not open the CSV to find an epoch.
 
+**Older times saved against VSX's elements.** The CSV keeps each row as it was saved: its own `period_d`, `epoch`,
+`elements` (`VSX HJD`, `saved HJD`, `typed HJD`) and the O − C and cycle worked out then. SHOBS-P never rewrites them,
+so the file stays a record of what was used. So a CSV started in 2.3 with VSX's elements and continued in 2.4.0 with
+the saved times' elements holds O − C columns against two sets of elements. The window does not mix them: the list and
+the diagram work every row out again against the elements in the boxes. If you analyse the CSV elsewhere, use the time
+columns (`hjd`, `bjd_tdb`) with one set of elements, not the stored `o_c_min` column.
+
 Measuring the same extremum again and saving replaces that row (same star, same type, within 0.01 d), so you can refine a timing without making duplicates.
 
 To keep times in another file, for example one shared between several series of the same star, press **Choose times CSV…** and pick or name a file.
 
 ## The O − C diagram
 
-The right-hand plot reads the times CSV. Saved maxima are filled circles, saved minima filled squares. Tonight's result, not yet saved, is an open red marker. The horizontal line at zero is "exactly on time".
+The right-hand plot reads the times CSV and works every saved time out against the elements in the boxes (it follows
+them as you type). Saved maxima are filled circles, saved minima filled squares. Tonight's result, not yet saved, is an open red marker. The horizontal line at zero is "exactly on time".
 
 - Points scattered around zero: the elements are good.
 - Points along a sloping straight line: the period is slightly off.

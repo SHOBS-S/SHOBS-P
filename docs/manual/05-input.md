@@ -118,7 +118,8 @@ comparison stars, check star, watch stars, **Use comps** choice, VSX period and 
 **Notes** box on the Output page goes back to its default, **OSC reduced; not transformed** (or **Monochrome camera;
 not transformed**), so the old star's notes cannot end up in the new star's report; if you had typed your own notes,
 the log lists "the Output page notes" among what was cleared. The last run's line on the Photometry page ("Photometry
-done in …") is cleared too. The frame folders, site and optics stay. SHOBS-P asks
+done in …") is cleared too. A report left open on the Transit fit page (chapter 19) is closed, so its planet can
+never stand in for the new night's. The frame folders, site and optics stay. SHOBS-P asks
 first: **Start a new reduction?** Then type the new name and press Enter.
 
 This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's
@@ -135,7 +136,9 @@ busy bar then looks up the star, its planets and the planet in turn, for example
 NASA Exoplanet Archive…**. Chapter 16 covers this box in detail.
 
 If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
-reduction. **No** keeps the old star and its series; check the planet's name.
+reduction. **No** keeps the old star and its series, and the other star's planet does not stay in the Planet boxes:
+the planet you had before comes back, or, if there was none, the value boxes are left empty (your typed name stays).
+A fit can then never use the other star's ephemeris. The line under the boxes says what to do to be asked again.
 
 ### Discovery mode: the field center
 

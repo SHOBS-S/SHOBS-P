@@ -9985,9 +9985,26 @@ def extremum_csv_elements(rows: list[dict], kind: str = "max") -> dict | None:
     return {"period": period, "epoch": epoch, "system": system, "n": len(same)}
 
 
-def extremum_times_lines(rows: list[dict], limit: int = 8) -> list[str]:
+def extremum_row_oc(row: dict, period: float, epoch: float, system: str = "HJD") -> float | None:
+    """2.4.0 (#65): a saved row's O−C in minutes against the given elements, as the Time of max/min window's O−C
+    diagram works it out (BJD_TDB or HJD by the system, else the JD; half cycles for a minimum). None without a time."""
+    def num(k):
+        v = row.get(k)
+        return float(v) if isinstance(v, float) and math.isfinite(v) else None
+    t = num("bjd_tdb" if str(system).upper() == "BJD" else "hjd")
+    if t is None:
+        t = num("jd_utc")
+    if t is None or not period or not epoch:
+        return None
+    return o_minus_c(t, period, epoch, half_cycles=str(row.get("type") or "") == "min")["oc_min"]
+
+
+def extremum_times_lines(rows: list[dict], limit: int = 8, elements=None) -> list[str]:
     """2.3.3 (nit, 10 Nov): one short line per saved time of one star (oldest first; the last `limit`):
-    'max  HJD 2461353.81255 ± 20.8 min   O−C −6.8 min   night JD2461353'."""
+    'max  HJD 2461353.81255 ± 20.8 min   O−C −6.8 min   night JD2461353'.
+    2.4.0 (#65): elements = (period, epoch, system): the O−C is worked out against them (as the O−C diagram is), and
+    a row whose stored O−C differs adds it with the elements it was saved against: '(saved +9.4 against VSX HJD)'.
+    Without elements the stored O−C is shown, as before."""
     def num(r, k):
         v = r.get(k)
         return float(v) if isinstance(v, float) and math.isfinite(v) else None
@@ -10001,8 +10018,15 @@ def extremum_times_lines(rows: list[dict], limit: int = 8) -> list[str]:
         line = f"{str(r.get('type') or '?'):<3}  {sysw} {t:.5f}"
         if num(r, "error_min") is not None:
             line += f" ± {num(r, 'error_min'):.1f} min"
-        if num(r, "o_c_min") is not None:
-            line += f"   O−C {num(r, 'o_c_min'):+.1f} min"
+        stored = num(r, "o_c_min")
+        now = extremum_row_oc(r, elements[0], elements[1], elements[2]) if elements else None
+        if now is not None:
+            line += f"   O−C {now:+.1f} min"
+            if stored is not None and abs(stored - now) >= 0.05:
+                what = str(r.get("elements") or "").strip() or "other elements"
+                line += f" (saved {stored:+.1f} against {what})"
+        elif stored is not None:
+            line += f"   O−C {stored:+.1f} min"
         if str(r.get("night") or "").strip():
             line += f"   night {str(r.get('night')).strip()}"
         out.append(line)
