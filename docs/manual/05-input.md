@@ -263,7 +263,12 @@ changing the box when this is your own telescope.
 
 **MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them. Newer
 MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
-their site, focal length and frame size. Their site and optics are never saved as yours. Their time zone is set to
+their site, focal length and frame size. The question shows the optics it would use: focal length 560 mm and
+**pixel 6.8 µm**, the camera's own pixel. The camera bins it 2×2 (the header says `XBINNING = 2`), so the frames are
+**about 5.0″ per pixel**, and the question says so. (Before 2.4.0 the box got 13.6 µm, the binned pixel, which the
+solve then multiplied by the header's binning again: 10″ per pixel, and the frames did not solve unless you typed
+6.8 µm yourself. Older MicroObservatory files that name no binning still get 13.6 µm, which is right for them.)
+Their site and optics are never saved as yours. Their time zone is set to
 `America/Phoenix` (Arizona, no daylight saving), and yours comes back with your own setup.
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself

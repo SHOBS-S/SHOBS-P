@@ -148,6 +148,13 @@
   {
    "section": "Input",
    "patterns": [
+    "These 78 lights look like MicroObservatory frames … Use that telescope's setup for these frames? … Optics: focal length 560 mm, pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)"
+   ],
+   "todo": "Yes for these frames; your own setup comes back when you scan your own lights. See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
    "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."

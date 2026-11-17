@@ -385,6 +385,18 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+def solve_camera_bin(header) -> int:
+    """2.4.0 (#107): the camera binning the plate solve multiplies the Pixel size box by: the header's XBINNING (1 when
+    it is missing; BINNING / XBIN only when XBINNING is there but unreadable, as the solve has always read it). The
+    MicroObservatory setup divides by the same number, so its header scale comes out right."""
+    for key in ("XBINNING", "BINNING", "XBIN"):
+        try:
+            return max(int(float((header or {}).get(key, 1))), 1)
+        except (TypeError, ValueError):
+            continue
+    return 1
+
+
 # 2.4.0 (#106): the Input page's planet boxes: key -> (variable, digits shown, scale from the stored value)
 PLANET_BOX_FORMATS = {"period": ("pl_period", "{:.8f}", 1.0), "t0": ("pl_t0", "{:.6f}", 1.0),
                       "t14": ("pl_t14", "{:.4f}", 24.0), "depth": ("pl_depth", "{:.4f}", 100.0),
@@ -5594,7 +5606,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             c_ra, c_dec = pointing
             try:
                 half_diag = math.hypot(*shape) / 2.0 * float(self.pixel_um.get()) / float(self.focal_mm.get()) \
-                    * 206.265 / 3600.0 if shape else 0.5
+                    * 206.265 * solve_camera_bin(header) / 3600.0 if shape else 0.5   # 2.4.0 (#107): camera bin
             except Exception:
                 half_diag = 0.5
         sep = core.sky_separation_arcsec(t_ra, t_dec, c_ra, c_dec) / 3600.0
@@ -6343,7 +6355,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         scale = core.header_plate_scale(header)
         focal = 560.0
         # 6.8 µm pixels binned 2x2 at 560 mm: about 5"/px, and a 650 x 500 frame covers about 56' x 42'.
-        pixel = scale * focal / 206.265 if scale else 13.6
+        # 2.4.0 (#107): the header's scale (IM_SCALE 5.000; FOCALLEN / XPIXSZ 13.6) is per BINNED pixel, and the solve
+        # multiplies the Pixel size box by the header's XBINNING (solve_camera_bin). So the box gets the camera's own
+        # pixel: the binned pixel / XBINNING (6.8 µm on current headers, XBINNING = 2), 13.6 µm on older headers that
+        # name no binning (the solve then multiplies by 1). Before, current headers gave 13.6 x 2: 10"/px, no solve.
+        cam_bin = solve_camera_bin(header)
+        binned_pixel = scale * focal / 206.265 if scale else 13.6
+        pixel = binned_pixel / cam_bin
+        frame_scale = binned_pixel / focal * 206.265   # arcsec per pixel of the frame as saved (what the solve uses)
         self.scale_approx = not scale
         use = messagebox.askyesno(
             APP_TITLE,
@@ -6351,7 +6370,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             "monochrome camera.\n\nUse that telescope's setup for these frames?\n"
             f"  Site: latitude {lat:.3f}, longitude {lon:.3f}" + (f", elevation {elev:.0f} m" if elev else "")
             + f" ({where})\n"
-            f"  Optics: focal length {focal:.0f} mm, pixel {pixel:.1f} µm (about {pixel / focal * 206.265:.1f}\"/px"
+            f"  Optics: focal length {focal:.0f} mm, pixel {pixel:.1f} µm"
+            + (f" (the camera's pixel; the camera bins {cam_bin}x{cam_bin}, so about {frame_scale:.1f}\"/px"
+               if cam_bin > 1 else f" (about {frame_scale:.1f}\"/px")
             + ("" if scale else "; Solve refines it") + ")\n"
             "  Camera: monochrome (no debayer), clear filter (CV), binning 1, saturation 4000 ADU\n\n"
             "Your own site, optics, and camera settings are kept and come back when you scan a folder of your own "
@@ -6387,7 +6408,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
         self.telescope_name.set("")   # 2.2.16 (item 5): your telescope's name is not theirs (comes back with yours)
         self.log(f"MicroObservatory setup: site {lat:.4f}, {lon:.4f} ({where}); optics {focal:.0f} mm, {pixel:.2f} µm "
-                 f"({'from the header scale' if scale else 'approximate'}); monochrome, CV, saturation 4000 ADU. "
+                 f"({'from the header scale' if scale else 'approximate'}"
+                 + (f"; camera pixel, binned {cam_bin}x{cam_bin} by the camera" if cam_bin > 1 else "")
+                 + f", {frame_scale:.2f}\"/px); monochrome, CV, saturation 4000 ADU. "
                  "Your own setup comes back when you scan your own lights.")
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
@@ -9050,8 +9073,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         was made at and the color camera's 2x2 superpixel; None when the boxes are empty."""
         try:
             superpixel = 1 if self.pattern.get() == core.MONO else 2
+            # 2.4.0 (#107): times the camera's binning too, as the solve (the MicroObservatory box is now the camera
+            # pixel, 6.8 µm, binned 2x2 by the camera)
             scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * max(int(self._image_binning()), 1) \
-                * superpixel
+                * superpixel * solve_camera_bin(self.preview_header)
             return scale if math.isfinite(scale) and scale > 0 else None
         except Exception:
             return None
@@ -9076,17 +9101,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             field = 2.0
             try:
                 # review: the scale the field image uses (_field_scale_arcsec's Optics formula)
-                scale = self._optics_scale_arcsec()
-                camera_bin = 1
-                for k in ("XBINNING", "BINNING", "XBIN"):   # the camera's own binning, as the solve reads it
-                    if header.get(k) not in (None, ""):
-                        try:
-                            camera_bin = max(int(float(header.get(k))), 1)
-                            break
-                        except (TypeError, ValueError):
-                            continue
+                scale = self._optics_scale_arcsec()   # (2.4.0 #107: the camera's binning is in it now)
                 if scale:
-                    est = max(self.preview.shape[:2]) * scale * camera_bin / 3600.0
+                    est = max(self.preview.shape[:2]) * scale / 3600.0
                     if math.isfinite(est) and est > 0:
                         field = est
             except Exception:
@@ -13432,13 +13449,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             ra_hours, dec = float(query[0]), float(query[1])
             binning = max(int(self._image_binning()), 1)
-            camera_bin = 1
-            for key in ("XBINNING", "BINNING", "XBIN"):
-                try:
-                    camera_bin = max(int(float((self.preview_header or {}).get(key, 1))), 1)
-                    break
-                except (TypeError, ValueError):
-                    continue
+            camera_bin = solve_camera_bin(self.preview_header)   # 2.4.0 (#107): one rule with the MOBS setup
             # Camera binning, app binning, then the superpixel debayer each multiply the pixel size (a monochrome
             # frame has no debayer). Frames from another telescope (MicroObservatory) bring their own scale.
             if wcs is not None:

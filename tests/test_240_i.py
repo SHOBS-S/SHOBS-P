@@ -2,7 +2,8 @@
 drift check that fails is said), N4 (a partial or differently binned series is not taken for the night's drift), N7
 (the same name on two stars clearly apart), and the nits (fit inputs never cost the settings file, typed-over values
 named on the lookup line, the NEB check of a same-star report without RA/Dec, the series drift labels cached), and
-#106 (the boxes' rounding no longer drops a looked-up error from the fit's priors)."""
+#106 (the boxes' rounding no longer drops a looked-up error from the fit's priors), #107 (MicroObservatory pixel
+from a binned header scale)."""
 import os
 import sys
 import tempfile
@@ -367,6 +368,64 @@ class TestNits(unittest.TestCase):
     def test_saved_times_button_comment(self):
         src = _src()
         self.assertNotIn("not filled by themselves: under the numbers", src)
+
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestMicroObservatoryPixel(unittest.TestCase):
+    """#107: the header's scale is per binned pixel; the Pixel size box gets the camera's pixel, so the solve's
+    x XBINNING gives 5.0"/px (it gave 10"/px and no solve on current headers, XBINNING = 2)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import clearv_app as ca
+        cls.ca = ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_240_i_mobs.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _setup(self, header):
+        app = self.app
+        app._own_setup = None
+        asked = []
+        with mock.patch.object(self.ca.messagebox, "askyesno", side_effect=lambda t, text, *a, **k:
+                               asked.append(text) or True):
+            app._setup_microobservatory(header, 78)
+        app.preview_header = header
+        solve_scale = float(app.pixel_um.get()) / float(app.focal_mm.get()) * 206.265 \
+            * self.ca.solve_camera_bin(header)
+        return [ln for ln in asked[0].splitlines() if "Optics" in ln][0], float(app.pixel_um.get()), solve_scale
+
+    def test_current_headers_xbinning_2(self):
+        head = {"TELESCOP": "Cecilia", "OBSERVAT": "Whipple Observatory", "LATITUDE": 31.68, "LONGITUD": -110.88,
+                "IM_SCALE": 5.0, "XBINNING": 2, "YBINNING": 2, "XPIXSZ": 13.6, "FOCALLEN": 560,
+                "NAXIS1": 650, "NAXIS2": 500}
+        line, pixel, scale = self._setup(head)
+        self.assertAlmostEqual(pixel, 6.8, places=1)
+        self.assertAlmostEqual(scale, 5.0, delta=0.05)
+        self.assertIn("pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)", line)
+        self.assertAlmostEqual(self.app._optics_scale_arcsec(), scale, places=6)   # the field image's scale too
+
+    def test_older_headers_without_binning(self):
+        head = {"TELESCOP": "MicroObservatory", "XPIXSZ": 13.6, "FOCALLEN": 560, "NAXIS1": 650, "NAXIS2": 500}
+        line, pixel, scale = self._setup(head)
+        self.assertAlmostEqual(pixel, 13.6, places=1)
+        self.assertAlmostEqual(scale, 5.0, delta=0.05)
+        self.assertIn("pixel 13.6 µm (about 5.0\"/px)", line)
+        head = dict(head, XBINNING=1)
+        self.assertAlmostEqual(self._setup(head)[2], 5.0, delta=0.05)
+
+    def test_no_scale_in_the_header(self):
+        for head, want_pixel in (({"TELESCOP": "MicroObservatory", "XBINNING": 2}, 6.8),
+                                 ({"TELESCOP": "MicroObservatory"}, 13.6)):
+            line, pixel, scale = self._setup(head)
+            self.assertAlmostEqual(pixel, want_pixel, places=1)
+            self.assertAlmostEqual(scale, 13.6 / 560 * 206.265, places=3)   # about 5.0"/px either way
+            self.assertIn("Solve refines it", line)
 
 
 if __name__ == "__main__":

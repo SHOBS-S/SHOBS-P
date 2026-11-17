@@ -109,3 +109,14 @@ Input page box shows. Only fits of such planets can move (priors only); the boxe
 |---|---|---|---|
 | img/17-transit-fit-page.png, img/17-flip-step.png, img/17-trim.png, img/17-refit-needed.png | 17 | only if that planet's catalog a/R\*, b or Rp/R\* has more decimals than the box: the fit's numbers and the notes' *Priors* line may move | CHECK when retaken: compare the Priors line with step 2's; RESHOOT if any number changed |
 | all others | | nothing of #106 in view | reuse |
+
+## #107 (MicroObservatory pixel from the binned header scale)
+
+The MicroObservatory setup question now says *pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about
+5.0"/px)* on current headers, and the Pixel size box gets 6.8 µm (was 13.6 µm, which made the solve use 10"/px).
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the MicroObservatory setup question | 05 | new Optics line | RESHOOT if one exists |
+| any shot of the Input page Optics box with MicroObservatory frames scanned | 05 | Pixel size 6.8 (was 13.6) | RESHOOT if one exists |
+| img/08-photometry-solved.jpg (if a MOBS night) | 08 | nothing (it was solved with 6.8 µm typed by hand) | reuse |
