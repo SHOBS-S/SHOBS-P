@@ -579,6 +579,8 @@ class TransitPage:
             self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
+        if self.report is not None:
+            self._show_source()   # 2.4.0 (#105): the banner's "Your … photometry is kept" follows the series now
         self.show_target_status()   # 2.2.21 (#32, item 14)
         if self.report is None:
             self._trim_source_check()   # review: before the stale check, so the signature has no stale trim
@@ -660,6 +662,9 @@ class TransitPage:
             self.groups.show("data", self.close_report_button, False)
             self._show_flip_check(False)
             app.set_report_note("")
+        # 2.4.0 (#105, related): the TOI / ExoClock lines follow the source shown (hidden for a report of another
+        # planet; they showed the photometry night's TOI-2046 b beside a TrES-3 b report).
+        self.show_target_status()
         self._update_comp_buttons()
         self._update_airmass_box()   # 2.4.0 (#96)
 
@@ -890,11 +895,20 @@ class TransitPage:
             pass
 
     def current_planet(self) -> dict | None:
-        p = self.app.planet_from_fields()
+        """The planet this page fits: an open report's (unless the Input page holds the same planet with a period),
+        else the Input page's. Only for this page's own fit and lines; a photometry run's checks and everything
+        downstream of a run use input_planet() (2.4.0, #105)."""
         if self.report is not None:
+            p = self.app.planet_from_fields()
             rp = self.report.get("planet")
             if not p or not p.get("period") or _norm(p.get("name")) != _norm(rp.get("name")):
                 return rp
+        return self.input_planet()
+
+    def input_planet(self) -> dict | None:
+        """2.4.0 (#105): the planet on the Input page, never an open report's (the pre-run transit check used the
+        report's K2-113 b for an HD 189733 b night)."""
+        p = self.app.planet_from_fields()
         if p and p.get("period") and not p.get("depth_note"):
             # 2.2.13: the lookup's note on a listed depth that disagrees with Rp/R* (the Input page keeps only k² as
             # the depth), while the page still shows that planet's Rp/R*.
@@ -3147,6 +3161,9 @@ class TransitPage:
             info = {}   # the last lookup was for another planet
         if self.report is not None:
             rp = self.report.get("planet") or {}
+            if rp.get("name") and _norm(rp.get("name")) != _norm(names[0]):
+                # 2.4.0 (#105): a report of another planet: its own TOI / TIC, never the Input page planet's
+                names, info = [], {}
             names += [str(rp.get("name") or ""), str(rp.get("host") or "")]
         toi, tic = tc.exofop_ids(info, *names)
         url = core.exofop_target_url(toi=toi, tic=tic)

@@ -4637,8 +4637,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example "
                                                "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
+        # 2.4.0 (#82): the name of the planet now in the boxes (the box itself already holds the new name)
+        self._planet_name_before = getattr(self, "_last_planet_lookup", None) or ""
         self._last_planet_lookup = name   # 2.2.14 (item 2)
         self._lookup_busy_start("planet", name, "NASA Exoplanet Archive")   # 2.2.19 (nit)
+        self._status_before_lookup = dict(getattr(self, "target_status", None) or {})   # 2.4.0 (#82): put back on No
         self._show_target_status({})   # 2.2.21 (#32, item 14): the last planet's TOI/ExoClock lines go
 
         def work():
@@ -4680,6 +4683,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.planet_source.set("Lookup failed.")
             messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
             return
+        before = self._planet_snapshot()   # 2.4.0 (#82): put back if a planet of another star is answered No
         self.planet_info = dict(p)
         self._planet_to_fields(p)
         self._last_planet_lookup = self.planet_name.get().strip()   # 2.2.14 (item 2): the resolved name counts too
@@ -4700,16 +4704,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
             switched = self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
                                          keep_planet=True)
-            if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: wait for the "
-                                       "current step to finish, then press Enter in the planet box again.")
-                self._last_planet_lookup = None
-                return
-            if switched is None:
-                # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
-                                       "and its series. Check the planet's name, or answer Yes to start a new "
-                                       "reduction.")
+            if switched in ("busy", None):
+                # 2.4.0 (#82): the other star's planet never stays in the Planet boxes (a Transits fit then used its
+                # ephemeris and shape for this star's night): the previous planet comes back, else the values empty.
+                pname = p.get("name") or name
+                prev = self._restore_planet(before, typed=name)
+                lead = f"⚠ {pname} orbits {p['host']}, not {old_star}: "
+                if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
+                    text = (lead + "wait for the current step to finish, then " +
+                            (f"type {pname} in the Planet box again and press Enter." if prev else
+                             "press Enter in the Planet box again."))
+                elif prev:
+                    text = (lead + f"kept {old_star}, its series and its planet {prev}. To use {pname} instead, type "
+                                   "it in the Planet box again and press Enter (you are asked again).")
+                else:
+                    text = (lead + f"kept {old_star} and its series; {pname}'s values were not filled in. Check the "
+                                   "planet's name, or press Look up again beside the Planet box to be asked again.")
+                self.planet_source.set(text)
+                # Busy: Enter or leaving the box asks again. No: only a changed name or Look up again asks again (a
+                # click elsewhere must not bring the question straight back).
+                self._last_planet_lookup = None if switched == "busy" else self.planet_name.get().strip()
+                if hasattr(self, "transit_page"):
+                    self.transit_page.refresh()
                 return
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
@@ -4891,6 +4907,40 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             win.grab_set()
         except Exception:
             pass
+
+    _PLANET_VARS = ("planet_name", "pl_period", "pl_t0", "pl_t14", "pl_depth", "pl_k", "pl_a_rs", "pl_b", "pl_teff")
+
+    def _planet_snapshot(self) -> dict:
+        """2.4.0 (#82): the Planet boxes, the lookup behind them and its TOI / ExoClock lines, as they are now."""
+        vars_ = {k: getattr(self, k).get() for k in self._PLANET_VARS}
+        # The Planet box already holds the name just typed: the boxes' planet is the last lookup's.
+        vars_["planet_name"] = ((getattr(self, "planet_info", None) or {}).get("name")
+                                or getattr(self, "_planet_name_before", "") or "")
+        return {"vars": vars_,
+                "info": dict(getattr(self, "planet_info", None) or {}),
+                "status": dict(getattr(self, "_status_before_lookup", None) or {})}
+
+    def _restore_planet(self, snap: dict, typed: str = "") -> str:
+        """2.4.0 (#82): after No to a planet of another star. The previous planet (one with a period) comes back
+        whole; with none, the value boxes are emptied and the typed name stays, so no fit can use the other star's
+        ephemeris. Returns the restored planet's name ('' when the boxes were emptied)."""
+        old = snap.get("vars") or {}
+        try:
+            had = float(old.get("pl_period") or "nan") > 0
+        except ValueError:
+            had = False
+        if had:
+            for k in self._PLANET_VARS:
+                getattr(self, k).set(old.get(k, ""))
+            self.planet_info = dict(snap.get("info") or {})
+            self._show_target_status(snap.get("status") or {})
+            return old.get("planet_name", "").strip() or "the previous planet"
+        self.planet_name.set(typed or self.planet_name.get())
+        for k in self._PLANET_VARS[1:]:
+            getattr(self, k).set("")
+        self.planet_info = {}
+        self._show_target_status({})
+        return ""
 
     def _planet_to_fields(self, p: dict):
         def put(var, value, fmt):
@@ -5117,7 +5167,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.close_series(asked=True)
             if self.observations:
                 return False
+        tp = getattr(self, "transit_page", None)
+        if tp is not None and tp.report is not None:
+            # 2.4.0 (#105): a report left open on the Transit fit page belongs to the old work: closed, so its planet
+            # never stands in for the next night's and its banner never names the cleared photometry.
+            try:
+                tp.close_report(quiet=True)
+            except Exception:
+                traceback.print_exc()
+            report_closed = True
+        else:
+            report_closed = False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        if report_closed:
+            cleared.append("the report open on the Transit fit page")
         self.run_findings = []   # 2.3.6 (#79 item 2): findings belong to the run that raised them
         try:   # 2.4.0 (#102, John 17 Nov): a new reduction starts with an empty Findings list
             self.findings.clear()
@@ -9890,7 +9953,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.mode_key != "transits" or not lights:
             return True
         page = getattr(self, "transit_page", None)
-        planet = page.current_planet() if page is not None else None
+        # 2.4.0 (#105): the Input page's planet, never a report left open on the Transit fit page
+        planet = page.input_planet() if page is not None else None
         if not planet:
             return True
         try:
@@ -10019,7 +10083,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_mode_answered = False   # 2.2.14 (item 19, review): set when this guard already asked about it
         if self.mode_key == "transits" and lights:
             page = getattr(self, "transit_page", None)
-            planet = page.current_planet() if page is not None else None
+            planet = page.input_planet() if page is not None else None   # 2.4.0 (#105): never a report's planet
             why = self._target_variable_reasons()
             series_open = self.observations and self.series_mode == "variables" and not self.series_mode_unknown
             span = self._lights_span(lights)

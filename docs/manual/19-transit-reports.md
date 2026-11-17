@@ -229,7 +229,12 @@ To open a report:
 
 Things to know:
 
-- **The planet.** SHOBS-P uses the report's planet, unless the Input page names the same planet.
+- **The planet.** SHOBS-P uses the report's planet, unless the Input page names the same planet. The report's
+  planet is used only for the report's own fit on this page. **Run photometry** and everything that comes from a run
+  (the check that a transit falls in the lights, the ephemeris, O − C and the report fields) always use the Input
+  page's planet. A new run closes the report, and so does **New reduction** (Input page).
+- **TOI and ExoClock lines.** The *TOI-… / ExoClock: …* lines under the Results row follow the planet the page is
+  fitting: for a report of another planet than the Input page's they are hidden.
 - **The ephemeris.** If the report has no predicted mid-transit, SHOBS-P looks one up (NASA Exoplanet Archive, then
   an EXOTIC `inits` file next to the report). Without any, no O − C is given.
 - **Time systems.** BJD_TDB is used as it is. HJD is moved to BJD_TDB (+69.184 s). JD_UTC is converted when the star's
@@ -237,7 +242,9 @@ Things to know:
   Tc may be off by up to 8 minutes, with no usable O − C; enter the star on the Input page and open the report again.
 - **What is not available.** **Comp health…**, **Use comps…**, **Refit with flagged frames** and the comp check
   need your own photometry, so they are off for a report.
-- **Going back.** Click **Close report**, or pick one of your nights in **Night**. Your own photometry was kept.
+- **Going back.** Click **Close report**, or pick one of your nights in **Night**. Your own photometry was kept. The
+  banner's *Your … photometry is kept* part is there only while a series is open; after **New reduction** the report
+  is closed anyway.
 
 You can save the AAVSO report, ExoFOP package, fit CSV and plot of a report fit like any other.
 
