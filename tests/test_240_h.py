@@ -311,8 +311,8 @@ class TestWhitenessGuard(unittest.TestCase):
         self.assertTrue(m["ok"], m.get("why"))
         self.assertGreaterEqual(m["dropped_structure"], 4)
         self.assertLess(abs(m["k"] / 2.0 - 1), 0.02, m["k"])
-        self.assertIn(f"{m['dropped_structure']} pairs dropped: the sky had structure the background model missed, "
-                      "e.g. cloud or moonlight", sg.summary(m))
+        self.assertIn(f"{m['dropped_structure']} pairs dropped: the sky had structure the background model missed "
+                      "(cloud, moonlight, or faint stars that moved between the frames)", sg.summary(m))
         import transit_ui as tu
         self.assertIn("pairs dropped: the sky had structure", tu.sky_meas_words({"sky_meas": core._sky_meas_brief(m)}))
         with mock.patch.object(sg, "WHITE_MAX", float("inf")):   # without the guard: low
@@ -397,7 +397,8 @@ class TestStackedRunUsesTheFramesGain(unittest.TestCase):
             self.assertLess(abs(s["electrons"] / 8.0 - 1), 0.06, s["electrons"])
             self.assertEqual(s["sky_meas"]["basis"], "stacks")
             self.assertEqual(s["sky_meas"]["stack_n"], 4)
-            self.assertIn("x 4 for the stacks", s["note"])
+            self.assertIn("units per stack of 4 frames (from the darks, added up over the 4 frames)", s["note"])
+            self.assertIn("e- per camera pixel in a single frame", s["note"])
             self.assertIn("measured on the stacks themselves", s["note"])
             self.assertAlmostEqual(s["sky_meas"]["rn_e"], math.sqrt(120), delta=1.5)
 

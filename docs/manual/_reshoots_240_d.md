@@ -144,7 +144,7 @@ The MicroObservatory setup question now says *pixel 6.8 µm (the camera's pixel;
 | any shot of the Input page Optics box with MicroObservatory frames scanned | 05 | Pixel size 6.8 (was 13.6) | RESHOOT if one exists |
 | img/08-photometry-solved.jpg (if a MOBS night) | 08 | nothing (it was solved with 6.8 µm typed by hand) | reuse |
 
-## MicroObservatory elevation from the header (HEIGHT)
+## MicroObservatory elevation from the header (HEIGHT, #108)
 
 The MicroObservatory setup question now reads the header's elevation (`HEIGHT`, 1268 m) instead of the approximate
 2340 m, so its site line says *elevation 1268 m (from the FITS header)*.
@@ -153,3 +153,18 @@ The MicroObservatory setup question now reads the header's elevation (`HEIGHT`, 
 |---|---|---|---|
 | any shot of the MicroObservatory setup question | 05 | elevation 1268 m from the header, no "elevation approximate" | RESHOOT if one exists |
 | all others | | nothing of this in view | reuse |
+
+## Fable re-review fixes (#104, #107, #108, #78, #68: N1-N4 and nits)
+
+Text only: the whiteness guard's words (faint stars that moved, resampled frames), the stacks' read-noise wording
+(*… units per stack of 4 frames (from the darks, added up over the 4 frames) …*), *… or more (no upper bound)*
+instead of *inf*, a Log line when a pre-2.4.0 series' Pixel size 13.6 µm is changed to 6.8 µm over current
+MicroObservatory frames, and new or reworded chapter 23 rows (same-name variants, the lower-limit note). No number
+changes; the gain of the WASP-50 night is the same (39.27 e- per image unit, 24 pairs, none dropped).
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any shot of the Log or the Photon noise line of a stacked run on darks | 08 | the read-noise wording | RESHOOT if the line is in view |
+| any shot of the Input page Optics box after opening a pre-2.4.0 MicroObservatory series | 05 | Pixel size 6.8 (was 13.6) and the new Log line | RESHOOT if one exists |
+| any shot of the Findings panel with a same-name or same-star check message | 23 | the "what to do" line now matches the before-solve and combined variants | CHECK when retaken |
+| all others | | nothing of these fixes in view | reuse |

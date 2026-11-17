@@ -468,9 +468,13 @@ other capture programs), that is used. When they don't (MicroObservatory frames,
    cancels. Half the variance of the difference is then the sky's photon noise plus the read noise. As a check that
    what is left really is plain noise, SHOBS-P compares that variance with the one from differences of neighbouring
    pixels: for plain noise the two agree, while a passing cloud, moonlight or other structure the background missed
-   adds to the first and hardly to the second. A pair where the first is more than 5 % larger is dropped, and the
-   log says how many were (*"3 pairs dropped: the sky had structure the background model missed, e.g. cloud or
-   moonlight"*). This check is Mike Fitzgerald's too.
+   adds to the first and hardly to the second. Stars too faint to be masked that moved between the two frames (a
+   crowded field that drifts) do the same. A pair where the first is more than 5 % larger is dropped, and the log
+   says how many were (*"3 pairs dropped: the sky had structure the background model missed (cloud, moonlight, or
+   faint stars that moved between the frames)"*). Frames that other software aligned or registered before SHOBS-P
+   have been resampled, which makes neighbouring pixels alike, so nearly every pair is dropped even on a clear night;
+   when most pairs are dropped the line says the frames may be resampled or the field very crowded. This check is
+   Mike Fitzgerald's too.
 4. The read noise comes from two raw darks at the lights' exposure in the **Dark** folder: their difference holds
    exactly the noise the lights carry without light (read noise plus the dark current's noise). Without such darks,
    two bias frames give the read noise alone (the gain then comes out a little low, the safe side). Without either,
@@ -522,11 +526,17 @@ one to the next by more than the sky's noise (thin clouds, a moving gradient, po
 of a single frame. When you run photometry on stacks (the Stack step), the gain is therefore measured on the single
 frames that went into the stacks, calibrated as single frames, just as the night's own run measures it; the line then
 ends *"…, measured on the single frames that went into the stacks (a stack is their sum: the same gain)"*. If those
-frames cannot give it (moved, or no usable pairs), it is measured on the stacks themselves, read as they are, with
-the darks' read + dark noise times the number of frames in a stack (*"… from the darks x 4 for the stacks …, measured
-on the stacks themselves"*). If neither works, the one-frame lower limit is used and the line says why for both.
+frames cannot be read (moved or deleted), it is measured on the stacks themselves, read as they are, with the darks'
+read + dark noise added up over the frames in a stack (*"… read + dark noise 2.31 units per stack of 4 frames (from
+the darks, added up over the 4 frames), about 45.4 e- per camera pixel in a single frame …, measured on the stacks
+themselves"*: the units figure is already the stack's, the electrons figure a single frame's). This needs stacks that
+say they hold the sum of their frames (SHOBS-P's own do). If the frames were read but the night's sky could not give
+the gain (too faint against the read noise, for example), the stacks, which hold the same sky, are not tried: the
+one-frame lower limit is used, and the reason starts *"on the single frames that went into the stacks, …"*. If neither
+works, the one-frame lower limit is used and the line says why for both.
 
-The measurement takes a second or two on small frames and a few seconds on 26-megapixel frames; the log says
+The measurement takes about 5 seconds on a MicroObservatory night (24 frame pairs) and about as long on 26-megapixel
+frames (12 pairs, a central part of each frame), on a fast desktop computer; the log says
 *"Measuring the gain from the night's sky (24 frame pairs)…"* when it starts. It runs at the start
 of the run (the busy bar says **Photometry on … lights…** meanwhile), on a sample of frames, never as an extra pass
 over the whole night. Frames it has to read whole (XISF, compressed FITS, stacks) get at most 12 pairs, as do frames

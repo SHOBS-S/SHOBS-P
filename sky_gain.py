@@ -247,28 +247,39 @@ def prep_frame(img: np.ndarray, sat: float | None = None) -> dict:
     return {"resid": resid, "mask": mask, "level": level, "masked": float(mask.mean()), "rms": rms}
 
 
-def pair_stats(a: dict, b: dict) -> tuple:
-    """Two prepared neighbouring frames -> (sky level S, var(difference) / 2) in image units; NaN when unusable."""
+def _pair_diff(a: dict, b: dict):
+    """(sky level S, the residuals' difference) of two prepared frames; (NaN, None) when the pair is unusable (other
+    shapes, no sky level, or a sky level that jumped by more than MAX_LEVEL_STEP between them)."""
     nan = float("nan")
     if a["resid"].shape != b["resid"].shape:
-        return nan, nan
+        return nan, None
     sa, sb = a["level"], b["level"]
     if not (math.isfinite(sa) and math.isfinite(sb)) or sa <= 0 or sb <= 0:
-        return nan, nan
+        return nan, None
     if abs(sa - sb) / max(sa, sb) > MAX_LEVEL_STEP:
-        return nan, nan
-    d = a["resid"] - b["resid"]   # NaN where either is masked
-    v = clipped_var(d)
-    return 0.5 * (sa + sb), 0.5 * v
+        return nan, None
+    return 0.5 * (sa + sb), a["resid"] - b["resid"]   # NaN where either is masked
 
 
-def whiteness(a: dict, b: dict) -> float:
+def pair_stats(a: dict, b: dict) -> tuple:
+    """Two prepared neighbouring frames -> (sky level S, var(difference) / 2) in image units; NaN when unusable."""
+    s, d = _pair_diff(a, b)
+    if d is None:
+        return s, float("nan")
+    return s, 0.5 * clipped_var(d)
+
+
+def whiteness(a: dict, b: dict, d: np.ndarray | None = None, v: float | None = None) -> float:
     """Mike Fitzgerald's whiteness ratio of a prepared pair: var(difference) / (var(neighbouring-pixel differences) / 2),
-    the smaller of x and y (masks OR'd for both pixels; sigma-clipped). About 1 for white noise; NaN when unusable."""
-    if a["resid"].shape != b["resid"].shape:
-        return float("nan")
-    d = a["resid"] - b["resid"]   # NaN where either is masked, so a neighbour difference is NaN when either is
-    v = clipped_var(d)
+    the smaller of x and y (masks OR'd for both pixels; sigma-clipped). About 1 for white noise; NaN when unusable.
+    d, v: the pair's difference and its clipped variance when already worked out (pair_measure), so they are not
+    worked out twice."""
+    if d is None:
+        if a["resid"].shape != b["resid"].shape:
+            return float("nan")
+        d = a["resid"] - b["resid"]   # NaN where either is masked, so a neighbour difference is NaN when either is
+    if v is None:
+        v = clipped_var(d)
     vx, vy = clipped_var(d[:, 1:] - d[:, :-1]), clipped_var(d[1:, :] - d[:-1, :])
     ratios = [v / (n / 2.0) for n in (vx, vy) if math.isfinite(n) and n > 0]
     if not ratios or not math.isfinite(v):
@@ -276,9 +287,53 @@ def whiteness(a: dict, b: dict) -> float:
     return float(min(ratios))
 
 
-def structure_words(n: int) -> str:
-    return (f"{n} pair{'s' if n != 1 else ''} dropped: the sky had structure the background model missed, e.g. cloud "
-            "or moonlight")
+def pair_measure(a: dict, b: dict) -> tuple:
+    """pair_stats and, for a usable pair, whiteness in one go (the difference and its variance worked out once):
+    (S, var(difference) / 2, whiteness ratio); NaN where unusable."""
+    nan = float("nan")
+    s, d = _pair_diff(a, b)
+    if d is None:
+        return s, nan, nan
+    v = clipped_var(d)
+    if not (math.isfinite(s) and math.isfinite(v)):
+        return s, 0.5 * v, nan
+    return s, 0.5 * v, whiteness(a, b, d, v)
+
+
+def structure_words(n: int, most: bool = False) -> str:
+    """The whiteness guard's words. Fable re-review N2: besides cloud and moonlight, faint stars below the source
+    mask that moved between the two frames (a crowded field that drifts) raise the ratio too; and frames resampled
+    by other software (aligned or registered before SHOBS-P) have neighbouring pixels alike, so nearly every pair is
+    dropped even on a clear night (most=True: most of the pairs were dropped)."""
+    text = (f"{n} pair{'s' if n != 1 else ''} dropped: the sky had structure the background model missed (cloud, "
+            "moonlight, or faint stars that moved between the frames)")
+    if most:
+        text += (". With most pairs dropped, the frames may have been resampled (aligned or registered by other "
+                 "software, which makes neighbouring pixels alike), or the field is very crowded")
+    return text
+
+
+def range_words(lo, hi) -> str:
+    """'38.8-39.4' for a gain range; '38.8 or more (no upper bound)' when the read noise's own error reaches the
+    sky's noise on the pairs (the upper end is then infinite); '' when the lower end is not known either."""
+    try:
+        lo, hi = float(lo), float(hi)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(lo):
+        return ""
+    return f"{lo:.3g}-{hi:.3g}" if math.isfinite(hi) else f"{lo:.3g} or more (no upper bound)"
+
+
+def floor_text(rn: float, src: str, stack_n: int = 0) -> str:
+    """'read + dark noise 1.16 units from the darks'; on stacks the figure is already the stack's (the darks'
+    noise x the frames per stack), so it says so: '... 21.9 units per stack of 4 frames (from the darks, added up
+    over the 4 frames)'."""
+    n = int(stack_n or 0)
+    if n > 1:
+        return (f"{floor_words(src)} {rn:.3g} units per stack of {n} frames "
+                f"({floor_from_words(src)}, added up over the {n} frames)")
+    return f"{floor_words(src)} {rn:.3g} units {floor_from_words(src)}".rstrip()
 
 
 def floor_from_pair(f1: np.ndarray, f2: np.ndarray, with_err: bool = False):
@@ -368,7 +423,7 @@ def night_gain(levels, variances, floor_var: float | None = None, floor_source: 
     if S.size < MIN_PAIRS:
         out["why"] = f"only {S.size} usable frame pair{'s' if S.size != 1 else ''}"
         if dropped_structure:
-            out["why"] += f" ({structure_words(int(dropped_structure))})"
+            out["why"] += f" ({structure_words(int(dropped_structure), int(dropped_structure) > S.size)})"
         return out
     fl = float(floor_var) if floor_var is not None and math.isfinite(float(floor_var)) and floor_var >= 0 else None
     src = floor_source if fl is not None else ""
@@ -400,6 +455,8 @@ def night_gain(levels, variances, floor_var: float | None = None, floor_source: 
         d_hi = vu - fl - fe
         g_hi = np.where(d_hi > 0, Su / np.where(d_hi > 0, d_hi, 1.0), np.inf)
     lo, hi = float(np.percentile(g_lo, 16)), float(np.percentile(g_hi, 84))
+    if math.isnan(hi) and np.isinf(g_hi).any():
+        hi = float("inf")   # re-review nit: no upper bound (the percentile of infinities is NaN), said as such
     k_err = nan
     if src == "ptc" and math.isfinite(ptc.get("g_err", nan)):
         k_err = float(ptc["g_err"])                 # review N5: the photon-transfer line's own error
@@ -413,7 +470,8 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
                   max_pairs: int = MAX_PAIRS, skip=None, floor_err: float | None = None) -> dict:
     """The night's gain from up to max_pairs neighbouring pairs of `paths` (in time order). load(path) -> the
     calibrated image window (raises on a frame it cannot read). skip: paths never used (bad frames). Each frame is
-    read and prepared once. Returns night_gain's dict plus "pairs_tried"."""
+    read and prepared once. Returns night_gain's dict plus "pairs_tried" and "pairs_read" (pairs whose two frames
+    could be read)."""
     skip = set(skip or ())
     use = [p for p in paths if p not in skip]
     pairs = pick_pairs(len(use), max_pairs)
@@ -428,7 +486,7 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
         return cache[i]
 
     S, V = [], []
-    dropped = 0
+    dropped = read = 0
     for n, (i, j) in enumerate(pairs):
         a, b = prepared(i), prepared(j)
         cache.pop(i, None)   # pairs go forward in time: frame i is not needed again
@@ -436,9 +494,9 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
             cache.pop(j, None)   # review nit: nor is j when the next pair does not start at it
         if a is None or b is None:
             continue
-        s, v = pair_stats(a, b)
+        read += 1
+        s, v, r = pair_measure(a, b)   # review nit: the difference and its variance worked out once
         if math.isfinite(s) and math.isfinite(v):
-            r = whiteness(a, b)
             if math.isfinite(r) and r > WHITE_MAX:   # Mike Fitzgerald's whiteness guard
                 dropped += 1
                 continue
@@ -446,6 +504,7 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
             V.append(v)
     out = night_gain(S, V, floor_var, floor_source, floor_err, dropped)
     out["pairs_tried"] = len(pairs)
+    out["pairs_read"] = read   # re-review nit: pairs whose two frames could be read (the rest: files unreadable)
     return out
 
 
@@ -481,20 +540,21 @@ def summary(meas: dict) -> str:
     n = meas["n_pairs"]
     rn = math.sqrt(meas["floor_var"]) if math.isfinite(meas.get("floor_var", float("nan"))) else float("nan")
     k_err = meas.get("k_err")
+    stack_n = int(meas.get("stack_n") or 0)
+    floor = floor_text(rn, meas.get("floor_source", ""), stack_n)
     if meas.get("floor_source") == "ptc" and k_err is not None and math.isfinite(k_err):
         # review N5: the photon-transfer floor's gain error is the honest spread
-        text = (f"{k:.3g} +/- {k_err:.2g} electrons per image unit (from {n} frame pairs; "
-                f"{floor_words(meas['floor_source'])} {rn:.3g} units {floor_from_words(meas['floor_source'])}")
+        text = f"{k:.3g} +/- {k_err:.2g} electrons per image unit (from {n} frame pairs; {floor}"
     else:
-        text = (f"{k:.3g} electrons per image unit (from {n} frame pairs, {meas['k_lo']:.3g}-{meas['k_hi']:.3g}; "
-                f"{floor_words(meas['floor_source'])} {rn:.3g} units {floor_from_words(meas['floor_source'])}")
+        rng = range_words(meas.get("k_lo"), meas.get("k_hi"))   # re-review nit: never "38.8-inf"
+        text = f"{k:.3g} electrons per image unit (from {n} frame pairs{', ' + rng if rng else ''}; {floor}"
     rn_e = meas.get("rn_e")
     if rn_e is not None and math.isfinite(rn_e):
-        text += f", about {rn_e:.3g} e- per camera pixel"
-    if meas.get("stack_n"):
-        text += f" x {int(meas['stack_n'])} for the stacks"
+        # re-review nit: on stacks the units figure is the stack's already; this one is a single frame's
+        text += f", about {rn_e:.3g} e- per camera pixel" + (" in a single frame" if stack_n > 1 else "")
     if meas.get("dropped_structure"):
-        text += f"; {structure_words(int(meas['dropped_structure']))}"
+        d = int(meas["dropped_structure"])
+        text += f"; {structure_words(d, d > n)}"
     text += ")"
     basis = basis_words(meas)
     if basis:

@@ -3737,15 +3737,16 @@ def sky_meas_words(pn: dict | None) -> str:
         if m.get("floor_source") == "ptc" and m.get("k_err"):   # Fable review N5: the line's own gain error
             parts.append(f"from {m['pairs']} frame pairs, +/- {m['k_err']:.2g}")
         else:
-            parts.append(f"from {m['pairs']} frame pairs" + (f", {m['k_lo']:.3g}-{m['k_hi']:.3g}"
-                                                            if m.get("k_lo") and m.get("k_hi") else ""))
-    if m.get("floor") is not None:
-        parts.append(f"{sg.floor_words(m.get('floor_source', ''))} {math.sqrt(m['floor']):.3g} units "
-                     f"{sg.floor_from_words(m.get('floor_source', ''))}".rstrip())
+            # re-review nit: an infinite upper end is stored as None ("... or more (no upper bound)")
+            rng = sg.range_words(m.get("k_lo"), m["k_hi"] if m.get("k_hi") is not None else float("inf")) \
+                if m.get("k_lo") else ""
+            parts.append(f"from {m['pairs']} frame pairs" + (f", {rng}" if rng else ""))
+    if m.get("floor") is not None:   # re-review nit: on stacks, the stack's figure, said as such
+        parts.append(sg.floor_text(math.sqrt(m["floor"]), m.get("floor_source", ""), int(m.get("stack_n") or 0)))
     if m.get("basis"):   # a stacked run: on the frames that went into the stacks, or on the stacks
         parts.append(sg.basis_words({"basis": m["basis"]}))
     if m.get("dropped"):   # Mike Fitzgerald's whiteness guard
-        parts.append(sg.structure_words(int(m["dropped"])))
+        parts.append(sg.structure_words(int(m["dropped"]), int(m["dropped"]) > int(m.get("pairs") or 0)))
     if m.get("ptc_g"):
         parts.append(f"photon-transfer check {m['ptc_g']:.3g} +/- {m.get('ptc_g_err') or 0:.2g}")
     parts.append("method: " + sg.METHOD_WORDS)
