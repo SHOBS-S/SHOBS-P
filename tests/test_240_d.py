@@ -249,6 +249,11 @@ class TestApp(unittest.TestCase):
         self._job("Testing apertures…", ["⚠ same", "⚠ same"])
         self.assertEqual(self.app.status.get(), "⚠ same")
 
+    def test_result_files_count_a_repeat_once(self):
+        """John, 17 Nov: the findings that travel with a result (settings file, report note) count a repeat once."""
+        self._job("Testing apertures…", ["⚠ same", "⚠ same", "⚠ other"])
+        self.assertEqual(self.app.last_job_findings, ["⚠ same", "⚠ other"])
+
     def test_status_line_is_a_link_only_for_a_finding(self):
         """(review N5)"""
         app = self.app

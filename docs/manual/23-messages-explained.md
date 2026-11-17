@@ -27,7 +27,7 @@ SHOBS-P talks to you in five places:
 - **No sign**: a plain note. It is there for the record; nothing needs doing.
 
 A photometry run's ⚠ and ✖ lines travel with the result. The settings file saved beside a report lists them under
-*Findings from the photometry run …*, and the report's notes say how many there were (for example *2 findings from
+*Findings from the photometry run …* (from 2.4.0 a line that came up more than once in the run is listed once), and the report's notes say how many there were (for example *2 findings from
 the run, see the settings file*; in a Variables AAVSO report the comma becomes a semicolon), so whoever reads the report later sees them too. A
 report that covers several nights carries that note only on the rows of the night the run reduced; the other nights' rows
 leave it out.

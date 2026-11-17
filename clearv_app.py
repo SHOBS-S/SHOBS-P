@@ -1864,7 +1864,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._job_close_pending = False
         found = getattr(self, "_job_findings", None) or []
         self._job_findings = None
-        self.last_job_findings = [t for _lv, t in found]
+        # 2.4.0 (#102, John 17 Nov): the same line twice is one finding in the result files too (settings file list,
+        # report note count), as on the status line and the Findings panel
+        self.last_job_findings = list(dict.fromkeys(t for _lv, t in found))
         summary = self._job_summary(found)
         if summary and len(dict.fromkeys(found)) > 1:
             self.log(summary, finding=False)   # 2.4.0 (#102): the count line is not a finding of its own
