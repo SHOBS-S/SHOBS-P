@@ -160,7 +160,8 @@ says *⚠ N things need a look (click to see them)*, to open the **Findings** wi
 
 Running a step again replaces that step's findings from last time, so the list is always about your latest runs; a
 clean rerun clears them. A step you cancel leaves nothing on the list; a step stopped by an error leaves only its ✖,
-which says why it stopped. Plain notes never go on it: only
+which says why it stopped. **New reduction** (Input page) empties the list, as it clears the rest of the
+last star's work. Plain notes never go on it: only
 things that need a look, and probably an action. The log still keeps every line (chapter 22).
 
 ![The Findings window after a photometry run](img/03-findings.png)

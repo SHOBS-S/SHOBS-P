@@ -5117,6 +5117,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
         self.run_findings = []   # 2.3.6 (#79 item 2): findings belong to the run that raised them
+        try:   # 2.4.0 (#102, John 17 Nov): a new reduction starts with an empty Findings list
+            self.findings.clear()
+        except Exception:
+            pass
         # 2.2.21 (nit h): the last run's "Photometry done in 2:08. 240 points." (or field scan / aperture test) line on
         # the Photometry page belongs to the old star. The Calibrate page's preview line stays: the frames stay.
         if hasattr(self, "progress_text"):

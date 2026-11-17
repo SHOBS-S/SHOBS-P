@@ -267,6 +267,18 @@ class TestApp(unittest.TestCase):
         self.assertNotIn("[WARN] ⚠ 2 things need a look", text)
         self.assertIn("⚠ 2 things need a look", text)
 
+    def test_new_reduction_clears_the_list(self):
+        """John, 17 Nov: New reduction starts with an empty Findings list."""
+        from unittest import mock
+        app = self.app
+        app.log("⚠ left from the last star")
+        self.assertEqual(len(app.findings), 1)
+        with mock.patch.object(self.ca.messagebox, "askyesno", return_value=True):
+            self.assertTrue(app.new_reduction())
+        app.update()
+        self.assertEqual(len(app.findings), 0)
+        self.assertEqual(app.findings_var.get(), "")
+
     def test_log_file_tags(self):
         app = self.app
         app.log("plain note line")

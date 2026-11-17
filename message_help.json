@@ -150,7 +150,7 @@
    "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
-   "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own)."
+   "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
   },
   {
    "section": "Input",
