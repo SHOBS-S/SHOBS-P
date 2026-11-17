@@ -99,3 +99,13 @@ values typed over after the lookup. The NEB check of a same-star report with no 
 | img/08-photometry-solved.jpg | 08 | only if shot within the few seconds after Calibrate: the status strip's busy bar would show *Checking the night's drift…* | CHECK when retaken for #78: shoot after the bar has gone |
 | any shot of the status strip right after Calibrate | 07, 08 | the busy bar may show the drift words | CHECK, reshoot if the words are in view |
 | all others | | nothing of these fixes in view (text-file rows, boxes that need a deliberate mistake) | reuse |
+
+## #106 (the boxes' rounding no longer drops a looked-up error)
+
+The a/R* and b priors now use the lookup's published uncertainty when the catalog value has more decimals than the
+Input page box shows. Only fits of such planets can move (priors only); the boxes and pages look the same.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/17-transit-fit-page.png, img/17-flip-step.png, img/17-trim.png, img/17-refit-needed.png | 17 | only if that planet's catalog a/R\*, b or Rp/R\* has more decimals than the box: the fit's numbers and the notes' *Priors* line may move | CHECK when retaken: compare the Priors line with step 2's; RESHOOT if any number changed |
+| all others | | nothing of #106 in view | reuse |

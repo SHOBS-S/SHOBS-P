@@ -385,6 +385,29 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+# 2.4.0 (#106): the Input page's planet boxes: key -> (variable, digits shown, scale from the stored value)
+PLANET_BOX_FORMATS = {"period": ("pl_period", "{:.8f}", 1.0), "t0": ("pl_t0", "{:.6f}", 1.0),
+                      "t14": ("pl_t14", "{:.4f}", 24.0), "depth": ("pl_depth", "{:.4f}", 100.0),
+                      "k": ("pl_k", "{:.5f}", 1.0), "a_rs": ("pl_a_rs", "{:.3f}", 1.0), "b": ("pl_b", "{:.3f}", 1.0),
+                      "teff": ("pl_teff", "{:.0f}", 1.0)}
+
+
+def box_shows(key: str, looked_up, value) -> bool:
+    """2.4.0 (#106): True when `value` (read back from its Input page box, in stored units) is the looked-up value as
+    that box shows it (PLANET_BOX_FORMATS' digits), i.e. not typed over. False when either is missing."""
+    if looked_up is None or value is None:
+        return False
+    _var, fmt, scale = PLANET_BOX_FORMATS[key]
+    try:
+        shown = float(fmt.format(float(looked_up) * scale))
+        v = float(value) * scale
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(shown) and math.isfinite(v)):
+        return False
+    return abs(shown - v) <= 1e-9 * max(abs(shown), 1.0)
+
+
 SERIES_DRIFT_COVER = 0.95   # Fable N4: the loaded series stands for the night's drift when it covers this share of the lights
 CHECK_NAME_APART_ARCSEC = 10.0   # Fable N7: the same name on markers this far apart is two stars sharing a name
 CHECK_NAME_APART_PX = 10.0       # (the same without a plate solution)
@@ -4983,14 +5006,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         def put(var, value, fmt):
             var.set(fmt.format(value) if isinstance(value, (int, float)) and math.isfinite(value) else "")
         self.planet_name.set(p.get("name") or self.planet_name.get())
-        put(self.pl_period, p.get("period"), "{:.8f}")
-        put(self.pl_t0, p.get("t0"), "{:.6f}")
-        put(self.pl_t14, (p.get("t14") or float("nan")) * 24, "{:.4f}")
-        put(self.pl_depth, (p.get("depth") or float("nan")) * 100, "{:.4f}")
-        put(self.pl_k, p.get("k"), "{:.5f}")
-        put(self.pl_a_rs, p.get("a_rs"), "{:.3f}")
-        put(self.pl_b, p.get("b"), "{:.3f}")
-        put(self.pl_teff, p.get("teff"), "{:.0f}")
+        for key, (var, fmt, scale) in PLANET_BOX_FORMATS.items():
+            put(getattr(self, var), (p.get(key) or float("nan")) * scale if scale != 1.0 else p.get(key), fmt)
 
     def planet_from_fields(self) -> dict | None:
         """The planet as typed on the Input page; uncertainties come from the last lookup when a value is unchanged."""
@@ -5015,35 +5032,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)
         p["depth"] = depth / 100.0 if depth else None
+        # 2.4.0 (#106): a box holds the lookup's value when it reads as _planet_to_fields wrote it (box_shows): the
+        # boxes round (a/R* and b to 3 decimals), and that rounding is not typing. Before, a looked-up a/R* of 8.7312
+        # (shown 8.731) lost its error and the fit's prior fell to its floor; a typed value still loses it.
         from_lookup = [v for v in (info.get("depth"), info.get("depth_listed")) if v]
-        if p["depth"] and not any(abs(v - p["depth"]) <= 1e-4 * max(v, 1e-6) for v in from_lookup):
+        if p["depth"] and not any(box_shows("depth", v, p["depth"]) for v in from_lookup):
             p["depth_typed"] = True   # 2.2.13: not the lookup's value; the depth note must not call it the Archive's
-        if info.get("a_rs_derived") and p["a_rs"] is not None and info.get("a_rs") is not None \
-                and abs(info["a_rs"] - p["a_rs"]) <= 1e-3 * max(abs(info["a_rs"]), 1.0):
+        if info.get("a_rs_derived") and box_shows("a_rs", info.get("a_rs"), p["a_rs"]):
             p["a_rs_derived"] = True
         for key, err in (("period", "period_err"), ("t0", "t0_err"), ("a_rs", "a_rs_err"), ("b", "b_err"),
                          ("k", "k_err")):
-            old = info.get(key)
-            if old is not None and p.get(key) is not None and abs(old - p[key]) <= 1e-6 * max(abs(old), 1.0):
+            if box_shows(key, info.get(key), p.get(key)):
                 p[err] = info.get(err)
         if info.get("looked_up") or info.get("from_cache"):
             # Fable nit (#93): the values typed over after the lookup, so the fit inputs' lookup line does not call
             # them all the lookup's ("(live)")
-            typed = []
-            # compared as the boxes show the lookup's values (_planet_to_fields' digits), so rounding is not typing
-            for key, label, fmt, scale in (("period", "period", "{:.8f}", 1.0), ("t0", "t0", "{:.6f}", 1.0),
-                                           ("a_rs", "a/R*", "{:.3f}", 1.0), ("b", "b", "{:.3f}", 1.0),
-                                           ("k", "Rp/R*", "{:.5f}", 1.0), ("teff", "Teff", "{:.0f}", 1.0),
-                                           ("t14", "T14", "{:.4f}", 24.0)):
-                old, new = info.get(key), p.get(key)
-                if new is None:
-                    continue
-                try:
-                    shown = float(fmt.format(float(old) * scale)) if old is not None else None
-                except (TypeError, ValueError):
-                    shown = None
-                if shown is None or abs(shown - new * scale) > 1e-9 * max(abs(shown), 1.0):
-                    typed.append(label)
+            typed = [label for key, label in (("period", "period"), ("t0", "t0"), ("a_rs", "a/R*"), ("b", "b"),
+                                              ("k", "Rp/R*"), ("teff", "Teff"), ("t14", "T14"))
+                     if p.get(key) is not None and not box_shows(key, info.get(key), p.get(key))]
             if p.get("depth_typed"):
                 typed.append("depth")
             if typed:

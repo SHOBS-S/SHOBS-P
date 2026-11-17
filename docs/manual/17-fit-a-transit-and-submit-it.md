@@ -144,6 +144,11 @@ figures. Its columns are:
   the published value (else the MCMC's), b more than 0.3 from it, or an error on a/R\* larger than half of it. A wide
   error on b alone is normal (b and a/R\* trade off on one night's light curve) and is not flagged.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
+  The priors on a/R\* and b use the lookup's published uncertainties (at least 3 % of a/R\* and 0.04 in b). The
+  Input page boxes show a/R\* and b to 3 decimals and Rp/R\* to 5; that rounding does not count as a change, so the
+  lookup's uncertainties are kept (from 2.4.0; before, an a/R\* of 8.7312 shown as 8.731 lost its uncertainty and the
+  prior fell to the minimum width). A value you type yourself has no published uncertainty, so its prior uses the
+  minimum width.
   On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.
 

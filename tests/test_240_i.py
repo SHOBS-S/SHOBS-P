@@ -1,7 +1,8 @@
 """2.4.0 step 3, Fable review fixes: N2 (the drift read shows the busy bar and keeps the previous suggestions), N3 (a
 drift check that fails is said), N4 (a partial or differently binned series is not taken for the night's drift), N7
 (the same name on two stars clearly apart), and the nits (fit inputs never cost the settings file, typed-over values
-named on the lookup line, the NEB check of a same-star report without RA/Dec, the series drift labels cached)."""
+named on the lookup line, the NEB check of a same-star report without RA/Dec, the series drift labels cached), and
+#106 (the boxes' rounding no longer drops a looked-up error from the fit's priors)."""
 import os
 import sys
 import tempfile
@@ -284,6 +285,48 @@ class TestNits(unittest.TestCase):
         line = [x for x in tc.fit_inputs_lines({"planet": p}) if x.startswith("Fit input lookup")][0]
         self.assertEqual(line, "Fit input lookup: 15 Nov 2026 14:03 UTC (live); typed over on the Input page "
                                "after it: period, b")
+
+    def test_box_rounding_keeps_the_lookup_errors(self):
+        """#106: a/R* and b are shown to 3 decimals, Rp/R* to 5: that rounding is not typing, so the looked-up errors
+        reach the fit's priors; a typed value still drops its error."""
+        import transit_core as tc
+        info = {"name": "HD 189733 b", "host": "HD 189733", "period": 2.218575671, "period_err": 2e-8,
+                "t0": 2458334.9908991, "t0_err": 0.00007, "a_rs": 8.7312, "a_rs_err": 0.25, "b": 0.0835,
+                "b_err": 0.07, "k": 0.149183, "k_err": 0.0012, "depth": 0.149183 ** 2, "teff": 5050.0,
+                "t14": 0.07527, "source": "NASA Exoplanet Archive", "looked_up": "17 Nov 2026 20:00 UTC"}
+        self.app.planet_info = dict(info)
+        self.app._planet_to_fields(info)
+        self.assertEqual(self.app.pl_a_rs.get(), "8.731")   # shown rounded
+        p = self.app.planet_from_fields()
+        for key in ("period_err", "t0_err", "a_rs_err", "b_err", "k_err"):
+            self.assertEqual(p.get(key), info[key], key)
+        self.assertNotIn("depth_typed", p)
+        self.assertNotIn("typed_over", p)
+        pri = tc.prepare_priors(p)
+        self.assertAlmostEqual(pri["b"][1], 0.07)                     # the catalog's, not the 0.04 floor
+        self.assertAlmostEqual(pri["a_rs"][1], max(0.25, 0.03 * 8.731))   # 0.25 is under the 3 % floor here
+        self.app.planet_info = dict(info, a_rs_err=0.4)
+        pri = tc.prepare_priors(self.app.planet_from_fields())
+        self.assertAlmostEqual(pri["a_rs"][1], 0.4)                   # a wider catalog error is used
+        # a typed value still drops its error (and the prior falls back to the floor)
+        self.app.planet_info = dict(info)
+        self.app.pl_b.set("0.120")
+        p = self.app.planet_from_fields()
+        self.assertIsNone(p.get("b_err"))
+        self.assertAlmostEqual(tc.prepare_priors(p)["b"][1], 0.04)
+        self.assertEqual(p.get("a_rs_err"), 0.25)
+        self.assertEqual(p["typed_over"], ["b"])
+
+    def test_small_depth_is_not_called_typed(self):
+        """#106: a depth under 0.5 % lost the 2.2.13 'not typed' test to the box's 4 decimals (in %)."""
+        info = {"name": "X b", "host": "X", "period": 3.1, "depth": 0.001234567, "source": "NASA Exoplanet Archive",
+                "looked_up": "17 Nov 2026 20:00 UTC"}
+        self.app.planet_info = dict(info)
+        self.app._planet_to_fields(info)
+        self.assertEqual(self.app.pl_depth.get(), "0.1235")
+        self.assertNotIn("depth_typed", self.app.planet_from_fields())
+        self.app.pl_depth.set("0.13")
+        self.assertTrue(self.app.planet_from_fields().get("depth_typed"))
 
     def test_fit_inputs_never_cost_the_settings_file(self):
         import transit_ui as tu
