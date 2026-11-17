@@ -72,7 +72,9 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
   columns, and the step is in the NOTES,
 - one line of reduction settings, starting `SHOBS-P settings:` (aperture, comps, check, frames left out, trimmed
   frames, detrending, gain, calibration, and, for stacked points, `points are stacks of 40 frames (effective exposure
-  30 s)`),
+  30 s)`). The gain part says which gain was used: `Gain 0.255 e-/ADU (header EGAIN)`, `Gain measured from the
+  night's sky, 39.3 e- per image unit` (2.4.0), or `Gain from the sky's own noise, a lower limit of 28.7 e- per image
+  unit`,
 - a parameter limited by its prior range (chapter 17, "The corner plot").
 
 ### The settings file and the field image
@@ -82,7 +84,9 @@ Beside the report, SHOBS-P writes:
 - `…_settings.txt`: the full settings of the reduction, one per line: **Source**, **Aperture** (what the night was
   measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames skipped at photometry**,
   **Frames left out** (by flag and frame number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and
-  the dark's exposure) and the **Gain** with where it came from, **Scintillation** (on or off, with the telescope
+  the dark's exposure) and the **Gain** with where it came from (from 2.4.0, on a night with EGAIN, a **Gain check
+  from the night's sky** line follows it, and a **SHOBS-FLUX camera profile** line when FLUX has a profile for the
+  camera; see "The gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md)), **Scintillation** (on or off, with the telescope
   aperture and elevation the error bars used), **Telescope aperture box when the night was measured** (nights measured with 2.3.1 or
   later), and **Stacking** for stacked points. With it, you (or
   anyone you send it to) can reduce the night again the same way. Some rows in more detail:

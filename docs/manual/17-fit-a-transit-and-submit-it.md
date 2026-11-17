@@ -193,7 +193,12 @@ The notes under the table also say:
 - what this night was measured with, for example *"Measured with r 8, sky 14–22 px (Bin 1)."*, in orange when the
   Photometry page's boxes have changed since (run photometry again to apply them);
 - the camera gain the error bars used and where it came from, for example *"Gain 0.25 e-/ADU (header EGAIN)."* When
-  the headers have no gain, it is estimated from the sky's own noise, or 1 e-/ADU is assumed, in orange. On frames
+  the headers have no gain, it is measured from the night's sky, for example *"Gain measured from the night's sky,
+  39.3 e- per image unit (from 24 frame pairs, 38.9-39.4; read + dark noise 1.16 units from the darks; photon-transfer
+  check 37.1 +/- 2.7; method: background model and source mask, idea by Mike Fitzgerald)."* (see "The gain behind the
+  error bars" in [8. Photometry basics](08-photometry-basics.md)). When it cannot be measured, the one-frame estimate
+  is used and the note says so: *"Gain from the sky's own noise, a lower limit of 28.7 e- per image unit (no EGAIN in
+  the headers; error bars are on the safe side)."* With no estimate at all, 1 e-/ADU is assumed, in orange. On frames
   the camera binned (XBINNING above 1), SHOBS-P also works out from the sky's noise whether the camera summed or
   averaged the binned pixels, for example *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3 averaged, so 6.91 e- per
   stored ADU used (from the sky's noise)"*. See "Camera binning and the gain" in [7. Calibrate](07-calibrate.md);

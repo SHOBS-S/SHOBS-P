@@ -1261,6 +1261,10 @@ class TransitPage:
             cal += f"; dark EXPTIME {dexp:g} s"
         rep["calibration"] = cal
         rep["gain"] = meta["gain"]
+        if sky_check_line(pn):
+            rep["gain_check"] = sky_check_line(pn)   # 2.4.0 (#104)
+        if pn.get("flux_check"):
+            rep["flux_check"] = str(pn["flux_check"])   # 2.4.0 (#104)
         stack = setup.get("stack") if isinstance(setup.get("stack"), dict) else None
         if stack and int(stack.get("n") or 1) > 1:   # 2.3.0 (#54): the points are stacks of N frames
             import stack_core
@@ -1282,6 +1286,10 @@ class TransitPage:
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        if rep.get("gain_check"):
+            lines.append(rep["gain_check"])   # 2.4.0 (#104): EGAIN nights, the sky's own measurement
+        if rep.get("flux_check"):
+            lines.append(rep["flux_check"])   # 2.4.0 (#104): against the SHOBS-FLUX camera profile
         if meta.get("scint"):
             lines.append(f"Scintillation (this fit's error bars): {meta['scint']}")   # 2.3.1 (nit)
         if rep.get("aperture_mm"):
@@ -3704,6 +3712,33 @@ def frame_ranges(nums) -> str:
     return ", ".join(out)
 
 
+def sky_meas_words(pn: dict | None) -> str:
+    """2.4.0 (#104): how the night's sky measured the gain, for the settings file (ASCII): "from 24 frame pairs; read
+    + dark noise 1.16 units from the darks; method: background model and source mask, idea by Mike Fitzgerald"."""
+    m = (pn or {}).get("sky_meas") or {}
+    import sky_gain as sg
+    parts = []
+    if m.get("pairs"):
+        parts.append(f"from {m['pairs']} frame pairs" + (f", {m['k_lo']:.3g}-{m['k_hi']:.3g}"
+                                                        if m.get("k_lo") and m.get("k_hi") else ""))
+    if m.get("floor") is not None:
+        parts.append(f"{sg.floor_words(m.get('floor_source', ''))} {math.sqrt(m['floor']):.3g} units "
+                     f"{sg.floor_from_words(m.get('floor_source', ''))}".rstrip())
+    if m.get("ptc_g"):
+        parts.append(f"photon-transfer check {m['ptc_g']:.3g} +/- {m.get('ptc_g_err') or 0:.2g}")
+    parts.append("method: " + sg.METHOD_WORDS)
+    return "; ".join(parts)
+
+
+def sky_check_line(pn: dict | None) -> str:
+    """2.4.0 (#104): with EGAIN, the night's sky measurement as a settings-file line ("" when there is none)."""
+    pn = pn or {}
+    m = pn.get("sky_meas") or {}
+    if pn.get("source") != "EGAIN" or not m.get("k"):
+        return ""
+    return f"Gain check from the night's sky: {m['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
+
+
 def gain_note(pn: dict | None) -> str:
     """2.2.19 (#39): the gain the photon-noise error bars used and where it came from (photometry_core.
     photon_noise_setup: header EGAIN, else the sky's own noise, else 1 e-/ADU assumed). ASCII."""
@@ -3720,9 +3755,13 @@ def gain_note(pn: dict | None) -> str:
             return (f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN) used as is; camera bin {cb}x{cb}, summed or "
                     "averaged not known (no sky estimate)")
         return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN)"
+    if src == "sky" and pn.get("k") and pn.get("sky_method") == "measured":
+        # 2.4.0 (#104): measured from the night's sky (the NOTES keep the words before the first bracket)
+        return f"Gain measured from the night's sky, {pn['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
     if src == "sky" and pn.get("k"):
-        return (f"Gain from the sky's own noise, {pn['k']:.3g} e- per image unit (no EGAIN in the headers; a lower "
-                "limit, so error bars are on the safe side)")
+        # 2.4.0 (#104): "a lower limit" before the bracket, so a report's NOTES say which one was used
+        return (f"Gain from the sky's own noise, a lower limit of {pn['k']:.3g} e- per image unit (no EGAIN in the "
+                "headers; error bars are on the safe side)")
     if src == "assumed":
         return ("Gain 1 e-/ADU assumed (no EGAIN in the headers, no usable sky estimate): photon-noise error bars "
                 "scale as 1/sqrt(true gain); add EGAIN to the headers if the camera's gain is known")

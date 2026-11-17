@@ -17,8 +17,9 @@ To see every source SHOBS-P uses:
      the NASA Exoplanet Archive (planet values and TESS TOI status), ExoFOP, ExoClock (planet priorities) and
      VizieR.
    - **METHODS**: the published methods behind the period search, the color transformations, the transit model,
-     the MCMC sampler, the red-noise estimate, the error bars, the timing methods, the Sun's position (for the
-     approximate BJD_TDB of a report that has no site) and more.
+     the MCMC sampler, the red-noise estimate, the error bars, the gain measured from the night's sky (2.4.0; see
+     below), the timing methods, the Sun's position (for the approximate BJD_TDB of a report that has no site) and
+     more.
 
    For each source the page says what SHOBS-P uses it for and gives the reference. Sentences in quotes are the
    acknowledgements each source asks for, in its own words.
@@ -91,6 +92,14 @@ it into an APA or BibTeX reference you can copy. Reference managers such as Zote
 SHOBS-P is free software under the GNU General Public License, version 3 or later. You may use it, share it and
 change it under that license's terms. It comes with no warranty. The full text is in the **LICENSE** file in the
 program folder.
+
+## Ideas from other observers
+
+- **Gain from the night's sky** (2.4.0): fitting a smooth background, masking the stars, and taking the read noise
+  from the darks first, so the camera gain can be measured when the headers give none, is **Mike Fitzgerald's**
+  idea (EXOTIC, Exoplanet Watch), from the November 2026 discussion of Joanna Puszkarska's WASP-50 b MicroObservatory
+  night. SHOBS-P adds the difference of neighbouring frames and a photon-transfer check (Janesick 2007). See "The
+  gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md).
 
 ## How SHOBS-P was made
 
