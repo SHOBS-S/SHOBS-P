@@ -53,8 +53,9 @@ before; see nit below). NEW: 17-refit-needed.
 
 LEFT: 15-webobs-offer and NEW 09-field-image-saved: apps.aavso.org answered 500 for the AAVSO chart all session, so the
 Results row shows "Fetch AAVSO chart" instead of "Field image saved ✓"; retake once the chart comes back.
-15-no-auid: ASASSN-V J185009.93+281035.4 now has an AUID, so the No AUID line no longer appears; needs another star
-without an AUID (or keep the 2.3.6 shot with a note).
+15-no-auid: DONE later on 17 Nov. ASASSN-V J185009.93+281035.4 now has an AUID, so a new no-AUID case was used:
+Gaia DR3 929011703982360448 (VSX OID 3712278, DSCT|GDOR|SXPHE, G 13.0, no AUID), measured on the SZ Lyn 13–14 Oct
+frames (Bin 2, comp TYC 2979-1343-1, check APASS J080939.8+442221); ch 15 caption updated.
 SKIPPED (optional): 17-no-airmass: with the TOI-2046 series loaded, airmass stayed available after blanking the site
 (the series carries each night's site), so the grayed state did not show.
 

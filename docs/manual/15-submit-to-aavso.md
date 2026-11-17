@@ -64,7 +64,7 @@ and save the report again.
 The line does not appear when the star is not in VSX at all (then there is nothing to request in VSX).
 
 ![The Output page with the orange No AUID line under the Results row](img/15-no-auid.png)
-*The No AUID warning, here for ASASSN-V J185009.93+281035.4.*
+*The No AUID warning, here for Gaia DR3 929011703982360448, a δ Scuti-type star in VSX next to SZ Lyn that has no AUID yet.*
 
 ### Questions before saving
 
