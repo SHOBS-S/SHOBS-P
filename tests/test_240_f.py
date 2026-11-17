@@ -246,8 +246,10 @@ class TestSuggestionsFollowTheDrift(unittest.TestCase):
             o = core.Obs(jd=2461337.5, mag=0.0, merr=0.01, cmag=0.0, kmag=None, airmass=None, path=p, exptime=60.0,
                          flux_var=1.0, flux_comp=1.0)
             o.pos = {"t": [210.0 + dx, 150.0 + dy]}
+            o.night = "2026-10-24"
             obs.append(o)
         app = self._setup(observations=obs)
+        app.night_bin = {"2026-10-24": {"binning": 1}}   # Fable N4: measured at the page's binning
         app._drift_cache = None
         app._suggest_comps()
         self.assertFalse(app._suggest_drift_pending)   # nothing to read: the series' own frame shifts

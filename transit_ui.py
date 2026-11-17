@@ -2488,6 +2488,16 @@ class TransitPage:
             self._check_stale(auto=True)
 
     # ---- 2.2.17 (item 5): trim -------------------------------------------------------------
+    def _report_same_star(self, report=None) -> bool:
+        """Fable nit (#105): the report's planet or host has the Input page's (or the planet lookup's) name."""
+        rp = ((report if report is not None else self.report) or {}).get("planet") or {}
+        names = {_norm(rp.get("name")), _norm(rp.get("host"))} - {""}
+        app = self.app
+        info = getattr(app, "planet_info", None) or {}
+        mine = {_norm(app.planet_name.get()), _norm(app.star_id.get()), _norm(info.get("name")),
+                _norm(info.get("host"))} - {""}
+        return bool(names & mine)
+
     def _report_radec(self, report=None):
         """The report's target RA/Dec (degrees) when the Input page or the planet lookup is for the same star."""
         rp = ((report if report is not None else self.report) or {}).get("planet") or {}
@@ -3123,7 +3133,12 @@ class TransitPage:
         report (logged on failure)."""
         lines = self.settings_lines(meta, self.result)
         # 2.4.0 (#93): the fit's exact inputs at full precision (for a report's fit too, which has no other settings)
-        inputs = tc.fit_inputs_lines(self.result) if self.result else []
+        try:   # Fable nit: never costs the report (a fit-inputs line that cannot be written is left out)
+            inputs = tc.fit_inputs_lines(self.result) if self.result else []
+        except Exception as exc:
+            traceback.print_exc()
+            self.app.log(f"Fit inputs not written to the settings file ({type(exc).__name__}: {exc}).", keep_status=True)
+            inputs = []
         if not lines and not inputs:
             return ""
         if self._findings_apply():   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
@@ -3920,7 +3935,10 @@ class NebWindow:
             return
         try:
             if page.report is not None:
-                self.ra, self.dec = page._report_radec()   # the report's star = the Input page's (checked above)
+                radec = page._report_radec()   # the report's star = the Input page's (checked above)
+                if radec is None:
+                    raise ValueError("the Input page has none for it yet (press Lookup, or type them)")
+                self.ra, self.dec = radec
             else:
                 self.ra, self.dec = app.target_radec_deg(planet)
         except Exception as exc:
@@ -3973,8 +3991,9 @@ class NebWindow:
     @staticmethod
     def report_of_another_star(page) -> bool:
         """2.4.0 (#105): a report is shown on the page and SHOBS-P cannot tie its star to the Input page's (the
-        Input page and the planet lookup name another star)."""
-        return page.report is not None and page._report_radec() is None
+        Input page and the planet lookup name another star). Fable nit: a report of the Input page's star whose RA/Dec
+        is not filled in yet is the same star (it gets 'needs the target's RA/Dec', not this)."""
+        return page.report is not None and not page._report_same_star()
 
     def _target_mag(self):
         best = None

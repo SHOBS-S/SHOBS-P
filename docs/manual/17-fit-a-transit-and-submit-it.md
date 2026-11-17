@@ -348,7 +348,9 @@ The check needs a solved image and the transit depth. The depth, the target's po
 from one star. With your photometry shown they are the Input page's. With an opened report (chapter 19) shown, the
 check runs only when the report is of the Input page's star, and then uses the report's depth. For a report of
 another star, it says so and does not run (from 2.4.0; before, it mixed that report's depth with the Input page's
-star and field). Press **Close report** to check the Input page's star.
+star and field). Press **Close report** to check the Input page's star. A report of the Input page's star with no
+RA and Dec on the Input page yet gets *"The NEB check needs the target's RA/Dec: …"*: press **Lookup** (or type them)
+first.
 
 ## Per-frame or stacked points
 

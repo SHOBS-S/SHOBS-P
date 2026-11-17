@@ -385,6 +385,9 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+SERIES_DRIFT_COVER = 0.95   # Fable N4: the loaded series stands for the night's drift when it covers this share of the lights
+CHECK_NAME_APART_ARCSEC = 10.0   # Fable N7: the same name on markers this far apart is two stars sharing a name
+CHECK_NAME_APART_PX = 10.0       # (the same without a plate solution)
 CHECK_SAME_ARCSEC = 2.0     # 2.4.0 (#68): a comp within this of the check star (or with its name) is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
@@ -5023,6 +5026,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             old = info.get(key)
             if old is not None and p.get(key) is not None and abs(old - p[key]) <= 1e-6 * max(abs(old), 1.0):
                 p[err] = info.get(err)
+        if info.get("looked_up") or info.get("from_cache"):
+            # Fable nit (#93): the values typed over after the lookup, so the fit inputs' lookup line does not call
+            # them all the lookup's ("(live)")
+            typed = []
+            # compared as the boxes show the lookup's values (_planet_to_fields' digits), so rounding is not typing
+            for key, label, fmt, scale in (("period", "period", "{:.8f}", 1.0), ("t0", "t0", "{:.6f}", 1.0),
+                                           ("a_rs", "a/R*", "{:.3f}", 1.0), ("b", "b", "{:.3f}", 1.0),
+                                           ("k", "Rp/R*", "{:.5f}", 1.0), ("teff", "Teff", "{:.0f}", 1.0),
+                                           ("t14", "T14", "{:.4f}", 24.0)):
+                old, new = info.get(key), p.get(key)
+                if new is None:
+                    continue
+                try:
+                    shown = float(fmt.format(float(old) * scale)) if old is not None else None
+                except (TypeError, ValueError):
+                    shown = None
+                if shown is None or abs(shown - new * scale) > 1e-9 * max(abs(shown), 1.0):
+                    typed.append(label)
+            if p.get("depth_typed"):
+                typed.append("depth")
+            if typed:
+                p["typed_over"] = typed
         try:
             return tcore.complete_planet(p)
         except Exception:
@@ -12345,6 +12370,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.4.0 (#68): the comps that are the same star as the check star: the same name (a real catalog name, not
         "check" or "comp2"), or markers within CHECK_SAME_ARCSEC on the sky (2 px without a plate solution). Returns
         [(role, words)], e.g. ("comp2", "the same name, Gaia DR3 439068910332260352")."""
+        return [(r, w) for r, w, _kind in self._check_comp_clash_kinds()]
+
+    def _check_comp_clash_kinds(self) -> list:
+        """check_comp_clash with each clash's kind: "star" (the same star) or "name" (Fable N7: the same name on two
+        markers clearly apart, CHECK_NAME_APART_ARCSEC on the sky or CHECK_NAME_APART_PX without a solve: two
+        stars that share a name, e.g. a duplicate AAVSO label, or a marker on the wrong star)."""
         cname = self.check_name.get().strip()
         cxy = self.check_xy
         if cxy is None and placeholder_star_name(cname):
@@ -12362,37 +12393,60 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             xy = getattr(self, f"{r}_xy")
             if xy is None and not name:
                 continue
-            if name and not placeholder_star_name(name) and not placeholder_star_name(cname) \
-                    and (name_key(name) == name_key(cname) or name_core(name) == name_core(cname)):
-                out.append((r, f"the same name, {cname}"))
-                continue
-            if xy is None or cxy is None:
-                continue
             sep = None
-            if csky is not None:
+            if xy is not None and csky is not None:
                 try:
                     ra, dec = core.pixel_to_sky(xy[0], xy[1], sol)
                     sep = core.sky_separation_arcsec(csky[0], csky[1], ra, dec)
                 except Exception:
                     sep = None
-            if sep is not None and math.isfinite(sep):
+            if sep is not None and not math.isfinite(sep):
+                sep = None
+            px = math.hypot(xy[0] - cxy[0], xy[1] - cxy[1]) if xy is not None and cxy is not None else None
+            if name and not placeholder_star_name(name) and not placeholder_star_name(cname) \
+                    and (name_key(name) == name_key(cname) or name_core(name) == name_core(cname)):
+                apart = (sep >= CHECK_NAME_APART_ARCSEC) if sep is not None else (
+                    px is not None and px >= CHECK_NAME_APART_PX)
+                if apart:
+                    gap = f"{sep:.0f}\u2033 apart" if sep is not None else f"{px:.0f} px apart on the image"
+                    out.append((r, f"{cname}, but the markers are {gap}", "name"))
+                else:
+                    out.append((r, f"the same name, {cname}", "star"))
+                continue
+            if xy is None or cxy is None:
+                continue
+            if sep is not None:
                 if sep < CHECK_SAME_ARCSEC:
-                    out.append((r, f"{sep:.1f}\u2033 apart"))
-            elif math.hypot(xy[0] - cxy[0], xy[1] - cxy[1]) < 2.0:
-                out.append((r, "on the same spot of the image"))
+                    out.append((r, f"{sep:.1f}\u2033 apart", "star"))
+            elif px < 2.0:
+                out.append((r, "on the same spot of the image", "star"))
         return out
 
     def check_clash_text(self) -> str:
         """2.4.0 (#68): the plain words for a comp that is also the check star ('' when there is none)."""
-        clash = self.check_comp_clash()
-        if not clash:
+        kinds = self._check_comp_clash_kinds()
+        if not kinds:
             return ""
-        roles = " and ".join(role_label(r) for r, _ in clash)
-        why = "; ".join(f"{role_label(r)}: {w}" for r, w in clash)
-        one = len(clash) == 1
-        return (f"{roles} and the check star are the same star ({why}). The check star tests the comps, so it "
-                f"can't also be one of them. Change {'one of them' if one else 'them'}: clear the marker (\u2715 in "
-                "the Stars panel, or right-click it) and pick another star. Run photometry waits until then.")
+        parts = []
+        same = [(r, w) for r, w, k in kinds if k == "star"]
+        named = [(r, w) for r, w, k in kinds if k == "name"]
+        if same:
+            roles = " and ".join(role_label(r) for r, _ in same)
+            why = "; ".join(f"{role_label(r)}: {w}" for r, w in same)
+            one = len(same) == 1
+            parts.append(f"{roles} and the check star are the same star ({why}). The check star tests the comps, so "
+                         f"it can't also be one of them. Change {'one of them' if one else 'them'}: clear the marker "
+                         "(\u2715 in the Stars panel, or right-click it) and pick another star.")
+        if named:
+            # Fable N7: two stars clearly apart that carry one name (duplicate catalog labels exist): not the same
+            # star, but the results could not tell them apart
+            roles = " and ".join(role_label(r) for r, _ in named)
+            why = "; ".join(f"{role_label(r)}: {w}" for r, w in named)
+            parts.append(f"{roles} and the check star have the same name ({why}). They look like two different "
+                         "stars, but the results would not tell them apart. Type another name in one of the boxes "
+                         "(for example its catalog number), or, if a marker is on the wrong star, clear it and pick "
+                         "again.")
+        return " ".join(parts) + " Run photometry waits until then."
 
     def _say_check_clash(self, role: str) -> bool:
         """2.4.0 (#68): at pick time, a comp just placed on the check star (or the check on a comp) is said at once,
@@ -14111,14 +14165,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             rotating = False
         if ref_o is not None and len(obs) >= 3 and not rotating and not any(
-                getattr(o, "segment", "") == "flip" for o in obs):
+                getattr(o, "segment", "") == "flip" for o in obs) and self._series_drift_usable(obs, lights):
             tx, ty = (float(v) for v in ref_o.pos["t"])
             rest = [o for o in obs if o is not ref_o]
+            # Fable nit: kept per (frame, series), so a Stars panel refresh does not look up every frame's label again
+            memo_key = (path, (h, w), len(rest), tuple(rest[0].pos["t"]), tuple(rest[-1].pos["t"]), tx, ty)
+            memo = getattr(self, "_series_drift_memo", None)
+            if memo is not None and memo[0] == memo_key:
+                return memo[1]
             labels = core.frame_labels_for([o.path for o in rest])   # one folder look-up, not one per frame
             regs = [(lab or os.path.basename(o.path),
                      {"dx": float(o.pos["t"][0]) - tx, "dy": float(o.pos["t"][1]) - ty, "angle": 0.0,
                       "flipped": False}) for o, lab in zip(rest, labels)]
-            return {"regs": regs, "how": "series", "of": len(obs), "failed": 0}
+            out = {"regs": regs, "how": "series", "of": len(obs), "failed": 0}
+            self._series_drift_memo = (memo_key, out)
+            return out
         try:
             stamp = os.path.getmtime(path)
         except OSError:
@@ -14129,11 +14190,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if not start:
                 return None
             cache = self._drift_cache = {"key": key, "state": "loading", "result": None}
+            # Fable N2: the green busy bar and its words while the frames are read (several seconds on a big night)
+            cache["tok"] = self.busy_begin("Checking the night's drift… reading the lights")
 
             def work():
                 try:
                     res = core.frame_drift(path, others, rotating=rotating, sample=True,
-                                           cancel=lambda: getattr(self, "_drift_cache", None) is not cache)
+                                           cancel=lambda: getattr(self, "_drift_cache", None) is not cache,
+                                           progress=lambda i, n: self.call_ui(self._drift_progress, cache, i, n))
                 except Exception as exc:
                     res = {"error": f"{type(exc).__name__}: {exc}"}
                 self.call_ui(self._drift_done, cache, res)
@@ -14144,11 +14208,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         res = cache.get("result") or {}
         raw_shape = res.get("raw_shape")
         if not raw_shape or res.get("error"):
-            return dict(empty, of=len(lights), failed=len(others))
+            return dict(empty, of=len(lights), failed=len(others), why="the lights could not be read")
         f = w / float(raw_shape[1])
         if abs(h / float(raw_shape[0]) - f) > 0.02 * f:
-            return dict(empty, of=len(lights), failed=len(others))   # not the same pixel grid (a crop?)
+            # not the same pixel grid (a crop?)
+            return dict(empty, of=len(lights), failed=len(others),
+                        why="the image on the page is not the same size as the lights")
+        if res.get("why") == "few stars":
+            return dict(empty, of=len(lights), failed=len(others),
+                        why="too few stars were found on this frame to line the others up with it")
         good = [(p, reg) for p, reg in res.get("regs", []) if reg is not None]
+        if res.get("regs") and not good:
+            return dict(empty, of=len(lights), failed=len(res["regs"]),
+                        why="none of the other lights could be lined up with this frame")
         labels = core.frame_labels_for([p for p, _reg in good])
         regs = [(lab or os.path.basename(p), core.scale_registration(reg, f)) for (p, reg), lab in zip(good, labels)]
         # "every": every light was looked at (small frames), so the words need not say how many were checked
@@ -14158,11 +14230,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _drift_done(self, cache: dict, result: dict):
         """2.4.0 (#78): the drift frames are read: suggest the comps that were waiting for them, and refresh the
         marked comps' notes."""
+        self.busy_end(cache.pop("tok", None))   # Fable N2 (also for a read that was replaced by a newer one)
         if getattr(self, "_drift_cache", None) is not cache:
             return
         cache["state"], cache["result"] = "done", result
         if result.get("error"):
             log_to_file(f"Drift check: the frames could not be read ({result['error']}).")
+        # Fable N3: a check that found nothing at all is said (a plain note: the frame on the page was still checked)
+        try:
+            got = self._series_drift(start=False)
+        except Exception:
+            got = None
+        if got and not got.get("regs") and got.get("why"):
+            self.log(f"The night's drift could not be checked ({got['why']}); only this frame's edge was checked.")
         if getattr(self, "_suggest_drift_pending", False):
             self._suggest_drift_pending = False
             self._suggest_comps()
@@ -14171,6 +14251,31 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.refresh_preview()
         elif any(getattr(self, f"{r}_xy", None) is not None for r in COMP_ROLES + ("check",)):
             self.update_star_panel()
+
+    def _drift_progress(self, cache: dict, done: int, of: int):
+        """Fable N2: the busy bar's words while the drift frames are read, frame by frame."""
+        if cache.get("tok") is not None and getattr(self, "_drift_cache", None) is cache:
+            self.busy_words(cache["tok"], f"Checking the night's drift… frame {done + 1} of {of}")
+
+    def _series_drift_usable(self, obs: list, lights: list) -> bool:
+        """Fable N4: the loaded series' frame positions stand for the night's drift only when they cover nearly
+        every light (SERIES_DRIFT_COVER; not a run canceled after 10 of 200 frames) and were measured at the binning
+        of the image on the page (their pixel positions are on that grid). Otherwise the lights are read."""
+        have = {getattr(o, "path", "") for o in obs} & set(lights)
+        if len(have) < max(3, math.ceil(SERIES_DRIFT_COVER * len(set(lights)))):
+            return False
+        try:
+            page_bin = int(getattr(self, "masters_binning", None) or self.binning.get() or 1)
+        except Exception:
+            return False
+        bins = set()
+        for night in {getattr(o, "night", "") for o in obs}:
+            b = self._night_info(night).get("binning")
+            try:
+                bins.add(int(b))
+            except (TypeError, ValueError):
+                return False   # not recorded: read the lights instead
+        return bins == {page_bin}
 
     def _drift_clearance(self, xy, drift=None):
         """2.4.0 (#78): for one point on the reference frame: (closest approach to the frame edge over the night in
@@ -14191,6 +14296,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _suggest_comps(self):
         """Labeled stars within about 1 mag of the target, not variable, not saturated, not crowded at the edge."""
+        before = (self.suggested_comps, self._closest_dm, self._target_bv)   # Fable N2: kept while the drift is read
         self.suggested_comps = []
         self._closest_dm = None
         self._target_bv = None
@@ -14212,7 +14318,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         drift = self._series_drift()
         self._suggest_drift_pending = drift is None
         if drift is None:
-            return   # the drift frames are being read: _drift_done suggests then (a second or two)
+            # the drift frames are being read (a few seconds; the busy bar says so): _drift_done suggests then. Fable
+            # N2: until then the previous suggestions stay (no rings vanishing; Run photometry keeps the same spares).
+            self.suggested_comps, self._closest_dm, self._target_bv = before
+            return
         lin = self._linear_limit()
         h, w = self.preview.shape
         cands, where, star_of, edge_px, edge_at = [], {}, {}, {}, {}
@@ -23220,8 +23329,8 @@ class ExtremumWindow:
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
                      width=5).grid(row=1, column=5, sticky=W)
         ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
-        # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click (not filled by themselves: under the numbers
-        # freeze the same clicks as 2.3.0 must save the same O−C; Fable M2)
+        # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click. 2.4.0 (#65): the window now also opens
+        # with them (see below), so this button puts them back after other values were typed or looked up.
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
         self.saved_button.grid(row=1, column=7, sticky=W, padx=(6, 0))
         ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=8, sticky=W, padx=(6, 0))

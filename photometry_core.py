@@ -2973,12 +2973,15 @@ def drift_view(img: np.ndarray) -> tuple[np.ndarray, int]:
     return ndimage.median_filter(small, size=3), k
 
 
-def frame_drift(ref_path: str, paths: list, rotating: bool = False, cancel=None, sample: bool = False) -> dict:
+def frame_drift(ref_path: str, paths: list, rotating: bool = False, cancel=None, sample: bool = False,
+                progress=None) -> dict:
     """2.4.0 (#78): how the field moved from the reference frame to each of `paths`, cheaply (drift_view; no
     calibration). sample=True: only drift_sample_paths of them (drift_sample_count for this frame size). Returns
     {"raw_shape": (h, w), "regs": [(path, reg or None), ...]}, each reg in raw-frame pixels (register_frame's dx, dy,
     angle, flipped); None where a frame could not be read, had another size or could not be aligned. rotating: an
-    alt-az mount without a derotator (register_rotating)."""
+    alt-az mount without a derotator (register_rotating). progress(done, of): called before each frame is read (Fable
+    N2: the busy bar's words). "why": "few stars" when the reference frame has too few stars to line others up
+    (Fable N3: said in the Log)."""
     raw, _h = read_fits(ref_path)
     raw_shape = tuple(raw.shape[:2])
     if sample:
@@ -2989,11 +2992,17 @@ def frame_drift(ref_path: str, paths: list, rotating: bool = False, cancel=None,
     out = {"raw_shape": raw_shape, "regs": []}
     if len(ref_src) < 3:
         out["regs"] = [(p, None) for p in paths]
+        out["why"] = "few stars"
         return out
     last = None
-    for p in paths:
+    for i, p in enumerate(paths):
         if cancel is not None and cancel():
             break
+        if progress is not None:
+            try:
+                progress(i, len(paths))
+            except Exception:
+                pass
         reg = None
         try:
             data, _hd = read_fits(p)

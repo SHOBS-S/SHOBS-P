@@ -85,3 +85,17 @@ gets a new METHODS entry, below the part in the shot.
 | img/17-flip-step.png, img/17-trim.png, img/17-refit-needed.png | 17 | as above | CHECK as above |
 | img/26-credits-page.png | 26 | new METHODS entry "Gain from the night's sky" (below the visible part: SOFTWARE and the first catalogs show) | reuse |
 | any shot of the Photometry log with a *Photon noise:* line from a no-EGAIN (MicroObservatory) night | 08 | the line now reads *…so the gain is measured from the night's sky: …* | RESHOOT if one exists (none found) |
+
+## Fable review fixes (#78 N2–N4, #68 N7, #93, #65, #105 nits)
+
+While the night's drift is read after Calibrate, the busy bar in the lower left says *Checking the night's drift…
+frame 3 of 8* and green rings already shown stay; a drift check that finds nothing gets a plain Log note; the loaded
+series' positions are used only when they cover nearly all lights at the page's binning. A comp and the check star
+with the same name but markers clearly apart get *… have the same name …* words. The fit inputs' lookup row names
+values typed over after the lookup. The NEB check of a same-star report with no RA/Dec says it needs the RA/Dec.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/08-photometry-solved.jpg | 08 | only if shot within the few seconds after Calibrate: the status strip's busy bar would show *Checking the night's drift…* | CHECK when retaken for #78: shoot after the bar has gone |
+| any shot of the status strip right after Calibrate | 07, 08 | the busy bar may show the drift words | CHECK, reshoot if the words are in view |
+| all others | | nothing of these fixes in view (text-file rows, boxes that need a deliberate mistake) | reuse |

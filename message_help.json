@@ -442,6 +442,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two different stars, but the results would not tell them apart. …"
+   ],
+   "todo": "Type another name in one of the boxes (its catalog number, for example), or clear the marker that is on the wrong star and pick again. Run photometry refuses until then."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "1 Not solved"
    ],
    "todo": "Press Solve again for the full diagnosis. Check the Optics box (focal length, pixel size, binning) and the RA/Dec. You can still click stars and type magnitudes."
@@ -676,6 +683,23 @@
     "from the loaded series' … frames"
    ],
    "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The night's drift could not be checked (too few stars were found on this frame to line the others up with it); only this frame's edge was checked.",
+    "… (the lights could not be read) …",
+    "… (none of the other lights could be lined up with this frame) …",
+    "… (the image on the page is not the same size as the lights) …"
+   ],
+   "todo": "Nothing, usually. On a night that drifts a lot, pick comps well inside the frame, or Run photometry once: the loaded series' own positions are then used."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Checking the night's drift… frame 3 of 8"
+   ],
+   "todo": "Nothing; the new green rings appear when it is done."
   },
   {
    "section": "Photometry",
@@ -1188,6 +1212,20 @@
     "Enter your site's latitude and longitude on the Input page first …"
    ],
    "todo": "Type your site once."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
+   ],
+   "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit inputs not written to the settings file (…)."
+   ],
+   "todo": "Nothing for the report. If you need the rows, fit again and save again; if it keeps happening, send the Log file."
   },
   {
    "section": "Output, Transits mode",

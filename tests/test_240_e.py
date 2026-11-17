@@ -245,7 +245,7 @@ class TestCheckIsNotAComp(unittest.TestCase):
 
     def test_same_name(self):
         self._mark("comp", "TYC 3308-462-1", (100.0, 100.0))
-        self._mark("comp2", "Gaia DR3 439068910332260352", (300.0, 300.0))
+        self._mark("comp2", "Gaia DR3 439068910332260352", (504.0, 500.0))   # (Fable N7: far apart is test_240_i)
         self._mark("check", "Gaia DR3 439068910332260352", (500.0, 500.0))
         clash = self.app.check_comp_clash()
         self.assertEqual([r for r, _ in clash], ["comp2"])
