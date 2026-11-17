@@ -249,7 +249,7 @@ class TestSuggestionsFollowTheDrift(unittest.TestCase):
             o.night = "2026-10-24"
             obs.append(o)
         app = self._setup(observations=obs)
-        app.night_bin = {"2026-10-24": {"binning": 1}}   # Fable N4: measured at the page's binning
+        app.night_bin = {"2026-10-24": {"binning": 1, "pattern": app.pattern.get()}}   # Fable N4 (+ grid, re-review)
         app._drift_cache = None
         app._suggest_comps()
         self.assertFalse(app._suggest_drift_pending)   # nothing to read: the series' own frame shifts

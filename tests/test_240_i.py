@@ -182,7 +182,7 @@ class TestDriftReadFixes(unittest.TestCase):
             app.night_bin = night_bin
             self.assertIsNone(app._series_drift(start=False), night_bin)   # the frames would be read
         app = self._setup(observations=self._series(6))
-        app.night_bin = {"2026-10-24": {"binning": 1}}
+        app.night_bin = {"2026-10-24": {"binning": 1, "pattern": app.pattern.get()}}   # re-review nit: grid recorded
         got = app._series_drift(start=False)
         self.assertEqual(got["how"], "series")
         self.assertIs(app._series_drift(start=False), got)   # nit: cached, labels not looked up again

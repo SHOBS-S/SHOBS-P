@@ -155,6 +155,13 @@
   {
    "section": "Input",
    "patterns": [
+    "Pixel size set to 6.8 µm, the MicroObservatory camera's own pixel. The series was saved with 13.6 µm, the pixel after the camera's 2x2 binning; …"
+   ],
+   "todo": "Nothing. The series file keeps 13.6 µm until it is saved again."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
    "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
@@ -441,7 +448,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comp 2 and the check star are the same star (Comp 2: the same name, … / 0.3″ apart). The check star tests the comps, so it can't also be one of them. …",
+    "Comp 2 and the check star are the same star (Comp 2: …). The check star tests the comps, so it can't also be one of them. …",
     "Run photometry"
    ],
    "todo": "Clear one of the two (✕ in the Stars panel, or right-click its marker) and pick another star. Run photometry refuses until then."
@@ -449,9 +456,17 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two different stars, but the results would not tell them apart. …"
+    "Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two different stars, but the results would not tell them apart. …",
+    "… but the markers are 25 px apart on the image). They look like two different stars …"
    ],
    "todo": "Type another name in one of the boxes (its catalog number, for example), or clear the marker that is on the wrong star and pick again. Run photometry refuses until then."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2 and the check star are the same star (…). The check star tests the comps, so it can't also be one of them. … Comp 3 and the check star have the same name (…). They look like two different stars …"
+   ],
+   "todo": "For the comp that is the same star: clear one of the two and pick another star. For the one that only shares the name: type another name in one of the boxes, or clear the marker that is on the wrong star and pick again. Run photometry refuses until both are fixed."
   },
   {
    "section": "Photometry",
@@ -1019,7 +1034,7 @@
    "section": "Photometry",
    "patterns": [
     "Photon noise: … , measured on the single frames that went into the stacks (a stack is their sum: the same gain)",
-    "… x N for the stacks …, measured on the stacks themselves (the single frames could not give it)"
+    "… units per stack of N frames (from the darks, added up over the N frames) …, measured on the stacks themselves (the single frames could not give it)"
    ],
    "todo": "Nothing."
   },
@@ -1033,10 +1048,9 @@
   {
    "section": "Photometry",
    "patterns": [
-    "… N pairs dropped: the sky had structure the background model missed, e.g. cloud or moonlight",
-    "Photon noise"
+    "… N pairs dropped: the sky had structure the background model missed (cloud, moonlight, or faint stars that moved between the frames)"
    ],
-   "todo": "Nothing when the gain was still measured. When too few pairs were left, the lower limit is used; frames from a clearer part of the night help."
+   "todo": "Nothing when the gain was still measured. When too few pairs were left, the lower limit is used; frames from a clearer part of the night help. With resampled frames, give SHOBS-P the frames as they came off the camera."
   },
   {
    "section": "Photometry",
@@ -1050,7 +1064,7 @@
    "patterns": [
     "Note: this is under the one-frame lower limit (…), which should not happen; the frames may change from one to the next by more than the sky's noise …"
    ],
-   "todo": "Nothing urgent: the error bars are then on the large side. Check the night's frames in Blink for clouds."
+   "todo": "Nothing urgent. Check the night's frames in Blink for clouds."
   },
   {
    "section": "Photometry",

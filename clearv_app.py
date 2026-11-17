@@ -6,6 +6,7 @@ and an AAVSO Extended File Format report (filter CV).
 
 from __future__ import annotations
 
+import collections
 import copy
 import io
 import json
@@ -426,6 +427,12 @@ CHECK_NAME_APART_PX = 10.0       # (the same without a plate solution)
 CHECK_SAME_ARCSEC = 2.0     # 2.4.0 (#68): a comp within this of the check star (or with its name) is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
+
+
+def _sky_gain_mod():
+    """sky_gain, imported when first needed (as the photometry worker does)."""
+    import sky_gain
+    return sky_gain
 
 
 def _same_exposure(path: str, exptime: float) -> bool:
@@ -10007,15 +10014,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             line = f"telescope not recorded / {cam}"
         else:
             line = "not recorded"
-        camera_bin = 1
-        for key in ("XBINNING", "BINNING", "XBIN"):   # the keys the solve reads (the first one present counts)
-            if head.get(key) in (None, ""):
-                continue
-            try:
-                camera_bin = max(int(float(head.get(key, 1))), 1)
-                break
-            except (TypeError, ValueError):
-                continue
+        camera_bin = solve_camera_bin(head)   # 2.4.0 (review nit): the solve's own rule, so the two never differ
         if pix and focal:
             scale = pix / focal * 206.265 * camera_bin * binning * superpixel
         else:
@@ -14277,7 +14276,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _series_drift_usable(self, obs: list, lights: list) -> bool:
         """Fable N4: the loaded series' frame positions stand for the night's drift only when they cover nearly
         every light (SERIES_DRIFT_COVER; not a run canceled after 10 of 200 frames) and were measured at the binning
-        of the image on the page (their pixel positions are on that grid). Otherwise the lights are read."""
+        of the image on the page (their pixel positions are on that grid). Otherwise the lights are read.
+        Re-review nit: and on the same pixel grid as the page's image, monochrome or a color camera's 2x2 superpixel
+        (half the size; every Bayer pattern and debayer channel gives the same superpixel grid). A night that does not
+        record its pattern (saved before 2.4.0) has its lights read."""
         have = {getattr(o, "path", "") for o in obs} & set(lights)
         if len(have) < max(3, math.ceil(SERIES_DRIFT_COVER * len(set(lights)))):
             return False
@@ -14285,13 +14287,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             page_bin = int(getattr(self, "masters_binning", None) or self.binning.get() or 1)
         except Exception:
             return False
+        try:
+            page_mono = str(self.pattern.get()).upper() == core.MONO
+        except Exception:
+            return False
         bins = set()
         for night in {getattr(o, "night", "") for o in obs}:
-            b = self._night_info(night).get("binning")
+            info = self._night_info(night)
+            b = info.get("binning")
             try:
                 bins.add(int(b))
             except (TypeError, ValueError):
                 return False   # not recorded: read the lights instead
+            # every Bayer pattern and debayer channel gives the same superpixel grid; only MONO against color differs
+            if not info.get("pattern") or (str(info["pattern"]).upper() == core.MONO) != page_mono:
+                return False   # another grid (or none recorded): read the lights instead
         return bins == {page_bin}
 
     def _drift_clearance(self, xy, drift=None):
@@ -14337,7 +14347,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if drift is None:
             # the drift frames are being read (a few seconds; the busy bar says so): _drift_done suggests then. Fable
             # N2: until then the previous suggestions stay (no rings vanishing; Run photometry keeps the same spares).
-            self.suggested_comps, self._closest_dm, self._target_bv = before
+            # Re-review nit: only when they were made for this target on this frame (another frame or target: none).
+            if getattr(self, "_suggest_for", None) == (self.target_xy, self.preview_path):
+                self.suggested_comps, self._closest_dm, self._target_bv = before
             return
         lin = self._linear_limit()
         h, w = self.preview.shape
@@ -14456,6 +14468,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 relaxed.update(n for n, _dm in got)
             picks += got
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
+        self._suggest_for = (self.target_xy, self.preview_path)   # Fable re-review nit: what they were made for
         # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
         have = {n for n, _dm in picks}
         edge_left = [] if len(picks) >= 4 else [
@@ -17378,7 +17391,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
             if meas.get("ok"):
                 meas = dict(meas, basis="frames")
-            else:
+            elif "pairs_read" in meas and int(meas["pairs_read"]) >= _sky_gain_mod().MIN_PAIRS:
+                # Fable re-review nit: the frames were read but the night's sky could not give the gain (too faint
+                # against the read noise, structure, no darks at their exposure): the stacks hold the same sky, so
+                # they are not tried; the lower limit is used, with the frames' reason.
+                meas = dict(meas, why=f"on the single frames that went into the stacks, {meas.get('why', '')}")
+            else:   # the frames could not be read (moved, deleted): the stacks themselves are tried
                 why_frames = meas.get("why", "")
                 meas = None
         if bias_removed and meas is None:
@@ -17450,24 +17468,34 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         dark_dir = "" if precalibrated else inputs.get("dark_dir", "")
         bias_dir = "" if precalibrated else inputs.get("bias_dir", "")
         n_sum, skip = 1, set()
+        floor_note = ""
         if stacks:
             # 2.4.0 (#104, John's choice): on stacks the floor is the darks' at the frames' exposure x STACKN (a stack
-            # is the sum of its frames); stacks of another N (a partial last one) are left out
+            # is the sum of its frames); stacks of another N (a partial last one) are left out.
+            # Fable re-review nits: N is the most common STACKN (the first stack may be a partial one), and the floor
+            # is multiplied only for stacks that say they hold the SUM of their frames (STACKSCL = SUM).
+            ns = {}
+            for p in lights:
+                try:
+                    ns[p] = int(core.read_header(p).get("STACKN") or 0)
+                except Exception:
+                    ns[p] = 0
+            counts = collections.Counter(n for n in ns.values() if n >= 1)
+            n_sum = max(counts, key=lambda n: (counts[n], n)) if counts else 0
             try:
                 exp = float(header.get("STACKEXP") or float("nan"))
-                n_sum = int(header.get("STACKN") or 0)
             except Exception:
-                n_sum = 0
-            if n_sum < 1 or not math.isfinite(exp):
+                exp = float("nan")
+            scl = str(header.get("STACKSCL") or "").strip().upper()
+            if n_sum < 1 or not math.isfinite(exp) or scl != "SUM":
+                if n_sum > 1 and math.isfinite(exp) and scl != "SUM":
+                    floor_note = (
+                        f"the stacks do not say they hold the sum of their frames (STACKSCL {scl or 'missing'}), "
+                        "so the darks' noise cannot be scaled to them")
                 dark_dir = bias_dir = ""
                 n_sum = 1
             else:
-                for p in lights:
-                    try:
-                        if int(core.read_header(p).get("STACKN") or 0) != n_sum:
-                            skip.add(p)
-                    except Exception:
-                        skip.add(p)
+                skip = {p for p, n in ns.items() if n != n_sum}
         key = (tuple(lights), int(binning or 1), pattern, mode, bool(stacks), repr(getattr(masters, "used", "")),
                dark_dir, bias_dir, sat)
         cache = getattr(self, "_sky_gain_cache", None)
@@ -17515,6 +17543,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                 max_pairs=max_pairs, floor_err=floor_err, skip=skip)
         if stacks and floor_src in ("darks", "bias"):
             meas["stack_n"] = n_sum
+        if floor_note and not meas.get("ok"):
+            meas["why"] = f"{floor_note}; {meas.get('why', '')}"
         if meas.get("ok"):
             meas["rn_e"] = sg.read_noise_e(meas["floor_var"] / n_sum, meas["k"], binning, pattern, mode)
         self._sky_gain_cache = (key, masters, meas)
@@ -17609,6 +17639,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         out = {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
                "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
                "comps": list(self.comps_used), "check": self.check_used or ""}
+        try:   # 2.4.0 (re-review nit): the Bayer pattern and debayer, so a night's star positions know their grid
+            out["pattern"], out["debayer"] = self.pattern.get(), self.debayer_mode.get()
+        except Exception:
+            pass
         # 2.3.1 (nit): the Telescope aperture and elevation the scintillation error used (they were not recorded)
         if self._aperture_box() is not None:
             out["aperture_mm"] = self._aperture_box()
@@ -18195,6 +18229,39 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      "short periods); type another shortest period on the Output page if you want one. The series "
                      "file keeps 0.05 d until its next save.")   # 2.2.19 (r2: nit)
 
+    def _mobs_series_pixel(self, meta: dict):
+        """2.4.0 (#107, review N3): a series saved before 2.4.0 holds MicroObservatory's binned pixel (13.6 µm) in the
+        Pixel size box. Over current MicroObservatory frames (XBINNING 2) the solve multiplies the box by the camera's
+        binning, so 13.6 µm would give 10"/px and no solve. When the frames on the Input page are MicroObservatory's,
+        binned by the camera, and the series' pixel is their binned pixel, the box gets the camera's pixel instead."""
+        try:
+            stored = float(meta.get("pixel_um"))
+        except (TypeError, ValueError):
+            return
+        header, path = self.preview_header, ""
+        try:
+            if not header or not core.is_microobservatory("", header):
+                lights = self._lights()
+                path = lights[0] if lights else ""
+                header = core.read_header(path) if path else None
+        except Exception:
+            return
+        if not header or not core.is_microobservatory(path, header):
+            return
+        cam_bin = solve_camera_bin(header)
+        if cam_bin <= 1:
+            return
+        scale = core.header_plate_scale(header)
+        binned = scale * 560.0 / 206.265 if scale else 13.6
+        if abs(stored - binned) > 0.05 * binned:
+            return
+        pixel = round(binned / cam_bin, 2)
+        self.pixel_um.set(pixel)
+        self.log(f"Pixel size set to {pixel:g} µm, the MicroObservatory camera's own pixel. The series was saved with "
+                 f"{stored:g} µm, the pixel after the camera's {cam_bin}x{cam_bin} binning; SHOBS-P now multiplies by "
+                 f"that binning itself, so the plate scale stays about {binned / 560.0 * 206.265:.1f}\"/px. The series "
+                 f"file keeps {stored:g} µm until its next save.")
+
     def _apply_meta_values(self, meta: dict):
         for key in self._META_STRINGS:
             if meta.get(key) not in (None, ""):
@@ -18217,6 +18284,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 except (TypeError, ValueError):
                     pass
         self._migrate_min_period(meta)   # 2.2.19 (#19)
+        self._mobs_series_pixel(meta)   # 2.4.0 (#107, review N3)
         if meta.get("binning"):
             want = int(meta["binning"])
             have = self.masters_binning if self.calibrated is not None else None
