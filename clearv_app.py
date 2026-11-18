@@ -20811,17 +20811,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             star_record.set_position(rec, star["ra"], star["dec"], year, star.get("pm"))
 
     def _chart_star_for_record(self, rec: dict, xy=None):
-        """Tonight's catalog star that is this record's star: at its marker, else at its sky position (within
-        SAME_STAR_ARCSEC). None when the image is not solved or no catalog star is there."""
+        """Tonight's catalog star that is this record's star: at its sky position (within SAME_STAR_ARCSEC), or,
+        for a record without a position, right under its marker. None when the image is not solved or no catalog
+        star is there."""
         if not self.chart_placed:
             return None
-        if xy is not None:
-            star = self._chart_star_at(xy)
-            if star is not None:
-                return star
         pos = star_record.position(rec)
         if pos is None:
-            return None
+            # no saved position yet: only a catalog star right under the marker (a neighbour is another star)
+            return self._chart_star_at(xy, reach=2.0) if xy is not None else None
         best = None
         for _x, _y, star in self.chart_placed:
             if star.get("ra") is None or star.get("dec") is None:
@@ -21048,7 +21046,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         xy = getattr(self, f"{role}_xy", None)
         rec = self._series_star_for(name) if name else None
         names = {name_key(n) for n in (star_record.record_names(rec) if rec else [])} | {name_key(name)}
-        star = self._chart_star_at(xy) if xy is not None and self.chart_placed else None
+        star = self._chart_star_at(xy, reach=2.0) if xy is not None and self.chart_placed else None
         if star is not None:
             names |= {name_key(n) for n in core.star_names(star)}
         names.discard("")
@@ -21112,9 +21110,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 + f". A star can't be both a comp and a Watch star, so it was not added as {role_label(role)}. To use "
                   "it as a comp, take it off the Watch stars list first (Remove selected).")
         self.clear_mark(role)
-        self._slot_say(role, text)
-        self.status.set(text)
-        self.log(text)
+        self._slot_say(role, text)   # the status bar, the Log and the slot's own line
         try:
             messagebox.showinfo(APP_TITLE, text)
         except Exception:
@@ -21625,7 +21621,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             remag, check_mag, spare_remag = {}, None, {}
         if not (renamed or remag or check_mag or watch or spares or spare_remag):
             return None
+        sources = {}   # 2.4.0 step 4 (#56): " (APASS DR9)" after the series' value, when its record knows
+        for n in list(remag) + ([new_check] if check_mag else []):
+            rec = self._series_star_for(n)
+            words = star_record.source_words((rec or {}).get("v_source") or "")
+            if words:
+                sources[n] = f" ({words})"
         return {"band_word": self._band_word(),   # 2.2.17 (item 1): "V", or "i′" on a Sloan run
+                "sources": sources,
                 "band_mismatch": band_mismatch,
                 "comps": new_comps, "check": new_check, "renamed": renamed, "remag": remag, "check_mag": check_mag,
                 "watch": watch, "spares": spares, "spare_remag": spare_remag}
@@ -21641,10 +21644,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             sb, tb = plan["band_mismatch"]
             out.append(f"the series' catalog magnitudes are in {sb}, this night's in {tb}, so this night keeps its "
                        f"own {tb} magnitudes (only the names follow the series)")
-        out += [f"{n}: the series' {bw} {s:.3f}, not tonight's {t:.3f}" for n, (t, s) in (plan.get("remag") or {}).items()]
+        src = plan.get("sources") or {}   # 2.4.0 step 4 (#56): where the series' value came from, when known
+        out += [f"{n}: the series' {bw} {s:.3f}{src.get(n, '')}, not tonight's {t:.3f}"
+                for n, (t, s) in (plan.get("remag") or {}).items()]
         if plan.get("check_mag"):
             t, s = plan["check_mag"]
-            out.append(f"check {plan['check']}: the series' {bw} {s:.3f}, not tonight's {t:.3f}")
+            out.append(f"check {plan['check']}: the series' {bw} {s:.3f}{src.get(plan['check'], '')}, not tonight's {t:.3f}")
         return out
 
     def _apply_same_star_plan(self, plan, night_points):
@@ -21725,11 +21730,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         and not plan.get("band_mismatch") else "") + " used.")
         for name, (t, s) in (plan.get("remag") or {}).items():
             if name not in plan["renamed"].values():
-                self.log(f"{name}: the series' catalog {bw} {s:.3f} used for this night, not tonight's {t:.3f} "
+                self.log(f"{name}: the series' catalog {bw} {s:.3f}{(plan.get('sources') or {}).get(name, '')} used for this night, not tonight's {t:.3f} "
                          f"(the night moves {s - t:+.3f} mag with it).")
         if plan.get("check_mag"):
             t, s = plan["check_mag"]
-            self.log(f"Check star {plan['check']}: the series' catalog {bw} {s:.3f} used, not tonight's {t:.3f}.", keep_status=True)
+            self.log(f"Check star {plan['check']}: the series' catalog {bw} {s:.3f}{(plan.get('sources') or {}).get(plan['check'], '')} used, not tonight's {t:.3f}.", keep_status=True)
         if plan.get("remag") or plan.get("check_mag"):
             self.log("  (The series' catalog magnitude wins, so every night stays on one zero point; Use comps… on the "
                      "Output page can re-derive the whole series with other comps.)")

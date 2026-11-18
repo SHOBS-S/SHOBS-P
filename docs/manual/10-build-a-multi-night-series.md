@@ -8,6 +8,16 @@ A series file keeps every point of every night, with its flags, plus the setting
 
 It does **not** keep star positions on the image, but it does keep each comp's and the check star's position on the sky. On every new night the solve places the target from its RA/Dec and, from 2.3.4, the series' comps and check star from their sky positions, so a series night is usually: calibrate, wait for the solve, **Run photometry**.
 
+### One record per comp and check star
+
+From 2.4.0 the series keeps a small record for every comp and for the check star. The star's **position on the sky** is what identifies it. Two names within about 1″ of each other are the same star, whatever the catalogs call it.
+
+- **Every name is kept.** The Gaia DR3 number, the Tycho (TYC) name, the APASS name, the AAVSO label and AUID, or a position you typed are all names of the one star. Rest the pointer on a comp's or the check's name box on the Photometry page to see its other names and each catalog's magnitude.
+- **Every magnitude is kept with its source**, for example APASS DR9 8.728 and Gaia DR3 8.704, plus which one the series uses.
+- **The name in the series does not change.** A star already in a series keeps the name the series has always used for it, so every night matches. A star you add for the first time gets its AAVSO AUID if it has one, else its TYC name, else its Gaia name, else its APASS name. It gets the same name whichever catalog happens to answer first that night.
+
+**Older series files are updated by themselves.** The first time you load a series made before 2.4.0, SHOBS-P copies the file as it is to `<name>_backup.cvseries` beside it (or `_backup2`, `_backup3`… if that name is taken; a backup is never overwritten) and the log says **Series updated to the new star format; the original is kept as …_backup.cvseries.** Nothing else changes: the same names, the same magnitudes, the same points. The file itself is written in the new form at its next save. Older SHOBS-P versions can still read it.
+
 ## Starting a new series
 
 The first night sets the rules for every night after it. Changing the aperture, the comps or the check star later means redoing every night, so choose them with care on night 1:
@@ -36,7 +46,7 @@ The status bar then reminds you: **Next night, load this file before reducing**.
 The order matters: load first, reduce second.
 
 1. On the Input page, press **Load series…** and open the series file. (The Output page has the same button, **Load series**.) A large series (thousands of points over dozens of nights) takes a few seconds; the busy bar at the lower left says what is being done: **Loading SZ_Lyn.cvseries… reading the file**, then **… the period search**, then **… drawing the light curve**.
-2. A message tells you how many points and nights were loaded, and that the comps and check are placed on their stars after the image is solved. If the Photometry page already has a solved image (say you pressed **New reduction** and then loaded the series), SHOBS-P solves it again at once, so the target, the series' comps and check and the suggested comps are placed without pressing **Solve again**.
+2. The log lists what the series brought, for example **Comps loaded: C1 TYC 4006-1008-1 V 8.728 (APASS DR9); check TYC 4006-832-1 V 9.786.** Read it: a comp you did not expect shows here at once. A message also tells you how many points and nights were loaded, and that the comps and check are placed on their stars after the image is solved. If the Photometry page already has a solved image (say you pressed **New reduction** and then loaded the series), SHOBS-P solves it again at once, so the target, the series' comps and check and the suggested comps are placed without pressing **Solve again**.
 3. The line at the top of the Input page now reads something like **Series: SZ_Lyn.cvseries — 8 nights, last 13–14 Oct. After the run you'll be asked to add the night.**
 4. Point the Input page at the new night's bias, dark, flat and lights, and blink and calibrate as usual.
 5. On the Photometry page, wait for the solve. From 2.3.4 it places the target, the **same comps** and the **same check star** as before, and each row says **✓ … placed after the solve …; magnitude … kept as loaded** (the series' magnitude is kept, never replaced by a catalog's). A star that is not on tonight's frame says so in its row (**⚠ … is not on this frame**): click another star, or clear the slot. A comp or check whose marker (from an earlier frame) falls off tonight's frame is taken out of its slot, and the log says **⚠ Not on this frame, so taken out of tonight's comps (not measured): …**; the other comps measure the night. A name with no saved position (a series from before 2.2.3) asks you to press **Enter** in its box or click the star. Clicking a comp that the series already knows puts it back into its old slot. If the series has a **Use comps…** choice, the comp rows show the comps in use; the series' other comps are found after the solve and still measured on every frame as spares, so a later **Use comps…** can bring them back (chapter 11).
@@ -66,7 +76,7 @@ Different filters do not belong in one series. Answer **No** unless you mean to 
 It lists the series' comps and check and tonight's. Different comps put each night on its own zero point. Usually it is better to answer No, go back to the Photometry page, mark the series' comps, and run again. If a comp was missing tonight (off the frame, for example), you can add the night anyway and then use **Use comps…** (chapter 11) to pick a set every night shares. Comps that simply follow the series' **Use comps…** choice do not count as different stars: the night is put into the series' comp layout by name.
 
 **One star, one name: …**
-The same star appears under another catalog's name tonight (for example a Gaia name tonight and a Tycho name in the series). **Yes** uses the series' names and catalog magnitudes for this night, so every night stays on one zero point. This is almost always what you want.
+The same star appears under another name tonight (for example a Gaia name tonight and a Tycho name in the series, or a position you typed because a catalog was down). SHOBS-P compares positions with the ones the series has stored, so a star typed as `02:47:03.45 +50:43:31.2` is recognized as the series' Gaia star at that spot and is not reported as a different star. **Yes** uses the series' names and catalog magnitudes for this night, so every night stays on one zero point. This is almost always what you want.
 
 **Careful: this night comes from other equipment or another observer.**
 Untransformed nights from different instruments can sit tenths of a magnitude apart. A separate series is usually better: answer **No**.
@@ -76,6 +86,27 @@ It lists what changed, for example the binning, the aperture, or the channel of 
 
 **The night of … is already in the series.**
 **Yes** replaces that night's points with this run. The other nights stay.
+
+## The series' magnitudes win
+
+Once a series has a magnitude for a comp or the check star, every later night uses it. A star click or a catalog lookup that comes back with another value does not replace it. The box keeps the series' value, and the star's row says, for example:
+
+> Series uses 8.728 (APASS DR9); Gaia DR3 says 8.704 (Series magnitudes… below)
+
+A **Series magnitudes…** button appears under the Stars panel. It lists each such star with two choices:
+
+- **Keep series value** leaves everything as it is. This is the usual answer: one magnitude per star keeps every night on one zero point.
+- **Use new value (re-calibrates every night)** changes the magnitude for the whole series in one step. SHOBS-P first copies the series file as it is to `<name>_backup.cvseries` (or the next free `_backup2`, `_backup3`…), then shifts every night's magnitudes by exactly the change. Nothing is measured again; errors and flags stay as they were. With several comps each point moves by the change in the average of its comps' catalog magnitudes. If the backup cannot be written, nothing is changed.
+
+If you type another magnitude into the box of a series star yourself, the same happens once you leave the box: the series' value comes back and your value is offered under **Series magnitudes…**. A value that cannot be a real magnitude (99.999, or an APASS value brighter than 4) is not offered at all; the log says it was not taken.
+
+The Output page's Series box shows what the series uses in its **Mags** line, in the order of the comps, then the check, for example `Mags    V 8.728 (APASS DR9), check V 9.786 (APASS DR9)`. The same is written in a report's settings file (**Series magnitudes (value and source): …**). A source of *typed* means you typed the value; *from the series file* means an older series held it without saying where it came from.
+
+## Comps you clear stay cleared
+
+The comp slots on the Photometry page are what the series saves. If you clear a comp with its **✕** (or **Clear selected**) and it was one of the series' **Use comps…** stars, the next save takes it out of that choice too, and the log says **Comps in use saved from the comp slots: … (… cleared).** Load series then never puts it back. Nights already reduced with that star keep their values until you open **Use comps…** (chapter 11) and apply the set you want; that re-derives every night.
+
+A star can be a comp or a Watch star, not both. Adding a comp to the Watch stars, or marking a Watch star as a comp, is refused with a message that says how to move it (clear the comp slot, or take the star off the Watch list, first).
 
 ## Night notes
 
@@ -152,3 +183,5 @@ There is only one `_prev`. The next session replaces it. For a long campaign, it
 ---
 
 Previous: [9. Reduce a variable-star night](09-reduce-a-variable-night.md) · Next: [11. Check your comparison stars](11-check-your-comparison-stars.md)
+
+There are two other copies, both made only on special occasions and never overwritten: `<name>_backup.cvseries` when an older series is updated to the 2.4.0 star format on Load, and again each time you press **Use new value** under **Series magnitudes…** (the next free name, `_backup2`, `_backup3`…). Load one like any series file.

@@ -56,7 +56,7 @@ On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both
 
 ### Watch a spare
 
-If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run.
+If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run. A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
 
 ## Use comps: change the comps without reducing again
 
@@ -99,6 +99,8 @@ Every point that used that comp shifts by the change in its comps' catalog mean;
 value is used for the whole series, the Photometry page's boxes for the same star follow, and an open series file is
 saved. The log lists each change, for example "Catalog magnitudes changed for the whole series: … 8.711 → 8.728. 412
 points re-derived (shift +0.0042 mag)." A box that does not hold a number gives **"…" is not a catalog magnitude**.
+
+The Photometry page offers the same change when a catalog disagrees with the series: **Series magnitudes…** → **Use new value**, which also keeps a backup of the series file first (chapter 10, "The series' magnitudes win").
 
 > **Tip:** Changing comps changes your magnitudes. Do it before you report, and report the whole series with one comp set. The AAVSO report names the comps actually in use.
 

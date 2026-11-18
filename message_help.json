@@ -450,6 +450,99 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Series updated to the new star format; the original is kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing. The names, magnitudes and points are the same."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series updated to the new star format in memory; a backup of the original could not be written (…), so the first save keeps it as …_prev.cvseries instead."
+   ],
+   "todo": "Nothing, if the folder is writable by the time you save. Otherwise copy the series file somewhere safe first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comps loaded: C1 … V 8.728 (APASS DR9); C2 …; check … V 9.786.",
+    "… is not put back: the series was saved with that comp slot empty."
+   ],
+   "todo": "Read it. If a comp is missing or unexpected, fix the slots before Run photometry."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comps in use saved from the comp slots: … (… cleared). Nights already reduced with … keep their values until Use comps… (Output page) re-derives them."
+   ],
+   "todo": "If earlier nights used that star, open Use comps… and apply the set you want for every night."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is Comp 2. A star can't be both a comp and a Watch star, so it was not added to the Watch stars. …"
+   ],
+   "todo": "To watch it instead, clear it from its comp slot first (the ✕ beside it)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is a Watch star. A star can't be both a comp and a Watch star, so it was not added as Comp 3. …"
+   ],
+   "todo": "To use it as a comp, take it off the Watch stars list first (Remove selected)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is both a comp and a Watch star in this series. A star can't be both: clear it from the comps (✕) or take it off the Watch stars list."
+   ],
+   "todo": "Decide which it is, and clear the other."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series uses 8.728 (APASS DR9); Gaia DR3 says 8.704 (Series magnitudes… below)",
+    "The series' value is kept; Series magnitudes… on the Photometry page changes it for every night."
+   ],
+   "todo": "Usually nothing. To change it for the whole series, press Series magnitudes… and Use new value."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… : the series' V 8.728 kept."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series re-calibrated: … now uses V 8.704 (Gaia DR3) instead of 8.728 (APASS DR9) on every night. The series as it was is kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing. To undo it, load the backup file."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series was not changed: a backup of … could not be written (…)."
+   ],
+   "todo": "Free disk space or fix the folder's permissions, then press Use new value again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 …: a magnitude of 99.999 was not taken (not a possible value); the series' 8.728 stays."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1: named Gaia DR3 … (APASS J… is another name of the same star)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image."
    ],
    "todo": "Calibrate."
