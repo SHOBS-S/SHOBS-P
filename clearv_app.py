@@ -1982,6 +1982,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.masters_binning = None
         self.calibrated = None
         self.preview = None
+        # step 3 regression (18 Nov): the old frames' "Preview: green from RGGB -> 1562x1044 (superpixel)" line went
+        # with them (it stayed up beside MicroObservatory MONO frames)
+        if getattr(self, "debayer_info", None) is not None:
+            self.debayer_info.set("No preview yet.")
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self.preview_is_debayered = False
         self.chart_placed = []
@@ -8289,9 +8293,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception as exc:
                 self.call_ui(self._calibration_done, None, None, None, None, binning, (str(exc), traceback.format_exc()))
 
-        # step 3 regression (18 Nov): the preview line describes the last calibrated image; a new calibration is
-        # under way, so until it lands there is none (it said "green from RGGB" beside a MONO MicroObservatory run)
-        self.debayer_info.set("No preview yet.")
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
 
@@ -8489,9 +8490,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log(f"✖ Calibration failed: {message}")
         if detail:
             self.log(detail)
-        # step 3 regression (18 Nov): the last night's "Preview: green from RGGB -> 1562x1044 (superpixel)" stayed up
-        # beside a MONO run that had failed; nothing calibrated means no preview
-        if getattr(self, "debayer_info", None) is not None:
+        # step 3 regression (18 Nov): the line follows the image; a failure with no image up says so (Fable review: an
+        # earlier good preview still on screen keeps its line)
+        if getattr(self, "debayer_info", None) is not None and self.preview is None:
             self.debayer_info.set("No preview yet.")
         messagebox.showerror(APP_TITLE, f"Calibration failed:\n{message}")
 

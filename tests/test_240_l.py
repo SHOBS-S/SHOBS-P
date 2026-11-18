@@ -62,14 +62,24 @@ class TestFitInputs(unittest.TestCase):
     def test_ascii(self):
         for ln in self.lines:
             ln.encode("ascii")
-            self.assertNotIn("?", ln.replace("? ", ""), ln)
+        cat = [ln for ln in self.lines if ln.startswith("Fit input catalog:")][0]
+        self.assertNotIn("?", cat)
 
 
 class TestEphemerisWords(unittest.TestCase):
     def test_under_a_minute(self):
-        src = open(os.path.join(HERE, "transit_core.py"), encoding="utf-8").read()
-        self.assertIn('"under 1 min now"', src)
-        self.assertIn('if best["sigma_min"] >= 1', src)
+        self.assertEqual(tc.ephemeris_note(8, 0.4), "; most precise of 8 published ephemerides, under 1 min now")
+        self.assertEqual(tc.ephemeris_note(8, 1.0), "; most precise of 8 published ephemerides, ±1 min now")
+        self.assertEqual(tc.ephemeris_note(3, 3.2), "; most precise of 3 published ephemerides, ±3 min now")
+        self.assertEqual(tc.ephemeris_note(1, 0.4), "")
+
+    def test_dedupe_without_a_reference_link(self):
+        # Fable review: NEA with no reference link but an eph note gives reference "; most precise of ..."
+        r = _result()
+        r["planet"]["reference"] = "; most precise of 8 published ephemerides, under 1 min now"
+        r["eph_source"] = "NASA Exoplanet Archive (most precise of 8 published ephemerides, under 1 min now)"
+        cat = [ln for ln in tc.fit_inputs_lines(r) if ln.startswith("Fit input catalog:")][0]
+        self.assertNotIn("; ephemeris from", cat)
 
 
 class TestAscii(unittest.TestCase):
@@ -80,17 +90,40 @@ class TestAscii(unittest.TestCase):
 
 
 class TestGainCheckLine(unittest.TestCase):
+    MEAS = {"k": 3.0, "pairs": 11, "k_lo": 3.0, "k_hi": 3.02}
+
+    def _model(self, **extra):
+        """The dict the app hands to sky_check_line: clearv_app's _noise_model, EGAIN's figure under "k"."""
+        m = {"source": "EGAIN", "e_per_adu": 0.243, "k": 2.857, "sky_method": "measured", "sky_meas": dict(self.MEAS)}
+        m.update(extra)
+        return m
+
     def test_leads_with_e_per_adu(self):
         import transit_ui as tu
-        meas = {"k": 3.0, "pairs": 11, "k_lo": 3.0, "k_hi": 3.02}
-        pn = {"source": "EGAIN", "e_per_adu": 0.243, "k_median": 2.857, "sky_meas": meas}
-        line = tu.sky_check_line(pn)
+        line = tu.sky_check_line(self._model())
         self.assertTrue(line.startswith("Gain check from the night's sky: 0.255 e-/ADU, 1.05 x the header EGAIN "
                                         "(3 e- per image unit; from 11 frame pairs"), line)
         line.encode("ascii")
+        # photon_noise_setup's own key works too
+        pn = self._model()
+        pn["k_median"] = pn.pop("k")
+        self.assertTrue(tu.sky_check_line(pn).startswith("Gain check from the night's sky: 0.255 e-/ADU"))
         # without the EGAIN-side figure, the old words stay
         pn.pop("k_median")
         self.assertTrue(tu.sky_check_line(pn).startswith("Gain check from the night's sky: 3 e- per image unit ("))
+
+    def test_real_noise_model_shape(self):
+        """The keys clearv_app copies from photon_noise_setup (Fable review: the test must use the app's dict)."""
+        src = open(os.path.join(HERE, "clearv_app.py"), encoding="utf-8").read()
+        self.assertIn('"k": setup.get("k_median")}', src)
+
+    def test_camera_averaged(self):
+        import transit_ui as tu
+        line = tu.sky_check_line(self._model(camera_bin=3, camera_bin_mode="averaged", e_per_stored_adu=2.187))
+        self.assertTrue(line.startswith("Gain check from the night's sky: 2.3 e- per stored ADU (camera bin 3x3 "
+                                        "averaged), 1.05 x what the header EGAIN gives (3 e- per image unit;"), line)
+        summed = tu.sky_check_line(self._model(camera_bin=2, camera_bin_mode="summed"))
+        self.assertTrue(summed.startswith("Gain check from the night's sky: 0.255 e-/ADU"), summed)
 
 
 class TestMasterSize(unittest.TestCase):
@@ -99,7 +132,7 @@ class TestMasterSize(unittest.TestCase):
             core.check_master_size(np.zeros((4176, 6248)), np.zeros((500, 650)), "bias", "flats", "Bias")
         msg = str(cm.exception)
         self.assertIn("The master bias is 6248x4176 px but the flats are 650x500 px", msg)
-        self.assertIn("Empty the Bias box on the Input page", msg)
+        self.assertIn("Empty the Bias row on the Input page", msg)
         core.check_master_size(None, np.zeros((5, 5)), "bias", "flats", "Bias")
         core.check_master_size(np.zeros((5, 5)), np.zeros((5, 5)), "bias", "flats", "Bias")
 
@@ -107,19 +140,49 @@ class TestMasterSize(unittest.TestCase):
         m = core.Masters(bias=np.zeros((40, 60), np.float32))
         with self.assertRaises(ValueError) as cm:
             core.calibrate_frame(np.ones((10, 20), np.float32), {"EXPTIME": 60.0}, m)
-        self.assertIn("The master bias is 60x40 px but the lights are 20x10 px", str(cm.exception))
+        self.assertIn("The master bias is 60x40 px but this light is 20x10 px: either the master is from another "
+                      "camera or binning (empty the Bias row on the Input page", str(cm.exception))
+        self.assertIn("or this light is not from the same camera and binning as the others", str(cm.exception))
         ok = core.calibrate_frame(np.ones((10, 20), np.float32), {"EXPTIME": 60.0},
                                   core.Masters(bias=np.zeros((10, 20), np.float32)))
         self.assertEqual(ok.shape, (10, 20))
 
+    def test_dark_flat_as_pedestal(self):
+        m = core.Masters(bias=np.zeros((40, 60), np.float32), pedestal="darkflat")
+        with self.assertRaises(ValueError) as cm:
+            core.calibrate_frame(np.ones((10, 20), np.float32), {"EXPTIME": 60.0}, m)
+        self.assertIn("The master dark flat is 60x40 px", str(cm.exception))
+        self.assertIn("empty the Dark flats row", str(cm.exception))
+
+    def test_unapplied_dark_not_checked(self):
+        m = core.Masters(dark=np.zeros((40, 60), np.float32), dark_exptime=0.0)
+        out = core.calibrate_frame(np.ones((10, 20), np.float32), {"EXPTIME": 60.0}, m)
+        self.assertEqual(out.shape, (10, 20))
+
 
 class TestPreviewLine(unittest.TestCase):
-    def test_cleared_on_start_and_failure(self):
+    def test_follows_the_image(self):
         src = open(os.path.join(HERE, "clearv_app.py"), encoding="utf-8").read()
+        changed = src[src.index("def _folders_changed"):src.index("def _clear_marks")]
+        self.assertIn('self.debayer_info.set("No preview yet.")', changed)
         fail = src[src.index("def _calibration_failed"):src.index("def apply_debayer")]
-        self.assertIn('self.debayer_info.set("No preview yet.")', fail)
+        self.assertIn('self.preview is None:', fail)
         start = src[src.index("def run_calibration"):src.index("def _calibration_done")]
-        self.assertIn('self.debayer_info.set("No preview yet.")', start)
+        self.assertNotIn('self.debayer_info.set("No preview yet.")', start)   # a cancel keeps the old image's line
+
+    @unittest.skipUnless(os.environ.get("DISPLAY") or sys.platform != "linux", "needs a display")
+    def test_failure_keeps_a_good_preview_line(self):
+        import types
+        from unittest import mock
+        import clearv_app as ca
+        fake = types.SimpleNamespace(log=lambda *_: None, preview=np.zeros((3, 3)),
+                                     debayer_info=mock.Mock())
+        with mock.patch.object(ca.messagebox, "showerror"):
+            ca.App._calibration_failed(fake, "x")
+            fake.debayer_info.set.assert_not_called()
+            fake.preview = None
+            ca.App._calibration_failed(fake, "x")
+            fake.debayer_info.set.assert_called_once_with("No preview yet.")
 
 
 if __name__ == "__main__":

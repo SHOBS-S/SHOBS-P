@@ -3762,14 +3762,23 @@ def sky_check_line(pn: dict | None) -> str:
     # step 3 regression (18 Nov): lead with e-/ADU, the unit of the EGAIN line just above, so the two are compared
     # like for like ("3 e- per image unit" beside "0.243 e-/ADU" read as a disagreement); the image-unit figure
     # (electrons per measured pixel at SHOBS-P's processing bin) follows in the bracket.
+    # Fable review: the app's noise model keeps EGAIN's electrons per image unit as "k" (photon_noise_setup's
+    # "k_median"); either is read. ratio = the sky's / EGAIN's electrons per image unit, the 1.5x caution's ratio.
     try:
-        egain, at = float(pn.get("e_per_adu")), float(pn.get("k_median"))
-        g_sky = float(m["k"]) * egain / at if egain > 0 and at > 0 else float("nan")
+        egain = float(pn.get("e_per_adu"))
+        at = float(pn.get("k") if pn.get("k") is not None else pn.get("k_median"))
+        ratio = float(m["k"]) / at if egain > 0 and at > 0 else float("nan")
     except (TypeError, ValueError):
-        g_sky = float("nan")
-    if math.isfinite(g_sky):
-        return (f"Gain check from the night's sky: {g_sky:.3g} e-/ADU, {g_sky / egain:.2f} x the header EGAIN "
-                f"({m['k']:.3g} e- per image unit; {sky_meas_words(pn)})")
+        egain, ratio = float("nan"), float("nan")
+    if math.isfinite(ratio):
+        tail = f"({m['k']:.3g} e- per image unit; {sky_meas_words(pn)})"
+        stored = pn.get("e_per_stored_adu")
+        if pn.get("camera_bin_mode") == "averaged" and stored:
+            # the camera averaged its binned pixels: a stored ADU holds cam_bin^2 x EGAIN electrons, as the Gain row says
+            cb = pn.get("camera_bin") or 1
+            return (f"Gain check from the night's sky: {ratio * float(stored):.3g} e- per stored ADU (camera bin "
+                    f"{cb}x{cb} averaged), {ratio:.2f} x what the header EGAIN gives {tail}")
+        return f"Gain check from the night's sky: {ratio * egain:.3g} e-/ADU, {ratio:.2f} x the header EGAIN {tail}"
     return f"Gain check from the night's sky: {m['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
 
 

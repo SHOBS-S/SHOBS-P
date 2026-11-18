@@ -2062,10 +2062,7 @@ def lookup_nea(name: str) -> dict:
     if best is not None:
         period, period_err, t0, t0_err = best["period"], best["period_err"], best["t0"], best["t0_err"]
         refs[0] = best["reference"] or refs[0]
-        # step 3 regression (18 Nov): "±0 min now" read oddly; under a minute is said as such
-        eph_note = ((f"; most precise of {best['n']} published ephemerides, "
-                     + (f"±{best['sigma_min']:.0f} min now" if best["sigma_min"] >= 1 else "under 1 min now"))
-                    if best["n"] > 1 else "")
+        eph_note = ephemeris_note(best["n"], best["sigma_min"])
     planet = {
         "name": pl_name, "host": row.get("hostname") or "",
         "period": period, "period_err": period_err, "t0": t0, "t0_err": t0_err,
@@ -2656,6 +2653,15 @@ def _full_pm(value, err, unit: str = "") -> str:
     return text + (f" +/- {e}{unit}" if e != "not known" else f"{unit} (no error given)")
 
 
+def ephemeris_note(n: int, sigma_min: float) -> str:
+    """The NASA lookup's '; most precise of N published ephemerides, ±3 min now' ('' for a single ephemeris). Step 3
+    regression (18 Nov): '±0 min now' read oddly, so under a minute is said as such."""
+    if n <= 1:
+        return ""
+    return (f"; most precise of {n} published ephemerides, "
+            + (f"±{sigma_min:.0f} min now" if sigma_min >= 1 else "under 1 min now"))
+
+
 def fit_inputs_lines(result: dict) -> list:
     """2.4.0 (#93, John 15 Nov): the exact inputs the fit used, at full precision, so a later rerun can be checked for
     identical inputs (HAT-P-32 b, 19 Oct: the fit moved 0.004 sigma between 2.3.5 and 2.3.6 and the report's 4-digit
@@ -2697,7 +2703,7 @@ def fit_inputs_lines(result: dict) -> list:
     eph = str(r.get("eph_source") or "").strip()
     cat = src + (f" ({ref})" if ref else "")
     # step 3 regression (18 Nov): the ephemeris source is often the same catalog and reference again; say it once
-    ref_core = ref.split("ephemeris:", 1)[-1].strip() if ref.lower().startswith("ephemeris:") else ref
+    ref_core = (ref.split("ephemeris:", 1)[-1] if ref.lower().startswith("ephemeris:") else ref).strip().lstrip("; ")
     if eph and eph != cat and not (ref_core and ref_core in eph and src in eph):
         cat += f"; ephemeris from {eph}"
     out.append(f"Fit input catalog: {cat}")
