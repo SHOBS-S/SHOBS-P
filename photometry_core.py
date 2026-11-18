@@ -927,6 +927,7 @@ def build_masters(
         exps = [header_exptime(read_fits(path)[1]) for path in dark_paths]
 
         def prep_dark(data, header):
+            check_master_size(masters.bias, data, "bias", "darks", "Bias")
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -942,6 +943,8 @@ def build_masters(
             if flats_calibrated:
                 # Already calibrated by other software (PixInsight _c): bias and dark are out already.
                 return np.asarray(data, dtype=np.float32)
+            check_master_size(masters.bias, data, "bias", "flats", "Bias")
+            check_master_size(masters.dark, data, "dark", "flats", "Darks")
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1427,6 +1430,7 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     dark_fp = "none"
 
     def prep_dark(data, header):
+        check_master_size(masters.bias, data, "bias", "darks", "Bias")
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1480,6 +1484,8 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
                                  f"but the flats are {np.shape(data)[1]}x{np.shape(data)[0]} px: pick dark flats "
                                  "taken with the flats' camera settings.")
             return (np.asarray(data, dtype=np.float32) - masters.darkflat).astype(np.float32)
+        check_master_size(masters.bias, data, "bias", "flats", "Bias")
+        check_master_size(masters.dark, data, "dark", "flats", "Darks")
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1516,7 +1522,23 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     return masters
 
 
+def check_master_size(master, data, master_what: str, frames_what: str, box: str) -> None:
+    """2.4.0 (step 3 regression, 18 Nov): a plain message, not numpy's "operands could not be broadcast together with
+    shapes (500,650) (4176,6248)", when a master does not fit the frames it is applied to. Seen when New reduction
+    kept the last night's Bias box (ASI2600MC, 6248 x 4176) for a MicroObservatory night (650 x 500)."""
+    if master is None or np.shape(master) == np.shape(data):
+        return
+    mh, mw = np.shape(master)[:2]
+    h, w = np.shape(data)[:2]
+    raise ValueError(f"The master {master_what} is {mw}x{mh} px but the {frames_what} are {w}x{h} px, so it is "
+                     f"from another camera or binning. Empty the {box} box on the Input page, or pick {master_what} "
+                     f"frames taken with this camera at this binning.")
+
+
 def calibrate_frame(data: np.ndarray, header: dict, masters: Masters) -> np.ndarray:
+    check_master_size(masters.bias, data, "bias", "lights", "Bias")
+    check_master_size(masters.dark, data, "dark", "lights", "Darks")
+    check_master_size(masters.flat, data, "flat", "lights", "Flats")
     ccd = _ccd(data, header_exptime(header))
     if masters.bias is not None:
         ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -11739,6 +11761,10 @@ _ASCII_MAP = {
     "…": "...", "²": "2", "³": "3", "χ": "chi", "σ": "sigma", "Δ": "d", "δ": "d",
     "µ": "u", "μ": "u", "≈": "~", "≤": "<=", "≥": ">=", "→": "->", "⚠": "!", "✖": "X",
     "•": "*", " ": " ", " ": " ", " ": " ", "▶": ">", "◀": "<",
+    # 2.4.0 (step 3 regression, 18 Nov): letters with no accent to drop (NFKD leaves them as they are), so author
+    # names keep their letters: Yalçınkaya -> Yalcinkaya, not "Yalc?nkaya"
+    "ı": "i", "İ": "I", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+    "ħ": "h", "Ħ": "H", "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "þ": "th", "Þ": "Th",
 }
 
 

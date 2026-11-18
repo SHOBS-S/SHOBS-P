@@ -74,7 +74,7 @@ on the Star ID."*
 
 - **The ephemeris.** SHOBS-P compares every published ephemeris for the planet and keeps the one with the smallest
   predicted uncertainty for tonight. The source line names it, for example *"most precise of 4 published
-  ephemerides, ±3 min now"*. This is the ephemeris your O − C is measured against later.
+  ephemerides, ±3 min now"* (*"under 1 min now"* for a very precise one). This is the ephemeris your O − C is measured against later.
 - **A star with several planets.** If you type a star (or the Star ID is a star) with more than one known planet,
   a window asks *"… has N known planets. Which one did you observe?"*. Click the planet. Planets that do not
   transit are marked **(does not transit)**. **Cancel** stops the lookup.

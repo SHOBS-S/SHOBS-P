@@ -168,3 +168,15 @@ changes; the gain of the WASP-50 night is the same (39.27 e- per image unit, 24 
 | any shot of the Input page Optics box after opening a pre-2.4.0 MicroObservatory series | 05 | Pixel size 6.8 (was 13.6) and the new Log line | RESHOOT if one exists |
 | any shot of the Findings panel with a same-name or same-star check message | 23 | the "what to do" line now matches the before-solve and combined variants | CHECK when retaken |
 | all others | | nothing of these fixes in view | reuse |
+
+## Step 3 regression text fixes (18 Nov)
+
+Text files and messages only: the *Fit input …* rows (15 significant figures; the catalog row says its ephemeris
+source once; "under 1 min now"), the settings file's *Gain check from the night's sky* row (e-/ADU first, then
+"x the header EGAIN"), author names in ASCII files (Yalcinkaya), a plain *Calibration failed: The master bias is … px
+but the flats are … px …* message, and the Calibrate page's preview line reading **No preview yet.** while a
+calibration runs or after one fails.
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| (none) | 7, 16, 19, 23 | Text only; no screenshot shows these lines | No reshoot |

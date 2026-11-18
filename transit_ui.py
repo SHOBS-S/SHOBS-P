@@ -3759,6 +3759,17 @@ def sky_check_line(pn: dict | None) -> str:
     m = pn.get("sky_meas") or {}
     if pn.get("source") != "EGAIN" or not m.get("k"):
         return ""
+    # step 3 regression (18 Nov): lead with e-/ADU, the unit of the EGAIN line just above, so the two are compared
+    # like for like ("3 e- per image unit" beside "0.243 e-/ADU" read as a disagreement); the image-unit figure
+    # (electrons per measured pixel at SHOBS-P's processing bin) follows in the bracket.
+    try:
+        egain, at = float(pn.get("e_per_adu")), float(pn.get("k_median"))
+        g_sky = float(m["k"]) * egain / at if egain > 0 and at > 0 else float("nan")
+    except (TypeError, ValueError):
+        g_sky = float("nan")
+    if math.isfinite(g_sky):
+        return (f"Gain check from the night's sky: {g_sky:.3g} e-/ADU, {g_sky / egain:.2f} x the header EGAIN "
+                f"({m['k']:.3g} e- per image unit; {sky_meas_words(pn)})")
     return f"Gain check from the night's sky: {m['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
 
 

@@ -85,8 +85,10 @@ Beside the report, SHOBS-P writes:
   measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames skipped at photometry**,
   **Frames left out** (by flag and frame number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and
   the dark's exposure) and the **Gain** with where it came from (from 2.4.0, on a night with EGAIN, a **Gain check
-  from the night's sky** line follows it, and a **SHOBS-FLUX camera profile** line when FLUX has a profile for the
-  camera; see "The gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md)), **Scintillation** (on or off, with the telescope
+  from the night's sky** line follows it, in the same unit as EGAIN: for example `Gain check from the night's sky:
+  0.255 e-/ADU, 1.05 x the header EGAIN (3 e- per image unit; from 11 frame pairs, …)`, the image-unit figure being the
+  electrons per measured pixel at SHOBS-P's processing bin; and a **SHOBS-FLUX camera profile** line when FLUX has a
+  profile for the camera; see "The gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md)), **Scintillation** (on or off, with the telescope
   aperture and elevation the error bars used), **Telescope aperture box when the night was measured** (nights measured with 2.3.1 or
   later), and **Stacking** for stacked points. With it, you (or
   anyone you send it to) can reduce the night again the same way. Some rows in more detail:
@@ -104,12 +106,14 @@ Beside the report, SHOBS-P writes:
     a flip)` (chapter 8).
   - On an alt-az night where the field turned by about 180° between two frames, a row `Field turn: field turned 180 deg
     between frames … on an alt-az night (a meridian flip? check Mount)` (chapter 8).
-  - **Fit inputs** (from 2.4.0): the exact values the fit started from, at full precision, so a later rerun can be
-    checked for identical inputs. One row each: `Fit input period: 2.21857 +/- 1e-06 d`, **t0** and its error,
+  - **Fit inputs** (from 2.4.0): the exact values the fit started from, at full precision (15 significant figures:
+    every digit the catalog gave, without the computer's rounding noise in a worked-out value, so a depth reads
+    `0.019321`, not `0.019321000000000005`), so a later rerun can be checked for identical inputs. One row each: `Fit input period: 2.21857 +/- 1e-06 d`, **t0** and its error,
     **a/R\*** and **b** with their errors, the published **Rp/R\*** and depth, **T14**, the **Teff** and band the limb
     darkening was taken for (`V / clear table`, or `Sloan i' (Claret 2004)`), the **limb darkening prior** (u1, u2 and
     its width), the **shape priors used** (the published values with SHOBS-P's minimum widths, which can be wider
-    than the catalog's), the **catalog** and where the ephemeris came from, and the **lookup**: when the NASA
+    than the catalog's), the **catalog** (with where the ephemeris came from when that is a different source; said once when it is the
+    same), and the **lookup**: when the NASA
     Exoplanet Archive (or ExoFOP) answered, `from the lookup cache (fetched …)` when it did not, `typed on the Input
     page`, or `not looked up (the report's own values)` for a fit of an opened report. When you typed over some of
     the looked-up values on the Input page before fitting, the row names them: `…(live); typed over on the Input page

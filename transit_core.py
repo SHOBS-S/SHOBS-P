@@ -2062,7 +2062,9 @@ def lookup_nea(name: str) -> dict:
     if best is not None:
         period, period_err, t0, t0_err = best["period"], best["period_err"], best["t0"], best["t0_err"]
         refs[0] = best["reference"] or refs[0]
-        eph_note = (f"; most precise of {best['n']} published ephemerides, ±{best['sigma_min']:.0f} min now"
+        # step 3 regression (18 Nov): "±0 min now" read oddly; under a minute is said as such
+        eph_note = ((f"; most precise of {best['n']} published ephemerides, "
+                     + (f"±{best['sigma_min']:.0f} min now" if best["sigma_min"] >= 1 else "under 1 min now"))
                     if best["n"] > 1 else "")
     planet = {
         "name": pl_name, "host": row.get("hostname") or "",
@@ -2634,14 +2636,16 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
 
 
 def _full(v, unit: str = "") -> str:
-    """2.4.0 (#93): a number at full precision (Python's shortest exact form), or 'not known'."""
+    """2.4.0 (#93): a number at full precision, or 'not known'. Step 3 regression (18 Nov): 15 significant digits,
+    not Python's repr, so a catalog value keeps every digit it was published with (a double holds ~15.9) while a
+    derived one loses only the binary noise (k^2 = 0.022159299599999998 -> 0.0221592996)."""
     try:
         f = float(v)
     except (TypeError, ValueError):
         return "not known"
     if not math.isfinite(f):
         return "not known"
-    return repr(f) + unit
+    return f"{f:.15g}" + unit
 
 
 def _full_pm(value, err, unit: str = "") -> str:
@@ -2690,8 +2694,13 @@ def fit_inputs_lines(result: dict) -> list:
                    + " (published values with the sigma floors)")
     src = str(pl.get("source") or "").strip() or "not recorded"
     ref = str(pl.get("reference") or "").strip()
-    out.append(f"Fit input catalog: {src}" + (f" ({ref})" if ref else "")
-               + (f"; ephemeris from {r['eph_source']}" if r.get("eph_source") else ""))
+    eph = str(r.get("eph_source") or "").strip()
+    cat = src + (f" ({ref})" if ref else "")
+    # step 3 regression (18 Nov): the ephemeris source is often the same catalog and reference again; say it once
+    ref_core = ref.split("ephemeris:", 1)[-1].strip() if ref.lower().startswith("ephemeris:") else ref
+    if eph and eph != cat and not (ref_core and ref_core in eph and src in eph):
+        cat += f"; ephemeris from {eph}"
+    out.append(f"Fit input catalog: {cat}")
     if pl.get("from_cache"):
         when = f"from the lookup cache (fetched {pl['from_cache']}; the live service did not answer)"
     elif pl.get("looked_up"):

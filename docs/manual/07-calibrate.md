@@ -51,7 +51,8 @@ The log ends with lines such as:
     Masters ready: bias n=51 saved master, dark n=20 exp=120s, flat n=30
     Preview debayered: green from RGGB, 3120×2080 px. Star positions are on this image.
 
-The line beside the buttons (**No preview yet.** before the first calibration) then shows the picture you will work
+The line beside the buttons (**No preview yet.** before the first calibration, while a calibration runs, and after
+one fails) then shows the picture you will work
 on, for example "Preview: green from RGGB → 3120×2080 (superpixel)".
 
 **Why the picture is half size (color cameras).** SHOBS-P combines each 2×2 group of the color mask into one pixel
