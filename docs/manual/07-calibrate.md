@@ -77,6 +77,12 @@ calibration stops with a message ending "Pick the matching frames, or tick Rebui
 noted as cautions in the log: a different Bayer pattern, gain, offset, a sensor temperature more than 3 °C apart, a
 flat taken at another rotator angle, or a flat more than 30 days from the lights.
 
+From 2.4.0 the commonest cause of a wrong-size master is gone: when the lights come from another camera than the last
+lights, the Bias, Flat and Dark flats boxes left over from that camera are emptied before calibration (and Dark,
+unless its frames have these lights' size and exposure), and the Input page says so in a plain line. See "Lights from
+another camera" in [5. Input](05-input.md). Calibrate itself runs the same check when the Lights folder was not
+scanned yet.
+
 ## Dark flats
 
 Dark flats are darks taken at the flats' exposure. Many capture programs offer them in place of bias frames. Put them

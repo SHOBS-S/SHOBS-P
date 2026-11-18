@@ -361,9 +361,18 @@ example "Measured with r 8, sky 14–22 px (Bin 1)". If you then change the aper
 changes to: "Aperture changed (now r 6, …): run photometry again to apply it." The new sizes are used only by the
 next run.
 
-**Aperture kept from another target.** The aperture boxes keep their values from the last target. On a new image,
-the log cautions when they don't fit these stars: an aperture larger than 2.5 × the stars' FWHM (it adds sky noise and
-neighbors), or, on defocused stars, one that clips the donut. Each caution says what **Suggest…** would give.
+**Aperture kept from another target.** The aperture boxes keep their values from the last target on the same
+camera. On a new image, a caution (Findings list and log) says when they don't fit these stars: an aperture larger
+than 2.5 × the stars' FWHM (it adds sky noise and neighbors), or, on defocused stars, one that clips the donut. Each
+caution says what **Suggest…** would give. From 2.4.0 the caution goes away as soon as you change the boxes (by hand
+or with **Suggest…**) to sizes that fit; if the new sizes still do not fit, it comes back in the new numbers, without
+"(kept from before)". Before, it stayed in the Findings list until the next solve.
+
+**A new camera (2.4.0).** When the lights come from another camera than the last ones, the boxes are not kept: they
+go back to 8, 14 and 22 px and, on the first calibrated image, are set to what **Suggest…** proposes for these stars
+(*"Aperture set for the new camera's frames: r 4.1, sky 8–12 px (stars' FWHM 2.3 px). Suggest… shows the detail and
+can test other sizes."*). **raw sat ADU** and **linear ADU** are set for the new camera too. See "Lights from another
+camera" in [5. Input](05-input.md).
 
 ### Defocused stars (donuts)
 

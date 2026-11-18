@@ -2426,9 +2426,13 @@ def parse_exoplanet_report(text: str) -> dict:
     out = {"header": header, "t": col("DATE"), "flux": col("DIFF"), "err": col("ERR"),
            "airmass": None, "priors": _parse_pm(header.get("PRIORS", "")),
            "results": _parse_pm(header.get("RESULTS", ""))}
+    # 2.4.0 (#110): the airmass is the DETREND_n column at AIRMASS's place in #DETREND_PARAMETERS (one column per
+    # name, in that order); DETREND_1 when the list only mentions airmass in other words, as before.
     detrends = header.get("DETREND_PARAMETERS", "").upper()
-    if "AIRMASS" in detrends and col("DETREND_1") is not None and np.isfinite(col("DETREND_1")).any():
-        out["airmass"] = col("DETREND_1")
+    names = [p.strip() for p in detrends.split(",")]
+    am_col = f"DETREND_{names.index('AIRMASS') + 1}" if "AIRMASS" in names else "DETREND_1"
+    if "AIRMASS" in detrends and col(am_col) is not None and np.isfinite(col(am_col)).any():
+        out["airmass"] = col(am_col)
     for key in ("RESULTS-XC",):
         if key in header:
             try:
@@ -2484,9 +2488,29 @@ def planet_from_report(rep: dict) -> dict:
     return complete_planet(planet)
 
 
+def detrend_columns(result: dict) -> list:
+    """2.4.0 (#110): the AAVSO exoplanet report's detrend columns for a fit, in the order of result["detrend"]:
+    [(NAME, values, format)], one per detrend. airmass → each point's airmass; time → each point's BJD_TDB (the
+    time slope's own variable, written like DATE). AAVSO wants as many DETREND_n columns on every data line as
+    #DETREND_PARAMETERS has names (0 to 4); a fit with no detrend lists none and writes none."""
+    values = {"airmass": (result.get("airmass"), "{:.7f}"), "time": (result.get("t"), "{:.8f}")}
+    out = []
+    for name in result.get("detrend") or []:
+        if name not in values:
+            raise ValueError(f"the report has no data column for the detrend '{name}'")
+        col, fmt = values[name]
+        col = np.full(len(result["t"]), np.nan) if col is None else np.asarray(col, dtype=float)
+        out.append((str(name).upper(), col, fmt))
+    return out
+
+
 def aavso_exoplanet_report(result: dict, meta: dict) -> str:
     """An AAVSO exoplanet report in the format EXOTIC writes (#TYPE=EXOPLANET), from a SHOBS-P fit.
-    Check AAVSO's current exoplanet-section instructions before uploading."""
+    Check AAVSO's current exoplanet-section instructions before uploading.
+    2.4.0 (#110): one DETREND_n column per name in #DETREND_PARAMETERS, in the same order (it always wrote one
+    column, the airmass, whatever the list said: AAVSO rejected "AIRMASS, TIME" with "not enough fields; need 5",
+    and "TIME" alone carried the airmass under the wrong name)."""
+    detrend = detrend_columns(result)
     s, pl = result["summary"], result["planet"]
 
     def pm(name, fmt):
@@ -2513,14 +2537,17 @@ def aavso_exoplanet_report(result: dict, meta: dict) -> str:
         f"#EXPOSURE_TIME={meta.get('exposure', '')}", f"#OBSLAT={meta.get('lat', '')}", f"#OBSLON={meta.get('lon', '')}",
         f"#OBSELEV={meta.get('elev', '')}", f"#NOTES={meta.get('notes', '')}",
         # 2.3.0 (#8): a kept flip step is not a data column, so it is said in #NOTES (flip_report_note), not here.
-        "#DETREND_PARAMETERS=" + (", ".join(d.upper() for d in result["detrend"]) or "NONE"),
+        # 2.4.0 (#110): no detrend = no names and no DETREND column (AAVSO: "0 to 4 names"; a word such as NONE
+        # would count as one name and ask for a column).
+        "#DETREND_PARAMETERS=" + ", ".join(name for name, _c, _f in detrend),
         "#MEASUREMENT_TYPE=Rnflux", f"#FILTER={meta.get('filter', 'CV')}",
         "#PRIORS=" + ",".join(priors), "#RESULTS=" + ",".join(results),
         _created(),
-        "#DATE,DIFF,ERR,DETREND_1",
+        "#DATE,DIFF,ERR" + "".join(f",DETREND_{i + 1}" for i in range(len(detrend))),
     ]
-    for t, f, e, a in zip(result["t"], result["flux"], result["err_scaled"], result["airmass"]):
-        lines.append(f"{t:.8f},{f:.7f},{e:.7f},{a:.7f}" if math.isfinite(a) else f"{t:.8f},{f:.7f},{e:.7f},na")
+    for i, (t, f, e) in enumerate(zip(result["t"], result["flux"], result["err_scaled"])):
+        extra = [fmt.format(col[i]) if math.isfinite(col[i]) else "na" for _name, col, fmt in detrend]
+        lines.append(",".join([f"{t:.8f}", f"{f:.7f}", f"{e:.7f}"] + extra))
     return "\n".join(lines) + "\n"
 
 

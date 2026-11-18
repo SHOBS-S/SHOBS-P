@@ -1263,6 +1263,84 @@ def same_scope(a: dict | None, b: dict | None, tol: float = 0.03) -> bool:
         return False
 
 
+# ---- 2.4.0 (#111): which camera took a set of lights ---------------------------------------------------------------
+APERTURE_DEFAULTS = (8.0, 14.0, 22.0)   # the Aperture r / sky in / sky out boxes of a fresh start
+SAT_DEFAULT_16BIT = 60000               # the raw sat ADU box of a fresh start (a little under a 16-bit file's 65,535)
+
+
+def camera_bits(header: dict | None, path: str = "") -> int | None:
+    """2.4.0 (#111): the camera's bit depth as far as the header tells: 12 for MicroObservatory frames, the depth a
+    DATAMAX of 2^n - 1 names (4095 = 12-bit), else the file's own whole-number depth (BITPIX 8 or 16). None for
+    floating-point or 32-bit files (they say nothing about the camera)."""
+    h = header or {}
+    try:
+        if core.is_microobservatory(path or "", h):
+            return 12
+    except Exception:
+        pass
+    try:
+        top = float(h.get("DATAMAX"))
+        n = int(round(math.log2(top + 1))) if math.isfinite(top) and top > 0 else 0
+        if 8 <= n <= 16 and abs(2 ** n - 1 - top) < 0.5:
+            return n
+    except (TypeError, ValueError):
+        pass
+    try:
+        bitpix = int(h.get("BITPIX"))
+    except (TypeError, ValueError):
+        return None
+    return bitpix if bitpix in (8, 16) else None
+
+
+def camera_signature(header: dict | None, path: str = "") -> dict | None:
+    """2.4.0 (#111): what tells one camera (and how it was read out) from another, from a light's header:
+    {"instrume", "nx", "ny", "xbin", "bits"}. None when the header gives no frame size."""
+    h = header or {}
+    try:
+        nx, ny = int(h.get("NAXIS1")), int(h.get("NAXIS2"))
+    except (TypeError, ValueError):
+        return None
+    if nx <= 0 or ny <= 0:
+        return None
+    try:
+        xbin = int(round(float(h.get("XBINNING", 1) or 1)))
+    except (TypeError, ValueError):
+        xbin = 1
+    return {"instrume": " ".join(str(h.get("INSTRUME") or "").split()), "nx": nx, "ny": ny,
+            "xbin": xbin if 1 <= xbin <= 16 else 1, "bits": camera_bits(h, path)}
+
+
+def same_camera(a: dict | None, b: dict | None) -> bool:
+    """2.4.0 (#111): two camera_signature() records are one camera read out the same way: same frame size and
+    XBINNING, the same INSTRUME when both headers name one (case aside), the same bit depth when both tell one."""
+    if not a or not b:
+        return False
+    if (a.get("nx"), a.get("ny"), a.get("xbin") or 1) != (b.get("nx"), b.get("ny"), b.get("xbin") or 1):
+        return False
+    na, nb = str(a.get("instrume") or "").lower(), str(b.get("instrume") or "").lower()
+    if na and nb and na != nb:
+        return False
+    return not (a.get("bits") and b.get("bits") and a["bits"] != b["bits"])
+
+
+def camera_words(sig: dict | None) -> str:
+    """2.4.0 (#111): "ZWO ASI2600MC Duo, 6248×4176" (", binned 2x2", ", 12-bit" when the header says so)."""
+    if not sig:
+        return "unknown camera"
+    parts = [p for p in (sig.get("instrume"),) if p] + [f"{sig.get('nx')}×{sig.get('ny')}"]
+    if (sig.get("xbin") or 1) > 1:
+        parts.append(f"binned {sig['xbin']}x{sig['xbin']}")
+    if sig.get("bits") and sig["bits"] != 16:
+        parts.append(f"{sig['bits']}-bit")
+    return ", ".join(parts)
+
+
+def camera_key(sig: dict) -> str:
+    """2.4.0 (#111): one text key per camera and readout, for the limits remembered per camera."""
+    return (f"{str(sig.get('instrume') or '').lower()}|{sig.get('nx')}x{sig.get('ny')}|bin{sig.get('xbin') or 1}"
+            f"|{sig.get('bits') or '?'}bit")
+
+
 def scope_words(scope: dict | None) -> str:
     """2.3.1: "ZWO ASI2600MM Pro, focal 2098 mm" for the aperture question."""
     if not scope:
@@ -4432,6 +4510,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
                                              wraplength=text_wrap_px(frames, 120), justify=LEFT)
         self.dark_exposure_label.pack(anchor=W)
+        # 2.4.0 (#111): what a change of camera emptied and reset, in plain words, while those lights are in the box
+        self.camera_note = StringVar(value="")
+        self.camera_note_label = ttk.Label(frames, textvariable=self.camera_note, style="Hint.TLabel",
+                                           wraplength=text_wrap_px(frames, 120), justify=LEFT)
+        frames.bind("<Configure>", lambda e: self.camera_note_label.configure(
+            wraplength=max(int(e.width) - int(10 * ui_scale(self)), int(300 * ui_scale(self)))), add="+")
 
         grid = ttk.Frame(card, style="Card.TFrame")
         grid.pack(fill=X, pady=(10, 0))
@@ -5202,7 +5286,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     # ---- 2.2.19 (#20): a new reduction never keeps the previous star's state ---------------------------------------
     NEW_REDUCTION_TIP = ("New reduction starts over for another star: the open series is closed (you are offered a "
                          "save first), and the target, planet, comps, check and watch stars, Use comps choice, VSX "
-                         "period and rejected frames are cleared. The frame folders, site and optics stay.")
+                         "period and rejected frames are cleared. The frame folders, site and optics stay. "
+                         "When the next lights come from another camera, the Bias, Flat and Dark flats boxes are "
+                         "emptied and the aperture, raw sat ADU and linear ADU are set for that camera.")
 
     def _switch_star(self, why: str, keep_planet: bool = False) -> bool:
         """2.2.19 (#20; TrES-3 b then WASP-10 b, beta tester): another star chosen on the Input page (a planet of
@@ -5291,6 +5377,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if note and note not in (OSC_NOTE, MONO_NOTE):
                 cleared.append("the Output page notes")
         reason = why or "New reduction pressed"
+        self._camera_folders_snapshot()   # 2.4.0 (#111): the frame boxes as the last night left them
+        self._set_camera_note("")
         self._flip_turn_note = None   # 2.3.4 review
         self.clear_target(quiet=True, why=reason)
         self.log("New reduction" + (f" (was {old})" if old else "") + ": " + reason
@@ -5496,14 +5584,254 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             pass
         return text
 
+    # ---- 2.4.0 (#111): lights from another camera never keep the last camera's calibration, aperture and limits ----
+    _CAMERA_BOXES = (("Bias", "bias_dir"), ("Dark", "dark_dir"), ("Dark flats", "darkflat_dir"), ("Flat", "flat_dir"))
+
+    def _camera_folders_snapshot(self):
+        """The calibration boxes as they are now: they go with the camera of the lights in use (taken when those
+        lights are checked or calibrated and at New reduction). A box still holding this text when lights from
+        another camera come in was carried over; one changed since was chosen for the new lights and is left alone."""
+        self._camera_folders = {key: getattr(self, name).get().strip() for key, name in self._CAMERA_BOXES}
+
+    def _set_camera_note(self, text: str):
+        note, label = getattr(self, "camera_note", None), getattr(self, "camera_note_label", None)
+        if note is None:
+            return
+        note.set(text)
+        self._camera_note_for = self.light_dir.get().strip() if text else None
+        try:
+            if text:
+                label.pack(anchor=W)
+            else:
+                label.pack_forget()
+        except Exception:
+            pass
+
+    def _box_number(self, var):
+        try:
+            v = float(str(var.get()).strip().replace(",", ""))
+            return v if math.isfinite(v) else None
+        except Exception:
+            return None
+
+    def _camera_limits_remember(self, sig: dict):
+        """The raw sat ADU and linear ADU boxes as used with this camera (settings file, the last 12 cameras)."""
+        sat = self._box_number(self.sat_limit)
+        if sat is None or sat <= 0:
+            return
+        mem = self.settings.get("camera_limits")
+        mem = dict(mem) if isinstance(mem, dict) else {}
+        rec = {"sat": sat, "linear": self._box_number(self.linear_limit) or ""}
+        key = camera_key(sig)
+        if mem.get(key) == rec and list(mem)[-1:] == [key]:
+            return
+        mem.pop(key, None)
+        mem[key] = rec
+        while len(mem) > 12:
+            mem.pop(next(iter(mem)))
+        self.settings["camera_limits"] = mem
+
+    def _camera_record(self, sig: dict):
+        self._camera_last = sig
+        self._camera_folders_snapshot()
+        self._camera_limits_remember(sig)
+        if self.settings.get("camera_last") != sig:
+            self.settings["camera_last"] = sig
+        self._save_settings()
+
+    def _camera_check(self, header: dict, path: str = "") -> bool:
+        """2.4.0 (#111, John's step 3 regression: HAT-P-32 b on the ASI2600MC Duo, then New reduction and a
+        MicroObservatory night): the lights now in the Lights box against the camera of the last lights (INSTRUME,
+        frame size, XBINNING, bit depth). The same camera, or no earlier lights: everything stays, as it always has
+        (handy for the next night). Another camera:
+        - Bias, Flat and Dark flats carried over from the last camera are emptied; Dark carried over stays only when
+          its frames have these lights' size and exposure;
+        - the aperture and sky ring go back to the defaults and are set from these frames' star sizes as soon as an
+          image is calibrated (_camera_aperture_apply; Suggest… measures the same way);
+        - raw sat ADU and linear ADU come from the SHOBS-FLUX profile for this camera, else from what was last used
+          with it, else the camera's bit-depth maximum (linear ADU empty = the raw sat level).
+        Each is said in one plain line (Log, and under the Frames boxes). True when the camera changed."""
+        if getattr(self, "_loading_meta", False) or getattr(self, "busy", False):
+            return False
+        sig = camera_signature(header, path)
+        if sig is None:
+            return False
+        lights_dir = self.light_dir.get().strip()
+        if getattr(self, "_camera_note_for", None) not in (None, lights_dir):
+            self._set_camera_note("")   # that note was about other lights
+        last = getattr(self, "_camera_last", None)
+        in_session = last is not None
+        if last is None:   # the camera of the last session's lights (the linear ADU box is remembered from then)
+            saved = self.settings.get("camera_last")
+            last = saved if isinstance(saved, dict) and saved.get("nx") else None
+        if last is None or same_camera(last, sig):
+            self._camera_record(sig)
+            return False
+        if in_session:
+            self._camera_limits_remember(last)   # the boxes still hold the last camera's limits
+        lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session),
+                 self._camera_reset_limits(header, sig, path)]
+        self._camera_record(sig)
+        self.log(lines[0])
+        for line in lines[1:]:
+            self.log(line, keep_status=True)
+        self._set_camera_note("\n".join(lines))
+        return True
+
+    def _camera_reset_folders(self, header: dict, last: dict, sig: dict) -> str:
+        carried = getattr(self, "_camera_folders", None) or {}
+        emptied, dark_words = [], ""
+        for key, name in self._CAMERA_BOXES:
+            var = getattr(self, name)
+            text = var.get().strip()
+            if not text or text != carried.get(key):
+                continue   # empty, or chosen since the last camera's night: not carried over
+            if key == "Dark":
+                dh = self._first_header(self.dark_dir) or {}
+                try:
+                    d_size = (int(dh.get("NAXIS1")), int(dh.get("NAXIS2")))
+                except (TypeError, ValueError):
+                    d_size = None
+                d_exp, l_exp = self._header_exposure(dh), self._header_exposure(header)
+                fits_size = d_size == (sig["nx"], sig["ny"])
+                fits_exp = bool(d_exp and l_exp and abs(d_exp / l_exp - 1.0) <= 0.02)
+                if fits_size and fits_exp:
+                    dark_words = " Dark kept: its frames have these lights' size and exposure."
+                    continue
+                dark_words = (" Dark emptied too: its frames ("
+                              + (f"{d_size[0]}×{d_size[1]}" if d_size else "size not known")
+                              + (f", {d_exp:g} s" if d_exp else "") + ") are not these lights' ("
+                              + f"{sig['nx']}×{sig['ny']}" + (f", {l_exp:g} s" if l_exp else "") + ").")
+            else:
+                emptied.append(key)
+            self._folder_job_cancel(key)
+            var.set("")
+            self._folder_job_cancel(key)
+            self.__dict__.setdefault("_folder_counted", {})[key] = ""
+            try:
+                self._counts[key].set("0 files")
+            except Exception:
+                pass
+        head = (f"These lights come from another camera than the last ones ({camera_words(last)} before, "
+                f"{camera_words(sig)} now)")
+        if emptied:
+            names = emptied[0] if len(emptied) == 1 else ", ".join(emptied[:-1]) + " and " + emptied[-1]
+            head += f": {names} emptied, because {'it belongs' if len(emptied) == 1 else 'they belong'} to the last camera."
+        else:
+            head += "."
+        return head + dark_words
+
+    def _camera_reset_aperture(self, in_session: bool = True) -> str:
+        r, si, so = APERTURE_DEFAULTS
+        now = (self._box_number(self.radius), self._box_number(self.sky_in), self._box_number(self.sky_out))
+        if not in_session and now != APERTURE_DEFAULTS:
+            # the last camera was in an earlier session: sizes typed since SHOBS-P started are the user's own
+            return "Aperture and sky ring left as you typed them."
+        self.radius.set(r)
+        self.sky_in.set(si)
+        self.sky_out.set(so)
+        self._camera_aperture_pending = APERTURE_DEFAULTS
+        self._aperture_caution_said = None
+        return (f"Aperture and sky ring back to the defaults (r {r:g}, sky {si:g}–{so:g} px) for the new camera; they "
+                "are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).")
+
+    def _camera_reset_limits(self, header: dict, sig: dict, path: str = "") -> str:
+        """Raw sat ADU and linear ADU for a new camera: the SHOBS-FLUX camera profile's saturation and linear limit,
+        else what was last used with this camera, else the bit-depth maximum (under 16 bits; SHOBS-P's 60,000 for a
+        16-bit file, as cameras scale their data up to just under 65,535) with linear ADU empty. On MicroObservatory
+        frames raw sat ADU is left to the MicroObservatory setup (it sets 4000 and sets your own value aside)."""
+        import shobs_profile as sp
+        sat = lin = None
+        source = ""
+        try:
+            cam_id = sp.setup_key(header).get("camera_id")
+            prof = sp.find_camera_profile(cam_id) if cam_id else None
+            sat = sp.camera_value(prof, "saturation_adu")[0]
+            lin = sp.camera_value(prof, "linear_limit_adu")[0]
+        except Exception:
+            sat = lin = None
+        if sat or lin:
+            source = "from the SHOBS-FLUX profile for this camera"
+        else:
+            mem = self.settings.get("camera_limits")
+            rec = mem.get(camera_key(sig)) if isinstance(mem, dict) else None
+            if isinstance(rec, dict) and rec.get("sat"):
+                sat, lin = rec.get("sat"), rec.get("linear") or None
+                source = "as last used with this camera"
+        if not source:
+            bits = sig.get("bits")
+            if bits and bits < 16:
+                sat, source = 2 ** bits - 1, f"the camera's {bits}-bit maximum; no SHOBS-FLUX profile for this camera"
+            else:
+                sat, source = SAT_DEFAULT_16BIT, ("SHOBS-P's value for a 16-bit file; no SHOBS-FLUX profile for this "
+                                                  "camera")
+            lin = None
+
+        def words(v):
+            return f"{float(v):,.0f}"
+
+        def box(v):
+            return int(v) if float(v).is_integer() else float(v)
+        try:
+            mobs = core.is_microobservatory(path or "", header)
+        except Exception:
+            mobs = False
+        self.linear_limit.set(str(box(lin)) if lin else "")
+        lin_words = "Linear ADU " + (words(lin) if lin else "emptied (empty = the raw sat ADU is the only limit)")
+        if mobs:
+            return (f"{lin_words} for the new camera" + (f" ({source})" if lin else "")
+                    + "; raw sat ADU is set with the MicroObservatory setup.")
+        if sat:
+            self.sat_limit.set(box(sat))
+            if isinstance(getattr(self, "_own_setup", None), dict) and "sat_limit" in self._own_setup:
+                self._own_setup["sat_limit"] = box(sat)   # your own setup coming back never undoes this
+        return ("Raw sat ADU " + (words(sat) if sat else "kept") + " and l" + lin_words[1:] + f" ({source}).")
+
+    def _camera_aperture_apply(self, donut, fwhm) -> bool:
+        """2.4.0 (#111): the first calibrated image of a new camera: the aperture and sky ring boxes get what
+        Suggest… proposes for these stars (core.suggest_apertures of the field's FWHM, or the donut sizes on a
+        defocused field), unless the boxes were changed since the reset. True when the boxes were set."""
+        pending = getattr(self, "_camera_aperture_pending", None)
+        if pending is None:
+            return False
+        self._camera_aperture_pending = None
+        now = (self._box_number(self.radius), self._box_number(self.sky_in), self._box_number(self.sky_out))
+        if now != tuple(pending):
+            return False   # typed, or loaded with a series, since the reset: the user's own
+        if donut is not None:
+            prop = {k: float(donut[k]) for k in ("radius", "sky_in", "sky_out")}
+            basis = "defocused stars: 95 % of the light"
+        elif fwhm is not None and math.isfinite(fwhm) and fwhm > 0:
+            prop = core.suggest_apertures(fwhm)
+            basis = f"stars' FWHM {fwhm:.1f} px"
+        else:
+            self.log(f"Star sizes could not be measured on this image: the aperture stays at the defaults (r "
+                     f"{pending[0]:g}, sky {pending[1]:g}–{pending[2]:g} px). Mark the stars and press Suggest….",
+                     keep_status=True)
+            return False
+        self.radius.set(prop["radius"])
+        self.sky_in.set(prop["sky_in"])
+        self.sky_out.set(prop["sky_out"])
+        self.log(f"Aperture set for the new camera's frames: r {prop['radius']:g}, sky {prop['sky_in']:g}–"
+                 f"{prop['sky_out']:g} px ({basis}). Suggest… shows the detail and can test other sizes.",
+                 keep_status=True)
+        return True
+
     def _frames_folder_picked(self, key: str):
         """2.2.19 (#20): a Lights or Dark folder was just chosen: the dark/lights exposure note, and for new lights the
         question whether they are another star (header pointing far from the Star ID, or OBJECT without pointing)."""
         self._prune_rejected()   # review: on Browse / Scan / a run, not on every key typed in the folder box
+        header = None
+        if key == "Lights":
+            header = self._first_header(self.light_dir)
+            try:   # 2.4.0 (#111): another camera than the last lights? (before the dark note: Dark may be emptied)
+                if header:
+                    self._camera_check(header, getattr(self, "_first_light_path", "") or "")
+            except Exception:
+                traceback.print_exc()
         self._update_dark_exposure_note()
         if key != "Lights" or self.mode_key == "discovery" or not self.star_id.get().strip():
             return
-        header = self._first_header(self.light_dir)
         if not header:
             return
         # Review: the same path as Scan folders: a folder pointing at two places is sorted out first (the two-fields
@@ -5936,6 +6264,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if lights:
             try:
                 _, header = core.read_fits(lights[0])
+                try:
+                    self._camera_check(header, lights[0])   # 2.4.0 (#111): another camera than the last lights?
+                except Exception:
+                    traceback.print_exc()   # never costs the checks below
                 # 2.2.18 (item 1): color images already debayered (three channels): a channel is chosen, no debayer.
                 rgb = core.is_rgb_header(header)
                 if rgb:
@@ -8096,6 +8428,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             finally:
                 self._scan_from_calibrate = False
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
+        self._camera_folders_snapshot()   # 2.4.0 (#111): these boxes go with these lights' camera
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
         bias, bias_file = core.calibration_source(self.bias_dir.get())
         dark, dark_file = core.calibration_source(self.dark_dir.get())
@@ -10324,7 +10657,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             return None
 
-    def _aperture_caution(self, token=None, measured: bool = False):
+    def _aperture_caution(self, token=None, measured: bool = False, typed: bool = False):
         """2.2.19 (nit, #30): the aperture carries over from the last target. On a new image, say so when it does
         not fit these stars: in focus, r over ~2.5 × the field's FWHM (sky noise and neighbors); defocused, r too
         small for the donut (it clips the ring). A log line and the status bar, no question (Run asks)."""
@@ -10356,12 +10689,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 key = (id(img), getattr(img, "shape", None))
                 if fwhm is not None and (getattr(self, "_seeing_cache", None) or (None,))[0] != key:
                     self._seeing_cache = (key, fwhm)
-                self._aperture_caution(token, measured=True)
+                self._aperture_caution(token, measured=True, typed=typed)
 
             threading.Thread(target=work, daemon=True).start()
             return
         donut = self._donut_apertures()
+        if getattr(self, "_camera_aperture_pending", None) is not None:
+            # 2.4.0 (#111): a new camera's first image: the boxes get the suggested sizes, so there is nothing to warn
+            if self._camera_aperture_apply(donut, None if donut is not None else self._seeing()):
+                return
+            try:
+                r = float(self.radius.get())
+            except (TypeError, ValueError):
+                return
         text = ""
+        # 2.4.0 (#111): "kept from before" only while it is; after you change the boxes the check speaks of your value
+        kept = "" if typed else " (kept from before)"
         if donut is not None:
             if r < donut["clip_below"]:
                 text = (f"⚠ Defocused stars: the aperture clips the ring — use r ≥ {donut['clip_below']:g} px (now r = "
@@ -10371,12 +10714,34 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             fwhm = self._seeing()
             if math.isfinite(fwhm) and fwhm > 0 and r > 2.5 * fwhm:
                 prop = core.suggest_apertures(fwhm)
-                text = (f"⚠ Aperture r = {r:g} px (kept from before) is {r / fwhm:.1f} × the stars' FWHM ({fwhm:.1f} "
+                text = (f"⚠ Aperture r = {r:g} px{kept} is {r / fwhm:.1f} × the stars' FWHM ({fwhm:.1f} "
                         f"px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = "
                         f"{prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px.")
         if text and text != getattr(self, "_aperture_caution_said", None):
             self._aperture_caution_said = text
             self.log(text)
+
+    APERTURE_CAUTION_STARTS = ("Aperture r = ", "Defocused stars: the aperture clips the ring")
+
+    def _aperture_caution_recheck(self):
+        """2.4.0 (#111): the Aperture / sky boxes changed (typed, Suggest…, a reset): the aperture caution of this
+        image leaves the Findings panel, and the check runs again on the new sizes (it comes back, in the new
+        numbers, only when they still do not fit the stars). Before, only a new solve replaced it."""
+        self._aperture_recheck_job = None
+        said = getattr(self, "_aperture_caution_said", None)
+        store = getattr(self, "findings", None)
+        if store is not None:
+            for f in [f for f in store.items if findings.bare(f.text).startswith(self.APERTURE_CAUTION_STARTS)]:
+                store.dismiss(f)
+        self._aperture_caution_said = None
+        if said is None and getattr(self, "_camera_aperture_pending", None) is None:
+            return   # nothing was said about this image's aperture: Run still asks when it does not fit
+        try:
+            float(self.radius.get())
+        except Exception:
+            return   # half-typed number: the next keystroke comes back here
+        if self.preview is not None and self.preview_is_debayered:
+            self._aperture_caution(getattr(self, "_preview_token", 0), typed=True)
 
     def _marked_stars(self):
         return [(role_label(role), xy) for role, xy in self._marked_roles()]
@@ -11533,6 +11898,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 pass
         self._aperture_redraw_job = self.after(400, self._aperture_redraw)
+        # 2.4.0 (#111): a fix to the boxes clears the aperture caution (and checks the new sizes)
+        job = getattr(self, "_aperture_recheck_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._aperture_recheck_job = self.after(600, self._aperture_caution_recheck)
 
     def _aperture_redraw(self):
         self._aperture_redraw_job = None

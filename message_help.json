@@ -162,9 +162,34 @@
   {
    "section": "Input",
    "patterns": [
+    "These lights come from another camera than the last ones (… before, … now): Bias, Dark flats and Flat emptied, because they belong to the last camera. …"
+   ],
+   "todo": "Choose this camera's bias, darks and flats (or leave a box empty). See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Aperture and sky ring back to the defaults (r 8, sky 14–22 px) for the new camera; they are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).",
+    "Aperture set for the new camera's frames: r …, sky …–… px (stars' FWHM … px). …"
+   ],
+   "todo": "Nothing; press Suggest… to see the measurement or test other sizes. Star sizes could not be measured on this image: the aperture stays at the defaults …: mark the stars and press Suggest…"
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Raw sat ADU … and linear ADU … (from the SHOBS-FLUX profile for this camera).",
+    "(as last used with this camera)",
+    "Raw sat ADU 4,095 and linear ADU emptied (empty = the raw sat ADU is the only limit) (the camera's 12-bit maximum; no SHOBS-FLUX profile for this camera).",
+    "Linear ADU emptied … for the new camera; raw sat ADU is set with the MicroObservatory setup."
+   ],
+   "todo": "Check the two boxes on the Photometry page; type your camera's linear limit if you know it (chapter 4)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
-   "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
+   "todo": "Yes to start over for another star; folders, site and optics stay (until lights from another camera come in: see the rows above). The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
   },
   {
    "section": "Input",
@@ -504,6 +529,20 @@
     "The aperture (r = 12 px) is much larger than the stars on this frame (FWHM 3.2 px)."
    ],
    "todo": "No, then Suggest… to set sizes from the stars."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Aperture r = … px (kept from before) is … × the stars' FWHM (… px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = …, sky …–… px."
+   ],
+   "todo": "Press Suggest… (or type the suggested sizes). The finding goes away once the sizes fit (2.4.0)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Defocused stars: the aperture clips the ring — use r ≥ … px (now r = …; Suggest… gives r = …, sky …–…)."
+   ],
+   "todo": "Press Suggest…; the finding goes away once the aperture holds the ring."
   },
   {
    "section": "Photometry",
@@ -1279,6 +1318,20 @@
     "Enter your site's latitude and longitude on the Input page first …"
    ],
    "todo": "Type your site once."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Error on data line … of report: not enough fields; need 5"
+   ],
+   "todo": "Save the report again with 2.4.0 (one column per detrend) and upload that. See 19. Reports."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The AAVSO exoplanet report could not be saved: the report has no data column for the detrend '…'"
+   ],
+   "todo": "Report the problem with the log (24. Troubleshooting)."
   },
   {
    "section": "Output, Transits mode",
