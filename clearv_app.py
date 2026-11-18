@@ -5632,12 +5632,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.settings["camera_limits"] = mem
 
     def _camera_record(self, sig: dict):
+        before = json.dumps([self.settings.get("camera_last"), self.settings.get("camera_limits")], sort_keys=False)
         self._camera_last = sig
         self._camera_folders_snapshot()
         self._camera_limits_remember(sig)
-        if self.settings.get("camera_last") != sig:
-            self.settings["camera_last"] = sig
-        self._save_settings()
+        self.settings["camera_last"] = dict(sig)
+        if json.dumps([self.settings["camera_last"], self.settings.get("camera_limits")], sort_keys=False) != before:
+            self._save_settings()   # only when something changed (not at every scan of the same lights)
 
     def _camera_check(self, header: dict, path: str = "") -> bool:
         """2.4.0 (#111, John's step 3 regression: HAT-P-32 b on the ASI2600MC Duo, then New reduction and a
@@ -10698,6 +10699,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.4.0 (#111): a new camera's first image: the boxes get the suggested sizes, so there is nothing to warn
             if self._camera_aperture_apply(donut, None if donut is not None else self._seeing()):
                 return
+            typed = True   # not kept from the last target: the defaults, or sizes typed since the reset
             try:
                 r = float(self.radius.get())
             except (TypeError, ValueError):
@@ -10728,6 +10730,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         image leaves the Findings panel, and the check runs again on the new sizes (it comes back, in the new
         numbers, only when they still do not fit the stars). Before, only a new solve replaced it."""
         self._aperture_recheck_job = None
+        try:
+            float(self.radius.get())
+        except Exception:
+            return   # half-typed number: the next keystroke comes back here
         said = getattr(self, "_aperture_caution_said", None)
         store = getattr(self, "findings", None)
         if store is not None:
@@ -10736,10 +10742,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._aperture_caution_said = None
         if said is None and getattr(self, "_camera_aperture_pending", None) is None:
             return   # nothing was said about this image's aperture: Run still asks when it does not fit
-        try:
-            float(self.radius.get())
-        except Exception:
-            return   # half-typed number: the next keystroke comes back here
         if self.preview is not None and self.preview_is_debayered:
             self._aperture_caution(getattr(self, "_preview_token", 0), typed=True)
 
