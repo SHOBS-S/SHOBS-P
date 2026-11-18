@@ -157,7 +157,7 @@ class TestSeriesPlacement(PlaceBase):
         mine = [ln for ln in lines if "Gaia DR3 4006100810081" in ln]
         self.assertEqual(len(mine), 1, lines)                                   # ONE line per star
         self.assertRegex(mine[0], r"^Comp 1 Gaia DR3 4006100810081 placed from the series position, centered "
-                                  r"\(\d\.\d px\); magnitude 8\.728 kept as loaded\.$")
+                                  r"\(\d\.\d px from where the position falls\); magnitude 8\.728 kept as loaded\.$")
         self.assertNotIn("⚠", mine[0])
         self.assertEqual(len(app.findings), 0)
 
@@ -364,7 +364,9 @@ class TestWiderRecenter(PlaceBase):
 
     def test_seven_px_off_near_the_edge_is_centered(self):
         star = (300.0, 21.8, 11.5)                            # 22 px from the top edge
-        app, field = self._setup(extra=[star], chart_extra=[(300.0, 21.8, {"auid": "APASS J185609.9+692057",
+        # step 4 review (M3): tonight's catalog star is drawn where the solution puts it (6.8 px out, like the
+        # stored position: the same RA/Dec), so it is the star meant and nothing else is near
+        app, field = self._setup(extra=[star], chart_extra=[(300.0, 28.6, {"auid": "APASS J185609.9+692057",
                                                                          "mag": 11.5, "mags": {"V": 11.5}})])
         c4 = self.ca.COMP_ROLES[3]
         app.series_path = "/tmp/series.csv"
@@ -381,7 +383,10 @@ class TestWiderRecenter(PlaceBase):
         self.assertLess(math.hypot(got[0] - 300.0, got[1] - 21.8), 0.3)
         line = [ln for ln in lines if "APASS J185609.9+692057" in ln]
         self.assertEqual(len(line), 1, lines)
-        self.assertRegex(line[0], r"centered by a wider search \(6\.\d px; 22 px from the top edge\): check it")
+        self.assertRegex(line[0], r"^⚠ .*centered by a wider search, 6\.\d px from where the position falls — more "
+                                  r"than the normal centering allows \(22 px from the top edge\)\. Check it is the "
+                                  r"right star")
+        self.assertEqual(len(app.findings), 1)                # review M3: a wide hop is always a finding
         # the run's own check has nothing to say about it
         self.assertEqual(app._warn_marker_offsets(5.0), [])
 
@@ -394,7 +399,8 @@ class TestWiderRecenter(PlaceBase):
         got = getattr(app, f"{c1}_xy")
         self.assertLess(math.hypot(got[0] - 300.0, got[1] - 21.8), 0.3)
         self.assertIn("wider search", app._slot_notes[c1][1])
-        self.assertEqual(len(app.findings), 0)
+        self.assertIn("⚠", app._slot_notes[c1][1])
+        self.assertEqual(len(app.findings), 1)                # review M3: a wide hop is always a finding
 
     def test_cannot_center_is_said_and_run_only_warns(self):
         a, b = (300.0, 40.0, 11.0), (314.0, 40.0, 11.2)       # two catalog stars; the position falls between them

@@ -299,17 +299,18 @@ class TestCompsFromSlots(AppCase):
             meta[f"{role}_name"], meta[f"{role}_mag"] = name, f"{cat[name]:.3f}"
         return self.write("S033.cvseries", meta, _points([A, B, X], cat))
 
-    def test_stale_active_comp_is_not_put_back(self):
-        # S033, 15 Nov 2026: the comp slot was saved empty but active_comps still listed the star
+    def test_stale_active_comp_is_asked_about(self):
+        # S033, 15 Nov 2026: the comp slot was saved empty but active_comps still listed the star. Step 4 review
+        # (M1): Load never trims the choice silently; it asks (tests/test_240_p.py has both answers). The answer
+        # here is the safe one, Keep it: the series stays as saved and the Log says so.
         self.load(self._file([A, B]))
         app = self.app
-        self.assertEqual(app.active_comps, [A, B])
-        self.assertEqual([app.comp_name.get(), app.comp2_name.get(), app.comp3_name.get()], [A, B, ""])
+        self.assertEqual(app.active_comps, [A, B, X])
         line = self.said("Comps loaded:")
         self.assertEqual(len(line), 1)
         self.assertIn(f"C1 {A}", line[0])
         self.assertIn(f"C2 {B}", line[0])
-        self.assertIn(f"{X} is not put back", line[0])
+        self.assertIn(f"{X} is still in the series' comps in use", line[0])
 
     def test_cleared_comp_stays_cleared(self):
         path = self._file([A, B, X])

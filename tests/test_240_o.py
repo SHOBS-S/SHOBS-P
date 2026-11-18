@@ -268,8 +268,8 @@ class TestCameraChange(unittest.TestCase):
 
     def test_changed_camera_clears_and_resets_one_line_each(self):
         app = self.app
+        app.radius.set(9.0)                 # the ASI night's own size (step 4 review M2: set before its snapshot)
         self._old_night()
-        app.radius.set(9.0)
         app.light_dir.set("/data/mobs/wasp-50")
         with mock.patch.object(app, "_first_header", return_value=dict(ASI)):      # the carried-over darks
             self.assertTrue(app._camera_check(MOBS, "/data/mobs/wasp-50/WASP-50b1.FITS"))
@@ -438,7 +438,7 @@ class TestCameraChange(unittest.TestCase):
         self.assertTrue(app._camera_check(MOBS, "/data/mobs/wasp-50/WASP-50b1.FITS"))
         self.assertEqual(app.bias_dir.get(), "/data/mobs/bias")
         self.assertEqual(app.radius.get(), 5.0)
-        self.assertIn("left as you typed them", self.lines[1])
+        self.assertIn("Aperture and sky ring left as they are", self.lines[1])
         self.assertEqual(app.linear_limit.get(), "")
 
     def test_settings_remember_the_camera(self):

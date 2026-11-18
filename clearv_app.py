@@ -47,10 +47,9 @@ import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
-import star_record   # 2.4.0 step 4 (#72): same star within 1 arcsec, the name shown
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
-import star_record   # 2.4.0 step 4 (#72): the per-star record of a series' comps and check
+import star_record   # 2.4.0 step 4 (#72): the per-star record of a series' comps and check (same star within 1")
 from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows   # 2.4.0 (#98)
 import photometry_core as core
 import transit_core as tcore
@@ -1799,7 +1798,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._slot_typed = {}         # 2.2.16 (item 8): role -> the name as last typed by a key in its box
         self._slot_state = {}         # 2.4.0 step 4 (#72): role -> (image token, name, "off" | "unplaced")
         self._tonight_aliases = {}    # 2.4.0 step 4 (#72): series name -> tonight's catalog names of the same star
-        self._last_center = None      # 2.4.0 step 4 (#71): what the last placement's centring did
         self._pick_note = ""          # 2.4.0 step 4 (#77): why the last name pick went by brightness
         self._pick_refused = {}       # 2.4.0 step 4 (#77): role -> (xy, why no neighbor's name was taken)
         self._slot_keying = None      # 2.2.16 (item 8): the slot a key was just pressed in (its text changes next)
@@ -1924,6 +1922,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._camera_folders_snapshot()   # step 4 review (M2): the boxes as the session starts
 
     # ---- thread-safe UI calls -------------------------------------------------
     def call_ui(self, func, *args):
@@ -5438,6 +5437,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.comp_catalog_mags = {}
         self.comp_coords = {}
         self.star_records, self._v_disagree, self._user_cleared = [], {}, set()   # 2.4.0 step 4
+        self._tonight_aliases = {}   # review S5: another target's catalog names never become aliases here
         self.spare_catalog = {}
         self.seq_auids = {}
         self.report_names = {}
@@ -5598,11 +5598,36 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     # ---- 2.4.0 (#111): lights from another camera never keep the last camera's calibration, aperture and limits ----
     _CAMERA_BOXES = (("Bias", "bias_dir"), ("Dark", "dark_dir"), ("Dark flats", "darkflat_dir"), ("Flat", "flat_dir"))
 
-    def _camera_folders_snapshot(self):
+    def _camera_folders_snapshot(self, values: bool = True):
         """The calibration boxes as they are now: they go with the camera of the lights in use (taken when those
         lights are checked or calibrated and at New reduction). A box still holding this text when lights from
         another camera come in was carried over; one changed since was chosen for the new lights and is left alone."""
+        # step 4 review (M2): the aperture, sky ring and limit boxes too. A camera change resets only a box that
+        # still holds this value; one changed since (typed, or set by a loaded series) is left alone.
+        # They are taken when the night's frames are calibrated or measured, at New reduction and when a camera
+        # change has just set them; values=False (the same camera's lights scanned again) keeps the ones held.
+        old = getattr(self, "_camera_folders", None) or {}
         self._camera_folders = {key: getattr(self, name).get().strip() for key, name in self._CAMERA_BOXES}
+        held = old.get(self._CAMERA_VALUES)
+        self._camera_folders[self._CAMERA_VALUES] = (held if not values and isinstance(held, dict)
+                                                     else self._camera_values_now())
+
+    _CAMERA_VALUES = "(values)"
+
+    def _camera_values_now(self) -> dict:
+        return {"aperture": (self._box_number(self.radius), self._box_number(self.sky_in),
+                             self._box_number(self.sky_out)),
+                "sat": self._box_number(self.sat_limit), "linear": self._box_number(self.linear_limit)}
+
+    def _camera_value_carried(self, key: str, fallback=None):
+        """True when the box (or the three aperture boxes) still holds what it held with the last camera's lights
+        (the snapshot), so it was carried over and a new camera resets it. Without a snapshot: `fallback` is the
+        value the session started with (None: taken as carried over)."""
+        now = self._camera_values_now()[key]
+        snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+        if not isinstance(snap, dict):
+            return fallback is None or now == fallback
+        return now == snap.get(key)
 
     def _set_camera_note(self, text: str):
         note, label = getattr(self, "camera_note", None), getattr(self, "camera_note_label", None)
@@ -5642,10 +5667,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             mem.pop(next(iter(mem)))
         self.settings["camera_limits"] = mem
 
-    def _camera_record(self, sig: dict):
+    def _camera_record(self, sig: dict, changed: bool = False):
         before = json.dumps([self.settings.get("camera_last"), self.settings.get("camera_limits")], sort_keys=False)
         self._camera_last = sig
-        self._camera_folders_snapshot()
+        self._camera_folders_snapshot(values=changed)
         self._camera_limits_remember(sig)
         self.settings["camera_last"] = dict(sig)
         if json.dumps([self.settings["camera_last"], self.settings.get("camera_limits")], sort_keys=False) != before:
@@ -5683,7 +5708,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._camera_limits_remember(last)   # the boxes still hold the last camera's limits
         lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session),
                  self._camera_reset_limits(header, sig, path)]
-        self._camera_record(sig)
+        self._camera_record(sig, changed=True)
         self.log(lines[0])
         for line in lines[1:]:
             self.log(line, keep_status=True)
@@ -5735,10 +5760,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _camera_reset_aperture(self, in_session: bool = True) -> str:
         r, si, so = APERTURE_DEFAULTS
-        now = (self._box_number(self.radius), self._box_number(self.sky_in), self._box_number(self.sky_out))
-        if not in_session and now != APERTURE_DEFAULTS:
-            # the last camera was in an earlier session: sizes typed since SHOBS-P started are the user's own
-            return "Aperture and sky ring left as you typed them."
+        if not self._camera_value_carried("aperture", APERTURE_DEFAULTS):
+            # step 4 review (M2): changed since the last camera's lights (typed, or set by a series just loaded):
+            # these sizes are not the last camera's, so they stay
+            return ("Aperture and sky ring left as they are: they were set (typed, or by a loaded series) after the "
+                    "last camera's night.")
         self.radius.set(r)
         self.sky_in.set(si)
         self.sky_out.set(so)
@@ -5788,16 +5814,38 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             mobs = core.is_microobservatory(path or "", header)
         except Exception:
             mobs = False
-        self.linear_limit.set(str(box(lin)) if lin else "")
-        lin_words = "Linear ADU " + (words(lin) if lin else "emptied (empty = the raw sat ADU is the only limit)")
+        # step 4 review (M2): a limit changed since the last camera's lights (typed, or set by a series just loaded)
+        # is not the last camera's: it stays
+        keep_sat = not self._camera_value_carried("sat")
+        keep_lin = not self._camera_value_carried("linear")
+        kept_words = " left as it is (set after the last camera's night)"
+        if keep_lin:
+            lin_words = "Linear ADU" + kept_words
+        else:
+            self.linear_limit.set(str(box(lin)) if lin else "")
+            lin_words = "Linear ADU " + (words(lin) if lin else "emptied (empty = the raw sat ADU is the only limit)")
         if mobs:
-            return (f"{lin_words} for the new camera" + (f" ({source})" if lin else "")
+            return (f"{lin_words}" + ("" if keep_lin else " for the new camera" + (f" ({source})" if lin else ""))
                     + "; raw sat ADU is set with the MicroObservatory setup.")
+        if keep_sat:
+            return ("Raw sat ADU" + kept_words + (" and l" + lin_words[1:] if keep_lin else "; l" + lin_words[1:]
+                                                   + f" ({source})") + ".")
         if sat:
             self.sat_limit.set(box(sat))
             if isinstance(getattr(self, "_own_setup", None), dict) and "sat_limit" in self._own_setup:
                 self._own_setup["sat_limit"] = box(sat)   # your own setup coming back never undoes this
         return ("Raw sat ADU " + (words(sat) if sat else "kept") + " and l" + lin_words[1:] + f" ({source}).")
+
+    def _camera_aperture_settle(self) -> bool:
+        """Step 4 review (S7): a new camera's aperture is set from the calibrated image here, on the window's own
+        thread, before a solve, a placement or Run photometry reads the boxes (it used to wait for a background
+        measurement, and a quick Run could measure with the defaults). True when the boxes were set."""
+        if getattr(self, "_camera_aperture_pending", None) is None:
+            return False
+        if self.preview is None or not self.preview_is_debayered:
+            return False
+        donut = self._donut_apertures()
+        return self._camera_aperture_apply(donut, None if donut is not None else self._seeing())
 
     def _camera_aperture_apply(self, donut, fwhm) -> bool:
         """2.4.0 (#111): the first calibrated image of a new camera: the aperture and sky ring boxes get what
@@ -5824,6 +5872,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.radius.set(prop["radius"])
         self.sky_in.set(prop["sky_in"])
         self.sky_out.set(prop["sky_out"])
+        snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+        if isinstance(snap, dict):   # these sizes go with this camera's lights
+            snap["aperture"] = self._camera_values_now()["aperture"]
         self.log(f"Aperture set for the new camera's frames: r {prop['radius']:g}, sky {prop['sky_in']:g}–"
                  f"{prop['sky_out']:g} px ({basis}). Suggest… shows the detail and can test other sizes.",
                  keep_status=True)
@@ -8901,6 +8952,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                  + f": {channel}, {mono.shape[1]}×{mono.shape[0]} px. Star positions are on this image.")
         self.refresh_preview()
         _tok = self._preview_token
+        try:
+            self._camera_aperture_settle()   # step 4 review (S7): a new camera's sizes, before anything reads them
+        except Exception:
+            traceback.print_exc()
         self.after(400, lambda: self._aperture_caution(_tok))   # 2.2.19 (nit, #30): the aperture kept from before
         self.show_step(STEP_PHOTO)   # in Discovery this starts the field solve (2.2.9: show_step)
         if self.mode_key == "discovery":
@@ -12496,7 +12551,34 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             ra, dec = float(rd[0]), float(rd[1])
         except (TypeError, ValueError, IndexError):
             return None
-        return (ra, dec) if math.isfinite(ra) and math.isfinite(dec) else None
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return None
+        return self._radec_tonight(name, (ra, dec))
+
+    def _radec_tonight(self, name: str, rd):
+        """Step 4 review (S6): a stored position moved to tonight with the star's proper motion, when the series'
+        record of this star has one (and rd is that record's stored position). Any other star: rd as it is."""
+        try:
+            rec = self._series_star_for(name)
+            if not rec or not rec.get("pm") or rec.get("epoch") is None:
+                return rd
+            stored = star_record.position(rec)
+            if stored is None or (rd is not None and not star_record.same_star(stored, rd)):
+                return rd
+            now = star_record.position_at(rec, core.pm_epoch())
+            return (float(now[0]), float(now[1])) if now is not None else rd
+        except Exception:
+            return rd
+
+    def _stored_is(self, name: str, rd, pos) -> bool:
+        """True when the stored position rd of the series' star `name` and tonight's position pos are one star
+        (within star_record.SAME_STAR_ARCSEC), as stored or moved to tonight by its proper motion (S6)."""
+        if rd is None or pos is None:
+            return False
+        if star_record.same_star(rd, pos):
+            return True
+        moved = self._radec_tonight(name, rd)
+        return moved is not rd and star_record.same_star(moved, pos)
 
     def _series_star_names(self) -> set:
         """2.4.0 step 4 (#72): the names the open series knows its comps and check by (empty with no series)."""
@@ -12543,7 +12625,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 best = (d, (float(x), float(y)))
         geo = self._sky_on_frame(ra, dec)
         if best is not None:
-            geo = dict(geo or {"px": best[1][0], "py": best[1][1], "beyond": 0.0, "side": ""}, state="on")
+            # step 4 review (S1): "start_sep" = how far (arcsec) that catalog star is from the position asked for,
+            # so the Log can say when it is beyond the same-star rule (which star is taken is unchanged: 2.3.6)
+            geo = dict(geo or {"px": best[1][0], "py": best[1][1], "beyond": 0.0, "side": ""}, state="on",
+                       start_sep=float(best[0]))
             return best[1], geo
         if geo is None:
             return None, {"state": "nosol"}
@@ -12731,7 +12816,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except (TypeError, ValueError, KeyError):
             pos = None
         if pos is not None:
-            same = [n for n, rd in self.comp_coords.items() if star_record.same_star(rd, pos)]
+            same = [n for n, rd in self.comp_coords.items() if self._stored_is(n, rd, pos)]
             for n in same:
                 if n in names:
                     return n
@@ -12772,14 +12857,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return None
         return (cx, cy)
 
-    def _center_placed(self, xy, rd=None, extra: float = 0.0) -> dict:
+    def _center_placed(self, xy, rd=None, extra: float = 0.0, mag=None) -> dict:
         """2.4.0 step 4 (#71, #72): center a marker placed from a name or sky position on its star, like a click,
-        and say what happened. First exactly as 2.2.18 did (_snap_to_star: a star within about 1.5 FWHM that is the
+        and say what happened. First exactly as 2.2.18 did (a star within about 1.5 FWHM that is the
         catalog star placed). When that fails, a wider search (3 FWHM or the aperture radius, plus extra px) takes
         the brightest star there, as long as no other catalog star (of comparable brightness) is that close.
         Returns {"xy", "centered", "how": "centered" | "wide" | "kept", "shift", "why", "reach"}; why (when kept):
         "blended" (a faint star in a brighter one's wing: left where it is, as a click is), "none" (no star within
-        reach), "several" (more than one catalog star that close), "" otherwise."""
+        reach), "several" (more than one catalog star that close), "bright" / "faint" (the star found does not have
+        the brightness of the star meant), "" otherwise.
+        Step 4 review (M3): with rd, the star meant is the catalog star within star_record.SAME_STAR_ARCSEC of rd;
+        when tonight's catalogs have none there, every catalog star in reach is another star (the nearest one is
+        not taken for it, and one lone catalog star there is not excused). Before a wide hop is accepted, the star
+        found must read (through the field zero point) like the star meant: `mag` (the slot's series magnitude),
+        else the matched catalog star's, within the #77 window. Otherwise the marker is not moved."""
         x0, y0 = float(xy[0]), float(xy[1])
         out = {"xy": (x0, y0), "centered": False, "how": "kept", "shift": 0.0, "why": "", "reach": 0.0}
         if self.preview is None or not self.preview_is_debayered:
@@ -12814,14 +12905,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 out["why"] = "none"
                 return out
             if rd is not None:
+                want = None   # M3: the nearest catalog star is not the star meant unless it is at rd
                 for x, y, st in self.chart_placed:
                     if st.get("ra") is not None and st.get("dec") is not None and star_record.same_star(
                             rd, (st["ra"], st["dec"])):
                         want = st
                         break
+            seen = self._seen_mag(star)
             ref = self._star_cat_mag(want)
             if ref is None:
-                ref = self._seen_mag(star)
+                ref = seen
             rivals = []
             for x, y, st in self.chart_placed:
                 if st is want or math.hypot(x - x0, y - y0) > wide:
@@ -12829,11 +12922,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 m = self._star_cat_mag(st)
                 if ref is None or m is None or m <= ref + self.FAINT_PICK_DMAG:
                     rivals.append((float(x), float(y), st))
-            if want is None and len(rivals) == 1 and math.hypot(rivals[0][0] - star[0], rivals[0][1] - star[1]) <= 8.0:
-                rivals = []   # the one catalog star that close is the star centered on
+            if rd is None and want is None and len(rivals) == 1 and math.hypot(
+                    rivals[0][0] - star[0], rivals[0][1] - star[1]) <= 8.0:
+                rivals = []   # the one catalog star that close is the star centered on (no position to tell by)
             if rivals:
                 out["why"] = "several"
+                out["rival"], out["lone"] = rivals[0][2], want is None and len(rivals) == 1
                 return out
+            # M3: the star found must have the brightness of the star meant (#77's window)
+            try:
+                expect = float(str(mag).strip()) if mag is not None and str(mag).strip() else None
+            except (TypeError, ValueError):
+                expect = None
+            if expect is None or not math.isfinite(expect):
+                expect = self._star_cat_mag(want)
+            if expect is not None and seen is not None:
+                resid = expect - seen
+                if not (-self.NAME_FIT_BRIGHT <= resid <= self.NAME_FIT_FAINT):
+                    out["why"] = "bright" if resid > 0 else "faint"
+                    out["seen"], out["expect"] = float(seen), float(expect)
+                    return out
             out.update(xy=star, centered=True, how="wide", shift=float(math.hypot(star[0] - x0, star[1] - y0)))
         except Exception:
             traceback.print_exc()
@@ -12841,10 +12949,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _not_centered_words(self, c: dict, xy) -> str:
         """2.4.0 step 4 (#71): why a placed marker was left at the catalog position, and what to do."""
+        band = core.band_label(self._band())
+        rival = c.get("rival")
+        several = (f"another catalog star ({self._chart_star_label(rival)}) lies within {c.get('reach', 0.0):.0f} px, "
+                   "so the star to center on could not be told" if rival is not None and c.get("lone") else
+                   f"more than one catalog star lies within {c.get('reach', 0.0):.0f} px, so the star to center on "
+                   "could not be told")
+        odd = (f"the only star within {c.get('reach', 0.0):.0f} px reads about {band} {c.get('seen', 0.0):.1f}, too "
+               f"{'bright' if c.get('why') == 'bright' else 'faint'} to be this star ({band} "
+               f"{c.get('expect', 0.0):.2f}), so the marker was not moved onto it")
         why = {"none": f"no star could be centered within {c.get('reach', 0.0):.0f} px of it",
-               "several": f"more than one catalog star lies within {c.get('reach', 0.0):.0f} px, so the star to "
-                          "center on could not be told"}.get(c.get("why"), "it could not be centered on a star")
-        edge = self._edge_text(xy)
+               "several": several, "bright": odd, "faint": odd}.get(c.get("why"),
+                                                                   "it could not be centered on a star")
+        edge = self._edge_text(xy) if xy is not None else ""
         return why + (f"; it is {edge}" if edge else "") + ". Click the star to center it."
 
     PLACE_STEP = "Placing a comp or check star"
@@ -12859,17 +12976,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         store.drop_step(step)
         if text:
             store.add("warn", text, step=step, where="Photometry page")
-
-    def _snap_to_star(self, xy):
-        """2.2.18 (item 5): a marker placed from a name or sky position sits where the plate solution puts the star,
-        which for a star the solve did not match can be a few px off. Center it on the star there (as a click is) when
-        one is within about 1.5 FWHM; 2.4.0 step 4 (#71): else by a wider search (_center_placed); otherwise keep the
-        position. What happened is left in self._last_center for the caller to say."""
-        if xy is None or self.preview is None or not self.preview_is_debayered:
-            self._last_center = None
-            return xy
-        self._last_center = self._center_placed(xy)
-        return self._last_center["xy"]
 
     def _series_off_this_image(self) -> bool:
         """2.3.5: True when the solved image is another field than the loaded series: the series' target (Input page
@@ -13033,13 +13139,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                                        "to look it up, or click the star.")
                 continue
             c = self._center_placed(xy0, rd=rd, extra=float(geo.get("beyond") or 0.0) if geo.get("state") == "edge"
-                                    else 0.0)
+                                    else 0.0, mag=mag_var.get())
             xy = c["xy"]
             if not c["centered"] and c["why"] != "blended" and (
                     geo.get("state") == "edge" or not core.star_under(self.preview, xy[0], xy[1], radius)):
                 # nothing to center on where the position falls: a weak solve, or the star is not there
                 where = (f"at the frame edge ({geo['px']:.0f}, {geo['py']:.0f})" if geo.get("state") == "edge" else
                          f"at ({xy[0]:.0f}, {xy[1]:.0f})")
+                if c["why"] in ("several", "bright", "faint"):   # review M3: a star is near, but not surely this one
+                    words = self._not_centered_words(c, None).replace(" Click the star to center it.", "")
+                    self._slot_unplaced(role, name, token,
+                                        f"⚠ {who} couldn't be placed where {source} falls, {where}: {words} Solve "
+                                        "again, or click the star.")
+                    continue
                 self._slot_unplaced(role, name, token,
                                     f"⚠ {who} couldn't be placed: no star was found within {c['reach']:.0f} px of "
                                     f"where {source} falls, {where}. Solve again, or click the star.")
@@ -13076,10 +13188,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 alias = (f" = {star_record.display_name(names)} in tonight's catalogs (the same star; the series' "
                          "name is kept)")
             edge = self._edge_text(xy)
-            if c["how"] == "wide":
-                how = f"centered by a wider search ({c['shift']:.1f} px" + (f"; {edge}" if edge else "") + "): check it"
+            # step 4 review (S1): the distance said is from where the stored position falls (the shift from a
+            # catalog star's own spot read "(0.0 px)" whatever the distance); a start star beyond the same-star
+            # rule is named as such
+            moved = c["shift"]
+            if rd is not None and geo.get("px") is not None:
+                moved = math.hypot(xy[0] - geo["px"], xy[1] - geo["py"])
+            far = ""
+            if (geo.get("start_sep") or 0.0) > star_record.SAME_STAR_ARCSEC:
+                far = (f"; tonight's catalog star there is {geo['start_sep']:.1f}\" from the stored position (more "
+                       "than the 1\" that makes it surely the same star): check it is the right star")
+            wide_hop = c["how"] == "wide"
+            if wide_hop:
+                how = (f"centered by a wider search, {moved:.1f} px from where the position falls — more than the "
+                       "normal centering allows" + (f" ({edge})" if edge else "") + ". Check it is the right star")
             elif c["centered"]:
-                how = f"centered ({c['shift']:.1f} px)"
+                how = f"centered ({moved:.1f} px from where the position falls)" + far
             elif c["why"] == "blended":
                 how = "left where the position falls (a faint star beside a brighter one)"
             else:
@@ -13090,7 +13214,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 tail = f"; magnitude {now} from the catalog (the slot had none): check it."   # review S6
             else:
                 tail = f"; type its {band} magnitude."
-            if how:
+            if wide_hop:
+                # review M3: a marker moved farther than the normal rule allows is always a ⚠ with a finding
+                warn = f"⚠ {who} placed from {source}, {how}{alias}{tail}"
+                self.log(warn, finding=False, keep_status=True)
+                self._place_finding(role, warn)
+                self._slot_notes[role] = (name, warn, True)
+            elif how:
                 self.log(f"{who} placed from {source}, {how}{alias}{tail}", keep_status=True)
                 self._slot_notes[role] = (name, f"✓ placed after the solve at ({xy[0]:.0f}, {xy[1]:.0f}), {how}"
                                           + tail, not now)
@@ -13123,7 +13253,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.2.18 (item 5): a catalog position is centered on its star like a click; 2.4.0 step 4 (#71): by a wider
         # search when that fails, and it is said when the marker could not be centered at all.
         c = self._center_placed(start, rd=rd) if self.preview is not None and self.preview_is_debayered else None
-        self._last_center = c
         xy = c["xy"] if c else start
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
@@ -13142,8 +13271,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         if c and c["how"] == "wide":
             edge = self._edge_text(xy)
-            msg += (f" Centered on the star {c['shift']:.1f} px from the catalog position (wider search"
-                    + (f"; {edge}" if edge else "") + "): check it is the right star.")
+            msg += (f" Centered on the star {c['shift']:.1f} px from the catalog position by a wider search — more "
+                    "than the normal centering allows" + (f" ({edge})" if edge else "")
+                    + ". Check it is the right star.")
         elif c and c["centered"] and c["shift"] >= 1.0:
             msg += f" Centered on the star ({c['shift']:.1f} px from the catalog position)."
         if c and not c["centered"] and c["why"] != "blended":
@@ -13152,6 +13282,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             warn = (f"⚠ {role_label(role)} {getattr(self, f'{role}_name').get().strip() or text} is at the catalog "
                     f"position ({xy[0]:.0f}, {xy[1]:.0f}), not centered on a star: " + self._not_centered_words(c, xy))
             self.log(f"{role_label(role)}: {msg}", keep_status=True)
+            self.log(warn, finding=False)
+            self._place_finding(role, warn)
+            self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), warn, True)
+            self.update_star_panel()
+        elif c and c["how"] == "wide":
+            # step 4 review (M3): moved farther than the normal rule allows: a ⚠ with a finding
+            warn = f"⚠ {role_label(role)}: {msg}"
             self.log(warn, finding=False)
             self._place_finding(role, warn)
             self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), warn, True)
@@ -14079,7 +14216,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             pos = (float(star["ra"]), float(star["dec"]))
             # 2.4.0 step 4 (#72): a stored position is fixed once; tonight's catalog position of the same star
             # (within 1 arcsec) does not replace it. Another star under an old name does.
-            if not star_record.same_star(self.comp_coords.get(name), pos):
+            if not self._stored_is(name, self.comp_coords.get(name), pos):
                 self.comp_coords[name] = pos
         if seq_auid := (star.get("seq") or {}).get("auid"):
             # 2.2.13 (John): an AAVSO sequence comp or check is named by its AUID in AAVSO reports; the series and
@@ -16550,6 +16687,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.masters is None:
             messagebox.showerror(APP_TITLE, "Build calibration masters first.")
             return
+        try:
+            self._camera_aperture_settle()   # step 4 review (S7): never a run on a new camera's default sizes
+        except Exception:
+            traceback.print_exc()
+        self._camera_folders_snapshot()   # step 4 review (M2): the sizes and limits this camera's night is run with
         if not self._aperture_sane():
             return
         if not self._markers_in_order():
@@ -18292,7 +18434,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._update_aperture_state()
         self.draw_output()
         saved = ""
-        if self.series_path:
+        if self.series_path and save:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -19955,7 +20097,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         watch_before = {w.get("name") for w in self.watch_list}
         auids_before = set(self.seq_auids)
         names_before = {role: name_key(getattr(self, f"{role}_name").get()) for role in COMP_ROLES + ("check",)}
-        self._apply_meta(meta)
+        self._loading_points = observations   # review S4: the spares these points measured count as "in use"
+        try:
+            self._apply_meta(meta)
+        finally:
+            self._loading_points = None
         for role, (name, mag) in kept_marked.items():
             getattr(self, f"{role}_name").set(name)
             getattr(self, f"{role}_mag").set(mag)
@@ -19988,14 +20134,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
         self.legacy_mixed = self._legacy_nights(meta, observations)
         self.series_path = path
-        left_out = self._loaded_active_comps()   # 2.4.0 step 4 (S033): a cleared comp never comes back
+        # 2.4.0 step 4 (S033; review M1): a "comps in use" star that no comp box of the file holds is never trimmed
+        # silently: Load asks once (Leave it out re-derives every night as Use comps… does; Keep it leaves the file's
+        # choice). The file's own fingerprint is taken first, so a re-derive shows as unsaved.
+        fp_file = self._series_fingerprint()
+        left_out, kept_in = self._loaded_active_comps(meta, step)
         if self.active_comps:
             try:
                 self._comps_follow_in_use("as saved in the series")   # 2.2.19 (#34)
                 self._seed_comps_under()   # review: the series' other comps are measured (as spares) next night too
             except Exception:
                 traceback.print_exc()
-        self.log(self._comps_loaded_line(left_out))   # 2.4.0 step 4 (S033): a surprise shows at once
+        self.log(self._comps_loaded_line(left_out, kept_in))   # 2.4.0 step 4 (S033): a surprise shows at once
         both = self._comp_and_watch_names()
         if both:
             self.log(f"⚠ {', '.join(both)} {'is' if len(both) == 1 else 'are'} both a comp and a Watch star in this "
@@ -20004,7 +20154,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         step("the period search")
         self._refresh_period()
-        self._series_saved_fp = self._series_fingerprint()   # 2.2.15 (item 7): the series as on disk
+        # 2.2.15 (item 7): the series as on disk (review M1: a comp left out at Load is a change not saved yet)
+        self._series_saved_fp = fp_file if left_out else self._series_fingerprint()
         step("drawing the light curve")
         self.draw_output()
         step(None)
@@ -21638,7 +21789,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._refresh_period()
         self.draw_output()
         saved = ""
-        if self.series_path:
+        if self.series_path and save:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -21887,7 +22038,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             source = str(entry["source"])
                     except (TypeError, ValueError):
                         pass
-                star_record.set_used(rec, value, source or star_record.TYPED)
+                # review nit: "typed" only for a magnitude in a slot's box that no catalog gave; else not known ("")
+                star_record.set_used(rec, value, source or (star_record.TYPED if in_slot else ""))
                 rec["band"] = band
         return records
 
@@ -21903,6 +22055,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if isinstance(info, dict):
                 in_data |= {name_key(n) for n in info.get("comps") or []}
         in_data |= {name_key(meta.get(f"{r}_name")) for r in COMP_ROLES}
+        for o in getattr(self, "_loading_points", None) or self.observations or []:   # review S4: spares measured
+            in_data |= {name_key(n) for n in (getattr(o, "spare_insts", None) or {})}
         for rec in records:
             if rec.get("role") != "comp" or self.comp_catalog_mags.get(rec["key"]) is None:
                 continue
@@ -21939,6 +22093,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         (never over an existing one), and the Log says so in one line."""
         if star_record.is_current(meta):
             return ""
+        same = self._same_backup(path)
+        if same:
+            # review S2: this original is already kept (an earlier Load converted it): no second copy
+            self.log(f"Series updated to the new star format; the original is already kept as "
+                     f"{os.path.basename(same)}.")
+            return same
         try:
             kept = star_record.write_backup(path)
         except OSError as exc:
@@ -21947,6 +22107,31 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return ""
         self.log(f"Series updated to the new star format; the original is kept as {os.path.basename(kept)}.")
         return kept
+
+    @staticmethod
+    def _same_backup(path: str) -> str:
+        """An existing backup of this series file ("<name>_backup<ext>", "_backup2"…) with exactly the file's
+        bytes, or ""."""
+        try:
+            with open(path, "rb") as fh:
+                mine = fh.read()
+        except OSError:
+            return ""
+        stem, ext = os.path.splitext(path)
+        n = 1
+        while n < 1000:
+            cand = f"{stem}_backup{'' if n == 1 else n}{ext}"
+            if not os.path.exists(cand):
+                return ""
+            try:
+                if os.path.getsize(cand) == len(mine):
+                    with open(cand, "rb") as fh:
+                        if fh.read() == mine:
+                            return cand
+            except OSError:
+                pass
+            n += 1
+        return ""
 
     def _comp_slot_names(self) -> list:
         return [n for n in (getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES) if n]
@@ -21958,17 +22143,52 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         mine = {name_key(n) for n in (star_record.record_names(rec) if rec else [name])} | {name_key(name)}
         return bool(keys & mine)
 
-    def _loaded_active_comps(self) -> list:
-        """S033 (15 Nov 2026): the comp slots a series was saved with are the truth. A "comps in use" star whose
-        comp slot is empty in the file is not put back by Load series. Returns the names left out."""
-        if not self.active_comps or not self._comp_slot_names():
-            return []
+    def _loaded_active_comps(self, meta: dict | None = None, step=None) -> tuple:
+        """S033 (15 Nov 2026) and the step 4 review (M1): Load never changes the series' "comps in use" silently.
+        A name in active_comps that no comp box of the file holds is either a comp the user cleared (a 2.3.x file
+        kept it in the choice: S033) or one that moved off the frame. A file written with star records already
+        followed the save rule (only a comp the user cleared leaves the choice), so its choice is kept without a
+        question. For an older file Load asks once: Leave it out re-derives every night from the stored values with
+        the other comps, exactly as Use comps… does, and the series shows as not saved; Keep it leaves the choice as
+        in the file (the box is filled again, as 2.3.6 did). Discovery series are not touched.
+        Returns (names left out, names kept although no comp box holds them)."""
+        if self.mode_key == "discovery" or not self.active_comps or not self._comp_slot_names():
+            return [], []
         gone = [n for n in self.active_comps if not self._in_comp_slot(n)]
         kept = [n for n in self.active_comps if n not in gone]
         if not gone or not kept:
-            return []
-        self.active_comps = [] if set(kept) == set(self.comps_used) else kept
-        return gone
+            return [], []
+        if meta is not None and star_record.is_current(meta):
+            return [], gone
+        names = ", ".join(gone)
+        one = len(gone) == 1
+        if step is not None:
+            step(None)   # no busy bar behind a question
+        answer = ask_choice(
+            self, APP_TITLE,
+            f"The series' comps in use include {names}, but no comp box holds {'it' if one else 'them'} "
+            f"({'it was' if one else 'they were'} cleared, or moved off the frame).\n\n"
+            f"Leave {'it' if one else 'them'} out: every night is re-derived with the other comps "
+            f"({', '.join(kept)}), as Use comps… does. Nothing is saved until you save the series.\n\n"
+            f"Keep {'it' if one else 'them'}: the series stays as saved, and {names} "
+            f"{'goes' if one else 'go'} back into the comp box.",
+            [("leave", "Leave it out" if one else "Leave them out"), ("keep", "Keep it" if one else "Keep them")],
+            safe="keep")
+        if step is not None:
+            step("the stars and settings")
+        if answer != "leave":
+            return [], gone
+        try:
+            if not self._comp_selection_ok(kept):
+                return [], gone   # the re-derive was refused (points would be lost): the file's choice stays
+            result = core.recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
+                                               self._star_aliases())
+            self._comp_selection_applied(kept, result, save=False)
+        except Exception as exc:
+            traceback.print_exc()
+            self.log(f"⚠ {names} could not be left out ({exc}); the series' comps in use stay as saved.")
+            return [], gone
+        return gone, []
 
     def _user_clear_mark(self, role: str):
         """The ✕ beside a slot (or Clear selected): the user took this star out. Remembered, so the series' saved
@@ -21998,7 +22218,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                  "re-derives them.")
         return gone
 
-    def _comps_loaded_line(self, left_out=()) -> str:
+    def _comps_loaded_line(self, left_out=(), kept_in=()) -> str:
         """The load-time Log line: which comps and check the series brought, with the magnitude each one uses."""
         def one(name, mag_text):
             rec = self._series_star_for(name)
@@ -22012,8 +22232,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         line = ("Comps loaded: " + ("; ".join(comps) or "none")
                 + (f"; check {one(check, self.check_mag.get())}" if check else "; no check star") + ".")
         if left_out:
-            line += (f" {', '.join(left_out)} {'is' if len(left_out) == 1 else 'are'} not put back: the series was "
-                     "saved with that comp slot empty.")
+            line += (f" {', '.join(left_out)} left out of the comps in use, as you chose: every night is re-derived "
+                     "with the others. Save the series to keep this.")
+        if kept_in:
+            line += (f" {', '.join(kept_in)} {'is' if len(kept_in) == 1 else 'are'} still in the series' comps in use"
+                     " (no comp box held it when the series was saved).")
         return line
 
     # ---- a star is a comp or a Watch star, never both (S033, 15 Nov 2026) ----
@@ -22311,9 +22534,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def use_new_series_v(self, role: str) -> bool:
         """Use new value: the series takes the new magnitude for this star and EVERY night is re-calibrated in one
         action, from its stored instrumental magnitudes (set_catalog_mags: an exact shift, nothing is measured
-        again). The series file as it was is copied to a backup first; without a backup nothing is changed."""
+        again). The series file as it was is copied to a backup first; without a backup nothing is changed.
+        Step 4 review (S3): not while a job is running; the shift is from the value the disagreement was found
+        against (the series' value, d["series"]), whatever the live tables hold by now; a slot showing another name
+        of the star follows; when the file cannot be written the change stays in memory, said in a ⚠ box, and the
+        series shows as not saved (memory and file never differ silently)."""
         d = (getattr(self, "_v_disagree", None) or {}).get(role)
         if not d:
+            return False
+        if getattr(self, "busy", False):
+            messagebox.showinfo(APP_TITLE, "SHOBS-P is working on something else right now. Wait for it to finish, "
+                                           "then press Use new value again. Nothing was changed.")
             return False
         kept = ""
         if self.series_path and os.path.isfile(self.series_path):
@@ -22324,14 +22555,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                                 f"{os.path.basename(self.series_path)} could not be written ({exc}).")
                 return False
         self._v_disagree.pop(role, None)
-        key, new = d["key"], float(d["new"])
+        key, new, old = d["key"], float(d["new"]), float(d["series"])
         rec = self._series_star_for(key)
         self._v_reconciling = True
         try:
             if role == "check":
-                changed = self.set_catalog_mags({}, check=f"{new:.3f}")
+                used = self.check_used or self.check_name.get().strip()
+                self._series_check = (used, f"{old:.3f}")
+                changed = self.set_catalog_mags({}, check=f"{new:.3f}", save=False)
             else:
-                changed = self.set_catalog_mags({key: new})
+                self.comp_catalog_mags[key] = old   # the value every night was reduced with
+                changed = self.set_catalog_mags({key: new}, save=False)
+                # a comp slot showing another name of this star follows too
+                names = {name_key(n) for n in (star_record.record_names(rec) if rec else [])} | {name_key(key)}
+                for r in COMP_ROLES:
+                    if name_key(getattr(self, f"{r}_name").get()) in names - {""}:
+                        getattr(self, f"{r}_mag").set(f"{new:.3f}")
         finally:
             self._v_reconciling = False
         if rec is not None:
@@ -22339,14 +22578,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         src = star_record.source_words(d["new_source"])
         was = star_record.source_words(d["series_source"])
         self.log(f"Series re-calibrated: {key} now uses {self._band_word()} {new:.3f}" + (f" ({src})" if src else "")
-                 + f" instead of {d['series']:.3f}" + (f" ({was})" if was else "") + " on every night"
+                 + f" instead of {old:.3f}" + (f" ({was})" if was else "") + " on every night"
                  + ("" if role != "check" else " (the check star's own magnitude: no target point moves)")
                  + (f". The series as it was is kept as {os.path.basename(kept)}." if kept else "."))
-        if self.series_path and rec is not None:
+        if self.series_path:
             try:
-                self._write_series(self.series_path)   # the record's new source goes into the file too
+                self.status.set("Catalog magnitudes changed." + self._save_series_words())
             except OSError as exc:
-                self.log(f"⚠ Could not save the series: {exc}")
+                self._series_saved_fp = None   # not what the file holds: shows as not saved until Save series works
+                self.log(f"⚠ The series was re-calibrated but could not be saved ({exc}). It is not saved yet: use "
+                         "Save series (Output page).", finding=False)
+                messagebox.showwarning(
+                    APP_TITLE, f"⚠ The series was re-calibrated here, but {os.path.basename(self.series_path)} could "
+                               f"not be written ({exc}).\n\nThe file still holds the old values"
+                               + (f" (and {os.path.basename(kept)} is a copy of it)" if kept else "")
+                               + ". Use Save series on the Output page before you close the series.")
+                try:
+                    self.update_series_status()
+                except Exception:
+                    traceback.print_exc()
         self._series_v_button()
         self.update_star_panel()
         return bool(changed)
@@ -22882,7 +23132,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return False
         return True
 
-    def _comp_selection_applied(self, selection: list[str], result: dict) -> bool:
+    def _comp_selection_applied(self, selection: list[str], result: dict, save: bool = True) -> bool:
+        """What follows a re-derive with the chosen comps. save=False (review M1: Load's "Leave it out") leaves the
+        file alone, so the series shows as not saved."""
         self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         self.active_comps = [] if set(selection) == set(self.comps_used) else list(selection)
         try:
@@ -22916,7 +23168,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._update_skip_line()
         self._log_zero_point_check()   # 2.2.14 (item 10)
         saved = ""
-        if self.series_path:
+        if self.series_path and save:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -23073,12 +23325,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._comps_under_token = getattr(self, "_preview_token", 0)
         return found
 
-    def set_catalog_mags(self, changes: dict, check: str | None = None) -> bool:
+    def set_catalog_mags(self, changes: dict, check: str | None = None, save: bool = True) -> bool:
         """2.2.18 (item 3): catalog magnitudes typed in Use comps… for the whole series ({star: V}); check: the check
         star's, or None. The series' values win over the Photometry boxes, so a wrong catalog value (HD 219134's
         rebuild took Gaia V 8.711 for the campaign's 8.728) is corrected here: every point is re-derived from its
         stored instrumental magnitudes (core.apply_catalog_mags), the boxes of the same stars follow, and an open
-        series file is written. True when something changed."""
+        series file is written (save=False: the caller writes it). True when something changed."""
         self._recompute_count = getattr(self, "_recompute_count", 0) + 1   # 2.3.5 (#81, review r2 S4): see _hold_stamp
         changes = {str(k): float(v) for k, v in (changes or {}).items()}
         old_cat = self._comp_catalog()
@@ -23125,7 +23377,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._refresh_period()
         self.draw_output()
         saved = ""
-        if self.series_path:
+        if self.series_path and save:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -23303,7 +23555,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._refresh_period()
         self.draw_output()
         saved = ""
-        if self.series_path:
+        if self.series_path and save:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
