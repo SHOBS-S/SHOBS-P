@@ -589,6 +589,57 @@
   {
    "section": "Photometry",
    "patterns": [
+    "These stars of the series have no marker on this image, so they would not be measured tonight: …"
+   ],
+   "todo": "Go on without them (the default) keeps their names in the series; Stop, so I can mark them lets you click them first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 … placed from the series position, centered (0.8 px); magnitude … kept as loaded."
+   ],
+   "todo": "Nothing. With centered by a wider search (… px …): check it, look at that marker once."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 … is not on this frame tonight: its position (…) falls at (x, y), N px beyond the top edge. …"
+   ],
+   "todo": "Nothing, if the other comps are enough. Click another star to add a comp for tonight."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… couldn't be placed: …",
+    "Comp 1 TYC … couldn't be placed: no star was found …"
+   ],
+   "todo": "Solve again, or click the star. The name stays in its row meanwhile."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is at the catalog position (x, y), not centered on a star: …",
+    "… placed from the series position at (x, y) but not centered on a star: …"
+   ],
+   "todo": "Click the star to center the marker before you run; a marker beside its star measures the star's wing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 at (x, y): named by brightness: the star reads about V …, and … is …; the nearer catalog position is … too faint to be this star."
+   ],
+   "todo": "Nothing; check the name is the star you meant."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 at (x, y): the star reads about V …, but the only catalog star near it is … too faint to be this star. No name or magnitude was taken from it; …"
+   ],
+   "todo": "Type the star's name and magnitude in its row, or pick another star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "No light frames in the Lights folder (Input page). …",
     "Every light frame is rejected in Blink. …"
    ],
@@ -625,7 +676,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Check marker at (x, y) is N px from the center of the star there …"
+    "… marker at (x, y) is N px from the center of the star there …"
    ],
    "todo": "Clear the marker, zoom in and click the star again, unless you meant it."
   },

@@ -47,6 +47,7 @@ import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
+import star_record   # 2.4.0 step 4 (#72): same star within 1 arcsec, the name shown
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows   # 2.4.0 (#98)
@@ -1795,6 +1796,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.report_names = {}        # 2.2.14 (item 7): placeholder name ("check") -> the name typed for reports
         self._slot_notes = {}         # 2.2.14 (item 14): role -> (typed name, outcome) shown on the slot's hint line
         self._slot_typed = {}         # 2.2.16 (item 8): role -> the name as last typed by a key in its box
+        self._slot_state = {}         # 2.4.0 step 4 (#72): role -> (image token, name, "off" | "unplaced")
+        self._tonight_aliases = {}    # 2.4.0 step 4 (#72): series name -> tonight's catalog names of the same star
+        self._last_center = None      # 2.4.0 step 4 (#71): what the last placement's centring did
+        self._pick_note = ""          # 2.4.0 step 4 (#77): why the last name pick went by brightness
+        self._pick_refused = {}       # 2.4.0 step 4 (#77): role -> (xy, why no neighbor's name was taken)
         self._slot_keying = None      # 2.2.16 (item 8): the slot a key was just pressed in (its text changes next)
         self._prev_kept = set()       # 2.2.14 (item 17): series files whose _prev copy was made this session
         self.series_mode_unknown = False   # 2.2.14 (item 19): the loaded series file does not say its mode (old)
@@ -5850,10 +5856,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _drop_offframe_slots(self, shape=None) -> list:
         """2.2.19 (#20): comps and the check kept from an earlier run (names left in their slots) that are not on this
-        frame are dropped, and logged. A slot counts as off the frame when its marker lies outside the image, or, on a
-        solved image, its star's sky position (comp_coords) falls outside it. Names without a known position stay
-        (they still say "not marked on this image"). 2.3.6 (m088): with a series open the line is a ⚠ (tonight's comp
-        set differs from the series)."""
+        frame are dropped, and logged. 2.4.0 step 4 (#72; the 2.3.6 m088 lesson), decided per slot:
+        - a slot whose NAME the open series knows (_series_star_names) is never emptied here. A marker of its that
+          lies outside the image is taken off (name and magnitude stay) and _auto_place_named_slots, which runs next,
+          decides from the star's stored sky position alone: on the frame -> placed there; off it -> the name stays
+          without a marker and is not measured (one Log line either way). A marker is never put back from pixels.
+        - any other slot (a leftover of an earlier run, or a star the series does not know) is cleared as before
+          when its marker lies outside the image or, on a solved image, its sky position is really off the frame
+          (beyond the edge by more than the aperture radius). Names without a known position stay.
+        Returns the labels cleared."""
         img = self.preview
         if shape is None:
             if img is None:
@@ -5863,24 +5874,33 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         sol = self.chart_solution if self.chart_placed or (self.chart_solution or {}).get("auto") else None
         dropped = []
         series_loaded = bool(getattr(self, "series_path", "") or getattr(self, "observations", None))   # 2.3.6
+        known = self._series_star_names()
         for role in list(COMP_ROLES) + ["check"]:
             name = getattr(self, f"{role}_name").get().strip()
             xy = getattr(self, f"{role}_xy")
+            mine = bool(name) and name in known
             off = False
             if xy is not None:
                 off = not (0 <= xy[0] < w and 0 <= xy[1] < h)
-            elif name and sol and self.comp_coords.get(name) is not None:
-                try:
-                    px, py = core.sky_to_pixel(float(self.comp_coords[name][0]), float(self.comp_coords[name][1]), sol)
-                    off = not (np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5)
-                except Exception:
-                    off = False
+                if off and mine:
+                    setattr(self, f"{role}_xy", None)   # the solve places it from its sky position, or says why not
+                    self._slot_notes.pop(role, None)
+                    continue
+            elif name and sol and not mine and self._saved_radec(name) is not None:
+                geo = self._sky_on_frame(*self._saved_radec(name)) if img is not None else None
+                if geo is not None:
+                    off = geo["state"] == "off"
+                else:
+                    try:
+                        px, py = core.sky_to_pixel(*self._saved_radec(name), sol)
+                        off = not (np.isfinite(px) and np.isfinite(py) and -0.5 <= px < w - 0.5 and -0.5 <= py < h - 0.5)
+                    except Exception:
+                        off = False
             if off:
                 dropped.append(f"{role_label(role)} {name or '(unnamed)'}")
                 self.clear_mark(role, redraw=False)
         if dropped and series_loaded:
-            # 2.3.6 (m088, wording only; review S1: keeping the name in its slot can change which comps are
-            # measured, so that waits for 2.4.0, #72): with a series open, tonight's comp set differs from it
+            # 2.3.6 (m088): with a series open, tonight's comp set differs from it (a star the series does not know)
             self.log("⚠ Not on this frame, so taken out of tonight's comps (not measured): " + ", ".join(dropped)
                      + ". Click another star to add a comp if you need one.")
         elif dropped:
@@ -12000,6 +12020,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.star_bands.pop(role, None)
         getattr(self, "_slot_typed", {}).pop(role, None)   # 2.2.16 (item 8, review)
         if role != "target":
+            getattr(self, "_slot_state", {}).pop(role, None)   # 2.4.0 step 4: off-frame / couldn't-place state
+            self._place_finding(role, None)
+        if role != "target":
             self._update_chart_field()
         if not redraw:
             return
@@ -12081,12 +12104,23 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     return r
             return None
         if xy is not None:
-            star = self._chart_star_at(xy)
-            name = str((star or {}).get("auid") or (star or {}).get("label") or "").strip()
-            if name:
-                for r in COMP_ROLES:
-                    if getattr(self, f"{r}_xy") is None and getattr(self, f"{r}_name").get().strip() == name:
-                        return r
+            # 2.4.0 step 4 (#72, #77): the star clicked, by the same pick the slot's name comes from; a star the
+            # series knows by position answers to the series' name, whatever tonight's catalogs call it.
+            star = self._chart_pick_at(xy)
+            self._pick_note = ""
+            names = ([self._slot_name_for(star)] + core.star_names(star)) if star is not None else []
+            for r in COMP_ROLES:
+                if getattr(self, f"{r}_xy") is None and getattr(self, f"{r}_name").get().strip() in [n for n in names if n]:
+                    return r
+            # no catalog star there (tonight's catalogs lack it): the slot whose stored position falls on the click
+            near = self._num(self.radius) or 6.0
+            for r in COMP_ROLES:
+                rd = self._saved_radec(getattr(self, f"{r}_name").get().strip())
+                if getattr(self, f"{r}_xy") is not None or rd is None:
+                    continue
+                geo = self._sky_on_frame(rd[0], rd[1])
+                if geo is not None and math.hypot(geo["px"] - xy[0], geo["py"] - xy[1]) <= near:
+                    return r
         for r in COMP_ROLES:
             if getattr(self, f"{r}_xy") is None and not getattr(self, f"{r}_name").get().strip():
                 return r
@@ -12293,6 +12327,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             setattr(self, f"{mode}_xy", xy)
         else:
             self.check_xy = xy
+        if mode != "target":
+            getattr(self, "_slot_state", {}).pop(mode, None)   # 2.4.0 step 4: marked by hand now
+            getattr(self, "_slot_notes", {}).pop(mode, None)   # its "couldn't be placed" / "not centered" line too
+            self._place_finding(mode, None)
         filled = self._fill_from_spare(mode, spare[0]) if spare is not None else self._fill_from_chart(mode, xy)
         self._update_pick_label()
         self.refresh_preview()
@@ -12305,7 +12343,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if no_v:
             # 2.2.14 (item 4): say it when the comp is marked, not only when Run photometry refuses.
             self.status.set(f"{role_label(mode)}: {no_v}")
-            self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
+            if ((getattr(self, "_pick_refused", None) or {}).get(mode) or (None, ""))[1] != no_v:   # else said already
+                self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
@@ -12317,6 +12356,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return ""
         if getattr(self, f"{role}_mag").get().strip():
             return ""
+        refused = (getattr(self, "_pick_refused", None) or {}).get(role)
+        if refused and refused[0] == tuple(getattr(self, f"{role}_xy")):
+            return refused[1]   # 2.4.0 step 4 (#77): the only catalog star near it is too faint or bright to be it
         star = self._chart_star_at(getattr(self, f"{role}_xy"))
         band = (star or {}).get("band") or self._band()   # 2.2.14 (review): B or R with a mono filter, not always V
         band = core.band_label(band)   # 2.2.17 (item 1)
@@ -12342,6 +12384,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if self.preview is None or not self.preview_is_debayered:
             self._slot_say(role, f"Calibrate first, so {text} can be found on the image.")
+            return
+        # 2.4.0 step 4 (#72): a star the series (or this session) already knows by position is placed from that
+        # position, whatever tonight's catalogs call it; a name match in tonight's catalogs is the fallback.
+        saved = self._saved_radec(text)
+        if saved is not None and self.chart_solution:
+            self._place_slot_sky(role, text, saved[0], saved[1], saved=True)
             return
         star = self._chart_star_named(text)
         if star is not None and self._chart_xy_of(star) is not None:
@@ -12395,52 +12443,423 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         else:
             self.status.set(msg)
 
-    def _place_slot_sky(self, role: str, text: str, ra: float, dec: float, reach: float = 5.0):
+    def _place_slot_sky(self, role: str, text: str, ra: float, dec: float, reach: float = 5.0, saved: bool = False):
+        """A typed name's sky position -> its marker. 2.4.0 step 4 (#72, #71): "not on this frame" only when the
+        position really is off the frame (beyond the edge by more than the aperture), said with the position; a
+        position at the very edge is placed only when a star is centered there. saved: the position is the series'
+        own (comp_coords), not tonight's lookup."""
         if getattr(self, f"{role}_xy") is not None or getattr(self, f"{role}_name").get().strip() != text:
             return   # filled or changed meanwhile
         if not self.chart_solution or self.preview is None:
             self._slot_not_solved(text, role)
             return
+        xy, geo = self._sky_start(ra, dec, reach)
+        if xy is None:
+            if geo.get("state") == "off":
+                self._slot_say(role, f"{text} is not on this frame: {self._off_frame_words(ra, dec, geo)}.", bad=True)
+            else:
+                self._slot_say(role, f"{text} could not be placed from its position (the plate solution gave no "
+                                     "pixel for it). Solve again, or click the star.", bad=True)
+            return
+        if geo.get("state") == "edge":
+            c = self._center_placed(xy, rd=(ra, dec), extra=float(geo.get("beyond") or 0.0))
+            if not c["centered"]:
+                self._slot_say(role, f"{text} could not be placed: its position falls at the frame edge "
+                                     f"({geo['px']:.0f}, {geo['py']:.0f}) and no star is centered there. Click the "
+                                     "star if you can see it.", bad=True)
+                return
+            xy = c["xy"]
+        self._set_slot(role, xy, text, rd=(ra, dec))
+
+    # ---- 2.4.0 step 4 (#72, #71, #77): placement after the solve ---------------------------------------------------
+    NAME_FIT_FAINT = 1.5    # #77: a catalog star this much fainter than the star seen (field zero point) is not it
+    NAME_FIT_BRIGHT = 2.5   # ... or this much brighter (a saturated star reads faint, so the wider side)
+    NAME_WIDE_PX = 16.0     # #77: how far out a catalog star whose brightness fits may be (when its spot is empty)
+    ZP_MAX_SCATTER = 0.5    # the field zero point is used only when the chart stars agree this well (mag, robust)
+
+    def _saved_radec(self, name: str):
+        """2.4.0 step 4 (#72): the stored sky position of a named star (the series' comp_coords), or None."""
+        rd = self.comp_coords.get(name) if name else None
+        if rd is None:
+            return None
+        try:
+            ra, dec = float(rd[0]), float(rd[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        return (ra, dec) if math.isfinite(ra) and math.isfinite(dec) else None
+
+    def _series_star_names(self) -> set:
+        """2.4.0 step 4 (#72): the names the open series knows its comps and check by (empty with no series)."""
+        if not (getattr(self, "series_path", "") or getattr(self, "observations", None)):
+            return set()
+        return {str(n) for n in list(self.comp_coords) + list(getattr(self, "comp_catalog_mags", None) or {})}
+
+    def _sky_on_frame(self, ra: float, dec: float):
+        """2.4.0 step 4 (#72): where a sky position falls on this image: {"px", "py", "state", "beyond", "side"}.
+        state "on" (inside the image), "edge" (outside it by no more than the aperture radius: a weak solve near the
+        edge can be that far out) or "off" (really off the frame). None when the solution gives no pixel."""
+        if not self.chart_solution or self.preview is None:
+            return None
+        try:
+            px, py = core.sky_to_pixel(float(ra), float(dec), self.chart_solution)
+        except Exception:
+            return None
+        if not (np.isfinite(px) and np.isfinite(py)):
+            return None
+        h, w = self.preview.shape[:2]
+        over = {"left": -0.5 - px, "top": -0.5 - py, "right": px - (w - 0.5), "bottom": py - (h - 0.5)}
+        side = max(over, key=over.get)
+        beyond = float(over[side])
+        r_ap = self._num(self.radius) or 0.0
+        state = "on" if beyond <= 0 else ("edge" if beyond <= r_ap else "off")
+        return {"px": float(px), "py": float(py), "state": state, "beyond": max(beyond, 0.0), "side": side}
+
+    @staticmethod
+    def _off_frame_words(ra: float, dec: float, geo: dict) -> str:
+        return (f"its position ({core.sexagesimal_ra(ra / 15.0)} {core.sexagesimal_dec(dec)}) falls at "
+                f"({geo['px']:.0f}, {geo['py']:.0f}), {geo['beyond']:.0f} px beyond the {geo['side']} edge")
+
+    def _sky_start(self, ra: float, dec: float, reach: float = 5.0):
+        """2.4.0 step 4 (#72): where to start centring a star placed from a sky position: (xy or None, geometry).
+        As before: the labeled catalog star within reach arcsec (its matched position), else the projected position
+        (centered once by _project_to_frame when it is clear of the edge). New: a position near or at the edge is
+        still a start point (it was "not on this frame" before); None only when it is really off the frame."""
         best = None
         for x, y, st in self.chart_placed:
-            if st.get("ra") is None:
+            if st.get("ra") is None or st.get("dec") is None:
                 continue
             d = core.sky_separation_arcsec(ra, dec, st["ra"], st["dec"])
             if d < reach and (best is None or d < best[0]):
-                best = (d, (x, y))
-        xy = best[1] if best else self._project_to_frame(ra, dec)
-        if xy is None:
-            self._slot_say(role, f"{text} is not on this frame ({core.sexagesimal_ra(ra / 15.0)} "
-                                 f"{core.sexagesimal_dec(dec)}).", bad=True)
-            return
-        self._set_slot(role, xy, text)
+                best = (d, (float(x), float(y)))
+        geo = self._sky_on_frame(ra, dec)
+        if best is not None:
+            geo = dict(geo or {"px": best[1][0], "py": best[1][1], "beyond": 0.0, "side": ""}, state="on")
+            return best[1], geo
+        if geo is None:
+            return None, {"state": "nosol"}
+        if geo["state"] == "off":
+            return None, geo
+        if geo["state"] == "on":
+            return (self._project_to_frame(ra, dec) or (geo["px"], geo["py"])), geo
+        h, w = self.preview.shape[:2]
+        return (min(max(geo["px"], 0.0), w - 1.0), min(max(geo["py"], 0.0), h - 1.0)), geo
 
-    def _snap_to_star(self, xy):
-        """2.2.18 (item 5): a marker placed from a name or sky position sits where the plate solution puts the star,
-        which for a star the solve did not match can be a few px off. Center it on the star there (as a click is) when
-        one is within about 1.5 FWHM; otherwise keep the position."""
-        if xy is None or self.preview is None or not self.preview_is_debayered:
-            return xy
+    def _edge_text(self, xy) -> str:
+        """2.4.0 step 4 (#71 item 4): "22 px from the top edge" for a marker inside step 3's safe margin (3 x the
+        sky-out radius, #78), else ""."""
+        if xy is None or self.preview is None:
+            return ""
+        sky_out = self._num(self.sky_out)
+        if sky_out is None:
+            return ""
+        h, w = self.preview.shape[:2]
+        dists = {"left": xy[0], "top": xy[1], "right": (w - 1) - xy[0], "bottom": (h - 1) - xy[1]}
+        side = min(dists, key=dists.get)
+        if dists[side] >= 3.0 * sky_out:
+            return ""
+        return f"{max(dists[side], 0.0):.0f} px from the {side} edge"
+
+    def _field_zero_point(self):
+        """2.4.0 step 4 (#77): the image's zero point, catalog magnitude minus instrumental magnitude, as the robust
+        median over the labeled catalog stars (the brightest 80 clear of the edge, at the apertures in the boxes).
+        {"zp", "scatter", "n"}, or None when fewer than 8 stars measure or they disagree (scatter over
+        ZP_MAX_SCATTER): then brightness cannot be judged and names go by position, as before."""
+        img = self.preview
+        if img is None or not self.preview_is_debayered or not self.chart_placed:
+            return None
+        r, si, so = self._num(self.radius), self._num(self.sky_in), self._num(self.sky_out)
+        if r is None or si is None or so is None or not (0 < r < si < so):
+            return None
+        cache = getattr(self, "_zp_cache", None)
+        key = (len(self.chart_placed), r, si, so)
+        if cache is not None and cache[0] is img and cache[1] is self.chart_placed and cache[2] == key:
+            return cache[3]
+        h, w = img.shape[:2]
+        rows = []
+        for x, y, st in self.chart_placed:
+            try:
+                m = float(st.get("mag"))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(m) and so + 1 <= x < w - so - 1 and so + 1 <= y < h - so - 1:
+                rows.append((m, float(x), float(y)))
+        rows.sort()
+        rows = rows[:80]
+        out = None
+        if len(rows) >= 8:
+            try:
+                flux, _sky = core.measure_many(img, np.asarray([(x, y) for _m, x, y in rows], dtype=float), r, si, so)
+                d = np.asarray([m + 2.5 * math.log10(f) for (m, _x, _y), f in zip(rows, flux)
+                                if np.isfinite(f) and f > 0], dtype=float)
+                if d.size >= 8:
+                    med = float(np.median(d))
+                    sig = 1.4826 * float(np.median(np.abs(d - med)))
+                    if sig <= self.ZP_MAX_SCATTER:
+                        out = {"zp": med, "scatter": sig, "n": int(d.size)}
+            except Exception:
+                out = None
+        self._zp_cache = (img, self.chart_placed, key, out)
+        return out
+
+    def _seen_mag(self, xy):
+        """2.4.0 step 4 (#77): the magnitude the star at xy reads on this image through the field zero point (the
+        chart's band), or None when there is no zero point or nothing measurable there."""
+        zp = self._field_zero_point()
+        if zp is None or xy is None:
+            return None
+        inst = self._inst_at(xy)
+        return zp["zp"] + inst if math.isfinite(inst) else None
+
+    @staticmethod
+    def _star_cat_mag(star):
+        try:
+            m = float((star or {}).get("mag"))
+        except (TypeError, ValueError):
+            return None
+        return m if math.isfinite(m) else None
+
+    def _leads_here(self, cxy, xy, tight: float) -> bool:
+        """2.4.0 step 4 (#77): True when the image has no star of its own at the catalog position cxy: centring from
+        there ends on the star at xy (so that catalog star can be the star at xy, drawn a little off)."""
+        try:
+            radius = float(self.radius.get())
+            seeing = self._seeing()
+            info = core.recenter_info(self.preview, float(cxy[0]), float(cxy[1]), radius,
+                                      seeing if math.isfinite(seeing) else None, blend_check=False,
+                                      search=math.hypot(cxy[0] - xy[0], cxy[1] - xy[1]) + 2.0, min_sigma=10.0)
+        except Exception:
+            return False
+        return bool(core.real_star(info) and math.hypot(info["x"] - xy[0], info["y"] - xy[1]) <= tight)
+
+    def _chart_pick_at(self, xy, reach: float = 8.0):
+        """2.4.0 step 4 (#77): the catalog star a marker at xy IS, for its name and catalog magnitude. As before, the
+        nearest labeled star within reach px, with one new test: when that star is not right under the marker
+        (farther than the seeing), its catalog magnitude must fit what the star reads on the image through the field
+        zero point (NAME_FIT_FAINT / NAME_FIT_BRIGHT). An invisible faint neighbor therefore cannot give a bright
+        star its name (GSC 03308-00462, 9 Nov 2026: the V 12.65 AAVSO 127 star was named after a V 17.98 Gaia star
+        8 px away). When the nearest does not fit, the catalog star nearby whose brightness does is taken (within
+        reach; or out to NAME_WIDE_PX when the image shows no star of its own at its catalog position); when none
+        fits, no name is taken (None) and self._pick_note says why. Without a zero point: the nearest, as before."""
+        self._pick_note = ""
+        if xy is None or not self.chart_placed:
+            return None
+        wide = max(reach, self.NAME_WIDE_PX)
+        near = []
+        for x, y, star in self.chart_placed:
+            d = math.hypot(x - xy[0], y - xy[1])
+            if d < max(reach, wide):
+                near.append((d, float(x), float(y), star))
+        if not near:
+            return None
+        near.sort(key=lambda t: t[0])
+        nearest = near[0] if near[0][0] < reach else None
+        seeing = self._seeing()
+        tight = max(2.0, seeing if math.isfinite(seeing) else 2.0)
+        if nearest is not None and nearest[0] <= tight:
+            return nearest[3]   # right under the marker: the position decides
+        seen = self._seen_mag(xy)
+        if seen is None:
+            return nearest[3] if nearest is not None else None
+
+        def resid(star):
+            m = self._star_cat_mag(star)
+            return None if m is None else m - seen
+
+        def fits(rs):
+            return rs is not None and -self.NAME_FIT_BRIGHT <= rs <= self.NAME_FIT_FAINT
+        r0 = resid(nearest[3]) if nearest is not None else None
+        if nearest is not None and (r0 is None or fits(r0)):
+            return nearest[3]
+        band = core.band_label(self._band())
+        cands = [c for c in near if c is not nearest and fits(resid(c[3]))]
+        within = [c for c in cands if c[0] < reach]
+        pick = min(within, key=lambda c: abs(resid(c[3]))) if within else None
+        if pick is None:
+            for c in sorted(cands, key=lambda c: abs(resid(c[3]))):
+                if abs(resid(c[3])) <= 1.0 and self._leads_here((c[1], c[2]), xy, tight):
+                    pick = c
+                    break
+        if pick is not None:
+            self._pick_note = (f"named by brightness: the star reads about {band} {seen:.1f}, and "
+                               f"{self._chart_star_label(pick[3])} is {self._star_cat_mag(pick[3]):.2f}"
+                               + (f"; the nearer catalog position is {self._chart_star_label(nearest[3])} "
+                                  f"({self._star_cat_mag(nearest[3]):.2f}, {nearest[0]:.1f} px away), too "
+                                  f"{'faint' if r0 > 0 else 'bright'} to be this star" if nearest is not None else "")
+                               + ".")
+            return pick[3]
+        if nearest is not None:
+            self._pick_note = (f"the star reads about {band} {seen:.1f}, but the only catalog star near it is "
+                               f"{self._chart_star_label(nearest[3])} ({band} {self._star_cat_mag(nearest[3]):.2f}, "
+                               f"{nearest[0]:.1f} px away), too {'faint' if r0 > 0 else 'bright'} to be this star. "
+                               "No name or magnitude was taken from it; type them, or pick another star.")
+        return None
+
+    @staticmethod
+    def _real_names(star) -> list:
+        """2.4.0 step 4: core.star_names without the chart label of a star that is not an AAVSO sequence star (that
+        label is its magnitude as text, "11.5", not a name)."""
+        star = star or {}
+        names = core.star_names(star)
+        if not star.get("seq"):
+            label = str(star.get("label") or "")
+            if label and label != str(star.get("auid") or "") and len(names) > 1:
+                try:
+                    float(label)
+                    names = [n for n in names if n != label]
+                except ValueError:
+                    pass
+        return names
+
+    def _slot_name_for(self, star) -> str:
+        """2.4.0 step 4 (#72): the name a slot shows for a catalog star. A star the series already knows (a stored
+        position within star_record.SAME_STAR_ARCSEC) keeps the series' name: tonight's catalog name is an alias,
+        not a new star. A new star gets star_record.display_name of all its names (AUID / AAVSO label, then TYC,
+        Gaia, APASS), so the name does not depend on which catalog answered first."""
+        names = self._real_names(star)
+        try:
+            pos = (float(star["ra"]), float(star["dec"]))
+        except (TypeError, ValueError, KeyError):
+            pos = None
+        if pos is not None:
+            same = [n for n, rd in self.comp_coords.items() if star_record.same_star(rd, pos)]
+            for n in same:
+                if n in names:
+                    return n
+            if same:
+                return same[0]
+        return star_record.display_name(names) or str((star or {}).get("auid") or (star or {}).get("label") or "")
+
+    def _brightest_star_within(self, xy, wide: float, radius: float, fwhm):
+        """2.4.0 step 4 (#71): the center of the brightest star within wide px of xy (a real star: 10 sigma, see
+        core.real_star), or None. The brightest smoothed pixel inside the circle is centered like a click; light
+        that belongs to a star outside the circle (its wing reaching in) is not taken."""
+        from scipy import ndimage
+        img = self.preview
+        h, w = img.shape[:2]
+        half = int(math.ceil(wide)) + 2
+        xi, yi = int(round(xy[0])), int(round(xy[1]))
+        x0, x1 = max(0, xi - half), min(w, xi + half + 1)
+        y0, y1 = max(0, yi - half), min(h, yi + half + 1)
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            return None
+        crop = np.array(img[y0:y1, x0:x1], dtype=float)
+        fin = np.isfinite(crop)
+        if fin.sum() < 9:
+            return None
+        crop[~fin] = float(np.median(crop[fin]))
+        sm = ndimage.uniform_filter(crop, size=3, mode="nearest")
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        inside = np.hypot(xx - xy[0], yy - xy[1]) <= wide
+        if not inside.any():
+            return None
+        iy, ix = np.unravel_index(int(np.argmax(np.where(inside, sm, -np.inf))), sm.shape)
+        bx, by = float(x0 + ix), float(y0 + iy)
+        info = core.recenter_info(img, bx, by, radius, fwhm, wing="dip", min_sigma=10.0)
+        if not core.real_star(info):
+            return None
+        cx, cy = float(info["x"]), float(info["y"])
+        if math.hypot(cx - bx, cy - by) > max(2.0, fwhm or 2.0) or math.hypot(cx - xy[0], cy - xy[1]) > wide + 1.0:
+            return None
+        return (cx, cy)
+
+    def _center_placed(self, xy, rd=None, extra: float = 0.0) -> dict:
+        """2.4.0 step 4 (#71, #72): center a marker placed from a name or sky position on its star, like a click,
+        and say what happened. First exactly as 2.2.18 did (_snap_to_star: a star within about 1.5 FWHM that is the
+        catalog star placed). When that fails, a wider search (3 FWHM or the aperture radius, plus extra px) takes
+        the brightest star there, as long as no other catalog star (of comparable brightness) is that close.
+        Returns {"xy", "centered", "how": "centered" | "wide" | "kept", "shift", "why", "reach"}; why (when kept):
+        "blended" (a faint star in a brighter one's wing: left where it is, as a click is), "none" (no star within
+        reach), "several" (more than one catalog star that close), "" otherwise."""
+        x0, y0 = float(xy[0]), float(xy[1])
+        out = {"xy": (x0, y0), "centered": False, "how": "kept", "shift": 0.0, "why": "", "reach": 0.0}
+        if self.preview is None or not self.preview_is_debayered:
+            return out
         try:
             radius = float(self.radius.get())
             seeing = self._seeing()
             fwhm = seeing if math.isfinite(seeing) else None
-            info = core.recenter_info(self.preview, float(xy[0]), float(xy[1]), radius, fwhm, wing="dip")
+            info = core.recenter_info(self.preview, x0, y0, radius, fwhm, wing="dip")
             reach = max(2.0, 1.5 * fwhm) if fwhm else max(2.0, 0.5 * radius)
+            out["reach"] = reach
+            want = self._chart_star_at((x0, y0))
             if info.get("found") and not info.get("blended") and info["shift"] <= reach:
                 snapped = (float(info["x"]), float(info["y"]))
                 # Review: only when the star there is the one placed (not a neighbor the centring found).
-                want, got = self._chart_star_at(xy), self._chart_star_at(snapped)
-                if got is want:
-                    return snapped
-                if want is not None and got is not None and None not in (want.get("ra"), want.get("dec"),
-                                                                          got.get("ra"), got.get("dec")) and \
-                        core.sky_separation_arcsec(float(want["ra"]), float(want["dec"]), float(got["ra"]),
-                                                   float(got["dec"])) < WATCH_SAME_ARCSEC:
-                    return snapped
+                got = self._chart_star_at(snapped)
+                same = got is want
+                if not same and want is not None and got is not None and None not in (
+                        want.get("ra"), want.get("dec"), got.get("ra"), got.get("dec")):
+                    same = core.sky_separation_arcsec(float(want["ra"]), float(want["dec"]), float(got["ra"]),
+                                                      float(got["dec"])) < WATCH_SAME_ARCSEC
+                if same:
+                    out.update(xy=snapped, centered=True, how="centered", shift=float(info["shift"]))
+                    return out
+            if info.get("blended"):
+                out["why"] = "blended"
+                return out
+            wide = max(3.0 * fwhm if fwhm else 0.0, radius, reach) + max(float(extra), 0.0)
+            out["reach"] = wide
+            star = self._brightest_star_within((x0, y0), wide, radius, fwhm)
+            if star is None:
+                out["why"] = "none"
+                return out
+            if rd is not None:
+                for x, y, st in self.chart_placed:
+                    if st.get("ra") is not None and st.get("dec") is not None and star_record.same_star(
+                            rd, (st["ra"], st["dec"])):
+                        want = st
+                        break
+            ref = self._star_cat_mag(want)
+            if ref is None:
+                ref = self._seen_mag(star)
+            rivals = []
+            for x, y, st in self.chart_placed:
+                if st is want or math.hypot(x - x0, y - y0) > wide:
+                    continue
+                m = self._star_cat_mag(st)
+                if ref is None or m is None or m <= ref + self.FAINT_PICK_DMAG:
+                    rivals.append((float(x), float(y), st))
+            if want is None and len(rivals) == 1 and math.hypot(rivals[0][0] - star[0], rivals[0][1] - star[1]) <= 8.0:
+                rivals = []   # the one catalog star that close is the star centered on
+            if rivals:
+                out["why"] = "several"
+                return out
+            out.update(xy=star, centered=True, how="wide", shift=float(math.hypot(star[0] - x0, star[1] - y0)))
         except Exception:
-            pass
-        return xy
+            traceback.print_exc()
+        return out
+
+    def _not_centered_words(self, c: dict, xy) -> str:
+        """2.4.0 step 4 (#71): why a placed marker was left at the catalog position, and what to do."""
+        why = {"none": f"no star could be centered within {c.get('reach', 0.0):.0f} px of it",
+               "several": f"more than one catalog star lies within {c.get('reach', 0.0):.0f} px, so the star to "
+                          "center on could not be told"}.get(c.get("why"), "it could not be centered on a star")
+        edge = self._edge_text(xy)
+        return why + (f"; it is {edge}" if edge else "") + ". Click the star to center it."
+
+    PLACE_STEP = "Placing a comp or check star"
+
+    def _place_finding(self, role: str, text: str | None):
+        """2.4.0 step 4 (#71): the Findings panel's entry for a slot whose marker could not be centered or placed;
+        text None takes it off (the slot was marked again or cleared)."""
+        store = getattr(self, "findings", None)
+        if store is None:
+            return
+        step = f"{self.PLACE_STEP}: {role_label(role)}"
+        store.drop_step(step)
+        if text:
+            store.add("warn", text, step=step, where="Photometry page")
+
+    def _snap_to_star(self, xy):
+        """2.2.18 (item 5): a marker placed from a name or sky position sits where the plate solution puts the star,
+        which for a star the solve did not match can be a few px off. Center it on the star there (as a click is) when
+        one is within about 1.5 FWHM; 2.4.0 step 4 (#71): else by a wider search (_center_placed); otherwise keep the
+        position. What happened is left in self._last_center for the caller to say."""
+        if xy is None or self.preview is None or not self.preview_is_debayered:
+            self._last_center = None
+            return xy
+        self._last_center = self._center_placed(xy)
+        return self._last_center["xy"]
 
     def _series_off_this_image(self) -> bool:
         """2.3.5: True when the solved image is another field than the loaded series: the series' target (Input page
@@ -12481,11 +12900,33 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         left the target, the series' comps/check and the S1-S4 suggestions unplaced until Solve again, while the step
         line said "Pick Target". The image is solved again now (on the Photometry page; else when it is next shown),
         which places them as after any solve."""
-        if self.mode_key == "discovery" or self.preview is None or not self.preview_is_debayered \
-                or not self.chart_placed:
+        if self.mode_key == "discovery" or self.preview is None or not self.preview_is_debayered:
+            return
+        waiting = [r for r in list(COMP_ROLES) + ["check"]
+                   if getattr(self, f"{r}_name").get().strip() and getattr(self, f"{r}_xy") is None]
+        if not self.chart_placed:
+            # 2.4.0 step 4 (#72): a solution without labeled stars (the catalogs did not answer) is enough to place
+            # the series' stars: their own stored positions are projected and centered, right away.
+            if self.chart_solution and waiting and not self.busy and not getattr(self, "_preview_foreign", "") \
+                    and not self._series_off_this_image():
+                self.log("Series loaded on a solved image: placing the series' comps and check from their saved "
+                         "positions.")
+                try:
+                    self._drop_offframe_slots()
+                    self._auto_place_named_slots()
+                except Exception as exc:
+                    self.log(f"The series' comps and check were not placed ({type(exc).__name__}: {exc}); press "
+                             "Solve again.")
+            elif waiting and not self.chart_solution:
+                self.log("Series loaded: its comps and check are placed on their stars after the solve (press Solve "
+                         "again if the image stays unsolved).")
             return
         if self.busy:
-            return   # review (S3): a run or solve in flight keeps its marks; a solve that lands places the slots
+            # review (S3): a run or solve in flight keeps its marks; a solve that lands places the slots
+            if waiting:
+                self.log("Series loaded while a job is running: its comps and check are placed by the next solve "
+                         "(press Solve again when the job ends if they are still unmarked).")
+            return
         if getattr(self, "_preview_foreign", ""):
             return   # review (S4): the image is of another field than the series: keep its solution
         if self._series_off_this_image():
@@ -12514,93 +12955,173 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _auto_place_named_slots(self) -> list:
         """2.3.4 (John): after the solve, every comp/check slot that holds a name but no marker (a loaded series, or
-        names kept from an earlier run) gets its marker, as Enter would place it, so a series run is solve -> Run.
-        The position comes from the series' saved sky position (comp_coords), else the solved image's catalog star of
-        that name, else a J-designation's own coordinates. Unlike Enter, the slot keeps its name, magnitude and colours
-        as loaded (the series' numbers win over a catalog answer, #56). Names typed here and waiting for Enter are left
-        to Enter. Returns the roles placed."""
+        names kept from an earlier run) gets its marker, so a series run is solve -> Run.
+        2.4.0 step 4 (#72, John's decisions): the star is placed from its STORED sky position (comp_coords) projected
+        through tonight's solution, then centered like a click (_center_placed, with the wider search of #71). A name
+        match in tonight's catalogs is only the fallback for a star with no stored position (then a J-designation's
+        own coordinates). The slot keeps its name, magnitude and colours as loaded: a catalog name of the same star
+        (within star_record.SAME_STAR_ARCSEC) is an alias, logged and kept in self._tonight_aliases. A star is
+        "not on this frame" only when its position really is off it (beyond the edge by more than the aperture):
+        its name and magnitude stay in the slot, no marker, so it is not measured tonight and never silently dropped
+        (self._slot_state says why, for the Stars panel and the question before Run). A star whose position is on
+        the frame but has no star to center on is not placed either ("couldn't place: Solve again, or click it").
+        ONE Log line per star says what happened. Names typed here and waiting for Enter are left to Enter.
+        Returns the roles placed."""
         if self.mode_key == "discovery" or not self.chart_solution or self.preview is None \
                 or not self.preview_is_debayered:
             return []
         token = getattr(self, "_preview_token", 0)
-        placed, missing = [], []
+        radius = self._num(self.radius) or 8.0
+        band = core.band_label(self._band())
+        saved_words = ("the series position" if getattr(self, "series_path", "") or getattr(self, "observations", None)
+                       else "its saved position")
+        placed = []
         for role in list(COMP_ROLES) + ["check"]:
             name_var, mag_var = getattr(self, f"{role}_name"), getattr(self, f"{role}_mag")
             name = name_var.get().strip()
-            if not name or getattr(self, f"{role}_xy") is not None:
+            if not name:
+                self._slot_state.pop(role, None)
+                continue
+            who = f"{role_label(role)} {name}"
+            rd = self._saved_radec(name)
+            have = getattr(self, f"{role}_xy")
+            if have is not None:
+                self._slot_state.pop(role, None)
+                geo = self._sky_on_frame(rd[0], rd[1]) if rd is not None else None
+                if geo is not None:
+                    d = math.hypot(geo["px"] - have[0], geo["py"] - have[1])
+                    self.log(f"{who}: already marked at ({have[0]:.0f}, {have[1]:.0f}), {d:.1f} px from where "
+                             f"{saved_words} falls" + ("; that is more than the aperture radius, so check it is "
+                                                        "the right star." if d > radius else "."), keep_status=True)
                 continue
             if getattr(self, "_slot_typed", {}).get(role) == (token, name):
                 continue   # typed on this image: Enter decides (and fills the catalog magnitude)
-            xy = None
-            rd = self.comp_coords.get(name)
+            xy0, geo, source = None, {"state": "on"}, saved_words
             if rd is None:
                 star = self._chart_star_named(name)
                 if star is not None and self._chart_xy_of(star) is not None:
-                    xy = self._chart_xy_of(star)
+                    xy0, source = self._chart_xy_of(star), "its name in tonight's catalogs (no saved position)"
                 else:
                     rd = designation_coords(name)
-            if xy is None and rd is not None:
-                try:
-                    ra, dec = float(rd[0]), float(rd[1])
-                except (TypeError, ValueError):
-                    ra = dec = None
-                if ra is not None:
-                    best = None
-                    for x, y, st in self.chart_placed:
-                        if st.get("ra") is None or st.get("dec") is None:
-                            continue
-                        d = core.sky_separation_arcsec(ra, dec, st["ra"], st["dec"])
-                        if d < 5.0 and (best is None or d < best[0]):
-                            best = (d, (x, y))
-                    xy = best[1] if best else self._project_to_frame(ra, dec)
-                    if xy is None:
-                        self._slot_say(role, f"⚠ {name} is not on this frame (or too near its edge); click another "
-                                             "star or clear the slot.", bad=True)
-                        missing.append(name)
-                        continue
-            if xy is None:
-                self._slot_say(role, f"{name}: no saved position and not on this image's catalog chart; press "
-                                     "Enter in the box to look it up, or click the star.", bad=True)
-                missing.append(name)
+                    source = "the coordinates in its name (no saved position)"
+            if xy0 is None and rd is not None:
+                xy0, geo = self._sky_start(float(rd[0]), float(rd[1]), 5.0)
+                if xy0 is None and geo.get("state") == "off":
+                    # really off the frame: said with the position; the name and magnitude stay, nothing is measured
+                    text = (f"{who} is not on this frame tonight: {self._off_frame_words(rd[0], rd[1], geo)}. It is "
+                            "not measured tonight; its name and magnitude stay.")
+                    self._slot_state[role] = (token, name, "off")
+                    self._slot_notes[role] = (name, "not on this frame tonight (" + f"{geo['beyond']:.0f} px beyond "
+                                              f"the {geo['side']} edge); not measured, the name stays", False)
+                    self._place_finding(role, None)
+                    self.log(text, keep_status=True)
+                    continue
+            if xy0 is None:
+                why = ("it has no saved position and tonight's catalogs do not have its name" if rd is None else
+                       "the plate solution gave no pixel for its position")
+                self._slot_unplaced(role, name, token, f"⚠ {who} couldn't be placed: {why}. Press Enter in its box "
+                                                       "to look it up, or click the star.")
+                continue
+            c = self._center_placed(xy0, rd=rd, extra=float(geo.get("beyond") or 0.0) if geo.get("state") == "edge"
+                                    else 0.0)
+            xy = c["xy"]
+            if not c["centered"] and c["why"] != "blended" and (
+                    geo.get("state") == "edge" or not core.star_under(self.preview, xy[0], xy[1], radius)):
+                # nothing to center on where the position falls: a weak solve, or the star is not there
+                where = (f"at the frame edge ({geo['px']:.0f}, {geo['py']:.0f})" if geo.get("state") == "edge" else
+                         f"at ({xy[0]:.0f}, {xy[1]:.0f})")
+                self._slot_unplaced(role, name, token,
+                                    f"⚠ {who} couldn't be placed: no star was found within {c['reach']:.0f} px of "
+                                    f"where {source} falls, {where}. Solve again, or click the star.")
+                continue
+            clash = next((o for o, oxy in [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in
+                                                                          list(COMP_ROLES) + ["check"]]
+                          if o != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0), None)
+            if clash is not None:
+                self._slot_unplaced(role, name, token, f"⚠ {who} couldn't be placed: the star where {source} falls, "
+                                                       f"at ({xy[0]:.0f}, {xy[1]:.0f}), is already marked as "
+                                                       f"{role_label(clash)}. Clear one of the two.")
                 continue
             mag = mag_var.get()
             bands = self.star_bands.get(role)
-            self._set_slot(role, xy, name, vet=False)
-            if getattr(self, f"{role}_xy") is None:
-                missing.append(name)   # _set_slot refused (already marked as another slot) and said why
-                continue
+            setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
+            self._slot_state.pop(role, None)
+            self._place_finding(role, None)
+            star = self._chart_pick_at(xy)
+            self._pick_note = ""
+            # tonight's bands, colors, AAVSO sequence AUID; then the series' own back
+            self._fill_from_chart(role, xy, say=False)
             name_var.set(name)
             if str(mag).strip():
                 mag_var.set(mag)
             if isinstance(bands, dict):
                 self.star_bands[role] = bands
-            got = getattr(self, f"{role}_xy")
             now = str(mag_var.get()).strip()
+            # tonight's catalog names of this star: aliases of the series' name, never a rename
+            alias = ""
+            if star is not None and name not in core.star_names(star) and rd is not None and star_record.same_star(
+                    rd, (star.get("ra"), star.get("dec"))):
+                names = self._real_names(star)
+                self._tonight_aliases[name] = names
+                alias = (f" = {star_record.display_name(names)} in tonight's catalogs (the same star; the series' "
+                         "name is kept)")
+            edge = self._edge_text(xy)
+            if c["how"] == "wide":
+                how = f"centered by a wider search ({c['shift']:.1f} px" + (f"; {edge}" if edge else "") + "): check it"
+            elif c["centered"]:
+                how = f"centered ({c['shift']:.1f} px)"
+            elif c["why"] == "blended":
+                how = "left where the position falls (a faint star beside a brighter one)"
+            else:
+                how = ""
             if str(mag).strip():
                 tail = f"; magnitude {now} kept as loaded."
             elif now:
                 tail = f"; magnitude {now} from the catalog (the slot had none): check it."   # review S6
             else:
-                tail = "; type its magnitude."
-            self._slot_say(role, f"✓ {role_label(role)} {name} placed after the solve at ({got[0]:.0f}, {got[1]:.0f})"
-                                 + tail, bad=not now)
+                tail = f"; type its {band} magnitude."
+            if how:
+                self.log(f"{who} placed from {source}, {how}{alias}{tail}", keep_status=True)
+                self._slot_notes[role] = (name, f"✓ placed after the solve at ({xy[0]:.0f}, {xy[1]:.0f}), {how}"
+                                          + tail, not now)
+            else:
+                # #71: on the frame, a star is there, but the marker could not be centered on it: said, with a finding
+                warn = (f"⚠ {who} placed from {source} at ({xy[0]:.0f}, {xy[1]:.0f}) but not centered on a star: "
+                        + self._not_centered_words(c, xy))
+                self.log(warn + alias, finding=False, keep_status=True)
+                self._place_finding(role, warn)
+                self._slot_notes[role] = (name, warn, True)
             placed.append(role)
+        self._update_pick_label()
+        self.update_star_panel()
         if placed:
-            self.log("Comps/check placed after the solve: " + ", ".join(
-                f"{role_label(r)} {getattr(self, f'{r}_name').get().strip()}" for r in placed) + ".")
-            self._update_pick_label()
-            self.update_star_panel()
             self.refresh_preview()
         return placed
 
-    def _set_slot(self, role: str, xy, text: str, vet: bool = True):
-        xy = self._snap_to_star(xy)   # 2.2.18 (item 5): a catalog position is centered on its star like a click
+    def _slot_unplaced(self, role: str, name: str, token, text: str):
+        """2.4.0 step 4 (#72): a named slot the solve could not place: one ⚠ Log line, a finding, the slot's hint;
+        the name and magnitude stay."""
+        self._slot_state[role] = (token, name, "unplaced")
+        self.log(text, finding=False, keep_status=True)
+        self._place_finding(role, text)
+        self._slot_notes[role] = (name, text, True)
+
+    def _set_slot(self, role: str, xy, text: str, vet: bool = True, rd=None):
+        """rd (2.4.0 step 4): the sky position the marker was placed from, when it was (so the wider centring knows
+        which catalog star is meant)."""
+        start = (float(xy[0]), float(xy[1]))
+        # 2.2.18 (item 5): a catalog position is centered on its star like a click; 2.4.0 step 4 (#71): by a wider
+        # search when that fails, and it is said when the marker could not be centered at all.
+        c = self._center_placed(start, rd=rd) if self.preview is not None and self.preview_is_debayered else None
+        self._last_center = c
+        xy = c["xy"] if c else start
         others = [("target", self.target_xy)] + [(o, getattr(self, f"{o}_xy")) for o in list(COMP_ROLES) + ["check"]]
         for other, oxy in others:
             if other != role and oxy is not None and math.hypot(oxy[0] - xy[0], oxy[1] - xy[1]) < 2.0:
                 self._slot_say(role, f"{text} is already marked as {role_label(other)}.")   # 2.2.14 (14)
                 return
         setattr(self, f"{role}_xy", (float(xy[0]), float(xy[1])))
+        self._place_finding(role, None)
         filled = self._fill_from_chart(role, xy)
         if not filled or "=" not in filled:
             getattr(self, f"{role}_name").set(text)
@@ -12609,7 +13130,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         msg = ((filled if filled else f"{role_label(role)} placed on {text}; type its magnitude.")
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
-        self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
+        if c and c["how"] == "wide":
+            edge = self._edge_text(xy)
+            msg += (f" Centered on the star {c['shift']:.1f} px from the catalog position (wider search"
+                    + (f"; {edge}" if edge else "") + "): check it is the right star.")
+        elif c and c["centered"] and c["shift"] >= 1.0:
+            msg += f" Centered on the star ({c['shift']:.1f} px from the catalog position)."
+        if c and not c["centered"] and c["why"] != "blended":
+            # 2.4.0 step 4 (#71): never silently left at the catalog position (Qatar-10 b 0704: comp 4 sat 7 px off
+            # its star and gave a fake -34.9 ppt flip step)
+            warn = (f"⚠ {role_label(role)} {getattr(self, f'{role}_name').get().strip() or text} is at the catalog "
+                    f"position ({xy[0]:.0f}, {xy[1]:.0f}), not centered on a star: " + self._not_centered_words(c, xy))
+            self.log(f"{role_label(role)}: {msg}", keep_status=True)
+            self.log(warn, finding=False)
+            self._place_finding(role, warn)
+            self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), warn, True)
+            self.update_star_panel()
+        else:
+            self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
         if self._say_check_clash(role):   # 2.4.0 (#68): the check typed into a comp slot, or a comp into the check's
             return
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
@@ -13467,19 +14005,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         )
         self._update_step_hint()   # 2.2.15 (GitHub #3)
 
-    def _fill_from_chart(self, mode, xy):
-        """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form."""
+    def _fill_from_chart(self, mode, xy, say: bool = True):
+        """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form.
+        say=False (2.4.0 step 4): no Log line of its own (the caller writes the star's one line)."""
         if mode == "target" or not self.chart_placed:
             return ""
-        best = None
-        for x, y, star in self.chart_placed:
-            d = math.hypot(x - xy[0], y - xy[1])
-            if d < 8 and (best is None or d < best[0]):
-                best = (d, star)
-        if best is None:
+        # 2.4.0 step 4 (#77): the star is picked by brightness when it is not right under the marker (an invisible
+        # faint neighbor cannot name a bright star), and (#72) named by star_record's order, or by the series' own
+        # name when the series already knows this star by position.
+        star = self._chart_pick_at(xy)
+        note = getattr(self, "_pick_note", "")
+        if note and say:
+            self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {note}", keep_status=star is not None)
+        self._pick_refused = dict(getattr(self, "_pick_refused", None) or {})
+        self._pick_refused.pop(mode, None)
+        if star is None:
+            if note:
+                self._pick_refused[mode] = ((float(xy[0]), float(xy[1])), note)
             return ""
-        star = best[1]
-        name = star.get("auid") or star.get("label") or ""
+        name = self._slot_name_for(star)
         if star.get("mag") is None:
             return (f"{name} has no {core.band_label(star.get('band', 'V'))} magnitude in "
                     f"{star.get('catalog', 'the catalog')}. Pick another star.")   # 2.2.17 (item 1): band label
@@ -13491,7 +14035,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                  "source": star.get("catalog", ""), "seq": star.get("seq"),
                                  "colors": core.star_colors(star)}   # 2.2.14 (item 1): one catalog per color
         if star.get("ra") is not None and star.get("dec") is not None:
-            self.comp_coords[name] = (float(star["ra"]), float(star["dec"]))
+            pos = (float(star["ra"]), float(star["dec"]))
+            # 2.4.0 step 4 (#72): a stored position is fixed once; tonight's catalog position of the same star
+            # (within 1 arcsec) does not replace it. Another star under an old name does.
+            if not star_record.same_star(self.comp_coords.get(name), pos):
+                self.comp_coords[name] = pos
         if seq_auid := (star.get("seq") or {}).get("auid"):
             # 2.2.13 (John): an AAVSO sequence comp or check is named by its AUID in AAVSO reports; the series and
             # the panel keep the catalog name, so night-to-night matching is unchanged.
@@ -14477,15 +15025,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                    + [("check", self.check_xy, self.check_name)]):
             if xy is None:
                 continue
-            star = self._chart_star_at(xy)
+            star = self._chart_pick_at(xy)   # 2.4.0 step 4 (#77): by brightness when not right under the marker
+            self._pick_note = ""
             if star is None:
+                if not name_var.get().strip():
+                    self._fill_from_chart(role, xy)   # says why no name was taken, when a neighbor was turned away
                 continue
             old = name_var.get().strip()
             if old:
                 # 2.2.8: a catalog name left over from another night that belongs to a different star is corrected.
                 # Left alone: names typed by hand (no sky position known for them), the same star under another
                 # catalog's name (within 3"), and any case where the labeled star is not right under the marker.
-                new = str(star.get("auid") or star.get("label") or "").strip()
+                new = self._slot_name_for(star).strip()
                 if not new or new == old or old in core.star_names(star):
                     self._note_sequence(role, old, star, xy)
                     continue
@@ -15802,6 +16353,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 traceback.print_exc()
 
+    MARKER_STEP = "Markers before Run photometry"
+
     def _warn_marker_offsets(self, radius: float) -> list:
         """2.2.18 (item 5): before photometry, say in the Log when the frames would be measured off a marked star's
         center (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit).
@@ -15814,6 +16367,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         rows = [("Target", self.target_xy, "gauss")] + [(role_label(r), getattr(self, f"{r}_xy"), "dip")
                                                         for r in COMP_ROLES] + [("Check", self.check_xy, "dip")]
         warned = []
+        # 2.4.0 step 4 (#71): each off-center marker is a finding of its own (Findings panel), replaced on the next
+        # Run; near the frame edge the line says how far the marker is from it (step 3's margin, #78).
+        store = getattr(self, "findings", None)
+        if store is not None:
+            store.drop_step(self.MARKER_STEP)
         for label, xy, wing in rows:
             if xy is None:
                 continue
@@ -15831,10 +16389,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                          "if that is not the star you meant, clear it and click again.")
                 continue
             warned.append((label, info["offset"]))   # 2.3.6 (audit fix, m377): only real off-center markers
-            self.log(f"⚠ {where} is {info['offset']:.1f} px from the center of the star there ({info['x']:.1f}, "
-                     f"{info['y']:.1f})" + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
-                     + ". The frames would be measured beside the star, so it would read faint. Clear it and click the "
-                       "star again (zoom in first) if that is not intended.")
+            edge = self._edge_text(xy) if label != "Target" else ""
+            text = (f"⚠ {where} is {info['offset']:.1f} px from the center of the star there ({info['x']:.1f}, "
+                    f"{info['y']:.1f})" + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
+                    + (f"; the marker is {edge}" if edge else "")
+                    + ". The frames would be measured beside the star, so it would read faint. Clear it and click the "
+                      "star again (zoom in first) if that is not intended.")
+            self.log(text, finding=False)
+            if store is not None:
+                store.add("warn", text, step=self.MARKER_STEP, where="Before Run photometry")
         if warned:
             self.status.set("Check the Log: " + ", ".join(label for label, _o in warned)
                             + (" is" if len(warned) == 1 else " are") + " marked off the center of the star.")
@@ -15869,6 +16432,36 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._warn_marker_offsets(radius)   # 2.2.18 (item 5)
         ghosts = [(role, label, var.get().strip()) for role, (label, var) in names.items()
                   if role != "target" and var.get().strip() and getattr(self, f"{role}_xy") is None]
+        # 2.4.0 step 4 (#72; the 2.3.6 m088 lesson): a series star without a marker tonight keeps its name. One that
+        # is off this frame is only noted; one the solve could not place is asked about with "keep the names" as
+        # the default (the old question's Yes cleared the names, and so took the star out of the series' comps).
+        token = getattr(self, "_preview_token", 0)
+        known = self._series_star_names()
+        off = [g for g in ghosts if self._slot_state.get(g[0]) == (token, g[2], "off")]
+        mine = [g for g in ghosts if g not in off and g[2] in known]
+        ghosts = [g for g in ghosts if g not in off and g not in mine]
+        if off:
+            self.log("Not on this frame tonight, so not measured (their names stay): "
+                     + ", ".join(f"{label} {name}" for _r, label, name in off) + ".", keep_status=True)
+        if mine:
+            listing = "\n".join(f"  • {label}: {name}" for _r, label, name in mine)
+            answer = ask_choice(
+                self, APP_TITLE,
+                "These stars of the series have no marker on this image, so they would not be measured tonight:\n"
+                f"{listing}\n\nClick each star on the image to mark it, or go on without them (their names stay).",
+                [("keep", "Go on without them"), ("clear", "Clear those names and go on"),
+                 ("stop", "Stop, so I can mark them")], safe="keep")
+            if answer == "stop":
+                return False
+            if answer == "clear":
+                for role, _label, _name in mine:
+                    self.clear_mark(role, redraw=False)
+                self._update_pick_label()
+                self.refresh_preview()
+                self.update_star_panel()
+            else:
+                self.log("Not marked on this image, so not measured tonight (their names stay): "
+                         + ", ".join(f"{label} {name}" for _r, label, name in mine) + ".", keep_status=True)
         if ghosts:
             listing = "\n".join(f"  • {label}: {name}" for _r, label, name in ghosts)
             answer = messagebox.askyesnocancel(
