@@ -49,6 +49,7 @@ import busy_bar   # 2.2.20 (item 3)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
+import star_record   # 2.4.0 step 4 (#72): the per-star record of a series' comps and check
 from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows   # 2.4.0 (#98)
 import photometry_core as core
 import transit_core as tcore
@@ -1734,6 +1735,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.last_scan = None
         self.highlight_night = None
         self._marks_shape = None         # 2.2.3: shape of the debayered image the markers belong to
+        self.star_records = []           # 2.4.0 step 4 (#72): the open series' star records (star_record.py)
+        self._v_disagree = {}            # 2.4.0 step 4 (#56): {role: a magnitude that disagrees with the series'}
+        self._user_cleared = set()       # 2.4.0 step 4 (S033): comps the user cleared from their slots
         self.comp_coords = {}            # 2.2.3: {comp/check name: (ra, dec)} to recognize one star under two names
         self._save_one_night = False     # 2.2.3: the current Save is for the highlighted night only
         self.reports_saved = {}          # 2.2.3: {night: [{"file":..., "date":..., "scope": "night"|"series"}]}
@@ -5339,6 +5343,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._prev_stars = ([], "")
         self.comp_catalog_mags = {}
         self.comp_coords = {}
+        self.star_records, self._v_disagree, self._user_cleared = [], {}, set()   # 2.4.0 step 4
         self.spare_catalog = {}
         self.seq_auids = {}
         self.report_names = {}
@@ -11639,7 +11644,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.5: the Comps button adds comps one after another; Clear selected removes the last one marked.
             used = self._comp_roles_used()
             if used:
-                self.clear_mark(used[-1])
+                self._user_clear_mark(used[-1])
             elif self.target_xy is not None and getattr(self, "_pick_auto_advanced", False):
                 # 2.2.18 (item 7, review): Comps was picked for the user after the solve's Target marker; with no comp
                 # yet, Clear selected means the marker just placed.
@@ -11653,7 +11658,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return
         if mode == "exclude":
             return
-        self.clear_mark(mode)
+        self._user_clear_mark(mode)
 
     def _clear_selected_watch(self):
         """2.2.18 (item 19): Clear selected with Watch picked stops watching the star selected in the Watch stars list
@@ -11932,6 +11937,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"{role_label(mode)}: {no_v}")
             self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
+            if self._say_watch_clash(mode):   # 2.4.0 step 4 (S033): a comp is never a Watch star too
+                return
+            if spare is None:
+                self._settle_slot_name(mode)   # 2.4.0 step 4 (#72): a stable name
+                self.update_star_panel()
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
 
@@ -12235,6 +12245,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
+        if self._say_watch_clash(role):   # 2.4.0 step 4 (S033): a comp is never a Watch star too
+            return
+        settled = self._settle_slot_name(role)   # 2.4.0 step 4 (#72): the series' name, or the star's display name
+        if settled and self._slot_notes.get(role):
+            self._slot_notes[role] = (settled,) + tuple(self._slot_notes[role][1:])
+            self.update_star_panel()
         if self._say_check_clash(role):   # 2.4.0 (#68): the check typed into a comp slot, or a comp into the check's
             return
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
@@ -12516,6 +12532,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             w = ttk.Entry(stars, textvariable=name_var, width=30)
             w.grid(row=r, column=1, sticky="ew", pady=(4, 0))
             if role != "target":
+                # 2.4.0 step 4 (#72): hover: the star's other names and every catalog magnitude with its source
+                self._add_tooltip(w, lambda k=role: self._slot_hover(k))
                 # 2.2.13 (John): type a name or RA/Dec in an empty slot and press Enter to put the marker on it.
                 w.bind("<Return>", lambda e, k=role: self._slot_lookup(k))
                 w.bind("<KP_Enter>", lambda e, k=role: self._slot_lookup(k))   # 2.2.14 (item 14): keypad Enter
@@ -12527,7 +12545,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 w = ttk.Entry(stars, textvariable=mag_var, width=8)
                 w.grid(row=r, column=2, sticky=W, padx=(6, 0), pady=(4, 0))
                 widgets.append(w)
-            w = ttk.Button(stars, text="✕", width=3, command=lambda k=role: self.clear_mark(k))
+            w = ttk.Button(stars, text="✕", width=3, command=lambda k=role: self._user_clear_mark(k))
             w.grid(row=r, column=3, sticky=W, padx=(4, 0), pady=(4, 0))
             widgets.append(w)
             var = StringVar(value="")
@@ -12557,6 +12575,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                   justify=LEFT).grid(
             row=3 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
 
+        # 2.4.0 step 4 (#56): shown only while a slot's new magnitude disagrees with the series'
+        self.series_v_row = ttk.Frame(stars, style="Card.TFrame")
+        self.series_v_row.grid(row=4 + 2 * len(rows), column=0, columnspan=4, sticky=W, pady=(6, 0))
+        ttk.Button(self.series_v_row, text="Series magnitudes…", command=self.series_v_dialog).pack(side=LEFT)
+        ttk.Label(self.series_v_row, text="a catalog disagrees with the series: keep the series' value or use "
+                                          "the new one", style="Hint.TLabel").pack(side=LEFT, padx=(8, 0))
+        self.series_v_row.grid_remove()
         watch = self._group(panel, "Watch stars")
         watch.pack(fill=BOTH, expand=True, pady=(10, 0))
         ttk.Label(watch, text="Pick Watch and click a star, or Add a star… by name or RA/Dec. Watch stars are measured "
@@ -12602,6 +12627,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """Catalog color, red-color warning, and variable-star check for the target, comps, and check star."""
         if not hasattr(self, "star_status"):
             return
+        try:
+            self._series_v_reconcile()   # 2.4.0 step 4 (#56): the series' magnitude stays in its box
+        except Exception:
+            traceback.print_exc()
         checked = bool(self.field_check_sources)
         # 2.2.5: show Comp 2 … Comp 10 only when they are in use; 2.2.13: plus one empty slot after the last one, to
         # type a star into.
@@ -12720,6 +12749,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     parts.append("variable check: Solve first")
                 else:
                     parts.append("variable check: mark it on the image to check it by position")
+            v_note = self._series_v_note(role) if role != "target" else ""   # 2.4.0 step 4 (#56)
+            if v_note:
+                parts.insert(0, v_note)
             if slot_note and "  Marker at (" not in slot_note[1]:
                 # 2.2.14 (item 14): e.g. "renamed only" (2.2.16 item 8: now with its ✓; a placed star's line is not
                 # repeated, the panel shows the star itself)
@@ -12733,6 +12765,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     # ---- watch stars ------------------------------------------------------------------
     def add_watch_at(self, xy, announce: bool = False):
         star = self._chart_star_at(xy)
+        # 2.4.0 step 4 (S033): a star is a comp or a Watch star, never both
+        for cand in ([""] + (core.star_names(star) if star is not None else [])):
+            if self._refuse_watch_of_comp(cand, (star or {}).get("ra") if not cand else None,
+                                          (star or {}).get("dec") if not cand else None, xy if not cand else None):
+                return None
         if star is not None:
             name = str(star.get("auid") or star.get("label") or "")
             # 2.2.14 (item 11): a known variable's name on the star counts too (V1441 Cas is TYC 4006-670-1).
@@ -12784,6 +12821,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._already_watching(name, f"{name} is already a watch star.", True)   # 2.2.14 (item 15)
             return
         info = self.spare_catalog.get(name, {})
+        if self._refuse_watch_of_comp(name, info.get("ra"), info.get("dec")):   # 2.4.0 step 4 (S033)
+            return
         self.watch_list.append({"name": name, "mag": info.get("mag"), "mags": dict(info.get("mags") or {}),
                                 "catalog": info.get("catalog", ""), "ra": info.get("ra"), "dec": info.get("dec"),
                                 "variable": info.get("variable", ""),
@@ -13028,6 +13067,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         onto the image with the chart solution."""
         if any(w["name"] == name for w in self.watch_list):
             self._already_watching(name, f"{name} is already a watch star.", announce)   # 2.2.14 (item 15)
+            return
+        if self._refuse_watch_of_comp(name, ra, dec):   # 2.4.0 step 4 (S033): never a comp and a Watch star
             return
         # 2.2.13 (John): one star, one name. A star typed by RA/Dec (or another name) that is already watched is not
         # added again (13 Oct: APASS J231239.3+565553 became a second watch star 'watch 348.1637 +56.9314').
@@ -18162,6 +18203,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         meta["watch_list"] = self.watch_list
         meta["spare_catalog"] = self.spare_catalog
         meta["comp_catalog_mags"] = self.comp_catalog_mags
+        # 2.4.0 step 4 (S033): the comp slots are the truth: a "comps in use" star the user cleared is not saved
+        try:
+            self._active_comps_from_slots()
+        except Exception:
+            traceback.print_exc()
         meta["active_comps"] = list(self.active_comps)
         meta["align_flip"] = bool(self.align_flip.get())
         meta["pier_segments"] = bool(self.pier_segments.get())   # 2.2.14 (item 20)
@@ -18175,6 +18221,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         meta["reports_saved"] = self.reports_saved
         meta["reports_sent"] = self.reports_sent   # 2.2.18 (item 10): a new key; older versions ignore it
         meta["comp_coords"] = {k: list(v) for k, v in self.comp_coords.items()}
+        # 2.4.0 step 4 (#72): the star records (position = identity, every name, every V with its source). The
+        # keys above (comp_coords, comp_catalog_mags, active_comps, the slots) stay as before for everything else.
+        try:
+            meta[star_record.META_KEY] = star_record.to_meta(self._sync_star_records())
+        except Exception:
+            traceback.print_exc()
+            meta[star_record.META_KEY] = star_record.to_meta(getattr(self, "star_records", None) or [])
         if getattr(self, "multinight_alt_eph", None):
             meta["multinight_alt_eph"] = dict(self.multinight_alt_eph)   # 2.2.21 (#44): Multi-night's typed ephemeris
         planet = self.planet_from_fields()
@@ -18351,6 +18404,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.comp_catalog_mags = {str(k): float(v) for k, v in (meta.get("comp_catalog_mags") or {}).items()
                                   if v is not None}
         self.active_comps = list(meta.get("active_comps") or [])
+        self._records_from_file(meta)   # 2.4.0 step 4 (#72): the star records (an older file converts in memory)
         if "align_flip" in meta:
             self.align_flip.set(bool(meta["align_flip"]))
         self.pier_segments.set(bool(meta.get("pier_segments")))   # 2.2.14 (item 20)
@@ -18715,6 +18769,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._pier_cache = {k: v for k, v in self._pier_cache.items()
                             if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
         self._series_check = ("", "")
+        self.star_records, self._v_disagree, self._user_cleared = [], {}, set()   # 2.4.0 step 4 (#72)
         self._series_names = set()   # 2.2.16 (item 11, review)
         self._series_site = {}   # 2.2.21 (nit j)
         self._zp_caution_cache = None
@@ -18893,6 +18948,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             messagebox.showerror(APP_TITLE, f"Could not read {os.path.basename(path)}:\n{exc}")
             return
         step(f"{len(observations)} points, the stars and settings")
+        self._convert_series_backup(path, meta)   # 2.4.0 step 4 (#72): an older file's original is kept first
         if self.observations or self.series_path:
             self._clear_series_state()   # 2.2.15 review: nothing of the series set aside goes into this one
         self._slot_typed = {}   # 2.2.16 (item 8, review): the series' names are not typed here
@@ -18959,12 +19015,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.transit_page.close_report(quiet=True)   # 2.2.7: a loaded series replaces a loaded report
         self.legacy_mixed = self._legacy_nights(meta, observations)
         self.series_path = path
+        left_out = self._loaded_active_comps()   # 2.4.0 step 4 (S033): a cleared comp never comes back
         if self.active_comps:
             try:
                 self._comps_follow_in_use("as saved in the series")   # 2.2.19 (#34)
                 self._seed_comps_under()   # review: the series' other comps are measured (as spares) next night too
             except Exception:
                 traceback.print_exc()
+        self.log(self._comps_loaded_line(left_out))   # 2.4.0 step 4 (S033): a surprise shows at once
+        both = self._comp_and_watch_names()
+        if both:
+            self.log(f"⚠ {', '.join(both)} {'is' if len(both) == 1 else 'are'} both a comp and a Watch star in this "
+                     "series. A star can't be both: clear it from the comps (✕) or take it off the Watch stars list.")
         # 2.2.14 (item 17): the next save of this file keeps it, as loaded now, as its _prev copy.
         self._prev_kept.discard(os.path.normcase(os.path.abspath(path)))
         step("the period search")
@@ -19853,6 +19915,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             *self._comps_lines(comps),   # 2.2.14 (item 9): wrapped, so 6+ comps do not run off the box
             f"Check   {self.check_used or '—'}" + (f"   σ {np.std(check_vals_all):.3f}" if len(check_vals_all) > 1 else "")
             + ("   (instrumental)" if check_kind == "instrumental" and check_vals_all else ""),
+            *self._series_v_lines(),   # 2.4.0 step 4 (#56 item 5): each comp's and the check's magnitude and source
             # 2.2.14 (item 9): the camera binning ("bin None" was the plot's binning box); plot bins only when on.
             f"Filter  {filt}   {self._binning_text(nights)}"
             + (f"   plot bins {self.bin_choice.get()}" if self.bin_choice.get() != "None" else ""),
@@ -20572,6 +20635,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for name, rd in (meta.get("comp_coords") or {}).items():
             if isinstance(rd, (list, tuple)) and len(rd) == 2:
                 self.comp_coords.setdefault(str(name), (float(rd[0]), float(rd[1])))
+        try:
+            self._merge_star_records(meta)   # 2.4.0 step 4 (#72)
+        except Exception:
+            traceback.print_exc()
         for night, entries in (meta.get("reports_saved") or {}).items():
             if isinstance(entries, list):
                 have = self.reports_saved.setdefault(str(night), [])
@@ -20683,6 +20750,710 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                               if isinstance(v, dict) and v.get("name")}
         return names | {name}
 
+    # ---- 2.4.0 step 4 (#72, #56, #67): the per-star record of a series' comp and check stars ----------------------
+    # star_record.py holds the rules (position = identity within SAME_STAR_ARCSEC, every name an alias, every V with
+    # its source). self.star_records is the open series' list; comp_coords and comp_catalog_mags stay the live views
+    # the rest of the app reads, and the records are brought up to date from them at every save (_sync_star_records).
+    def _series_star_for(self, name: str):
+        """The series' star record that `name` is (any of its names), or None."""
+        return star_record.find(getattr(self, "star_records", None) or [], name=str(name or "").strip())
+
+    def _series_star_at(self, ra, dec, tol_arcsec: float = star_record.SAME_STAR_ARCSEC):
+        """The series' star record at this sky position (degrees; proper motion allowed for), or None."""
+        try:
+            year = core.pm_epoch()
+        except Exception:
+            year = None
+        return star_record.find(getattr(self, "star_records", None) or [], pos=(ra, dec), tol_arcsec=tol_arcsec,
+                                year=year)
+
+    def _series_key(self, name: str) -> str:
+        """The name the series' data uses for this star (the name itself for a star the series does not know)."""
+        rec = self._series_star_for(name)
+        return rec["key"] if rec else str(name or "").strip()
+
+    def _slot_sky(self, role: str):
+        """Where a slot's star is on the sky: its saved position, a position typed as its name, else its marker
+        through the solved image; None when none of them is known."""
+        name = getattr(self, f"{role}_name").get().strip()
+        rd = self.comp_coords.get(name) if name else None
+        if rd is None and name:
+            rd = star_record.position_from_name(name)
+        xy = getattr(self, f"{role}_xy", None)
+        if rd is None and xy is not None and self.chart_solution and self.chart_placed:
+            try:
+                rd = core.pixel_to_sky(xy[0], xy[1], self.chart_solution)
+            except Exception:
+                rd = None
+        try:
+            return (float(rd[0]), float(rd[1])) if rd is not None else None
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def _record_learn(self, rec: dict, star: dict):
+        """Add what tonight's catalogs say about a record's star: its names, every catalog's magnitude in the series'
+        band, and its proper motion. Never changes the key or the magnitude the series uses."""
+        if not star:
+            return
+        for n in core.star_names(star):
+            if star_record.name_kind(n) != "aavso_label" or (star.get("seq") or {}).get("label") == n:
+                star_record.add_name(rec, n)
+        band = rec.get("band") or "V"
+        for cat, mags in (star.get("cat_mags") or {}).items():
+            if isinstance(mags, dict) and mags.get(band) is not None:
+                star_record.add_v(rec, cat, mags[band])
+        if star.get("ra") is not None and star.get("dec") is not None and (
+                star_record.position(rec) is None or (star.get("pm") and not rec.get("pm"))):
+            try:
+                year = core.pm_epoch()
+            except Exception:
+                year = None
+            star_record.set_position(rec, star["ra"], star["dec"], year, star.get("pm"))
+
+    def _chart_star_for_record(self, rec: dict, xy=None):
+        """Tonight's catalog star that is this record's star: at its marker, else at its sky position (within
+        SAME_STAR_ARCSEC). None when the image is not solved or no catalog star is there."""
+        if not self.chart_placed:
+            return None
+        if xy is not None:
+            star = self._chart_star_at(xy)
+            if star is not None:
+                return star
+        pos = star_record.position(rec)
+        if pos is None:
+            return None
+        best = None
+        for _x, _y, star in self.chart_placed:
+            if star.get("ra") is None or star.get("dec") is None:
+                continue
+            d = star_record.separation_arcsec(pos[0], pos[1], float(star["ra"]), float(star["dec"]))
+            if d <= star_record.SAME_STAR_ARCSEC and (best is None or d < best[0]):
+                best = (d, star)
+        return best[1] if best else None
+
+    def _sync_star_records(self) -> list:
+        """Bring the series' star records up to date with what the series holds now (its comps, check, catalog
+        magnitudes and positions, and what tonight's catalogs say about them). Called at every save. A star's key is
+        never changed; a name at a known star's position becomes an alias; a new star gets a record."""
+        records = self.__dict__.setdefault("star_records", [])
+        band = self._band() if hasattr(self, "pattern") else "V"
+        slots = {}
+        for role in list(COMP_ROLES) + ["check"]:
+            name = getattr(self, f"{role}_name").get().strip()
+            if name:
+                slots[name] = role
+        series_check = (getattr(self, "_series_check", None) or ("", ""))
+        check_names = [n for n in (self.check_used, series_check[0]) if n]
+        comp_names = [n for n in list(self.comps_used or []) + list(self.active_comps or []) if n]
+        wanted = []
+        for n in comp_names + check_names + list(slots) + list(self.comp_catalog_mags or {}):
+            if n and n not in wanted:
+                wanted.append(n)
+        data_names = {name_key(n) for n in comp_names + check_names}
+        for name in wanted:
+            role = slots.get(name)
+            pos = self.comp_coords.get(name) or (self._slot_sky(role) if role else None) \
+                or star_record.position_from_name(name)
+            rec = self._series_star_for(name)
+            if rec is None and pos is not None:
+                rec = self._series_star_at(pos[0], pos[1])
+                if rec is not None:
+                    if name_key(name) in data_names and name_key(rec["key"]) not in data_names:
+                        # the series' data uses this name: it is the key (the old key stays as a name)
+                        rec["names"] = [name] + [n for n in star_record.record_names(rec) if n != name]
+                        rec["key"] = name
+                    star_record.add_name(rec, name)
+            if rec is None:
+                rec = star_record.new_record(name, band=band)
+                records.append(rec)
+            if star_record.position(rec) is None and pos is not None:
+                star_record.set_position(rec, pos[0], pos[1])
+            xy = getattr(self, f"{role}_xy", None) if role else None
+            if xy is not None and rec.get("xy") is None:
+                rec["xy"] = [float(xy[0]), float(xy[1])]
+            try:
+                self._record_learn(rec, self._chart_star_for_record(rec, xy))
+            except Exception:
+                traceback.print_exc()
+            if self.seq_auids.get(name):
+                star_record.add_name(rec, self.seq_auids[name])
+        used = {name_key(n) for n in comp_names}
+        checks = {name_key(n) for n in check_names} | ({name_key(self.check_name.get())} - {""})
+        for rec in records:
+            keys = {name_key(n) for n in star_record.record_names(rec)}
+            in_slot = next((r for n, r in slots.items() if name_key(n) in keys), None)
+            if keys & used or (in_slot and in_slot != "check"):
+                rec["role"] = "comp"
+            elif keys & checks or in_slot == "check":
+                rec["role"] = "check"
+            else:
+                rec["role"] = ""
+            # the magnitude the series uses: comp_catalog_mags for a comp, the series' check magnitude for the check
+            value = None
+            if rec["role"] == "comp":
+                value = next((self.comp_catalog_mags[n] for n in [rec["key"]] + star_record.record_names(rec)
+                              if self.comp_catalog_mags.get(n) is not None), None)
+            elif rec["role"] == "check":
+                text = series_check[1] if name_key(series_check[0]) in keys else self.check_mag.get()
+                try:
+                    value = float(text)
+                except (TypeError, ValueError):
+                    value = None
+            if value is None or not math.isfinite(float(value)):
+                continue
+            if rec.get("v_used") is None or abs(float(rec["v_used"]) - float(value)) > 1e-9:
+                source = star_record.source_of(rec, value)
+                if not source and in_slot:
+                    entry = self.star_bands.get(in_slot)
+                    try:
+                        if isinstance(entry, dict) and entry.get("source") and abs(
+                                float((entry.get("mags") or {}).get(band)) - float(value)) <= 0.0005:
+                            source = str(entry["source"])
+                    except (TypeError, ValueError):
+                        pass
+                star_record.set_used(rec, value, source or star_record.TYPED)
+                rec["band"] = band
+        return records
+
+    def _records_from_file(self, meta: dict) -> bool:
+        """Take a series file's star records (an older file is converted in memory). comp_catalog_mags loses the key
+        of another name of a series comp (same position) that no night uses, so one star has one magnitude (#56).
+        True when the file was in the old format."""
+        records, converted = star_record.from_meta(meta)
+        self.star_records = records
+        self._v_disagree = {}
+        in_data = {name_key(n) for n in list(self.comps_used or []) + list(self.active_comps or [])}
+        for info in (meta.get("night_binning") or {}).values():
+            if isinstance(info, dict):
+                in_data |= {name_key(n) for n in info.get("comps") or []}
+        in_data |= {name_key(meta.get(f"{r}_name")) for r in COMP_ROLES}
+        for rec in records:
+            if rec.get("role") != "comp" or self.comp_catalog_mags.get(rec["key"]) is None:
+                continue
+            for n in star_record.record_names(rec):
+                if n != rec["key"] and n in self.comp_catalog_mags and name_key(n) not in in_data \
+                        and n not in self.spare_catalog:
+                    self.comp_catalog_mags.pop(n)
+        return converted
+
+    def _merge_star_records(self, meta: dict):
+        """Add series file… : the added file's stars join the open series' records (a star already known keeps its
+        key and its magnitude; its other names and catalog magnitudes are added)."""
+        theirs, _conv = star_record.from_meta(meta)
+        records = self.__dict__.setdefault("star_records", [])
+        for rec in theirs:
+            pos = star_record.position(rec)
+            mine = next((self._series_star_for(n) for n in star_record.record_names(rec)
+                         if self._series_star_for(n) is not None), None)
+            if mine is None and pos is not None:
+                mine = self._series_star_at(pos[0], pos[1])
+            if mine is None:
+                records.append(rec)
+                continue
+            for n in star_record.record_names(rec):
+                star_record.add_name(mine, n)
+            for src, mag in (rec.get("v") or {}).items():
+                if src not in (mine.get("v") or {}):
+                    star_record.add_v(mine, src, mag)
+            if star_record.position(mine) is None and pos is not None:
+                star_record.set_position(mine, pos[0], pos[1], rec.get("epoch"), rec.get("pm"))
+
+    def _convert_series_backup(self, path: str, meta: dict):
+        """An older series file is about to be converted to star records: its original is copied to a backup first
+        (never over an existing one), and the Log says so in one line."""
+        if star_record.is_current(meta):
+            return ""
+        try:
+            kept = star_record.write_backup(path)
+        except OSError as exc:
+            self.log(f"Series updated to the new star format in memory; a backup of the original could not be written "
+                     f"({exc}), so the first save keeps it as {os.path.basename(series_prev_path(path))} instead.")
+            return ""
+        self.log(f"Series updated to the new star format; the original is kept as {os.path.basename(kept)}.")
+        return kept
+
+    def _comp_slot_names(self) -> list:
+        return [n for n in (getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES) if n]
+
+    def _in_comp_slot(self, name: str) -> bool:
+        """True when this star (under any of its names) is named in a comp slot."""
+        keys = {name_key(n) for n in self._comp_slot_names()}
+        rec = self._series_star_for(name)
+        mine = {name_key(n) for n in (star_record.record_names(rec) if rec else [name])} | {name_key(name)}
+        return bool(keys & mine)
+
+    def _loaded_active_comps(self) -> list:
+        """S033 (15 Nov 2026): the comp slots a series was saved with are the truth. A "comps in use" star whose
+        comp slot is empty in the file is not put back by Load series. Returns the names left out."""
+        if not self.active_comps or not self._comp_slot_names():
+            return []
+        gone = [n for n in self.active_comps if not self._in_comp_slot(n)]
+        kept = [n for n in self.active_comps if n not in gone]
+        if not gone or not kept:
+            return []
+        self.active_comps = [] if set(kept) == set(self.comps_used) else kept
+        return gone
+
+    def _user_clear_mark(self, role: str):
+        """The ✕ beside a slot (or Clear selected): the user took this star out. Remembered, so the series' saved
+        "comps in use" follow the comp slots (S033)."""
+        name = getattr(self, f"{role}_name").get().strip() if role != "target" else ""
+        if name and comp_number(role):
+            self.__dict__.setdefault("_user_cleared", set()).add(name_key(name))
+        getattr(self, "_v_disagree", {}).pop(role, None)
+        self.clear_mark(role)
+
+    def _active_comps_from_slots(self) -> list:
+        """At save: a "comps in use" star the user cleared from its comp slot (and did not put back) leaves the
+        series' saved choice, so Load series never brings it back. Returns the names taken out."""
+        cleared = getattr(self, "_user_cleared", None) or set()
+        if not cleared or not self.active_comps or self.mode_key == "discovery":
+            return []
+        gone = [n for n in self.active_comps
+                if (name_key(n) in cleared or name_key(self._series_key(n)) in cleared) and not self._in_comp_slot(n)]
+        kept = [n for n in self.active_comps if n not in gone]
+        cleared -= {name_key(n) for n in self._comp_slot_names()}
+        if not gone or not kept:
+            return []
+        self.active_comps = [] if set(kept) == set(self.comps_used) else kept
+        cleared -= {name_key(n) for n in gone}
+        self.log(f"Comps in use saved from the comp slots: {', '.join(kept)} ({', '.join(gone)} cleared). Nights "
+                 f"already reduced with {', '.join(gone)} keep their values until Use comps… (Output page) "
+                 "re-derives them.")
+        return gone
+
+    def _comps_loaded_line(self, left_out=()) -> str:
+        """The load-time Log line: which comps and check the series brought, with the magnitude each one uses."""
+        def one(name, mag_text):
+            rec = self._series_star_for(name)
+            words = star_record.v_words(rec, self._band_word()) if rec else ""
+            if not words and str(mag_text or "").strip():
+                words = f"{self._band_word()} {str(mag_text).strip()}"
+            return f"{name} {words}".strip()
+        comps = [f"C{k + 1} " + one(getattr(self, f'{r}_name').get().strip(), getattr(self, f'{r}_mag').get())
+                 for k, r in enumerate(COMP_ROLES) if getattr(self, f"{r}_name").get().strip()]
+        check = self.check_name.get().strip()
+        line = ("Comps loaded: " + ("; ".join(comps) or "none")
+                + (f"; check {one(check, self.check_mag.get())}" if check else "; no check star") + ".")
+        if left_out:
+            line += (f" {', '.join(left_out)} {'is' if len(left_out) == 1 else 'are'} not put back: the series was "
+                     "saved with that comp slot empty.")
+        return line
+
+    # ---- a star is a comp or a Watch star, never both (S033, 15 Nov 2026) ----
+    def _watch_entry_for(self, role: str):
+        """The Watch star that a comp slot's star is (same name, another of its names, the same sky position within
+        SAME_STAR_ARCSEC, or the same spot on this image), or None."""
+        name = getattr(self, f"{role}_name").get().strip()
+        xy = getattr(self, f"{role}_xy", None)
+        rec = self._series_star_for(name) if name else None
+        names = {name_key(n) for n in (star_record.record_names(rec) if rec else [])} | {name_key(name)}
+        star = self._chart_star_at(xy) if xy is not None and self.chart_placed else None
+        if star is not None:
+            names |= {name_key(n) for n in core.star_names(star)}
+        names.discard("")
+        pos = self._slot_sky(role)
+        for w in self.watch_list:
+            wname = w.get("name")
+            if name_key(wname) in names:
+                return w
+            if pos is not None and star_record.same_star(pos, (w.get("ra"), w.get("dec"))):
+                return w
+            wxy = self.watch_xy.get(wname)
+            if xy is not None and wxy is not None and math.hypot(wxy[0] - xy[0], wxy[1] - xy[1]) < 2.0:
+                return w
+        return None
+
+    def _comp_role_of_watch(self, name: str = "", ra=None, dec=None, xy=None):
+        """The comp slot holding this star (by name, sky position or spot on the image), or None."""
+        key = name_key(name)
+        for role in COMP_ROLES:
+            slot = getattr(self, f"{role}_name").get().strip()
+            sxy = getattr(self, f"{role}_xy", None)
+            if not slot and sxy is None:
+                continue
+            rec = self._series_star_for(slot) if slot else None
+            names = {name_key(n) for n in (star_record.record_names(rec) if rec else [])} | {name_key(slot)}
+            if key and key in names - {""}:
+                return role
+            if xy is not None and sxy is not None and math.hypot(sxy[0] - xy[0], sxy[1] - xy[1]) < 2.0:
+                return role
+            if ra is not None and dec is not None and star_record.same_star((ra, dec), self._slot_sky(role)):
+                return role
+        return None
+
+    def _refuse_watch_of_comp(self, name: str = "", ra=None, dec=None, xy=None, announce: bool = True) -> bool:
+        """True (and said) when the star asked for as a Watch star is in a comp slot."""
+        role = self._comp_role_of_watch(name, ra, dec, xy)
+        if role is None:
+            return False
+        slot = getattr(self, f"{role}_name").get().strip() or name or "that star"
+        text = (f"{slot} is {role_label(role)}. A star can't be both a comp and a Watch star, so it was not added to "
+                f"the Watch stars. To watch it instead, clear it from {role_label(role)} first (the ✕ beside it).")
+        self.status.set(text)
+        self.log("Watch stars: " + text)
+        if announce:
+            try:
+                messagebox.showinfo(APP_TITLE, text)
+            except Exception:
+                pass
+        return True
+
+    def _say_watch_clash(self, role: str) -> bool:
+        """A comp just placed on a Watch star is refused: the slot is cleared again and the reason said. True when
+        it was."""
+        if not comp_number(role):
+            return False
+        w = self._watch_entry_for(role)
+        if w is None:
+            return False
+        name = getattr(self, f"{role}_name").get().strip() or w.get("name")
+        text = (f"{name} is a Watch star" + (f" ({w['name']})" if name_key(w.get("name")) != name_key(name) else "")
+                + f". A star can't be both a comp and a Watch star, so it was not added as {role_label(role)}. To use "
+                  "it as a comp, take it off the Watch stars list first (Remove selected).")
+        self.clear_mark(role)
+        self._slot_say(role, text)
+        self.status.set(text)
+        self.log(text)
+        try:
+            messagebox.showinfo(APP_TITLE, text)
+        except Exception:
+            pass
+        return True
+
+    def _comp_and_watch_names(self) -> list:
+        """Stars that are both in a comp slot and on the Watch list (an older series may hold some)."""
+        return [getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES
+                if getattr(self, f"{r}_name").get().strip() and self._watch_entry_for(r) is not None]
+
+    # ---- a new star's name (#72: the saved name is stable between runs and versions) ----
+    def _settle_slot_name(self, role: str) -> str:
+        """After a click or a typed name filled a comp or check slot from tonight's catalogs: a star the series knows
+        keeps the series' name; a new star gets its display name (AUID or AAVSO label, then TYC, then Gaia, then
+        APASS) whichever catalog answered first. The slot's records (position, bands, AUID) move with the name.
+        Returns the name now in the slot."""
+        var = getattr(self, f"{role}_name")
+        name = var.get().strip()
+        xy = getattr(self, f"{role}_xy", None)
+        if not name or self.mode_key == "discovery":
+            return name
+        star = self._chart_star_at(xy) if xy is not None and self.chart_placed else None
+        names = [n for n in (core.star_names(star) if star else []) if n]
+        if star is not None and name_key(name) not in {name_key(n) for n in names}:
+            return name                      # the slot's name is not this catalog star's: leave it alone
+        rec = self._series_star_for(name) or next(
+            (self._series_star_for(n) for n in names if self._series_star_for(n) is not None), None)
+        if rec is None:
+            pos = self._slot_sky(role)
+            rec = self._series_star_at(pos[0], pos[1]) if pos is not None else None
+        if rec is not None:
+            new = rec["key"]
+        elif star is not None:
+            # a bare AAVSO label ("127") is not unique in a field, so it is never the key; the AUID is
+            new = star_record.new_key([n for n in names if star_record.name_kind(n) != "aavso_label"]) or name
+        else:
+            return name
+        if not new or new == name:
+            return name
+        if name in self.comp_coords and new not in self.comp_coords:
+            self.comp_coords[new] = self.comp_coords[name]
+        if name in self.seq_auids and new not in self.seq_auids:
+            self.seq_auids[new] = self.seq_auids[name]
+        entry = self.star_bands.get(role)
+        if isinstance(entry, dict) and entry.get("name") == name:
+            entry["name"] = new
+        var.set(new)
+        self.log(f"{role_label(role)}: named {new} ({name} is another name of the same star).", keep_status=True)
+        return new
+
+    # ---- #56: the series' V wins ----
+    def _series_v_for_slot(self, role: str):
+        """(series value, its source, the series' name) for a slot whose star is a comp or the check of the open
+        series, else None."""
+        name = getattr(self, f"{role}_name").get().strip()
+        if not name or not self.observations or self.mode_key == "discovery":
+            return None
+        key = self._series_key(name)
+        rec = self._series_star_for(name)
+        before = getattr(self, "_series_catalog_before", None) or {}
+        if role == "check":
+            series_check = getattr(self, "_series_check", None) or ("", "")
+            if not series_check[0] or name_key(self._series_key(series_check[0])) != name_key(key):
+                return None
+            try:
+                value = float(series_check[1])
+            except (TypeError, ValueError):
+                return None
+        else:
+            series_comps = {name_key(n) for n in list(getattr(self, "_prev_stars", ([], ""))[0] or [])
+                            + list(self.comps_used or [])}
+            if name_key(key) not in series_comps:
+                return None
+            value = (before.get("comps") or {}).get(key)
+            if value is None:
+                return None
+        source = ""
+        if rec is not None and rec.get("v_used") is not None and abs(float(rec["v_used"]) - float(value)) <= 0.0005:
+            source = rec.get("v_source") or ""
+        return float(value), source, key
+
+    def _series_band_now(self) -> bool:
+        """True when this night's comps are taken in the series' band (the series' magnitudes apply to it)."""
+        try:
+            bands = {core.filter_band(o.filt) for o in self.observations if getattr(o, "filt", "")}
+            return not bands or bands == {core.filter_band(self._filter_code())}
+        except Exception:
+            return False
+
+    def _series_v_reconcile(self) -> list:
+        """#56: a comp or check of the open series keeps the series' magnitude in its box. A different value put
+        there by a star click or a catalog lookup is taken out again and shown beside the slot instead ("Series uses
+        8.728 (APASS DR9); Gaia DR3 says 8.704"), with Keep series value / Use new value. A value being typed is left
+        alone until the box loses the keyboard. Returns the roles with a new disagreement."""
+        notes = self.__dict__.setdefault("_v_disagree", {})
+        if getattr(self, "_loading_meta", False) or getattr(self, "_v_reconciling", False):
+            return []
+        if not self.observations or self.mode_key == "discovery" or not self._series_band_now():
+            if notes:
+                notes.clear()
+                self._series_v_button()
+            return []
+        self._v_reconciling = True
+        fresh = []
+        try:
+            for role in list(COMP_ROLES) + ["check"]:
+                info = self._series_v_for_slot(role)
+                if info is None:
+                    notes.pop(role, None)
+                    continue
+                value, source, key = info
+                if notes.get(role) and notes[role]["key"] != key:
+                    notes.pop(role)
+                var = getattr(self, f"{role}_mag")
+                try:
+                    box = float(var.get())
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(box) or abs(box - value) <= 0.0005:
+                    continue
+                typing = self._mag_box_focused(role)
+                new_source = star_record.TYPED if typing else ""
+                entry = self.star_bands.get(role)
+                try:
+                    if not typing and isinstance(entry, dict) and entry.get("source") and abs(
+                            float((entry.get("mags") or {}).get(self._band())) - box) <= 0.0005:
+                        new_source = str(entry["source"])
+                except (TypeError, ValueError):
+                    pass
+                old = notes.get(role)
+                if old and abs(old["new"] - box) <= 0.0005:
+                    new_source = new_source or old["new_source"]
+                if not self._new_v_plausible(box, new_source):
+                    # #64 item 1: an impossible magnitude is never shown as a choice
+                    if not typing:
+                        var.set(self._series_v_text(role, value))
+                        self.log(f"{role_label(role)} {key}: a magnitude of {box:g} was not taken (not a possible "
+                                 f"value); the series' {value:.3f} stays.", keep_status=True)
+                    continue
+                if not (old and abs(old["new"] - box) <= 0.0005):
+                    fresh.append(role)
+                notes[role] = {"key": key, "series": value, "series_source": source, "new": box,
+                               "new_source": new_source}
+                if not typing:
+                    var.set(self._series_v_text(role, value))
+            for role in fresh:
+                d = notes[role]
+                self.log(f"{role_label(role)} {d['key']}: "
+                         + star_record.disagreement_text(d["series"], d["series_source"], d["new"], d["new_source"])
+                         + ". The series' value is kept; Series magnitudes… on the Photometry page changes it for "
+                           "every night.", keep_status=True)
+        finally:
+            self._v_reconciling = False
+        self._series_v_button()
+        return fresh
+
+    @staticmethod
+    def _new_v_plausible(value: float, source: str = "") -> bool:
+        """#64 item 1, for one value: a 99.999 / 999999 placeholder, or an APASS magnitude brighter than APASS can
+        hold (its damaged copies give V 0.1-2.1), is not a magnitude to offer."""
+        if not math.isfinite(value) or core.is_sentinel_mag(value) or value < -2.0:
+            return False
+        return not (str(source).startswith("APASS") and value < core.APASS_FLOOR_V)
+
+    def _series_v_text(self, role: str, value: float) -> str:
+        """The series' magnitude as the box shows it (the check's own saved text when it is the same number)."""
+        if role == "check":
+            text = str((getattr(self, "_series_check", None) or ("", ""))[1]).strip()
+            try:
+                if text and abs(float(text) - value) <= 1e-9:
+                    return text
+            except ValueError:
+                pass
+        return f"{value:.3f}"
+
+    def _mag_box_focused(self, role: str) -> bool:
+        try:
+            return self.focus_get() is self.star_row_widgets[role][2]
+        except Exception:
+            return False
+
+    def _slot_hover(self, role: str) -> str:
+        """The hover note on a comp or check name box: the star's other names, each catalog's magnitude with its
+        source, and the magnitude the series uses ("" for a star without a record)."""
+        name = getattr(self, f"{role}_name").get().strip()
+        rec = self._series_star_for(name) if name else None
+        return star_record.hover_text(rec, name) if rec else ""
+
+    def _series_v_note(self, role: str) -> str:
+        d = (getattr(self, "_v_disagree", None) or {}).get(role)
+        if not d:
+            return ""
+        return star_record.disagreement_text(d["series"], d["series_source"], d["new"], d["new_source"]) \
+            + " (Series magnitudes… below)"
+
+    def _series_v_button(self):
+        """Show the Series magnitudes… button only while a slot has a magnitude that disagrees with the series'."""
+        row = getattr(self, "series_v_row", None)
+        if row is None:
+            return
+        try:
+            if getattr(self, "_v_disagree", None):
+                row.grid()
+            else:
+                row.grid_remove()
+        except Exception:
+            pass
+
+    def keep_series_v(self, role: str) -> bool:
+        """Keep series value: the disagreement shown beside the slot goes; nothing else changes."""
+        d = (getattr(self, "_v_disagree", None) or {}).pop(role, None)
+        if not d:
+            return False
+        self.log(f"{role_label(role)} {d['key']}: the series' {self._band_word()} {d['series']:.3f} kept.")
+        self._series_v_button()
+        self.update_star_panel()
+        return True
+
+    def use_new_series_v(self, role: str) -> bool:
+        """Use new value: the series takes the new magnitude for this star and EVERY night is re-calibrated in one
+        action, from its stored instrumental magnitudes (set_catalog_mags: an exact shift, nothing is measured
+        again). The series file as it was is copied to a backup first; without a backup nothing is changed."""
+        d = (getattr(self, "_v_disagree", None) or {}).get(role)
+        if not d:
+            return False
+        kept = ""
+        if self.series_path and os.path.isfile(self.series_path):
+            try:
+                kept = star_record.write_backup(self.series_path)
+            except OSError as exc:
+                messagebox.showerror(APP_TITLE, f"The series was not changed: a backup of "
+                                                f"{os.path.basename(self.series_path)} could not be written ({exc}).")
+                return False
+        self._v_disagree.pop(role, None)
+        key, new = d["key"], float(d["new"])
+        rec = self._series_star_for(key)
+        self._v_reconciling = True
+        try:
+            if role == "check":
+                changed = self.set_catalog_mags({}, check=f"{new:.3f}")
+            else:
+                changed = self.set_catalog_mags({key: new})
+        finally:
+            self._v_reconciling = False
+        if rec is not None:
+            star_record.set_used(rec, new, d["new_source"] or star_record.TYPED)
+        src = star_record.source_words(d["new_source"])
+        was = star_record.source_words(d["series_source"])
+        self.log(f"Series re-calibrated: {key} now uses {self._band_word()} {new:.3f}" + (f" ({src})" if src else "")
+                 + f" instead of {d['series']:.3f}" + (f" ({was})" if was else "") + " on every night"
+                 + ("" if role != "check" else " (the check star's own magnitude: no target point moves)")
+                 + (f". The series as it was is kept as {os.path.basename(kept)}." if kept else "."))
+        if self.series_path and rec is not None:
+            try:
+                self._write_series(self.series_path)   # the record's new source goes into the file too
+            except OSError as exc:
+                self.log(f"⚠ Could not save the series: {exc}")
+        self._series_v_button()
+        self.update_star_panel()
+        return bool(changed)
+
+    def series_v_dialog(self):
+        """Series magnitudes…: each slot whose new magnitude disagrees with the series', with the two choices."""
+        notes = dict(getattr(self, "_v_disagree", None) or {})
+        if not notes:
+            return
+        win = Toplevel(self)
+        win.title("Series magnitudes")
+        win.transient(self)
+        body = ttk.Frame(win, style="Card.TFrame", padding=12)
+        body.pack(fill=BOTH, expand=True)
+        ttk.Label(body, style="Card.TLabel", wraplength=text_wrap_px(win, 70), justify=LEFT,
+                  text="The series already has a magnitude for these stars, and every night so far was reduced with "
+                       "it. Keep series value leaves everything as it is. Use new value re-calibrates every night of "
+                       "the series with the new magnitude (the series file as it was is kept as a backup first)."
+                  ).pack(anchor=W, pady=(0, 8))
+
+        def done(fn, role, frame):
+            fn(role)
+            frame.destroy()
+            if not getattr(self, "_v_disagree", None):
+                win.destroy()
+        for role, d in notes.items():
+            frame = ttk.Frame(body, style="Card.TFrame")
+            frame.pack(fill=X, pady=4)
+            ttk.Label(frame, style="Card.TLabel", justify=LEFT, wraplength=text_wrap_px(win, 70),
+                      text=f"{role_label(role)}  {d['key']}\n" + star_record.disagreement_text(
+                          d["series"], d["series_source"], d["new"], d["new_source"]) + ".").pack(anchor=W)
+            row = ttk.Frame(frame, style="Card.TFrame")
+            row.pack(anchor=W, pady=(2, 0))
+            ttk.Button(row, text="Keep series value",
+                       command=lambda r=role, f=frame: done(self.keep_series_v, r, f)).pack(side=LEFT)
+            ttk.Button(row, text="Use new value (re-calibrates every night)",
+                       command=lambda r=role, f=frame: done(self.use_new_series_v, r, f)).pack(side=LEFT, padx=6)
+        ttk.Button(body, text="Close", command=win.destroy).pack(anchor="e", pady=(8, 0))
+
+    def series_v_words(self) -> list:
+        """#56 item 5: the magnitude and source the series uses for each comp in use and for the check, in words
+        ("TYC 4006-1008-1 V 8.728 (APASS DR9)"), comps first, then "check …"."""
+        out = []
+        cat = self._comp_catalog()
+        bw = self._band_word()
+        for name in list(self.active_comps or self.comps_used or []):
+            rec = self._series_star_for(name)
+            value = cat.get(name)
+            if value is None and rec is not None:
+                value = rec.get("v_used")
+            if value is None:
+                continue
+            src = ""
+            if rec is not None and rec.get("v_used") is not None and abs(float(rec["v_used"]) - float(value)) <= 0.0005:
+                src = star_record.source_words(rec.get("v_source") or "")
+            out.append(f"{name} {bw} {float(value):.3f}" + (f" ({src})" if src else ""))
+        check = self.check_used
+        text = str((getattr(self, "_series_check", None) or ("", ""))[1] or "").strip() or self.check_mag.get().strip()
+        if check and text:
+            rec = self._series_star_for(check)
+            src = ""
+            try:
+                if rec is not None and rec.get("v_used") is not None and abs(float(rec["v_used"]) - float(text)) <= 0.0005:
+                    src = star_record.source_words(rec.get("v_source") or "")
+            except ValueError:
+                pass
+            out.append(f"check {check} {bw} {text}" + (f" ({src})" if src else ""))
+        return out
+
+    def _series_v_lines(self, width: int = 50) -> list:
+        """The Series box's lines for series_v_words, wrapped like the Comps line (none without magnitudes)."""
+        words = self.series_v_words()
+        if not words:
+            return []
+        short = []
+        for w in words:
+            # the names are on the Comps and Check lines just above: the box shows the magnitudes and sources
+            m = _re.search(r" (\S+ \d+\.\d+(?: \(.*\))?)$", w)
+            short.append(("check " if w.startswith("check ") else "") + (m.group(1) if m else w))
+        return [ln.replace("Comps   ", "Mags    ", 1) for ln in self._comps_lines(short, width)]
+
     def _series_star_coords(self) -> dict:
         """2.2.14 (item 11): sky positions of every star the series and tonight know by name: comps and check
         (comp_coords), spares (spare_catalog, as before tonight's picks too) and watch stars."""
@@ -20697,6 +21468,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for w in self.watch_list:
             if w.get("ra") is not None and w.get("dec") is not None:
                 coords.setdefault(w["name"], (float(w["ra"]), float(w["dec"])))
+        # 2.4.0 step 4 (#67): the series' star records (every name of a star has its position), and tonight's comp
+        # and check slots: a position typed as the name (Gaia down, 10-11 Nov 2026), else the marker through the solve
+        for name, rd in star_record.coords_view(getattr(self, "star_records", None) or []).items():
+            coords.setdefault(name, rd)
+        for role in list(COMP_ROLES) + ["check"]:
+            name = getattr(self, f"{role}_name").get().strip()
+            if name and name not in coords:
+                rd = self._slot_sky(role)
+                if rd is not None:
+                    coords[name] = rd
+        for name in list(self.comps_used or []) + [self.check_used]:
+            if name and name not in coords:
+                rd = star_record.position_from_name(name)
+                if rd is not None:
+                    coords[name] = rd
         return coords
 
     def _same_series_star(self, name: str, candidates, coords: dict, index: dict, xy_of: dict | None = None):
@@ -20710,6 +21496,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for c in candidates:
             if c in mine or name in self._names_of(c, index):
                 return c
+        rec = self._series_star_for(name)   # 2.4.0 step 4 (#67): another name of a star the series has a record of
+        if rec is not None:
+            for c in candidates:
+                if star_record.has_name(rec, c):
+                    return c
         best = None
         rd = coords.get(name)
         if rd is not None:
@@ -21859,6 +22650,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + (f"; catalog magnitudes {', '.join(mags)}" if mags else ""))
         check_mag = self.check_mag.get().strip()
         lines.append(f"Check in the report: {self.check_used or 'none'}" + (f" ({check_mag})" if check_mag and self.check_used else ""))
+        v_words = self.series_v_words()   # 2.4.0 step 4 (#56): which magnitude and source the series uses
+        if v_words:
+            lines.append("Series magnitudes (value and source): " + "; ".join(v_words))
         lines.append("Scintillation (this report's error bars): " + self._scint_note())
         lines.append("Flagged points: " + ("left out" if self.skip_flagged.get() else "kept"))
         for name, var in (("Check-star zero point", "use_check_zp"), ("Segments lined up", "norm_segments"),
