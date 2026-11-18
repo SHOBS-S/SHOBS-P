@@ -5248,6 +5248,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.clear_mark(role, redraw=False)
         self.star_bands = {}
         self.suggested_comps = []
+        self._tonight_aliases = {}   # step 4 review (S5): the old field's catalog names are not aliases of the next
         # 2.2.16 (item 11): the rest of the old field (15 Oct: a stale "✓ Comp 5 … Marker at (747, 169)" showed with
         # no marker, and TOI-2046's comp names went into HD 219134's series).
         self.spare_marks = []
@@ -5827,13 +5828,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if mobs:
             return (f"{lin_words}" + ("" if keep_lin else " for the new camera" + (f" ({source})" if lin else ""))
                     + "; raw sat ADU is set with the MicroObservatory setup.")
+        if keep_sat and keep_lin:
+            return "Raw sat ADU and linear ADU left as they are (set after the last camera's night)."
         if keep_sat:
-            return ("Raw sat ADU" + kept_words + (" and l" + lin_words[1:] if keep_lin else "; l" + lin_words[1:]
-                                                   + f" ({source})") + ".")
+            return f"Raw sat ADU{kept_words}. {lin_words} ({source})."
         if sat:
             self.sat_limit.set(box(sat))
             if isinstance(getattr(self, "_own_setup", None), dict) and "sat_limit" in self._own_setup:
                 self._own_setup["sat_limit"] = box(sat)   # your own setup coming back never undoes this
+        if keep_lin:
+            return "Raw sat ADU " + (words(sat) if sat else "kept") + f" ({source}). {lin_words}."
         return ("Raw sat ADU " + (words(sat) if sat else "kept") + " and l" + lin_words[1:] + f" ({source}).")
 
     def _camera_aperture_settle(self) -> bool:
@@ -12955,7 +12959,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                    "so the star to center on could not be told" if rival is not None and c.get("lone") else
                    f"more than one catalog star lies within {c.get('reach', 0.0):.0f} px, so the star to center on "
                    "could not be told")
-        odd = (f"the only star within {c.get('reach', 0.0):.0f} px reads about {band} {c.get('seen', 0.0):.1f}, too "
+        odd = (f"the brightest star within {c.get('reach', 0.0):.0f} px reads about {band} {c.get('seen', 0.0):.1f}, too "
                f"{'bright' if c.get('why') == 'bright' else 'faint'} to be this star ({band} "
                f"{c.get('expect', 0.0):.2f}), so the marker was not moved onto it")
         why = {"none": f"no star could be centered within {c.get('reach', 0.0):.0f} px of it",

@@ -169,6 +169,16 @@
   {
    "section": "Input",
    "patterns": [
+    "Aperture and sky ring left as they are: they were set (typed, or by a loaded series) after the last camera's night.",
+    "Raw sat ADU and linear ADU left as they are (set after the last camera's night).",
+    "Raw sat ADU left as it is …",
+    "… Linear ADU left as it is (set after the last camera's night)."
+   ],
+   "todo": "Check that they suit these frames (Suggest… for the aperture; chapter 4 for the limits)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Aperture and sky ring back to the defaults (r 8, sky 14–22 px) for the new camera; they are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).",
     "Aperture set for the new camera's frames: r …, sky …–… px (stars' FWHM … px). …"
    ],
@@ -482,6 +492,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Series updated to the new star format; the original is already kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Series updated to the new star format in memory; a backup of the original could not be written (…), so the first save keeps it as …_prev.cvseries instead."
    ],
    "todo": "Nothing, if the folder is writable by the time you save. Otherwise copy the series file somewhere safe first."
@@ -490,9 +507,25 @@
    "section": "Photometry",
    "patterns": [
     "Comps loaded: C1 … V 8.728 (APASS DR9); C2 …; check … V 9.786.",
-    "… is not put back: the series was saved with that comp slot empty."
+    "… left out of the comps in use, as you chose: every night is re-derived with the others. Save the series to keep this.",
+    "… is still in the series' comps in use (no comp box held it when the series was saved)."
    ],
    "todo": "Read it. If a comp is missing or unexpected, fix the slots before Run photometry."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series' comps in use include …, but no comp box holds it (it was cleared, or moved off the frame). …",
+    "Leave it out"
+   ],
+   "todo": "Leave it out: every night is re-derived with the other comps, as Use comps… does; save the series to keep it. Keep it (the default): the series stays as saved and the star goes back into the comp box."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… could not be left out (…); the series' comps in use stay as saved."
+   ],
+   "todo": "Open Use comps… on the Output page and choose the comps there."
   },
   {
    "section": "Photometry",
@@ -543,6 +576,21 @@
     "Series re-calibrated: … now uses V 8.704 (Gaia DR3) instead of 8.728 (APASS DR9) on every night. The series as it was is kept as …_backup.cvseries."
    ],
    "todo": "Nothing. To undo it, load the backup file."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series was re-calibrated here, but … could not be written (…). …",
+    "The series was re-calibrated but could not be saved (…). It is not saved yet: use Save series (Output page)."
+   ],
+   "todo": "Free disk space or fix the folder, then press Save series on the Output page before you close the series."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "SHOBS-P is working on something else right now. Wait for it to finish, then press Use new value again. Nothing was changed."
+   ],
+   "todo": "Wait for the busy bar to go, then press it again."
   },
   {
    "section": "Photometry",
@@ -689,9 +737,18 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comp 1 … placed from the series position, centered (0.8 px); magnitude … kept as loaded."
+    "Comp 1 … placed from the series position, centered (0.8 px from where the position falls); magnitude … kept as loaded."
    ],
-   "todo": "Nothing. With centered by a wider search (… px …): check it, look at that marker once."
+   "todo": "Nothing. With tonight's catalog star there is …\" from the stored position (more than the 1\" that makes it surely the same star): check it is the right star, look at that marker once."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… placed from the series position, centered by a wider search, 6.8 px from where the position falls — more than the normal centering allows …",
+    "… Centered on the star 6.8 px from the catalog position by a wider search — more than the normal centering allows …",
+    "Check it is the right star."
+   ],
+   "todo": "Look at the marker once. If it is on the wrong star, click the right one."
   },
   {
    "section": "Photometry",
@@ -704,7 +761,8 @@
    "section": "Photometry",
    "patterns": [
     "… couldn't be placed: …",
-    "Comp 1 TYC … couldn't be placed: no star was found …"
+    "Comp 1 TYC … couldn't be placed: no star was found …",
+    "… couldn't be placed where the series position falls, …"
    ],
    "todo": "Solve again, or click the star. The name stays in its row meanwhile."
   },

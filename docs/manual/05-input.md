@@ -132,12 +132,17 @@ Another camera:
   frames have the new lights' size and exposure; otherwise it is emptied too. A box you filled after the last
   night (after **New reduction**, say) is yours and is left alone.
 - **Aperture r**, **sky in** and **sky out** (Photometry page) go back to 8, 14 and 22 px, and are set from the new
-  frames' star sizes as soon as the image is calibrated: the sizes **Suggest…** would propose (chapter 8). Sizes you
-  type in between are kept.
+  frames' star sizes as soon as the image is calibrated: the sizes **Suggest…** would propose (chapter 8). This
+  happens before the solve and before **Run photometry** read the boxes. Sizes you type in between are kept.
 - **raw sat ADU** and **linear ADU** are set for the new camera: from its SHOBS-FLUX camera profile when there is
   one; else what you last used with that camera; else the camera's bit-depth maximum (4,095 for a 12-bit camera;
   60,000 for a 16-bit file, a little under 65,535 because cameras scale their data up) with **linear ADU** empty.
   On MicroObservatory frames **raw sat ADU** is set with the MicroObservatory setup, as before.
+- **Only what the last night left is reset.** If you typed an aperture or a limit after the last night, or loaded a
+  series since (Load series fills these boxes from the series), that box is not the last camera's any more and
+  SHOBS-P leaves it alone. The line says so: *Aperture and sky ring left as they are: they were set (typed, or by a
+  loaded series) after the last camera's night.* The same goes for **raw sat ADU** and **linear ADU**, each on its
+  own.
 
 SHOBS-P says what it did in three plain lines, in the log and under the Frames boxes while those lights are in the
 **Lights** box, for example:

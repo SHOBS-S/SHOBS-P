@@ -56,3 +56,16 @@ APASS name.
 | img/10-colour-box.png | 10 | nothing | reuse |
 | NEW: the Stars panel with a disagreement and the Series magnitudes… window | 10 | new in 2.4.0 ("The series' magnitudes win") | NEW SHOT when 2.4.0 is complete |
 | all others | | nothing of #72 / #56 / #67 in view | reuse |
+
+## Step 4 review fixes (M1-M3, S1-S6)
+
+No screenshots were taken. Words changed in view of existing shots, and new windows:
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/08-stars-panel.png | 08 | rows of series comps now read *✓ placed after the solve at (x, y), centered (0.8 px from where the position falls); magnitude … kept as loaded* ("from where the position falls" is new) | RESHOOT (already on the list above; shoot once, with these words) |
+| any shot of the Photometry Log after a solve on a loaded series (08, 10) | 08, 10 | the per-star lines say *centered (N px from where the position falls)*; a wider-search placement is now a ⚠ line and a Findings entry | RESHOOT (already on the list above) |
+| img/05-another-camera.png (the optional new shot above) | 05 | the aperture / limits lines may read *… left as they are …* when a series was loaded or a value typed since the last night; for the shot, use untouched boxes so the three reset lines show | note for the new shot |
+| NEW: the Load series question *The series' comps in use include …, but no comp box holds it …* with **Leave it out** / **Keep it** | 10 | new in 2.4.0 ("Load never changes the comps in use without asking"); needs a pre-2.4.0 series saved with a cleared comp still in its Use comps choice | NEW SHOT (optional) when 2.4.0 is complete |
+| NEW: a comp row with *⚠ … centered by a wider search … Check it is the right star* and its Findings entry | 08 | the wider-search placement is a ⚠ with a finding now | NEW SHOT (optional) |
+| all others | | nothing of the review fixes in view | reuse |

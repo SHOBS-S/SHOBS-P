@@ -348,9 +348,17 @@ tonight's catalogs do not have that name (a catalog that did not answer).
 **Centered like a click.** A marker placed from a name or a position starts where the plate solution puts the star,
 then is centered on the star itself. Near the frame edge the solution can be several pixels out, so from 2.4.0
 SHOBS-P looks further when the first try fails (out to 3 × the star width, or the aperture radius) and takes the
-brightest star there, as long as no other catalog star of similar brightness is that close. The row then says
-"Centered on the star 6.8 px from the catalog position (wider search; 22 px from the top edge): check it is the right
-star."
+brightest star there, as long as no other catalog star of similar brightness is that close. Because the marker then
+moved further than the normal rule allows, the row carries a ⚠ and the line is in the Findings panel: "⚠ Comp 4:
+… Centered on the star 6.8 px from the catalog position by a wider search — more than the normal centering allows
+(22 px from the top edge). Check it is the right star." Look at the marker once; if it is on the right star there is
+nothing more to do.
+
+Two things stop the wider search from landing on a neighbor. For a star of the open series, only tonight's catalog
+star at the series' saved position (within about 1″) counts as that star: any other catalog star of similar
+brightness within reach is another star, and the marker is not moved. And the star found must have the brightness
+the series has for it (read through the field's zero point); a star 3 magnitudes too bright is not taken. In both
+cases the marker stays where the position falls and SHOBS-P says it could not be centered (next paragraph).
 
 **When it cannot be centered, SHOBS-P says so.** The marker stays at the catalog position and the row, the status
 line, the Log and the Findings panel all say, for example, "⚠ Comp 4 APASS J185609.9+692057 is at the catalog position
@@ -407,8 +415,9 @@ or with **Suggest…**) to sizes that fit; if the new sizes still do not fit, it
 **A new camera (2.4.0).** When the lights come from another camera than the last ones, the boxes are not kept: they
 go back to 8, 14 and 22 px and, on the first calibrated image, are set to what **Suggest…** proposes for these stars
 (*"Aperture set for the new camera's frames: r 4.1, sky 8–12 px (stars' FWHM 2.3 px). Suggest… shows the detail and
-can test other sizes."*). **raw sat ADU** and **linear ADU** are set for the new camera too. See "Lights from another
-camera" in [5. Input](05-input.md).
+can test other sizes."*). **raw sat ADU** and **linear ADU** are set for the new camera too. A box you typed in, or
+that a loaded series filled, after the last night is left as it is. See "Lights from another camera" in
+[5. Input](05-input.md).
 
 ### Defocused stars (donuts)
 
