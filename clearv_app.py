@@ -5599,7 +5599,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     # ---- 2.4.0 (#111): lights from another camera never keep the last camera's calibration, aperture and limits ----
     _CAMERA_BOXES = (("Bias", "bias_dir"), ("Dark", "dark_dir"), ("Dark flats", "darkflat_dir"), ("Flat", "flat_dir"))
 
-    def _camera_folders_snapshot(self, values: bool = True):
+    def _camera_folders_snapshot(self, values: bool = True, folders: bool = True):
         """The calibration boxes as they are now: they go with the camera of the lights in use (taken when those
         lights are checked or calibrated and at New reduction). A box still holding this text when lights from
         another camera come in was carried over; one changed since was chosen for the new lights and is left alone."""
@@ -5607,8 +5607,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # still holds this value; one changed since (typed, or set by a loaded series) is left alone.
         # They are taken when the night's frames are calibrated or measured, at New reduction and when a camera
         # change has just set them; values=False (the same camera's lights scanned again) keeps the ones held.
+        # folders=False (Run photometry): only the values; the frame boxes keep their own snapshot.
         old = getattr(self, "_camera_folders", None) or {}
-        self._camera_folders = {key: getattr(self, name).get().strip() for key, name in self._CAMERA_BOXES}
+        if folders or not old:
+            self._camera_folders = {key: getattr(self, name).get().strip() for key, name in self._CAMERA_BOXES}
+        else:
+            self._camera_folders = {key: old[key] for key, _name in self._CAMERA_BOXES if key in old}
         held = old.get(self._CAMERA_VALUES)
         self._camera_folders[self._CAMERA_VALUES] = (held if not values and isinstance(held, dict)
                                                      else self._camera_values_now())
@@ -16695,7 +16699,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._camera_aperture_settle()   # step 4 review (S7): never a run on a new camera's default sizes
         except Exception:
             traceback.print_exc()
-        self._camera_folders_snapshot()   # step 4 review (M2): the sizes and limits this camera's night is run with
+        self._camera_folders_snapshot(folders=False)   # step 4 review (M2): the sizes and limits this night is run with
         if not self._aperture_sane():
             return
         if not self._markers_in_order():
