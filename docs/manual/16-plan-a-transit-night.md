@@ -74,7 +74,7 @@ on the Star ID."*
 
 - **The ephemeris.** SHOBS-P compares every published ephemeris for the planet and keeps the one with the smallest
   predicted uncertainty for tonight. The source line names it, for example *"most precise of 4 published
-  ephemerides, ±3 min now"*. This is the ephemeris your O − C is measured against later.
+  ephemerides, ±3 min now"* (*"under 1 min now"* for a very precise one). This is the ephemeris your O − C is measured against later.
 - **A star with several planets.** If you type a star (or the Star ID is a star) with more than one known planet,
   a window asks *"… has N known planets. Which one did you observe?"*. Click the planet. Planets that do not
   transit are marked **(does not transit)**. **Cancel** stops the lookup.
@@ -82,7 +82,9 @@ on the Star ID."*
   starts a new reduction (chapter 5): it clears the old target, comparison stars, check star, watch stars and **Use
   comps…** choice, closes an open series (asking first, with a save offered), and fills in the new host. This keeps a
   previous field's stars from leaking into the new one. If a series is open and you answer **No**, the old star and
-  its series stay; check the planet's name.
+  its series stay, and so does the planet you had before (it is put back in the Planet boxes; with no earlier planet
+  the value boxes stay empty), so a fit never uses the other star's period and transit time. Check the planet's name;
+  the line under the boxes says how to be asked again.
 - **Typing values by hand.** Every box can be edited. If the lookup fails (for example, no internet), type the
   period, T0 and duration yourself; the rest help the fit but are optional. If you type a depth that disagrees with
   Rp/R\* by more than 20%, SHOBS-P notes it and compares against (Rp/R\*)².

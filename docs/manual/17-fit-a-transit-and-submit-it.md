@@ -144,6 +144,11 @@ figures. Its columns are:
   the published value (else the MCMC's), b more than 0.3 from it, or an error on a/R\* larger than half of it. A wide
   error on b alone is normal (b and a/R\* trade off on one night's light curve) and is not flagged.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
+  The priors on a/R\* and b use the lookup's published uncertainties (at least 3 % of a/R\* and 0.04 in b). The
+  Input page boxes show a/R\* and b to 3 decimals and Rp/R\* to 5; that rounding does not count as a change, so the
+  lookup's uncertainties are kept (from 2.4.0; before, an a/R\* of 8.7312 shown as 8.731 lost its uncertainty and the
+  prior fell to the minimum width). A value you type yourself has no published uncertainty, so its prior uses the
+  minimum width.
   On the **Tc** row this column holds the predicted Tc for your epoch, with its uncertainty.
 - A fourth column with a report's own values appears when you fit an EXOTIC report.
 
@@ -193,7 +198,12 @@ The notes under the table also say:
 - what this night was measured with, for example *"Measured with r 8, sky 14–22 px (Bin 1)."*, in orange when the
   Photometry page's boxes have changed since (run photometry again to apply them);
 - the camera gain the error bars used and where it came from, for example *"Gain 0.25 e-/ADU (header EGAIN)."* When
-  the headers have no gain, it is estimated from the sky's own noise, or 1 e-/ADU is assumed, in orange. On frames
+  the headers have no gain, it is measured from the night's sky, for example *"Gain measured from the night's sky,
+  39.3 e- per image unit (from 24 frame pairs, 38.9-39.4; read + dark noise 1.16 units from the darks; photon-transfer
+  check 37.1 +/- 2.7; method: background model and source mask, idea by Mike Fitzgerald)."* (see "The gain behind the
+  error bars" in [8. Photometry basics](08-photometry-basics.md)). When it cannot be measured, the one-frame estimate
+  is used and the note says so: *"Gain from the sky's own noise, a lower limit of 28.7 e- per image unit (no EGAIN in
+  the headers; error bars are on the safe side)."* With no estimate at all, 1 e-/ADU is assumed, in orange. On frames
   the camera binned (XBINNING above 1), SHOBS-P also works out from the sky's noise whether the camera summed or
   averaged the binned pixels, for example *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3 averaged, so 6.91 e- per
   stored ADU used (from the sky's noise)"*. See "Camera binning and the gain" in [7. Calibrate](07-calibrate.md);
@@ -339,7 +349,13 @@ To clear the neighbors:
 2. Run photometry on a transit night and fit the transit.
 3. Open the NEB check again. Each watched neighbor now has a **Measured drop** and a verdict.
 
-The check needs a solved image and the transit depth.
+The check needs a solved image and the transit depth. The depth, the target's position and the neighbors always come
+from one star. With your photometry shown they are the Input page's. With an opened report (chapter 19) shown, the
+check runs only when the report is of the Input page's star, and then uses the report's depth. For a report of
+another star, it says so and does not run (from 2.4.0; before, it mixed that report's depth with the Input page's
+star and field). Press **Close report** to check the Input page's star. A report of the Input page's star with no
+RA and Dec on the Input page yet gets *"The NEB check needs the target's RA/Dec: …"*: press **Lookup** (or type them)
+first.
 
 ## Per-frame or stacked points
 
@@ -396,7 +412,9 @@ saves nothing and the status line says *"Not saved: fix the Notes (Output page),
 planet, comps and check star never set it off. A new reduction puts the notes back to *"OSC reduced; not
 transformed"* (or *"Monochrome camera; not transformed"*).
 
-Saving the report also writes a `…_settings.txt` with the reduction settings, and a field image (`…_field.png`, plus
+Saving the report also writes a `…_settings.txt` with the reduction settings and the fit's exact inputs (period, t0,
+a/R\*, b and the rest at full precision, with the catalog and the lookup date, so a rerun can be checked for the same
+inputs), and a field image (`…_field.png`, plus
 the AAVSO chart of the field when it answers) beside it: the field image comes with the report. Chapter 19 describes them.
 
 ### Send it to ExoClock

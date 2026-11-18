@@ -2062,8 +2062,7 @@ def lookup_nea(name: str) -> dict:
     if best is not None:
         period, period_err, t0, t0_err = best["period"], best["period_err"], best["t0"], best["t0_err"]
         refs[0] = best["reference"] or refs[0]
-        eph_note = (f"; most precise of {best['n']} published ephemerides, ±{best['sigma_min']:.0f} min now"
-                    if best["n"] > 1 else "")
+        eph_note = ephemeris_note(best["n"], best["sigma_min"])
     planet = {
         "name": pl_name, "host": row.get("hostname") or "",
         "period": period, "period_err": period_err, "t0": t0, "t0_err": t0_err,
@@ -2196,6 +2195,7 @@ def lookup_planet(name: str) -> dict:
     try:
         planet = lookup_nea(name)
         lookup_cache.put("nea", key, _json_ready(planet))
+        planet["looked_up"] = _lookup_stamp()   # 2.4.0 (#93): for the fit report's inputs (not cached)
         return planet
     except PlanetChoice:
         raise
@@ -2205,7 +2205,9 @@ def lookup_planet(name: str) -> dict:
             no_answer = exc   # not reached (timeout, no connection, 5xx), as opposed to "no planet called …"
     if "TOI" in name.upper():
         try:
-            return lookup_exofop_toi(name)
+            planet = lookup_exofop_toi(name)
+            planet["looked_up"] = _lookup_stamp()   # 2.4.0 (#93)
+            return planet
         except Exception as exc:
             errors.append(f"ExoFOP: {exc}")
     if no_answer is not None:
@@ -2216,6 +2218,14 @@ def lookup_planet(name: str) -> dict:
             planet["cache_note"] = lookup_cache.from_cache_note("nea", when, _no_answer_reason(no_answer))
             return planet
     raise ValueError("\n".join(errors))
+
+
+def _lookup_stamp() -> str:
+    """2.4.0 (#93): when a live lookup answered: '17 Nov 2026 14:03 UTC'."""
+    import datetime as _dt
+    import lookup_cache
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return f"{lookup_cache.fetched_text(now)} {now:%H:%M} UTC"
 
 
 def _json_ready(planet: dict) -> dict:
@@ -2622,6 +2632,103 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
                if result.get("comp_loo") else ""))
 
 
+def _full(v, unit: str = "") -> str:
+    """2.4.0 (#93): a number at full precision, or 'not known'. Step 3 regression (18 Nov): 15 significant digits,
+    not Python's repr, so a catalog value keeps every digit it was published with (a double holds ~15.9) while a
+    derived one loses only the binary noise (k^2 = 0.022159299599999998 -> 0.0221592996)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "not known"
+    if not math.isfinite(f):
+        return "not known"
+    return f"{f:.15g}" + unit
+
+
+def _full_pm(value, err, unit: str = "") -> str:
+    text = _full(value)
+    if text == "not known":
+        return text
+    e = _full(err)
+    return text + (f" +/- {e}{unit}" if e != "not known" else f"{unit} (no error given)")
+
+
+def ephemeris_note(n: int, sigma_min: float) -> str:
+    """The NASA lookup's '; most precise of N published ephemerides, ±3 min now' ('' for a single ephemeris). Step 3
+    regression (18 Nov): '±0 min now' read oddly, so under a minute is said as such."""
+    if n <= 1:
+        return ""
+    return (f"; most precise of {n} published ephemerides, "
+            + (f"±{sigma_min:.0f} min now" if sigma_min >= 1 else "under 1 min now"))
+
+
+def fit_inputs_lines(result: dict) -> list:
+    """2.4.0 (#93, John 15 Nov): the exact inputs the fit used, at full precision, so a later rerun can be checked for
+    identical inputs (HAT-P-32 b, 19 Oct: the fit moved 0.004 sigma between 2.3.5 and 2.3.6 and the report's 4-digit
+    priors could not show which lookup value had changed). One 'Name: value' line each, ASCII. Report lines only:
+    nothing here feeds the fit."""
+    r = result or {}
+    pl = r.get("planet") or {}
+    out = [f"Fit input period: {_full_pm(r.get('period', pl.get('period')), pl.get('period_err'), ' d')}",
+           f"Fit input t0: {_full_pm(pl.get('t0'), pl.get('t0_err'))} (BJD_TDB)"
+           + ("" if pl.get("t0") else " (no ephemeris: no O - C)"),
+           f"Fit input a/R*: {_full_pm(pl.get('a_rs'), pl.get('a_rs_err'))}"
+           + (" (derived from the duration)" if pl.get("a_rs_derived") else ""),
+           f"Fit input b: {_full_pm(pl.get('b'), pl.get('b_err'))}" + (" (assumed)" if pl.get("b_assumed") else "")]
+    k = pl.get("k")
+    depth = published_depth(pl)[0] if pl else None
+    out.append(f"Fit input published Rp/R*: {_full_pm(k, pl.get('k_err'))}; depth {_full(depth)}"
+               + (f" (listed {_full(pl.get('depth_listed'))})" if pl.get("depth_listed") else "")
+               + (" (typed on the Input page)" if pl.get("depth_typed") else ""))
+    t14 = pl.get("t14")
+    out.append(f"Fit input T14: {_full(t14, ' d')}" + (f" ({t14 * 24.0:.6f} h)"
+                                                      if isinstance(t14, (int, float)) and math.isfinite(t14) else ""))
+    teff = pl.get("teff")
+    band = r.get("ld_band") or ""
+    out.append(f"Fit input Teff for limb darkening: "
+               + (_full(teff, " K") if isinstance(teff, (int, float)) and math.isfinite(teff)
+                  else "not known (5800 K assumed)")
+               + "; band " + (f"Sloan {core_band_label(band)} (Claret 2004)" if band else "V / clear table")
+               + (f" (filter {pl.get('ld_band')})" if pl.get("ld_band") else ""))
+    ld = r.get("ld_prior")
+    if ld:
+        out.append(f"Fit input limb darkening prior: u1 {_full(ld[0])}, u2 {_full(ld[1])}, width {_full(ld[2])}")
+    pri = r.get("priors") or {}
+    if pri:
+        out.append("Fit input shape priors used: " + ", ".join(f"{name} {_full(m)} +/- {_full(sd)}"
+                                                               for name, (m, sd) in pri.items())
+                   + " (published values with the sigma floors)")
+    src = str(pl.get("source") or "").strip() or "not recorded"
+    ref = str(pl.get("reference") or "").strip()
+    eph = str(r.get("eph_source") or "").strip()
+    cat = src + (f" ({ref})" if ref else "")
+    # step 3 regression (18 Nov): the ephemeris source is often the same catalog and reference again; say it once
+    ref_core = (ref.split("ephemeris:", 1)[-1] if ref.lower().startswith("ephemeris:") else ref).strip().lstrip("; ")
+    if eph and eph != cat and not (ref_core and ref_core in eph and src in eph):
+        cat += f"; ephemeris from {eph}"
+    out.append(f"Fit input catalog: {cat}")
+    if pl.get("from_cache"):
+        when = f"from the lookup cache (fetched {pl['from_cache']}; the live service did not answer)"
+    elif pl.get("looked_up"):
+        when = f"{pl['looked_up']} (live)"
+    elif "report" in src.lower():
+        when = "not looked up (the report's own values)"
+    elif "input page" in src.lower():
+        when = "typed on the Input page"
+    else:
+        when = "not recorded"
+    if pl.get("typed_over") and (pl.get("from_cache") or pl.get("looked_up")):
+        # Fable nit: values typed over on the Input page after the lookup are not the lookup's
+        when += "; typed over on the Input page after it: " + ", ".join(pl["typed_over"])
+    out.append(f"Fit input lookup: {when}")
+    return [_ascii_line(x) for x in out]
+
+
+def _ascii_line(text: str) -> str:
+    import photometry_core as core
+    return core.ascii_safe(str(text).replace("\u2212", "-").replace("\u00b1", "+/-"))
+
+
 def fit_text(result: dict, meta: dict) -> str:
     """Plain-text summary of a transit fit (ExoFOP package, and a copy for the observer's records)."""
     s, pl = result["summary"], result["planet"]
@@ -2669,6 +2776,7 @@ def fit_text(result: dict, meta: dict) -> str:
               + (f" (Claret 2004, Sloan {core_band_label(result['ld_band'])})" if result.get("ld_band") else
                  f" (V-band table used: no Sloan table for {meta.get('filter')})" if _mentions_sloan(meta.get("filter"))
                  else ""),
+              # 2.4.0 (#93): the exact inputs at full precision follow this block ("Fit inputs (full precision)")
               f"Noise            rms {result['rms'] * 100:.3f}% per point"
               + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
               + f", reduced chi-square {result['rchi2']:.2f}, "
@@ -2692,6 +2800,9 @@ def fit_text(result: dict, meta: dict) -> str:
     v = result.get("verdict") or {}
     if v.get("depth_unreliable"):
         lines.append("Verdict          timing usable, depth unreliable: " + v["depth_unreliable"])
+    # 2.4.0 (#93): the fit's exact inputs, so a rerun can be checked for identical inputs.
+    lines += ["", "Fit inputs (full precision)"] + ["  " + ln.replace("Fit input ", "", 1)
+                                                    for ln in fit_inputs_lines(result)]
     if result["flags"]:
         lines += ["", "Notes"] + [("  ! " if lvl == "warn" else "  - ") + text for lvl, text in result["flags"]]
     return "\n".join(lines) + "\n"

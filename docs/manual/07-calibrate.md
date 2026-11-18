@@ -51,7 +51,8 @@ The log ends with lines such as:
     Masters ready: bias n=51 saved master, dark n=20 exp=120s, flat n=30
     Preview debayered: green from RGGB, 3120×2080 px. Star positions are on this image.
 
-The line beside the buttons (**No preview yet.** before the first calibration) then shows the picture you will work
+The line beside the buttons (**No preview yet.** before the first calibration, and again when the Lights or Flat
+folder changes) then shows the picture you will work
 on, for example "Preview: green from RGGB → 3120×2080 (superpixel)".
 
 **Why the picture is half size (color cameras).** SHOBS-P combines each 2×2 group of the color mask into one pixel
@@ -135,8 +136,10 @@ and then EGAIN is right as it is. Many CMOS cameras **average** them instead: a 
 holds 9 × EGAIN electrons. Used as it is, EGAIN would make the error bars about 2–3 times too big (and the transit
 fit's reduced χ² well under 1).
 
-SHOBS-P tells the two apart from the sky's own noise, which it always measures on the reference frame. The log's
-**Photon noise:** line then adds one sentence, for example:
+SHOBS-P tells the two apart from the sky's own noise. Since 2.4.0 it measures the gain from the night's sky (see "The
+gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md)); when that is not possible it uses the
+one-frame estimate on the reference frame, a lower limit, as before. The log's **Photon noise:** line then adds one
+sentence, for example:
 
 - *"The camera binned 3x3 and averaged the binned pixels (the sky's noise says so), so each stored ADU holds 9 x
   EGAIN electrons: about 6.91 electrons per image unit."*
@@ -148,7 +151,8 @@ SHOBS-P tells the two apart from the sky's own noise, which it always measures o
 The Transit fit's settings record then says, for example, *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3
 averaged, so 6.91 e- per stored ADU used (from the sky's noise)"*. SHOBS-P's own **Binning** box (processing bin) was
 already handled correctly, and unbinned cameras, mono or color, are not affected at all. Nights reduced before 2.3.0
-keep their old error bars until you reduce them again.
+keep their old error bars until you reduce them again. With the 2.4.0 measurement the choice is surer: the one-frame
+estimate is a lower limit, so a camera that averaged could, on a faint sky, look as if it had summed.
 
 ## Changing the channel
 

@@ -148,9 +148,44 @@
   {
    "section": "Input",
    "patterns": [
+    "These 78 lights look like MicroObservatory frames … Use that telescope's setup for these frames? … Optics: focal length 560 mm, pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)"
+   ],
+   "todo": "Yes for these frames; your own setup comes back when you scan your own lights. See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Pixel size set to 6.8 µm, the MicroObservatory camera's own pixel. The series was saved with 13.6 µm, the pixel after the camera's 2x2 binning; …"
+   ],
+   "todo": "Nothing. The series file keeps 13.6 µm until it is saved again."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
    "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… orbits …, not …: kept …, its series and its planet …. To use … instead, type it in the Planet box again and press Enter (you are asked again)."
+   ],
+   "todo": "Check the planet's name. To use the other planet after all, type it again and press Enter, and answer Yes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… orbits …, not …: kept … and its series; …'s values were not filled in. Check the planet's name, or press Look up again beside the Planet box to be asked again."
+   ],
+   "todo": "Check the name, or press Look up again and answer Yes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… orbits …, not …: wait for the current step to finish, then …"
+   ],
+   "todo": "Wait, then do what the line says."
   },
   {
    "section": "Input",
@@ -325,6 +360,15 @@
   {
    "section": "Calibrate",
    "patterns": [
+    "Calibration failed: The master … is … px but the … are … px, so it is from another camera or binning. …",
+    "Calibration failed: The master … is … px but this light is … px: either the master is from another camera or binning …",
+    "The master bias is 6248x4176 px but the flats are 650x500 px"
+   ],
+   "todo": "Empty that row on the Input page, or pick frames taken with this camera at this binning; or take the odd light out of the folder."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
     "Calibration failed: The masters do not fit these lights: …"
    ],
    "todo": "Pick matching frames, or tick Rebuild masters (ignore saved ones)."
@@ -409,6 +453,29 @@
     "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image."
    ],
    "todo": "Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2 and the check star are the same star (Comp 2: …). The check star tests the comps, so it can't also be one of them. …",
+    "Run photometry"
+   ],
+   "todo": "Clear one of the two (✕ in the Stars panel, or right-click its marker) and pick another star. Run photometry refuses until then."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two different stars, but the results would not tell them apart. …",
+    "… but the markers are 25 px apart on the image). They look like two different stars …"
+   ],
+   "todo": "Type another name in one of the boxes (its catalog number, for example), or clear the marker that is on the wrong star and pick again. Run photometry refuses until then."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2 and the check star are the same star (…). The check star tests the comps, so it can't also be one of them. … Comp 3 and the check star have the same name (…). They look like two different stars …"
+   ],
+   "todo": "For the comp that is the same star: clear one of the two and pick another star. For the one that only shares the name: type another name in one of the boxes, or clear the marker that is on the wrong star and pick again. Run photometry refuses until both are fixed."
   },
   {
    "section": "Photometry",
@@ -622,6 +689,62 @@
     "only … px from the frame edge: its sky ring … needs the star at least … px in …"
    ],
    "todo": "Pick a star further in (for the check, the line may name a green ring S1, S2 … farther in)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "drifts toward the frame edge later in the night: … px in on this frame, but only … px on frame …; stars at least … px in all night …",
+    "… (checked on 8 of the night's … lights) …"
+   ],
+   "todo": "Pick a star further in, or one of the green rings S1, S2 … (they stay clear all night)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "drifts off the frame later in the night: it is off the frame edge on frames … , so it is not measured there — pick a star further in",
+    "… drifts to the frame edge later in the night: its sky ring … runs past the edge on frames …"
+   ],
+   "todo": "Pick a star further in."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Suggested comps (…): … All stay at least … px from the frame edge all night (the field drifts up to … px; checked on all … lights).",
+    "checked on 8 of the … lights",
+    "from the loaded series' … frames"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The night's drift could not be checked (too few stars were found on this frame to line the others up with it); only this frame's edge was checked.",
+    "… (the lights could not be read) …",
+    "… (none of the other lights could be lined up with this frame) …",
+    "… (the image on the page is not the same size as the lights) …"
+   ],
+   "todo": "Nothing, usually. On a night that drifts a lot, pick comps well inside the frame, or Run photometry once: the loaded series' own positions are then used."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Checking the night's drift… frame 3 of 8"
+   ],
+   "todo": "Nothing; the new green rings appear when it is done."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Only 3 comps suggested: 1 more star of the right brightness comes nearer the frame edge during the night than the … px a comp needs to stay clear: … (… px on frame …). They are not suggested."
+   ],
+   "todo": "Nothing; use the suggestions there are. If you want a fourth comp, pick one by hand that stays in (its Stars panel line warns if it does not)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No comp can be suggested: the stars of the right brightness all come nearer the frame edge during the night than the … px a comp needs to stay clear: … Pick comps by hand further in, or reject the frames where the field drifted farthest."
+   ],
+   "todo": "Pick comps by hand further in (the Stars panel says how each one fares), or reject the frames where the field drifted farthest in Blink and Calibrate again."
   },
   {
    "section": "Photometry",
@@ -903,6 +1026,93 @@
    "todo": "Go on, or Edit… to type the ID of the AAVSO chart you used (chapter 15)."
   },
   {
+   "section": "Photometry",
+   "patterns": [
+    "Photon noise: … so the gain is measured from the night's sky: … electrons per image unit (from … frame pairs, …; read + dark noise … units from the darks, …). Method: background model and source mask, idea by Mike Fitzgerald."
+   ],
+   "todo": "Nothing. See \"The gain behind the error bars\" in 8. Photometry basics."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Photon noise: … so the gain comes from the sky's own noise on one frame (… electrons per image unit, a lower limit: error bars on the safe side). It could not be measured from the night's sky: …"
+   ],
+   "todo": "For a measurement next time, put two or more darks at the lights' exposure (or bias frames) in the Dark (or Bias) folder."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Photon noise: … , measured on the single frames that went into the stacks (a stack is their sum: the same gain)",
+    "… units per stack of N frames (from the darks, added up over the N frames) …, measured on the stacks themselves (the single frames could not give it)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Measuring the gain from the night's sky (… frame pairs)…"
+   ],
+   "todo": "Nothing; the Photon noise line follows."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… N pairs dropped: the sky had structure the background model missed (cloud, moonlight, or faint stars that moved between the frames)"
+   ],
+   "todo": "Nothing when the gain was still measured. When too few pairs were left, the lower limit is used; frames from a clearer part of the night help. With resampled frames, give SHOBS-P the frames as they came off the camera."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… the sky is too faint against the read + dark noise (the sky's own noise has to be at least as large as the read + dark noise, and it was in only … of … frame pairs) …"
+   ],
+   "todo": "Nothing needed: the error bars are on the safe side. Longer exposures (a brighter sky per frame) allow a measurement."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Note: this is under the one-frame lower limit (…), which should not happen; the frames may change from one to the next by more than the sky's noise …"
+   ],
+   "todo": "Nothing urgent. Check the night's frames in Blink for clouds."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No photon-transfer check: the night's sky level changed too little to give a slope."
+   ],
+   "todo": "Nothing; the gain is still measured."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The night's sky measures … electrons per image unit, … x what EGAIN … e-/ADU gives (…): EGAIN may be too small for the stored values, or the frames carry a pedestal. Error bars may be too large."
+   ],
+   "todo": "Check the camera's gain in the capture program and that no pedestal was added. If the Transit fit's χ²ν is well under 1, EGAIN is too small."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The night's sky measures … electrons per image unit, … x what EGAIN … e-/ADU gives (…): EGAIN may be per native ADU of 12/14-bit data stored as 16-bit, or for unsummed binning. Error bars may be too small; check the Transit fit's reduced chi-square."
+   ],
+   "todo": "Check the Transit fit's χ²ν: well over 1 says the error bars are too small. Fix EGAIN in the capture program."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The sky's noise says at least … electrons per image unit, over twice what EGAIN … gives …",
+    "… about …, under half what EGAIN … gives …"
+   ],
+   "todo": "As for the two lines above."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "SHOBS-FLUX camera profile …: gain … e-/ADU (…); the night's sky gives … e-/ADU, they agree (within … %).",
+    "… higher: check that the profile is for this camera's gain and offset setting"
+   ],
+   "todo": "Nothing when they agree. When they differ, check the camera's gain and offset settings that night, and the profile in SHOBS-FLUX."
+  },
+  {
    "section": "Output, Variables mode",
    "patterns": [
     "Add these N points as the night of … to the M points already in the series?"
@@ -1040,11 +1250,56 @@
    "todo": "For another star, use New reduction on the Input page."
   },
   {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "from the times CSV: epoch = first saved maximum, period last used"
+   ],
+   "todo": "Nothing; Elements from VSX puts VSX's in instead. See 14. Time a maximum or minimum."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "no saved maxima yet; VSX elements",
+    "… typed elements",
+    "… type the elements"
+   ],
+   "todo": "Nothing, or type the elements."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "O−C against P …, E … (HJD), as in the diagram:",
+    "… O−C +0.0 min (saved +9.4 against VSX HJD)"
+   ],
+   "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
+  },
+  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"
    ],
    "todo": "Type your site once."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
+   ],
+   "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit inputs not written to the settings file (…)."
+   ],
+   "todo": "Nothing for the report. If you need the rows, fit again and save again; if it keeps happening, send the Log file."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The NEB check works on one star: its transit depth, its position and the neighbors on the solved image. The report shown is of …, but the Input page and the solved image are of …."
+   ],
+   "todo": "Close report to check the Input page's star, or set the report's star up on the Input page and solve one of its frames."
   },
   {
    "section": "Output, Transits mode",
@@ -1101,6 +1356,20 @@
     "With the shape left free the fit is not constrained (…) …"
    ],
    "todo": "Nothing; the result uses the published shape."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Gain measured from the night's sky, … e- per image unit (…)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Gain from the sky's own noise, a lower limit of … e- per image unit (no EGAIN in the headers; error bars are on the safe side)"
+   ],
+   "todo": "Nothing, or add darks at the lights' exposure and run photometry again for a measured gain."
   },
   {
    "section": "Output, Transits mode",

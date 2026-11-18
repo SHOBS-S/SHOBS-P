@@ -243,6 +243,12 @@ of a bare "check" (a night added to a series whose check was saved as "check" be
   edge: its sky ring (out to 22 px) needs the star at least 27 px in, with room for drift — pick a star further in".
   For the check star it also names a suggested comp ring farther in, for example "…; S2 (TYC 3089-883-1) is farther
   in and would make a good check".
+- (2.4.0) for a comp or check star that is fine on this frame but **drifts toward or off the edge later in the
+  night**, the frames where it happens, for example "⚠ drifts toward the frame edge later in the night: 60 px in on
+  this frame, but only 32 px on frame #2; stars at least 36 px in all night (3 × the sky-out radius) stay clear of
+  the edge and the weakest part of the flat", or "⚠ drifts off the frame later in the night: it is off the frame
+  edge on frames 61–84, so it is not measured there — pick a star further in". When only some of the night's frames
+  were checked (big frames), the line says so: "(checked on 8 of the night's 300 lights)". See "How S1–S4 are chosen" below for how the drift is found.
 
 **Suggested comparison stars** are drawn as thick green rings labeled **S1**, **S2** …: up to four catalog stars close
 to the target in color and brightness, not variable, not near saturation or the linear limit, well inside the frame,
@@ -263,8 +269,29 @@ From 2.3.4 the rules are:
   says **the closest color left here (no more within 0.3)**. A star with no colour in the catalogs only fills in (when the target's colour is known), and its line says so.
 - **Linear:** with a **linear ADU** set, the star's brightest raw pixel on the reference frame must be under 75 % of
   it, so the sharpest frames of the night stay linear too.
-- **Inside the frame:** at least 3 × the sky-out radius from every edge, so a framing shift between nights does not
-  drop it. Nearer stars only fill in when the field has too few, and their line says how far in they are.
+- **Inside the frame all night (2.4.0):** at least 3 × the sky-out radius from every edge on **every frame of the
+  night**, not only on the frame on the page. A star that the night's drift takes nearer the edge than that is
+  **never** suggested, however short the field is: you then get fewer than four suggestions, and the Log says which
+  stars were left out and how near the edge they come, for example "Only 3 comps suggested: 1 more star of the right
+  brightness comes nearer the frame edge during the night than the 42 px a comp needs to stay clear: APASS
+  J025600.7-110545 (6 px on frame 67). They are not suggested." The suggestions line ends with how far the field
+  drifts, for example "All stay at least 36 px from the frame edge all night (the field drifts up to 78 px; checked
+  on all 78 lights)."
+  - **How the drift is found.** When the loaded series was measured on these lights, from its own frame positions
+    (every frame; nothing is read), as long as it covers nearly all of them (95 %; not a run you canceled partway)
+    and was measured at the **Binning** of the image on the page. Otherwise SHOBS-P reads the lights right after
+    Calibrate, in the background, and lines up their stars with the frame on the page: **every** light when the
+    frames are small, or 8 of them — the night's first and last and six between — for big frames. Measured times:
+    about 7 seconds for a MicroObservatory night of 78 frames of 650 × 500 px, about 4 seconds for 8 of 300 frames of
+    6248 × 4176 px (on a modest 2-core computer; a fast PC takes less, a slow or network drive more). Meanwhile the
+    busy bar in the lower left says *Checking the night's drift… frame 3 of 8*, and any green rings already shown
+    stay until the new ones are ready. It is done once per frame on the page. If the drift cannot be found at all
+    (too few stars on the frame, or the lights cannot be read or lined up), the Log says *The night's drift could not
+    be checked (…); only this frame's edge was checked.*, and the suggestions are checked on the frame on the page
+    alone. With 8 frames checked, a frame in
+    between can drift a little further (a sudden jump of the mount), which the margin of 3 × the sky-out radius
+    covers in most cases; the lines say how many frames were checked.
+  - With a single light (or an image from another field) only the frame on the page is checked.
 - **AAVSO sequence stars** that pass come first, then other catalog stars.
 
 What a suggestion cannot know yet is how steady the star is: that shows after the run, in **Comp health…**
@@ -272,6 +299,19 @@ What a suggestion cannot know yet is how steady the star is: that shows after th
 
 **Variables are caught.** If you click a known or suspected variable as a comp or check star, SHOBS-P asks whether to
 use it anyway. **No** removes the marker.
+
+**The check star is never a comp.** If a comp and the check star turn out to be the same star (the same catalog
+name, or markers within about 2″ of each other on a solved image; 2 pixels before the solve), SHOBS-P says so at
+once, in a box and on the star's line in the Stars panel, for example *"⚠ Comp 2 and the check star are the same star
+(Comp 2: 0.3″ apart). The check star tests the comps, so it can't also be one of them. …"*. This catches a position
+or name typed into the wrong row as well as a click. Clear one of the two markers (✕ in the Stars panel, or
+right-click it) and pick another star. Until then **Run photometry** refuses, with the same words.
+If the two have the same name but their markers are clearly apart (10″ or more; 10 px before the solve), they are two
+stars that share a name (catalogs sometimes repeat a label), or one marker is on the wrong star: SHOBS-P then says
+*"⚠ Comp 2 and the check star have the same name (Comp 2: …, but the markers are 30″ apart). They look like two
+different stars, but the results would not tell them apart. …"*. Type another name in one of the boxes (its catalog
+number, for example), or clear the marker that is on the wrong star and pick again. **Run photometry** waits for that
+too.
 
 ### Place a star by name
 
@@ -408,6 +448,100 @@ example "SZ Lyn not on the frame in 5 of 142 images (frames 1–5); those frames
 
 To stop, press **Cancel run**. Nothing is added: the gray line beside **Cancel run** says, for example, "Photometry
 done in 0:12. Canceled; nothing was added."
+
+### The gain behind the error bars
+
+Each point's error bar counts the photons the star and the sky gave, so SHOBS-P needs the camera gain: how many
+electrons one image unit holds. When the headers give it (EGAIN, written by NINA, ASIAIR, SharpCap, MaxIm and most
+other capture programs), that is used. When they don't (MicroObservatory frames, some older software), SHOBS-P 2.4.0
+**measures the gain from the night's own sky** at the start of the run, before the frames are measured:
+
+1. It takes up to 24 pairs of neighbouring frames spread through the night (12 pairs on frames over 8 megapixels),
+   calibrated just as the run calibrates them, and looks at a central part of each (about 360,000 pixels; a whole
+   MicroObservatory frame).
+2. On each frame it fits a smooth background (the sky with its gradients) and takes it off, then finds the stars and
+   masks them with a few pixels to spare, together with saturated pixels and the edge. Where the sky itself comes
+   within a few times its own noise of the saturation level, that sky is masked too (its brightest noise would be
+   cut off and the gain would come out high).
+3. It subtracts the two frames of each pair. The sky's photon noise is different in the two frames, but everything
+   fixed on the sensor (hot pixels, each pixel's own sensitivity, the master dark and flat) is the same in both and
+   cancels. Half the variance of the difference is then the sky's photon noise plus the read noise. As a check that
+   what is left really is plain noise, SHOBS-P compares that variance with the one from differences of neighbouring
+   pixels: for plain noise the two agree, while a passing cloud, moonlight or other structure the background missed
+   adds to the first and hardly to the second. Stars too faint to be masked that moved between the two frames (a
+   crowded field that drifts) do the same. A pair where the first is more than 5 % larger is dropped, and the log
+   says how many were (*"3 pairs dropped: the sky had structure the background model missed (cloud, moonlight, or
+   faint stars that moved between the frames)"*). Frames that other software aligned or registered before SHOBS-P
+   have been resampled, which makes neighbouring pixels alike, so nearly every pair is dropped even on a clear night;
+   when most pairs are dropped the line says the frames may be resampled or the field very crowded. This check is
+   Mike Fitzgerald's too.
+4. The read noise comes from two raw darks at the lights' exposure in the **Dark** folder: their difference holds
+   exactly the noise the lights carry without light (read noise plus the dark current's noise). Without such darks,
+   two bias frames give the read noise alone (the gain then comes out a little low, the safe side). Without either,
+   the photon-transfer line (step 5) gives it.
+5. Gain = sky level ÷ (variance − read noise²) for each pair. A pair counts only when its sky variance is at least
+   twice the read noise² (the sky's noise at least as large as the read noise): on a fainter sky a small error in the
+   read noise, for example darks a little warmer than the lights, would move the gain a lot, so SHOBS-P falls back
+   instead and says *"the sky is too faint against the read + dark noise …"*. The night's value is the median, with
+   the spread of the middle two thirds of the pairs, widened by how well the read noise itself is known. When the
+   read noise comes from the photon-transfer line, the log gives the gain as *"… +/- … electrons per image unit"*,
+   the line's own uncertainty, and the EGAIN check below uses that. As a cross-check, SHOBS-P fits a **photon-transfer line** (variance against sky
+   level across the night: its slope is 1 ÷ gain, its intercept the read noise squared; Janesick 2007). It is
+   shown only when the night's sky changed enough to pin the slope down to better than 15 %.
+
+The background model and source mask, and taking the read noise from the darks first, are **Mike Fitzgerald's idea**
+(EXOTIC, November 2026).
+
+The log's **Photon noise** line then says, for example (Joanna Puszkarska's WASP-50 b MicroObservatory night):
+*"Photon noise: the headers give no EGAIN (camera gain in e-/ADU), so the gain is measured from the night's sky:
+39.3 electrons per image unit (from 24 frame pairs, 38.9-39.4; read + dark noise 1.16 units from the darks, about
+45.4 e- per camera pixel). Method: background model and source mask, idea by Mike Fitzgerald. Photon-transfer check
+across the night: 37.1 +/- 2.7 electrons per image unit (the sky level ranged 1.1x over the pairs)."*
+
+When the gain cannot be measured (fewer than 4 frames, or no darks or bias frames and a sky that hardly changed),
+SHOBS-P falls back to the estimate it used before 2.4.0: the sky level ÷ the sky's variance in the stars' sky rings
+on one frame. Read noise, faint stars and the pixels' own pattern add variance to that, so it is a **lower limit**
+(28.7 on the same night in SHOBS-P 2.3.0) and the error bars come out on the safe (large) side. The line then says *"…so the gain
+comes from the sky's own noise on one frame (28.7 electrons per image unit, a lower limit: error bars on the safe
+side). It could not be measured from the night's sky: …"* with the reason. Darks at the lights' exposure in the Dark
+folder are the easiest way to get a measurement.
+
+With EGAIN in the headers, EGAIN is used and the night's measurement is a check: the line adds, for example, *"The
+night's sky measures … electrons per image unit (0.97 x that; from 24 frame pairs)."* When the two differ by more
+than 1.5 times either way, and the measurement's own spread does not reach EGAIN's value, a caution goes to the
+Findings list (see [23. Messages explained](23-messages-explained.md)). On frames the camera binned, the measurement
+also tells whether the camera summed or averaged the binned pixels (see "Camera binning and the gain" in
+[7. Calibrate](07-calibrate.md)).
+
+If you use SHOBS-FLUX and it has a camera profile for this camera at the same gain setting, offset and binning, the
+log adds a plain note comparing the profile's bench gain and read noise with the night's, for example *"SHOBS-FLUX
+camera profile zwo-asi2600mc-air__g100__o50__bin1: gain 0.25 e-/ADU (measured); the night's sky gives 0.26 e-/ADU,
+they agree (within 4 %)."*
+
+If the measured gain comes out under the one-frame lower limit (below), which should not happen, the line adds a plain
+note: *"Note: this is under the one-frame lower limit (…), which should not happen; …"*. The frames then change from
+one to the next by more than the sky's noise (thin clouds, a moving gradient, poor tracking).
+
+**Stacks.** A stack holds the sum of its frames, so each image unit of a stack holds as many electrons as an image unit
+of a single frame. When you run photometry on stacks (the Stack step), the gain is therefore measured on the single
+frames that went into the stacks, calibrated as single frames, just as the night's own run measures it; the line then
+ends *"…, measured on the single frames that went into the stacks (a stack is their sum: the same gain)"*. If those
+frames cannot be read (moved or deleted), it is measured on the stacks themselves, read as they are, with the darks'
+read + dark noise added up over the frames in a stack (*"… read + dark noise 2.31 units per stack of 4 frames (from
+the darks, added up over the 4 frames), about 45.4 e- per camera pixel in a single frame …, measured on the stacks
+themselves"*: the units figure is already the stack's, the electrons figure a single frame's). This needs stacks that
+say they hold the sum of their frames (SHOBS-P's own do). If the frames were read but the night's sky could not give
+the gain (too faint against the read noise, for example), the stacks, which hold the same sky, are not tried: the
+one-frame lower limit is used, and the reason starts *"on the single frames that went into the stacks, …"*. If neither
+works, the one-frame lower limit is used and the line says why for both.
+
+The measurement takes about 5 seconds on a MicroObservatory night (24 frame pairs) and about as long on 26-megapixel
+frames (12 pairs, a central part of each frame), on a fast desktop computer; the log says
+*"Measuring the gain from the night's sky (24 frame pairs)…"* when it starts. It runs at the start
+of the run (the busy bar says **Photometry on … lights…** meanwhile), on a sample of frames, never as an extra pass
+over the whole night. Frames it has to read whole (XISF, compressed FITS, stacks) get at most 12 pairs, as do frames
+over 8 megapixels. **Measure skipped frames** measures the same frames as the night's own run, so the added
+frames get the same gain.
 
 ### Comps near the frame edge
 

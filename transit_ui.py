@@ -579,6 +579,8 @@ class TransitPage:
             self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
+        if self.report is not None:
+            self._show_source()   # 2.4.0 (#105): the banner's "Your … photometry is kept" follows the series now
         self.show_target_status()   # 2.2.21 (#32, item 14)
         if self.report is None:
             self._trim_source_check()   # review: before the stale check, so the signature has no stale trim
@@ -660,6 +662,9 @@ class TransitPage:
             self.groups.show("data", self.close_report_button, False)
             self._show_flip_check(False)
             app.set_report_note("")
+        # 2.4.0 (#105, related): the TOI / ExoClock lines follow the source shown (hidden for a report of another
+        # planet; they showed the photometry night's TOI-2046 b beside a TrES-3 b report).
+        self.show_target_status()
         self._update_comp_buttons()
         self._update_airmass_box()   # 2.4.0 (#96)
 
@@ -890,11 +895,20 @@ class TransitPage:
             pass
 
     def current_planet(self) -> dict | None:
-        p = self.app.planet_from_fields()
+        """The planet this page fits: an open report's (unless the Input page holds the same planet with a period),
+        else the Input page's. Only for this page's own fit and lines; a photometry run's checks and everything
+        downstream of a run use input_planet() (2.4.0, #105)."""
         if self.report is not None:
+            p = self.app.planet_from_fields()
             rp = self.report.get("planet")
             if not p or not p.get("period") or _norm(p.get("name")) != _norm(rp.get("name")):
                 return rp
+        return self.input_planet()
+
+    def input_planet(self) -> dict | None:
+        """2.4.0 (#105): the planet on the Input page, never an open report's (the pre-run transit check used the
+        report's K2-113 b for an HD 189733 b night)."""
+        p = self.app.planet_from_fields()
         if p and p.get("period") and not p.get("depth_note"):
             # 2.2.13: the lookup's note on a listed depth that disagrees with Rp/R* (the Input page keeps only k² as
             # the depth), while the page still shows that planet's Rp/R*.
@@ -1247,6 +1261,10 @@ class TransitPage:
             cal += f"; dark EXPTIME {dexp:g} s"
         rep["calibration"] = cal
         rep["gain"] = meta["gain"]
+        if sky_check_line(pn):
+            rep["gain_check"] = sky_check_line(pn)   # 2.4.0 (#104)
+        if pn.get("flux_check"):
+            rep["flux_check"] = str(pn["flux_check"])   # 2.4.0 (#104)
         stack = setup.get("stack") if isinstance(setup.get("stack"), dict) else None
         if stack and int(stack.get("n") or 1) > 1:   # 2.3.0 (#54): the points are stacks of N frames
             import stack_core
@@ -1268,6 +1286,10 @@ class TransitPage:
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
                  "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
+        if rep.get("gain_check"):
+            lines.append(rep["gain_check"])   # 2.4.0 (#104): EGAIN nights, the sky's own measurement
+        if rep.get("flux_check"):
+            lines.append(rep["flux_check"])   # 2.4.0 (#104): against the SHOBS-FLUX camera profile
         if meta.get("scint"):
             lines.append(f"Scintillation (this fit's error bars): {meta['scint']}")   # 2.3.1 (nit)
         if rep.get("aperture_mm"):
@@ -2466,6 +2488,16 @@ class TransitPage:
             self._check_stale(auto=True)
 
     # ---- 2.2.17 (item 5): trim -------------------------------------------------------------
+    def _report_same_star(self, report=None) -> bool:
+        """Fable nit (#105): the report's planet or host has the Input page's (or the planet lookup's) name."""
+        rp = ((report if report is not None else self.report) or {}).get("planet") or {}
+        names = {_norm(rp.get("name")), _norm(rp.get("host"))} - {""}
+        app = self.app
+        info = getattr(app, "planet_info", None) or {}
+        mine = {_norm(app.planet_name.get()), _norm(app.star_id.get()), _norm(info.get("name")),
+                _norm(info.get("host"))} - {""}
+        return bool(names & mine)
+
     def _report_radec(self, report=None):
         """The report's target RA/Dec (degrees) when the Input page or the planet lookup is for the same star."""
         rp = ((report if report is not None else self.report) or {}).get("planet") or {}
@@ -3100,10 +3132,18 @@ class TransitPage:
         """2.2.19 (#40): <report stem>_settings.txt beside the report: the full settings block. Never costs the
         report (logged on failure)."""
         lines = self.settings_lines(meta, self.result)
-        if not lines:
+        # 2.4.0 (#93): the fit's exact inputs at full precision (for a report's fit too, which has no other settings)
+        try:   # Fable nit: never costs the report (a fit-inputs line that cannot be written is left out)
+            inputs = tc.fit_inputs_lines(self.result) if self.result else []
+        except Exception as exc:
+            traceback.print_exc()
+            self.app.log(f"Fit inputs not written to the settings file ({type(exc).__name__}: {exc}).", keep_status=True)
+            inputs = []
+        if not lines and not inputs:
             return ""
         if self._findings_apply():   # 2.3.6 (#79 item 2): the run's ⚠ lines go with the result it made
             lines = lines + self.app.run_findings_lines()
+        lines = lines + inputs
         path = self.app._unique_path(os.path.splitext(report_path)[0] + "_settings.txt")   # never over an older one
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
@@ -3147,6 +3187,9 @@ class TransitPage:
             info = {}   # the last lookup was for another planet
         if self.report is not None:
             rp = self.report.get("planet") or {}
+            if rp.get("name") and _norm(rp.get("name")) != _norm(names[0]):
+                # 2.4.0 (#105): a report of another planet: its own TOI / TIC, never the Input page planet's
+                names, info = [], {}
             names += [str(rp.get("name") or ""), str(rp.get("host") or "")]
         toi, tic = tc.exofop_ids(info, *names)
         url = core.exofop_target_url(toi=toi, tic=tic)
@@ -3432,6 +3475,8 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     sl = fit_csv_error_line(r)
     if sl:
         out.append(sl)
+    if (r or {}).get("planet") is not None and "summary" in (r or {}):
+        out += ["# " + ln for ln in tc.fit_inputs_lines(r)]   # 2.4.0 (#93): the exact inputs, full precision
     t_flip = fit_csv_flip_time(r, meta)
     if t_flip is not None:
         out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")
@@ -3682,6 +3727,61 @@ def frame_ranges(nums) -> str:
     return ", ".join(out)
 
 
+def sky_meas_words(pn: dict | None) -> str:
+    """2.4.0 (#104): how the night's sky measured the gain, for the settings file (ASCII): "from 24 frame pairs; read
+    + dark noise 1.16 units from the darks; method: background model and source mask, idea by Mike Fitzgerald"."""
+    m = (pn or {}).get("sky_meas") or {}
+    import sky_gain as sg
+    parts = []
+    if m.get("pairs"):
+        if m.get("floor_source") == "ptc" and m.get("k_err"):   # Fable review N5: the line's own gain error
+            parts.append(f"from {m['pairs']} frame pairs, +/- {m['k_err']:.2g}")
+        else:
+            # re-review nit: an infinite upper end is stored as None ("... or more (no upper bound)")
+            rng = sg.range_words(m.get("k_lo"), m["k_hi"] if m.get("k_hi") is not None else float("inf")) \
+                if m.get("k_lo") else ""
+            parts.append(f"from {m['pairs']} frame pairs" + (f", {rng}" if rng else ""))
+    if m.get("floor") is not None:   # re-review nit: on stacks, the stack's figure, said as such
+        parts.append(sg.floor_text(math.sqrt(m["floor"]), m.get("floor_source", ""), int(m.get("stack_n") or 0)))
+    if m.get("basis"):   # a stacked run: on the frames that went into the stacks, or on the stacks
+        parts.append(sg.basis_words({"basis": m["basis"]}))
+    if m.get("dropped"):   # Mike Fitzgerald's whiteness guard
+        parts.append(sg.structure_words(int(m["dropped"]), int(m["dropped"]) > int(m.get("pairs") or 0)))
+    if m.get("ptc_g"):
+        parts.append(f"photon-transfer check {m['ptc_g']:.3g} +/- {m.get('ptc_g_err') or 0:.2g}")
+    parts.append("method: " + sg.METHOD_WORDS)
+    return "; ".join(parts)
+
+
+def sky_check_line(pn: dict | None) -> str:
+    """2.4.0 (#104): with EGAIN, the night's sky measurement as a settings-file line ("" when there is none)."""
+    pn = pn or {}
+    m = pn.get("sky_meas") or {}
+    if pn.get("source") != "EGAIN" or not m.get("k"):
+        return ""
+    # step 3 regression (18 Nov): lead with e-/ADU, the unit of the EGAIN line just above, so the two are compared
+    # like for like ("3 e- per image unit" beside "0.243 e-/ADU" read as a disagreement); the image-unit figure
+    # (electrons per measured pixel at SHOBS-P's processing bin) follows in the bracket.
+    # Fable review: the app's noise model keeps EGAIN's electrons per image unit as "k" (photon_noise_setup's
+    # "k_median"); either is read. ratio = the sky's / EGAIN's electrons per image unit, the 1.5x caution's ratio.
+    try:
+        egain = float(pn.get("e_per_adu"))
+        at = float(pn.get("k") if pn.get("k") is not None else pn.get("k_median"))
+        ratio = float(m["k"]) / at if egain > 0 and at > 0 else float("nan")
+    except (TypeError, ValueError):
+        egain, ratio = float("nan"), float("nan")
+    if math.isfinite(ratio):
+        tail = f"({m['k']:.3g} e- per image unit; {sky_meas_words(pn)})"
+        stored = pn.get("e_per_stored_adu")
+        if pn.get("camera_bin_mode") == "averaged" and stored:
+            # the camera averaged its binned pixels: a stored ADU holds cam_bin^2 x EGAIN electrons, as the Gain row says
+            cb = pn.get("camera_bin") or 1
+            return (f"Gain check from the night's sky: {ratio * float(stored):.3g} e- per stored ADU (camera bin "
+                    f"{cb}x{cb} averaged), {ratio:.2f} x what the header EGAIN gives {tail}")
+        return f"Gain check from the night's sky: {ratio * egain:.3g} e-/ADU, {ratio:.2f} x the header EGAIN {tail}"
+    return f"Gain check from the night's sky: {m['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
+
+
 def gain_note(pn: dict | None) -> str:
     """2.2.19 (#39): the gain the photon-noise error bars used and where it came from (photometry_core.
     photon_noise_setup: header EGAIN, else the sky's own noise, else 1 e-/ADU assumed). ASCII."""
@@ -3698,9 +3798,13 @@ def gain_note(pn: dict | None) -> str:
             return (f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN) used as is; camera bin {cb}x{cb}, summed or "
                     "averaged not known (no sky estimate)")
         return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN)"
+    if src == "sky" and pn.get("k") and pn.get("sky_method") == "measured":
+        # 2.4.0 (#104): measured from the night's sky (the NOTES keep the words before the first bracket)
+        return f"Gain measured from the night's sky, {pn['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
     if src == "sky" and pn.get("k"):
-        return (f"Gain from the sky's own noise, {pn['k']:.3g} e- per image unit (no EGAIN in the headers; a lower "
-                "limit, so error bars are on the safe side)")
+        # 2.4.0 (#104): "a lower limit" before the bracket, so a report's NOTES say which one was used
+        return (f"Gain from the sky's own noise, a lower limit of {pn['k']:.3g} e- per image unit (no EGAIN in the "
+                "headers; error bars are on the safe side)")
     if src == "assumed":
         return ("Gain 1 e-/ADU assumed (no EGAIN in the headers, no usable sky estimate): photon-noise error bars "
                 "scale as 1/sqrt(true gain); add EGAIN to the headers if the camera's gain is known")
@@ -3829,6 +3933,13 @@ class CornerWindow:
         self.app.saved_notice(path)
 
 
+# 2.4.0 (#105): the NEB check with a report of another star open (one star's depth, position and field, never two)
+NEB_OTHER_STAR = ("The NEB check works on one star: its transit depth, its position and the neighbors on the solved "
+                  "image. The report shown is of {report}, but the Input page and the solved image are of {mine}.\n\n"
+                  "To check {mine}, press Close report first. To check {report}, set it up on the Input page (type "
+                  "its name and press Enter) and solve one of its frames.")
+
+
 class NebWindow:
     """Nearby eclipsing binaries: could a neighbor star, blended in TESS's big pixels, make this signal?"""
 
@@ -3841,8 +3952,23 @@ class NebWindow:
             messagebox.showinfo("SHOBS-P", "The NEB check needs the transit depth: enter the planet on the Input page "
                                            "(Lookup), or fit the transit first.")
             return
+        if NebWindow.report_of_another_star(page):
+            # 2.4.0 (#105): the depth, the position and the neighbors (the solved image) must be of one star: a report
+            # of another star than the Input page's has none of its own here (it gave the report's depth against the
+            # Input page's RA/Dec and field).
+            rp = (page.report.get("planet") or {})
+            name = rp.get("name") or rp.get("host") or "another planet"
+            mine = app.planet_name.get().strip() or app.star_id.get().strip() or "the Input page's target"
+            messagebox.showinfo("SHOBS-P", NEB_OTHER_STAR.format(report=name, mine=mine))
+            return
         try:
-            self.ra, self.dec = app.target_radec_deg(planet)
+            if page.report is not None:
+                radec = page._report_radec()   # the report's star = the Input page's (checked above)
+                if radec is None:
+                    raise ValueError("the Input page has none for it yet (press Lookup, or type them)")
+                self.ra, self.dec = radec
+            else:
+                self.ra, self.dec = app.target_radec_deg(planet)
         except Exception as exc:
             messagebox.showinfo("SHOBS-P", f"The NEB check needs the target's RA/Dec: {exc}")
             return
@@ -3889,6 +4015,13 @@ class NebWindow:
         self.tree.pack(fill=BOTH, expand=True, pady=(6, 0))
         self.rows = []
         self.update()
+
+    @staticmethod
+    def report_of_another_star(page) -> bool:
+        """2.4.0 (#105): a report is shown on the page and SHOBS-P cannot tie its star to the Input page's (the
+        Input page and the planet lookup name another star). Fable nit: a report of the Input page's star whose RA/Dec
+        is not filled in yet is the same star (it gets 'needs the target's RA/Dec', not this)."""
+        return page.report is not None and not page._report_same_star()
 
     def _target_mag(self):
         best = None

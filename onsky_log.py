@@ -21,8 +21,9 @@ guess it (version 1 logs leave it out: FLUX must treat their flux scale as not k
                                     mosaic median; green sits ~1.3 above it on an OSC flat). Electrons in the
                                     aperture = flux x e_per_unit. Null when no gain is known (see below).
   measurement.e_per_unit_median     the median of that map over the whole frame (null when no gain is known).
-  measurement.e_per_unit_source     "EGAIN" (header gain), "sky" (the sky's own noise: a LOWER limit on the true
-                                    value, so electrons from it are too few), "assumed" (no gain known: 1 e-/ADU was
+  measurement.e_per_unit_source     "EGAIN" (header gain), "sky" (from the sky: since SHOBS-P 2.4.0 (#104)
+                                    usually MEASURED from the night's frames, e_per_unit_note says so; else the
+                                    one-frame LOWER limit on the true value, so electrons from it are too few), "assumed" (no gain known: 1 e-/ADU was
                                     used for the error bars only; e_per_unit is then null), or null.
   measurement.e_per_unit_note       why the value is null, or how it was worked out, in a sentence.
   measurement.flat_applied          true when a master flat divided the frames (its factor is in e_per_unit).
@@ -124,7 +125,9 @@ def electron_scale(noise: dict | None) -> dict:
     out["map"] = el
     out["median"] = _sig(noise.get("k_median"))
     out["note"] = ("from the header EGAIN" if src == "EGAIN" else
-                   "from the sky's own noise (no EGAIN): a lower limit, so electrons from it are too few")
+                   "measured from the night's sky (no EGAIN): background model, source mask and neighbouring-frame "
+                   "differences, with the read noise taken off (SHOBS-P 2.4.0)" if noise.get("sky_method") == "measured"
+                   else "from the sky's own noise (no EGAIN): a lower limit, so electrons from it are too few")
     if out["camera_bin_mode"] == "averaged":
         out["note"] += "; the camera averaged its binned pixels, so EGAIN x camera_bin^2 per stored ADU"
     return out

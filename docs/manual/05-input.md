@@ -118,7 +118,8 @@ comparison stars, check star, watch stars, **Use comps** choice, VSX period and 
 **Notes** box on the Output page goes back to its default, **OSC reduced; not transformed** (or **Monochrome camera;
 not transformed**), so the old star's notes cannot end up in the new star's report; if you had typed your own notes,
 the log lists "the Output page notes" among what was cleared. The last run's line on the Photometry page ("Photometry
-done in …") is cleared too. The frame folders, site and optics stay. SHOBS-P asks
+done in …") is cleared too. A report left open on the Transit fit page (chapter 19) is closed, so its planet can
+never stand in for the new night's. The frame folders, site and optics stay. SHOBS-P asks
 first: **Start a new reduction?** Then type the new name and press Enter.
 
 This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's
@@ -135,7 +136,9 @@ busy bar then looks up the star, its planets and the planet in turn, for example
 NASA Exoplanet Archive…**. Chapter 16 covers this box in detail.
 
 If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
-reduction. **No** keeps the old star and its series; check the planet's name.
+reduction. **No** keeps the old star and its series, and the other star's planet does not stay in the Planet boxes:
+the planet you had before comes back, or, if there was none, the value boxes are left empty (your typed name stays).
+A fit can then never use the other star's ephemeris. The line under the boxes says what to do to be asked again.
 
 ### Discovery mode: the field center
 
@@ -260,7 +263,19 @@ changing the box when this is your own telescope.
 
 **MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them. Newer
 MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
-their site, focal length and frame size. Their site and optics are never saved as yours. Their time zone is set to
+their site, focal length and frame size. The question shows the optics it would use: focal length 560 mm and
+**pixel 6.8 µm**, the camera's own pixel. The camera bins it 2×2 (the header says `XBINNING = 2`), so the frames are
+**about 5.0″ per pixel**, and the question says so. (Before 2.4.0 the box got 13.6 µm, the binned pixel, which the
+solve then multiplied by the header's binning again: 10″ per pixel, and the frames did not solve unless you typed
+6.8 µm yourself. Older MicroObservatory files that name no binning still get 13.6 µm, which is right for them.)
+The site comes from the header too, including its elevation (`HEIGHT`, 1268 m at Whipple Observatory's base camp;
+from 2.4.0, GitHub #108, before which SHOBS-P used an approximate 2340 m). Files with no elevation still get 2340 m.
+The elevation goes into the scintillation part of the error bars (thinner air above a higher site, less
+scintillation), so on MicroObservatory nights that part is about 14 % larger than in 2.3.x: a results change, not a
+mistake. If you open a series saved before 2.4.0 over current MicroObservatory frames, its Pixel size of 13.6 µm (the
+binned pixel) is changed to 6.8 µm when it loads, and the Log says so, so the frames still come out at about 5.0″ per
+pixel.
+Their site and optics are never saved as yours. Their time zone is set to
 `America/Phoenix` (Arizona, no daylight saving), and yours comes back with your own setup.
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself

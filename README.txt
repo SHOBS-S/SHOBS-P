@@ -78,6 +78,20 @@ names it. Input, Blink, and Calibrate are shared, and calibrated frames and mark
 - Discovery (plum): Scan field is the main button on the Photometry page, and the scan results fill the Output page.
 A series file records its mode. Loading one switches to its mode; series from different modes are never merged.
 
+New in 2.4.0 (S = shared by every mode; GitHub issue numbers in brackets)
+- S  Gain from the night's sky [104]: with no EGAIN in the headers (MicroObservatory and others) the camera gain is
+     now MEASURED from the night's own frames instead of estimated as a lower limit: a smooth background model
+     and a source mask on up to 24 pairs of neighbouring frames, the frames' difference (fixed pattern cancels),
+     and the read noise from two darks at the lights' exposure (else bias frames, else a photon-transfer line).
+     Idea by Mike Fitzgerald (EXOTIC), credited in the manual and on the Credits page. On Joanna Puszkarska's
+     WASP-50 b MicroObservatory night: 39.3 e- per image unit (the old lower limit was 28.7), so its photon-noise
+     error bars are about 15 % smaller. With EGAIN, EGAIN is still used and the measurement is a check (a caution when they differ
+     by more than 1.5x); a SHOBS-FLUX camera profile is compared too. The one-frame lower limit is the fallback,
+     and the log, settings file and report NOTES say which was used.
+- S  MicroObservatory elevation from the header [108]: the site's elevation now comes from the header's HEIGHT
+     (1268 m, Whipple Observatory's base camp) instead of an approximate 2340 m. A results change on
+     MicroObservatory nights: the scintillation part of the error bars is about 14 % larger.
+
 New in 2.3.6 (messages, from the 14 Nov 2026 message review [79]; screen and file text only: every measured
 number is the same as in 2.3.5; S = shared by every mode, T = Transits)
 - S  One vocabulary for messages: ⚠ = something to look at or act on, ✖ = it did not work, ✔ = done, no sign =

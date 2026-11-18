@@ -648,6 +648,11 @@ def header_site(header: dict):
         elev = num("ALTITUDE")   # Unistellar: "altitude in meters of observing site" (elsewhere often pointing altitude)
     if lat is None or lon is None:
         return None
+    if elev is None and abs(lat - MOBS_SITE[0]) < 0.1 and abs(abs(lon) - abs(MOBS_SITE[1])) < 0.1:
+        # 2.4.0 step 3: MicroObservatory writes its elevation as HEIGHT ("Local elevation above sea level, in
+        # meters", 1268 m: Whipple Observatory's base camp, where the telescopes are). Read only at that site, since
+        # HEIGHT means other things in other headers.
+        elev = num("HEIGHT")
     return lat, lon, elev
 
 
@@ -922,6 +927,7 @@ def build_masters(
         exps = [header_exptime(read_fits(path)[1]) for path in dark_paths]
 
         def prep_dark(data, header):
+            check_master_size(masters.bias, data, *_pedestal_words(masters, "darks"))
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -937,6 +943,8 @@ def build_masters(
             if flats_calibrated:
                 # Already calibrated by other software (PixInsight _c): bias and dark are out already.
                 return np.asarray(data, dtype=np.float32)
+            check_master_size(masters.bias, data, *_pedestal_words(masters, "flats"))
+            check_master_size(_applied_dark(masters), data, "dark", "flats", "Dark")
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1422,6 +1430,7 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     dark_fp = "none"
 
     def prep_dark(data, header):
+        check_master_size(masters.bias, data, *_pedestal_words(masters, "darks"))
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1475,6 +1484,8 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
                                  f"but the flats are {np.shape(data)[1]}x{np.shape(data)[0]} px: pick dark flats "
                                  "taken with the flats' camera settings.")
             return (np.asarray(data, dtype=np.float32) - masters.darkflat).astype(np.float32)
+        check_master_size(masters.bias, data, *_pedestal_words(masters, "flats"))
+        check_master_size(_applied_dark(masters), data, "dark", "flats", "Dark")
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1511,7 +1522,42 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     return masters
 
 
+def check_master_size(master, data, master_what: str, frames_what: str, box: str) -> None:
+    """2.4.0 (step 3 regression, 18 Nov): a plain message, not numpy's "operands could not be broadcast together with
+    shapes (500,650) (4176,6248)", when a master does not fit the frames it is applied to. Seen when New reduction
+    kept the last night's Bias box (ASI2600MC, 6248 x 4176) for a MicroObservatory night (650 x 500)."""
+    if master is None or np.shape(master) == np.shape(data):
+        return
+    mh, mw = np.shape(master)[:2]
+    h, w = np.shape(data)[:2]
+    fix = (f"Empty the {box} row on the Input page, or pick {master_what} frames taken with this camera at this "
+           "binning.")
+    if frames_what == "lights":
+        # Fable review: in a run, the odd one may be a single light, not the master
+        raise ValueError(f"The master {master_what} is {mw}x{mh} px but this light is {w}x{h} px: either the master "
+                         f"is from another camera or binning ({fix[0].lower() + fix[1:-1]}), or this light is not "
+                         "from the same camera and binning as the others.")
+    raise ValueError(f"The master {master_what} is {mw}x{mh} px but the {frames_what} are {w}x{h} px, so it is "
+                     f"from another camera or binning. {fix}")
+
+
+def _pedestal_words(masters, frames_what: str) -> tuple:
+    """check_master_size's words for `masters.bias`. Fable review: with dark flats standing in for the bias (pedestal
+    'darkflat'), `bias` holds the dark flat, and the Bias box is empty."""
+    if getattr(masters, "pedestal", "") == "darkflat":
+        return "dark flat", frames_what, "Dark flats"
+    return "bias", frames_what, "Bias"
+
+
+def _applied_dark(masters):
+    """Fable review: a dark that is not applied (no exposure) is not size-checked either."""
+    return masters.dark if masters.dark is not None and masters.dark_exptime > 0 else None
+
+
 def calibrate_frame(data: np.ndarray, header: dict, masters: Masters) -> np.ndarray:
+    check_master_size(masters.bias, data, *_pedestal_words(masters, "lights"))
+    check_master_size(_applied_dark(masters), data, "dark", "lights", "Dark")
+    check_master_size(masters.flat, data, "flat", "lights", "Flat")
     ccd = _ccd(data, header_exptime(header))
     if masters.bias is not None:
         ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -2939,6 +2985,124 @@ def register_rotating(ref_sources, sources, shape: tuple[int, int], last_sources
     return reg
 
 
+# ---- 2.4.0 (#78): the night's drift, for the suggested comps ----------------------------------------------------
+DRIFT_SAMPLES = 8          # frames read to find how the field drifts over the night (first, last and between)
+DRIFT_PIXEL_BUDGET = 8 * 6248 * 4176   # small frames: more of them, up to the pixels of 8 ASI2600 frames (all of a
+                                       # 78-frame MicroObservatory night, whose robotic pointing jumps between frames)
+DRIFT_VIEW_WIDTH = 1200    # frames are averaged down to about this width for the drift check (fast on 6248 px)
+
+
+def drift_sample_count(shape, n_frames: int) -> int:
+    """2.4.0 (#78): how many lights the drift check reads: DRIFT_SAMPLES, or more for small frames (as many as fit in
+    DRIFT_PIXEL_BUDGET pixels), never more than there are."""
+    px = max(1, int(shape[0]) * int(shape[1]))
+    return int(min(n_frames, max(DRIFT_SAMPLES, DRIFT_PIXEL_BUDGET // px)))
+
+
+def drift_sample_paths(lights: list, ref_path: str = "", n: int = DRIFT_SAMPLES) -> list:
+    """2.4.0 (#78): the lights read for the drift check: the night's first and last, and the rest spread evenly
+    between (at most n; the reference frame itself is not read again)."""
+    others = [p for p in (lights or []) if p != ref_path]
+    if len(others) <= n:
+        return list(others)
+    idx = sorted({int(round(i)) for i in np.linspace(0, len(others) - 1, n)})
+    return [others[i] for i in idx]
+
+
+def drift_view(img: np.ndarray) -> tuple[np.ndarray, int]:
+    """2.4.0 (#78): a small, clean copy of a raw frame for finding its shift: averaged down by k (to about
+    DRIFT_VIEW_WIDTH px wide; a Bayer mosaic is mixed into one value, which is fine for finding stars), then a 3 x 3
+    median so hot pixels (the same on every frame, so they would vote for no shift) drop out. Returns (image, k)."""
+    k = max(1, int(round(img.shape[1] / float(DRIFT_VIEW_WIDTH))))
+    small = bin_plain(np.asarray(img, dtype=np.float32), k)
+    from scipy import ndimage
+    return ndimage.median_filter(small, size=3), k
+
+
+def frame_drift(ref_path: str, paths: list, rotating: bool = False, cancel=None, sample: bool = False,
+                progress=None) -> dict:
+    """2.4.0 (#78): how the field moved from the reference frame to each of `paths`, cheaply (drift_view; no
+    calibration). sample=True: only drift_sample_paths of them (drift_sample_count for this frame size). Returns
+    {"raw_shape": (h, w), "regs": [(path, reg or None), ...]}, each reg in raw-frame pixels (register_frame's dx, dy,
+    angle, flipped); None where a frame could not be read, had another size or could not be aligned. rotating: an
+    alt-az mount without a derotator (register_rotating). progress(done, of): called before each frame is read (Fable
+    N2: the busy bar's words). "why": "few stars" when the reference frame has too few stars to line others up
+    (Fable N3: said in the Log)."""
+    raw, _h = read_fits(ref_path)
+    raw_shape = tuple(raw.shape[:2])
+    if sample:
+        paths = drift_sample_paths(paths, ref_path, drift_sample_count(raw_shape, len(paths)))
+    ref, k = drift_view(raw)
+    del raw
+    ref_src = detect_sources(ref, max_sources=80)
+    out = {"raw_shape": raw_shape, "regs": []}
+    if len(ref_src) < 3:
+        out["regs"] = [(p, None) for p in paths]
+        out["why"] = "few stars"
+        return out
+    last = None
+    for i, p in enumerate(paths):
+        if cancel is not None and cancel():
+            break
+        if progress is not None:
+            try:
+                progress(i, len(paths))
+            except Exception:
+                pass
+        reg = None
+        try:
+            data, _hd = read_fits(p)
+            if tuple(data.shape[:2]) == raw_shape:
+                small, _k = drift_view(data)
+                src = detect_sources(small, max_sources=80)
+                if rotating:
+                    reg = register_rotating(ref_src, src, small.shape, *(last or (None, None)))
+                else:
+                    reg = register_frame(ref_src, src, small.shape)
+                if reg is not None:
+                    last = (src, reg)
+            del data
+        except Exception:
+            reg = None
+        if reg is not None:
+            reg = {"dx": reg["dx"] * k, "dy": reg["dy"] * k, "angle": float(reg.get("angle", 0.0)),
+                   "flipped": bool(reg.get("flipped")), "votes": reg.get("votes"), "of": reg.get("of")}
+        out["regs"].append((p, reg))
+    return out
+
+
+def scale_registration(reg: dict | None, factor: float) -> dict | None:
+    """2.4.0 (#78): a registration found on one pixel grid, on a grid `factor` times as fine (e.g. raw frame ->
+    binned, debayered preview: factor = preview width / raw width). The angle and flip are the same."""
+    if reg is None:
+        return None
+    out = dict(reg)
+    out["dx"], out["dy"] = float(reg["dx"]) * factor, float(reg["dy"]) * factor
+    return out
+
+
+def edge_clearance(xy, shape: tuple[int, int], regs: list) -> tuple[np.ndarray, np.ndarray]:
+    """2.4.0 (#78): each point's closest approach to the frame edge over the reference frame (where xy are) and the
+    frames with registrations regs (move_points; None entries are skipped). Returns (closest distance in px, which
+    frame: -1 for the reference, else the index into regs). A point off the frame has a negative distance."""
+    pts = np.asarray(xy, dtype=float).reshape(-1, 2)
+    h, w = shape[:2]
+
+    def dist(p):
+        return np.minimum(np.minimum(p[:, 0], p[:, 1]), np.minimum((w - 1) - p[:, 0], (h - 1) - p[:, 1]))
+
+    best = dist(pts)
+    where = np.full(len(pts), -1, dtype=int)
+    for i, reg in enumerate(regs or []):
+        if reg is None:
+            continue
+        d = dist(move_points(pts, reg, (h, w)))
+        closer = d < best
+        best = np.where(closer, d, best)
+        where = np.where(closer, i, where)
+    return best, where
+
+
 def raw_peak_near(raw: np.ndarray, star: "Star", radius: float, total_bin: int) -> float:
     """Brightest raw (unbinned, uncalibrated) pixel around a star given in final-image coordinates.
 
@@ -3225,6 +3389,7 @@ def _mag_variance(flux: float, variance: float) -> float:
 # measured sky scatter, plus the error of the sky level itself (the CCD equation of Merline & Howell 1995).
 # The old fixed 0.005 mag added to every point is gone: the real 60 s nights scatter LESS than 0.005 per point.
 E_PER_ADU_RANGE = (0.01, 100.0)   # plausible camera gains in e-/ADU; anything else is not a gain
+MEAS_CHECK = 1.5                 # 2.4.0 (#104): EGAIN vs the gain measured from the sky, either way, before a caution
 SKY_CHECK_E = 100.0               # sky electrons per image pixel above which read noise cannot hide a gain mismatch
 OLD_ERR_FLOOR = 0.005             # the fixed term of the pre-2.2.17 model (kept only for points measured with it)
 
@@ -3359,9 +3524,29 @@ def sky_electrons_estimate(img: np.ndarray, stars, radius: float, sky_inner: flo
     return k
 
 
+def _sky_meas_brief(meas: dict | None) -> dict | None:
+    """2.4.0 (#104): what the night's records keep of a sky-gain measurement (plain numbers, JSON-safe)."""
+    if not meas or not meas.get("ok"):
+        return None
+
+    def f(v, nd=4):
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return None
+        return float(f"{x:.{nd}g}") if math.isfinite(x) else None
+    p = meas.get("ptc") or {}
+    return {"k": f(meas.get("k")), "k_lo": f(meas.get("k_lo")), "k_hi": f(meas.get("k_hi")),
+            "k_err": f(meas.get("k_err"), 2), "dropped": int(meas.get("dropped_structure") or 0), "basis": meas.get("basis") or "",
+            "stack_n": int(meas.get("stack_n") or 0),
+            "pairs": int(meas.get("n_pairs") or 0), "floor": f(meas.get("floor_var")),
+            "floor_source": meas.get("floor_source") or "", "rn_e": f(meas.get("rn_e")),
+            "ptc_g": f(p.get("g")) if p.get("ok") else None, "ptc_g_err": f(p.get("g_err"), 2) if p.get("ok") else None}
+
+
 def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: str, flat=None,
                        bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan"),
-                       sky_level: float = float("nan")) -> dict:
+                       sky_level: float = float("nan"), sky_meas: dict | None = None) -> dict:
     """2.2.17 (item 8): how the photon noise is converted to electrons for a run. Returns {"electrons": number or map,
     "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": the log line(s), "warning": '' or a
     caution, "k_median", "sky_k"}.
@@ -3372,8 +3557,42 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
     Review: with EGAIN the sky estimate is a cross-check. sky_k is a lower limit, so sky_k > 2 k says EGAIN is too
     small for the stored values or the frames carry a pedestal; sky_k < k / 2 on a bright sky (over SKY_CHECK_E
     electrons per pixel, where read noise cannot explain it) says EGAIN is too large for the stored values (12/14-bit
-    data scaled to 16 bits with EGAIN per native ADU, or a software-summed binned frame)."""
+    data scaled to 16 bits with EGAIN per native ADU, or a software-summed binned frame).
+    2.4.0 (#104): sky_meas = sky_gain.measure_night's result (the gain MEASURED from the night's sky: background model,
+    source mask, neighbouring-frame differences, read noise from the darks; idea by Mike Fitzgerald). When it is ok it
+    takes the place of sky_k everywhere: as the gain without EGAIN, in the camera-binning choice, and in the EGAIN
+    cross-check, which then compares with a measurement and is tighter (1.5x either way, beyond the measurement's own
+    16-84 % spread, instead of 2x up / 0.5x down). Without it, sky_k (the single-frame lower limit) is used as before
+    and the words say it is a lower limit. The result's "sky_method" is "measured" or "lower limit"."""
     b = max(int(binning or 1), 1)
+    meas = sky_meas if (sky_meas and sky_meas.get("ok") and bias_removed
+                        and math.isfinite(float(sky_meas.get("k", float("nan")))) and sky_meas["k"] > 0) else None
+    sky_ll = sky_k
+    if meas is not None:
+        sky_k = float(meas["k"])
+    method = "measured" if meas is not None else "lower limit"
+    try:
+        import sky_gain as _sg
+    except Exception:   # never stops a run
+        _sg = None
+    meas_words = (_sg.summary(meas) if (_sg and meas) else "")
+    # 2.4.0 (Fable review nit): a measured gain whose whole range is under the one-frame lower limit should not happen
+    ll_note = ""
+    if meas is not None and math.isfinite(sky_ll) and sky_ll > 0:
+        try:
+            k_hi = float(meas.get("k_hi", sky_k))
+        except (TypeError, ValueError):
+            k_hi = sky_k
+        if math.isfinite(k_hi) and k_hi < sky_ll:
+            ll_note = (f" Note: this is under the one-frame lower limit ({sky_ll:.3g}), which should not happen; the "
+                       "frames may change from one to the next by more than the sky's noise (thin clouds, a moving "
+                       "gradient, poor tracking).")
+            ll_note += (" This check is then less certain." if (header_e_per_adu(header) is not None
+                                                                and not precalibrated)
+                        else " The error bars are then on the safe (large) side.")
+    ptc_words = (_sg.ptc_words(meas) if (_sg and meas) else "")
+    extra = {"sky_method": method if math.isfinite(sky_k) and sky_k > 0 else "",
+             "sky_meas": _sky_meas_brief(meas), "sky_k_lower_limit": sky_ll}
     pedestal = _header_float(header or {}, "PEDESTAL")
     ped_note = (f" The header gives a pedestal ({pedestal:g}): if it is still in the values, the sky estimate is too "
                 "high and these error bars may be too small." if pedestal else
@@ -3417,7 +3636,23 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                 + (" and the flat" if flat is not None else "") + "." + cam_note)
         stored_gain = gain * cam_bin * cam_bin if binned == "averaged" else gain
         warning = ""
-        if bias_removed and math.isfinite(sky_k) and sky_k > 0:
+        if meas is not None:
+            # 2.4.0 (#104): a measurement, so the check is tighter (see the docstring)
+            note += (f" The night's sky measures {sky_k:.3g} electrons per image unit ({sky_k / at:.2f} x that; "
+                     f"from {meas['n_pairs']} frame pairs).") + ll_note
+            lo, hi = float(meas.get("k_lo", sky_k)), float(meas.get("k_hi", sky_k))
+            sky_e = sky_level * at if math.isfinite(sky_level) else float("nan")
+            if sky_k > MEAS_CHECK * at and lo > MEAS_CHECK * at:
+                warning = (f"The night's sky measures {sky_k:.3g} electrons per image unit, {sky_k / at:.1f} x what "
+                           f"EGAIN {gain:.3g} e-/ADU gives ({at:.3g}): EGAIN may be too small for the stored values, "
+                           "or the frames carry a pedestal. Error bars may be too large.")
+            elif (sky_k < at / MEAS_CHECK and hi < at / MEAS_CHECK and math.isfinite(sky_e)
+                  and sky_e > SKY_CHECK_E):
+                warning = (f"The night's sky measures {sky_k:.3g} electrons per image unit, {sky_k / at:.2f} x what "
+                           f"EGAIN {gain:.3g} e-/ADU gives ({at:.3g}): EGAIN may be per native ADU of 12/14-bit "
+                           "data stored as 16-bit, or for unsummed binning. Error bars may be too small; check the "
+                           "Transit fit's reduced chi-square.")
+        elif bias_removed and math.isfinite(sky_k) and sky_k > 0:
             note += f" The sky's own noise gives {sky_k:.3g} (a lower limit)."
             sky_e = sky_level * at if math.isfinite(sky_level) else float("nan")
             if sky_k > 2.0 * at:
@@ -3433,20 +3668,30 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                 "sky_k": sky_k, "warning": warning,
                 # 2.3.0 (#53): the camera's binning, how it combined the binned pixels, and the e-/ADU of the stored
                 # values that was used (EGAIN x cam_bin^2 when averaged)
-                "camera_bin": cam_bin, "camera_bin_mode": binned, "e_per_stored_adu": stored_gain}
+                "camera_bin": cam_bin, "camera_bin_mode": binned, "e_per_stored_adu": stored_gain, **extra}
     why = ("the frames are pre-calibrated (their values may not be camera ADU)" if precalibrated
            else "the headers give no EGAIN (camera gain in e-/ADU)")
+    if meas is not None:
+        # 2.4.0 (#104): measured from the night's sky (Mike Fitzgerald's background model and source mask)
+        return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
+                "sky_k": sky_k, "warning": "", **extra,
+                "note": f"Photon noise: {why}, so the gain is measured from the night's sky: {meas_words}. Method: "
+                        f"{_sg.METHOD_WORDS if _sg else 'background model and source mask'}."
+                        + (f" {ptc_words}" if ptc_words else "") + ll_note + ped_note}
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:
+        why_not = str((sky_meas or {}).get("why") or "")
         safe = ("a lower limit: error bars on the safe side" if not (precalibrated or pedestal)
                 else "a lower limit unless a pedestal is in the values")
         return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
-                "sky_k": sky_k, "warning": "",
-                "note": f"Photon noise: {why}, so the gain comes from the sky's own noise ({sky_k:.3g} electrons per "
-                        f"image unit, {safe}).{ped_note}"}
+                "sky_k": sky_k, "warning": "", **extra,
+                "note": f"Photon noise: {why}, so the gain comes from the sky's own noise on one frame ({sky_k:.3g} "
+                        f"electrons per image unit, {safe})."
+                        + (f" It could not be measured from the night's sky: {why_not}." if why_not else "")
+                        + ped_note}
     k = electrons_per_unit(1.0, b, pattern, mode, flat)
     at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
     return {"electrons": k, "e_per_adu": None, "source": "assumed", "k_median": at, "sky_k": sky_k, "warning": "",
-            "note": f"Photon noise: {why}, so 1 e-/ADU is assumed. Error bars scale as 1/sqrt(true gain); "
+            **extra, "note": f"Photon noise: {why}, so 1 e-/ADU is assumed. Error bars scale as 1/sqrt(true gain); "
                     "the Transit fit's reduced chi-square shows whether they fit the scatter."}
 
 
@@ -9331,6 +9576,13 @@ CREDITS = [
         ("CCD equation", "Each point's photon and sky noise in electrons (camera gain EGAIN, binning, debayer and "
          "flat accounted for), including the sky-level error term.",
          "Merline, W. J. & Howell, S. B. 1995, Experimental Astronomy 6, 163.", ""),
+        # 2.4.0 (#104): the gain measured from the night's sky.
+        ("Gain from the night's sky", "The camera gain when the headers give none (and a check of EGAIN): a smooth "
+         "background model and a source mask on each sampled frame, the difference of neighbouring frames, and "
+         "the read noise from the darks first (idea by Mike Fitzgerald, EXOTIC, 2026); a photon-transfer line over "
+         "the night as the cross-check.",
+         "Janesick, J. R. 2007, Photon Transfer, SPIE Press (doi:10.1117/3.725073); background and segmentation "
+         "from photutils (Bradley, L. et al.).", ""),
         # 2.2.17 (item 10): honest period significance.
         ("False-alarm probability", "Periodogram FAP; for long periods a night-counting check (permutation test on "
          "the nightly means) so a few nights cannot look significant.",
@@ -9985,9 +10237,26 @@ def extremum_csv_elements(rows: list[dict], kind: str = "max") -> dict | None:
     return {"period": period, "epoch": epoch, "system": system, "n": len(same)}
 
 
-def extremum_times_lines(rows: list[dict], limit: int = 8) -> list[str]:
+def extremum_row_oc(row: dict, period: float, epoch: float, system: str = "HJD") -> float | None:
+    """2.4.0 (#65): a saved row's O−C in minutes against the given elements, as the Time of max/min window's O−C
+    diagram works it out (BJD_TDB or HJD by the system, else the JD; half cycles for a minimum). None without a time."""
+    def num(k):
+        v = row.get(k)
+        return float(v) if isinstance(v, float) and math.isfinite(v) else None
+    t = num("bjd_tdb" if str(system).upper() == "BJD" else "hjd")
+    if t is None:
+        t = num("jd_utc")
+    if t is None or not period or not epoch:
+        return None
+    return o_minus_c(t, period, epoch, half_cycles=str(row.get("type") or "") == "min")["oc_min"]
+
+
+def extremum_times_lines(rows: list[dict], limit: int = 8, elements=None) -> list[str]:
     """2.3.3 (nit, 10 Nov): one short line per saved time of one star (oldest first; the last `limit`):
-    'max  HJD 2461353.81255 ± 20.8 min   O−C −6.8 min   night JD2461353'."""
+    'max  HJD 2461353.81255 ± 20.8 min   O−C −6.8 min   night JD2461353'.
+    2.4.0 (#65): elements = (period, epoch, system): the O−C is worked out against them (as the O−C diagram is), and
+    a row whose stored O−C differs adds it with the elements it was saved against: '(saved +9.4 against VSX HJD)'.
+    Without elements the stored O−C is shown, as before."""
     def num(r, k):
         v = r.get(k)
         return float(v) if isinstance(v, float) and math.isfinite(v) else None
@@ -10001,8 +10270,15 @@ def extremum_times_lines(rows: list[dict], limit: int = 8) -> list[str]:
         line = f"{str(r.get('type') or '?'):<3}  {sysw} {t:.5f}"
         if num(r, "error_min") is not None:
             line += f" ± {num(r, 'error_min'):.1f} min"
-        if num(r, "o_c_min") is not None:
-            line += f"   O−C {num(r, 'o_c_min'):+.1f} min"
+        stored = num(r, "o_c_min")
+        now = extremum_row_oc(r, elements[0], elements[1], elements[2]) if elements else None
+        if now is not None:
+            line += f"   O−C {now:+.1f} min"
+            if stored is not None and abs(stored - now) >= 0.05:
+                what = str(r.get("elements") or "").strip() or "other elements"
+                line += f" (saved {stored:+.1f} against {what})"
+        elif stored is not None:
+            line += f"   O−C {stored:+.1f} min"
         if str(r.get("night") or "").strip():
             line += f"   night {str(r.get('night')).strip()}"
         out.append(line)
@@ -11504,6 +11780,10 @@ _ASCII_MAP = {
     "…": "...", "²": "2", "³": "3", "χ": "chi", "σ": "sigma", "Δ": "d", "δ": "d",
     "µ": "u", "μ": "u", "≈": "~", "≤": "<=", "≥": ">=", "→": "->", "⚠": "!", "✖": "X",
     "•": "*", " ": " ", " ": " ", " ": " ", "▶": ">", "◀": "<",
+    # 2.4.0 (step 3 regression, 18 Nov): letters with no accent to drop (NFKD leaves them as they are), so author
+    # names keep their letters: Yalçınkaya -> Yalcinkaya, not "Yalc?nkaya"
+    "ı": "i", "İ": "I", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+    "ħ": "h", "Ħ": "H", "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "þ": "th", "Þ": "Th",
 }
 
 

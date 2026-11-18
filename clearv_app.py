@@ -6,6 +6,7 @@ and an AAVSO Extended File Format report (filter CV).
 
 from __future__ import annotations
 
+import collections
 import copy
 import io
 import json
@@ -385,8 +386,62 @@ SUGGEST_RING_MEW = 2.6
 SEQ_RING_MS = 11
 SEQ_RING_DASH = (0, (2.2, 1.6))
 WATCH_SAME_ARCSEC = 4.0     # 2.2.13: a watch star within this of an existing one is the same star
+def solve_camera_bin(header) -> int:
+    """2.4.0 (#107): the camera binning the plate solve multiplies the Pixel size box by: the header's XBINNING (1 when
+    it is missing; BINNING / XBIN only when XBINNING is there but unreadable, as the solve has always read it). The
+    MicroObservatory setup divides by the same number, so its header scale comes out right."""
+    for key in ("XBINNING", "BINNING", "XBIN"):
+        try:
+            return max(int(float((header or {}).get(key, 1))), 1)
+        except (TypeError, ValueError):
+            continue
+    return 1
+
+
+# 2.4.0 (#106): the Input page's planet boxes: key -> (variable, digits shown, scale from the stored value)
+PLANET_BOX_FORMATS = {"period": ("pl_period", "{:.8f}", 1.0), "t0": ("pl_t0", "{:.6f}", 1.0),
+                      "t14": ("pl_t14", "{:.4f}", 24.0), "depth": ("pl_depth", "{:.4f}", 100.0),
+                      "k": ("pl_k", "{:.5f}", 1.0), "a_rs": ("pl_a_rs", "{:.3f}", 1.0), "b": ("pl_b", "{:.3f}", 1.0),
+                      "teff": ("pl_teff", "{:.0f}", 1.0)}
+
+
+def box_shows(key: str, looked_up, value) -> bool:
+    """2.4.0 (#106): True when `value` (read back from its Input page box, in stored units) is the looked-up value as
+    that box shows it (PLANET_BOX_FORMATS' digits), i.e. not typed over. False when either is missing."""
+    if looked_up is None or value is None:
+        return False
+    _var, fmt, scale = PLANET_BOX_FORMATS[key]
+    try:
+        shown = float(fmt.format(float(looked_up) * scale))
+        v = float(value) * scale
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(shown) and math.isfinite(v)):
+        return False
+    return abs(shown - v) <= 1e-9 * max(abs(shown), 1.0)
+
+
+SERIES_DRIFT_COVER = 0.95   # Fable N4: the loaded series stands for the night's drift when it covers this share of the lights
+CHECK_NAME_APART_ARCSEC = 10.0   # Fable N7: the same name on markers this far apart is two stars sharing a name
+CHECK_NAME_APART_PX = 10.0       # (the same without a plate solution)
+CHECK_SAME_ARCSEC = 2.0     # 2.4.0 (#68): a comp within this of the check star (or with its name) is the same star
 CIRCLE_LABELS_MAX = 400     # 2.2.14 (item 5): catalog circles labeled on the image (the brightest; hover shows all)
 CIRCLES_MAX = 3000          # 2.2.14 (item 5): catalog circles drawn (the brightest; clicks and hover find every star)
+
+
+def _sky_gain_mod():
+    """sky_gain, imported when first needed (as the photometry worker does)."""
+    import sky_gain
+    return sky_gain
+
+
+def _same_exposure(path: str, exptime: float) -> bool:
+    """2.4.0 (#104): a calibration frame taken at this exposure (within 1 %)."""
+    try:
+        e = float(core.header_exptime(core.read_header(path)))
+    except Exception:
+        return False
+    return math.isfinite(exptime) and exptime > 0 and abs(e - exptime) <= 0.01 * exptime
 
 
 def _fainter_text(dm: float) -> str:
@@ -1927,6 +1982,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.masters_binning = None
         self.calibrated = None
         self.preview = None
+        # step 3 regression (18 Nov): the old frames' "Preview: green from RGGB -> 1562x1044 (superpixel)" line went
+        # with them (it stayed up beside MicroObservatory MONO frames)
+        if getattr(self, "debayer_info", None) is not None:
+            self.debayer_info.set("No preview yet.")
         self._photo_disp = None   # 2.2.15: the stretched copy belongs to the old image
         self.preview_is_debayered = False
         self.chart_placed = []
@@ -3253,7 +3312,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
         need = sky_out + 5.0
         safe = 3.0 * sky_out
-        if dist < need:
+        drift = self._series_drift()
+        night = self._drift_clearance(xy, drift) if drift else None
+        if night is not None and night[0] < min(dist, safe):
+            # 2.4.0 (#78): fine on this frame, but the field drifts and takes the star toward or off the edge
+            near_px, at, per = night
+            r_ap = self._num(self.radius) or 0.0
+            lost = [lab for lab, d_ in per if d_ < r_ap + 1.0]   # as core.aperture_clip_reason: off the frame
+            cut = [lab for lab, d_ in per if d_ < sky_out]
+            checked = ("" if drift.get("how") == "series" or drift.get("every") else
+                       f" (checked on {len(drift['regs'])} of the night's {drift.get('of', 0)} lights)")
+            if lost or cut:
+                which = lost or cut
+                note = ("⚠ drifts off the frame later in the night: it is off the frame edge" if lost else
+                        f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) runs "
+                        "past the edge") + (f" on frame{'s' if len(which) != 1 else ''} "
+                                            f"{core.frame_list_text(which, 12)}{checked}"
+                                            + (", so it is not measured there" if lost else "")
+                                            + " — pick a star further in")
+            else:
+                note = (f"⚠ drifts toward the frame edge later in the night: {dist:.0f} px in on this frame, but only "
+                        f"{near_px:.0f} px on frame {at}{checked}; stars at least {safe:.0f} px in all night (3 × the "
+                        "sky-out radius) stay clear of the edge and the weakest part of the flat")
+        elif dist < need:
             note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
                     f"star at least {need:.0f} px in, with room for drift — pick a star further in")
         elif dist < safe:
@@ -3277,8 +3358,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         taken = [getattr(self, f"{r}_xy") for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
         k_inst = self._inst_at(xy)
         best = None
+        info_all = getattr(self, "suggested_info", None) or {}
         for k, (name, _dm, x, y) in enumerate(self.suggested_comps):
-            if min(x, y, (w - 1) - x, (h - 1) - y) < safe:
+            night = (info_all.get(name) or {}).get("edge")   # 2.4.0 (#78): its closest approach over the night
+            if min(x, y, (w - 1) - x, (h - 1) - y) < safe or (night is not None and night < safe):
                 continue
             if any(math.hypot(x - t[0], y - t[1]) < 2.0 for t in taken) or math.hypot(x - xy[0], y - xy[1]) < 2.0:
                 continue
@@ -4637,8 +4720,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example "
                                                "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
             return
+        # 2.4.0 (#82): the name of the planet now in the boxes (the box itself already holds the new name)
+        self._planet_name_before = getattr(self, "_last_planet_lookup", None) or ""
         self._last_planet_lookup = name   # 2.2.14 (item 2)
         self._lookup_busy_start("planet", name, "NASA Exoplanet Archive")   # 2.2.19 (nit)
+        self._status_before_lookup = dict(getattr(self, "target_status", None) or {})   # 2.4.0 (#82): put back on No
         self._show_target_status({})   # 2.2.21 (#32, item 14): the last planet's TOI/ExoClock lines go
 
         def work():
@@ -4680,6 +4766,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.planet_source.set("Lookup failed.")
             messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
             return
+        before = self._planet_snapshot()   # 2.4.0 (#82): put back if a planet of another star is answered No
         self.planet_info = dict(p)
         self._planet_to_fields(p)
         self._last_planet_lookup = self.planet_name.get().strip()   # 2.2.14 (item 2): the resolved name counts too
@@ -4700,16 +4787,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.19 (#20): a new reduction (the old series and its Use comps choice too); the planet stays.
             switched = self._switch_star(f"the planet {p.get('name') or name} orbits {p['host']}, not {old_star}",
                                          keep_planet=True)
-            if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: wait for the "
-                                       "current step to finish, then press Enter in the planet box again.")
-                self._last_planet_lookup = None
-                return
-            if switched is None:
-                # Review: No keeps the old star and its series; the planet's values stay for a look, nothing else.
-                self.planet_source.set(f"⚠ {p.get('name') or name} orbits {p['host']}, not {old_star}: kept {old_star} "
-                                       "and its series. Check the planet's name, or answer Yes to start a new "
-                                       "reduction.")
+            if switched in ("busy", None):
+                # 2.4.0 (#82): the other star's planet never stays in the Planet boxes (a Transits fit then used its
+                # ephemeris and shape for this star's night): the previous planet comes back, else the values empty.
+                pname = p.get("name") or name
+                prev = self._restore_planet(before, typed=name)
+                lead = f"⚠ {pname} orbits {p['host']}, not {old_star}: "
+                if switched == "busy":   # 2.2.19 (r2: S9): nothing changes while a job runs
+                    text = (lead + "wait for the current step to finish, then " +
+                            (f"type {pname} in the Planet box again and press Enter." if prev else
+                             "press Enter in the Planet box again."))
+                elif prev:
+                    text = (lead + f"kept {old_star}, its series and its planet {prev}. To use {pname} instead, type "
+                                   "it in the Planet box again and press Enter (you are asked again).")
+                else:
+                    text = (lead + f"kept {old_star} and its series; {pname}'s values were not filled in. Check the "
+                                   "planet's name, or press Look up again beside the Planet box to be asked again.")
+                self.planet_source.set(text)
+                # Busy: Enter or leaving the box asks again. No: only a changed name or Look up again asks again (a
+                # click elsewhere must not bring the question straight back).
+                self._last_planet_lookup = None if switched == "busy" else self.planet_name.get().strip()
+                if hasattr(self, "transit_page"):
+                    self.transit_page.refresh()
                 return
         if p.get("ra") is not None and (not self.ra_hours.get().strip() or different):
             self.ra_hours.set(f"{p['ra'] / 15.0:.6f}")
@@ -4892,18 +4991,46 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             pass
 
+    _PLANET_VARS = ("planet_name", "pl_period", "pl_t0", "pl_t14", "pl_depth", "pl_k", "pl_a_rs", "pl_b", "pl_teff")
+
+    def _planet_snapshot(self) -> dict:
+        """2.4.0 (#82): the Planet boxes, the lookup behind them and its TOI / ExoClock lines, as they are now."""
+        vars_ = {k: getattr(self, k).get() for k in self._PLANET_VARS}
+        # The Planet box already holds the name just typed: the boxes' planet is the last lookup's.
+        vars_["planet_name"] = ((getattr(self, "planet_info", None) or {}).get("name")
+                                or getattr(self, "_planet_name_before", "") or "")
+        return {"vars": vars_,
+                "info": dict(getattr(self, "planet_info", None) or {}),
+                "status": dict(getattr(self, "_status_before_lookup", None) or {})}
+
+    def _restore_planet(self, snap: dict, typed: str = "") -> str:
+        """2.4.0 (#82): after No to a planet of another star. The previous planet (one with a period) comes back
+        whole; with none, the value boxes are emptied and the typed name stays, so no fit can use the other star's
+        ephemeris. Returns the restored planet's name ('' when the boxes were emptied)."""
+        old = snap.get("vars") or {}
+        try:
+            had = float(old.get("pl_period") or "nan") > 0
+        except ValueError:
+            had = False
+        if had:
+            for k in self._PLANET_VARS:
+                getattr(self, k).set(old.get(k, ""))
+            self.planet_info = dict(snap.get("info") or {})
+            self._show_target_status(snap.get("status") or {})
+            return old.get("planet_name", "").strip() or "the previous planet"
+        self.planet_name.set(typed or self.planet_name.get())
+        for k in self._PLANET_VARS[1:]:
+            getattr(self, k).set("")
+        self.planet_info = {}
+        self._show_target_status({})
+        return ""
+
     def _planet_to_fields(self, p: dict):
         def put(var, value, fmt):
             var.set(fmt.format(value) if isinstance(value, (int, float)) and math.isfinite(value) else "")
         self.planet_name.set(p.get("name") or self.planet_name.get())
-        put(self.pl_period, p.get("period"), "{:.8f}")
-        put(self.pl_t0, p.get("t0"), "{:.6f}")
-        put(self.pl_t14, (p.get("t14") or float("nan")) * 24, "{:.4f}")
-        put(self.pl_depth, (p.get("depth") or float("nan")) * 100, "{:.4f}")
-        put(self.pl_k, p.get("k"), "{:.5f}")
-        put(self.pl_a_rs, p.get("a_rs"), "{:.3f}")
-        put(self.pl_b, p.get("b"), "{:.3f}")
-        put(self.pl_teff, p.get("teff"), "{:.0f}")
+        for key, (var, fmt, scale) in PLANET_BOX_FORMATS.items():
+            put(getattr(self, var), (p.get(key) or float("nan")) * scale if scale != 1.0 else p.get(key), fmt)
 
     def planet_from_fields(self) -> dict | None:
         """The planet as typed on the Input page; uncertainties come from the last lookup when a value is unchanged."""
@@ -4922,22 +5049,34 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
              "b": num(self.pl_b), "teff": num(self.pl_teff), "source": info.get("source") or "Input page",
              "reference": info.get("reference", ""), "vmag": info.get("vmag"), "tmag": info.get("tmag"),
              "ra": info.get("ra"), "dec": info.get("dec"),
-             "from_cache": info.get("from_cache")}   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "from_cache": info.get("from_cache"),   # 2.2.21 (#21): "from cache (fetched …)" in the report
+             "looked_up": info.get("looked_up")}   # 2.4.0 (#93): when the live lookup answered (fit inputs)
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)
         p["depth"] = depth / 100.0 if depth else None
+        # 2.4.0 (#106): a box holds the lookup's value when it reads as _planet_to_fields wrote it (box_shows): the
+        # boxes round (a/R* and b to 3 decimals), and that rounding is not typing. Before, a looked-up a/R* of 8.7312
+        # (shown 8.731) lost its error and the fit's prior fell to its floor; a typed value still loses it.
         from_lookup = [v for v in (info.get("depth"), info.get("depth_listed")) if v]
-        if p["depth"] and not any(abs(v - p["depth"]) <= 1e-4 * max(v, 1e-6) for v in from_lookup):
+        if p["depth"] and not any(box_shows("depth", v, p["depth"]) for v in from_lookup):
             p["depth_typed"] = True   # 2.2.13: not the lookup's value; the depth note must not call it the Archive's
-        if info.get("a_rs_derived") and p["a_rs"] is not None and info.get("a_rs") is not None \
-                and abs(info["a_rs"] - p["a_rs"]) <= 1e-3 * max(abs(info["a_rs"]), 1.0):
+        if info.get("a_rs_derived") and box_shows("a_rs", info.get("a_rs"), p["a_rs"]):
             p["a_rs_derived"] = True
         for key, err in (("period", "period_err"), ("t0", "t0_err"), ("a_rs", "a_rs_err"), ("b", "b_err"),
                          ("k", "k_err")):
-            old = info.get(key)
-            if old is not None and p.get(key) is not None and abs(old - p[key]) <= 1e-6 * max(abs(old), 1.0):
+            if box_shows(key, info.get(key), p.get(key)):
                 p[err] = info.get(err)
+        if info.get("looked_up") or info.get("from_cache"):
+            # Fable nit (#93): the values typed over after the lookup, so the fit inputs' lookup line does not call
+            # them all the lookup's ("(live)")
+            typed = [label for key, label in (("period", "period"), ("t0", "t0"), ("a_rs", "a/R*"), ("b", "b"),
+                                              ("k", "Rp/R*"), ("teff", "Teff"), ("t14", "T14"))
+                     if p.get(key) is not None and not box_shows(key, info.get(key), p.get(key))]
+            if p.get("depth_typed"):
+                typed.append("depth")
+            if typed:
+                p["typed_over"] = typed
         try:
             return tcore.complete_planet(p)
         except Exception:
@@ -5117,7 +5256,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.close_series(asked=True)
             if self.observations:
                 return False
+        tp = getattr(self, "transit_page", None)
+        if tp is not None and tp.report is not None:
+            # 2.4.0 (#105): a report left open on the Transit fit page belongs to the old work: closed, so its planet
+            # never stands in for the next night's and its banner never names the cleared photometry.
+            try:
+                tp.close_report(quiet=True)
+            except Exception:
+                traceback.print_exc()
+            report_closed = True
+        else:
+            report_closed = False
         cleared = self._clear_per_star_state(keep_planet=keep_planet, all_rejected=ask)
+        if report_closed:
+            cleared.append("the report open on the Transit fit page")
         self.run_findings = []   # 2.3.6 (#79 item 2): findings belong to the run that raised them
         try:   # 2.4.0 (#102, John 17 Nov): a new reduction starts with an empty Findings list
             self.findings.clear()
@@ -5465,7 +5617,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             c_ra, c_dec = pointing
             try:
                 half_diag = math.hypot(*shape) / 2.0 * float(self.pixel_um.get()) / float(self.focal_mm.get()) \
-                    * 206.265 / 3600.0 if shape else 0.5
+                    * 206.265 * solve_camera_bin(header) / 3600.0 if shape else 0.5   # 2.4.0 (#107): camera bin
             except Exception:
                 half_diag = 0.5
         sep = core.sky_separation_arcsec(t_ra, t_dec, c_ra, c_dec) / 3600.0
@@ -6214,7 +6366,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         scale = core.header_plate_scale(header)
         focal = 560.0
         # 6.8 µm pixels binned 2x2 at 560 mm: about 5"/px, and a 650 x 500 frame covers about 56' x 42'.
-        pixel = scale * focal / 206.265 if scale else 13.6
+        # 2.4.0 (#107): the header's scale (IM_SCALE 5.000; FOCALLEN / XPIXSZ 13.6) is per BINNED pixel, and the solve
+        # multiplies the Pixel size box by the header's XBINNING (solve_camera_bin). So the box gets the camera's own
+        # pixel: the binned pixel / XBINNING (6.8 µm on current headers, XBINNING = 2), 13.6 µm on older headers that
+        # name no binning (the solve then multiplies by 1). Before, current headers gave 13.6 x 2: 10"/px, no solve.
+        cam_bin = solve_camera_bin(header)
+        binned_pixel = scale * focal / 206.265 if scale else 13.6
+        pixel = binned_pixel / cam_bin
+        frame_scale = binned_pixel / focal * 206.265   # arcsec per pixel of the frame as saved (what the solve uses)
         self.scale_approx = not scale
         use = messagebox.askyesno(
             APP_TITLE,
@@ -6222,7 +6381,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             "monochrome camera.\n\nUse that telescope's setup for these frames?\n"
             f"  Site: latitude {lat:.3f}, longitude {lon:.3f}" + (f", elevation {elev:.0f} m" if elev else "")
             + f" ({where})\n"
-            f"  Optics: focal length {focal:.0f} mm, pixel {pixel:.1f} µm (about {pixel / focal * 206.265:.1f}\"/px"
+            f"  Optics: focal length {focal:.0f} mm, pixel {pixel:.1f} µm"
+            + (f" (the camera's pixel; the camera bins {cam_bin}x{cam_bin}, so about {frame_scale:.1f}\"/px"
+               if cam_bin > 1 else f" (about {frame_scale:.1f}\"/px")
             + ("" if scale else "; Solve refines it") + ")\n"
             "  Camera: monochrome (no debayer), clear filter (CV), binning 1, saturation 4000 ADU\n\n"
             "Your own site, optics, and camera settings are kept and come back when you scan a folder of your own "
@@ -6258,7 +6419,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
         self.telescope_name.set("")   # 2.2.16 (item 5): your telescope's name is not theirs (comes back with yours)
         self.log(f"MicroObservatory setup: site {lat:.4f}, {lon:.4f} ({where}); optics {focal:.0f} mm, {pixel:.2f} µm "
-                 f"({'from the header scale' if scale else 'approximate'}); monochrome, CV, saturation 4000 ADU. "
+                 f"({'from the header scale' if scale else 'approximate'}"
+                 + (f"; camera pixel, binned {cam_bin}x{cam_bin} by the camera" if cam_bin > 1 else "")
+                 + f", {frame_scale:.2f}\"/px); monochrome, CV, saturation 4000 ADU. "
                  "Your own setup comes back when you scan your own lights.")
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
@@ -8166,6 +8329,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         , keep_status=True)
         self._header_pointing_note()   # 2.4.0 (#99): the header's pointing against the Input page's target
+        try:
+            self._series_drift()   # 2.4.0 (#78): read the drift frames now, so they are ready when comps are suggested
+        except Exception:
+            pass
         pat = core.header_bayer(header or {})
         if pat and not self._rgb_channel:   # 2.2.18 (item 1): never on color images (said at Scan/Calibrate)
             self.pattern.set(pat)
@@ -8323,6 +8490,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.log(f"✖ Calibration failed: {message}")
         if detail:
             self.log(detail)
+        # step 3 regression (18 Nov): the line follows the image; a failure with no image up says so (Fable review: an
+        # earlier good preview still on screen keeps its line)
+        if getattr(self, "debayer_info", None) is not None and self.preview is None:
+            self.debayer_info.set("No preview yet.")
         messagebox.showerror(APP_TITLE, f"Calibration failed:\n{message}")
 
     def apply_debayer(self, auto: bool = False):
@@ -8917,8 +9088,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         was made at and the color camera's 2x2 superpixel; None when the boxes are empty."""
         try:
             superpixel = 1 if self.pattern.get() == core.MONO else 2
+            # 2.4.0 (#107): times the camera's binning too, as the solve (the MicroObservatory box is now the camera
+            # pixel, 6.8 µm, binned 2x2 by the camera)
             scale = float(self.pixel_um.get()) / float(self.focal_mm.get()) * 206.265 * max(int(self._image_binning()), 1) \
-                * superpixel
+                * superpixel * solve_camera_bin(self.preview_header)
             return scale if math.isfinite(scale) and scale > 0 else None
         except Exception:
             return None
@@ -8943,17 +9116,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             field = 2.0
             try:
                 # review: the scale the field image uses (_field_scale_arcsec's Optics formula)
-                scale = self._optics_scale_arcsec()
-                camera_bin = 1
-                for k in ("XBINNING", "BINNING", "XBIN"):   # the camera's own binning, as the solve reads it
-                    if header.get(k) not in (None, ""):
-                        try:
-                            camera_bin = max(int(float(header.get(k))), 1)
-                            break
-                        except (TypeError, ValueError):
-                            continue
+                scale = self._optics_scale_arcsec()   # (2.4.0 #107: the camera's binning is in it now)
                 if scale:
-                    est = max(self.preview.shape[:2]) * scale * camera_bin / 3600.0
+                    est = max(self.preview.shape[:2]) * scale / 3600.0
                     if math.isfinite(est) and est > 0:
                         field = est
             except Exception:
@@ -9857,15 +10022,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             line = f"telescope not recorded / {cam}"
         else:
             line = "not recorded"
-        camera_bin = 1
-        for key in ("XBINNING", "BINNING", "XBIN"):   # the keys the solve reads (the first one present counts)
-            if head.get(key) in (None, ""):
-                continue
-            try:
-                camera_bin = max(int(float(head.get(key, 1))), 1)
-                break
-            except (TypeError, ValueError):
-                continue
+        camera_bin = solve_camera_bin(head)   # 2.4.0 (review nit): the solve's own rule, so the two never differ
         if pix and focal:
             scale = pix / focal * 206.265 * camera_bin * binning * superpixel
         else:
@@ -9890,7 +10047,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.mode_key != "transits" or not lights:
             return True
         page = getattr(self, "transit_page", None)
-        planet = page.current_planet() if page is not None else None
+        # 2.4.0 (#105): the Input page's planet, never a report left open on the Transit fit page
+        planet = page.input_planet() if page is not None else None
         if not planet:
             return True
         try:
@@ -10019,7 +10177,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._series_mode_answered = False   # 2.2.14 (item 19, review): set when this guard already asked about it
         if self.mode_key == "transits" and lights:
             page = getattr(self, "transit_page", None)
-            planet = page.current_planet() if page is not None else None
+            planet = page.input_planet() if page is not None else None   # 2.4.0 (#105): never a report's planet
             why = self._target_variable_reasons()
             series_open = self.observations and self.series_mode == "variables" and not self.series_mode_unknown
             span = self._lights_span(lights)
@@ -11774,7 +11932,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"{role_label(mode)}: {no_v}")
             self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
-            self._vet_choice(mode, xy)
+            if not self._say_check_clash(mode):   # 2.4.0 (#68)
+                self._vet_choice(mode, xy)
 
     def _no_catalog_v_note(self, role: str) -> str:
         """2.2.14 (item 4): why a marked comp has no catalog V on a solved image ('' when it has one, or when the image
@@ -11804,6 +11963,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
             self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
                                  "then Enter places the name).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
+            self._say_check_clash(role)   # 2.4.0 (#68): renamed to the check star's (or a comp's) name
             return
         if self.preview is None or not self.preview_is_debayered:
             self._slot_say(role, f"Calibrate first, so {text} can be found on the image.")
@@ -12075,6 +12235,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                + f"  Marker at ({xy[0]:.0f}, {xy[1]:.0f}).")
         bad = bool(filled) and "=" not in filled   # placed, but its catalog has no magnitude for it
         self._slot_say(role, ("" if bad else "✓ ") + msg)   # 2.2.14 (item 14)
+        if self._say_check_clash(role):   # 2.4.0 (#68): the check typed into a comp slot, or a comp into the check's
+            return
         if vet:   # 2.3.4 (review S2): not for a series comp placed after the solve (its row shows the variable check)
             self._vet_choice(role, xy)
 
@@ -12233,6 +12395,104 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"A variable {what} shifts every measurement it touches. Use it anyway?",
         ):
             self.clear_mark(role)
+
+    def check_comp_clash(self) -> list:
+        """2.4.0 (#68): the comps that are the same star as the check star: the same name (a real catalog name, not
+        "check" or "comp2"), or markers within CHECK_SAME_ARCSEC on the sky (2 px without a plate solution). Returns
+        [(role, words)], e.g. ("comp2", "the same name, Gaia DR3 439068910332260352")."""
+        return [(r, w) for r, w, _kind in self._check_comp_clash_kinds()]
+
+    def _check_comp_clash_kinds(self) -> list:
+        """check_comp_clash with each clash's kind: "star" (the same star) or "name" (Fable N7: the same name on two
+        markers clearly apart, CHECK_NAME_APART_ARCSEC on the sky or CHECK_NAME_APART_PX without a solve: two
+        stars that share a name, e.g. a duplicate AAVSO label, or a marker on the wrong star)."""
+        cname = self.check_name.get().strip()
+        cxy = self.check_xy
+        if cxy is None and placeholder_star_name(cname):
+            return []
+        sol = self.chart_solution if (self.chart_placed or (self.chart_solution or {}).get("auto")) else None
+        csky = None
+        if cxy is not None and sol:
+            try:
+                csky = core.pixel_to_sky(cxy[0], cxy[1], sol)
+            except Exception:
+                csky = None
+        out = []
+        for r in COMP_ROLES:
+            name = getattr(self, f"{r}_name").get().strip()
+            xy = getattr(self, f"{r}_xy")
+            if xy is None and not name:
+                continue
+            sep = None
+            if xy is not None and csky is not None:
+                try:
+                    ra, dec = core.pixel_to_sky(xy[0], xy[1], sol)
+                    sep = core.sky_separation_arcsec(csky[0], csky[1], ra, dec)
+                except Exception:
+                    sep = None
+            if sep is not None and not math.isfinite(sep):
+                sep = None
+            px = math.hypot(xy[0] - cxy[0], xy[1] - cxy[1]) if xy is not None and cxy is not None else None
+            if name and not placeholder_star_name(name) and not placeholder_star_name(cname) \
+                    and (name_key(name) == name_key(cname) or name_core(name) == name_core(cname)):
+                apart = (sep >= CHECK_NAME_APART_ARCSEC) if sep is not None else (
+                    px is not None and px >= CHECK_NAME_APART_PX)
+                if apart:
+                    gap = f"{sep:.0f}\u2033 apart" if sep is not None else f"{px:.0f} px apart on the image"
+                    out.append((r, f"{cname}, but the markers are {gap}", "name"))
+                else:
+                    out.append((r, f"the same name, {cname}", "star"))
+                continue
+            if xy is None or cxy is None:
+                continue
+            if sep is not None:
+                if sep < CHECK_SAME_ARCSEC:
+                    out.append((r, f"{sep:.1f}\u2033 apart", "star"))
+            elif px < 2.0:
+                out.append((r, "on the same spot of the image", "star"))
+        return out
+
+    def check_clash_text(self) -> str:
+        """2.4.0 (#68): the plain words for a comp that is also the check star ('' when there is none)."""
+        kinds = self._check_comp_clash_kinds()
+        if not kinds:
+            return ""
+        parts = []
+        same = [(r, w) for r, w, k in kinds if k == "star"]
+        named = [(r, w) for r, w, k in kinds if k == "name"]
+        if same:
+            roles = " and ".join(role_label(r) for r, _ in same)
+            why = "; ".join(f"{role_label(r)}: {w}" for r, w in same)
+            one = len(same) == 1
+            parts.append(f"{roles} and the check star are the same star ({why}). The check star tests the comps, so "
+                         f"it can't also be one of them. Change {'one of them' if one else 'them'}: clear the marker "
+                         "(\u2715 in the Stars panel, or right-click it) and pick another star.")
+        if named:
+            # Fable N7: two stars clearly apart that carry one name (duplicate catalog labels exist): not the same
+            # star, but the results could not tell them apart
+            roles = " and ".join(role_label(r) for r, _ in named)
+            why = "; ".join(f"{role_label(r)}: {w}" for r, w in named)
+            parts.append(f"{roles} and the check star have the same name ({why}). They look like two different "
+                         "stars, but the results would not tell them apart. Type another name in one of the boxes "
+                         "(for example its catalog number), or, if a marker is on the wrong star, clear it and pick "
+                         "again.")
+        return " ".join(parts) + " Run photometry waits until then."
+
+    def _say_check_clash(self, role: str) -> bool:
+        """2.4.0 (#68): at pick time, a comp just placed on the check star (or the check on a comp) is said at once,
+        in a box and on the slot's own line. True when there is a clash."""
+        if role != "check" and not comp_number(role):
+            return False
+        text = self.check_clash_text()
+        if not text:
+            return False
+        self._slot_say(role, "\u26a0 " + text, bad=True)
+        self.status.set("\u26a0 " + text)   # the panel redraw above may have put its own line there
+        try:
+            messagebox.showwarning(APP_TITLE, text)
+        except Exception:
+            pass
+        return True
 
     # ---- star panel (Photometry page) ---------------------------------------------------
     def _build_star_panel(self, panel):
@@ -13196,13 +13456,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             ra_hours, dec = float(query[0]), float(query[1])
             binning = max(int(self._image_binning()), 1)
-            camera_bin = 1
-            for key in ("XBINNING", "BINNING", "XBIN"):
-                try:
-                    camera_bin = max(int(float((self.preview_header or {}).get(key, 1))), 1)
-                    break
-                except (TypeError, ValueError):
-                    continue
+            camera_bin = solve_camera_bin(self.preview_header)   # 2.4.0 (#107): one rule with the MOBS setup
             # Camera binning, app binning, then the superpixel debayer each multiply the pixel size (a monochrome
             # frame has no debayer). Frames from another telescope (MicroObservatory) bring their own scale.
             if wcs is not None:
@@ -13901,8 +14155,183 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         cache[key] = -2.5 * math.log10(f) if f > 0 else float("nan")
         return cache[key]
 
+    # ---- 2.4.0 (#78): the night's drift, so a suggested comp never drifts toward the frame edge ----------------------
+    def _series_drift(self, start: bool = True):
+        """2.4.0 (#78): how the field moves on the sensor over the night, from the reference frame (the image on the
+        page) to the other lights. From the loaded series' own frame positions when it was measured on these lights
+        (every frame; nothing is read), else from up to core.DRIFT_SAMPLES lights (the night's first, last and some
+        between; core.frame_drift: averaged down, no calibration), read once in the background and cached.
+        Returns None while those frames are being read (start=True starts it; _drift_done suggests again), else
+        {"regs": [(frame label, registration in preview px), ...], "how": "series" | "frames" | "", "of": lights,
+        "failed": frames that could not be aligned}. "regs" is empty when there is nothing to check (one frame,
+        another field's image, no file)."""
+        empty = {"regs": [], "how": "", "of": 0, "failed": 0}
+        path = getattr(self, "preview_path", "") or ""
+        if self.preview is None or not path or getattr(self, "_preview_foreign", ""):
+            return empty
+        try:
+            lights = list(self._lights())
+        except Exception:
+            lights = []
+        others = [p for p in lights if p != path]
+        if not others:
+            return empty
+        h, w = self.preview.shape[:2]
+        # The loaded series' frame shifts, when it holds this frame and the night's others (target positions; a
+        # meridian flip or field rotation needs more than a shift, so those read frames instead).
+        lightset = set(lights) | {path}
+        obs = [o for o in (self.observations or []) if getattr(o, "path", "") in lightset
+               and len((getattr(o, "pos", None) or {}).get("t") or []) == 2]
+        ref_o = next((o for o in obs if o.path == path), None)
+        rotating = False
+        try:
+            rotating = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ
+        except Exception:
+            rotating = False
+        if ref_o is not None and len(obs) >= 3 and not rotating and not any(
+                getattr(o, "segment", "") == "flip" for o in obs) and self._series_drift_usable(obs, lights):
+            tx, ty = (float(v) for v in ref_o.pos["t"])
+            rest = [o for o in obs if o is not ref_o]
+            # Fable nit: kept per (frame, series), so a Stars panel refresh does not look up every frame's label again
+            memo_key = (path, (h, w), len(rest), tuple(rest[0].pos["t"]), tuple(rest[-1].pos["t"]), tx, ty)
+            memo = getattr(self, "_series_drift_memo", None)
+            if memo is not None and memo[0] == memo_key:
+                return memo[1]
+            labels = core.frame_labels_for([o.path for o in rest])   # one folder look-up, not one per frame
+            regs = [(lab or os.path.basename(o.path),
+                     {"dx": float(o.pos["t"][0]) - tx, "dy": float(o.pos["t"][1]) - ty, "angle": 0.0,
+                      "flipped": False}) for o, lab in zip(rest, labels)]
+            out = {"regs": regs, "how": "series", "of": len(obs), "failed": 0}
+            self._series_drift_memo = (memo_key, out)
+            return out
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return empty
+        key = (path, stamp, tuple(others), rotating)
+        cache = getattr(self, "_drift_cache", None)
+        if cache is None or cache.get("key") != key:
+            if not start:
+                return None
+            cache = self._drift_cache = {"key": key, "state": "loading", "result": None}
+            # Fable N2: the green busy bar and its words while the frames are read (several seconds on a big night)
+            cache["tok"] = self.busy_begin("Checking the night's drift… reading the lights")
+
+            def work():
+                try:
+                    res = core.frame_drift(path, others, rotating=rotating, sample=True,
+                                           cancel=lambda: getattr(self, "_drift_cache", None) is not cache,
+                                           progress=lambda i, n: self.call_ui(self._drift_progress, cache, i, n))
+                except Exception as exc:
+                    res = {"error": f"{type(exc).__name__}: {exc}"}
+                self.call_ui(self._drift_done, cache, res)
+
+            threading.Thread(target=work, daemon=True).start()
+        if cache["state"] == "loading":
+            return None
+        res = cache.get("result") or {}
+        raw_shape = res.get("raw_shape")
+        if not raw_shape or res.get("error"):
+            return dict(empty, of=len(lights), failed=len(others), why="the lights could not be read")
+        f = w / float(raw_shape[1])
+        if abs(h / float(raw_shape[0]) - f) > 0.02 * f:
+            # not the same pixel grid (a crop?)
+            return dict(empty, of=len(lights), failed=len(others),
+                        why="the image on the page is not the same size as the lights")
+        if res.get("why") == "few stars":
+            return dict(empty, of=len(lights), failed=len(others),
+                        why="too few stars were found on this frame to line the others up with it")
+        good = [(p, reg) for p, reg in res.get("regs", []) if reg is not None]
+        if res.get("regs") and not good:
+            return dict(empty, of=len(lights), failed=len(res["regs"]),
+                        why="none of the other lights could be lined up with this frame")
+        labels = core.frame_labels_for([p for p, _reg in good])
+        regs = [(lab or os.path.basename(p), core.scale_registration(reg, f)) for (p, reg), lab in zip(good, labels)]
+        # "every": every light was looked at (small frames), so the words need not say how many were checked
+        return {"regs": regs, "how": "frames", "of": len(lights), "every": len(res.get("regs", [])) >= len(others),
+                "failed": sum(1 for _p, reg in res.get("regs", []) if reg is None)}
+
+    def _drift_done(self, cache: dict, result: dict):
+        """2.4.0 (#78): the drift frames are read: suggest the comps that were waiting for them, and refresh the
+        marked comps' notes."""
+        self.busy_end(cache.pop("tok", None))   # Fable N2 (also for a read that was replaced by a newer one)
+        if getattr(self, "_drift_cache", None) is not cache:
+            return
+        cache["state"], cache["result"] = "done", result
+        if result.get("error"):
+            log_to_file(f"Drift check: the frames could not be read ({result['error']}).")
+        # Fable N3: a check that found nothing at all is said (a plain note: the frame on the page was still checked)
+        try:
+            got = self._series_drift(start=False)
+        except Exception:
+            got = None
+        if got and not got.get("regs") and got.get("why"):
+            self.log(f"The night's drift could not be checked ({got['why']}); only this frame's edge was checked.")
+        if getattr(self, "_suggest_drift_pending", False):
+            self._suggest_drift_pending = False
+            self._suggest_comps()
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
+        elif any(getattr(self, f"{r}_xy", None) is not None for r in COMP_ROLES + ("check",)):
+            self.update_star_panel()
+
+    def _drift_progress(self, cache: dict, done: int, of: int):
+        """Fable N2: the busy bar's words while the drift frames are read, frame by frame."""
+        if cache.get("tok") is not None and getattr(self, "_drift_cache", None) is cache:
+            self.busy_words(cache["tok"], f"Checking the night's drift… frame {done + 1} of {of}")
+
+    def _series_drift_usable(self, obs: list, lights: list) -> bool:
+        """Fable N4: the loaded series' frame positions stand for the night's drift only when they cover nearly
+        every light (SERIES_DRIFT_COVER; not a run canceled after 10 of 200 frames) and were measured at the binning
+        of the image on the page (their pixel positions are on that grid). Otherwise the lights are read.
+        Re-review nit: and on the same pixel grid as the page's image, monochrome or a color camera's 2x2 superpixel
+        (half the size; every Bayer pattern and debayer channel gives the same superpixel grid). A night that does not
+        record its pattern (saved before 2.4.0) has its lights read."""
+        have = {getattr(o, "path", "") for o in obs} & set(lights)
+        if len(have) < max(3, math.ceil(SERIES_DRIFT_COVER * len(set(lights)))):
+            return False
+        try:
+            page_bin = int(getattr(self, "masters_binning", None) or self.binning.get() or 1)
+        except Exception:
+            return False
+        try:
+            page_mono = str(self.pattern.get()).upper() == core.MONO
+        except Exception:
+            return False
+        bins = set()
+        for night in {getattr(o, "night", "") for o in obs}:
+            info = self._night_info(night)
+            b = info.get("binning")
+            try:
+                bins.add(int(b))
+            except (TypeError, ValueError):
+                return False   # not recorded: read the lights instead
+            # every Bayer pattern and debayer channel gives the same superpixel grid; only MONO against color differs
+            if not info.get("pattern") or (str(info["pattern"]).upper() == core.MONO) != page_mono:
+                return False   # another grid (or none recorded): read the lights instead
+        return bins == {page_bin}
+
+    def _drift_clearance(self, xy, drift=None):
+        """2.4.0 (#78): for one point on the reference frame: (closest approach to the frame edge over the night in
+        px, the frame label there or "" for this frame, [(label, distance) for every frame checked]), or None when
+        the drift is not known (yet)."""
+        if xy is None or self.preview is None:
+            return None
+        drift = self._series_drift(start=True) if drift is None else drift
+        if not drift or not drift.get("regs"):
+            return None
+        regs = [reg for _lab, reg in drift["regs"]]
+        h, w = self.preview.shape[:2]
+        pts = np.asarray([xy], dtype=float)
+        near, where = core.edge_clearance(pts, (h, w), regs)
+        per = [(lab, float(core.edge_clearance(pts, (h, w), [reg])[0][0])) for lab, reg in drift["regs"]]
+        k = int(where[0])
+        return float(near[0]), (drift["regs"][k][0] if k >= 0 else ""), per
+
     def _suggest_comps(self):
         """Labeled stars within about 1 mag of the target, not variable, not saturated, not crowded at the edge."""
+        before = (self.suggested_comps, self._closest_dm, self._target_bv)   # Fable N2: kept while the drift is read
         self.suggested_comps = []
         self._closest_dm = None
         self._target_bv = None
@@ -13918,10 +14347,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         edge = so + 3
         # 2.3.4 (c): suggestions prefer stars at least 3 x the sky-out radius in (as the edge note asks), so a framing
         # shift between nights does not drop a comp off the frame; nearer stars only fill in when the field is short.
+        # 2.4.0 (#78): over the WHOLE night (the drift from this frame to the night's other lights), and no longer
+        # only preferred: a star that comes nearer the edge than this on any frame checked is never suggested.
         safe_edge = 3.0 * so
+        drift = self._series_drift()
+        self._suggest_drift_pending = drift is None
+        if drift is None:
+            # the drift frames are being read (a few seconds; the busy bar says so): _drift_done suggests then. Fable
+            # N2: until then the previous suggestions stay (no rings vanishing; Run photometry keeps the same spares).
+            # Re-review nit: only when they were made for this target on this frame (another frame or target: none).
+            if getattr(self, "_suggest_for", None) == (self.target_xy, self.preview_path):
+                self.suggested_comps, self._closest_dm, self._target_bv = before
+            return
         lin = self._linear_limit()
         h, w = self.preview.shape
-        cands, where, star_of, edge_px = [], {}, {}, {}
+        cands, where, star_of, edge_px, edge_at = [], {}, {}, {}, {}
         stars = [(x, y, st) for x, y, st in self.chart_placed
                  if not st.get("variable") and st.get("mag") is not None and edge <= x < w - edge and edge <= y < h - edge
                  and math.hypot(x - self.target_xy[0], y - self.target_xy[1]) > 2 * r]
@@ -13962,8 +14402,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
             edge_px[name] = float(min(x, y, (w - 1) - x, (h - 1) - y))
+            edge_at[name] = ""
             where[name] = (x, y)
             star_of[name] = st   # 2.2.19 (#15): for the S1 … lines in the panel
+        if drift["regs"] and cands:
+            # 2.4.0 (#78): each candidate's closest approach to the edge over the frames checked
+            near, at = core.edge_clearance([(c[2], c[3]) for c in cands], (h, w), [g for _l, g in drift["regs"]])
+            for c, d_, k_ in zip(cands, near, at):
+                edge_px[c[0]] = float(d_)
+                edge_at[c[0]] = drift["regs"][int(k_)][0] if k_ >= 0 else ""
         target_star = self._chart_star_at(self.target_xy)
         t_bv_cat = core.catalog_bv(target_star) if target_star else None
         # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
@@ -14011,13 +14458,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         # 2.2.13 (John): AAVSO sequence stars of the right brightness come first; other catalog stars fill in when
         # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
-        # within 0.3 in color first, then the rest.
+        # within 0.3 in color first, then the rest. 2.4.0 (#78): only stars that stay at least safe_edge in all night
+        # (no pool lets a star nearer the edge back in; the field gets fewer suggestions instead, and the log says so).
         seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in stars if st.get("seq")}
         inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
         relaxed = set()
         picks = []
-        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (seq_names, 0.3), (None, 0.3),
-                                 (inside, 0.6), (None, 0.6)):
+        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
             if len(picks) >= 4:
                 break
             have = {n for n, _dm in picks}
@@ -14029,6 +14476,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 relaxed.update(n for n, _dm in got)
             picks += got
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
+        self._suggest_for = (self.target_xy, self.preview_path)   # Fable re-review nit: what they were made for
+        # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
+        have = {n for n, _dm in picks}
+        edge_left = [] if len(picks) >= 4 else [
+            n for n, _dm in choose([c for c in cands if c[0] not in inside and c[0] not in have], 0.6)]
+        self._suggest_edge_left = {n: (edge_px.get(n), edge_at.get(n, "")) for n in edge_left}
+        self._suggest_drift = drift
         # 2.2.19 (#15): what the panel's "S1 = … V 11.2, why suggested" lines say.
         self.suggested_info = {}
         for name, dm in picks:
@@ -14038,6 +14492,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                          "bv": core.catalog_bv(st) if st else None, "target_bv": t_bv, "faint": faint,
                                          "target_bv_from": t_bv_from, "relaxed": name in relaxed,
                                          "edge": edge_px.get(name), "safe_edge": safe_edge,
+                                         "edge_at": edge_at.get(name, ""), "drift_how": drift.get("how", ""),
                                          "peak": peaks.get(name, float("nan")), "linear": lin,
                                          "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
                                          or st.get("catalog", "")}
@@ -14052,13 +14507,47 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + "; green rings S1, S2 …): "
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
-                     + ". Comps like the target cancel airmass, focus, and calibration errors best.")
-        elif self._closest_dm is not None and self._closest_dm <= 1.0:
+                     + ". Comps like the target cancel airmass, focus, and calibration errors best."
+                     + self._drift_words(drift, safe_edge))
+        if not getattr(self, "_suggest_quiet", False) and edge_left:
+            # 2.4.0 (#78): say why there are fewer than four, by name; a warning only when none is left at all
+            far = ", ".join(f"{n} ({max(d_, 0.0):.0f} px" + (f" on frame {lab}" if lab else "") + ")"
+                            for n, (d_, lab) in list(self._suggest_edge_left.items())[:4])
+            during = " during the night" if drift.get("regs") else ""
+            if self.suggested_comps:
+                self.log(f"Only {len(self.suggested_comps)} comp{'s' if len(self.suggested_comps) != 1 else ''} "
+                         f"suggested: {len(edge_left)} more star{'s' if len(edge_left) != 1 else ''} of the right "
+                         f"brightness come{'s' if len(edge_left) == 1 else ''} nearer the frame edge{during} "
+                         f"than the {safe_edge:.0f} px a comp needs to stay clear: {far}. They are not suggested.")
+            else:
+                self.log(f"⚠ No comp can be suggested: the stars of the right brightness all come nearer the frame "
+                         f"edge{during} than the {safe_edge:.0f} px a comp needs to stay clear: {far}. "
+                         "Pick comps by hand further in, or reject the frames where the field drifted farthest.")
+            return
+        if self.suggested_comps or getattr(self, "_suggest_quiet", False):
+            return
+        if self._closest_dm is not None and self._closest_dm <= 1.0:
             self.log("Labeled stars within 1 mag of the target here all differ from it in color (B−V more than 0.6 "
                      "apart) or are near the linear limit; pick the closest in brightness and color you can.")
         elif self._closest_dm is not None:
             self.log(f"No labeled star within 1 mag of the target here (closest: {self._closest_dm:.1f} mag away); "
                      "pick the closest in brightness and color you can.")
+
+    @staticmethod
+    def _drift_words(drift, safe_edge: float) -> str:
+        """2.4.0 (#78): ' All stay at least 36 px from the frame edge all night (the field drifts up to 64 px over
+        the 78 lights; checked on 8 of them).' for the suggestions line, or '' when no drift was checked."""
+        regs = (drift or {}).get("regs") or []
+        if not regs:
+            return ""
+        most = max(math.hypot(g["dx"], g["dy"]) for _l, g in regs)
+        flip = any(g.get("flipped") for _l, g in regs)
+        how = (f"from the loaded series' {drift.get('of', len(regs) + 1)} frames" if drift.get("how") == "series"
+               else f"checked on all {drift.get('of', len(regs) + 1)} lights" if drift.get("every")
+               else f"checked on {len(regs)} of the {drift.get('of', len(regs) + 1)} lights")
+        return (f" All stay at least {safe_edge:.0f} px from the frame edge all night (the field "
+                + ("turns at the meridian flip and " if flip else "") + f"drifts up to {most:.0f} px; {how}"
+                + (f"; {drift['failed']} could not be aligned" if drift.get("failed") else "") + ").")
 
     def _measured_target_bv(self):
         """2.3.4 (e): the target's measured B-V: the median over the loaded series' points that have one (nights run
@@ -14105,8 +14594,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             elif info.get("target_bv") is None:
                 why += ", target color not known (tick Also measure R and B)"
             # 2.3.4 (d): what else it was picked on
-            if info.get("edge") is not None and info.get("safe_edge") and info["edge"] < info["safe_edge"]:
-                why += f", only {info['edge']:.0f} px from the edge"
+            # (2.4.0 #78: a suggestion is never nearer the edge than safe_edge, all night, so no edge words here)
             pk, lin = info.get("peak"), info.get("linear")
             if lin and pk is not None and math.isfinite(pk):
                 why += f", raw peak {pk:,.0f} ADU ({pk / lin:.0%} of the linear limit)"
@@ -15120,6 +15608,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             f"{la} and {lb} are marked on the same star. Each one must be a different star; "
                             "the check star in particular must not be one of the comparison stars."
                         )
+            clash = self.check_clash_text() if check is not None else ""
+            if clash:
+                raise ValueError("\u26a0 " + clash)   # 2.4.0 (#68): same name, or within about 2\u2033
             sat_limit = self._num_box(self.sat_limit, "Saturation")
             lat = self._num_box(self.lat, "Latitude") if self.lat.get().strip() else None
             lon = self._num_box(self.lon, "Longitude") if self.lon.get().strip() else None
@@ -15486,13 +15977,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             rej_labels = core.distinct_frame_labels(rej_lights)   # 2.3.3 (#63): each file once, each label its own
             self.log(f"Rejected frames ({len(rej_labels)}): " + core.frame_list_text(rej_labels))
         # 2.2.17 (item 8): photon noise in electrons (EGAIN, binning, superpixel, flat); said once in the log.
-        noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
-                                               [target] + comps, radius, sky_in, sky_out)
-        electrons = noise_setup.get("electrons")
-        if getattr(self, "_onsky_ctx", None) is not None:
-            # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
-            self._onsky_ctx["noise"] = noise_setup
-            self._onsky_ctx["flat_applied"] = getattr(masters, "flat", None) is not None and not precalibrated
+        # 2.4.0 (#104): worked out at the start of the worker (below): the gain is measured on a sample of the night's
+        # frames, which takes a few seconds on big frames.
+        noise_stars = [target] + comps
+        night_lights = (self._lights() if only is not None and stack_run is None else None)
+        # 2.4.0 (#104, John's choice): a stacked run takes the gain measured on the single frames that went into the
+        # stacks (a stack is their sum: the same electrons per image unit)
+        stack_frames = None
+        if stack_run is not None:
+            stack_frames, seen = [], set()
+            for sp in lights:
+                for m in (stack_run.get("meta") or {}).get(sp, {}).get("members", []):
+                    fp = m.get("path")
+                    if fp and fp not in seen:
+                        seen.add(fp)
+                        stack_frames.append(fp)
+        gain_inputs = self._sky_gain_inputs()   # Tk variables: read here, on the main thread
         cal_xy = np.array([(x, y) for x, y, _ in cal_stars], dtype=float) if cal_stars else None
         # 2.2.14 (item 1): each star's B-V and V-R from one catalog (catalog_color), NaN where none has both bands.
         cal_catalog = {
@@ -15513,6 +16013,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         def work_inner():
             nonlocal target, comps, check, spares, watch, ref_sources, ref_img, cal_xy, ref_label
+            # 2.4.0 (#104): the photon noise setup, with the gain measured from the night's sky (see above)
+            noise_setup = self._photon_noise_setup(lights, binning, pattern, mode, masters, precalibrated,
+                                                   noise_stars, radius, sky_in, sky_out,
+                                                   log=lambda text: self.call_ui(self.log, text),
+                                                   all_lights=night_lights, stacks=stack_run is not None,
+                                                   gain_inputs=gain_inputs, stack_frames=stack_frames)
+            electrons = noise_setup.get("electrons")
+            if getattr(self, "_onsky_ctx", None) is not None:
+                # 2.3.0 (#55): the electrons per image unit (flat factor included) for the on-sky log
+                self._onsky_ctx["noise"] = noise_setup
+                self._onsky_ctx["flat_applied"] = getattr(masters, "flat", None) is not None and not precalibrated
             night_points = []
             cal_samples = {"bv": [], "vr": []}   # (obs, relative colors, comps' relative color)
             cancelled = False
@@ -16848,9 +17359,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return text if near or miss else ""
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
-                            sky_out) -> dict:
+                            sky_out, log=None, all_lights=None, stacks: bool = False, gain_inputs=None,
+                            stack_frames=None) -> dict:
         """2.2.17 (item 8): electrons per image unit for this run's photon noise (core.photon_noise_setup), from the
-        first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once."""
+        first light's EGAIN, else the sky noise of the reference frame, else 1 e-/ADU; logged once.
+        2.4.0 (#104): the gain is MEASURED from the night's sky first (_sky_gain_measure: sky_gain.py, idea by Mike
+        Fitzgerald); the single-frame lower limit is kept as the fallback. Runs in the photometry worker (it reads a
+        sample of frames): log is the thread-safe log; all_lights = the night's whole frame list (a Measure skipped
+        frames run measures the same frames as the night's own run, so the gain is the same); gain_inputs =
+        _sky_gain_inputs(), read on the main thread (Tk variables).
+        2.4.0 (#104, John's choice): a stacked run (stacks=True) measures the gain on stack_frames, the single frames
+        that went into the stacks, calibrated as single frames (a stack is their sum: stack_core.write_stack keeps the
+        sum scale, so the electrons per image unit are the frames'); when that cannot be had, on the stacks with the
+        darks' floor x STACKN; else the lower limit. The log line says which."""
+        log = log or self.log
+        if gain_inputs is None:
+            gain_inputs = self._sky_gain_inputs()
         try:
             header = core.read_header(lights[0]) if lights else {}
         except Exception:
@@ -16863,22 +17387,194 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             sky_k, sky_level = core.sky_electrons_estimate(self.preview, stars, radius, sky_in, sky_out, with_level=True)
         except Exception:
             pass
+        meas = None
+        why_frames = ""
+        if bias_removed and stacks and stack_frames:
+            try:   # the single frames first, as the frames' own run measures them
+                fh = core.read_header(stack_frames[0])
+                meas = self._sky_gain_measure(list(stack_frames), binning, pattern, mode, masters, precalibrated,
+                                              False, fh, gain_inputs, log=log)
+            except Exception as exc:
+                traceback.print_exc()
+                meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
+            if meas.get("ok"):
+                meas = dict(meas, basis="frames")
+            elif "pairs_read" in meas and int(meas["pairs_read"]) >= _sky_gain_mod().MIN_PAIRS:
+                # Fable re-review nit: the frames were read but the night's sky could not give the gain (too faint
+                # against the read noise, structure, no darks at their exposure): the stacks hold the same sky, so
+                # they are not tried; the lower limit is used, with the frames' reason.
+                meas = dict(meas, why=f"on the single frames that went into the stacks, {meas.get('why', '')}")
+            else:   # the frames could not be read (moved, deleted): the stacks themselves are tried
+                why_frames = meas.get("why", "")
+                meas = None
+        if bias_removed and meas is None:
+            try:
+                meas = self._sky_gain_measure(all_lights or lights, binning, pattern, mode, masters, precalibrated,
+                                              stacks, header, gain_inputs, log=log)
+            except Exception as exc:   # never stops a run: the lower limit is used
+                traceback.print_exc()
+                meas = {"ok": False, "why": f"an error while reading the frames ({type(exc).__name__}: {exc})"}
+            if stacks and stack_frames:
+                meas = dict(meas, basis="stacks" if meas.get("ok") else "")
+                if not meas.get("ok"):
+                    meas["why"] = (f"not on the single frames ({why_frames}), nor on the stacks "
+                                   f"({meas.get('why', '')})")
         try:
             setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
-                                            sky_level)
+                                            sky_level, sky_meas=meas)
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
                                                                   "the pre-2.2.17 error model is used."}
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
+        if setup.get("sky_method"):   # 2.4.0 (#104): measured from the night's sky, or the one-frame lower limit
+            self._noise_model["sky_method"] = setup["sky_method"]
+            if setup.get("sky_meas"):
+                self._noise_model["sky_meas"] = dict(setup["sky_meas"])
         if setup.get("camera_bin", 1) > 1:   # 2.3.0 (#53): camera binning and how it combined the pixels
             self._noise_model.update({"camera_bin": setup.get("camera_bin"),
                                       "camera_bin_mode": setup.get("camera_bin_mode"),
                                       "e_per_stored_adu": setup.get("e_per_stored_adu")})
-        self.log(setup.get("note", ""))
+        log(setup.get("note", ""))
         if setup.get("warning"):
-            self.log("⚠ " + setup["warning"])
+            log("⚠ " + setup["warning"])
+        try:   # 2.4.0 (#104): the SHOBS-FLUX camera profile's bench values, when there is one
+            flux = self._flux_gain_check(header, setup, meas, binning, pattern, mode, flat)
+        except Exception:
+            flux = ""
+        if flux:
+            log(flux)
+            self._noise_model["flux_check"] = flux
         return setup
+
+    def _sky_gain_inputs(self) -> dict:
+        """2.4.0 (#104): what _sky_gain_measure needs from the window (Tk variables: main thread only)."""
+        lin = self._linear_limit()
+        try:
+            sat = float(lin) if lin else float(self.sat_limit.get())
+        except Exception:
+            sat = None
+        return {"dark_dir": self.dark_dir.get().strip(), "bias_dir": self.bias_dir.get().strip(), "sat": sat}
+
+    def _sky_gain_measure(self, lights, binning, pattern, mode, masters, precalibrated, stacks, header,
+                          inputs=None, log=None) -> dict:
+        """2.4.0 (#104): the gain measured from the night's sky (sky_gain.measure_night) on up to 24 neighbouring frame
+        pairs (12 on frames over 8 Mpx), each read and calibrated only in a central window, with the noise floor from
+        two raw darks of the lights' exposure (else two bias frames, else the photon-transfer line). Kept for the same
+        frames, calibration and channel, so a second run (or Measure skipped frames) gives the same number.
+        Fable review S1: stacks are read as the run reads them (stack_ui.load_frame: as they are, never binned or
+        calibrated again), with no saturation cut (they are on the scale of a sum). N6: frames that must be read whole
+        (XISF, compressed or extension FITS, stacks) get at most 12 pairs, and the log says the measurement started."""
+        import sky_gain as sg
+        from stack_ui import is_stack_path
+        try:
+            exp = float(core.header_exptime(header))
+        except Exception:
+            exp = float("nan")
+        inputs = inputs if inputs is not None else self._sky_gain_inputs()
+        sat = None if stacks else inputs.get("sat")   # review S1: a stack is a sum; its frames' peaks were checked
+        dark_dir = "" if precalibrated else inputs.get("dark_dir", "")
+        bias_dir = "" if precalibrated else inputs.get("bias_dir", "")
+        n_sum, skip = 1, set()
+        floor_note = ""
+        if stacks:
+            # 2.4.0 (#104, John's choice): on stacks the floor is the darks' at the frames' exposure x STACKN (a stack
+            # is the sum of its frames); stacks of another N (a partial last one) are left out.
+            # Fable re-review nits: N is the most common STACKN (the first stack may be a partial one), and the floor
+            # is multiplied only for stacks that say they hold the SUM of their frames (STACKSCL = SUM).
+            ns = {}
+            for p in lights:
+                try:
+                    ns[p] = int(core.read_header(p).get("STACKN") or 0)
+                except Exception:
+                    ns[p] = 0
+            counts = collections.Counter(n for n in ns.values() if n >= 1)
+            n_sum = max(counts, key=lambda n: (counts[n], n)) if counts else 0
+            try:
+                exp = float(header.get("STACKEXP") or float("nan"))
+            except Exception:
+                exp = float("nan")
+            scl = str(header.get("STACKSCL") or "").strip().upper()
+            if n_sum < 1 or not math.isfinite(exp) or scl != "SUM":
+                if n_sum > 1 and math.isfinite(exp) and scl != "SUM":
+                    floor_note = (
+                        f"the stacks do not say they hold the sum of their frames (STACKSCL {scl or 'missing'}), "
+                        "so the darks' noise cannot be scaled to them")
+                dark_dir = bias_dir = ""
+                n_sum = 1
+            else:
+                skip = {p for p, n in ns.items() if n != n_sum}
+        key = (tuple(lights), int(binning or 1), pattern, mode, bool(stacks), repr(getattr(masters, "used", "")),
+               dark_dir, bias_dir, sat)
+        cache = getattr(self, "_sky_gain_cache", None)
+        if cache and cache[0] == key and cache[1] is masters:   # review nit: the same masters object, not its id
+            return cache[2]
+
+        def whole(path):   # review S1: stacks are read as they are (as the run reads them)
+            return bool(stacks) or is_stack_path(path)
+        flat_only = core.Masters(flat=getattr(masters, "flat", None)) if masters is not None else core.Masters()
+        floor_load = sg.window_loader(binning, flat_only, pattern, mode)
+        floor, floor_err, floor_src = None, None, ""
+        for folder, src in ((dark_dir, "darks"), (bias_dir, "bias")):
+            if not folder:
+                continue
+            frames = core.calibration_source(folder)[0]
+            if src == "darks":   # read + dark noise only at the lights' own exposure
+                frames = [f for f in frames if _same_exposure(f, exp)]
+            vals, errs = [], []
+            for a, b in list(zip(frames[0::2], frames[1::2]))[:3]:
+                try:
+                    v, e = sg.floor_from_pair(floor_load(a), floor_load(b), with_err=True)
+                except Exception:
+                    continue
+                vals.append(v)
+                errs.append(e)
+            fl, fe = sg.floor_combine(vals, errs)
+            if fl is not None:
+                floor, floor_err, floor_src = fl * n_sum, fe * n_sum, src
+                break
+        try:
+            raw_px = int(header.get("NAXIS1") or 0) * int(header.get("NAXIS2") or 0)
+        except Exception:
+            raw_px = 0
+        max_pairs = sg.max_pairs_for(raw_px)
+        if lights and (whole(lights[0]) or not sg.plain_fits_2d(lights[0])):
+            max_pairs = min(max_pairs, sg.MAX_PAIRS // 2)   # review N6: read whole, so at most 12 pairs
+
+        def full_load(path):
+            return core.debayer(stack_load_frame(path, binning, masters)[2], pattern, mode)
+        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load, whole=whole)
+        n_pairs = len(sg.pick_pairs(len([p for p in lights if p not in skip]), max_pairs))
+        if log is not None and n_pairs:
+            log(f"Measuring the gain from the night's sky ({n_pairs} frame pair{'s' if n_pairs != 1 else ''})…")
+        meas = sg.measure_night(lights, load, sat=sat, floor_var=floor, floor_source=floor_src,
+                                max_pairs=max_pairs, floor_err=floor_err, skip=skip)
+        if stacks and floor_src in ("darks", "bias"):
+            meas["stack_n"] = n_sum
+        if floor_note and not meas.get("ok"):
+            meas["why"] = f"{floor_note}; {meas.get('why', '')}"
+        if meas.get("ok"):
+            meas["rn_e"] = sg.read_noise_e(meas["floor_var"] / n_sum, meas["k"], binning, pattern, mode)
+        self._sky_gain_cache = (key, masters, meas)
+        return meas
+
+    def _flux_gain_check(self, header, setup, meas, binning, pattern, mode, flat) -> str:
+        """2.4.0 (#104): the run's gain (and read noise) against a SHOBS-FLUX camera profile's bench values for this
+        camera, gain setting, offset and binning, when such a profile exists: a plain note ("" when there is none)."""
+        if not header:
+            return ""
+        import shobs_profile as sp
+        import sky_gain as sg
+        cam_id = sp.setup_key(header).get("camera_id")
+        prof = sp.find_camera_profile(cam_id) if cam_id else None
+        if not prof:
+            return ""
+        channel = {"green": "G", "red": "R", "blue": "B"}.get(mode) if (pattern or "").upper() != core.MONO else None
+        g_flux, g_rec = sp.camera_value(prof, "gain_e_per_adu", channel)
+        rn_flux, rn_rec = sp.camera_value(prof, "read_noise_e", channel)
+        return sg.flux_words(cam_id, meas, setup, g_flux, (g_rec or {}).get("source", ""), rn_flux,
+                             (rn_rec or {}).get("source", ""),
+                             core.electrons_per_unit(1.0, binning, pattern, mode, flat))
 
     def measured_aperture(self, night: str = "") -> dict | None:
         """2.2.19 (#41): what a night's photometry was measured with ({"radius", "sky_in", "sky_out", "binning",
@@ -16951,6 +17647,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         out = {"binning": int(self.binning.get() or 1), "method": "bayer", "app_version": APP_VERSION,
                "radius": num(self.radius), "sky_in": num(self.sky_in), "sky_out": num(self.sky_out),
                "comps": list(self.comps_used), "check": self.check_used or ""}
+        try:   # 2.4.0 (re-review nit): the Bayer pattern and debayer, so a night's star positions know their grid
+            out["pattern"], out["debayer"] = self.pattern.get(), self.debayer_mode.get()
+        except Exception:
+            pass
         # 2.3.1 (nit): the Telescope aperture and elevation the scintillation error used (they were not recorded)
         if self._aperture_box() is not None:
             out["aperture_mm"] = self._aperture_box()
@@ -17537,6 +18237,39 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      "short periods); type another shortest period on the Output page if you want one. The series "
                      "file keeps 0.05 d until its next save.")   # 2.2.19 (r2: nit)
 
+    def _mobs_series_pixel(self, meta: dict):
+        """2.4.0 (#107, review N3): a series saved before 2.4.0 holds MicroObservatory's binned pixel (13.6 µm) in the
+        Pixel size box. Over current MicroObservatory frames (XBINNING 2) the solve multiplies the box by the camera's
+        binning, so 13.6 µm would give 10"/px and no solve. When the frames on the Input page are MicroObservatory's,
+        binned by the camera, and the series' pixel is their binned pixel, the box gets the camera's pixel instead."""
+        try:
+            stored = float(meta.get("pixel_um"))
+        except (TypeError, ValueError):
+            return
+        header, path = self.preview_header, ""
+        try:
+            if not header or not core.is_microobservatory("", header):
+                lights = self._lights()
+                path = lights[0] if lights else ""
+                header = core.read_header(path) if path else None
+        except Exception:
+            return
+        if not header or not core.is_microobservatory(path, header):
+            return
+        cam_bin = solve_camera_bin(header)
+        if cam_bin <= 1:
+            return
+        scale = core.header_plate_scale(header)
+        binned = scale * 560.0 / 206.265 if scale else 13.6
+        if abs(stored - binned) > 0.05 * binned:
+            return
+        pixel = round(binned / cam_bin, 2)
+        self.pixel_um.set(pixel)
+        self.log(f"Pixel size set to {pixel:g} µm, the MicroObservatory camera's own pixel. The series was saved with "
+                 f"{stored:g} µm, the pixel after the camera's {cam_bin}x{cam_bin} binning; SHOBS-P now multiplies by "
+                 f"that binning itself, so the plate scale stays about {binned / 560.0 * 206.265:.1f}\"/px. The series "
+                 f"file keeps {stored:g} µm until its next save.")
+
     def _apply_meta_values(self, meta: dict):
         for key in self._META_STRINGS:
             if meta.get(key) not in (None, ""):
@@ -17559,6 +18292,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 except (TypeError, ValueError):
                     pass
         self._migrate_min_period(meta)   # 2.2.19 (#19)
+        self._mobs_series_pixel(meta)   # 2.4.0 (#107, review N3)
         if meta.get("binning"):
             want = int(meta["binning"])
             have = self.masters_binning if self.calibrated is not None else None
@@ -21181,6 +21915,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             masters = setup.get("masters") or []
             lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
             lines.append(tu.gain_note(setup.get("photon_noise")))
+            if tu.sky_check_line(setup.get("photon_noise")):   # 2.4.0 (#104): EGAIN nights, the sky's measurement
+                lines.append(tu.sky_check_line(setup.get("photon_noise")))
+            if (setup.get("photon_noise") or {}).get("flux_check"):   # 2.4.0 (#104): the SHOBS-FLUX profile
+                lines.append(str(setup["photon_noise"]["flux_check"]))
             if setup.get("aperture_mm"):
                 # review S6: the error bars use the box at report time (the Scintillation line above)
                 lines.append(f"Telescope aperture box when the night was measured: {float(setup['aperture_mm']):g} mm")
@@ -22755,8 +23493,8 @@ class ExtremumWindow:
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
                      width=5).grid(row=1, column=5, sticky=W)
         ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
-        # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click (not filled by themselves: under the numbers
-        # freeze the same clicks as 2.3.0 must save the same O−C; Fable M2)
+        # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click. 2.4.0 (#65): the window now also opens
+        # with them (see below), so this button puts them back after other values were typed or looked up.
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
         self.saved_button.grid(row=1, column=7, sticky=W, padx=(6, 0))
         ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=8, sticky=W, padx=(6, 0))
@@ -22770,6 +23508,14 @@ class ExtremumWindow:
         self.csv_path = app.extremum_csv if app.extremum_csv and (
             core.same_star_text(app.extremum_csv_star, self._star())
             or os.path.basename(app.extremum_csv) == core.extremum_csv_name(self._star())) else ""
+        # 2.4.0 (#65, John 11 Nov): a star with saved times starts from them: Period = the one last used, Epoch = the
+        # first saved maximum (or minimum, by Type). VSX stays the fallback (no saved time of this type).
+        self._kind_quiet = False
+        self._redraw_job = None
+        self._prefill_from_csv(auto=True)
+        self.kind.trace_add("write", lambda *_a: self._kind_changed())
+        for var in (self.period, self.epoch, self.system):
+            var.trace_add("write", lambda *_a: self._elements_changed())
         self.fig = None
         if Figure is not None:
             self.fig = make_constrained_figure((10.5, 4.0))
@@ -22780,6 +23526,36 @@ class ExtremumWindow:
         self._show_csv()
         self.draw()
         fit_to_content(win)
+
+    def _kind_changed(self):
+        """2.4.0 (#65): switching Type takes the epoch from that type's first saved time, unless the elements were
+        typed (they are the user's own)."""
+        if self._kind_quiet:
+            return
+        p, e = self._elements()
+        if p and e and self._elements_source(p, e) == "typed":
+            return
+        self._prefill_from_csv(auto=True)
+
+    def _elements_changed(self):
+        """2.4.0 (#65): the saved-times list and the O−C diagram follow the elements in the boxes (shortly after
+        typing stops)."""
+        try:
+            if self._redraw_job is not None:
+                self.win.after_cancel(self._redraw_job)
+            self._redraw_job = self.win.after(400, self._elements_redraw)
+        except Exception:
+            pass
+
+    def _elements_redraw(self):
+        self._redraw_job = None
+        try:
+            if not self.win.winfo_exists():
+                return
+        except Exception:
+            return
+        self._show_csv()
+        self.draw()
 
     # -- inputs ---------------------------------------------------------------------------
     def _elements(self):
@@ -22850,7 +23626,11 @@ class ExtremumWindow:
             self.app.catalog_epoch = e
         self.system.set("HJD")
         self.app.catalog_var_type = found.get("var_type") or self.app.catalog_var_type
-        self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        self._kind_quiet = True   # 2.4.0 (#65): VSX's elements were asked for; the Type follows without a refill
+        try:
+            self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
+        finally:
+            self._kind_quiet = False
         self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
 
     # -- measuring ------------------------------------------------------------------------
@@ -22994,15 +23774,22 @@ class ExtremumWindow:
         except Exception:
             return []
 
-    def _prefill_from_csv(self):
+    def _prefill_from_csv(self, auto: bool = False) -> bool:
         """2.3.3 (nit, 10 Nov): Elements from saved times: Period = the one last used, Epoch = the first saved time of
         the chosen type (so the CSV need not be opened to find it). The elements can still be typed over or fetched
-        with Elements from VSX."""
+        with Elements from VSX. 2.4.0 (#65): also on open and on a Type switch (auto=True); with no saved time of
+        this type the boxes are left as they are (VSX's, when VSX gave them). True when the boxes were filled."""
         kind = "max" if self.kind.get() == "maximum" else "min"
         got = core.extremum_csv_elements(self._csv_rows(), kind)
         if not got:
-            self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times CSV")
-            return
+            if not auto:
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} of {self._star()} in the times "
+                                "CSV")
+            elif self._csv_rows():
+                p, e = self._elements()
+                self.source.set(f"no saved {'maxima' if kind == 'max' else 'minima'} yet; "
+                                + (f"{self._elements_source(p, e)} elements" if p and e else "type the elements"))
+            return False
         if got.get("period"):
             self.period.set(f"{got['period']:.8f}")
         self.epoch.set(f"{got['epoch']:.5f}")
@@ -23014,7 +23801,9 @@ class ExtremumWindow:
         word = "maximum" if kind == "max" else "minimum"
         self.source.set(f"from the times CSV: epoch = first saved {word}"
                         + (", period last used" if got.get("period") else "; period from VSX"
-                           if self.period.get().strip() else "; type the period"))
+                           if self.period.get().strip() else "; type the period")
+                        + ("  (Elements from VSX for VSX's)" if auto and self.app.catalog_period else ""))
+        return True
 
     def _show_csv(self):
         path = self._default_csv()
@@ -23023,10 +23812,17 @@ class ExtremumWindow:
             return
         rows = self._csv_rows()
         text = f"Times CSV: {path}  ({len(rows)} time{'s' if len(rows) != 1 else ''} of {self._star()})"
-        lines = core.extremum_times_lines(rows)   # 2.3.3 (nit, 10 Nov): the saved times themselves
+        # 2.3.3 (nit, 10 Nov): the saved times themselves. 2.4.0 (#65): each O−C against the elements in the boxes,
+        # as the O−C diagram has it (a row's own stored O−C is added when it differs).
+        period, epoch = self._elements()
+        elements = (period, epoch, self.system.get()) if period and epoch else None
+        lines = core.extremum_times_lines(rows, elements=elements)
         if lines:
             more = len(rows) - len(lines)
-            text += "\n" + "\n".join("   " + ln for ln in lines) + (f"\n   … and {more} earlier" if more > 0 else "")
+            head = (f"   O−C against P {period:.8f}, E {epoch:.5f} ({self.system.get()}), as in the diagram:"
+                    if elements else "   O−C as saved (each row against its own elements):")
+            text += "\n" + head + "\n" + "\n".join("   " + ln for ln in lines) + (
+                f"\n   … and {more} earlier" if more > 0 else "")
         self.csv_text.set(text)
 
     def save(self):
