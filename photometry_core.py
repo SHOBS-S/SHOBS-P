@@ -927,6 +927,7 @@ def build_masters(
         exps = [header_exptime(read_fits(path)[1]) for path in dark_paths]
 
         def prep_dark(data, header):
+            check_master_size(masters.bias, data, *_pedestal_words(masters, "darks"))
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -942,6 +943,8 @@ def build_masters(
             if flats_calibrated:
                 # Already calibrated by other software (PixInsight _c): bias and dark are out already.
                 return np.asarray(data, dtype=np.float32)
+            check_master_size(masters.bias, data, *_pedestal_words(masters, "flats"))
+            check_master_size(_applied_dark(masters), data, "dark", "flats", "Dark")
             ccd = _ccd(data, header_exptime(header))
             if masters.bias is not None:
                 ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1427,6 +1430,7 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     dark_fp = "none"
 
     def prep_dark(data, header):
+        check_master_size(masters.bias, data, *_pedestal_words(masters, "darks"))
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1480,6 +1484,8 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
                                  f"but the flats are {np.shape(data)[1]}x{np.shape(data)[0]} px: pick dark flats "
                                  "taken with the flats' camera settings.")
             return (np.asarray(data, dtype=np.float32) - masters.darkflat).astype(np.float32)
+        check_master_size(masters.bias, data, *_pedestal_words(masters, "flats"))
+        check_master_size(_applied_dark(masters), data, "dark", "flats", "Dark")
         ccd = _ccd(data, header_exptime(header))
         if masters.bias is not None:
             ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -1516,7 +1522,42 @@ def prepare_masters(bias_paths: list[str], dark_paths: list[str], flat_paths: li
     return masters
 
 
+def check_master_size(master, data, master_what: str, frames_what: str, box: str) -> None:
+    """2.4.0 (step 3 regression, 18 Nov): a plain message, not numpy's "operands could not be broadcast together with
+    shapes (500,650) (4176,6248)", when a master does not fit the frames it is applied to. Seen when New reduction
+    kept the last night's Bias box (ASI2600MC, 6248 x 4176) for a MicroObservatory night (650 x 500)."""
+    if master is None or np.shape(master) == np.shape(data):
+        return
+    mh, mw = np.shape(master)[:2]
+    h, w = np.shape(data)[:2]
+    fix = (f"Empty the {box} row on the Input page, or pick {master_what} frames taken with this camera at this "
+           "binning.")
+    if frames_what == "lights":
+        # Fable review: in a run, the odd one may be a single light, not the master
+        raise ValueError(f"The master {master_what} is {mw}x{mh} px but this light is {w}x{h} px: either the master "
+                         f"is from another camera or binning ({fix[0].lower() + fix[1:-1]}), or this light is not "
+                         "from the same camera and binning as the others.")
+    raise ValueError(f"The master {master_what} is {mw}x{mh} px but the {frames_what} are {w}x{h} px, so it is "
+                     f"from another camera or binning. {fix}")
+
+
+def _pedestal_words(masters, frames_what: str) -> tuple:
+    """check_master_size's words for `masters.bias`. Fable review: with dark flats standing in for the bias (pedestal
+    'darkflat'), `bias` holds the dark flat, and the Bias box is empty."""
+    if getattr(masters, "pedestal", "") == "darkflat":
+        return "dark flat", frames_what, "Dark flats"
+    return "bias", frames_what, "Bias"
+
+
+def _applied_dark(masters):
+    """Fable review: a dark that is not applied (no exposure) is not size-checked either."""
+    return masters.dark if masters.dark is not None and masters.dark_exptime > 0 else None
+
+
 def calibrate_frame(data: np.ndarray, header: dict, masters: Masters) -> np.ndarray:
+    check_master_size(masters.bias, data, *_pedestal_words(masters, "lights"))
+    check_master_size(_applied_dark(masters), data, "dark", "lights", "Dark")
+    check_master_size(masters.flat, data, "flat", "lights", "Flat")
     ccd = _ccd(data, header_exptime(header))
     if masters.bias is not None:
         ccd = subtract_bias(ccd, _ccd(masters.bias))
@@ -11739,6 +11780,10 @@ _ASCII_MAP = {
     "…": "...", "²": "2", "³": "3", "χ": "chi", "σ": "sigma", "Δ": "d", "δ": "d",
     "µ": "u", "μ": "u", "≈": "~", "≤": "<=", "≥": ">=", "→": "->", "⚠": "!", "✖": "X",
     "•": "*", " ": " ", " ": " ", " ": " ", "▶": ">", "◀": "<",
+    # 2.4.0 (step 3 regression, 18 Nov): letters with no accent to drop (NFKD leaves them as they are), so author
+    # names keep their letters: Yalçınkaya -> Yalcinkaya, not "Yalc?nkaya"
+    "ı": "i", "İ": "I", "ł": "l", "Ł": "L", "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+    "ħ": "h", "Ħ": "H", "ß": "ss", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "þ": "th", "Þ": "Th",
 }
 
 

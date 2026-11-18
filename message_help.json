@@ -360,6 +360,15 @@
   {
    "section": "Calibrate",
    "patterns": [
+    "Calibration failed: The master … is … px but the … are … px, so it is from another camera or binning. …",
+    "Calibration failed: The master … is … px but this light is … px: either the master is from another camera or binning …",
+    "The master bias is 6248x4176 px but the flats are 650x500 px"
+   ],
+   "todo": "Empty that row on the Input page, or pick frames taken with this camera at this binning; or take the odd light out of the folder."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
     "Calibration failed: The masters do not fit these lights: …"
    ],
    "todo": "Pick matching frames, or tick Rebuild masters (ignore saved ones)."
