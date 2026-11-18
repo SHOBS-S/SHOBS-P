@@ -11954,6 +11954,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.check_xy = xy
         if mode != "target":
             getattr(self, "_slot_state", {}).pop(mode, None)   # 2.4.0 step 4: marked by hand now
+            getattr(self, "_slot_notes", {}).pop(mode, None)   # its "couldn't be placed" / "not centered" line too
             self._place_finding(mode, None)
         filled = self._fill_from_spare(mode, spare[0]) if spare is not None else self._fill_from_chart(mode, xy)
         self._update_pick_label()
@@ -12266,8 +12267,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._pick_note = ""
         if xy is None or not self.chart_placed:
             return None
-        radius = self._num(self.radius) or 8.0
-        wide = min(self.NAME_WIDE_PX, max(reach, 1.5 * radius))
+        wide = max(reach, self.NAME_WIDE_PX)
         near = []
         for x, y, star in self.chart_placed:
             d = math.hypot(x - xy[0], y - xy[1])
@@ -12318,12 +12318,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                "No name or magnitude was taken from it; type them, or pick another star.")
         return None
 
+    @staticmethod
+    def _real_names(star) -> list:
+        """2.4.0 step 4: core.star_names without the chart label of a star that is not an AAVSO sequence star (that
+        label is its magnitude as text, "11.5", not a name)."""
+        star = star or {}
+        names = core.star_names(star)
+        if not star.get("seq"):
+            label = str(star.get("label") or "")
+            if label and label != str(star.get("auid") or "") and len(names) > 1:
+                try:
+                    float(label)
+                    names = [n for n in names if n != label]
+                except ValueError:
+                    pass
+        return names
+
     def _slot_name_for(self, star) -> str:
         """2.4.0 step 4 (#72): the name a slot shows for a catalog star. A star the series already knows (a stored
         position within star_record.SAME_STAR_ARCSEC) keeps the series' name: tonight's catalog name is an alias,
         not a new star. A new star gets star_record.display_name of all its names (AUID / AAVSO label, then TYC,
         Gaia, APASS), so the name does not depend on which catalog answered first."""
-        names = core.star_names(star or {})
+        names = self._real_names(star)
         try:
             pos = (float(star["ra"]), float(star["dec"]))
         except (TypeError, ValueError, KeyError):
@@ -12581,6 +12597,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         token = getattr(self, "_preview_token", 0)
         radius = self._num(self.radius) or 8.0
         band = core.band_label(self._band())
+        saved_words = ("the series position" if getattr(self, "series_path", "") or getattr(self, "observations", None)
+                       else "its saved position")
         placed = []
         for role in list(COMP_ROLES) + ["check"]:
             name_var, mag_var = getattr(self, f"{role}_name"), getattr(self, f"{role}_mag")
@@ -12596,13 +12614,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 geo = self._sky_on_frame(rd[0], rd[1]) if rd is not None else None
                 if geo is not None:
                     d = math.hypot(geo["px"] - have[0], geo["py"] - have[1])
-                    self.log(f"{who}: already marked at ({have[0]:.0f}, {have[1]:.0f}), {d:.1f} px from where its "
-                             "series position falls" + ("; that is more than the aperture radius, so check it is "
+                    self.log(f"{who}: already marked at ({have[0]:.0f}, {have[1]:.0f}), {d:.1f} px from where "
+                             f"{saved_words} falls" + ("; that is more than the aperture radius, so check it is "
                                                         "the right star." if d > radius else "."), keep_status=True)
                 continue
             if getattr(self, "_slot_typed", {}).get(role) == (token, name):
                 continue   # typed on this image: Enter decides (and fills the catalog magnitude)
-            xy0, geo, source = None, {"state": "on"}, "the series position"
+            xy0, geo, source = None, {"state": "on"}, saved_words
             if rd is None:
                 star = self._chart_star_named(name)
                 if star is not None and self._chart_xy_of(star) is not None:
@@ -12666,7 +12684,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             alias = ""
             if star is not None and name not in core.star_names(star) and rd is not None and star_record.same_star(
                     rd, (star.get("ra"), star.get("dec"))):
-                names = core.star_names(star)
+                names = self._real_names(star)
                 self._tonight_aliases[name] = names
                 alias = (f" = {star_record.display_name(names)} in tonight's catalogs (the same star; the series' "
                          "name is kept)")

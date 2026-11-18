@@ -226,9 +226,26 @@ status bar says, for example, " Centered on the star (2.3 px from the click)." I
 " No star found right at the click; the marker is where you clicked." Watch for that one.
 
 **How names and magnitudes fill in.** On a solved image, clicking a comp or the check star fills its row in the
-**Stars** panel: the star's name (its AAVSO identifier or catalog name) and its catalog magnitude in the band you are
+**Stars** panel: the star's name and its catalog magnitude in the band you are
 measuring (the column header says which, for example **V magnitude**). AAVSO sequence magnitudes are used first, then
-APASS, Gaia and Tycho-2. If the check star has no catalog name (for example when a catalog did not answer), SHOBS-P
+APASS, Gaia and Tycho-2.
+
+**Which name a star gets (from 2.4.0).** A star usually has several names, one per catalog. SHOBS-P shows one, always
+in the same order of preference: its AAVSO identifier (AUID) or chart label when it is an AAVSO sequence star, then its
+Tycho name (TYC), then its Gaia DR3 name, then its APASS name. So the name no longer depends on which catalog answered
+first that night. A star an open series already knows keeps the series' name: the series knows its stars by sky
+position, and tonight's catalog name for the same star (within about 1″) is only another name for it.
+
+**The name goes by brightness, not just by the nearest catalog position (from 2.4.0).** When the catalog star nearest
+to your marker is not right under it, SHOBS-P compares how bright the star reads on the image with each nearby catalog
+star's magnitude. A faint catalog star you cannot even see can therefore no longer give its name and magnitude to the
+bright star beside it. The log says so, for example "Comp 1 at (420, 60): named by brightness: the star reads about V
+12.6, and 000-BBB-127 is 12.65; the nearer catalog position is Gaia DR3 … (17.98, 7.5 px away), too faint to be this
+star." If no catalog star near the marker fits the star's brightness, SHOBS-P takes no name and no magnitude from a
+neighbor and says "… No name or magnitude was taken from it; type them, or pick another star." A catalog star right
+under the marker is always taken, as before.
+
+If the check star has no catalog name (for example when a catalog did not answer), SHOBS-P
 names it by its sky position when you press **Run photometry**, the way APASS names its stars, for example
 `J020351.8+464115`. The log says so, and that name goes into the series, the reports and the settings file instead
 of a bare "check" (a night added to a series whose check was saved as "check" before 2.3.2 keeps the series' name). The line under each row says where the magnitude came from and adds checks:
@@ -324,6 +341,25 @@ You can also type a star instead of clicking it:
 3. Press **Enter**. SHOBS-P finds the star on the image, places the marker and fills in the magnitude.
 
 The image must be solved for this to work.
+
+A star the open series already knows is placed from the series' own saved sky position, so it is found even when
+tonight's catalogs do not have that name (a catalog that did not answer).
+
+**Centered like a click.** A marker placed from a name or a position starts where the plate solution puts the star,
+then is centered on the star itself. Near the frame edge the solution can be several pixels out, so from 2.4.0
+SHOBS-P looks further when the first try fails (out to 3 × the star width, or the aperture radius) and takes the
+brightest star there, as long as no other catalog star of similar brightness is that close. The row then says
+"Centered on the star 6.8 px from the catalog position (wider search; 22 px from the top edge): check it is the right
+star."
+
+**When it cannot be centered, SHOBS-P says so.** The marker stays at the catalog position and the row, the status
+line, the Log and the Findings panel all say, for example, "⚠ Comp 4 APASS J185609.9+692057 is at the catalog position
+(300, 29), not centered on a star: no star could be centered within 11 px of it; it is 29 px from the top edge. Click
+the star to center it." Do that before you run: a marker beside its star measures the star's wing, and the light curve
+can show steps that are not real.
+
+**Not on this frame.** A position that falls off the frame is said with the position: "… is not on this frame: its
+position (18h 56m 09.9s +69° 20′ 57″) falls at (250, -40), 40 px beyond the top edge."
 
 ### Remove a mark
 
@@ -600,8 +636,13 @@ You will not see most of these on most nights. Each window explains its choices.
 - **Too few stars to align the frames.** When the reference frame shows fewer than 3 stars (clouds, bad focus), the
   other frames cannot be aligned to it, and the apertures would not follow any drift. **Stop** (the default) lets you
   check the frame or reject it in Blink, so another frame becomes the reference; **Run without alignment** goes on.
-- **Names without markers.** A comp or check row has a name but no marker on this image (often left from a series).
+- **Names without markers.** A comp or check row has a name but no marker on this image (left from an earlier run).
   **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.
+- **Stars of the series without a marker (from 2.4.0).** A comp or check of the open series that the solve could not
+  place would not be measured tonight. **Go on without them** (the default) runs and keeps their names, so the series
+  keeps its stars; **Clear those names and go on** takes them out; **Stop, so I can mark them** lets you click them.
+  A series star that is simply off tonight's frame is not asked about: the log notes "Not on this frame tonight, so
+  not measured (their names stay): …".
 - **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P
   offers to **Run in Variables mode instead?**. In Variables mode, when the **Planet (Transits)** box holds a planet of
   this star, or the target is a known planet host (SHOBS-P looks its planets up in the NASA Exoplanet Archive after the
@@ -617,7 +658,9 @@ You will not see most of these on most nights. Each window explains its choices.
 **A marker off its star.** Before the run, SHOBS-P checks that each marker sits on its star's center. If one would be
 measured beside the star (so it would read faint), the log says, for example, "⚠ Check marker at (512.0, 340.5) is
 6.2 px from the center of the star there (…)", and the status bar says **Check the Log: Check is marked off the center
-of the star.** The run goes on; if that is not what you meant, clear the marker, zoom in and click the star again.
+of the star.** From 2.4.0 each such marker is also listed in the Findings panel, and near the frame edge the line says
+how far the marker is from the edge ("…; the marker is 22 px from the top edge"). The run always goes on (SHOBS-P
+never refuses to run for this); if that is not what you meant, clear the marker, zoom in and click the star again.
 
 Some problems stop the run with a message instead, for example **Mark at least one comparison star (Comps, then click
 the star)**, **Need aperture r < sky in < sky out**, or two markers on the same star. Fix what it says and press **Run

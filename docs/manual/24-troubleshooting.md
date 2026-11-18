@@ -132,6 +132,7 @@ message above."*
 |---|---|
 | **1 Not solved**. | Press **Solve again** to see the diagnosis. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; a wrong plate scale is the usual cause. Check that RA/Dec are near the field. |
 | Frames from another telescope do not solve. | Set that telescope's focal length and pixel size in the Optics box. |
+| A comp row got the name and magnitude of a much fainter star. | Before 2.4.0 the name came from the nearest catalog position, which can be an invisible faint neighbor. From 2.4.0 the name is picked by brightness (chapter 8); clear the row and click the star again. |
 | The check star (or a comp) reads much fainter than its catalog magnitude, or scatters a lot. | The marker is probably a few pixels off the star's center, so every frame is measured beside the star. Before each run SHOBS-P warns in the log (*"⚠ Check marker at … is … px from the center of the star there …"*). Clear the marker, zoom in, and click the star again. |
 | A star's name and magnitude do not fill in when clicked. | The image is not solved yet, or the star is not in the catalogs. Type the magnitude yourself. |
 | The image is too small to click stars. | Wheel to zoom, drag to pan, or **Pop out** the image into its own window. At 125–150 % display scaling a small frame (MicroObservatory) can stay small even after the log shrinks: press **Pop out** in the View box, or **Hide log** for more room. |
