@@ -19727,6 +19727,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.legacy_mixed = set()
         self.active_comps = []
         self._tonight_aliases = {}   # 2.4.0 step 4 (merge): aliases found for the series set aside go with it
+        # 2.4.0 step 4 (merge): so do its star records; a closed series' V must never win over tonight's in the next
+        # series (a new series from tonight's run builds its records at its first save)
+        self.star_records = []
+        self._v_disagree = {}
         self.reports_saved = {}
         self.reports_sent = {}       # 2.2.18 (item 10)
         self.multinight_alt_eph = None   # 2.2.21 (#44)

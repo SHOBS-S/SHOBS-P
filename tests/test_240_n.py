@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 os.environ["SHOBS_ONSKY_OFF"] = "1"
 
 import numpy as np  # noqa: E402
+import star_record  # noqa: E402
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 
@@ -499,6 +500,11 @@ class TestNameByBrightness(PlaceBase):
         # a series that already knows this star as the APASS name keeps that name
         app, field = self._setup(extra=[(x, y, 12.0)], chart_extra=[(x, y, merged)])
         app.comp_coords = {"APASS J025525.9-105500": self._rd(x, y)}
+        # merge (step 4): a loaded series always carries star records (s4-record); the record is what the series knows
+        rd = self._rd(x, y)
+        self.addCleanup(setattr, app, "star_records", [])   # the app is shared by the class's tests
+        app.star_records = [star_record.new_record("APASS J025525.9-105500", ra=rd[0], dec=rd[1], role="comp",
+                                                   names=["APASS J025525.9-105500"])]
         name, _mag, _xy = self._click(app, x, y)
         self.assertEqual(name, "APASS J025525.9-105500")
 
