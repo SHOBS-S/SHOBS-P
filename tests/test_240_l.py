@@ -185,5 +185,25 @@ class TestPreviewLine(unittest.TestCase):
             fake.debayer_info.set.assert_called_once_with("No preview yet.")
 
 
+class TestMasterSizeHints(unittest.TestCase):
+    """Fable re-review: the Findings panel's "what to do" for every wording of the size message."""
+
+    def test_every_variant_has_its_hint(self):
+        import findings
+        hints = findings.load_hints()
+        cases = [(np.zeros((4176, 6248)), "bias", "flats", "Bias"), (np.zeros((4176, 6248)), "bias", "darks", "Bias"),
+                 (np.zeros((4176, 6248)), "dark", "flats", "Dark"), (np.zeros((4176, 6248)), "dark flat", "darks",
+                                                                     "Dark flats"),
+                 (np.zeros((4176, 6248)), "bias", "lights", "Bias"), (np.zeros((4176, 6248)), "flat", "lights", "Flat")]
+        for master, what, frames, box in cases:
+            with self.assertRaises(ValueError) as cm:
+                core.check_master_size(master, np.zeros((500, 650)), what, frames, box)
+            todo = findings.match_hint("✖ Calibration failed: " + str(cm.exception), hints)
+            self.assertIn("Empty that row on the Input page", todo, (what, frames))
+        old = findings.match_hint("✖ Calibration failed: The masters do not fit these lights: master bias is "
+                                  "6248x4176 px but the binned lights are 650x500 px.", hints)
+        self.assertNotIn("Empty that row", old)
+
+
 if __name__ == "__main__":
     unittest.main()

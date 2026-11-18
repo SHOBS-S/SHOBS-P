@@ -88,7 +88,7 @@ Beside the report, SHOBS-P writes:
   from the night's sky** line follows it, in the same unit as EGAIN: for example `Gain check from the night's sky:
   0.255 e-/ADU, 1.05 x the header EGAIN (3 e- per image unit; from 11 frame pairs, …)`, the image-unit figure being the
   electrons per measured pixel at SHOBS-P's processing bin (on frames the camera binned and averaged, the first
-  figure is per stored ADU, as in the Gain row: `… 2.4 e- per stored ADU (camera bin 3x3 averaged), 1.07 x what the
+  figure is per stored ADU, as in the Gain row: `… 2.3 e- per stored ADU (camera bin 3x3 averaged), 1.05 x what the
   header EGAIN gives …`); and a **SHOBS-FLUX camera profile** line when FLUX has a
   profile for the camera; see "The gain behind the error bars" in [8. Photometry basics](08-photometry-basics.md)), **Scintillation** (on or off, with the telescope
   aperture and elevation the error bars used), **Telescope aperture box when the night was measured** (nights measured with 2.3.1 or
