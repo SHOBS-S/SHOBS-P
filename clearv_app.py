@@ -11968,7 +11968,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if no_v:
             # 2.2.14 (item 4): say it when the comp is marked, not only when Run photometry refuses.
             self.status.set(f"{role_label(mode)}: {no_v}")
-            self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
+            if ((getattr(self, "_pick_refused", None) or {}).get(mode) or (None, ""))[1] != no_v:   # else said already
+                self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {no_v}")
         if comp_number(mode) or mode == "check":
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
@@ -12673,7 +12674,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._place_finding(role, None)
             star = self._chart_pick_at(xy)
             self._pick_note = ""
-            self._fill_from_chart(role, xy)   # tonight's bands, colors, AAVSO sequence AUID; then the series' own back
+            # tonight's bands, colors, AAVSO sequence AUID; then the series' own back
+            self._fill_from_chart(role, xy, say=False)
             name_var.set(name)
             if str(mag).strip():
                 mag_var.set(mag)
@@ -13628,8 +13630,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         )
         self._update_step_hint()   # 2.2.15 (GitHub #3)
 
-    def _fill_from_chart(self, mode, xy):
-        """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form."""
+    def _fill_from_chart(self, mode, xy, say: bool = True):
+        """If the click lands on a star from the AAVSO chart, copy its label and magnitude into the form.
+        say=False (2.4.0 step 4): no Log line of its own (the caller writes the star's one line)."""
         if mode == "target" or not self.chart_placed:
             return ""
         # 2.4.0 step 4 (#77): the star is picked by brightness when it is not right under the marker (an invisible
@@ -13637,7 +13640,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # name when the series already knows this star by position.
         star = self._chart_pick_at(xy)
         note = getattr(self, "_pick_note", "")
-        if note:
+        if note and say:
             self.log(f"{role_label(mode)} at ({xy[0]:.0f}, {xy[1]:.0f}): {note}", keep_status=star is not None)
         self._pick_refused = dict(getattr(self, "_pick_refused", None) or {})
         self._pick_refused.pop(mode, None)
