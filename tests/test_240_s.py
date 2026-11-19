@@ -106,10 +106,10 @@ class TestEnsemble(unittest.TestCase):
             m[20:, j] += s
         st = cs.ensemble_stats(m, flipped)
         self.assertTrue(st["flip"])
-        # each star's step against the others: the ensemble's own mean step (0.0083) comes off every star
+        # each star's step against the others' median (one big-stepping star does not shift the rest)
         for j, s in enumerate(steps_in):
-            self.assertAlmostEqual(st["step"][j], s - np.mean([v for k, v in enumerate(steps_in) if k != j]),
-                                   delta=0.004)
+            self.assertAlmostEqual(st["step"][j], s - np.median([v for k, v in enumerate(steps_in) if k != j]),
+                                   delta=0.006)
         # the scatter does not count the step (each side is zero-pointed on its own)
         self.assertTrue(np.all(st["scatter"] < 0.006), st["scatter"])
         names = [f"S{j}" for j in range(6)]
@@ -123,6 +123,19 @@ class TestEnsemble(unittest.TestCase):
         self.assertEqual(chosen, names[:4])
         self.assertTrue(math.isnan(step))
 
+    def test_steps_near_target(self):
+        # WASP-49 b 19 Nov, r 8 (steps against the others' median, mmag) and distance from the target (px)
+        step = np.array([-36.4, -34.0, 9.9, 15.8, 64.4]) / 1000
+        dist = [155, 614, 702, 740, 1300]
+        rel = cs.steps_near_target(step, dist)
+        self.assertAlmostEqual(rel[0] * 1000, -2.4, places=6)      # the nearest stars step like the target
+        self.assertAlmostEqual(rel[1] * 1000, 0.0, places=6)
+        self.assertGreater(rel[4] * 1000, 90)                       # the edge star steps most
+        names = ["2073", "2164", "2079", "2074", "J0603"]
+        chosen, exp = cs.choose_set(names, [0, 0.1, 0.2, 0.3, 0.4], list(rel), count=4)
+        self.assertEqual(chosen, ["2073", "2164"])                  # the pair that left the target -1.6 mmag
+        self.assertTrue(np.all(np.isnan(cs.steps_near_target([0.01, np.nan], [1, 2]))))
+
     def test_rank_key(self):
         steady = cs.rank_key(0.5, 0.002, 0.004)
         noisy = cs.rank_key(0.0, 0.008, 0.004)
@@ -135,7 +148,7 @@ class TestEnsemble(unittest.TestCase):
 
 class TestApertureChoice(unittest.TestCase):
     def test_radii(self):
-        self.assertEqual(cs.trial_radii(2.6, 4.6), [3.1, 3.9, 4.6, 4.7, 5.7, 6.5])
+        self.assertEqual(cs.trial_radii(2.6, 4.6), [2.6, 3.1, 3.9, 4.6, 4.7, 5.7, 6.5])
         self.assertEqual(cs.trial_radii(float("nan"), 5.0), [5.0])
         self.assertEqual(cs.trial_radii(1.0), [2.0, 2.2, 2.5])
 

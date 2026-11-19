@@ -158,6 +158,24 @@ def ensemble_stats(mags, flipped=None, iterations: int = 3) -> dict:
             "flip": sides is not None, "in_ensemble": use}
 
 
+def steps_near_target(step, dist, k: int = 3):
+    """Each candidate's flip step against the median step of the k candidates nearest the target (dist: distance
+    from the target, any unit). The pier-side error depends on where a star sits on the sensor (the flat and the
+    optics are point-symmetric about the axis, and the flip turns the field 180 degrees), so the stars nearest the
+    target step most like it; a set whose steps against them average to zero leaves the target's step out of the
+    result. Against the other candidates instead, a set can agree with itself and still give the target a large
+    step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to -2.8 mmag among themselves but give the
+    target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6). NaN where the step is not measured, and all
+    NaN with fewer than 2 measured steps."""
+    st = np.asarray(step, dtype=float)
+    d = np.asarray(dist, dtype=float)
+    ok = np.isfinite(st) & np.isfinite(d)
+    if ok.sum() < 2:
+        return np.full(st.shape, np.nan)
+    near = np.argsort(np.where(ok, d, np.inf))[:max(1, min(k, int(ok.sum())))]
+    return st - float(np.median(st[near]))
+
+
 def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,
                    min_peers: int = VARIABLE_MIN_PEERS) -> list:
     """Per candidate: (scatter / median scatter of the candidates within `window` mag of it) when that is over

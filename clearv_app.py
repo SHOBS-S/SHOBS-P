@@ -16179,7 +16179,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         peak_max = np.where(np.isfinite(peak_max), peak_max, np.nan)
         fws = [result["frames"][i]["fwhm"] for i in idx]
         fws_ok = [f for f in fws if math.isfinite(f)]
-        view = {"index": {c[0]: j for j, c in enumerate(cands)}, "scatter": st["scatter"], "step": st["step"],
+        # the flip step against the stars nearest the target (comp_survey.steps_near_target), not the ensemble
+        step_rel = cs.steps_near_target(st["step"], dist) if st["flip"] else st["step"]
+        view = {"index": {c[0]: j for j, c in enumerate(cands)}, "scatter": st["scatter"], "step": step_rel,
                 "peak_max": peak_max, "peaks": peaks, "n": st["n"], "dist": dist, "flip": st["flip"],
                 "ref_scatter": float(np.median(good)) if good else float("nan"), "out": out, "frames": len(idx),
                 "of": result["of"], "failed": result["failed"], "labels": labels, "radius": rr,
@@ -16297,7 +16299,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                "sharpest frames' peaks, every frame in view")
         if survey["flip"]:
             txt += (f"; {survey['n_before']} before and {survey['n_after']} after the meridian flip, so steady on "
-                    "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag"
+                    "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag against the stars nearest "
+                                         "the target"
                                          if math.isfinite(set_step) else ""))
         return txt + ")."
 
@@ -16400,7 +16403,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # 2.4.0 step 5 (#76): what the night's own frames said
                 why += f", steady {cs.mmag(sv['scatter'])} on {sv['frames']} frames"
                 if sv.get("flip") and math.isfinite(sv.get("step", float("nan"))):
-                    why += f", flip step {1000 * sv['step']:+.1f} mmag"
+                    why += f", flip step {1000 * sv['step']:+.1f} mmag (against the stars nearest the target)"
                 if lin and math.isfinite(sv.get("peak", float("nan"))):
                     why += f", raw peak {sv['peak']:,.0f} ADU on the sharpest ({sv['peak'] / lin:.0%} of the linear limit)"
                 if info.get("series"):
