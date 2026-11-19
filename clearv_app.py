@@ -2520,6 +2520,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.update_note = {}
 
     def show_credits(self):
+        self._leave_blink_page()   # 2.4.0 (#112)
         if not getattr(self, "_on_credits", False):
             self._before_credits = getattr(self, "current_step", 0)
         self._on_credits = True
@@ -2564,6 +2565,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.status.set(f"Wrote {path}")
 
     def show_step(self, index: int):
+        if index != STEP_BLINK:
+            self._leave_blink_page()   # 2.4.0 (#112): playback never runs on behind another page
         if index != STEP_PHOTO and getattr(self, "photo_popout", None) is not None:
             self.photo_bring_back()   # 2.2.16 (item 16): leaving the Photometry step brings the image back
         self.current_step = index
@@ -7611,6 +7614,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.blink_index = (self.blink_index + delta) % len(self.blink_paths)
         self._blink_retry(self.blink_paths[self.blink_index], by_hand=True)
         self.show_blink()
+
+    def _leave_blink_page(self):
+        """2.4.0 (#112, John 19 Nov): leaving the Blink page (another step, or Credits; a mode change keeps the step on screen) stops playback
+        and the frame reader behind it. Left running, every tick read and drew the next frame on the hidden page and
+        the reader kept loading frames, which slowed Calibrate, Photometry and Run (a long night on a network
+        drive). Stepping back to Blink shows the frame it stopped on; Blink starts it again."""
+        was_playing = bool(getattr(self, "blink_playing", False))
+        if was_playing or getattr(self, "_blink_job", None) is not None \
+                or getattr(self, "_blink_show_job", None) is not None:
+            self.blink_playing = False
+            self._cancel_blink_timer()
+            self._blink_pace = 0.0
+            self._blink_busy("")
+        reader = getattr(self, "_blink_reader", None)
+        if reader is not None and reader.is_alive():
+            self._blink_gen = getattr(self, "_blink_gen", 0) + 1   # the reader ends at its next frame
+        if was_playing:
+            self.log("Blink stopped (left the Blink page).", keep_status=True)
+            self.status.set("Blink stopped (left the Blink page).")
 
     def stop_blink(self):
         self.blink_playing = False

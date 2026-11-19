@@ -26,6 +26,9 @@ The frames shown are **raw**: not calibrated. Hot pixels, gradients and dust sha
 
 1. Go to **2 Blink** in the sidebar (or press **Next: Blink** on the Input page). The first frame appears.
 2. Press **Blink** to play the frames. Press **Blink** again to pause, or **Stop** to stop.
+   Leaving the Blink page (another step, or Credits) stops playback, and the background
+   reading of frames with it, so it never slows the later steps; the status line says *Blink stopped (left the
+   Blink page).* Come back and press **Blink** to go on from the frame it stopped on.
 3. Use **Previous** and **Next** to step one frame at a time. At the end, the list wraps round to the start.
 
 SHOBS-P reads the frames in the background, starting at the frame on screen and keeping ahead of it. Blinking
