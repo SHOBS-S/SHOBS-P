@@ -56,7 +56,7 @@ On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both
 
 ### Watch a spare
 
-If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run.
+If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run. A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
 
 ## Use comps: change the comps without reducing again
 
@@ -78,6 +78,7 @@ To return to the comps the nights were reduced with, open **Use comps…** again
 Things to know:
 
 - Pick stars measured on **every** night. A frame missing only some of the chosen comps is kept: its point is worked out from the chosen comps that are there, put on the night's scale, so no step appears. Only frames with none of the chosen comps (or nights that never measured a chosen star) are flagged `nocomp` and left out; SHOBS-P tells you how many before it applies. The log line *"Comps in use: … N points re-derived"* adds *"(M of them from the comps present in that frame)"*.
+- **A series comp that is off tonight's frame.** From 2.4.0 the comp keeps its name and magnitude in its row (the row says **not on this frame tonight**) and is simply not measured that night; it is back the next night the frame holds it (chapter 10). Nights measured with different comp sets are compared here like any others.
 - **A comp that drifted off the edge.** From 2.4.0 the suggested comps (green rings S1, S2 …) never include a star that the night's drift takes out of the safe edge margin (chapter 8, "How S1–S4 are chosen"), and a star you pick yourself says so on its Stars panel line. If a comp you picked did drift off the edge in some frames, the comp set changes partway through the night; untick it here to measure the whole night with the same comps.
 - **Dropping a comp that cost frames.** If the run skipped frames because every comp was lost in them (for example a one-comp night whose comp drifted off the frame edge) and your new choice drops those comps, the Photometry page says *"⚠ N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."* Use comps only recalculates frames that were measured; press **Measure skipped frames** on that line to measure the skipped ones with the comps now in use (chapter 8).
 - Every chosen star needs a catalog magnitude. If one has none, you get **No catalog magnitude for …**. You can type
@@ -99,6 +100,8 @@ Every point that used that comp shifts by the change in its comps' catalog mean;
 value is used for the whole series, the Photometry page's boxes for the same star follow, and an open series file is
 saved. The log lists each change, for example "Catalog magnitudes changed for the whole series: … 8.711 → 8.728. 412
 points re-derived (shift +0.0042 mag)." A box that does not hold a number gives **"…" is not a catalog magnitude**.
+
+The Photometry page offers the same change when a catalog disagrees with the series: **Series magnitudes…** → **Use new value**, which also keeps a backup of the series file first (chapter 10, "The series' magnitudes win").
 
 > **Tip:** Changing comps changes your magnitudes. Do it before you report, and report the whole series with one comp set. The AAVSO report names the comps actually in use.
 

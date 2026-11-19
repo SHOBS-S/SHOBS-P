@@ -162,9 +162,67 @@
   {
    "section": "Input",
    "patterns": [
+    "These lights come from another camera than the last ones (… before, … now): Bias, Dark flats and Flat emptied, because they belong to the last camera. …"
+   ],
+   "todo": "Choose this camera's bias, darks and flats (or leave a box empty). See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Aperture and sky ring left as they are: they were set (typed, or by a loaded series) after the last camera's night.",
+    "Raw sat ADU and linear ADU left as they are (set after the last camera's night).",
+    "Raw sat ADU left as it is …",
+    "… Linear ADU left as it is (set after the last camera's night)."
+   ],
+   "todo": "Check that they suit these frames (Suggest… for the aperture; chapter 4 for the limits)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "The series' aperture and raw sat ADU were for its … nights",
+    "The series' aperture was …",
+    "The series' raw sat ADU was …"
+   ],
+   "todo": "Check the boxes (Suggest… for the aperture)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Raw sat ADU … (from the series) is above what this …-bit camera can record (…): saturated stars would not be flagged. Set raw sat ADU for this camera."
+   ],
+   "todo": "Type this camera's saturation level in raw sat ADU (chapter 4)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Aperture and sky ring put back to r …, sky …–… px, as last used with this camera in this session."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Aperture and sky ring back to the defaults (r 8, sky 14–22 px) for the new camera; they are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).",
+    "Aperture set for the new camera's frames: r …, sky …–… px (stars' FWHM … px). …"
+   ],
+   "todo": "Nothing; press Suggest… to see the measurement or test other sizes. Star sizes could not be measured on this image: the aperture stays at the defaults …: mark the stars and press Suggest…"
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Raw sat ADU … and linear ADU … (from the SHOBS-FLUX profile for this camera).",
+    "(as last used with this camera)",
+    "Raw sat ADU 4,095 and linear ADU emptied (empty = the raw sat ADU is the only limit) (the camera's 12-bit maximum; no SHOBS-FLUX profile for this camera).",
+    "Linear ADU emptied … for the new camera; raw sat ADU is set with the MicroObservatory setup."
+   ],
+   "todo": "Check the two boxes on the Photometry page; type your camera's linear limit if you know it (chapter 4)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Start a new reduction? … target, planet, comps, check and watch stars, Use comps choice, VSX period and rejected frames are cleared …"
    ],
-   "todo": "Yes to start over for another star; folders, site and optics stay. The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
+   "todo": "Yes to start over for another star; folders, site and optics stay (until lights from another camera come in: see the rows above). The Output page notes go back to their default (the log lists the Output page notes among what was cleared when you had typed your own). The Findings list is emptied too."
   },
   {
    "section": "Input",
@@ -450,6 +508,147 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Series updated to the new star format; the original is kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing. The names, magnitudes and points are the same."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series updated to the new star format; the original is already kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series updated to the new star format in memory; a backup of the original could not be written (…), so the first save keeps it as …_prev.cvseries instead."
+   ],
+   "todo": "Nothing, if the folder is writable by the time you save. Otherwise copy the series file somewhere safe first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comps loaded: C1 … V 8.728 (APASS DR9); C2 …; check … V 9.786.",
+    "… left out of the comps in use, as you chose: every night is re-derived with the others. Save the series to keep this.",
+    "… is still in the series' comps in use (no comp box held it when the series was saved)."
+   ],
+   "todo": "Read it. If a comp is missing or unexpected, fix the slots before Run photometry."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series' comps in use include …, but no comp box holds it (it was cleared, or moved off the frame). …",
+    "Leave it out"
+   ],
+   "todo": "Leave it out (the default: Enter): every night is re-derived with the other comps, as Use comps… does; save the series to keep it. Keep it (also Escape): the series stays as saved and the star goes back into the comp box."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is in the series' comps in use, but you cleared its comp box. …",
+    "Leave it out"
+   ],
+   "todo": "Leave it out (the default: Enter): every night is re-derived with the other comps, as Use comps… does, then the series is saved. Keep it (also Escape): the series is saved as it is, the star stays in the comps in use. See 10. Build a multi-night series."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… left out of the series' comps in use (its comp box was cleared): every night is re-derived with …, as Use comps… does.",
+    "… kept in the series' comps in use (its comp box is empty); the nights are unchanged."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… could not be left out (…); the series' comps in use stay as saved.",
+    "… stay as they are."
+   ],
+   "todo": "Open Use comps… on the Output page and choose the comps there."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is Comp 2. A star can't be both a comp and a Watch star, so it was not added to the Watch stars. …"
+   ],
+   "todo": "To watch it instead, clear it from its comp slot first (the ✕ beside it)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is a Watch star. A star can't be both a comp and a Watch star, so it was not added as Comp 3. …"
+   ],
+   "todo": "To use it as a comp, take it off the Watch stars list first (Remove selected)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is both a comp and a Watch star in this series. A star can't be both: clear it from the comps (✕) or take it off the Watch stars list."
+   ],
+   "todo": "Decide which it is, and clear the other."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series uses 8.728 (APASS DR9); Gaia DR3 says 8.704 (Series magnitudes… below)",
+    "The series' value is kept; Series magnitudes… on the Photometry page changes it for every night."
+   ],
+   "todo": "Usually nothing. To change it for the whole series, press Series magnitudes… and Use new value."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… : the series' V 8.728 kept."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series re-calibrated: … now uses V 8.704 (Gaia DR3) instead of 8.728 (APASS DR9) on every night. The series as it was is kept as …_backup.cvseries."
+   ],
+   "todo": "Nothing. To undo it, load the backup file."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series was re-calibrated here, but … could not be written (…). …",
+    "The series was re-calibrated but could not be saved (…). It is not saved yet: use Save series (Output page)."
+   ],
+   "todo": "Free disk space or fix the folder, then press Save series on the Output page before you close the series."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "SHOBS-P is working on something else right now. Wait for it to finish, then press Use new value again. Nothing was changed."
+   ],
+   "todo": "Wait for the busy bar to go, then press it again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The series was not changed: a backup of … could not be written (…)."
+   ],
+   "todo": "Free disk space or fix the folder's permissions, then press Use new value again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 …: a magnitude of 99.999 was not taken (not a possible value); the series' 8.728 stays."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1: named Gaia DR3 … (APASS J… is another name of the same star)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image."
    ],
    "todo": "Calibrate."
@@ -508,6 +707,20 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Aperture r = … px (kept from before) is … × the stars' FWHM (… px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = …, sky …–… px."
+   ],
+   "todo": "Press Suggest… (or type the suggested sizes). The finding goes away once the sizes fit (2.4.0)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Defocused stars: the aperture clips the ring — use r ≥ … px (now r = …; Suggest… gives r = …, sky …–…)."
+   ],
+   "todo": "Press Suggest…; the finding goes away once the aperture holds the ring."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Defocused stars: the aperture (r = … px) clips the ring — use r ≥ … px. …"
    ],
    "todo": "Use r = … and run (the default) sets the suggested sizes (95 % of the light) and runs."
@@ -550,6 +763,74 @@
   {
    "section": "Photometry",
    "patterns": [
+    "These stars of the series have no marker on this image, so they would not be measured tonight: …"
+   ],
+   "todo": "Go on without them (the default) keeps their names in the series; Stop, so I can mark them lets you click them first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 … placed from the series position, centered (0.8 px from where the position falls); magnitude … kept as loaded."
+   ],
+   "todo": "Nothing. With tonight's catalog star there is …\" from the stored position (more than the 1\" that makes it surely the same star): check it is the right star, look at that marker once."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… placed from the series position, centered by a wider search, 6.8 px from where the position falls — more than the normal centering allows …",
+    "… Centered on the star 6.8 px from the catalog position by a wider search — more than the normal centering allows …",
+    "Check it is the right star."
+   ],
+   "todo": "Look at the marker once. If it is on the wrong star, click the right one."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 … is not on this frame tonight: its position (…) falls at (x, y), N px beyond the top edge. …"
+   ],
+   "todo": "Nothing, if the other comps are enough. Click another star to add a comp for tonight."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… couldn't be placed: …",
+    "Comp 1 TYC … couldn't be placed: no star was found …",
+    "… couldn't be placed where the series position falls, …"
+   ],
+   "todo": "Solve again, or click the star. The name stays in its row meanwhile."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… is at the catalog position (x, y), not centered on a star: …",
+    "… placed from the series position at (x, y) but not centered on a star: …"
+   ],
+   "todo": "Click the star to center the marker before you run; a marker beside its star measures the star's wing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 …: the star centered on looks … mag fainter than the series' V (V … on this image, V … in the series); check it is the right star."
+   ],
+   "todo": "Look at the marker once. If it is on a faint neighbor, click the right star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 at (x, y): named by brightness: the star reads about V …, and … is …; the nearer catalog position is … too faint to be this star."
+   ],
+   "todo": "Nothing; check the name is the star you meant."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 at (x, y): the star reads about V …, but the only catalog star near it is … too faint to be this star. No name or magnitude was taken from it; …"
+   ],
+   "todo": "Type the star's name and magnitude in its row, or pick another star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "No light frames in the Lights folder (Input page). …",
     "Every light frame is rejected in Blink. …"
    ],
@@ -586,7 +867,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Check marker at (x, y) is N px from the center of the star there …"
+    "… marker at (x, y) is N px from the center of the star there …"
    ],
    "todo": "Clear the marker, zoom in and click the star again, unless you meant it."
   },
@@ -1279,6 +1560,20 @@
     "Enter your site's latitude and longitude on the Input page first …"
    ],
    "todo": "Type your site once."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Error on data line … of report: not enough fields; need 5"
+   ],
+   "todo": "Save the report again with 2.4.0 (one column per detrend) and upload that. See 19. Reports."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The AAVSO exoplanet report could not be saved: the report has no data column for the detrend '…'"
+   ],
+   "todo": "Report the problem with the log (24. Troubleshooting)."
   },
   {
    "section": "Output, Transits mode",

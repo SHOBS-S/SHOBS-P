@@ -122,6 +122,52 @@ done in …") is cleared too. A report left open on the Transit fit page (chapte
 never stand in for the new night's. The frame folders, site and optics stay. SHOBS-P asks
 first: **Start a new reduction?** Then type the new name and press Enter.
 
+**Lights from another camera (2.4.0).** Keeping the frame folders, the aperture and the ADU limits is handy for the
+next night on the same camera, and wrong when the camera changes. So when the **Lights** box gets new frames (Browse,
+a typed path, **Scan folders** or **Calibrate**), SHOBS-P compares their camera with the last lights' camera: the
+header's `INSTRUME`, the frame size, `XBINNING` and the bit depth. The same camera: everything stays, as before.
+Another camera:
+
+- **Bias**, **Flat** and **Dark flats** left over from the last camera are emptied. **Dark** is kept only when its
+  frames have the new lights' size and exposure; otherwise it is emptied too. A box you filled after the last
+  night (after **New reduction**, say) is yours and is left alone.
+- **Aperture r**, **sky in** and **sky out** (Photometry page) go back to 8, 14 and 22 px, and are set from the new
+  frames' star sizes as soon as the image is calibrated: the sizes **Suggest…** would propose (chapter 8). This
+  happens before the solve and before **Run photometry** read the boxes. Sizes you type in between are kept.
+- **raw sat ADU** and **linear ADU** are set for the new camera: from its SHOBS-FLUX camera profile when there is
+  one; else what you last used with that camera; else the camera's bit-depth maximum (4,095 for a 12-bit camera;
+  60,000 for a 16-bit file, a little under 65,535 because cameras scale their data up) with **linear ADU** empty.
+  On MicroObservatory frames **raw sat ADU** is set with the MicroObservatory setup, as before.
+- **Only what the last night left is reset.** If you typed an aperture or a limit after the last night, or loaded a
+  series since (Load series fills these boxes from the series), that box is not the last camera's any more and
+  SHOBS-P leaves it alone. The line says so: *Aperture and sky ring left as they are: they were set (typed, or by a
+  loaded series) after the last camera's night.* The same goes for **raw sat ADU** and **linear ADU**, each on its
+  own. What a loaded series set is the series' own whatever the number: a series at the default 8, 14 and 22 px
+  keeps them (they are not replaced by the star-size suggestion), and so does one whose sizes happen to equal
+  last night's. Once you calibrate or run these lights, the boxes go with their camera again.
+- **A series from another camera.** The series' aperture and raw sat ADU are kept only when tonight's lights come
+  from the camera of the series' latest night. Lights from another camera reset them like any camera change, and the
+  log says *The series' aperture and raw sat ADU were for its … nights; these lights are from …, so they are reset as
+  for any camera change.* An older series that doesn't say which camera took it keeps them. Whenever the series'
+  values are kept, a raw sat ADU above what tonight's camera can record (60,000 on a 12-bit camera that stops at
+  4,095) gets a ⚠ in the Findings list, because saturated stars would never be flagged; it goes away when you type a
+  new raw sat ADU. Closing the series ends all of this.
+- **Back to the camera before.** If you picked a folder from another camera by mistake and then choose the first
+  camera's lights again in the same session, the aperture and sky ring are put back as that camera's lights last
+  used them (*Aperture and sky ring put back to r 6, sky 11–17 px, as last used with this camera in this
+  session.*), and the ADU limits come back as last used with that camera. Sizes you typed in between are kept.
+
+SHOBS-P says what it did in three plain lines, in the log and under the Frames boxes while those lights are in the
+**Lights** box, for example:
+
+*These lights come from another camera than the last ones (ZWO ASI2600MC Duo, 6248×4176 before, 650×500, binned 2x2,
+12-bit now): Bias and Flat emptied, because they belong to the last camera. Dark emptied too: its frames (6248×4176,
+120 s) are not these lights' (650×500, 60 s).*
+
+Then choose the new camera's own calibration frames (or leave a box empty: calibration skips it). The first lights
+after you start SHOBS-P are compared with the last session's camera for the aperture and the ADU limits only (the
+frame boxes start empty anyway, and sizes you already typed are kept).
+
 This matters: without it, one star's comparison stars (or its **Use comps** choice) could be applied to another star's
 night. **Clear target** still empties only the Star ID, RA and Dec and the comparison and check stars.
 

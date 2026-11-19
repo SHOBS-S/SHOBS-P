@@ -84,9 +84,10 @@ SHOBS-P may ask a few questions before it starts. The ones you will meet most in
 
 - **With N comps the AAVSO report is an ensemble, and AAVSO requires a check star…** You have no check star marked. Answer **No** and mark one, unless you will never report this night.
 - **These have a name in the Stars panel but no marker on this image…** A name is left over from an earlier night. **Yes** clears those names, **Cancel** lets you mark the stars.
+- **These stars of the series have no marker on this image…** (from 2.4.0) The solve could not place a comp or the check of the open series. **Go on without them** (the default) keeps their names in the series; **Stop, so I can mark them** lets you click them first (chapter 8).
 - **… is a known or suspected variable …** about a comp or the check. See above.
 - **Run in Transits mode instead?**, if your target hosts a known transiting planet (from the **Planet (Transits)** box, or looked up in the NASA Exoplanet Archive after the Star ID lookup) and a transit is predicted during your frames. You do not need to have used Transits mode first. For variable-star work, answer **No** (run in Variables mode anyway).
-- A ⚠ line in the log saying a marker is some pixels **from the center of the star**. See chapter 8.
+- A ⚠ line in the log saying a marker is some pixels **from the center of the star** (also listed in the Findings panel; the run goes on). See chapter 8.
 
 Chapter 8 lists the other checks. The busy bar at the bottom of the window counts the frames as they are measured (for example **Photometry… 12 of 38, about 1:20 left**), and you can stop with **Cancel run**. Nothing is added to a series if you cancel.
 

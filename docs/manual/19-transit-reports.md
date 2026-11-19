@@ -43,7 +43,23 @@ duplicates. See "The duplicate warning" in [15. Submit to AAVSO](15-submit-to-aa
 
 The report uses the same format as EXOTIC's (`#TYPE=EXOPLANET`): a header with your site, filter, exposure,
 binning, the priors and the fitted results, then one line per frame with the BJD_TDB time, the relative flux, its
-error and the airmass. Times are always BJD_TDB.
+error and the detrend columns. Times are always BJD_TDB.
+
+**The detrend columns.** `#DETREND_PARAMETERS` names what the fit detrended with, and every data line carries one
+column per name, in the same order (`DETREND_1`, `DETREND_2`):
+
+| **Detrend** on the Transit fit page | `#DETREND_PARAMETERS=` | Columns line | Each data line |
+|---|---|---|---|
+| airmass | `AIRMASS` | `#DATE,DIFF,ERR,DETREND_1` | time, flux, error, the point's airmass |
+| time slope | `TIME` | `#DATE,DIFF,ERR,DETREND_1` | time, flux, error, the point's BJD_TDB again |
+| both | `AIRMASS, TIME` | `#DATE,DIFF,ERR,DETREND_1,DETREND_2` | time, flux, error, airmass, BJD_TDB |
+| neither | (empty) | `#DATE,DIFF,ERR` | time, flux, error |
+
+A point with no airmass has `na` in its airmass column. Before 2.4.0 every report had one detrend column holding the
+airmass, whatever the list said: the AAVSO Exoplanet Database rejected a report fitted with both (*"not enough
+fields; need 5"* on every data line), and a report fitted with time slope alone was accepted with the airmass under
+the name TIME. If you uploaded a time-slope-only report made with 2.3.6 or earlier, save it again with 2.4.0 and
+replace it. SHOBS-P still opens the older files (and EXOTIC's, with the airmass first) as before.
 
 `#BINNING` is how the **camera** binned the frames, read from the frames' headers (`XBINNING`/`YBINNING`), for example
 `2x2` for MicroObservatory frames; `1x1` when the headers name no binning. SHOBS-P's own **Binning** box is not the
@@ -68,8 +84,8 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 - on a night with a meridian flip, the flip time and the flip-step decision, written whether or not the step was
   kept, for example `SHOBS-P: meridian flip at BJD_TDB 2463218.67686; baseline step -1.45+/-0.05% (kept, dBIC 629) …`
   or `SHOBS-P: meridian flip at BJD_TDB …; Flip step not needed: …, no step in this fit`. A later refit of the report
-  (by SHOBS-P or another program) then uses the same flip time. `#DETREND_PARAMETERS` is unchanged: it lists data
-  columns, and the step is in the NOTES,
+  (by SHOBS-P or another program) then uses the same flip time. `#DETREND_PARAMETERS` does not name the step: it
+  lists data columns only (see "The detrend columns" above), and the step is in the NOTES,
 - one line of reduction settings, starting `SHOBS-P settings:` (aperture, comps, check, frames left out, trimmed
   frames, detrending, gain, calibration, and, for stacked points, `points are stacks of 40 frames (effective exposure
   30 s)`). The gain part says which gain was used: `Gain 0.255 e-/ADU (header EGAIN)`, `Gain measured from the

@@ -107,6 +107,12 @@ night notes, the watch list and the settings of each night. It is a text file (J
 - **The backup copy.** The first time SHOBS-P writes to a series file in a session, it keeps the previous version as
   `<name>_prev.cvseries`. Later writes in that session leave the `_prev` file alone, so it always holds the series
   as it was before this session. If something goes wrong, close the series and load the `_prev` file.
+- **`<name>_backup.cvseries`.** Written beside the series, and never overwritten (the next ones are `_backup2`,
+  `_backup3`…): the original of a series made before 2.4.0, copied when Load series updates it to the star
+  records; and the series as it was each time you press **Use new value** under **Series magnitudes…**.
+- **Star records.** From 2.4.0 the file holds one record per comp and check star (`"stars"`): its sky position,
+  every name it goes by, every catalog magnitude with its source and the one the series uses. The older entries
+  (comp names, catalog magnitudes, positions) are still written, so an older SHOBS-P can read the file.
 - Star positions on the image are **not** stored. You mark the target and comparison stars again on each new night.
 - **Stacked nights.** A night whose points are stacks (the Photometry page's **Points: Stacked**, chapter 8) stores
   only the stacked points, and its settings carry a `"stack"` entry: the stack size N, the number of stacks and

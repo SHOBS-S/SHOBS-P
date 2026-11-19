@@ -1782,7 +1782,8 @@ class MultiNightWindow:
             try:
                 # 2.2.21 review: with the series' own site and observer (nit j), not the Input page's
                 override = self.app._report_series_override() if hasattr(self.app, "_report_series_override") else None
-                self.app._write_series(self.app.series_path, override)
+                # re-review 4: bookkeeping, so never the cleared-comp question (it could re-derive the nights)
+                self.app._write_series(self.app.series_path, override, ask=False)
             except Exception as exc:
                 self.app.log(f"Multi-night: the alternative ephemeris was not saved in the series ({exc}).")
 
