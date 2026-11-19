@@ -7456,7 +7456,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._blink_restretch_gen += 1
         gen = self._blink_restretch_gen
         stretch = dict(self.stretch["blink"])
-        if getattr(self, "current_step", STEP_BLINK) == STEP_BLINK:   # #112 review nit: no reader off the page
+        if getattr(self, "current_step", STEP_BLINK) == STEP_BLINK:   # #112 review nit: no frame reads off the page
             self.show_blink()
         with self._blink_lock:   # 2.4.0 (#100): the reader thread fills the cache
             items = [(k, v) for k, v in self._blink_cache.items() if len(v) > 3 and v[3] != stretch]

@@ -71,7 +71,7 @@ class LeaveBlink(unittest.TestCase):
     @property
     def app_picture(self):
         img = np.zeros((4, 4), dtype=np.uint8)
-        return (img, 60.0, None, dict(self.app.stretch["blink"]))
+        return (img, 60.0, np.zeros((4, 4), dtype=np.float16), dict(self.app.stretch["blink"]))
 
     def _pump(self, sec, until=None):
         t = time.time()
@@ -135,7 +135,47 @@ class LeaveBlink(unittest.TestCase):
             app.show_step(self.ca.STEP_BLINK)   # back: the awaited frame is asked for again and drawn
             self.assertTrue(self._pump(3, lambda: app._blink_key(self.paths[2]) in app._blink_cache))
             self._pump(0.3)
-            self.assertNotIn("Reading", app.blink_label.get())
+            self.assertIn("Frame 3", app.blink_label.get())
+            self.assertIsNone(getattr(app, "_blink_busy_tok", None))
+
+    def test_running_jobs_warning_stays_on_the_status_line(self):
+        app = self.app
+        app._job_findings = []
+        try:
+            app.log("⚠ 3 frames skipped")
+            shown = app.status.get()
+            self.assertIn("⚠", shown)
+            self._playing()
+            app.show_step(self.ca.STEP_CAL)
+            self.assertEqual(app.status.get(), shown)
+            self.assertTrue(any("Blink stopped (left the Blink page)" in ln for ln in self.lines))
+        finally:
+            app._job_findings = None
+
+    def test_stretch_change_off_the_page_reads_nothing_and_shows_on_return(self):
+        app = self.app
+        with mock.patch.object(app, "_blink_picture", self._slow_picture), \
+                mock.patch.object(app, "_blink_next_to_read",
+                                  lambda b, paths=None: next((p for p in (paths or app.blink_paths)
+                                                              if (p, b) not in app._blink_cache), None)):
+            app.show_blink()
+            self.assertTrue(self._pump(3, lambda: all(app._blink_key(p) in app._blink_cache for p in self.paths)))
+            app.show_step(self.ca.STEP_CAL)
+            reader = app._blink_reader
+            self.assertTrue(self._pump(2, lambda: reader is None or not reader.is_alive()))
+            new = dict(app.stretch["blink"])
+            new["white"] = 98.0 if new.get("white") != 98.0 else 97.0
+            app.stretch["blink"] = new
+            n = len(self.reads)
+            app._blink_stretch_changed()
+            self.assertIsNone(app._blink_show_job)
+            r = app._blink_reader
+            self.assertTrue(r is None or not r.is_alive() or r is reader)
+            self.assertEqual(len(self.reads), n)
+            app.show_step(self.ca.STEP_BLINK)
+            self._pump(0.3)
+            key = app._blink_key(self.paths[app.blink_index])
+            self.assertEqual(app._blink_cache[key][3], app.stretch["blink"])
 
     def test_not_playing_says_nothing(self):
         self.app.show_step(self.ca.STEP_INPUT)
