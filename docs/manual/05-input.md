@@ -142,7 +142,13 @@ Another camera:
   series since (Load series fills these boxes from the series), that box is not the last camera's any more and
   SHOBS-P leaves it alone. The line says so: *Aperture and sky ring left as they are: they were set (typed, or by a
   loaded series) after the last camera's night.* The same goes for **raw sat ADU** and **linear ADU**, each on its
-  own.
+  own. What a loaded series set is the series' own whatever the number: a series at the default 8, 14 and 22 px
+  keeps them (they are not replaced by the star-size suggestion), and so does one whose sizes happen to equal
+  last night's. Once you calibrate or run these lights, the boxes go with their camera again.
+- **Back to the camera before.** If you picked a folder from another camera by mistake and then choose the first
+  camera's lights again in the same session, the aperture and sky ring are put back as that camera's lights last
+  used them (*Aperture and sky ring put back to r 6, sky 11–17 px, as last used with this camera in this
+  session.*), and the ADU limits come back as last used with that camera. Sizes you typed in between are kept.
 
 SHOBS-P says what it did in three plain lines, in the log and under the Frames boxes while those lights are in the
 **Lights** box, for example:

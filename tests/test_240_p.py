@@ -75,7 +75,7 @@ class TestLoadAsksAboutTheCompsInUse(M.AppCase):
         self.assertIn(f"The series' comps in use include {X}, but no comp box holds it", message)
         self.assertIn("as Use comps… does", message)
         self.assertNotIn("⚠", message)
-        self.assertEqual((values, safe), (["leave", "keep"], "keep"))
+        self.assertEqual((values, safe), (["leave", "keep"], "leave"))   # second review: Enter leaves it out
         self.assertEqual(app.active_comps, [A, B])
         self.assertEqual(self._slots(), [A, B, ""])
         self.assertTrue(app.series_unsaved(), "a re-derive at Load is a change not saved yet")
@@ -362,6 +362,7 @@ class TestCameraChangeKeepsWhatWasSetSince(N.PlaceBase):
         app._camera_last = None
         app._camera_folders = None
         app._camera_aperture_pending = None
+        app._camera_apertures, app._camera_series_set = {}, set()
         app._own_setup = None
         self._settings = {k: app.settings.get(k) for k in ("camera_last", "camera_limits")}
         app.settings.pop("camera_last", None)
@@ -473,6 +474,7 @@ class TestCameraChangeKeepsWhatWasSetSince(N.PlaceBase):
     def test_new_camera_sizes_are_set_before_run_reads_them(self):
         # review S7: the sizes were set from a background measurement; a quick Run could read the defaults
         app, _field = self._setup()
+        own = app.radius.get()                  # camera A's night used this
         self._night_on_a()
         self.assertTrue(app._camera_check(CAM_B, ""))
         self.assertEqual(app._camera_aperture_pending, self.ca.APERTURE_DEFAULTS)
@@ -482,13 +484,72 @@ class TestCameraChangeKeepsWhatWasSetSince(N.PlaceBase):
         want = core.suggest_apertures(app._seeing())
         self.assertEqual((app.radius.get(), app.sky_in.get(), app.sky_out.get()),
                          (want["radius"], want["sky_in"], want["sky_out"]))
-        # those sizes belong to camera B now: the next camera resets them
+        # those sizes belong to camera B now: the next camera does not keep them (second review, item 8: going
+        # back to camera A puts A's own back)
         self.assertTrue(app._camera_check(CAM_A, ""))
-        self.assertEqual(app.radius.get(), 8.0)
+        self.assertEqual(app.radius.get(), own)
+        self.assertIsNone(app._camera_aperture_pending)
         # Run photometry settles them itself before it reads the boxes
         src = open(self.ca.__file__, encoding="utf-8").read()
         run = src[src.index("    def run_photometry(self"):]
         self.assertLess(run.index("self._camera_aperture_settle()"), run.index("self._aperture_sane()"))
+
+    # ---- second review (items 4 and 8) ----
+    SERIES = {"radius": 8.0, "sky_in": 14.0, "sky_out": 22.0, "sat_limit": 50000}
+
+    def test_r2_lights_first_then_a_series_at_the_default_aperture(self):
+        # new-camera lights reset the boxes to 8/14/22 (to be set from the star sizes); the series loaded next
+        # holds 8/14/22 itself: its aperture stays, the star-size suggestion is off
+        app, _field = self._setup()
+        self._night_on_a()
+        self.assertTrue(app._camera_check(CAM_B, ""))
+        self.assertEqual(app._camera_aperture_pending, self.ca.APERTURE_DEFAULTS)
+        app._apply_meta(dict(self.SERIES))
+        self.assertIsNone(app._camera_aperture_pending)
+        self.lines.clear()
+        self.assertFalse(app._camera_aperture_settle())
+        self.assertFalse(app._camera_aperture_apply(None, 3.0))
+        self.assertEqual(self._boxes()[:4], (8.0, 14.0, 22.0, 50000))
+        self.assertEqual([ln for ln in self.lines if "Aperture set" in ln], [])
+
+    def test_r2_a_series_equal_to_last_nights_sizes_then_other_lights(self):
+        # the loaded series' aperture and raw sat ADU equal what the last night left: still the series' own
+        app = self.app
+        app.radius.set(4.0); app.sky_in.set(8.0); app.sky_out.set(12.0)
+        app.sat_limit.set(50000)
+        self._night_on_a()
+        app._apply_meta({"radius": 4.0, "sky_in": 8.0, "sky_out": 12.0, "sat_limit": 50000})
+        self.assertTrue(app._camera_check(CAM_B, ""))
+        self.assertEqual(self._boxes()[:4], (4.0, 8.0, 12.0, 50000))
+        self.assertIsNone(app._camera_aperture_pending)
+        self.assertEqual(len([ln for ln in self.lines if "Aperture and sky ring left as they are" in ln]), 1)
+        self.assertEqual(len([ln for ln in self.lines if "Raw sat ADU left as it is" in ln]), 1)
+        # once these lights are calibrated the boxes go with them: the next camera resets them as always
+        app._camera_folders_snapshot()
+        self.assertEqual(app._camera_series_set, set())
+        cam_c = dict(CAM_B, INSTRUME="A third camera", NAXIS1=1234, NAXIS2=999)
+        self.assertTrue(app._camera_check(cam_c, ""))
+        self.assertEqual(self._boxes()[:3], (8.0, 14.0, 22.0))
+
+    def test_r2_back_to_the_camera_before_puts_its_sizes_back(self):
+        # a wrong folder picked (camera B), then the right one again (camera A)
+        app = self.app
+        app.radius.set(6.0); app.sky_in.set(11.0); app.sky_out.set(17.0)
+        self._night_on_a()
+        self.assertTrue(app._camera_check(CAM_B, ""))
+        self.assertEqual(self._boxes(), (8.0, 14.0, 22.0, 60000, ""))
+        self.lines.clear()
+        self.assertTrue(app._camera_check(CAM_A, ""))
+        self.assertEqual(self._boxes(), (6.0, 11.0, 17.0, 60000, "40000"))
+        self.assertIsNone(app._camera_aperture_pending, "not set from the star sizes over A's own")
+        self.assertEqual(self.lines[1], "Aperture and sky ring put back to r 6, sky 11–17 px, as last used with this "
+                                        "camera in this session.")
+        self.assertIn("as last used with this camera", self.lines[2])
+        # sizes typed for B since are the user's own: they stay
+        self.assertTrue(app._camera_check(CAM_B, ""))
+        app.radius.set(5.0)
+        self.assertTrue(app._camera_check(CAM_A, ""))
+        self.assertEqual(app.radius.get(), 5.0)
 
 
 # ---- M3, S1, S6 ----------------------------------------------------------------------------------------------------
@@ -580,6 +641,91 @@ class TestWiderRecenterKeepsToItsStar(N.PlaceBase):
         app._place_finding(c4, None)
         self.assertEqual(len(app.findings), 0)
 
+    # ---- second review (items 5, 6, 7) ----
+    def test_r2_a_neighbour_1p2_mag_brighter_does_not_win_the_wide_hop(self):
+        # the comp (V 12.0) and an uncatalogued neighbour 1.2 mag brighter are both in reach; the #77 window let it in
+        app, c1, placed, lines = self._series_comp(6.3, extra=[(300.0, 300.0, 12.0), (312.0, 300.0, 10.8)])
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 306.3, xy[1] - 300.0), 0.01, "the marker stays where the position falls")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith("⚠ "))
+        self.assertIn("too bright to be this star (V 12.00)", lines[0])
+        self.assertIn("Click the star to center it.", lines[0])
+        self.assertEqual(len(app.findings), 1)
+        self.assertEqual(self.ca.App.WIDE_FIT_MAG, 0.75)
+        self.assertEqual((self.ca.App.NAME_FIT_FAINT, self.ca.App.NAME_FIT_BRIGHT), (1.5, 2.5), "#77 as it was")
+
+    def test_r2_within_the_window_the_wide_hop_is_still_made(self):
+        app, c1, placed, lines = self._series_comp(6.3, mag="12.600", extra=[(300.0, 300.0, 12.0)])
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 300.0, xy[1] - 300.0), 0.3)
+        self.assertIn("wider search", lines[0])
+        app.findings.clear()
+        app, c1, placed, lines = self._series_comp(6.3, mag="12.900", extra=[(300.0, 300.0, 12.0)])
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 306.3, xy[1] - 300.0), 0.01)
+        self.assertIn("too bright to be this star (V 12.90)", lines[0])
+
+    def test_r2_without_a_field_zero_point_the_wide_hop_is_refused(self):
+        app, field = self._setup(extra=[(300.0, 300.0, 12.0)])
+        app.series_path = "/tmp/series.csv"
+        c1 = self.ca.COMP_ROLES[0]
+        app.comp_coords = {self.NAME: self._rd(306.3, 300.0)}
+        getattr(app, f"{c1}_name").set(self.NAME)
+        getattr(app, f"{c1}_mag").set("12.000")
+        with mock.patch.object(app, "_field_zero_point", lambda *a, **k: None):
+            placed, lines = self._logged(app._auto_place_named_slots)
+        lines = [ln for ln in lines if "555" in ln]
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 306.3, xy[1] - 300.0), 0.01, "the marker stays")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith("⚠ "))
+        self.assertIn("but not centered on a star: a star lies 6.3 px from it", lines[0])
+        self.assertIn("no brightness check was possible on this image (no field zero point)", lines[0])
+        self.assertIn("Click the star to center it.", lines[0])
+        self.assertEqual(len(app.findings), 1)
+
+    def test_r2_without_a_zero_point_the_normal_centering_is_as_before(self):
+        app, field = self._setup(extra=[(300.0, 300.0, 12.0)])
+        app.series_path = "/tmp/series.csv"
+        c1 = self.ca.COMP_ROLES[0]
+        app.comp_coords = {self.NAME: self._rd(300.9, 300.0)}
+        getattr(app, f"{c1}_name").set(self.NAME)
+        getattr(app, f"{c1}_mag").set("12.000")
+        with mock.patch.object(app, "_field_zero_point", lambda *a, **k: None):
+            placed, lines = self._logged(app._auto_place_named_slots)
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 300.0, xy[1] - 300.0), 0.3)
+        self.assertEqual([ln for ln in lines if "⚠" in ln], [])
+
+    def test_r2_the_slots_own_name_off_the_stored_position_is_said_as_such(self):
+        # nit 6: the same star catalogued more than 1" from the series' stored position
+        app, c1, placed, lines = self._series_comp(
+            6.3, extra=[(300.0, 300.0, 12.0)],
+            chart_extra=[(300.0, 300.0, {"auid": self.NAME, "label": "12.0", "mag": 12.0, "mags": {"V": 12.0}})])
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r"tonight's catalog position of this star disagrees with the series' stored "
+                                   r"position \(by \d+\.\d\"\), so the star to center on could not be told")
+        self.assertNotIn("another catalog star", lines[0])
+        self.assertEqual(len(app.findings), 1)
+
+    def test_r2_a_normal_centering_onto_a_much_fainter_star_is_said(self):
+        # nit 7: the comp is out of reach; an uncatalogued star 2 mag fainter is within the normal centering
+        app, c1, placed, lines = self._series_comp(14.0, extra=[(300.0, 300.0, 12.0), (318.0, 300.0, 14.0)])
+        xy = getattr(app, f"{c1}_xy")
+        self.assertLess(math.hypot(xy[0] - 318.0, xy[1] - 300.0), 0.3, "the marker goes where it always went")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertNotIn("⚠", lines[0])
+        self.assertRegex(lines[1], r"^⚠ Comp 1 Gaia DR3 555: the star centered on looks 2\.\d mag fainter than the "
+                                   r"series' V \(V 14\.\d on this image, V 12\.00 in the series\); check it is the "
+                                   r"right star\.$")
+        self.assertEqual(len(app.findings), 1)
+        app.findings.clear()
+        # 1.5 mag fainter: nothing said
+        app, c1, placed, lines = self._series_comp(14.0, extra=[(300.0, 300.0, 12.0), (318.0, 300.0, 13.5)])
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(len(app.findings), 0)
+
     def test_a_normal_placement_is_unchanged_and_says_the_real_distance(self):
         # S1: the catalog star is the start; the Log gives the distance from where the stored position falls
         app, field = self._setup()
@@ -667,7 +813,17 @@ class TestTheManualKnowsTheNewMessages(unittest.TestCase):
                 "Solve again, or click the star.",
                 "⚠ The series was re-calibrated but could not be saved (disk full). It is not saved yet: use Save "
                 "series (Output page).",
-                "⚠ X could not be left out (no catalog magnitude); the series' comps in use stay as saved."):
+                "⚠ X could not be left out (no catalog magnitude); the series' comps in use stay as saved.",
+                "⚠ X could not be left out (no catalog magnitude); the series' comps in use stay as they are.",
+                "⚠ Comp 1 Gaia DR3 555 placed from the series position at (306, 300) but not centered on a star: a "
+                "star lies 5.7 px from it (farther than the normal centering allows), but no brightness check was "
+                "possible on this image (no field zero point), so the marker was not moved onto it. Click the star "
+                "to center it.",
+                "⚠ Comp 1 Gaia DR3 555 placed from the series position at (306, 300) but not centered on a star: "
+                "tonight's catalog position of this star disagrees with the series' stored position (by 6.3\"), so "
+                "the star to center on could not be told. Click the star to center it.",
+                "⚠ Comp 1 Gaia DR3 555: the star centered on looks 2.0 mag fainter than the series' V (V 14.0 on "
+                "this image, V 12.00 in the series); check it is the right star."):
             self.assertTrue(findings.match_hint(text, hints), text)
 
 

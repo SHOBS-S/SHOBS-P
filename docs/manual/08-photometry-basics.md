@@ -357,8 +357,11 @@ nothing more to do.
 Two things stop the wider search from landing on a neighbor. For a star of the open series, only tonight's catalog
 star at the series' saved position (within about 1″) counts as that star: any other catalog star of similar
 brightness within reach is another star, and the marker is not moved. And the star found must have the brightness
-the series has for it (read through the field's zero point); a star 3 magnitudes too bright is not taken. In both
-cases the marker stays where the position falls and SHOBS-P says it could not be centered (next paragraph).
+the series has for it, read through the field's zero point: within 0.75 mag for the wider search (a neighbor 1.2
+magnitudes brighter is not taken). When the image has no field zero point (too few catalog stars, or they
+disagree), the brightness cannot be checked, so the wider search does not move the marker at all. In each of these
+cases the marker stays where the position falls and SHOBS-P says it could not be centered (next paragraph). The
+normal centering, and the naming of a star you click, are as before.
 
 **When it cannot be centered, SHOBS-P says so.** The marker stays at the catalog position and the row, the status
 line, the Log and the Findings panel all say, for example, "⚠ Comp 4 APASS J185609.9+692057 is at the catalog position

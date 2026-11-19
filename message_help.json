@@ -179,6 +179,13 @@
   {
    "section": "Input",
    "patterns": [
+    "Aperture and sky ring put back to r …, sky …–… px, as last used with this camera in this session."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Aperture and sky ring back to the defaults (r 8, sky 14–22 px) for the new camera; they are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).",
     "Aperture set for the new camera's frames: r …, sky …–… px (stars' FWHM … px). …"
    ],
@@ -518,21 +525,31 @@
     "The series' comps in use include …, but no comp box holds it (it was cleared, or moved off the frame). …",
     "Leave it out"
    ],
-   "todo": "Leave it out: every night is re-derived with the other comps, as Use comps… does; save the series to keep it. Keep it (the default): the series stays as saved and the star goes back into the comp box."
+   "todo": "Leave it out (the default: Enter): every night is re-derived with the other comps, as Use comps… does; save the series to keep it. Keep it (also Escape): the series stays as saved and the star goes back into the comp box."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "… could not be left out (…); the series' comps in use stay as saved."
+    "… is in the series' comps in use, but you cleared its comp box. …",
+    "Leave it out"
+   ],
+   "todo": "Leave it out (the default: Enter): every night is re-derived with the other comps, as Use comps… does, then the series is saved. Keep it (also Escape): the series is saved as it is, the star stays in the comps in use. See 10. Build a multi-night series."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… left out of the series' comps in use (its comp box was cleared): every night is re-derived with …, as Use comps… does.",
+    "… kept in the series' comps in use (its comp box is empty); the nights are unchanged."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… could not be left out (…); the series' comps in use stay as saved.",
+    "… stay as they are."
    ],
    "todo": "Open Use comps… on the Output page and choose the comps there."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
-    "Comps in use saved from the comp slots: … (… cleared). Nights already reduced with … keep their values until Use comps… (Output page) re-derives them."
-   ],
-   "todo": "If earlier nights used that star, open Use comps… and apply the set you want for every night."
   },
   {
    "section": "Photometry",
@@ -773,6 +790,13 @@
     "… placed from the series position at (x, y) but not centered on a star: …"
    ],
    "todo": "Click the star to center the marker before you run; a marker beside its star measures the star's wing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 1 …: the star centered on looks … mag fainter than the series' V (V … on this image, V … in the series); check it is the right star."
+   ],
+   "todo": "Look at the marker once. If it is on a faint neighbor, click the right star."
   },
   {
    "section": "Photometry",

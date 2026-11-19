@@ -146,18 +146,18 @@ class TestSeriesPlacement(PlaceBase):
         x, y, _v = field[3]
         app.comp_coords = {"Gaia DR3 4006100810081": self._rd(x + 0.6, y - 0.5)}   # the solve is 0.8 px out
         getattr(app, f"{c1}_name").set("Gaia DR3 4006100810081")
-        getattr(app, f"{c1}_mag").set("8.728")
+        getattr(app, f"{c1}_mag").set(f"{_v:.3f}")          # the series' magnitude of this star
         self.assertIsNone(app._chart_star_named("Gaia DR3 4006100810081"))
         placed, lines = self._logged(app._auto_place_named_slots)
         self.assertEqual(placed, [c1])
         got = getattr(app, f"{c1}_xy")
         self.assertLess(math.hypot(got[0] - x, got[1] - y), 0.3)              # on the star, not on the projection
         self.assertEqual(getattr(app, f"{c1}_name").get(), "Gaia DR3 4006100810081")
-        self.assertEqual(getattr(app, f"{c1}_mag").get(), "8.728")
+        self.assertEqual(getattr(app, f"{c1}_mag").get(), f"{_v:.3f}")
         mine = [ln for ln in lines if "Gaia DR3 4006100810081" in ln]
         self.assertEqual(len(mine), 1, lines)                                   # ONE line per star
         self.assertRegex(mine[0], r"^Comp 1 Gaia DR3 4006100810081 placed from the series position, centered "
-                                  r"\(\d\.\d px from where the position falls\); magnitude 8\.728 kept as loaded\.$")
+                                  r"\(\d\.\d px from where the position falls\); magnitude \d+\.\d{3} kept as loaded\.$")
         self.assertNotIn("⚠", mine[0])
         self.assertEqual(len(app.findings), 0)
 

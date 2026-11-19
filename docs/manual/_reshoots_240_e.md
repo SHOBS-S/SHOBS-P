@@ -69,3 +69,14 @@ No screenshots were taken. Words changed in view of existing shots, and new wind
 | NEW: the Load series question *The series' comps in use include …, but no comp box holds it …* with **Leave it out** / **Keep it** | 10 | new in 2.4.0 ("Load never changes the comps in use without asking"); needs a pre-2.4.0 series saved with a cleared comp still in its Use comps choice | NEW SHOT (optional) when 2.4.0 is complete |
 | NEW: a comp row with *⚠ … centered by a wider search … Check it is the right star* and its Findings entry | 08 | the wider-search placement is a ⚠ with a finding now | NEW SHOT (optional) |
 | all others | | nothing of the review fixes in view | reuse |
+
+## Step 4 second review fixes
+
+No screenshots were taken. No existing shot changes; new or changed question windows:
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| the optional new shot of the Load series question (row above) | 10 | the accented (default) button is now **Leave it out**, not **Keep it** | note for the new shot |
+| NEW: the Save question *… is in the series' comps in use, but you cleared its comp box. …* with **Leave it out** / **Keep it** | 10 ("Comps you clear stay cleared") | new question at a save after a Use comps star was cleared with ✕ | NEW SHOT (optional) when 2.4.0 is complete |
+| img/05-another-camera.png (the optional new shot above) | 05 | going back to the first camera in one session reads *Aperture and sky ring put back to r …, as last used with this camera in this session.*; not in view when the shot goes A to B only | note for the new shot |
+| all others | | nothing of the second review's fixes in view | reuse |

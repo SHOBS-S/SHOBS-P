@@ -302,8 +302,10 @@ class TestCompsFromSlots(AppCase):
     def test_stale_active_comp_is_asked_about(self):
         # S033, 15 Nov 2026: the comp slot was saved empty but active_comps still listed the star. Step 4 review
         # (M1): Load never trims the choice silently; it asks (tests/test_240_p.py has both answers). The answer
-        # here is the safe one, Keep it: the series stays as saved and the Log says so.
-        self.load(self._file([A, B]))
+        # here is Keep it (what Escape gives; Enter is Leave it out since the second review): the series stays as
+        # saved and the Log says so.
+        with mock.patch.object(self.ca, "ask_choice", lambda *a, **k: "keep"):
+            self.load(self._file([A, B]))
         app = self.app
         self.assertEqual(app.active_comps, [A, B, X])
         line = self.said("Comps loaded:")
@@ -322,7 +324,9 @@ class TestCompsFromSlots(AppCase):
         saved = json.load(open(path, encoding="utf-8"))["meta"]
         self.assertEqual(saved["active_comps"], [A, B])
         self.assertEqual(saved["comp3_name"], "")
-        self.assertEqual(len(self.said("Comps in use saved from the comp slots")), 1)
+        # second review: Save asks (tests/test_240_q.py); the answer here is the default, Leave it out
+        self.assertEqual(len(self.said(f"{X} left out of the series' comps in use")), 1)
+        self.assertEqual(len(self.said("Comps in use saved from the comp slots")), 0)
         self.load(path)
         self.assertEqual(app.active_comps, [A, B])
         self.assertEqual([app.comp_name.get(), app.comp2_name.get(), app.comp3_name.get()], [A, B, ""])

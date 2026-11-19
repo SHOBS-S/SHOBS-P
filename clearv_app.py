@@ -5616,6 +5616,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         held = old.get(self._CAMERA_VALUES)
         self._camera_folders[self._CAMERA_VALUES] = (held if not values and isinstance(held, dict)
                                                      else self._camera_values_now())
+        if values or not isinstance(held, dict):
+            self._camera_series_set = set()   # re-review 2 (item 4): from here the boxes go with these lights
 
     _CAMERA_VALUES = "(values)"
 
@@ -5628,6 +5630,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """True when the box (or the three aperture boxes) still holds what it held with the last camera's lights
         (the snapshot), so it was carried over and a new camera resets it. Without a snapshot: `fallback` is the
         value the session started with (None: taken as carried over)."""
+        if key in (getattr(self, "_camera_series_set", None) or ()):
+            return False   # re-review 2 (item 4): set by a series loaded since, whatever value it holds
         now = self._camera_values_now()[key]
         snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
         if not isinstance(snap, dict):
@@ -5711,7 +5715,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return False
         if in_session:
             self._camera_limits_remember(last)   # the boxes still hold the last camera's limits
-        lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session),
+            # re-review 2 (item 8): the sizes the last camera's lights were used with, for a way back this session
+            snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+            ap = snap.get("aperture") if isinstance(snap, dict) else None
+            if ap and all(v is not None for v in ap) and getattr(self, "_camera_aperture_pending", None) is None:
+                self.__dict__.setdefault("_camera_apertures", {})[camera_key(last)] = tuple(ap)
+        back = (getattr(self, "_camera_apertures", None) or {}).get(camera_key(sig))
+        lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session, back),
                  self._camera_reset_limits(header, sig, path)]
         self._camera_record(sig, changed=True)
         self.log(lines[0])
@@ -5763,18 +5773,28 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             head += "."
         return head + dark_words
 
-    def _camera_reset_aperture(self, in_session: bool = True) -> str:
+    def _camera_reset_aperture(self, in_session: bool = True, back=None) -> str:
         r, si, so = APERTURE_DEFAULTS
         if not self._camera_value_carried("aperture", APERTURE_DEFAULTS):
             # step 4 review (M2): changed since the last camera's lights (typed, or set by a series just loaded):
             # these sizes are not the last camera's, so they stay
             return ("Aperture and sky ring left as they are: they were set (typed, or by a loaded series) after the "
                     "last camera's night.")
+        self._aperture_caution_said = None
+        if back:
+            # re-review 2 (item 8): back to a camera used earlier this session (a wrong folder picked, then the
+            # right one again): the sizes its lights were last used with, not the defaults
+            r, si, so = back
+            self.radius.set(r)
+            self.sky_in.set(si)
+            self.sky_out.set(so)
+            self._camera_aperture_pending = None
+            return (f"Aperture and sky ring put back to r {r:g}, sky {si:g}–{so:g} px, as last used with this camera "
+                    "in this session.")
         self.radius.set(r)
         self.sky_in.set(si)
         self.sky_out.set(so)
         self._camera_aperture_pending = APERTURE_DEFAULTS
-        self._aperture_caution_said = None
         return (f"Aperture and sky ring back to the defaults (r {r:g}, sky {si:g}–{so:g} px) for the new camera; they "
                 "are set from these frames' star sizes when the image is calibrated (Suggest… shows the detail).")
 
@@ -12547,6 +12567,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     # ---- 2.4.0 step 4 (#72, #71, #77): placement after the solve ---------------------------------------------------
     NAME_FIT_FAINT = 1.5    # #77: a catalog star this much fainter than the star seen (field zero point) is not it
     NAME_FIT_BRIGHT = 2.5   # ... or this much brighter (a saturated star reads faint, so the wider side)
+    WIDE_FIT_MAG = 0.75     # re-review 2: a wider-search hop needs the star to read this close to the series' magnitude
+    FAINT_CENTER_DMAG = 2.0  # re-review 2: a normal centering onto an uncatalogued star this much fainter is said
     NAME_WIDE_PX = 16.0     # #77: how far out a catalog star whose brightness fits may be (when its spot is empty)
     ZP_MAX_SCATTER = 0.5    # the field zero point is used only when the chart stars agree this well (mag, robust)
 
@@ -12865,7 +12887,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return None
         return (cx, cy)
 
-    def _center_placed(self, xy, rd=None, extra: float = 0.0, mag=None) -> dict:
+    def _center_placed(self, xy, rd=None, extra: float = 0.0, mag=None, name: str = "") -> dict:
         """2.4.0 step 4 (#71, #72): center a marker placed from a name or sky position on its star, like a click,
         and say what happened. First exactly as 2.2.18 did (a star within about 1.5 FWHM that is the
         catalog star placed). When that fails, a wider search (3 FWHM or the aperture radius, plus extra px) takes
@@ -12878,7 +12900,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         when tonight's catalogs have none there, every catalog star in reach is another star (the nearest one is
         not taken for it, and one lone catalog star there is not excused). Before a wide hop is accepted, the star
         found must read (through the field zero point) like the star meant: `mag` (the slot's series magnitude),
-        else the matched catalog star's, within the #77 window. Otherwise the marker is not moved."""
+        else the matched catalog star's, within the #77 window. Otherwise the marker is not moved.
+        Re-review 2: for this wide hop only (never the normal centering, never the naming of a click) the slot's
+        series magnitude must fit within WIDE_FIT_MAG (the #77 window let a neighbour 1.2 mag brighter win), and
+        without a field zero point there is no brightness check, so the hop is refused (why "nocheck"). A lone
+        rival that carries the slot's own name (`name`) is this star catalogued off the stored position: said so
+        (out["own_sep"], arcsec)."""
         x0, y0 = float(xy[0]), float(xy[1])
         out = {"xy": (x0, y0), "centered": False, "how": "kept", "shift": 0.0, "why": "", "reach": 0.0}
         if self.preview is None or not self.preview_is_debayered:
@@ -12936,17 +12963,35 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if rivals:
                 out["why"] = "several"
                 out["rival"], out["lone"] = rivals[0][2], want is None and len(rivals) == 1
+                if out["lone"] and name and rd is not None:
+                    try:
+                        rec = self._series_star_for(name)
+                        mine = {name_key(n) for n in (star_record.record_names(rec) if rec else [])} | {name_key(name)}
+                        st = rivals[0][2]
+                        if mine & {name_key(n) for n in core.star_names(st)} and None not in (st.get("ra"), st.get("dec")):
+                            out["own_sep"] = float(core.sky_separation_arcsec(
+                                float(rd[0]), float(rd[1]), float(st["ra"]), float(st["dec"])))
+                    except Exception:
+                        traceback.print_exc()
                 return out
             # M3: the star found must have the brightness of the star meant (#77's window)
             try:
                 expect = float(str(mag).strip()) if mag is not None and str(mag).strip() else None
             except (TypeError, ValueError):
                 expect = None
-            if expect is None or not math.isfinite(expect):
+            tight = expect is not None and math.isfinite(expect)   # the slot's own series magnitude
+            if not tight:
                 expect = self._star_cat_mag(want)
-            if expect is not None and seen is not None:
+            if seen is None:
+                # re-review 2: no field zero point (or nothing measurable): a hop that cannot be checked is not made
+                out["why"] = "nocheck"
+                out["away"] = float(math.hypot(star[0] - x0, star[1] - y0))
+                return out
+            if expect is not None:
                 resid = expect - seen
-                if not (-self.NAME_FIT_BRIGHT <= resid <= self.NAME_FIT_FAINT):
+                fits = (abs(resid) <= self.WIDE_FIT_MAG if tight
+                        else -self.NAME_FIT_BRIGHT <= resid <= self.NAME_FIT_FAINT)
+                if not fits:
                     out["why"] = "bright" if resid > 0 else "faint"
                     out["seen"], out["expect"] = float(seen), float(expect)
                     return out
@@ -12959,7 +13004,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.4.0 step 4 (#71): why a placed marker was left at the catalog position, and what to do."""
         band = core.band_label(self._band())
         rival = c.get("rival")
-        several = (f"another catalog star ({self._chart_star_label(rival)}) lies within {c.get('reach', 0.0):.0f} px, "
+        several = (f"tonight's catalog position of this star disagrees with the series' stored position (by "
+                   f"{c['own_sep']:.1f}\"), so the star to center on could not be told"
+                   if rival is not None and c.get("lone") and c.get("own_sep") is not None else
+                   f"another catalog star ({self._chart_star_label(rival)}) lies within {c.get('reach', 0.0):.0f} px, "
                    "so the star to center on could not be told" if rival is not None and c.get("lone") else
                    f"more than one catalog star lies within {c.get('reach', 0.0):.0f} px, so the star to center on "
                    "could not be told")
@@ -12967,6 +13015,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                f"{'bright' if c.get('why') == 'bright' else 'faint'} to be this star ({band} "
                f"{c.get('expect', 0.0):.2f}), so the marker was not moved onto it")
         why = {"none": f"no star could be centered within {c.get('reach', 0.0):.0f} px of it",
+               "nocheck": (f"a star lies {c.get('away', 0.0):.1f} px from it (farther than the normal centering "
+                           "allows), but no brightness check was possible on this image (no field zero point), so "
+                           "the marker was not moved onto it"),
                "several": several, "bright": odd, "faint": odd}.get(c.get("why"),
                                                                    "it could not be centered on a star")
         edge = self._edge_text(xy) if xy is not None else ""
@@ -13147,14 +13198,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                                        "to look it up, or click the star.")
                 continue
             c = self._center_placed(xy0, rd=rd, extra=float(geo.get("beyond") or 0.0) if geo.get("state") == "edge"
-                                    else 0.0, mag=mag_var.get())
+                                    else 0.0, mag=mag_var.get(), name=name)
             xy = c["xy"]
             if not c["centered"] and c["why"] != "blended" and (
                     geo.get("state") == "edge" or not core.star_under(self.preview, xy[0], xy[1], radius)):
                 # nothing to center on where the position falls: a weak solve, or the star is not there
                 where = (f"at the frame edge ({geo['px']:.0f}, {geo['py']:.0f})" if geo.get("state") == "edge" else
                          f"at ({xy[0]:.0f}, {xy[1]:.0f})")
-                if c["why"] in ("several", "bright", "faint"):   # review M3: a star is near, but not surely this one
+                if c["why"] in ("several", "bright", "faint", "nocheck"):   # review M3: a star is near, but not surely this one
                     words = self._not_centered_words(c, None).replace(" Click the star to center it.", "")
                     self._slot_unplaced(role, name, token,
                                         f"⚠ {who} couldn't be placed where {source} falls, {where}: {words} Solve "
@@ -13239,6 +13290,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self.log(warn + alias, finding=False, keep_status=True)
                 self._place_finding(role, warn)
                 self._slot_notes[role] = (name, warn, True)
+            if c["how"] == "centered" and star is None:
+                # re-review 2 (nit 7): a normal centering onto a star no catalog has, far fainter than the series'
+                # magnitude: said (the marker goes where it always went)
+                try:
+                    expect = float(str(mag).strip()) if str(mag).strip() else None
+                    seen = self._seen_mag(xy) if expect is not None and math.isfinite(expect) else None
+                except (TypeError, ValueError):
+                    expect = seen = None
+                if seen is not None and round(seen - expect, 1) >= self.FAINT_CENTER_DMAG:   # as the line says it
+                    warn = (f"⚠ {who}: the star centered on looks {seen - expect:.1f} mag fainter than the series' "
+                            f"{band} ({band} {seen:.1f} on this image, {band} {expect:.2f} in the series); check it "
+                            "is the right star.")
+                    self.log(warn, finding=False, keep_status=True)
+                    self._place_finding(role, warn)
+                    self._slot_notes[role] = (name, warn, True)
             placed.append(role)
         self._update_pick_label()
         self.update_star_panel()
@@ -18442,7 +18508,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._update_aperture_state()
         self.draw_output()
         saved = ""
-        if self.series_path and save:
+        if self.series_path:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -19321,11 +19387,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         meta["watch_list"] = self.watch_list
         meta["spare_catalog"] = self.spare_catalog
         meta["comp_catalog_mags"] = self.comp_catalog_mags
-        # 2.4.0 step 4 (S033): the comp slots are the truth: a "comps in use" star the user cleared is not saved
-        try:
-            self._active_comps_from_slots()
-        except Exception:
-            traceback.print_exc()
         meta["active_comps"] = list(self.active_comps)
         meta["align_flip"] = bool(self.align_flip.get())
         meta["pier_segments"] = bool(self.pier_segments.get())   # 2.2.14 (item 20)
@@ -19362,6 +19423,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._apply_meta_values(meta)
         finally:
             self._loading_meta = False
+        # re-review 2 (item 4): the aperture and raw sat ADU a series brings are the series' own, whatever their
+        # value: a camera change does not reset them, and a new camera's pending "set from the star sizes" is off
+        # (a series at the default 8/14/22 keeps it; one equal to last night's sizes is not taken for carried over).
+        marks = self.__dict__.setdefault("_camera_series_set", set())
+        if any(meta.get(k) not in (None, "") for k in ("radius", "sky_in", "sky_out")):
+            marks.add("aperture")
+            self._camera_aperture_pending = None
+        if meta.get("sat_limit") not in (None, ""):
+            marks.add("sat")
         self._take_series_snapshot()   # 2.2.14 (item 11): the loaded series' catalog magnitudes
 
     def _take_series_snapshot(self):
@@ -19630,6 +19700,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
         # from before this session. The new file is written completely (X.part) before anything is renamed.
+        # 2.4.0 step 4 (S033; re-review 2): a comp the user cleared that is still in the comps in use: asked once
+        # (Leave it out re-derives every night first; Keep it leaves the choice), never trimmed without a re-derive.
+        try:
+            self._save_comps_question()
+        except Exception:
+            traceback.print_exc()
         holds = self._series_holds()
         nights_now = {o.night for o in self.observations}
         for gone in [n for n in holds if n not in nights_now]:
@@ -21797,7 +21873,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._refresh_period()
         self.draw_output()
         saved = ""
-        if self.series_path and save:
+        if self.series_path:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
@@ -22181,7 +22257,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             f"Keep {'it' if one else 'them'}: the series stays as saved, and {names} "
             f"{'goes' if one else 'go'} back into the comp box.",
             [("leave", "Leave it out" if one else "Leave them out"), ("keep", "Keep it" if one else "Keep them")],
-            safe="keep")
+            safe="leave", cancel="keep")   # re-review 2: Enter leaves it out; Escape keeps
         if step is not None:
             step("the stars and settings")
         if answer != "leave":
@@ -22207,23 +22283,53 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         getattr(self, "_v_disagree", {}).pop(role, None)
         self.clear_mark(role)
 
-    def _active_comps_from_slots(self) -> list:
-        """At save: a "comps in use" star the user cleared from its comp slot (and did not put back) leaves the
-        series' saved choice, so Load series never brings it back. Returns the names taken out."""
+    def _save_comps_question(self) -> list:
+        """At save (S033; re-review 2): a "comps in use" star the user cleared from its comp box (✕, and did not put
+        back) is never dropped from the saved choice without the nights being re-derived, since that would leave
+        nights reduced with a comp the file says is not in use. Save asks once, with Load's words and buttons:
+        Leave it out (the default) re-derives every night with the other comps, exactly as Use comps… does, and the
+        save goes on; Keep it leaves the series as it is (the star stays in the comps in use, its box stays empty).
+        Returns the names left out."""
         cleared = getattr(self, "_user_cleared", None) or set()
-        if not cleared or not self.active_comps or self.mode_key == "discovery":
+        if not cleared or not self.active_comps or self.mode_key == "discovery" or not self.observations:
             return []
         gone = [n for n in self.active_comps
                 if (name_key(n) in cleared or name_key(self._series_key(n)) in cleared) and not self._in_comp_slot(n)]
         kept = [n for n in self.active_comps if n not in gone]
-        cleared -= {name_key(n) for n in self._comp_slot_names()}
+        cleared -= {name_key(n) for n in self._comp_slot_names()}   # put back since: nothing to ask
         if not gone or not kept:
             return []
-        self.active_comps = [] if set(kept) == set(self.comps_used) else kept
-        cleared -= {name_key(n) for n in gone}
-        self.log(f"Comps in use saved from the comp slots: {', '.join(kept)} ({', '.join(gone)} cleared). Nights "
-                 f"already reduced with {', '.join(gone)} keep their values until Use comps… (Output page) "
-                 "re-derives them.")
+        cleared -= {name_key(n) for n in gone} | {name_key(self._series_key(n)) for n in gone}   # asked once
+        names = ", ".join(gone)
+        one = len(gone) == 1
+        answer = ask_choice(
+            self, APP_TITLE,
+            f"{names} {'is' if one else 'are'} in the series' comps in use, but you cleared "
+            f"{'its comp box' if one else 'their comp boxes'}.\n\n"
+            f"Leave {'it' if one else 'them'} out: every night is re-derived with the other comps "
+            f"({', '.join(kept)}), as Use comps… does, and the series is saved that way.\n\n"
+            f"Keep {'it' if one else 'them'}: the series stays as it is; {names} "
+            f"{'stays' if one else 'stay'} in the comps in use.",
+            [("leave", "Leave it out" if one else "Leave them out"), ("keep", "Keep it" if one else "Keep them")],
+            safe="leave", cancel="keep")
+        kept_words = (f"{names} kept in the series' comps in use ({'its comp box is' if one else 'their comp boxes are'}"
+                      " empty); the nights are unchanged.")
+        if answer != "leave":
+            self.log(kept_words)
+            return []
+        try:
+            if not self._comp_selection_ok(kept):
+                self.log(kept_words)   # the re-derive was refused (points would be lost)
+                return []
+            result = core.recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
+                                               self._star_aliases())
+            self.log(f"{names} left out of the series' comps in use ({'its comp box was' if one else 'their comp boxes were'}"
+                     f" cleared): every night is re-derived with {', '.join(kept)}, as Use comps… does.")
+            self._comp_selection_applied(kept, result, save=False)   # the save that asked writes it
+        except Exception as exc:
+            traceback.print_exc()
+            self.log(f"⚠ {names} could not be left out ({exc}); the series' comps in use stay as they are.")
+            return []
         return gone
 
     def _comps_loaded_line(self, left_out=(), kept_in=()) -> str:
@@ -23563,7 +23669,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._refresh_period()
         self.draw_output()
         saved = ""
-        if self.series_path and save:
+        if self.series_path:
             try:
                 saved = self._save_series_words()
             except OSError as exc:
