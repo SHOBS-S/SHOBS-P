@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import traceback
 from tkinter import BOTH, END, LEFT, RIGHT, W, X, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
     filedialog, messagebox, ttk
@@ -742,11 +743,17 @@ class TransitPage:
             self.detrend_time.set(dt)
 
     def _detrend_clicked(self):
-        """The user's own choice, kept so it comes back when a source without airmass is left."""
+        """The user's own choice, kept so it comes back when a source without airmass is left. Fable S6: a choice
+        made while airmass is missing is kept too, with airmass added back when the earlier choice had it."""
+        key = self.detrend_key()
         if not self._airmass_off_why:
             self._detrend_wanted = self.detrend.get()
-            key = self.detrend_key()
             self._airmass_wanted = key == tc.DETREND_AUTO or tc.detrend_flags(key)[0]
+        else:
+            if key != tc.DETREND_AUTO and self._airmass_wanted:
+                _da, dt, dq = tc.detrend_flags(key)
+                key = tc.detrend_key((True, dt, dq))
+            self._detrend_wanted = tc.detrend_label(key)
         self._sync_detrend_mirrors()
 
     def _airmass_clicked(self):   # kept for older callers: the drop-down's own handler
@@ -1580,18 +1587,30 @@ class TransitPage:
                 app.call_ui(self._progress, phase, done, total)
 
             src_planet = (self.report or {}).get("planet") if self.report is not None else None
+            # Fable S4: a lookup that got no answer this session is not tried again for 10 minutes
+            failed_at = self.__dict__.setdefault("_rp_lookup_failed", {})
+            pname = str((planet or {}).get("name") or "")
+            want_rp = (planet is not None and "k_published" not in planet and pname
+                       and time.monotonic() - failed_at.get(pname, -1e9) > 600)
+
+            def keep_rp(ks, ds, ok):
+                if not ok:
+                    failed_at[pname] = time.monotonic()
+                    return
+                for target in (src_planet, getattr(app, "planet_info", None)):
+                    if (isinstance(target, dict) and target is not planet and _norm(target.get("name")) == _norm(pname)
+                            and "k_published" not in target):
+                        target["k_published"], target["depths_listed"] = ks, ds
 
             def work():
                 try:
-                    if planet is not None and "k_published" not in planet and planet.get("name"):
+                    if want_rp:
                         # 2.4.0 (#70): a report's planet (or one typed by hand) has no published list yet: fetch
                         # every published Rp/R* once (cached), so the size check has its range
                         app.call_ui(app._job_words, "Fitting the transit: looking up the published sizes…")
-                        ks, ds = tc.published_rp_cached(planet["name"])
+                        ks, ds, ok = tc.published_rp_cached(pname, timeout=10, with_status=True)
                         planet["k_published"], planet["depths_listed"] = ks, ds
-                        if src_planet is not None and src_planet is not planet:
-                            src_planet.setdefault("k_published", ks)
-                            src_planet.setdefault("depths_listed", ds)
+                        app.call_ui(keep_rp, ks, ds, ok)   # Fable N9: the page's dicts change on the Tk thread
                     result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
                                             detrend_curve=dq, detrend_auto=auto,
                                             mcmc_steps=steps, progress=progress, cancel=cancel,
@@ -1886,10 +1905,13 @@ class TransitPage:
         except Exception:
             pass
         if offer is not None:
+            self.app.status.set(f"Some fitted frames are past airmass {offer['limit']:g}: Trim airmass > "
+                                f"{offer['limit']:g} takes them out and refits.")
+        if offer is not None:
             text = tc.high_airmass_text(offer)
             flags = result.setdefault("flags", [])
             if not any(t_ == text for _l, t_ in flags):
-                flags.append(("info", text + f" Trim airmass > {offer['limit']:g} takes them out and refits."))
+                flags.append(("info", text))   # Fable N3: the button's instruction stays on the page (below)
                 self._notes_text(tc.cautions(flags, result.get("verdict")))
             self.app.log("Transit fit: " + text)
 
@@ -2177,6 +2199,13 @@ class TransitPage:
         return True
 
     def _fill_table(self):
+        if self.result is None and getattr(self, "_airmass_offer", None) is not None:
+            # Fable N2: the high-airmass offer belongs to the fit it was made for
+            self._airmass_offer = None
+            try:
+                self.groups.show("points", self.trim_airmass_button, False)
+            except Exception:
+                pass
         self._set_columns()
         self._show_verdict()
         self._show_stale()   # 2.4.0 (#98): after the verdict (it sets its own colour)
@@ -3019,6 +3048,9 @@ class TransitPage:
             # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "") + "SHOBS-P "
                              + tc.oc_text(o, ascii_only=True))
+        cnote = tc.curve_depth_note(self.result or {}, ascii_only=True)   # 2.4.0 (John 19 Nov)
+        if cnote:
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + cnote)
         dnote = tc.detrend_report_note(self.result or {})   # 2.4.0 (#103)
         if dnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(dnote)

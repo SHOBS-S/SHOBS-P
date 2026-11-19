@@ -75,8 +75,13 @@ strip; the page has no progress bar of its own.
   (*Fit input detrend*), and the report's NOTES name the choice and the runner-up. Pick a choice yourself to force
   it, for example to compare with an earlier fit.
   With airmass and a time trend together, the two can absorb a transit. When that happens, SHOBS-P refits with each
-  trend alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32).
-  Untick time slope and fit again only if that trend is not real …"*.
+  trend alone, and the verdict says so, for example *"No detection with airmass and time trend together: … Airmass
+  alone detects it (ΔBIC 32). Choose airmass in Detrend and fit again only if the other trend is not real …"*.
+  When Auto picks a **time curve**, a plain note gives the depth with the curve and the depth the best choice
+  without a curve gives (for example *"Auto chose airmass + time curve: depth 4.84 % with the time curve; the best
+  choice without it, airmass (ΔBIC +13.5), gives 3.56 % (least squares) …"*). A curve can trade against the depth,
+  most of all with little baseline on one side; compare the two before you rely on the depth. The note also goes
+  into the report's NOTES and the settings file.
   When the data have no airmass, the airmass choices leave the list (a chosen one becomes the same choice without
   airmass, and Auto leaves them out itself), and the row says why: *no airmass: site not set* (enter the site's
   latitude and longitude on the Input page), *no airmass in these data (run photometry again with the site set)* (the

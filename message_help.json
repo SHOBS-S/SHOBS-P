@@ -1672,6 +1672,21 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Auto chose … time curve: depth … % with the time curve; the best choice without it, … (ΔBIC …), gives … % (least squares) …"
+   ],
+   "todo": "Compare the two depths; with little baseline on one side, prefer the one without the curve (choose it in Detrend)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "detrend …: no fit (…); left out of the choice",
+    "… frames without airmass left out, so every detrend choice is fitted on the same frames"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Prayer-bead check (… shifted refits): its error is larger than the MCMC's for …, so that error is the one shown"
    ],
    "todo": "Nothing; the report carries the larger error. Clouds, seeing or guiding often cause it."
@@ -1765,9 +1780,10 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "No detection with Both: … alone detects it (ΔBIC …). …"
+    "No detection with airmass and time trend together: … alone detects it (ΔBIC …). …",
+    "No detection with Both: …"
    ],
-   "todo": "Untick one trend only if it is not real. See 18. When the fit says \"inconclusive\" or \"none\"."
+   "todo": "Choose the one trend in Detrend only if the other is not real. See 18. When the fit says \"inconclusive\" or \"none\"."
   },
   {
    "section": "Output, Transits mode",

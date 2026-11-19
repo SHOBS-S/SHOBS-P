@@ -37,13 +37,15 @@ night was noisy, or much of the transit is missing.
 - Look at **Comp health…**: a noisy comp raises the scatter for every point.
 - Try fewer, better comps with **Use comps…** (the fit reruns at once).
 
-### "No detection with Both: …"
+### "No detection with airmass and time trend together: …"
 
-With both **airmass** and **time slope** ticked, the two trends can together absorb a transit, especially when
-airmass and time change together through the night. SHOBS-P then refits with each trend alone, and when one of them
-detects the transit, the verdict starts, for example: *"No detection with Both: airmass and time trends are nearly the
-same over this night (correlation +0.97) and may absorb the transit together. Airmass alone detects it (ΔBIC 32).
-Untick time slope and fit again only if that trend is not real (a slope artifact can also read as a detection)."*
+With **airmass + time slope** (or **airmass + time curve**) in **Detrend**, the two trends can together absorb a
+transit, especially when airmass and time change together through the night. SHOBS-P then refits with each trend
+alone, and when one of them detects the transit, the verdict starts, for example: *"No detection with airmass and
+time trend together: airmass and time trends are nearly the same over this night (correlation +0.97) and may absorb
+the transit together. Airmass alone detects it (ΔBIC 32). Choose airmass in Detrend and fit again only if the other
+trend is not real (a slope artifact can also read as a detection)."* (Before 2.4.0 this said *"No detection with
+Both … Untick …"*.)
 
 ### "Tc is not pinned down (± … h for a …-hour transit)"
 

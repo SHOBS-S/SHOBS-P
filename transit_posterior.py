@@ -297,11 +297,11 @@ def both_detrend_text(check: dict, threshold: float = 10.0) -> str:
     alone = "; ".join(f"{'Airmass' if w == 'airmass' else 'time slope'} alone detects it (ΔBIC {d:.0f})"
                       for w, d in hits)
     alone = alone[:1].upper() + alone[1:]
-    other = ("one of the two (airmass or time slope)" if len(hits) == 2 else
-             "time slope" if hits[0][0] == "airmass" else "airmass")
-    fix = (f"Untick {other} and fit again only if that trend is not real (a slope artifact can also read as a "
-           "detection)")
-    return f"No detection with Both: {why}. {alone}. {fix}."
+    # 2.4.0 (#103, Fable S5): in the Detrend drop-down's words
+    pick = ("airmass or time slope" if len(hits) == 2 else "airmass" if hits[0][0] == "airmass" else "time slope")
+    fix = (f"Choose {pick} in Detrend and fit again only if the other trend is not real (a slope artifact can also "
+           "read as a detection)")
+    return f"No detection with airmass and time trend together: {why}. {alone}. {fix}."
 
 
 # ---- Corner plot ---------------------------------------------------------------------------------------------------

@@ -400,6 +400,8 @@ def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = BETA_MAX_
     cad_min = max(cadence_days, 1e-6) * 1440.0
     max_n = max(2, int(max_minutes / cad_min))
     min_n = min(max(2, int(math.ceil(min_minutes / cad_min))), max_n)
+    if min_n > min(max_n, n_tot // 4):
+        min_n = 2   # Fable N4: a run too short for a 10-min bin: the old 2-point bins, rather than no beta at all
     for n in range(min_n, min(max_n, n_tot // 4) + 1):
         m = n_tot // n
         if m < 4:
@@ -919,58 +921,91 @@ def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress
     gated = t_flip is not None and S.get("flip_gated")
     forced = t_flip is not None and not S.get("flip_gated")
     no_step = [st for st in S["starts"] if "step" not in st]
-    # One error scale for every choice (BICs are only comparable on the same errors): the fullest model's.
-    _k, _lab, (fa, ft_, fq) = choices[-1]
-    prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], fa, ft_, S["ld"], t_flip,
-                          detrend_curve=fq)
-    x, chi2 = best_fit(prob, S["starts"])
+    # One error scale for every choice (BICs are only comparable on the same errors): the fullest model's (Fable S3:
+    # the next fullest when that one does not converge).
+    prob = x = None
+    for _k, _lab, (fa, ft_, fq) in reversed(choices):
+        try:
+            prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], fa, ft_, S["ld"],
+                                  t_flip, detrend_curve=fq)
+            x, chi2 = best_fit(prob, S["starts"])
+            break
+        except ValueError:
+            prob = x = None
+    if prob is None:
+        raise ValueError("the least-squares fit did not converge with any detrend choice")
     p_full = prob.full(x)
     rchi = chi2 / max(n - len(prob.free), 1)
     beta = red_noise_beta(t, flux - prob.model(p_full), S["cadence"])
     scale = math.sqrt(max(rchi, 1.0)) * beta
     e = err * scale
-    rows = []
+    rows, failed = [], []
     for j, (key, label, (da, dt, dq)) in enumerate(choices):
         if cancel is not None and cancel.is_set():
             raise RuntimeError("Canceled")
         if progress is not None:
             progress(j + 1, len(choices))
-        st = {nm: v for nm, v in p_full.items() if nm != "step"}
-        for nm, on in (("c_am", da), ("c_t", dt), ("c_t2", dt and dq)):
-            if not on:
-                st[nm] = 0.0
-        if forced:
-            prob_ns = None
-        else:
-            prob_ns = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st, da, dt, S["ld"], None,
-                                     detrend_curve=dq)
-            x_ns, chi2_ns = best_fit(prob_ns, no_step[:2])
-            bic_ns = chi2_ns + len(prob_ns.free) * math.log(n)
-        row = {"key": key, "label": label, "flags": (da, dt, dq)}
-        if t_flip is not None:
-            st_ws = dict(prob_ns.full(x_ns), step=0.0) if prob_ns is not None else dict(st, step=p_full.get("step", 0.0))
-            prob_ws = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st_ws, da, dt, S["ld"], t_flip,
-                                     detrend_curve=dq)
-            x_ws, chi2_ws = best_fit(prob_ws, [{"step": 0.02}, {"step": -0.02}])
-            bic_ws = chi2_ws + len(prob_ws.free) * math.log(n)
-            try:
-                e_ws = lsq_errors(prob_ws)
-                s_err = float(e_ws[prob_ws.free.index("step")])
-            except Exception:
-                s_err = float("nan")
-            s_val = float(prob_ws.full(x_ws)["step"])
-            if forced:
-                row.update(step=(s_val, s_err), dbic_step=float("nan"), kept=True, bic=bic_ws, k=len(prob_ws.free),
-                           chi2_step=chi2_ws, chi2_nostep=float("nan"))
-            else:
-                dbs = bic_ns - bic_ws
-                kept = dbs >= FLIP_STEP_DBIC
-                row.update(step=(s_val, s_err), dbic_step=float(dbs), kept=bool(kept),
-                           bic=bic_ws if kept else bic_ns, k=len(prob_ws.free) if kept else len(prob_ns.free),
-                           chi2_step=chi2_ws, chi2_nostep=chi2_ns)
-        else:
-            row.update(bic=bic_ns, k=len(prob_ns.free))
+        try:
+            row = _choice_row(S, key, label, (da, dt, dq), p_full, e, t_flip, forced, no_step, n)
+        except ValueError as exc:
+            failed.append(label)   # Fable S3: one choice that does not fit is left out, not the whole fit
+            if say:
+                say(f"  detrend {label}: no fit ({exc}); left out of the choice")
+            continue
         rows.append(row)
+    if not rows:
+        raise ValueError("the least-squares fit did not converge with any detrend choice")
+    return _pick_choice(rows, failed, S, t_flip, gated, scale, allow_airmass, say)
+
+
+def _choice_row(S, key, label, flags, p_full, e, t_flip, forced, no_step, n) -> dict:
+    """One row of choose_detrend: the choice fitted without and (on a flip night) with the step."""
+    t, flux, am = S["t"], S["flux"], S["am"]
+    da, dt, dq = flags
+    st = {nm: v for nm, v in p_full.items() if nm != "step"}
+    for nm, on in (("c_am", da), ("c_t", dt), ("c_t2", dt and dq)):
+        if not on:
+            st[nm] = 0.0
+    if forced:
+        prob_ns = None
+    else:
+        prob_ns = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st, da, dt, S["ld"], None,
+                                 detrend_curve=dq)
+        x_ns, chi2_ns = best_fit(prob_ns, no_step[:2])
+        bic_ns = chi2_ns + len(prob_ns.free) * math.log(n)
+    row = {"key": key, "label": label, "flags": (da, dt, dq)}
+    if t_flip is not None:
+        st_ws = dict(prob_ns.full(x_ns), step=0.0) if prob_ns is not None else dict(st, step=p_full.get("step", 0.0))
+        prob_ws = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st_ws, da, dt, S["ld"], t_flip,
+                                 detrend_curve=dq)
+        x_ws, chi2_ws = best_fit(prob_ws, [{"step": 0.02}, {"step": -0.02}])
+        bic_ws = chi2_ws + len(prob_ws.free) * math.log(n)
+        try:
+            e_ws = lsq_errors(prob_ws)
+            s_err = float(e_ws[prob_ws.free.index("step")])
+        except Exception:
+            s_err = float("nan")
+        s_val = float(prob_ws.full(x_ws)["step"])
+        if forced:
+            row.update(step=(s_val, s_err), dbic_step=float("nan"), kept=True, bic=bic_ws, k=len(prob_ws.free),
+                       chi2_step=chi2_ws, chi2_nostep=float("nan"))
+        else:
+            dbs = bic_ns - bic_ws
+            kept = dbs >= FLIP_STEP_DBIC
+            row.update(step=(s_val, s_err), dbic_step=float(dbs), kept=bool(kept),
+                       bic=bic_ws if kept else bic_ns, k=len(prob_ws.free) if kept else len(prob_ns.free),
+                       chi2_step=chi2_ws, chi2_nostep=chi2_ns)
+    else:
+        row.update(bic=bic_ns, k=len(prob_ns.free))
+    # Fable S1: the least-squares depth of the variant this row stands for (with the step when it is kept)
+    if t_flip is not None and (forced or row.get("kept")):
+        row["depth"] = float(prob_ws.full(x_ws)["k"] ** 2)
+    else:
+        row["depth"] = float(prob_ns.full(x_ns)["k"] ** 2)
+    return row
+
+
+def _pick_choice(rows, failed, S, t_flip, gated, scale, allow_airmass, say) -> dict:
     bmin = min(r["bic"] for r in rows)
     near = [r for r in rows if r["bic"] <= bmin + DETREND_TIE]
     # fewest parameters among the near-equal ones; at the same count, the lower BIC
@@ -984,7 +1019,8 @@ def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress
                      "error_scale": float(scale), "chi2_step": float(chosen["chi2_step"]),
                      "chi2_nostep": float(chosen["chi2_nostep"]), "detrend": chosen["label"]}
     out = {"key": chosen["key"], "label": chosen["label"], "flags": chosen["flags"], "rows": rows,
-           "scale": float(scale), "flip_test": flip_test, "airmass_tried": bool(allow_airmass)}
+           "scale": float(scale), "flip_test": flip_test, "airmass_tried": bool(allow_airmass), "failed": failed,
+           "dropped_no_airmass": int(S.get("dropped_no_airmass") or 0)}
     if say:
         say("  " + detrend_choice_text(out))
     return out
@@ -994,6 +1030,26 @@ def tc_detrend_words(result: dict) -> str:
     """The detrend a fit used, for summaries: 'airmass, time curve (Auto, the lowest BIC)'."""
     r = result or {}
     return detrend_text(r.get("detrend")) + (" (Auto, the lowest BIC)" if r.get("detrend_choice") else "")
+
+
+def curve_depth_note(result: dict, ascii_only: bool = False) -> str:
+    """2.4.0 (John 19 Nov, Fable S1): when Auto chose a time curve, the depth with it and the depth the best choice
+    without a curve gives, because a curve can trade against the depth (TrES-3 b 4 Sep: 4.84 % with airmass + time
+    curve, 3.56 % with airmass alone). A plain note; '' otherwise."""
+    r = result or {}
+    ch = r.get("detrend_choice")
+    s = r.get("summary") or {}
+    if not ch or not ch["flags"][2] or "depth" not in s:
+        return ""
+    other = [row for row in ch["rows"] if not row["flags"][2] and row.get("depth") is not None]
+    if not other:
+        return ""
+    alt = min(other, key=lambda row: row["bic"])
+    d = "dBIC" if ascii_only else "ΔBIC"
+    return (f"Auto chose {ch['label']}: depth {s['depth'][0] * 100:.2f} % with the time curve; the best choice "
+            f"without it, {alt['label']} ({d} {alt['dbic']:+.1f}), gives {alt['depth'] * 100:.2f} % (least squares). "
+            "A time curve can trade against the depth, most of all with little baseline on one side: compare the two "
+            "before you rely on the depth.")
 
 
 def detrend_report_note(result: dict) -> str:
@@ -1128,7 +1184,18 @@ def _setup_and_detrend(t, flux, err, airmass, planet, detrend_airmass, detrend_t
     the given one (with the usual flip gate). Returns (S, (airmass, time, curve), flip_test, choice or None)."""
     if detrend_auto:
         allow = airmass_usable(airmass)
+        dropped = 0
+        if not allow and airmass is not None:
+            # Fable S2: a few frames without airmass (as manual airmass does, those frames are left out, so every
+            # choice is fitted on the same frames); with half or more missing, Auto leaves airmass out instead
+            am_ = np.asarray(airmass, dtype=float)
+            fin = np.isfinite(am_)
+            if am_.size and fin.mean() >= 0.5 and fin.sum() >= 20 and np.ptp(am_[fin]) > 1e-4:
+                allow, dropped = True, int((~fin).sum())
         S = _setup_fit(t, flux, err, airmass, planet, allow, after_flip, flip_step, flagged_mask)
+        S["dropped_no_airmass"] = dropped
+        if dropped and say:
+            say(f"  {_frames(dropped)} without airmass left out, so every detrend choice is fitted on the same frames")
         choice = choose_detrend(S, allow, say, cancel, progress)
         flags = choice["flags"]
         flip_test = choice["flip_test"]
@@ -1253,9 +1320,9 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
                 + (f"; the larger is reported for {', '.join(pb_raised)}" if pb_raised else "; MCMC errors kept"))
             pb["mcmc"] = mc
             pb["raised"] = pb_raised
-    except RuntimeError:
-        raise
     except Exception as exc:
+        if str(exc) == "Canceled":
+            raise
         say(f"  prayer-bead check skipped: {exc}")
     # Free shape check (no priors on a/R* and b), least squares only.
     free_fit = None
@@ -2078,6 +2145,9 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         flags.append(("info", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
                               "heavily on the b prior."))
+    cnote = curve_depth_note(r)   # 2.4.0 (John 19 Nov): Auto's time curve and the depth without it
+    if cnote:
+        flags.append(("info", cnote))
     pb = r.get("prayer_bead") or {}
     if pb.get("raised"):
         # 2.4.0 (#62): which errors are the prayer bead's
@@ -2199,7 +2269,14 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     if r["planet"].get("depth_note"):
         flags.append(("info", r["planet"]["depth_note"]))
     flip = r.get("flip")
-    if pub and "depth" in s and not (flip and not flip.get("depth_ok", True)):
+    sc = (r.get("verdict") or {}).get("size_check")
+    if sc is None:
+        try:
+            sc = size_check(r)
+        except Exception:
+            sc = None
+    near_range = sc is not None and sc.get("state") in ("inside", "near")   # Fable S7: the range says it better
+    if pub and "depth" in s and not (flip and not flip.get("depth_ok", True)) and not near_range:
         dd = s["depth"][0] - pub
         if abs(dd) > 3 * max(s["depth"][1], 1e-5):
             why = ("a neighbor's light in the aperture dilutes a transit (makes it shallower)" if dd < 0 else
@@ -2366,13 +2443,13 @@ def _strip_tags(text: str) -> str:
     return html.unescape(html.unescape(re.sub(r"<[^>]+>", "", text or ""))).strip()
 
 
-def _nea_query(adql: str) -> list[dict]:
+def _nea_query(adql: str, timeout: float = 45) -> list[dict]:
     import csv
     import io
     import urllib.parse
 
     url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?" + urllib.parse.urlencode({"query": adql, "format": "csv"})
-    return list(csv.DictReader(io.StringIO(_http_get(url).decode("utf-8", "replace"))))
+    return list(csv.DictReader(io.StringIO(_http_get(url, timeout=timeout).decode("utf-8", "replace"))))
 
 
 class PlanetChoice(ValueError):
@@ -2536,13 +2613,16 @@ def lookup_nea(name: str) -> dict:
     return complete_planet(planet)
 
 
-def published_rp_values(pl_name: str) -> tuple:
+def published_rp_values(pl_name: str, timeout: float = 15) -> tuple:
     """2.4.0 (#70): every published solution's Rp/R* in the NASA Exoplanet Archive's 'ps' table, and every listed
     depth. Returns ([[k, k_err or None, reference], ...], [[depth (fraction), reference], ...]), each sorted. The
     listed depths (pl_trandep, ExoFOP's TESS-band dips among them) are a different quantity from (Rp/R*)² (limb-
     darkened, other bands, other analyses), so they are shown, never used to judge a fit."""
+    # Fable N8: the spellings lookup_nea tries ('WASP-12b', 'wasp-12 b'), any capitalization, no quotes
+    variants = _name_variants(str(pl_name or "").strip().replace("'", ""))
+    where = " or ".join(f"lower(pl_name) = '{v.lower()}'" for v in variants)
     rows = _nea_query("select pl_ratror,pl_ratrorerr1,pl_ratrorerr2,pl_trandep,pl_refname from ps "
-                      f"where pl_name = '{pl_name}'")
+                      f"where {where}", timeout=timeout)
     ks, ds = [], []
     for row in rows:
         ref = unescape_name(_strip_tags(row.get("pl_refname", ""))).strip()
@@ -2556,22 +2636,25 @@ def published_rp_values(pl_name: str) -> tuple:
     return sorted(ks, key=lambda x: x[0]), sorted(ds, key=lambda x: x[0])
 
 
-def published_rp_cached(pl_name: str) -> tuple:
+def published_rp_cached(pl_name: str, timeout: float = 15, with_status: bool = False) -> tuple:
     """2.4.0 (#70): published_rp_values with the lookup cache (service 'nea_rp'): a live answer refreshes it, a
-    failed request falls back to the last good answer. ([], []) when there is neither."""
+    failed request falls back to the last good answer. ([], []) when there is neither. with_status: a third value,
+    True when the answer is real (live or cached), False when nothing could be had (Fable S4: not to be remembered
+    as "no published values")."""
     import lookup_cache
     key = lookup_cache.norm_key(pl_name)
     if not key:
-        return [], []
+        return ([], [], False) if with_status else ([], [])
     try:
-        ks, ds = published_rp_values(pl_name)
+        ks, ds = published_rp_values(pl_name, timeout=timeout)
         lookup_cache.put("nea_rp", key, {"k": ks, "depths": ds})
-        return ks, ds
+        return (ks, ds, True) if with_status else (ks, ds)
     except Exception:
         cached, _when = lookup_cache.get("nea_rp", key)
         if isinstance(cached, dict):
-            return list(cached.get("k") or []), list(cached.get("depths") or [])
-        return [], []
+            out = (list(cached.get("k") or []), list(cached.get("depths") or []))
+            return out + (True,) if with_status else out
+        return ([], [], False) if with_status else ([], [])
 
 
 SIZE_SIGMA = 3.0   # 2.4.0 (#70): a depth this many sigma outside the published (Rp/R*)² range gets the size caution
@@ -3299,6 +3382,8 @@ def fit_inputs_lines(result: dict) -> list:
                    + ("the larger reported for " + ", ".join(pb.get("raised") or []) if pb.get("raised")
                       else "MCMC errors reported") + f"; red-noise beta {_full(r.get('beta'))}")
     ch = r.get("detrend_choice")   # 2.4.0 (#103): every choice's BIC, so the pick can be checked
+    if curve_depth_note(r):
+        out.append("Fit input detrend note: " + curve_depth_note(r, ascii_only=True))
     out.append("Fit input detrend: " + (detrend_choice_text(ch, ascii_only=True) if ch
                                         else detrend_text(r.get("detrend")) + " (chosen by hand)"))
     src = str(pl.get("source") or "").strip() or "not recorded"

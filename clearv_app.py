@@ -5247,7 +5247,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if lookup_cache.norm_key(info.get("name")) == lookup_cache.norm_key(p["name"]):
             # 2.4.0 (#70): the literature's values stay with the planet whatever is typed in the boxes
             for key in ("k_published", "depths_listed"):
-                if info.get(key):
+                if key in info:   # Fable S4: an empty list is an answer too (no re-lookup at every fit)
                     p[key] = info[key]
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
@@ -16296,6 +16296,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not current:
             # re-review 5: not kept as an error under this key (back on that page, the survey runs again)
             self._survey_cache = None
+            if getattr(self, "_suggest_waiting_survey", False):
+                # Fable N1 (step 6 nit a): suggestions were held back for this survey: make them now for the page
+                self._suggest_waiting_survey = False
+                try:
+                    self._suggest_comps()
+                    self.update_star_panel()
+                except Exception:
+                    log_to_file("Suggestions after a dropped survey: " + traceback.format_exc())
             if run_after:
                 self.log("Run photometry did not start: the page changed while the comp survey read the frames. "
                          "Press Run photometry again.", keep_status=True)

@@ -303,3 +303,162 @@ class TestTransitPageStep6(unittest.TestCase):
         import transit_ui as tu
         self.assertEqual(tu.fit_progress_words("detrend", 2, 6), "Fitting the transit: choosing the detrend… 2 of 6")
         self.assertIn("prayer-bead", tu.fit_progress_words("prayer", 0, 1))
+
+
+class TestStep6aReviewFixes(unittest.TestCase):
+    """Fable review of step 6a: S1-S4, S6, S7, N1-N4, N6, N8."""
+
+    def test_partial_airmass_auto_drops_those_frames(self):            # S2
+        t, f, e, am, _a = night(quad=0.0)
+        am = am.copy()
+        am[:3] = np.nan
+        said = []
+        r = tc.lsq_fit(t, f, e, am, PLANET, detrend_auto=True)
+        ch = r["detrend_choice"]
+        self.assertTrue(ch["airmass_tried"])
+        self.assertEqual(ch["dropped_no_airmass"], 3)
+        self.assertEqual(len(r["t"]), len(t) - 3)
+        S, _fl, _ft, _ch = tc._setup_and_detrend(t, f, e, am, PLANET, True, False, False, True, None, None, None,
+                                                say=said.append)
+        self.assertTrue(any("3 frames without airmass left out" in m for m in said))
+        half = am.copy()
+        half[: len(t) // 2 + 5] = np.nan                            # most missing: airmass left out instead
+        r = tc.lsq_fit(t, f, e, half, PLANET, detrend_auto=True)
+        self.assertFalse(r["detrend_choice"]["airmass_tried"])
+        self.assertEqual(len(r["t"]), len(t))
+
+    def test_a_choice_that_does_not_fit_is_skipped(self):              # S3
+        t, f, e, am, _a = night()
+        real = tc.best_fit
+        calls = {"n": 0}
+
+        def flaky(problem, starts=None):
+            calls["n"] += 1
+            if getattr(problem, "free", None) and "c_t2" in problem.free and "c_am" not in problem.free:
+                raise ValueError("the least-squares fit did not converge")
+            return real(problem, starts)
+        said = []
+        with mock.patch.object(tc, "best_fit", side_effect=flaky):
+            S, _fl, _ft, ch = tc._setup_and_detrend(t, f, e, am, PLANET, True, False, False, True, None, None, None,
+                                                   say=said.append)
+        self.assertEqual(ch["failed"], ["time curve"])
+        self.assertNotIn("curve", [r_["key"] for r_ in ch["rows"]])
+        self.assertTrue(any("detrend time curve: no fit" in m for m in said))
+
+    def test_curve_depth_note(self):                                     # S1 (John: note with / without)
+        ch = {"key": "airmass+curve", "label": "airmass + time curve", "flags": (True, True, True), "rows": [
+            {"key": "airmass", "label": "airmass", "flags": (True, False, False), "bic": 113.5, "dbic": 13.5,
+             "depth": 0.0356},
+            {"key": "airmass+curve", "label": "airmass + time curve", "flags": (True, True, True), "bic": 100.0,
+             "dbic": 0.0, "depth": 0.0484},
+            {"key": "none", "label": "none", "flags": (False, False, False), "bic": 130.0, "dbic": 30.0,
+             "depth": 0.03}]}
+        r = {"detrend_choice": ch, "summary": {"depth": (0.0484, 0.0087)}}
+        note = tc.curve_depth_note(r)
+        self.assertIn("depth 4.84 % with the time curve", note)
+        self.assertIn("without it, airmass (ΔBIC +13.5), gives 3.56 %", note)
+        self.assertTrue(tc.curve_depth_note(r, ascii_only=True).isascii())
+        ch2 = dict(ch, key="airmass", flags=(True, False, False))
+        self.assertEqual(tc.curve_depth_note({"detrend_choice": ch2, "summary": r["summary"]}), "")
+        self.assertEqual(tc.curve_depth_note({"summary": r["summary"]}), "")
+
+    def test_rows_carry_their_depth(self):
+        t, f, e, am, after = night(step=14)
+        r = tc.lsq_fit(t, f, e, am, PLANET, after_flip=after, detrend_auto=True)
+        for row in r["detrend_choice"]["rows"]:
+            self.assertAlmostEqual(row["depth"], PLANET["k"] ** 2, delta=0.006)
+
+    def test_lookup_status_and_names(self):                              # S4, N8
+        import tempfile
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"SHOBS_P_LOOKUP_CACHE_DIR": d,
+                                                                              "SHOBS_P_NO_LOOKUP_CACHE": ""}):
+            with mock.patch.object(tc, "_nea_query", side_effect=OSError("down")):
+                self.assertEqual(tc.published_rp_cached("Nowhere b", with_status=True), ([], [], False))
+            seen = {}
+
+            def q(adql, timeout=45):
+                seen["adql"], seen["timeout"] = adql, timeout
+                return []
+            with mock.patch.object(tc, "_nea_query", side_effect=q):
+                self.assertEqual(tc.published_rp_cached("wasp-12b", timeout=10, with_status=True), ([], [], True))
+        self.assertIn("lower(pl_name) = 'wasp-12 b'", seen["adql"])
+        self.assertEqual(seen["timeout"], 10)
+        with mock.patch.object(tc, "_nea_query", side_effect=q):
+            tc.published_rp_values("O'Brien-1 b")
+        self.assertNotIn("O'B", seen["adql"])
+
+    def test_old_single_value_note_defers_to_the_range(self):            # S7
+        t, f, e, am, _a = night()
+        r = tc.fit_transit(t, f, e, am, dict(PLANET, k=0.13, k_err=0.001,
+                                             k_published=[[0.13, 0.001, "a"], [0.17, 0.001, "b"]]),
+                           detrend_airmass=True, mcmc_steps=300)
+        self.assertEqual((r["verdict"].get("size_check") or {}).get("state"), "inside")
+        self.assertFalse(any("vs published" in t_ and "a large difference" in t_ for _l, t_ in r["flags"]))
+
+    def test_beta_short_run_falls_back(self):                            # N4
+        rng = np.random.default_rng(2)
+        t = np.arange(100) * 20 / 86400.0                                   # 33 min at 20 s
+        walk = np.cumsum(rng.normal(0, 0.001, 100))
+        self.assertGreater(tc.red_noise_beta(t, walk - walk.mean(), 20 / 86400.0), 1.0)
+
+    def test_prayer_bead_error_does_not_stop_the_fit(self):              # N6
+        t, f, e, am, _a = night()
+        with mock.patch.object(tc, "prayer_bead", side_effect=RuntimeError("odd")):
+            r = tc.fit_transit(t, f, e, am, PLANET, mcmc_steps=200)
+        self.assertIsNone(r["prayer_bead"])
+        with mock.patch.object(tc, "prayer_bead", side_effect=RuntimeError("Canceled")):
+            with self.assertRaises(RuntimeError):
+                tc.fit_transit(t, f, e, am, PLANET, mcmc_steps=200)
+
+    def test_both_check_words(self):                                      # S5
+        import transit_posterior as tpost
+        text = tpost.both_detrend_text({"airmass": 30.0, "time": 2.0, "corr": 0.97})
+        self.assertIn("Choose airmass in Detrend", text)
+        self.assertNotIn("Untick", text)
+        self.assertNotIn("Both", text)
+
+
+class TestStep6aReviewFixesPage(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import clearv_app as ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_240_t2.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def test_choice_made_while_airmass_is_missing_is_kept(self):          # S6
+        tp = self.app.transit_page
+        old = tp.report
+        try:
+            tp._airmass_off_why = ""
+            tp.set_detrend("airmass")
+            tp.report = {"t": np.arange(30.0), "airmass": None}
+            tp._update_airmass_box()
+            self.assertEqual(tp.detrend.get(), "none")
+            tp.set_detrend("curve")                                    # picked while airmass is missing
+            tp.report = {"t": np.arange(30.0), "airmass": np.linspace(1.1, 1.5, 30)}
+            tp._update_airmass_box()
+            self.assertEqual(tp.detrend.get(), "airmass + time curve")  # airmass added back, the curve kept
+        finally:
+            tp.report = old
+            tp._airmass_off_why = ""
+            tp._update_airmass_box()
+            tp.set_detrend("auto")
+
+    def test_offer_goes_with_the_fit(self):                               # N2, N3
+        tp = self.app.transit_page
+        t = 2461000.5 + np.arange(60) * 0.004
+        result = {"t": t, "airmass": np.linspace(1.3, 3.8, 60), "flags": [],
+                  "summary": {"tc": (t[20], 0.001), "t14": (0.05, 0.001)}}
+        tp._offer_airmass_trim(result)
+        self.assertIn(tp.trim_airmass_button, tp.groups.boxes["points"].shown_widgets())
+        self.assertFalse(any("takes them out" in t_ for _l, t_ in result["flags"]))   # no button words in files
+        tp.result = None
+        tp._fill_table()
+        self.assertIsNone(tp._airmass_offer)
+        self.assertNotIn(tp.trim_airmass_button, tp.groups.boxes["points"].shown_widgets())
