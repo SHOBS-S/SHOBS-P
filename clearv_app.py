@@ -16152,7 +16152,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _survey_view(self, result: dict, cands: list, t_inst: float, r: float):
         """The survey's numbers for the aperture in the boxes (see _comp_survey)."""
         memo = result.setdefault("_views", {})
-        key = round(float(r), 1)
+        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy))   # distances are from the target
         if key in memo:
             return memo[key]
         idx, mags, peaks, flipped, rr = self._survey_columns(result, r)
