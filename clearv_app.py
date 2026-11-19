@@ -55,6 +55,7 @@ import photometry_core as core
 import transit_core as tcore
 import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
+import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1662,6 +1663,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             _lin = int(_lin)   # review nit: 32000, not 32000.0
         self.linear_limit = StringVar(value=str(_lin))
         self.linear_limit.trace_add("write", lambda *_: self._remember_linear_limit())
+        # 2.4.0 step 5 (#58): where the linear ADU came from ("from SHOBS-FLUX", "set here" or ""), shown beside the
+        # box; a value typed this session wins over the profile until other lights are scanned
+        self.linear_source = StringVar(value={"flux": "from SHOBS-FLUX", "user": "set here"}.get(
+            self.settings.get("linear_limit_source", ""), ""))
+        self._linear_setting = False   # True while SHOBS-P itself writes the box (not a typed value)
+        self._linear_typed_for = None  # the Lights folder a value was typed for this session
+        self.linear_limit.trace_add("write", lambda *_: self._linear_written())
         self.cloud_limit = DoubleVar(value=20.0)
         self.use_check_zp = BooleanVar(value=True)
         self.bin_choice = StringVar(value="None")
@@ -2206,8 +2214,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.pattern.get() == core.MONO and self.mono_filter:
             where = {"hand": "filter set here", "header": "filter wheel (FITS FILTER)",
                      "mobs": "MicroObservatory, clear",
-                     "rgb": "color image, one channel"}.get(getattr(self, "_mono_filter_source", None),
-                                                           "filter wheel (FITS FILTER)")
+                     "rgb": "color image, one channel",
+                     # 2.4.0 step 5 (nit, step 4 regression): before the lights are scanned the box shows the last
+                     # session's filter, not one read from these lights' headers
+                     None: "as last used (the lights' headers are read at the scan)"}.get(
+                getattr(self, "_mono_filter_source", None), "filter wheel (FITS FILTER)")
             self.filter_hint.set(f"AAVSO filter code {code}\n{where}, {band} comps")
         elif self.pattern.get() == core.MONO:
             what = ("filter in the header not supported" if getattr(self, "_mono_filter_source", None) == "unknown"
@@ -3370,6 +3381,80 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not (math.isfinite(lin) and lin > 0) or lin >= sat:
             return None
         return lin
+
+    def _flux_channel(self):
+        """2.4.0 step 5 (#58): the SHOBS-FLUX per-channel key for the channel measured on a color camera ("G" for
+        green …), None on a mono camera (the profile's one value)."""
+        try:
+            if str(self.pattern.get()).upper() == core.MONO:
+                return None
+            return {"green": "G", "red": "R", "blue": "B"}.get(str(self.debayer_mode.get()))
+        except Exception:
+            return None
+
+    def _set_linear_box(self, text: str, source: str):
+        """2.4.0 step 5 (#58): SHOBS-P writes the linear ADU box (not a typed value): the box, its source tag
+        ("flux", "user" or "") and the settings file's record of the source."""
+        self._linear_setting = True
+        try:
+            self.linear_limit.set(text)
+        finally:
+            self._linear_setting = False
+        self.linear_source.set({"flux": "from SHOBS-FLUX", "user": "set here"}.get(source, ""))
+        if self.settings.get("linear_limit_source", "") != source:
+            self.settings["linear_limit_source"] = source
+            self._save_settings()
+
+    def _linear_written(self):
+        """2.4.0 step 5 (#58): a value typed in the linear ADU box is "set here" and wins over the SHOBS-FLUX profile
+        for these lights (until other lights are scanned)."""
+        if getattr(self, "_linear_setting", False):
+            return
+        self._linear_typed_for = self.light_dir.get().strip() if hasattr(self, "light_dir") else ""
+        self.linear_source.set("set here" if self.linear_limit.get().strip() else "")
+        self.settings["linear_limit_source"] = "user" if self.linear_limit.get().strip() else ""
+
+    def _flux_linear_sync(self, header: dict) -> str:
+        """2.4.0 step 5 (#58, John 19 Nov: the box follows SHOBS-FLUX): the lights of the same camera as before are
+        scanned: the linear ADU comes from the SHOBS-FLUX camera profile for this camera, gain, offset and binning
+        (its channel on a color camera) whenever one has a linear limit, unless a value was typed for these lights
+        this session. A profile that was used before and is gone now leaves the box as it is, said once in a plain
+        line. Returns the line logged ("" when nothing changed). SHOBS-P only reads profiles."""
+        if not header:
+            return ""
+        import shobs_profile as sp
+        try:
+            cam_id = sp.setup_key(header).get("camera_id")
+            prof = sp.find_camera_profile(cam_id) if cam_id else None
+            lin, rec = sp.camera_value(prof, "linear_limit_adu", self._flux_channel())
+        except Exception:
+            prof, lin, rec = None, None, None
+        folder = self.light_dir.get().strip()
+        if lin is None or not (isinstance(lin, (int, float)) and math.isfinite(lin) and lin > 0):
+            if self.settings.get("linear_limit_source") == "flux" and not prof:
+                now = self._box_number(self.linear_limit)
+                self._set_linear_box(self.linear_limit.get(), "user")
+                line = ("The SHOBS-FLUX profile the linear ADU came from is not found for these lights' camera now; "
+                        "the box keeps " + (f"{now:,.0f}" if now else "its value") + " (now marked set here).")
+                self.log(line, keep_status=True)
+                return line
+            return ""
+        if getattr(self, "_linear_typed_for", None) == folder and self.linear_source.get() == "set here":
+            return ""   # typed for these lights this session: yours wins
+        text = str(int(lin)) if float(lin).is_integer() else f"{float(lin):g}"
+        before = self._box_number(self.linear_limit)
+        if before is not None and abs(before - float(lin)) < 0.5 and self.linear_source.get() == "from SHOBS-FLUX":
+            return ""
+        self._set_linear_box(text, "flux")
+        if before is not None and abs(before - float(lin)) < 0.5:
+            return ""
+        how = sp.SOURCE_WORDS.get((rec or {}).get("source", ""), "") if rec else ""
+        when = (rec or {}).get("date") or ""
+        line = (f"Linear ADU {float(lin):,.0f} from the SHOBS-FLUX profile for this camera"
+                + (f" ({how}" + (f" {when}" if when else "") + ")" if how else "")
+                + (f"; it was {before:,.0f}" if before is not None else "") + ".")
+        self.log(line, keep_status=True)
+        return line
 
     def _linearity_note(self, role: str, xy) -> str:
         """2.2.19 (#16): at pick time, the star's brightest raw pixel (unbinned, uncalibrated: per Bayer plane on a
@@ -5396,6 +5481,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if note and note not in (OSC_NOTE, MONO_NOTE):
                 cleared.append("the Output page notes")
         reason = why or "New reduction pressed"
+        if getattr(self, "_own_setup", None) is not None:
+            # 2.4.0 step 5 (nit, step 4 regression #6): a site and optics typed "for these frames only" (or a
+            # MicroObservatory setup) belonged to the last frames: your own come back, so they never carry into the
+            # next night's boxes (254 mm stayed until the MicroObservatory setup question)
+            self._restore_own_setup()
         self._camera_folders_snapshot()   # 2.4.0 (#111): the frame boxes as the last night left them
         self._set_camera_note("")
         self._flip_turn_note = None   # 2.3.4 review
@@ -5426,6 +5516,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         positions, report names, Sloan sources, the comp-follow state (#34), rejected frames, marked periods, a
         Discovery scan, and the questions already answered for the old star. Returns words for the log."""
         out = []
+        old_survey = getattr(self, "_survey_cache", None)
+        if old_survey is not None:
+            # 2.4.0 step 5 (#76): the comp survey belongs to the old star (a read still running ends itself)
+            self._survey_cache = None
+            self.busy_end(old_survey.pop("tok", None))
+        self._run_after_survey = False
         if not keep_planet:
             if self.planet_name.get().strip() or getattr(self, "planet_info", None):
                 out.append(f"planet {self.planet_name.get().strip()}" if self.planet_name.get().strip()
@@ -5723,6 +5819,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             last = saved if isinstance(saved, dict) and saved.get("nx") else None
         if last is None or same_camera(last, sig):
             self._camera_sat_drop()   # re-review 4: lights of the same camera again: the earlier warning is done
+            self._flux_linear_sync(header)   # 2.4.0 step 5 (#58): the SHOBS-FLUX profile's limit, every time
             self._camera_record(sig)
             return False
         if in_session:
@@ -5890,7 +5987,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             cam_id = sp.setup_key(header).get("camera_id")
             prof = sp.find_camera_profile(cam_id) if cam_id else None
             sat = sp.camera_value(prof, "saturation_adu")[0]
-            lin = sp.camera_value(prof, "linear_limit_adu")[0]
+            lin = sp.camera_value(prof, "linear_limit_adu", self._flux_channel())[0]   # step 5 (#58): per channel
         except Exception:
             sat = lin = None
         if sat or lin:
@@ -5927,7 +6024,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if keep_lin:
             lin_words = "Linear ADU" + kept_words
         else:
-            self.linear_limit.set(str(box(lin)) if lin else "")
+            self._set_linear_box(str(box(lin)) if lin else "",
+                                 "flux" if (lin and source.startswith("from the SHOBS-FLUX")) else ("user" if lin else ""))
             lin_words = "Linear ADU " + (words(lin) if lin else "emptied (empty = the raw sat ADU is the only limit)")
         if mobs:
             return (f"{lin_words}" + ("" if keep_lin else " for the new camera" + (f" ({source})" if lin else ""))
@@ -9189,6 +9287,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         ttk.Label(g, text="linear ADU", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
         lin_entry = ttk.Entry(g, textvariable=self.linear_limit, width=8)
         lin_entry.pack(side=LEFT)
+        # 2.4.0 step 5 (#58): where the number came from
+        ttk.Label(g, textvariable=self.linear_source, style="Card.TLabel", foreground="#5a6b75",
+                  font=(core.UI_FONT, 8)).pack(side=LEFT, padx=(3, 0))
         lin_entry.bind("<FocusOut>", lambda _e: self.update_star_panel())
         lin_entry.bind("<Return>", lambda _e: self.update_star_panel())
         ttk.Checkbutton(
@@ -12624,7 +12725,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """2.2.14 (item 14): every outcome of a typed name goes to the status bar, the log, and the slot's own hint
         line (until the name in the slot changes)."""
         self.status.set(text)
-        self.log(f"{role_label(role)}: {text}")
+        # 2.4.0 step 5 (nit, step 4 regression): a text that already starts with the slot's label is not labeled
+        # twice ("Comp 4: Comp 4: 000-BNX-001", "Comp 1: ✓ Comp 1: …")
+        lab = f"{role_label(role)}: "
+        body = text
+        for pre in ("✓ ", "⚠ ", "\u26a0 ", ""):
+            if text.startswith(pre + lab):
+                body = pre + text[len(pre + lab):]
+                break
+        self.log(lab + body)
         self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), text, bad)
         self.update_star_panel()
 
@@ -13462,7 +13571,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.update_star_panel()
         elif c and c["how"] == "wide":
             # step 4 review (M3): moved farther than the normal rule allows: a ⚠ with a finding
-            warn = f"⚠ {role_label(role)}: {msg}"
+            warn = ("⚠ " + msg) if msg.startswith(f"{role_label(role)}: ") else f"⚠ {role_label(role)}: {msg}"
             self.log(warn, finding=False)
             self._place_finding(role, warn)
             self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), warn, True)
@@ -15689,6 +15798,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             for c, d_, k_ in zip(cands, near, at):
                 edge_px[c[0]] = float(d_)
                 edge_at[c[0]] = drift["regs"][int(k_)][0] if k_ >= 0 else ""
+        # 2.4.0 step 5 (#76): the night's own frames. Started here (background, busy bar) the first time; until it is
+        # back the catalog suggestions below stand, and _survey_done suggests again with it.
+        survey = self._comp_survey(cands, t_inst)
         target_star = self._chart_star_at(self.target_xy)
         t_bv_cat = core.catalog_bv(target_star) if target_star else None
         # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
@@ -15718,21 +15830,45 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return peaks[name]
 
         def linear_ok(name):
-            # 2.3.4 (b): under 75 % of the linear limit on the reference frame, so the sharpest frames stay linear
+            # 2.3.4 (b): under 75 % of the linear limit on the reference frame, so the sharpest frames stay linear.
+            # 2.4.0 step 5 (#76): with the survey, under 90 % on every frame it read (the sharpest included).
             if lin is None or getattr(self, "precalibrated", False) or not self.preview_path:
                 return True
+            if survey is not None and name in survey["index"]:
+                pk = survey["peak_max"][survey["index"][name]]
+                return not (math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin)
             pk = peak_of(name)
             return not (math.isfinite(pk) and pk >= 0.75 * lin)
+
+        def survey_ok(name):
+            # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable
+            if survey is None or name not in survey["index"]:
+                return survey is None
+            return not survey["out"].get(name)
+
+        def ranked(got):
+            # 2.4.0 step 5 (#76): the night's own scatter first, the catalog order (brightness, color) second
+            if survey is None or not got:
+                return got
+            n = max(len(got) - 1, 1)
+            keyed = []
+            for k, (name, dm) in enumerate(got):
+                j = survey["index"][name]
+                keyed.append((cs.rank_key(k / n, survey["scatter"][j], survey["ref_scatter"],
+                                          survey["step"][j], survey["dist"][j], survey["flip"]), name, dm))
+            keyed.sort()
+            return [(name, dm) for _k, name, dm in keyed]
 
         def choose(pool, max_dbv):
             kw = dict(target_bv=t_bv, max_dbv=max_dbv, color_weight=2.0, count=40)
             if faint:
                 got = [g for g in core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, -0.5), **kw)
-                       if linear_ok(g[0])]
-                return got or [g for g in core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, 0.3), **kw)
-                               if linear_ok(g[0])]
+                       if linear_ok(g[0]) and survey_ok(g[0])]
+                return ranked(got or [g for g in core.suggest_comps_near(t_inst, pool, aim=-1.0, window=(-2.0, 0.3),
+                                                                         **kw)
+                                      if linear_ok(g[0]) and survey_ok(g[0])])
             got = core.suggest_comps_near(t_inst, pool, max_dmag=1.0, **kw)
-            return [g for g in got if linear_ok(g[0])]
+            return ranked([g for g in got if linear_ok(g[0]) and survey_ok(g[0])])
 
         # 2.2.13 (John): AAVSO sequence stars of the right brightness come first; other catalog stars fill in when
         # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
@@ -15753,6 +15889,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if gate > 0.3:
                 relaxed.update(n for n, _dm in got)
             picks += got
+        picks, set_step, series_kept = self._survey_final_picks(picks, survey, choose, cands, inside, seq_names)
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
         self._suggest_for = (self.target_xy, self.preview_path)   # Fable re-review nit: what they were made for
         # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
@@ -15772,6 +15909,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                          "edge": edge_px.get(name), "safe_edge": safe_edge,
                                          "edge_at": edge_at.get(name, ""), "drift_how": drift.get("how", ""),
                                          "peak": peaks.get(name, float("nan")), "linear": lin,
+                                         "survey": self._survey_info(survey, name), "set_step": set_step,
+                                         "series": name in series_kept,
                                          "catalog": (st.get("mag_source") or {}).get(st.get("band", "V"))
                                          or st.get("catalog", "")}
         if getattr(self, "_suggest_quiet", False):
@@ -15786,7 +15925,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best."
-                     + self._drift_words(drift, safe_edge))
+                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step))
+        if not getattr(self, "_suggest_quiet", False):
+            self._survey_report(survey, lin, picks)
         if not getattr(self, "_suggest_quiet", False) and edge_left:
             # 2.4.0 (#78): say why there are fewer than four, by name; a warning only when none is left at all
             far = ", ".join(f"{n} ({max(d_, 0.0):.0f} px" + (f" on frame {lab}" if lab else "") + ")"
@@ -15810,6 +15951,386 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         elif self._closest_dm is not None:
             self.log(f"No labeled star within 1 mag of the target here (closest: {self._closest_dm:.1f} mag away); "
                      "pick the closest in brightness and color you can.")
+
+    # ---- 2.4.0 step 5 (#76, #61): the pre-run comp survey ----------------------------------------------------------
+
+    def _comp_survey(self, cands: list, t_inst: float):
+        """2.4.0 step 5 (#76): the comp candidates (name, inst mag, x, y, B-V) measured on a sample of the night's own
+        lights (comp_survey.sample_indices / second_pass), calibrated and lined up like the run. Returns None while the
+        frames are read (the busy bar says so; _survey_done suggests again) or when there is nothing to survey (one
+        light, no masters, Discovery), else the survey for the aperture in the boxes:
+        {"index": {name: column}, "scatter", "step", "peak_max", "peaks", "n", "dist", "flip", "ref_scatter",
+         "out": {name: why left out}, "frames", "of", "failed", "labels", "aperture": #61 trial or None}."""
+        if self.mode_key == "discovery" or not cands or self.preview is None:
+            return None
+        if self.masters is None and not getattr(self, "precalibrated", False):
+            return None
+        try:
+            lights = list(self._lights())
+        except Exception:
+            return None
+        if len(lights) < 3:
+            return None
+        r, si, so = self._num(self.radius), self._num(self.sky_in), self._num(self.sky_out)
+        if not (r and si and so):
+            return None
+        try:
+            binning = max(int(self.binning.get()), 1)
+        except Exception:
+            binning = 1
+        pattern, mode = self.pattern.get(), self.debayer_mode.get()
+        try:
+            stamp = os.path.getmtime(self.preview_path or "")
+        except OSError:
+            stamp = 0.0
+        names = tuple(c[0] for c in cands)
+        xy = tuple((round(float(c[2]), 1), round(float(c[3]), 1)) for c in cands)
+        donut = self._donut_apertures()
+        fwhm = self._seeing()
+        key = (self.preview_path, stamp, tuple(lights), names, xy, binning, pattern, mode, id(self.masters),
+               bool(getattr(self, "precalibrated", False)), donut is None)
+        cache = getattr(self, "_survey_cache", None)
+        if cache is not None and cache.get("key") == key:
+            res = cache.get("result")
+            if cache["state"] == "loading":
+                return None
+            if not res or res.get("error"):
+                return None
+            # the aperture in the boxes must be one the survey measured, else read again with it added
+            if not any(abs(rr - r) <= 0.06 for rr in res["radii"]):
+                cache = None
+        if cache is None or cache.get("key") != key:
+            radii = cs.trial_radii(fwhm, r) if donut is None else [round(float(r), 1)]
+            rings = {}
+            for rr in radii:
+                if abs(rr - r) <= 0.06:
+                    rings[rr] = (si, so)
+                else:
+                    s_in = core.sky_inner_radius(rr, fwhm) if math.isfinite(fwhm) else max(si, rr + 3.0)
+                    rings[rr] = (s_in, float(math.ceil(math.sqrt(s_in ** 2 + 4.0 * rr ** 2))))
+            cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
+                                          "aperture_at_start": (r, si, so)}
+            cache["tok"] = self.busy_begin("Comp survey… reading the night's frames")
+            self._survey_start(cache, lights, np.asarray([(c[2], c[3]) for c in cands], dtype=float), radii, rings,
+                               binning, pattern, mode, r)
+            return None
+        return self._survey_view(cache["result"], cands, t_inst, r)
+
+    def _survey_start(self, cache, lights, xy0, radii, rings, binning, pattern, mode, r_now):
+        masters, ref = self.masters, self.preview
+        precal = bool(getattr(self, "precalibrated", False))
+        total_bin = binning * (1 if pattern == core.MONO else 2)
+        try:
+            altaz = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ
+        except Exception:
+            altaz = False
+        ref_path = self.preview_path
+        tx, ty = self.target_xy
+        n = len(lights)
+        alive = lambda: getattr(self, "_survey_cache", None) is cache
+
+        def work():
+            out = {"radii": list(radii), "rings": dict(rings), "frames": {}, "of": n, "failed": 0, "error": ""}
+            try:
+                ref_sources = core.detect_sources(ref, max_sources=80)
+                try:
+                    t_def = core.field_defocus(ref)
+                except Exception:
+                    t_def = {"donut": False}
+                t_donut = bool(t_def.get("donut"))
+                rmax = max(radii)
+                ref_pts = core.refine_points(ref, ref_sources, rmax, t_donut) if len(ref_sources) >= 3 else []
+                last = {"sources": None, "reg": None}
+                done = [0]
+
+                def read(idx_list, of_words):
+                    for i in idx_list:
+                        if not alive():
+                            raise RuntimeError("Canceled")
+                        path = lights[i]
+                        done[0] += 1
+                        self.call_ui(self._survey_progress, cache, done[0], of_words)
+                        try:
+                            raw, header, cal = stack_load_frame(path, binning, masters)
+                            img = core.debayer(cal, pattern, mode)
+                            del cal
+                            if img.shape != ref.shape:
+                                raise ValueError("frame size differs from the reference")
+                            if path == ref_path:
+                                reg = {"dx": 0.0, "dy": 0.0, "angle": 0.0, "flipped": False}
+                            else:
+                                src = core.detect_sources(img, max_sources=80)
+                                if altaz:
+                                    reg = core.register_rotating(ref_sources, src, img.shape, last["sources"],
+                                                                 last["reg"])
+                                else:
+                                    reg = core.register_frame(ref_sources, src, img.shape)
+                                if reg is None and last["sources"] is not None and not altaz:
+                                    step = core.register_frame(last["sources"], src, img.shape)
+                                    if step is not None:
+                                        reg = core.compose_registration(last["reg"], step, img.shape)
+                                if reg is None:
+                                    raise ValueError("could not align")
+                                if reg.get("flipped") and ref_pts:
+                                    core.seed_field_defocus(img, t_def if t_donut else False)
+                                    reg = core.refine_registration(img, reg, ref_pts, rmax, t_donut)
+                                last["sources"], last["reg"] = src, reg
+                            pos = core.move_points(xy0, reg, img.shape)
+                            tpos = core.move_points(np.asarray([(tx, ty)], dtype=float), reg, img.shape)[0]
+                            y0, x0 = max(0, int(tpos[1]) - 300), max(0, int(tpos[0]) - 300)
+                            try:
+                                fw = core.field_fwhm(img[y0:y0 + 600, x0:x0 + 600], n=6)["fwhm"]
+                            except Exception:
+                                fw = float("nan")
+                            exp = core.header_exptime(header) or 1.0
+                            mags = {}
+                            for rr in radii:
+                                flux, _sky = core.measure_many(img, pos, rr, *rings[rr])
+                                with np.errstate(divide="ignore", invalid="ignore"):
+                                    mags[rr] = np.where(flux > 0, -2.5 * np.log10(flux / exp), np.nan)
+                            peaks = (np.full(len(pos), np.nan) if precal
+                                     else core.raw_peaks_many(raw, pos, r_now, total_bin))
+                            out["frames"][i] = {"mags": mags, "peaks": np.asarray(peaks, float), "fwhm": fw,
+                                                "flipped": bool(reg.get("flipped")), "path": path}
+                        except RuntimeError:
+                            raise
+                        except Exception as exc:
+                            out["failed"] += 1
+                            log_to_file(f"Comp survey: {os.path.basename(path)} skipped ({type(exc).__name__}: {exc}).")
+
+                first = cs.sample_indices(n)
+                if ref_path in lights and lights.index(ref_path) not in first:
+                    first = sorted(set(first) | {lights.index(ref_path)})
+                read(first, len(first))
+                more = cs.second_pass(n, sorted(out["frames"]),
+                                      {i: f["fwhm"] for i, f in out["frames"].items()},
+                                      {i: f["flipped"] for i, f in out["frames"].items()})
+                read(more, len(first) + len(more))
+            except Exception as exc:
+                out["error"] = f"{type(exc).__name__}: {exc}"
+            self.call_ui(self._survey_done, cache, out)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _survey_progress(self, cache, done: int, of: int):
+        if cache.get("tok") is not None and getattr(self, "_survey_cache", None) is cache:
+            self.busy_words(cache["tok"], f"Comp survey… frame {done} of {of}")
+
+    def _survey_done(self, cache, result: dict):
+        """The survey's frames are read: apply the #61 aperture when it is clearly better (and yours to change),
+        suggest again, and start a run that was waiting for it."""
+        self.busy_end(cache.pop("tok", None))
+        if getattr(self, "_survey_cache", None) is not cache:
+            return
+        cache["state"], cache["result"] = "done", result
+        if result.get("error") and "Canceled" not in result["error"]:
+            self.log(f"The comp survey could not read the night's frames ({result['error']}); the suggestions are "
+                     "from the catalog and this frame only.", keep_status=True)
+        elif len(result.get("frames") or {}) < 3:
+            self.log("The comp survey read fewer than 3 of the night's frames; the suggestions are from the catalog "
+                     "and this frame only.", keep_status=True)
+            result["error"] = result.get("error") or "too few frames"
+        else:
+            self._survey_aperture_apply(cache)
+        self._suggest_comps()
+        self._update_pick_label()
+        self.update_star_panel()
+        self.refresh_preview()
+        if getattr(self, "_run_after_survey", False):
+            self._run_after_survey = False
+            self.after(10, self.run_photometry)
+
+    def _survey_columns(self, result: dict, r: float):
+        """(frame indexes in time order, mags F x S at the measured aperture nearest r, peaks F x S, flipped)."""
+        idx = sorted(result["frames"])
+        rr = min(result["radii"], key=lambda v: abs(v - r))
+        mags = np.array([result["frames"][i]["mags"][rr] for i in idx], dtype=float)
+        peaks = np.array([result["frames"][i]["peaks"] for i in idx], dtype=float)
+        flipped = [result["frames"][i]["flipped"] for i in idx]
+        return idx, mags, peaks, flipped, rr
+
+    def _survey_view(self, result: dict, cands: list, t_inst: float, r: float):
+        """The survey's numbers for the aperture in the boxes (see _comp_survey)."""
+        memo = result.setdefault("_views", {})
+        key = round(float(r), 1)
+        if key in memo:
+            return memo[key]
+        idx, mags, peaks, flipped, rr = self._survey_columns(result, r)
+        st = cs.ensemble_stats(mags, flipped)
+        inst = np.array([c[1] for c in cands], dtype=float)
+        var = cs.variable_flags(st["scatter"], inst)
+        h, w = self.preview.shape[:2]
+        half_diag = 0.5 * math.hypot(w, h)
+        tx, ty = self.target_xy
+        dist = [math.hypot(c[2] - tx, c[3] - ty) / half_diag for c in cands]
+        labels = core.frame_labels_for([result["frames"][i]["path"] for i in idx])
+        out = {}
+        for j, c in enumerate(cands):
+            miss = [labels[k] or str(idx[k] + 1) for k in range(len(idx)) if not math.isfinite(mags[k, j])]
+            if miss:
+                out[c[0]] = ("not measured on frame" + ("s " if len(miss) != 1 else " ")
+                             + core.frame_list_text(miss, 6) + f" of the {len(idx)} read")
+            elif var[j] is not None:
+                out[c[0]] = (f"scatters {var[j]:.1f} × the stars of its brightness tonight "
+                             f"({cs.mmag(st['scatter'][j])}): it may vary")
+        good = [st["scatter"][j] for j, c in enumerate(cands) if c[0] not in out and math.isfinite(st["scatter"][j])]
+        with np.errstate(all="ignore"):
+            peak_max = np.nanmax(np.where(np.isfinite(peaks), peaks, -np.inf), axis=0) if peaks.size else np.zeros(0)
+        peak_max = np.where(np.isfinite(peak_max), peak_max, np.nan)
+        fws = [result["frames"][i]["fwhm"] for i in idx]
+        fws_ok = [f for f in fws if math.isfinite(f)]
+        view = {"index": {c[0]: j for j, c in enumerate(cands)}, "scatter": st["scatter"], "step": st["step"],
+                "peak_max": peak_max, "peaks": peaks, "n": st["n"], "dist": dist, "flip": st["flip"],
+                "ref_scatter": float(np.median(good)) if good else float("nan"), "out": out, "frames": len(idx),
+                "of": result["of"], "failed": result["failed"], "labels": labels, "radius": rr,
+                "sharpest": (min(fws_ok) if fws_ok else float("nan")),
+                "n_after": int(sum(1 for f in flipped if f)), "n_before": int(sum(1 for f in flipped if not f)),
+                "aperture": result.get("aperture")}
+        memo[key] = view
+        return view
+
+    def _survey_aperture_apply(self, cache):
+        """2.4.0 step 5 (#61): the apertures tried on the survey's frames, judged on the stars like the target (within
+        0.75 mag of it, else the 5 nearest in brightness) against the other candidates. When one beats the aperture in
+        the boxes by at least 10 % it is set, with the trial in the Log; but not on a loaded series (its nights keep
+        one aperture), not on defocused stars (the ring rule), and not when the boxes were changed while the survey
+        ran. Then it is a plain note."""
+        res = cache["result"]
+        if len(res["radii"]) < 2 or self.target_xy is None:
+            return
+        r0, si0, so0 = cache["aperture_at_start"]
+        t_inst = self._inst_at(self.target_xy)
+        if not math.isfinite(t_inst):
+            return
+        idx = sorted(res["frames"])
+        n_cols = len(res["frames"][idx[0]]["peaks"]) if idx else 0
+        # the candidates' instrumental mags on the page's frame (set by the last suggestion), the target's likewise
+        cand_inst = getattr(self, "_survey_cand_inst", None)
+        if cand_inst is None or len(cand_inst) != n_cols:
+            return
+        d = np.abs(np.asarray(cand_inst, dtype=float) - t_inst)
+        like = [j for j in np.argsort(d) if d[j] <= 0.75]
+        if len(like) < 3:
+            like = [int(j) for j in np.argsort(d)[:5]]
+        by_r = {}
+        for rr in res["radii"]:
+            m = np.array([res["frames"][i]["mags"][rr] for i in idx], dtype=float)
+            st = cs.ensemble_stats(m, [res["frames"][i]["flipped"] for i in idx])
+            vals = [st["scatter"][j] for j in like if math.isfinite(st["scatter"][j])]
+            by_r[rr] = float(np.median(vals)) if vals else float("nan")
+        pick = cs.aperture_choice(by_r, r0)
+        trial = ", ".join(f"r {rr:g}: {cs.mmag(v)}" for rr, v in sorted(by_r.items()))
+        res["aperture"] = {"by_r": by_r, "pick": pick, "stars": len(like)}
+        if pick is None:
+            log_to_file(f"Comp survey aperture trial ({len(like)} stars like the target, {len(idx)} frames): {trial}; "
+                        f"r {r0:g} kept.")
+            return
+        now = (self._num(self.radius), self._num(self.sky_in), self._num(self.sky_out))
+        si, so = res["rings"][pick["r"]]
+        why_not = ("a series is open and its nights keep one aperture" if self.observations else
+                   "the boxes were changed while the survey ran" if now != (r0, si0, so0) else "")
+        words = (f"Aperture trial on {len(idx)} of the night's frames, {len(like)} stars like the target: {trial}. "
+                 f"r {pick['r']:g}, sky {si:g}–{so:g} px scatters {pick['gain']:.0%} less than r {r0:g} "
+                 f"({cs.mmag(pick['scatter'])} against {cs.mmag(pick['current_scatter'])})")
+        if why_not:
+            self.log(words + f"; not set because {why_not}. Type it in the Aperture boxes to use it.", keep_status=True)
+            return
+        self.radius.set(pick["r"])
+        self.sky_in.set(si)
+        self.sky_out.set(so)
+        self.log(words + ", so it is set (Suggest… shows the FWHM rule's sizes).", keep_status=True)
+
+    def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names):
+        """2.4.0 step 5 (#76): with the survey: a loaded series' comps come first when they pass tonight (and the
+        ones that do not are said), and on a flip night the set whose expected flip step is nearest zero is chosen
+        from the 8 best-ranked survivors. Returns (picks, expected flip step or NaN, series comps kept)."""
+        self._survey_cand_inst = [c[1] for c in cands]
+        if survey is None:
+            return picks, float("nan"), set()
+        dm_of = {n: dm for n, dm in picks}
+        ranked_all = []
+        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
+            pool = [c for c in cands if c[0] in pool_names and c[0] not in {n for n, _d in ranked_all}]
+            for n_, dm in choose(pool, gate):
+                if n_ not in {n for n, _d in ranked_all}:
+                    ranked_all.append((n_, dm))
+                    dm_of.setdefault(n_, dm)
+        series_kept = set()
+        if self.observations:
+            mine = [getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES]
+            mine = [m for m in mine if m]
+            ok = {n for n, _d in ranked_all}
+            series_kept = {m for m in mine if m in ok}
+            failed = [m for m in mine if m in survey["index"] and m not in ok]
+            self._survey_series_failed = failed
+            if series_kept:
+                front = [(m, dm_of[m]) for m in mine if m in series_kept]
+                picks = (front + [p for p in picks if p[0] not in series_kept])[:4]
+        else:
+            self._survey_series_failed = []
+        set_step = float("nan")
+        if survey["flip"] and not series_kept and len(ranked_all) >= 2:
+            names = [n for n, _d in ranked_all][:cs.SET_TOP]
+            n_ = max(len(names) - 1, 1)
+            keys = [cs.rank_key(k / n_, survey["scatter"][survey["index"][nm]], survey["ref_scatter"],
+                                survey["step"][survey["index"][nm]], survey["dist"][survey["index"][nm]], True)
+                    for k, nm in enumerate(names)]
+            steps = [survey["step"][survey["index"][nm]] for nm in names]
+            chosen, set_step = cs.choose_set(names, keys, steps, count=min(4, max(len(picks), 1)))
+            if chosen:
+                picks = [(nm, dm_of[nm]) for nm in chosen]
+        return picks, set_step, series_kept
+
+    @staticmethod
+    def _survey_info(survey, name):
+        if survey is None or name not in survey["index"]:
+            return None
+        j = survey["index"][name]
+        return {"scatter": float(survey["scatter"][j]), "step": float(survey["step"][j]),
+                "peak": float(survey["peak_max"][j]), "frames": survey["frames"], "flip": survey["flip"]}
+
+    @staticmethod
+    def _survey_words(survey, set_step) -> str:
+        if survey is None:
+            return ""
+        txt = (f" Chosen on {survey['frames']} of the night's {survey['of']} frames (comp survey: steadiness, the "
+               "sharpest frames' peaks, every frame in view")
+        if survey["flip"]:
+            txt += (f"; {survey['n_before']} before and {survey['n_after']} after the meridian flip, so steady on "
+                    "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag"
+                                         if math.isfinite(set_step) else ""))
+        return txt + ")."
+
+    def _survey_report(self, survey, lin, picks):
+        """2.4.0 step 5 (#76): the stars the survey left out (by name, why), the loaded series' comps that fail
+        tonight, and "no good comp" instead of filling S1–S4 with poor stars. Said once per survey and aperture."""
+        if survey is None:
+            return
+        out = dict(survey["out"])
+        if lin is not None and not getattr(self, "precalibrated", False):
+            for name, j in survey["index"].items():
+                pk = survey["peak_max"][j]
+                if name not in out and math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin:
+                    col = survey["peaks"][:, j]
+                    over = int(np.sum(col >= lin))
+                    out[name] = (f"raw peak up to {pk:,.0f} ADU on the sharpest frames "
+                                 + (f"(over the linear limit {lin:,.0f} on {over} of {survey['frames']})" if over
+                                    else f"(within 10 % of the linear limit {lin:,.0f})"))
+        said_key = (id(survey), lin, tuple(n for n, _d in picks))
+        if getattr(self, "_survey_said", None) == said_key:
+            return
+        self._survey_said = said_key
+        failed = [n for n in getattr(self, "_survey_series_failed", []) if n in out]
+        for n in failed:
+            self.log(f"Series comp {n} fails tonight: {out[n]}. It is not suggested; Comp health after the run shows "
+                     "whether to keep it.", keep_status=True)
+        rest = [n for n in out if n not in failed]
+        if rest:
+            self.log("Left out by the comp survey: " + "; ".join(f"{n} ({out[n]})" for n in rest[:6])
+                     + (f"; and {len(rest) - 6} more" if len(rest) > 6 else "") + ".", keep_status=True)
+        if not picks:
+            self.log("⚠ No good comp here tonight: every star of the right brightness and color failed the comp "
+                     "survey (above). Pick the steadiest you can by hand, and check Comp health after the run.")
 
     @staticmethod
     def _drift_words(drift, safe_edge: float) -> str:
@@ -15874,7 +16395,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.3.4 (d): what else it was picked on
             # (2.4.0 #78: a suggestion is never nearer the edge than safe_edge, all night, so no edge words here)
             pk, lin = info.get("peak"), info.get("linear")
-            if lin and pk is not None and math.isfinite(pk):
+            sv = info.get("survey")
+            if sv:
+                # 2.4.0 step 5 (#76): what the night's own frames said
+                why += f", steady {cs.mmag(sv['scatter'])} on {sv['frames']} frames"
+                if sv.get("flip") and math.isfinite(sv.get("step", float("nan"))):
+                    why += f", flip step {1000 * sv['step']:+.1f} mmag"
+                if lin and math.isfinite(sv.get("peak", float("nan"))):
+                    why += f", raw peak {sv['peak']:,.0f} ADU on the sharpest ({sv['peak'] / lin:.0%} of the linear limit)"
+                if info.get("series"):
+                    why += ", the series' comp"
+            elif lin and pk is not None and math.isfinite(pk):
                 why += f", raw peak {pk:,.0f} ADU ({pk / lin:.0%} of the linear limit)"
             role = marked.get(name)
             lines.append(f"{head}: {why}" + (f" — now {role_label(role)}" if role else ""))
@@ -16836,6 +17367,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         series and check-star questions were answered by the night's own run.
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
+        survey = getattr(self, "_survey_cache", None)
+        if (stack_run is None and only is None and survey is not None and survey.get("state") == "loading"
+                and self.mode_key != "discovery"):
+            # 2.4.0 step 5 (#76, John 19 Nov): Run photometry waits for the comp survey (its spares and S rings)
+            self._run_after_survey = True
+            self.status.set("Run photometry starts as soon as the comp survey finishes (the busy bar shows it).")
+            self.log("Run photometry waits for the comp survey to finish, then starts by itself.", keep_status=True)
+            return
+        self._run_after_survey = False
         self._remeasure = None
         self._unreadable_said = set()   # 2.4.0 (#94): each unreadable frame is named once per run
         self._typed_site_check(action="Run photometry")   # 2.3.2 (item 1)
