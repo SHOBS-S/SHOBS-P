@@ -131,9 +131,9 @@ class TestEnsemble(unittest.TestCase):
         # WASP-49 b 19 Nov, r 8 (steps against the others' median, mmag) and distance from the target (px)
         step = np.array([-36.4, -34.0, 9.9, 15.8, 64.4]) / 1000
         dist = [155, 614, 702, 740, 1300]
-        rel = cs.steps_near_target(step, dist, k=2)
-        self.assertAlmostEqual(rel[0] * 1000, -1.2, places=6)      # the nearest stars step like the target
-        self.assertAlmostEqual(rel[1] * 1000, 1.2, places=6)
+        rel = cs.steps_near_target(step, dist)
+        self.assertAlmostEqual(rel[0] * 1000, -2.4, places=6)      # the nearest stars step like the target
+        self.assertAlmostEqual(rel[1] * 1000, 0.0, places=6)
         self.assertGreater(rel[4] * 1000, 90)                       # the edge star steps most
         names = ["2073", "2164", "2079", "2074", "J0603"]
         chosen, exp = cs.choose_set(names, [0, 0.1, 0.2, 0.3, 0.4], list(rel), count=4)

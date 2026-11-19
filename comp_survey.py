@@ -202,16 +202,18 @@ def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLI
             "in_ensemble": use}
 
 
-def steps_near_target(step, dist, eligible=None, scatter=None, k: int = 5):
-    """Each candidate's flip step against a reference: the weighted (1/sigma^2) mean step of the k candidates
-    nearest the target among the ELIGIBLE ones (those that could be comps: through the gates, in the comp brightness
-    window; Fable 2: the faint stars nearest the target are noise, not a reference). The pier-side error depends on
-    where a star sits on the sensor (the flat and the optics are point-symmetric about the axis, and the flip turns
-    the field 180 degrees), so the stars nearest the target step most like it; a set whose steps against them average
-    to zero leaves the target's step out of the result. Against the other candidates instead, a set can agree with
-    itself and still give the target a large step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to
-    -2.8 mmag among themselves but give the target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6).
-    All NaN with fewer than 2 eligible stars with a measured step."""
+def steps_near_target(step, dist, eligible=None, scatter=None, k: int = 3):
+    """Each candidate's flip step against a reference: the median step of the k candidates nearest the target among
+    the ELIGIBLE ones (those that could be comps: through the gates, in the comp brightness window; Fable 2: the faint
+    stars nearest the target are noise, not a reference). The pier-side error depends on where a star sits on the
+    sensor (the flat and the optics are point-symmetric about the axis, and the flip turns the field 180 degrees), so
+    the stars nearest the target step most like it; a set whose steps against them average to zero leaves the
+    target's step out of the result. Against the other candidates instead, a set can agree with itself and still give
+    the target a large step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to -2.8 mmag among
+    themselves but give the target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6). A median of a few,
+    not a wider or weighted mean: the reference must stay local (a mean over 5 of WASP-49's comps chose a set that
+    left the target -20.8 mmag). `scatter` is accepted for the callers' convenience and not used. All NaN with fewer
+    than 2 eligible stars with a measured step."""
     st = np.asarray(step, dtype=float)
     d = np.asarray(dist, dtype=float)
     ok = np.isfinite(st) & np.isfinite(d)
@@ -220,14 +222,7 @@ def steps_near_target(step, dist, eligible=None, scatter=None, k: int = 5):
     if ok.sum() < 2:
         return np.full(st.shape, np.nan)
     near = np.argsort(np.where(ok, d, np.inf))[:max(2, min(k, int(ok.sum())))]
-    if scatter is not None:
-        sc = np.asarray(scatter, dtype=float)[near]
-        w = np.where(np.isfinite(sc) & (sc > 0), 1.0 / np.maximum(sc, 1e-4) ** 2, 0.0)
-    else:
-        w = np.ones(near.size)
-    if w.sum() <= 0:
-        w = np.ones(near.size)
-    return st - float(np.sum(w * st[near]) / np.sum(w))
+    return st - float(np.median(st[near]))
 
 
 def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,
