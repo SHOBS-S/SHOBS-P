@@ -2591,7 +2591,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if index == STEP_BLINK and self._blink_folder() != self._blink_loaded_from:
             self.load_blink_list()
         elif index == STEP_BLINK:
-            self._update_rejected_list()   # 2.2.17 (item 6): frames set aside elsewhere (two fields, a series)
+            # 2.2.17 (item 6): frames set aside elsewhere (two fields, a series) — show_blink updates the rejected
+            # list too. 2.4.0 (#112 review M1): it also draws the frame left awaited when the page was left (its
+            # wait and the reader were stopped then) and starts the reader again.
+            self.show_blink()
         # 2.2.3: once the page is on screen and laid out, make its plot fill its area (the first draw could land
         # small in the top-left corner until something else redrew it, e.g. the mouse wheel).
         self.after_idle(self._fit_visible_canvases)
@@ -7453,7 +7456,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._blink_restretch_gen += 1
         gen = self._blink_restretch_gen
         stretch = dict(self.stretch["blink"])
-        self.show_blink()
+        if getattr(self, "current_step", STEP_BLINK) == STEP_BLINK:   # #112 review nit: no reader off the page
+            self.show_blink()
         with self._blink_lock:   # 2.4.0 (#100): the reader thread fills the cache
             items = [(k, v) for k, v in self._blink_cache.items() if len(v) > 3 and v[3] != stretch]
         if not items:
@@ -7616,10 +7620,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.show_blink()
 
     def _leave_blink_page(self):
-        """2.4.0 (#112, John 19 Nov): leaving the Blink page (another step, or Credits; a mode change keeps the step on screen) stops playback
-        and the frame reader behind it. Left running, every tick read and drew the next frame on the hidden page and
-        the reader kept loading frames, which slowed Calibrate, Photometry and Run (a long night on a network
-        drive). Stepping back to Blink shows the frame it stopped on; Blink starts it again."""
+        """2.4.0 (#112, John 19 Nov): leaving the Blink page stops playback and the frame reader behind it.
+        Leaving = another step, or Credits; a mode change keeps the step on screen, so it is not a leave. Left
+        running, every tick read and drew the next frame on the hidden page and the reader kept loading frames,
+        which slowed Calibrate, Photometry and Run (a long night on a network drive). Stepping back to Blink shows
+        the frame it stopped on (show_step redraws it and restarts the reader); Blink starts playback again."""
         was_playing = bool(getattr(self, "blink_playing", False))
         if was_playing or getattr(self, "_blink_job", None) is not None \
                 or getattr(self, "_blink_show_job", None) is not None:
@@ -7631,8 +7636,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if reader is not None and reader.is_alive():
             self._blink_gen = getattr(self, "_blink_gen", 0) + 1   # the reader ends at its next frame
         if was_playing:
-            self.log("Blink stopped (left the Blink page).", keep_status=True)
-            self.status.set("Blink stopped (left the Blink page).")
+            self.log("Blink stopped (left the Blink page).")   # review S1: log() keeps a running job's ⚠ shown
 
     def stop_blink(self):
         self.blink_playing = False
