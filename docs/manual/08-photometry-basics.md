@@ -341,19 +341,29 @@ The edge, brightness and colour rules above still apply first.
 
 **How the rest are ranked.** By the night's own scatter first (each star against the other candidates, with clouds
 and airmass cancelling as they do in the run), then by the brightness and colour rules above. On a night with a
-meridian flip two more things count: each star's **step at the flip**, measured against the stars nearest the target,
-and its **distance from the target**. After the flip every star lands on the opposite side of the sensor, so a flat or
-optics error that does not cancel shows up as a step, and it grows away from the center. The stars nearest the target
-step most like it, so a set whose steps against them average to zero leaves the target's step out of your result. On
-WASP-49 b (19 Nov 2026) the two comps nearest the target left it a −1.6 mmag step, while three steadier-looking stars
-farther out, which agreed with each other to 3 mmag, gave it −26.5 mmag.
+meridian flip, stars nearer the target rank a little higher: after the flip every star lands on the opposite side of
+the sensor, so a flat or optics error that does not cancel shows up as a step, and it grows away from the center.
 
-**Choosing the set on a flip night.** From the 8 best-ranked survivors SHOBS-P takes the set (2 to 4 stars) whose
-steps average nearest zero, preferring stars that do not step much on their own (a set that only cancels big steps is
-fragile), and suggests fewer than four when the fourth would make it worse. The suggestions line ends with, for
+**Choosing the set on a flip night (Transits).** What matters is the step the *target* gets with a set of comps, so
+SHOBS-P measures exactly that. On the survey's frames nearest the flip (up to 6 on each side) it takes the target
+against each possible set (2 to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the
+ephemeris and shape from the Input page, and keeps the set whose step for the target is nearest zero. Sets within the
+measurement's own error of the best count as equal, and then the best-ranked of them wins, so the choice does not
+chase noise. It suggests fewer than four when the fourth would make the step worse. The suggestions line ends with, for
 example, *Chosen on 36 of the night's 232 frames (comp survey: steadiness, the sharpest frames' peaks, every frame in
-view; 15 before and 21 after the meridian flip, so steady on both pier sides, expected flip step +0.4 mmag against
-the stars nearest the target).*
+view; 15 before and 21 after the meridian flip, so steady on both pier sides, the target's flip step with these comps
++0.4 ± 1.1 mmag (measured on the frames nearest the flip, the predicted transit taken out)).*
+
+Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
+3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,
+and on that night the forecast picked the set with the largest step of all.
+
+**When the step is left to the transit fit.** The target's step is not measured, and the set is chosen on steadiness
+alone, when: the mode is not Transits (a variable target's own change would read as a step); the Input page has no
+ephemeris and shape (period, T0, Rp/R*, a/R*); the frames carry no times; or a frame used falls within 10 minutes (plus
+3 × the ephemeris uncertainty) of ingress or egress, where a small timing error changes the predicted dip fast. The
+line then says *…, the flip step is left to the transit fit (the flip is near ingress or egress, where the predicted
+transit is not exact enough)*, and the transit fit's own flip test handles it (chapter 17).
 
 **A loaded series.** The series' own comps come first when they pass tonight, so the series keeps its comps from night
 to night. A series comp that fails is named in the Log: *Series comp TYC … fails tonight: raw peak up to 62,100 ADU on
@@ -361,7 +371,7 @@ the sharpest frames (over the linear limit 60,931 on 6 of 30). It is not suggest
 whether to keep it.*
 
 **What the lines say.** Each S line adds what the night's frames showed, for example *…, steady 2.1 mmag on 30
-frames, flip step +0.8 mmag (against the stars nearest the target), raw peak 41,200 ADU on the sharpest (68% of the
+frames, flip step +0.8 mmag (the target against this comp alone), raw peak 41,200 ADU on the sharpest (68% of the
 linear limit)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
 (scatters 4.2 × the stars of its brightness tonight (18.3 mmag): it may vary); APASS … (not measured on frames 41, 42
 of the 30 read).* When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the

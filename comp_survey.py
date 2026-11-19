@@ -6,7 +6,8 @@ frame edge all night) on a SAMPLE of the night's own frames, calibrated and line
 about every 10th light, the first and last, the frames next to the sharpest ones read, and enough on each side of a
 meridian flip. From those frames each candidate gets:
   - its scatter against the other candidates (an iterative ensemble, like Comp health),
-  - its step at the meridian flip (after minus before, against the others), when the night has one,
+  - on a Transits night with a meridian flip, the TARGET's step there against it (and, for the set, against the set's
+    mean), from the frames nearest the flip with the predicted transit taken out (step 5 fix),
   - its highest raw peak (the sharpest frames read), for the linear-limit gate,
   - whether it was measured on every sampled frame.
 #61: the same frames are measured at a few apertures, and the one with the lowest scatter for stars like the target
@@ -34,6 +35,9 @@ SET_STEP_SLACK = 0.003     # mag: sets whose cost is this close to the best coun
 SET_SIZE_COST = 0.003      # mag: what one comp fewer than asked costs a set (fewer comps, less S/N)
 SET_TOP = 8                # the set is chosen from the 8 best-ranked survivors
 FLIP_NEAR = 6              # the flip step from the 6 frames read nearest the flip on each side
+FLIP_GAP_MAX = 12          # at most this many frames read from the gap where the flip is (both ends of it)
+TARGET_STEP_MARGIN = 10.0 / 1440.0   # days: a near-flip frame this near (plus 3 sigma of Tc) to ingress or egress
+                                     # makes the target's measured step depend on the ephemeris: not judged then
 APERTURE_MIN_STARS = 3     # #61: judged on at least 3 stars like the target ...
 APERTURE_MIN_FRAMES = 12   # ... on at least 12 frames, else a note only
 
@@ -77,11 +81,19 @@ def second_pass(n: int, read: list[int], fwhm: dict, flipped: dict) -> list[int]
                     have.add(j)
                     out.append(j)
                     need -= 1
-        # and the frames right at the flip, which say where it is
-        for j in range(lo + 1, hi):
-            if j not in have and len(out) < 12:
+        # and the frames right at the flip, which say where it is: from both ends of the gap, alternately, with a cap
+        # of their own (step 5 regression: from the low end only, sharing a cap of 12 with the sharp frames' neighbors,
+        # WASP-49 b read frames 102-105 and missed 106-110 just before the flip at 111)
+        gap = [j for j in range(lo + 1, hi) if j not in have]
+        order = [gap[i] for pair in zip(range(len(gap)), range(len(gap) - 1, -1, -1)) for i in pair]
+        took = 0
+        for j in order:
+            if took >= FLIP_GAP_MAX:
+                break
+            if j not in have:
                 have.add(j)
                 out.append(j)
+                took += 1
     return sorted(out)
 
 
@@ -145,6 +157,21 @@ def flip_sides(flipped):
     return fl != fl[0]
 
 
+def near_flip_rows(after, near_flip: int = FLIP_NEAR):
+    """The rows (frames in time order) nearest the flip: the last `near_flip` of the first side and the first
+    `near_flip` of the second. (empty, empty) without a flip."""
+    if after is None:
+        return np.zeros(0, int), np.zeros(0, int)
+    after = np.asarray(after, dtype=bool)
+    before_idx, after_idx = np.where(~after)[0], np.where(after)[0]
+    if not before_idx.size or not after_idx.size:
+        return np.zeros(0, int), np.zeros(0, int)
+    first_after = after_idx.min()
+    b_rows = before_idx[before_idx < first_after][-near_flip:]
+    a_rows = after_idx[after_idx > b_rows.max()][:near_flip] if b_rows.size else after_idx[:near_flip]
+    return b_rows, a_rows
+
+
 def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLIP_NEAR) -> dict:
     """mags: instrumental magnitudes, frames in TIME ORDER in rows, candidates in columns (NaN = not measured).
     flipped: per frame, its orientation against the reference frame (None or all one value: no flip). Each
@@ -186,10 +213,7 @@ def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLI
             before_idx = np.where(~after)[0]
             after_idx = np.where(after)[0]
             n_b, n_a = int(before_idx.size), int(after_idx.size)
-            # the frames nearest the flip: the last of the first side and the first of the second (time order)
-            first_after = after_idx.min()
-            b_rows = before_idx[before_idx < first_after][-near_flip:]
-            a_rows = after_idx[after_idx > b_rows.max()][:near_flip] if b_rows.size else after_idx[:near_flip]
+            b_rows, a_rows = near_flip_rows(after, near_flip)
             if b_rows.size >= 2 and a_rows.size >= 2:
                 d = z - _others_median(z, use)
                 for j in range(s):
@@ -202,27 +226,84 @@ def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLI
             "in_ensemble": use}
 
 
-def steps_near_target(step, dist, eligible=None, scatter=None, k: int = 3):
-    """Each candidate's flip step against a reference: the median step of the k candidates nearest the target among
-    the ELIGIBLE ones (those that could be comps: through the gates, in the comp brightness window; Fable 2: the faint
-    stars nearest the target are noise, not a reference). The pier-side error depends on where a star sits on the
-    sensor (the flat and the optics are point-symmetric about the axis, and the flip turns the field 180 degrees), so
-    the stars nearest the target step most like it; a set whose steps against them average to zero leaves the
-    target's step out of the result. Against the other candidates instead, a set can agree with itself and still give
-    the target a large step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to -2.8 mmag among
-    themselves but give the target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6). A median of a few,
-    not a wider or weighted mean: the reference must stay local (a mean over 5 of WASP-49's comps chose a set that
-    left the target -20.8 mmag). `scatter` is accepted for the callers' convenience and not used. All NaN with fewer
-    than 2 eligible stars with a measured step."""
-    st = np.asarray(step, dtype=float)
-    d = np.asarray(dist, dtype=float)
-    ok = np.isfinite(st) & np.isfinite(d)
-    if eligible is not None:
-        ok &= np.asarray(eligible, dtype=bool)
-    if ok.sum() < 2:
-        return np.full(st.shape, np.nan)
-    near = np.argsort(np.where(ok, d, np.inf))[:max(2, min(k, int(ok.sum())))]
-    return st - float(np.median(st[near]))
+def transit_mags(t, planet: dict | None, occultation=None, ld=(0.4, 0.25)):
+    """step 5 fix (#76): the predicted transit at times t (BJD_TDB), in magnitudes (0 out of transit, positive in it),
+    and whether it can be trusted near those times: {"mag", "z", "k"}; None without a usable ephemeris and shape
+    (period, t0, Rp/R*, a/R*). `occultation(z, k, u1, u2)` is transit_core's model (passed in: no import here)."""
+    p = planet or {}
+    try:
+        period, t0, k, a_rs = (float(p[key]) for key in ("period", "t0", "k", "a_rs"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    b = float(p.get("b") or 0.0)
+    if not all(math.isfinite(v) and v > 0 for v in (period, k, a_rs)) or not math.isfinite(t0) or occultation is None:
+        return None
+    t = np.asarray(t, dtype=float)
+    n = np.round((t - t0) / period)
+    tc = t0 + n * period
+    cos_i = min(max(b / a_rs, 0.0), 1.0)
+    phase = 2.0 * math.pi * (t - tc) / period
+    z = a_rs * np.sqrt(np.sin(phase) ** 2 + (cos_i * np.cos(phase)) ** 2)
+    z = np.where(np.cos(phase) > 0, z, 1e3)
+    flux = np.asarray(occultation(z, k, float(ld[0]), float(ld[1])), dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mag = np.where(flux > 0, -2.5 * np.log10(flux), np.nan)
+    return {"mag": mag, "z": z, "k": k, "tc": tc, "period": period, "t0": t0, "a_rs": a_rs, "b": b,
+            "t0_err": float(p.get("t0_err") or 0.0), "period_err": float(p.get("period_err") or 0.0)}
+
+
+def near_contact(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> bool:
+    """True when any time in t lies within `margin` + 3 sigma of Tc of a partial phase (ingress or egress: the planet
+    on the stellar limb, 1 - k < z < 1 + k), where an ephemeris error changes the predicted dip fast."""
+    if model is None:
+        return True
+    t = np.asarray(t, dtype=float)
+    for ti in t:
+        unc = math.hypot(model["t0_err"], abs(round((ti - model["t0"]) / model["period"])) * model["period_err"])
+        m = margin + 3.0 * unc
+        tt = ti + np.linspace(-m, m, 25)
+        n = np.round((tt - model["t0"]) / model["period"])
+        phase = 2.0 * math.pi * (tt - (model["t0"] + n * model["period"])) / model["period"]
+        cos_i = min(max(model["b"] / model["a_rs"], 0.0), 1.0)
+        z = model["a_rs"] * np.sqrt(np.sin(phase) ** 2 + (cos_i * np.cos(phase)) ** 2)
+        z = np.where(np.cos(phase) > 0, z, 1e3)
+        if np.any((z > 1.0 - model["k"]) & (z < 1.0 + model["k"])):
+            return True
+    return False
+
+
+def target_diffs(t_mag, comp_mags, t_model=None):
+    """step 5 fix (#76): per frame (rows) and candidate (columns): the target's magnitude minus the candidate's, each
+    zero-pointed to its own median, with the predicted transit taken out of the target (t_model, mag, positive in
+    transit). A set's light curve is the target minus the mean of its comps, so its step is from the mean of these
+    columns."""
+    tm = np.asarray(t_mag, dtype=float)
+    cm = np.asarray(comp_mags, dtype=float)
+    if t_model is not None:
+        tm = tm - np.asarray(t_model, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        tz = tm - np.nanmedian(tm)
+        cz = cm - np.nanmedian(cm, axis=0)
+    return tz[:, None] - cz
+
+
+def set_target_step(diffs, cols, b_rows, a_rows) -> tuple[float, float]:
+    """The target's flip step (after minus before, mag) with the comps in columns `cols`, and its 1-sigma error: the
+    median over the near-flip frames after minus the median before, of the target minus the set's mean. (NaN, NaN)
+    with fewer than 2 frames a side where every comp of the set was measured."""
+    if not len(cols):
+        return float("nan"), float("nan")
+    d = np.asarray(diffs, dtype=float)[:, list(cols)]
+    ok = np.all(np.isfinite(d), axis=1)
+    lc = np.where(ok, d.mean(axis=1), np.nan)
+    a, b = lc[a_rows], lc[b_rows]
+    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+    if a.size < 2 or b.size < 2:
+        return float("nan"), float("nan")
+    # a median's error is about 1.25 x the mean's
+    err = 1.2533 * math.sqrt(float(np.var(a, ddof=1)) / a.size + float(np.var(b, ddof=1)) / b.size)
+    return float(np.median(a) - np.median(b)), err
 
 
 def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,
@@ -255,43 +336,48 @@ def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float
 def rank_key(base: float, scatter: float, ref_scatter: float, step: float = float("nan"), dist_frac: float = 0.0,
              flip: bool = False) -> float:
     """Lower is better. The night's own scatter first (relative to the survivors' median), then the catalog score
-    (brightness and color, as before, at half weight); on a flip night also the measured flip step (per 0.01 mag)
-    and the distance from the target (as a fraction of the frame's half-diagonal), since pier-side flat errors grow
-    away from the center."""
+    (brightness and color, as before, at half weight); on a flip night also the distance from the target (as a
+    fraction of the frame's half-diagonal), since pier-side flat errors grow away from the center. The flip step
+    itself is not ranked star by star (step 5 fix: one comp's step for the target is noisy on a few frames); the
+    set is chosen on its measured step (choose_set). `step` is accepted for the callers and not used."""
     sc = scatter / ref_scatter if (math.isfinite(scatter) and ref_scatter and ref_scatter > 0) else 2.0
     key = sc + 0.5 * (base if math.isfinite(base) else 1.0)
     if flip:
-        key += (abs(step) / 0.01 if math.isfinite(step) else 1.0) + 0.5 * dist_frac
+        key += 0.5 * dist_frac
     return float(key)
 
 
-def choose_set(names: list, keys: list, steps: list, count: int = 4, top: int = SET_TOP) -> tuple[list, float]:
+def choose_set(names: list, keys: list, set_step, count: int = 4, top: int = SET_TOP) -> tuple[list, float, float]:
     """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set (2 up to
-    `count` stars) with the lowest cost = |expected flip step| (the mean of its members' steps) + half their mean
-    |step| (steady stars first: a set that only cancels big steps is fragile) + SET_SIZE_COST per comp fewer than
-    `count`; among sets within SET_STEP_SLACK of the lowest, the best-ranked (lowest total key). Stars without a
-    measured step only join when there are not enough with one. Returns (names in rank order, expected step)."""
-    pool = [(n, k, s) for n, k, s in zip(names, keys, steps)][:top]
-    stepped = [p for p in pool if math.isfinite(p[2])]
+    `count` stars) whose MEASURED flip step for the target is nearest zero: set_step(names) -> (step, 1-sigma error),
+    the target against the set's mean on the frames nearest the flip (step 5 fix, #76: on WASP-49 b a forecast from
+    the stars nearest the target chose the set that gave the target the largest step). Cost = |step| +
+    SET_SIZE_COST per comp fewer than `count`; sets within the best one's error (at least SET_STEP_SLACK) count as
+    equal and the best-ranked of those (lowest mean key) is taken, so the choice does not chase noise. Sets without
+    a measured step are not considered. Returns (names in rank order, step, error); ([], NaN, NaN) when no set of 2
+    or more has a measured step."""
+    pool = [(n, k) for n, k in zip(names, keys)][:top]
     k = min(count, len(pool))
-    if k == 0:
-        return [], float("nan")
-    if len(stepped) < k:
-        chosen = pool[:k]
-        vals = [p[2] for p in chosen if math.isfinite(p[2])]
-        return [p[0] for p in chosen], (float(np.mean(vals)) if vals else float("nan"))
+    nan = float("nan")
+    if k < 2:
+        return [], nan, nan
     combos = []
-    for size in range(min(2, k), k + 1):
-        for c in itertools.combinations(stepped, size):
-            st = [p[2] for p in c]
-            cost = abs(float(np.mean(st))) + 0.5 * float(np.mean(np.abs(st))) + SET_SIZE_COST * (k - size)
-            combos.append((cost, sum(p[1] for p in c) / size, c))
-    best = min(c[0] for c in combos)
-    ok = [c for c in combos if c[0] <= best + SET_STEP_SLACK]
-    pick = min(ok, key=lambda c: c[1])[2]
+    for size in range(2, k + 1):
+        for c in itertools.combinations(pool, size):
+            st, er = set_step([p[0] for p in c])
+            if not math.isfinite(st):
+                continue
+            cost = abs(st) + SET_SIZE_COST * (k - size)
+            combos.append((cost, sum(p[1] for p in c) / size, c, st, er))
+    if not combos:
+        return [], nan, nan
+    best = min(combos, key=lambda c: c[0])
+    slack = max(SET_STEP_SLACK, best[4] if math.isfinite(best[4]) else 0.0)
+    ok = [c for c in combos if c[0] <= best[0] + slack]
+    pick = min(ok, key=lambda c: c[1])
     order = {p[0]: i for i, p in enumerate(pool)}
-    chosen = sorted(pick, key=lambda p: order[p[0]])
-    return [p[0] for p in chosen], float(np.mean([p[2] for p in chosen]))
+    chosen = sorted(pick[2], key=lambda p: order[p[0]])
+    return [p[0] for p in chosen], pick[3], pick[4]
 
 
 def trial_radii(fwhm: float, current: float | None = None) -> list[float]:

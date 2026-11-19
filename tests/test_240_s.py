@@ -69,6 +69,21 @@ class TestSampling(unittest.TestCase):
         # no flip, no FWHM: nothing more to read
         self.assertEqual(cs.second_pass(60, read, {}, {i: False for i in read}), [])
 
+    def test_second_pass_reads_both_ends_of_the_flip_gap(self):
+        # step 5 regression (WASP-49 b): the frames just before the flip were never read
+        read = list(range(0, 232, 10)) + [231]
+        flipped = {i: i >= 115 for i in read}   # the flip somewhere in 111-119 (110 before, 120 after)
+        fwhm = {i: 3.0 for i in read}
+        fwhm[60], fwhm[200] = 2.0, 2.1
+        more = cs.second_pass(232, read, fwhm, flipped)
+        gap = [j for j in more if 110 < j < 120]
+        self.assertEqual(gap, list(range(111, 120)))              # the whole gap (9 frames), both ends
+        big = cs.second_pass(400, [0, 100, 300, 399], {}, {0: False, 100: False, 300: True, 399: True})
+        g = [j for j in big if 100 < j < 300]
+        self.assertEqual(len(g), cs.FLIP_GAP_MAX)
+        self.assertIn(101, g)
+        self.assertIn(299, g)
+
 
 def _night(frames=40, stars=8, noise=0.003, seed=1):
     rng = np.random.default_rng(seed)
@@ -116,36 +131,6 @@ class TestEnsemble(unittest.TestCase):
                                    delta=0.006)
         # the scatter does not count the step (each side is zero-pointed on its own)
         self.assertTrue(np.all(st["scatter"] < 0.006), st["scatter"])
-        names = [f"S{j}" for j in range(6)]
-        keys = [0.1 * j for j in range(6)]
-        chosen, step = cs.choose_set(names, keys, list(st["step"]), count=4)
-        self.assertEqual(len(chosen), 4)
-        self.assertLess(abs(step), 0.01)
-        self.assertNotIn("S0", chosen) if "S1" not in chosen else self.assertIn("S0", chosen)   # +/- pair together
-        # without enough measured steps: the best-ranked, as they come
-        chosen, step = cs.choose_set(names, keys, [float("nan")] * 6, count=4)
-        self.assertEqual(chosen, names[:4])
-        self.assertTrue(math.isnan(step))
-
-    def test_steps_near_target(self):
-        # WASP-49 b 19 Nov, r 8 (steps against the others' median, mmag) and distance from the target (px)
-        step = np.array([-36.4, -34.0, 9.9, 15.8, 64.4]) / 1000
-        dist = [155, 614, 702, 740, 1300]
-        rel = cs.steps_near_target(step, dist)
-        self.assertAlmostEqual(rel[0] * 1000, -2.4, places=6)      # the nearest stars step like the target
-        self.assertAlmostEqual(rel[1] * 1000, 0.0, places=6)
-        self.assertGreater(rel[4] * 1000, 90)                       # the edge star steps most
-        names = ["2073", "2164", "2079", "2074", "J0603"]
-        chosen, exp = cs.choose_set(names, [0, 0.1, 0.2, 0.3, 0.4], list(rel), count=4)
-        self.assertEqual(chosen, ["2073", "2164"])                  # the pair that left the target -1.6 mmag
-        self.assertTrue(np.all(np.isnan(cs.steps_near_target([0.01, np.nan], [1, 2]))))
-        # Fable 2: only eligible stars (comp brightness, through the gates) make the reference; the faint noisy
-        # stars nearest the target do not
-        noisy = np.array([0.05, -0.04, 0.0, 0.001, -0.001]); d = [1, 2, 10, 11, 12]
-        elig = [False, False, True, True, True]
-        rel = cs.steps_near_target(noisy, d, elig)
-        self.assertAlmostEqual(rel[2], 0.0, places=6)
-        self.assertTrue(np.all(np.isnan(cs.steps_near_target(noisy, d, [True, False, False, False, False]))))
 
     def test_flip_sides_follow_time_order_and_trend_is_no_step(self):
         # Fable 12: the reference frame may be after the flip; "after" is decided by time order
@@ -162,10 +147,94 @@ class TestEnsemble(unittest.TestCase):
         steady = cs.rank_key(0.5, 0.002, 0.004)
         noisy = cs.rank_key(0.0, 0.008, 0.004)
         self.assertLess(steady, noisy)                      # steadiness first
-        self.assertLess(cs.rank_key(0.2, 0.004, 0.004, 0.001, 0.1, True),
-                        cs.rank_key(0.2, 0.004, 0.004, 0.03, 0.1, True))   # a small flip step wins on a flip night
+        # step 5 fix: a single comp's flip step is not ranked (the set's measured step decides)
+        self.assertEqual(cs.rank_key(0.2, 0.004, 0.004, 0.001, 0.1, True),
+                         cs.rank_key(0.2, 0.004, 0.004, 0.03, 0.1, True))
         self.assertLess(cs.rank_key(0.2, 0.004, 0.004, 0.0, 0.1, True),
-                        cs.rank_key(0.2, 0.004, 0.004, 0.0, 0.9, True))    # and nearer the target
+                        cs.rank_key(0.2, 0.004, 0.004, 0.0, 0.9, True))    # nearer the target still wins
+
+
+def _flip_night(frames=60, flip_at=30, comp_steps=(0.0, 0.004, 0.030, 0.026, -0.002), target_step=0.002,
+                noise=0.002, seed=11, transit=None):
+    """Target (column 0) and comps with their own pier-side steps (mag, after minus before) and a common zero point."""
+    rng = np.random.default_rng(seed)
+    n = len(comp_steps) + 1
+    zp = rng.normal(0, 0.03, frames)[:, None]
+    m = np.linspace(11.0, 11.6, n)[None, :] + zp + rng.normal(0, noise, (frames, n))
+    after = np.arange(frames) >= flip_at
+    m[after, 0] += target_step
+    for j, st in enumerate(comp_steps):
+        m[after, j + 1] += st
+    if transit is not None:
+        m[:, 0] += transit
+    return m, after
+
+
+class TestTargetStep(unittest.TestCase):
+    """step 5 fix (#76, WASP-49 b 19 Nov): the target's own step at the flip against a set decides the set."""
+
+    def test_set_step_is_the_target_against_the_mean(self):
+        m, after = _flip_night(noise=0.0005)
+        b, a = cs.near_flip_rows(after)
+        self.assertEqual((list(b), list(a)), (list(range(24, 30)), list(range(30, 36))))
+        d = cs.target_diffs(m[:, 0], m[:, 1:])
+        # target +2 against comps 0 (0) and 1 (+4): 2 - 2 = 0; against 2 and 3 (+30, +26): 2 - 28 = -26 mmag
+        st, err = cs.set_target_step(d, [0, 1], b, a)
+        self.assertAlmostEqual(st, 0.0, delta=0.002)
+        self.assertLess(err, 0.002)
+        self.assertAlmostEqual(cs.set_target_step(d, [2, 3], b, a)[0], -0.026, delta=0.002)
+        self.assertTrue(math.isnan(cs.set_target_step(d, [], b, a)[0]))
+        names = ["A", "B", "C", "D", "E"]
+        chosen, step, _e = cs.choose_set(names, [0.0, 0.1, 0.2, 0.3, 0.4],
+                                         lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+        self.assertNotIn("C", chosen)
+        self.assertNotIn("D", chosen)
+        self.assertLess(abs(step), 0.003)
+
+    def test_steady_looking_pair_with_a_big_target_step_is_not_chosen(self):
+        # the regression's case: C and D agree with each other (and with the best-ranked) but give the target a
+        # large step; ranked first, they still lose to the set that leaves the target's step near zero
+        m, after = _flip_night(comp_steps=(0.030, 0.028, 0.0, 0.003), target_step=0.001, noise=0.0008)
+        b, a = cs.near_flip_rows(after)
+        d = cs.target_diffs(m[:, 0], m[:, 1:])
+        names = ["C", "D", "A", "B"]
+        chosen, step, _e = cs.choose_set(names, [0.0, 0.1, 0.5, 0.6],
+                                         lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+        self.assertEqual(chosen, ["A", "B"])
+
+    def test_noise_does_not_override_the_ranking(self):
+        # all sets equal within their error: the best-ranked set wins
+        m, after = _flip_night(comp_steps=(0.0, 0.0, 0.0, 0.0), target_step=0.0, noise=0.004)
+        b, a = cs.near_flip_rows(after)
+        d = cs.target_diffs(m[:, 0], m[:, 1:])
+        names = ["A", "B", "C", "D"]
+        chosen, _s, err = cs.choose_set(names, [0.0, 0.1, 0.2, 0.3],
+                                        lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+        self.assertTrue(math.isfinite(err))
+        self.assertEqual(chosen[:2], ["A", "B"])
+        # nothing measured: no set
+        self.assertEqual(cs.choose_set(names, [0, 1, 2, 3], lambda nm: (float("nan"), float("nan")))[0], [])
+
+    def test_transit_taken_out(self):
+        import transit_core as tcore
+        planet = {"period": 2.78, "t0": 2461363.8260, "k": 0.12, "a_rs": 7.0, "b": 0.3, "t0_err": 0.0003}
+        t = 2461363.74 + np.arange(120) * 0.0015
+        model = cs.transit_mags(t, planet, tcore.occultation, (0.45, 0.2))
+        self.assertGreater(np.nanmax(model["mag"]), 0.012)
+        self.assertEqual(model["mag"][0], 0.0)
+        flip = int(np.argmin(np.abs(t - 2461363.826)))   # at mid-transit
+        m, after = _flip_night(frames=120, flip_at=flip, comp_steps=(0.0, 0.0, 0.0), target_step=0.0,
+                               noise=0.0005, transit=model["mag"])
+        b, a = cs.near_flip_rows(after)
+        self.assertFalse(cs.near_contact(t[np.r_[b, a]], model))
+        d = cs.target_diffs(m[:, 0], m[:, 1:], model["mag"])
+        self.assertAlmostEqual(cs.set_target_step(d, [0, 1, 2], b, a)[0], 0.0, delta=0.0015)
+        # a flip in ingress: not judged
+        t1 = planet["t0"] - tcore.total_duration(planet["period"], planet["a_rs"], planet["b"], planet["k"]) / 2
+        near = np.array([t1 - 0.003, t1, t1 + 0.003])
+        self.assertTrue(cs.near_contact(near, model))
+        self.assertIsNone(cs.transit_mags(t, {"period": 2.78}, tcore.occultation))
+        self.assertTrue(cs.near_contact(t[:3], None))
 
 
 class TestApertureChoice(unittest.TestCase):
@@ -638,3 +707,76 @@ class TestSurveyAperture(unittest.TestCase):
         cache["result"]["radii"] = [3.0, 5.0]
         app._survey_aperture_apply(cache)         # a second read of the same night and target never sets it again
         self.assertEqual(float(app.radius.get()), 5.0)
+
+
+@unittest.skipUnless(HAVE_TK and fits is not None, "needs a display and astropy")
+class TestTargetStepInTheApp(unittest.TestCase):
+    """step 5 fix (#76): the app measures the target's own flip step (Transits, ephemeris, away from contact) and
+    otherwise leaves the step to the transit fit, and says which."""
+
+    @classmethod
+    def setUpClass(cls):
+        import clearv_app as ca
+        ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test240s_t.log")
+        cls.app = ca.App()
+        cls.app.update()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def _result(self, t, flip_at, comp_steps, target_step, transit):
+        m, after = _flip_night(frames=len(t), flip_at=flip_at, comp_steps=comp_steps, target_step=target_step,
+                               noise=0.0005, transit=transit)
+        return {"idx": list(range(len(t))), "jd": np.asarray(t), "flipped": list(after),
+                "mags": {8.0: m}}
+
+    def _planet(self, app):
+        app.set_mode("transits")
+        app.pl_period.set("2.78")
+        app.pl_t0.set("2461363.8260")
+        app.pl_k.set("0.12")
+        app.pl_a_rs.set("7.0")
+        app.pl_b.set("0.3")
+        app.ra_hours.set("6.07")
+        app.dec_deg.set("-17.1")
+        return app.planet_from_fields()
+
+    def test_measured_in_transits_and_fallback_words(self):
+        import transit_core as tcore
+        app = self.app
+        planet = self._planet(app)
+        # frame times are JD UTC; the app turns them into BJD before the ephemeris
+        t = 2461363.74 + np.arange(120) * 0.0015
+        bjd = t + np.asarray(tcore.bjd_minus_jd_days(t, 6.07 * 15, -17.1))
+        model = cs.transit_mags(bjd, planet, tcore.occultation, tcore.limb_darkening_guess(planet.get("teff")))
+        flip = int(np.argmin(np.abs(bjd - 2461363.826)))
+        res = self._result(t, flip, (0.0, 0.004, 0.030, 0.026), 0.002, model["mag"])
+        why, d, b, a = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
+        self.assertEqual(why, "")
+        self.assertEqual(d.shape, (120, 5))
+        self.assertTrue(np.all(np.isnan(d[:, 4])))
+        self.assertAlmostEqual(cs.set_target_step(d, [0, 1], b, a)[0], 0.0, delta=0.003)
+        self.assertAlmostEqual(cs.set_target_step(d, [2, 3], b, a)[0], -0.026, delta=0.003)
+        # Variables: not judged, and the words say the fit decides
+        app.set_mode("variables")
+        why, d2, _b, _a = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
+        self.assertIsNone(d2)
+        self.assertIn("outside Transits", why)
+        survey = {"index": {"A": 0}, "frames": 30, "of": 120, "flip": False, "flip_seen": True, "flip_why": why,
+                  "n_before": 15, "n_after": 15, "radius": 8.0, "radius_asked": 8.0}
+        words = app._survey_words(survey, float("nan"), picks=[("A", 0.1)])
+        self.assertIn("the flip step is left to the transit fit", words)
+        survey.update(flip=True, flip_why="")
+        words = app._survey_words(survey, 0.0012, picks=[("A", 0.1)], err=0.0009)
+        self.assertIn("+1.2 ± 0.9 mmag", words)
+        self.assertNotIn("nearest the target", words)
+        # a flip at ingress: not judged
+        app.set_mode("transits")
+        planet = self._planet(app)
+        t1 = 2461363.826 - tcore.total_duration(2.78, 7.0, 0.3, 0.12) / 2
+        flip = int(np.argmin(np.abs(bjd - t1)))
+        res = self._result(t, flip, (0.0, 0.0), 0.0, model["mag"])
+        why, d3, _b, _a = app._survey_target_steps(res, 8.0, [0, 1], planet)
+        self.assertIsNone(d3)
+        self.assertIn("ingress or egress", why)

@@ -15954,7 +15954,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best."
-                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step, shortened, picks))
+                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step, shortened, picks,
+                                                                     getattr(self, "_survey_set_err", None)))
         nogood = False
         if not getattr(self, "_suggest_quiet", False):
             nogood = self._survey_report(survey, lin, picks)
@@ -16174,8 +16175,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                 mags[rr] = mg
                             peaks = (np.full(len(pos), np.nan) if precal
                                      else core.raw_peaks_many(raw, pos, r_now, total_bin))
+                            try:
+                                jd = float(core.mid_jd(header))
+                            except Exception:
+                                jd = float("nan")
                             out["frames"][i] = {"mags": mags, "peaks": np.asarray(peaks, float), "fwhm": fw,
-                                                "flipped": bool(reg.get("flipped")), "path": path}
+                                                "flipped": bool(reg.get("flipped")), "path": path, "jd": jd}
                         except RuntimeError:
                             raise
                         except Exception as exc:
@@ -16199,6 +16204,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     out["labels"] = core.frame_labels_for([out["frames"][i]["path"] for i in idx])
                     out["peaks"] = np.array([out["frames"][i]["peaks"] for i in idx], dtype=float)
                     out["fwhm"] = [out["frames"][i]["fwhm"] for i in idx]
+                    out["jd"] = np.array([out["frames"][i].get("jd", float("nan")) for i in idx], dtype=float)
+                    out["flipped"] = flipped
                     out["mags"] = {rr: np.array([out["frames"][i]["mags"][rr] for i in idx], dtype=float)
                                    for rr in radii}
                     # the target is column 0 and never in its own ensemble
@@ -16272,13 +16279,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _survey_view(self, result: dict, cands: list, t_inst: float, r: float, faint: bool = False):
         """The survey's numbers for the suggestion candidates (by name; the survey's own list holds them) at the
-        measured aperture nearest r: {"index": {name: column of these arrays}, "scatter", "step" (against the stars
-        nearest the target), "peak_max", "peaks", "dist", "flip", "ref_scatter", "out": {name: why left out},
+        measured aperture nearest r: {"index": {name: column of these arrays}, "scatter", "step" (the target's
+        flip step against that comp alone, NaN when not judged), "flip_seen", "flip_why", "tdiffs", "b_rows",
+        "a_rows" (for choose_set), "peak_max", "peaks", "dist", "flip", "ref_scatter", "out": {name: why left out},
         "window": names in the comp brightness window, "frames", "of", "failed", "labels", "radius", "n_before",
         "n_after"}."""
         memo = result.setdefault("_views", {})
         names = tuple(c[0] for c in cands)
-        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3), faint)
+        planet = self.planet_from_fields() if self.mode_key == "transits" else None
+        p_key = tuple((planet or {}).get(k_) for k_ in ("period", "t0", "k", "a_rs", "b", "teff"))
+        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3), faint,
+               self.mode_key, p_key)
         if key in memo:
             return memo[key]
         stars = self._survey_cache.get("stars") or [] if getattr(self, "_survey_cache", None) else []
@@ -16292,7 +16303,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         nan = float("nan")
         pick = lambda arr, j: float(arr[j]) if j is not None else nan
         scatter = np.array([pick(st["scatter"], j) for j in cols])
-        step_raw = np.array([pick(st["step"], j) for j in cols])
         inst = np.array([c[1] for c in cands], dtype=float)
         # Fable 6 / re-review 4: the comp brightness window (as _suggest_comps: a faint target gets 0.5-2 mag
         # brighter comps, the widest of its two passes; else within 1 mag) decides what is judged and said
@@ -16325,17 +16335,65 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         pmax = np.where(np.isfinite(pmax), pmax, np.nan)
         peak_max = np.array([pick(pmax, j) for j in cols])
         peaks_c = np.array([[peaks[f, j] if j is not None else nan for j in cols] for f in range(len(idx))])
-        eligible = window & np.array([c[0] not in out for c in cands]) & np.isfinite(scatter) & (
-            scatter <= 2.0 * ref_sc if math.isfinite(ref_sc) else True)
-        step_rel = (cs.steps_near_target(step_raw, dist, eligible, scatter) if st["flip"] else step_raw)
+        # step 5 fix (#76): the TARGET's own step at the flip against each comp (and, in choose_set, each set), with
+        # the predicted transit taken out; a forecast from the stars nearest the target chose the worst set on
+        # WASP-49 b. Judged only in Transits, with an ephemeris, and when no frame used is near ingress or egress
+        tdiffs, b_rows, a_rows, flip_why = None, np.zeros(0, int), np.zeros(0, int), ""
+        if st["flip"]:
+            flip_why, tdiffs, b_rows, a_rows = self._survey_target_steps(result, rr, cols, planet)
+        if tdiffs is not None:
+            step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows)[0] if cols[k] is not None else nan
+                                 for k in range(len(cols))])
+        else:
+            step_rel = np.full(len(cols), nan)
         view = {"index": {c[0]: k for k, c in enumerate(cands) if cols[k] is not None}, "scatter": scatter,
                 "step": step_rel, "peak_max": peak_max, "peaks": peaks_c, "dist": dist,
                 "flip": bool(st["flip"]) and bool(np.isfinite(step_rel).any()), "ref_scatter": ref_sc, "out": out,
+                "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
+                "a_rows": a_rows,
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
                 "n_after": st["n_after"], "radius_asked": float(r)}
         memo[key] = view
         return view
+
+    def _survey_target_steps(self, result, rr, cols, planet):
+        """step 5 fix (#76): (why not judged or "", target-minus-candidate differences per frame with the predicted
+        transit taken out (rows: the survey's frames, columns: the suggestion candidates; NaN where not surveyed),
+        near-flip rows before, after). Not judged (None): outside Transits (a variable target's own change would read
+        as a step), without a usable ephemeris and shape, without frame times, or when a frame used lies within
+        10 min (plus 3 sigma of Tc) of ingress or egress, where the predicted dip depends on the ephemeris."""
+        none = np.zeros(0, int)
+        if self.mode_key != "transits":
+            return "the target's own changes would read as a step outside Transits", None, none, none
+        after = cs.flip_sides(result.get("flipped"))
+        b_rows, a_rows = cs.near_flip_rows(after)
+        if b_rows.size < 2 or a_rows.size < 2:
+            return "too few frames read on one side of the flip", None, none, none
+        jd = np.asarray(result.get("jd") if result.get("jd") is not None else [], dtype=float)
+        if jd.size != len(result["idx"]) or not np.all(np.isfinite(jd[np.r_[b_rows, a_rows]])):
+            return "the frames' times are not in their headers", None, none, none
+        try:
+            ra, dec = self.target_radec_deg(planet)
+            t = jd + np.asarray(tcore.bjd_minus_jd_days(jd, ra, dec), dtype=float)
+        except Exception:
+            t = jd   # JD for BJD: within 8.3 min, inside the margin below only when far from contact; judged on it
+        try:
+            ld = tcore.limb_darkening_guess((planet or {}).get("teff"), (planet or {}).get("ld_band"))
+        except Exception:
+            ld = (0.4, 0.25)
+        model = cs.transit_mags(t, planet, tcore.occultation, ld)
+        if model is None:
+            return "no ephemeris and transit shape on the Input page", None, none, none
+        if cs.near_contact(t[np.r_[b_rows, a_rows]], model):
+            return "the flip is near ingress or egress, where the predicted transit is not exact enough", None, none, \
+                none
+        mags = result["mags"][rr]
+        comp = np.full((mags.shape[0], len(cols)), np.nan)
+        for k, j in enumerate(cols):
+            if j is not None:
+                comp[:, k] = mags[:, j + 1]
+        return "", cs.target_diffs(mags[:, 0], comp, model["mag"]), b_rows, a_rows
 
     def _survey_aperture_apply(self, cache):
         """2.4.0 step 5 (#61): the apertures tried on the survey's frames, judged on the stars like the target (within
@@ -16410,6 +16468,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 front = [(m, dm_of[m]) for m in mine if m in series_kept]
                 picks = (front + [p for p in picks if p[0] not in series_kept])[:4]
         set_step, shortened = float("nan"), False
+        self._survey_set_err = float("nan")
         if survey["flip"] and not series_kept and len(ranked_all) >= 2:
             tight = [p for p in ranked_all if tier_of.get(p[0]) == 0.3]
             pool = tight if len(tight) >= len(picks) else ranked_all
@@ -16420,7 +16479,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 keys = [cs.rank_key(k / n_, survey["scatter"][j], survey["ref_scatter"], survey["step"][j],
                                     survey["dist"][j], True) for k, j in enumerate(ix)]
                 want = min(4, max(len(picks), 1))
-                chosen, set_step = cs.choose_set(names, keys, [survey["step"][j] for j in ix], count=want)
+                index = survey["index"]
+                chosen, set_step, self._survey_set_err = cs.choose_set(
+                    names, keys, lambda nm: cs.set_target_step(survey["tdiffs"], [index[x] for x in nm],
+                                                               survey["b_rows"], survey["a_rows"]), count=want)
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
@@ -16436,17 +16498,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "peak": float(survey["peak_max"][j]), "frames": survey["frames"], "flip": survey["flip"]}
 
     @staticmethod
-    def _survey_words(survey, set_step, shortened: bool = False, picks=()) -> str:
+    def _survey_words(survey, set_step, shortened: bool = False, picks=(), err=None) -> str:
         if survey is None or (picks and not any(n in survey["index"] for n, *_r in picks)):
             return ""   # re-review 6: no suggestion was among the surveyed stars
         txt = (f" Chosen on {survey['frames']} of the night's {survey['of']} frames (comp survey: steadiness, the "
                "sharpest frames' peaks, every frame in view")
         if abs(survey.get("radius", 0.0) - survey.get("radius_asked", survey.get("radius", 0.0))) > 0.06:
             txt += f"; measured at r {survey['radius']:g}, the nearest it tried"   # re-review 7
-        if survey["flip"]:
+        if survey.get("flip_seen", survey["flip"]):
             txt += (f"; {survey['n_before']} before and {survey['n_after']} after the meridian flip, so steady on "
-                    "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag against the stars nearest "
-                                         "the target" if math.isfinite(set_step) else ""))
+                    "both pier sides")
+            if survey["flip"] and math.isfinite(set_step):
+                err = err if err is not None and math.isfinite(err) else float("nan")
+                txt += (f", the target's flip step with these comps {1000 * set_step:+.1f}"
+                        + (f" ± {1000 * err:.1f}" if math.isfinite(err) else "") + " mmag (measured on the frames "
+                        "nearest the flip, the predicted transit taken out)")
+            elif not survey["flip"]:
+                txt += ("; the flip step is left to the transit fit"
+                        + (f" ({survey['flip_why']})" if survey.get("flip_why") else ""))
             if shortened:
                 txt += "; fewer than four, because another star would make the flip step worse"
         return txt + ")."
@@ -16525,6 +16594,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         info_all = getattr(self, "suggested_info", None) or {}
         marked = {getattr(self, f"{r}_name").get().strip(): r for r in COMP_ROLES
                   if getattr(self, f"{r}_xy") is not None}
+        placed = [(r, getattr(self, f"{r}_xy")) for r in COMP_ROLES if getattr(self, f"{r}_xy") is not None]
+
+        def role_at(name, x, y):
+            # step 5 regression nit: a slot showing the star's AUID (another of its names) is still that star
+            if name in marked:
+                return marked[name]
+            for r, xy in placed:
+                try:
+                    if math.hypot(float(xy[0]) - float(x), float(xy[1]) - float(y)) <= 3.0:
+                        return r
+                except (TypeError, ValueError, IndexError):
+                    pass
+            return None
         lines = []
         for k, (name, dm, _x, _y) in enumerate(self.suggested_comps):
             info = info_all.get(name, {})
@@ -16558,14 +16640,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # 2.4.0 step 5 (#76): what the night's own frames said
                 why += f", steady {cs.mmag(sv['scatter'])} on {sv['frames']} frames"
                 if sv.get("flip") and math.isfinite(sv.get("step", float("nan"))):
-                    why += f", flip step {1000 * sv['step']:+.1f} mmag (against the stars nearest the target)"
+                    why += f", flip step {1000 * sv['step']:+.1f} mmag (the target against this comp alone)"
                 if lin and math.isfinite(sv.get("peak", float("nan"))):
                     why += f", raw peak {sv['peak']:,.0f} ADU on the sharpest ({sv['peak'] / lin:.0%} of the linear limit)"
                 if info.get("series"):
                     why += ", the series' comp"
             elif lin and pk is not None and math.isfinite(pk):
                 why += f", raw peak {pk:,.0f} ADU ({pk / lin:.0%} of the linear limit)"
-            role = marked.get(name)
+            role = role_at(name, _x, _y)
             lines.append(f"{head}: {why}" + (f" — now {role_label(role)}" if role else ""))
         return ["Suggested comps (thick green rings on the image):"] + lines
 
