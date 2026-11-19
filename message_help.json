@@ -179,7 +179,9 @@
   {
    "section": "Input",
    "patterns": [
-    "The series' aperture and raw sat ADU were for its … nights; these lights are from …, so they are reset as for any camera change."
+    "The series' aperture and raw sat ADU were for its … nights",
+    "The series' aperture was …",
+    "The series' raw sat ADU was …"
    ],
    "todo": "Check the boxes (Suggest… for the aperture)."
   },

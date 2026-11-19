@@ -264,10 +264,6 @@ class TestLoadQuestionDefault(M.AppCase):
         self.assertIn('win.bind("<Escape>", lambda _e: pick(away))', body)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestBookkeepingWritesDoNotAsk(M.AppCase):
     """Re-review 3 (M1): a report note, a sent mark, a night note or planet-transit flags write the series without
     the cleared-comp question (the report on disk was made from the numbers as they are); the next real save asks."""
@@ -290,3 +286,9 @@ class TestBookkeepingWritesDoNotAsk(M.AppCase):
         self.assertIn("self._report_series_override(), ask=False)", src)
         self.assertIn("self._write_series(self.series_path, ask=False)", src)
         self.assertIn("self._save_series_words(ask=False)", src)
+        import multinight
+        self.assertIn("override, ask=False)", inspect.getsource(multinight))
+
+
+if __name__ == "__main__":
+    unittest.main()

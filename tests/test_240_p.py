@@ -827,10 +827,6 @@ class TestTheManualKnowsTheNewMessages(unittest.TestCase):
             self.assertTrue(findings.match_hint(text, hints), text)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestSeriesValuesFollowTheSeriesCamera(TestCameraChangeKeepsWhatWasSetSince):
     """Re-review 3 (S1, John 18 Nov 2026): a loaded series' aperture and raw sat ADU are kept through a camera
     change only when tonight's lights come from the camera of the series' latest night; another camera resets them
@@ -880,9 +876,33 @@ class TestSeriesValuesFollowTheSeriesCamera(TestCameraChangeKeepsWhatWasSetSince
         self.assertTrue(any("4095" in f.text for f in app.findings.items))
         app.findings.clear()
 
+    def test_same_camera_name_still_warns_when_sat_is_out_of_reach(self):
+        app = self.app
+        self._night_on_a()
+        self._series_on("RC14 / ZWO ASI174MM")
+        app.findings.clear()
+        self.assertTrue(app._camera_check(self.CAM_12, ""))
+        self.assertEqual(float(app.sat_limit.get()), 50000.0, "the series' camera: kept")
+        self.assertTrue(any("4095" in f.text for f in app.findings.items))
+        app.sat_limit.set(4000)   # typed: the warning goes
+        self.assertFalse(any("4095" in f.text for f in app.findings.items))
+
+    def test_a_telescope_alone_is_not_taken_for_a_camera(self):
+        app = self.app
+        self._night_on_a()
+        self._series_on("RC14")
+        self.assertTrue(app._camera_check(self.CAM_12, ""))
+        self.assertEqual(float(app.sat_limit.get()), 50000.0)
+        self.assertFalse(any("were for its RC14 nights" in ln for ln in self.lines), self.lines)
+        app.findings.clear()
+
     def test_close_series_takes_its_marks(self):
         app = self.app
         self._series_on("")
         self.assertTrue(app._camera_series_set)
         app._clear_series_state()
         self.assertEqual(app._camera_series_set, set())
+
+
+if __name__ == "__main__":
+    unittest.main()

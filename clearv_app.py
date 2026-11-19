@@ -1653,6 +1653,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # typed is left alone.
         self.pattern.trace_add("write", lambda *_a: self._sync_camera_note())
         self.sat_limit = DoubleVar(value=60000)
+        # 2.4.0 step 4 (re-review 4): a new raw sat ADU (typed, or set for a camera) ends the "above what this camera
+        # can record" warning
+        self.sat_limit.trace_add("write", lambda *_a: self._camera_sat_drop() if hasattr(self, "findings") else None)
         # 2.2.19 (#16): the camera's linear limit (raw ADU); empty = the saturation level (nothing changes). Remembered.
         _lin = self.settings.get("linear_limit_adu", "") or ""
         if isinstance(_lin, (int, float)) and float(_lin).is_integer():
@@ -5713,6 +5716,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             saved = self.settings.get("camera_last")
             last = saved if isinstance(saved, dict) and saved.get("nx") else None
         if last is None or same_camera(last, sig):
+            self._camera_sat_drop()   # re-review 4: lights of the same camera again: the earlier warning is done
             self._camera_record(sig)
             return False
         if in_session:
@@ -5738,36 +5742,54 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._set_camera_note("\n".join(lines))
         return True
 
-    def _series_camera(self) -> str:
-        """Re-review 3 (S1): the INSTRUME of the open series' latest night ("" when the series does not say)."""
+    SAT_STEP = "Camera change: raw sat ADU"
+
+    def _series_camera(self, tonight: str = "") -> str:
+        """Re-review 3 (S1): the camera (INSTRUME) of the open series' latest night that names one ("" when the
+        series does not say). Nights store "TELESCOP / INSTRUME" with empty parts left out, so a value without " / "
+        may be a telescope alone: it counts as the camera only when it is tonight's camera's name."""
         bins = getattr(self, "night_bin", None) or {}
-        if not bins:
+        if not isinstance(bins, dict):
             return ""
-        try:
-            latest = max(bins, key=lambda n: str(n))
-        except Exception:
-            return ""
-        inst = str((bins.get(latest) or {}).get("instrument") or "").strip()
-        return " ".join(inst.split(" / ")[-1].split()) if inst else ""
+        for night in sorted(bins, key=lambda n: str(n), reverse=True):   # "JD" + 7 digits: string order = date order
+            setup = bins.get(night)
+            inst = str(setup.get("instrument") or "").strip() if isinstance(setup, dict) else ""
+            if not inst:
+                continue
+            if " / " in inst:
+                return " ".join(inst.split(" / ")[-1].split())
+            one = " ".join(inst.split())
+            return one if tonight and one.lower() == " ".join(tonight.split()).lower() else ""
+        return ""
+
+    def _camera_sat_drop(self):
+        store = getattr(self, "findings", None)
+        if store is not None:
+            try:
+                store.drop_step(self.SAT_STEP)
+            except Exception:
+                traceback.print_exc()
 
     def _camera_series_check(self, sig: dict) -> str:
         """Re-review 3 (S1, John 18 Nov 2026): a loaded series' aperture and raw sat ADU are kept through a camera
         change only when tonight's lights come from the camera of the series' latest night. Another camera: the
-        series' marks go, so those boxes reset like any camera change (said in one plain line). A series that does
-        not say its camera keeps them, with a warning finding when the kept raw sat ADU is above what this camera
-        can record (saturation would never be flagged). Returns the line to add ("" for none)."""
+        series' marks go, so those boxes reset like any camera change (said in one plain line). Kept (the same
+        camera, or a series that does not say its camera): a warning finding when the kept raw sat ADU is above what
+        this camera can record (saturation would never be flagged). Returns the line to add ("" for none)."""
+        self._camera_sat_drop()   # re-review 4: a finding about earlier lights never outlives them
         marks = getattr(self, "_camera_series_set", None) or set()
         if not marks:
             return ""
-        series_cam = self._series_camera()
-        new_cam = str(sig.get("instrume") or "").strip()
-        if series_cam and new_cam:
-            if series_cam.lower() == new_cam.lower():
-                return ""
+        new_cam = " ".join(str(sig.get("instrume") or "").split())
+        series_cam = self._series_camera(new_cam)
+        if series_cam and new_cam and series_cam.lower() != new_cam.lower():
             self._camera_force = set(marks) & {"aperture", "sat"}
             self._camera_series_set = set()
-            return (f"The series' aperture and raw sat ADU were for its {series_cam} nights; these lights are from "
-                    f"{new_cam}, so they are reset as for any camera change.")
+            what = " and ".join(w for k, w in (("aperture", "aperture"), ("sat", "raw sat ADU")) if k in marks)
+            return (f"The series' {what} {'was' if len(marks & {'aperture', 'sat'}) == 1 else 'were'} for its "
+                    f"{series_cam} nights; these lights are from {new_cam}, so "
+                    f"{'it is' if len(marks & {'aperture', 'sat'}) == 1 else 'they are'} reset as for any camera "
+                    "change.")
         bits = sig.get("bits")
         sat = self._box_number(self.sat_limit)
         if "sat" in marks and bits and bits < 16 and sat is not None and sat > (2 ** int(bits)) - 1:
@@ -5776,8 +5798,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             try:
                 store = getattr(self, "findings", None)
                 if store is not None:
-                    store.drop_step("Camera change: raw sat ADU")
-                    store.add("warn", words, step="Camera change: raw sat ADU", where="Input page")
+                    store.add("warn", words, step=self.SAT_STEP, where="Input page")
             except Exception:
                 traceback.print_exc()
             return words
@@ -20015,6 +20036,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.star_records = []
         self._v_disagree = {}
         self._camera_series_set = set()   # re-review 3 (S2): a closed series' aperture/sat no longer shield the boxes
+        if hasattr(self, "_camera_sat_drop"):
+            self._camera_sat_drop()   # re-review 4: so does its raw sat ADU warning
         self.reports_saved = {}
         self.reports_sent = {}       # 2.2.18 (item 10)
         self.multinight_alt_eph = None   # 2.2.21 (#44)
