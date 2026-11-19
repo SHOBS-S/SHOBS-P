@@ -347,10 +347,11 @@ the sensor, so a flat or optics error that does not cancel shows up as a step, a
 **Choosing the set on a flip night (Transits).** What matters is the step the *target* gets with a set of comps, so
 SHOBS-P measures exactly that. Once its every-10th frames show which side of the flip each frame is on, the survey
 reads a few more frames to find the flip to the frame, then the 15 frames on each side of it (on a 232-frame night,
-about 51 frames in all, some 20–30 seconds more). On those 30 frames it takes the target against each possible set (2
+about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture trial
+still use only the evenly spread frames). On those 30 frames it takes the target against each possible set (2
 to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the ephemeris and shape from the
-Input page, and keeps the set whose step for the target is nearest zero (a fourth comp is preferred over three when
-the steps are within half a mmag). The suggestions line ends with, for example, *Chosen on 51 of the night's 232
+Input page, and keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
+step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The suggestions line ends with, for example, *Chosen on 51 of the night's 232
 frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 24 before and 27 after the meridian
 flip, so steady on both pier sides, the target's flip step with these comps +0.1 ± 2.8 mmag (measured on the frames
 nearest the flip, the predicted transit taken out)).*
@@ -366,6 +367,7 @@ flip against the other stars ranks lower. This happens when:
   flip step is not measured (the target's own changes would read as a step outside Transits)*;
 - the Input page has no ephemeris and shape (period, T0, Rp/R*, a/R*);
 - the frames carry no times, or fewer than 3 frames could be read on a side right at the flip;
+- the aperture boxes hold a size the survey did not measure (the step changes a lot with the aperture);
 - a frame used falls within 10 minutes (plus 3 × the ephemeris uncertainty) of ingress or egress, where a small
   timing error changes the predicted dip fast. A typed T0 has no uncertainty, so 30 minutes more are allowed, and
   without the target's RA and Dec another 10 minutes (the frame times can then be up to 8 minutes off BJD).

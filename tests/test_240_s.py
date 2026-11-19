@@ -202,7 +202,7 @@ class TestTargetStep(unittest.TestCase):
                                          lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
         self.assertEqual(chosen, ["A", "B"])
 
-    def test_noise_does_not_override_the_ranking(self):
+    def test_no_real_steps_keeps_the_steadiest(self):
         # all sets equal within their error: the best-ranked set wins
         m, after = _flip_night(comp_steps=(0.0, 0.0, 0.0, 0.0), target_step=0.0, noise=0.004)
         b, a = cs.near_flip_rows(after)
@@ -212,6 +212,21 @@ class TestTargetStep(unittest.TestCase):
                                         lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
         self.assertTrue(math.isfinite(err))
         self.assertEqual(len(chosen), 4)   # Fable S4: equal sets -> not a pair (the size nudge)
+        # Fable re-review S-A: with no real steps and comps getting noisier by rank, the set's noise keeps the
+        # steadiest; a pool of 4 is not cut to a pair on noise
+        sc = [0.002, 0.003, 0.005, 0.007, 0.009, 0.011]
+        picks = []
+        for seed in range(20):
+            m2, af2 = _flip_night(comp_steps=(0.0,) * 6, target_step=0.0, noise=0.0, seed=seed)
+            rng = np.random.default_rng(seed)
+            m2[:, 1:] += rng.normal(0, 1, m2[:, 1:].shape) * np.array(sc)
+            b2, a2 = cs.near_flip_rows(af2)
+            d2 = cs.target_diffs(m2[:, 0], m2[:, 1:])
+            nm6 = list("ABCDEF")
+            ch, _s2, _e2 = cs.choose_set(nm6, [0.1 * k for k in range(6)],
+                                         lambda nm: cs.set_curve(d2, [nm6.index(x) for x in nm]), b2, a2, scatter=sc)
+            picks.append(ch)
+        self.assertGreaterEqual(sum(1 for ch in picks if set(ch) <= set("ABCD")), 15)
         # nothing measured: no set
         self.assertEqual(cs.choose_set(names, [0, 1, 2, 3], lambda nm: np.full(len(d), np.nan), b, a)[0], [])
 

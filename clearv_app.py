@@ -16110,6 +16110,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         n = len(lights)
         alive = lambda: getattr(self, "_survey_cache", None) is cache
         r_near = min(radii, key=lambda v: abs(v - r_now))
+        transits = self.mode_key == "transits"   # re-review nit: the flip pass only where the target's step is used
 
         def work():
             out = {"radii": list(radii), "rings": dict(rings), "frames": {}, "of": n, "failed": 0, "error": ""}
@@ -16203,7 +16204,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # Fable re-review M1: bracket the flip to adjacent frames, then read its neighbors on both sides, so
                 # the target's flip step is measured right at the flip
                 extra = 0
-                while extra < cs.FLIP_PASS_MAX and alive():
+                even = set(out["frames"])   # Fable re-review S-B: the evenly spread frames, for scatter and #61
+                while transits and extra < cs.FLIP_PASS_MAX and alive():
                     nxt = cs.flip_pass(n, tried, {i: f["flipped"] for i, f in out["frames"].items()})[
                         :cs.FLIP_PASS_MAX - extra]
                     if not nxt:
@@ -16223,8 +16225,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     out["flipped"] = flipped
                     out["mags"] = {rr: np.array([out["frames"][i]["mags"][rr] for i in idx], dtype=float)
                                    for rr in radii}
-                    # the target is column 0 and never in its own ensemble
-                    out["stats"] = {rr: cs.ensemble_stats(out["mags"][rr][:, 1:], flipped) for rr in radii}
+                    # the target is column 0 and never in its own ensemble. Fable re-review S-B: scatter (and #61 below)
+                    # from the evenly spread frames only, so the 30 frames at the flip (the meridian, the best seeing)
+                    # do not weight them; the steps from every frame read
+                    ev = np.array([i in even for i in idx])
+                    fl_ev = [f for f, e in zip(flipped, ev) if e]
+                    out["stats"] = {}
+                    for rr in radii:
+                        whole = cs.ensemble_stats(out["mags"][rr][:, 1:], flipped)
+                        st_ev = cs.ensemble_stats(out["mags"][rr][ev][:, 1:], fl_ev) if ev.sum() >= 3 else whole
+                        out["stats"][rr] = dict(st_ev, step=whole["step"], flip=whole["flip"],
+                                                n_before=whole["n_before"], n_after=whole["n_after"])
                     # #61: the stars like the target, by brightness on the reference frame at the current aperture
                     k_ref = idx.index(lights.index(ref_path)) if ref_path in lights and \
                         lights.index(ref_path) in idx else 0
@@ -16355,7 +16366,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # the predicted transit taken out; a forecast from the stars nearest the target chose the worst set on
         # WASP-49 b. Judged only in Transits, with an ephemeris, and when no frame used is near ingress or egress
         tdiffs, b_rows, a_rows, flip_why = None, np.zeros(0, int), np.zeros(0, int), ""
-        if st["flip"]:
+        if st["flip"] and abs(rr - float(r)) > 0.06:
+            # re-review nit: the flip step depends strongly on the aperture (WASP-49 b: +35 at r 8, +16 at r 10.3)
+            flip_why = f"measured at r {rr:g}, not at r {float(r):g}"
+        elif st["flip"]:
             flip_why, tdiffs, b_rows, a_rows = self._survey_target_steps(result, rr, cols, planet)
         if tdiffs is not None:
             step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows)[0] if cols[k] is not None else nan
@@ -16507,7 +16521,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 index = survey["index"]
                 chosen, set_step, self._survey_set_err = cs.choose_set(
                     names, keys, lambda nm: cs.set_curve(survey["tdiffs"], [index[x] for x in nm]),
-                    survey["b_rows"], survey["a_rows"], count=want)
+                    survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix])
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]

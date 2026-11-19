@@ -324,8 +324,9 @@ def near_contact(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> bool:
     for ti in t:
         n = round((ti - model["t0"]) / P)
         tcn = model["t0"] + n * P
-        if model.get("err_known", True) and model.get("t0_err") is not None:
-            m = margin + 3.0 * math.hypot(model["t0_err"], abs(n) * (model.get("period_err") or 0.0))
+        p_err = model.get("period_err")
+        if model.get("err_known", True) and model.get("t0_err") is not None and (p_err is not None or n == 0):
+            m = margin + 3.0 * math.hypot(model["t0_err"], abs(n) * (p_err or 0.0))
         else:
             m = margin + EPHEM_ERR_MISSING   # a typed T0: 30 min more on each side
         lo, hi = ti - m, ti + m
@@ -427,17 +428,23 @@ def rank_key(base: float, scatter: float, ref_scatter: float, step: float = floa
 
 
 def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
-               top: int = SET_TOP) -> tuple[list, float, float]:
+               top: int = SET_TOP, scatter=None) -> tuple[list, float, float]:
     """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set (2 up to
     `count` stars) whose MEASURED flip step for the target is nearest zero. curve(names) -> per-frame target minus
     the set's mean (set_curve); the step is from the near-flip rows (curve_step). Step 5 fix (#76): on WASP-49 b a
     forecast from the stars nearest the target chose the set that gave the target the largest step.
-    Cost = |step| + SET_SIZE_COST per comp fewer than `count` (a small nudge to more comps); the lowest cost wins,
-    then the best-ranked. No tie slack (Fable re-review S3/S4: a slack picked sets at its edge, and favored pairs):
+    Cost = |step| + the set's own noise (sqrt(sum of its members' scatter squared) / n, from `scatter` in name
+    order; Fable re-review S-A: on a night with only small real steps the step alone picks on noise and drops the
+    steadiest comps) + SET_SIZE_COST per comp fewer than `count`; the lowest cost wins, then the best-ranked. On
+    WASP-49 b the noise term kept r 8's set (-0.5 ppt over the night) and moved r 10.3's to one at +2.2 ppt. No tie
+    slack (Fable re-review S3/S4: a slack picked sets at its edge, and favored pairs):
     on WASP-49 b, with every frame measured, the measured step tracked the night's fitted step to 2 mmag
     (correlation 0.95-0.99 over all 154 sets), and the lowest measured step chose sets within 1 ppt of zero at both
     apertures, where a 1 mmag tie slack let in sets stepping up to 5 ppt. Returns (names in rank order, step,
     error); ([], NaN, NaN) when no set of 2 or more has a measured step."""
+    sc_of = {}
+    if scatter is not None:
+        sc_of = {n: float(v) for n, v in zip(names, scatter) if v is not None and math.isfinite(float(v))}
     pool = [(n, k) for n, k in zip(names, keys)][:top]
     k = min(count, len(pool))
     nan = float("nan")
@@ -449,7 +456,8 @@ def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
             st, er = curve_step(curve([p[0] for p in c]), b_rows, a_rows)
             if not math.isfinite(st):
                 continue
-            score = (abs(st) + SET_SIZE_COST * (k - size), sum(p[1] for p in c) / size)
+            noise = (math.sqrt(sum(sc_of[p[0]] ** 2 for p in c)) / size) if all(p[0] in sc_of for p in c) else 0.0
+            score = (abs(st) + noise + SET_SIZE_COST * (k - size), sum(p[1] for p in c) / size)
             if best is None or score < best[0]:
                 best = (score, c, st, er)
     if best is None:
