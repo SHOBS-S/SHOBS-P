@@ -988,6 +988,20 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Run photometry called off (it was waiting for the comp survey)."
+   ],
+   "todo": "Press Run photometry again when you are ready."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry did not start: the page changed while the comp survey read the frames. Press Run photometry again."
+   ],
+   "todo": "Press Run photometry again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "The comp survey could not read the night's frames (…); the suggestions are from the catalog and this frame only.",
     "The comp survey read fewer than 3 of the night's frames; …"
    ],

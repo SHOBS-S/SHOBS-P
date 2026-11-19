@@ -180,8 +180,11 @@ def _folder_frame_labels(folder: str):
             if vkey not in _CAL_VERDICTS:
                 if len(_CAL_VERDICTS) > 50000:
                     _CAL_VERDICTS.clear()
-                _CAL_VERDICTS[vkey] = is_calibration_frame(path)
-            return _CAL_VERDICTS[vkey]
+                got = is_calibration_frame(path)
+                _CAL_VERDICTS[vkey] = got
+                return got   # re-review 12: the cache can be cleared by another thread between the two lines
+            got = _CAL_VERDICTS.get(vkey)
+            return got if got is not None else is_calibration_frame(path)
 
         try:
             lights = split_lights(images, verdict)[0]

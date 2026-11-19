@@ -365,6 +365,21 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertTrue(app._survey_report(view, None, []))
         self.assertTrue(any(t.startswith("⚠ No good comp here tonight") for t in self.lines))
 
+    def test_replaced_survey_keeps_the_waiting_run(self):
+        # re-review 2: survey A ends after B replaced it: the run waits for B
+        app = self._setup()
+        a, b = {"key": ("a",), "state": "loading"}, {"key": ("b",), "state": "loading"}
+        app._survey_cache = b
+        app._run_after_survey = True
+        app._survey_done(a, {"error": ""})
+        self.assertTrue(app._run_after_survey)
+        # re-review 5: the page changed: nothing cached as an error, the waiting run is said to be dropped
+        b["key"] = ("another frame.fits",)
+        app._survey_done(b, {"error": ""})
+        self.assertIsNone(app._survey_cache)
+        self.assertFalse(app._run_after_survey)
+        self.assertTrue(any(t.startswith("Run photometry did not start") for t in self.lines))
+
     def test_no_masters_no_survey(self):
         app = self._setup()
         app.masters = None

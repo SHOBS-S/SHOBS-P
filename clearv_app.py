@@ -5530,6 +5530,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._survey_cache = None
             self.busy_end(old_survey.pop("tok", None))
         self._run_after_survey = False
+        self._survey_aperture_done = set()   # re-review 8: #61 may set the aperture again for the next star
         if not keep_planet:
             if self.planet_name.get().strip() or getattr(self, "planet_info", None):
                 out.append(f"planet {self.planet_name.get().strip()}" if self.planet_name.get().strip()
@@ -15808,7 +15809,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 edge_at[c[0]] = drift["regs"][int(k_)][0] if k_ >= 0 else ""
         # 2.4.0 step 5 (#76): the night's own frames. Started here (background, busy bar) the first time; until it is
         # back the catalog suggestions below stand, and _survey_done suggests again with it.
-        survey = self._comp_survey(cands, t_inst)
+        t_snr0 = self._star_snr(self.preview, self.target_xy)   # (as `faint` below: the survey judges in its window)
+        survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
         target_star = self._chart_star_at(self.target_xy)
         t_bv_cat = core.catalog_bv(target_star) if target_star else None
         # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
@@ -15918,8 +15920,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
         have = {n for n, _dm in picks}
         # Fable 8: not when the flip choice shortened the set on purpose (the suggestions line says why)
-        edge_left = [] if (len(picks) >= 4 or shortened) else [
+        rejected_snap = set(getattr(self, "_survey_rejected", set()))   # re-review 1: the edge pass below is not
+        edge_left = [] if (len(picks) >= 4 or shortened) else [            # a survey rejection
             n for n, _dm in choose([c for c in cands if c[0] not in inside and c[0] not in have], 0.6)]
+        self._survey_rejected = rejected_snap
+        self._survey_inside = set(inside)
         self._suggest_edge_left = {n: (edge_px.get(n), edge_at.get(n, "")) for n in edge_left}
         self._suggest_drift = drift
         # 2.2.19 (#15): what the panel's "S1 = … V 11.2, why suggested" lines say.
@@ -15949,7 +15954,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best."
-                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step, shortened))
+                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step, shortened, picks))
         nogood = False
         if not getattr(self, "_suggest_quiet", False):
             nogood = self._survey_report(survey, lin, picks)
@@ -15982,7 +15987,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     SURVEY_STARS_MAX = 400   # labeled stars measured by the survey at most (nearest the target's catalog brightness)
     SURVEY_MARGIN = 10.0     # px: stars this far inside the page's frame (the edge rules come after, per aperture)
 
-    def _survey_stars(self):
+    def _survey_stars(self, cands=(), t_inst=float("nan")):
         """The survey's own star list, the same whatever the aperture boxes say (Fable 5: the suggestion candidates
         change with r and sky out, and a key built on them read the night again after every aperture change): the
         target first, then every labeled, non-variable chart star with a magnitude, SURVEY_MARGIN inside the frame
@@ -15998,6 +16003,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if len(stars) > self.SURVEY_STARS_MAX:
             t_star = self._chart_star_at(self.target_xy)
             t_cat = (t_star or {}).get("mag")
+            if t_cat is None and cands and math.isfinite(t_inst):
+                # re-review 6: an uncatalogued target: its catalog-scale magnitude from the candidates' zero point,
+                # rounded to 0.5 mag so the list (and the survey's key) does not change with the aperture
+                mag_of = {str(st.get("auid") or st.get("label") or ""): st.get("mag")
+                          for _x, _y, st in (self.chart_placed or [])}
+                zp = [float(mag_of[c[0]]) - c[1] for c in cands if mag_of.get(c[0]) is not None
+                      and math.isfinite(c[1])]
+                if len(zp) >= 3:
+                    t_cat = round(2.0 * (t_inst + float(np.median(zp)))) / 2.0
             ref = float(t_cat) if t_cat is not None else float(np.median([s_[3] for s_ in stars]))
             stars = sorted(stars, key=lambda s_: abs(s_[3] - ref))[:self.SURVEY_STARS_MAX]
         return [("\x00target", float(tx), float(ty))] + [(n, x, y) for n, x, y, _m in stars]
@@ -16016,7 +16030,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return id(self.masters)
         return tok
 
-    def _comp_survey(self, cands: list, t_inst: float):
+    def _comp_survey(self, cands: list, t_inst: float, faint: bool = False):
         """2.4.0 step 5 (#76): the night's own lights measured for the comp candidates: the survey's star list
         (_survey_stars) on a sample of the lights (comp_survey.sample_indices / second_pass), calibrated and lined up
         like the run, at the trial apertures (#61), with the statistics worked out in the background. Returns None
@@ -16047,7 +16061,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             stamp = os.path.getmtime(self.preview_path or "")
         except OSError:
             stamp = 0.0
-        stars = self._survey_stars()
+        stars = self._survey_stars(cands, t_inst)
         donut = self._donut_apertures()
         key = (self.preview_path, stamp, tuple(lights), tuple(s_[0] for s_ in stars),
                tuple((round(x, 1), round(y, 1)) for _n, x, y in stars), binning, pattern, mode,
@@ -16059,7 +16073,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             res = cache.get("result")
             if not res or res.get("error"):
                 return None
-            return self._survey_view(res, cands, t_inst, r)
+            return self._survey_view(res, cands, t_inst, r, faint)
         fwhm = self._seeing()
         radii = cs.trial_radii(fwhm, r) if donut is None else [round(float(r), 1)]
         rings = {}
@@ -16198,11 +16212,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     like = [int(j) for j in np.argsort(d) if d[j] <= 0.75]
                     if len(like) < cs.APERTURE_MIN_STARS:
                         like = [int(j) for j in np.argsort(d)[:5] if math.isfinite(d[j])]
+                    # re-review 3: the same stars at every aperture (a bigger ring can lose a star near the edge)
+                    like = [j for j in like if all(math.isfinite(out["stats"][rr]["scatter"][j]) for rr in radii)]
                     by_r = {}
                     for rr in radii:
                         sc = out["stats"][rr]["scatter"]
-                        vals = [sc[j] for j in like if math.isfinite(sc[j])]
-                        by_r[rr] = float(np.median(vals)) if vals else float("nan")
+                        by_r[rr] = float(np.median([sc[j] for j in like])) if like else float("nan")
                     out["by_r"], out["n_like"] = by_r, len(like)
                     for i in idx:   # the per-frame copies are in the arrays now
                         out["frames"][i].pop("mags", None)
@@ -16221,17 +16236,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         target, and yours to change), suggest again, and start a run that was waiting for it. Fable 9: only while the
         page still shows that frame in that mode; the waiting run is always handled, whatever goes wrong."""
         self.busy_end(cache.pop("tok", None))
+        if getattr(self, "_survey_cache", None) is not cache:
+            return   # re-review 2: a newer survey replaced this one; a waiting run waits for that one
         run_after = getattr(self, "_run_after_survey", False)
         self._run_after_survey = False
-        if getattr(self, "_survey_cache", None) is not cache:
-            return
-        cache["state"], cache["result"] = "done", result
         current = (self.mode_key != "discovery" and self.preview is not None
                    and self.preview_path == cache["key"][0] and self.target_xy is not None)
+        if not current:
+            # re-review 5: not kept as an error under this key (back on that page, the survey runs again)
+            self._survey_cache = None
+            if run_after:
+                self.log("Run photometry did not start: the page changed while the comp survey read the frames. "
+                         "Press Run photometry again.", keep_status=True)
+            return
+        cache["state"], cache["result"] = "done", result
         try:
-            if not current:
-                result["error"] = result.get("error") or "the page changed"
-            elif result.get("error") and "Canceled" not in result["error"]:
+            if result.get("error") and "Canceled" not in result["error"]:
                 self.log(f"The comp survey could not read the night's frames ({result['error']}); the suggestions are "
                          "from the catalog and this frame only.", keep_status=True)
             elif "stats" not in result:
@@ -16240,18 +16260,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 result["error"] = result.get("error") or "too few frames"
             else:
                 self._survey_aperture_apply(cache)
-            if current:
-                self._suggest_comps()
-                self._update_pick_label()
-                self.update_star_panel()
-                self.refresh_preview()
+            self._suggest_comps()
+            self._update_pick_label()
+            self.update_star_panel()
+            self.refresh_preview()
         except Exception:
             log_to_file("Comp survey: " + traceback.format_exc())
         finally:
-            if run_after and current:
+            if run_after:
                 self.after(10, self.run_photometry)
 
-    def _survey_view(self, result: dict, cands: list, t_inst: float, r: float):
+    def _survey_view(self, result: dict, cands: list, t_inst: float, r: float, faint: bool = False):
         """The survey's numbers for the suggestion candidates (by name; the survey's own list holds them) at the
         measured aperture nearest r: {"index": {name: column of these arrays}, "scatter", "step" (against the stars
         nearest the target), "peak_max", "peaks", "dist", "flip", "ref_scatter", "out": {name: why left out},
@@ -16259,7 +16278,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         "n_after"}."""
         memo = result.setdefault("_views", {})
         names = tuple(c[0] for c in cands)
-        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3))
+        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3), faint)
         if key in memo:
             return memo[key]
         stars = self._survey_cache.get("stars") or [] if getattr(self, "_survey_cache", None) else []
@@ -16275,8 +16294,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         scatter = np.array([pick(st["scatter"], j) for j in cols])
         step_raw = np.array([pick(st["step"], j) for j in cols])
         inst = np.array([c[1] for c in cands], dtype=float)
-        # Fable 6: the comp brightness window (faint target: brighter comps) decides what is judged and said
-        lo, hi = -2.0, 1.0
+        # Fable 6 / re-review 4: the comp brightness window (as _suggest_comps: a faint target gets 0.5-2 mag
+        # brighter comps, the widest of its two passes; else within 1 mag) decides what is judged and said
+        lo, hi = (-2.0, 0.3) if faint else (-1.0, 1.0)
         window = (inst - t_inst >= lo) & (inst - t_inst <= hi) & np.array(have)
         var = cs.variable_flags(scatter, inst)
         h, w = self.preview.shape[:2]
@@ -16313,7 +16333,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "flip": bool(st["flip"]) and bool(np.isfinite(step_rel).any()), "ref_scatter": ref_sc, "out": out,
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
-                "n_after": st["n_after"]}
+                "n_after": st["n_after"], "radius_asked": float(r)}
         memo[key] = view
         return view
 
@@ -16402,7 +16422,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 want = min(4, max(len(picks), 1))
                 chosen, set_step = cs.choose_set(names, keys, [survey["step"][j] for j in ix], count=want)
                 if chosen:
-                    shortened = len(chosen) < want
+                    shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
         relaxed = {n for n, _d in picks if tier_of.get(n) == 0.6}
         return picks, set_step, series_kept, relaxed, shortened
@@ -16416,11 +16436,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "peak": float(survey["peak_max"][j]), "frames": survey["frames"], "flip": survey["flip"]}
 
     @staticmethod
-    def _survey_words(survey, set_step, shortened: bool = False) -> str:
-        if survey is None:
-            return ""
+    def _survey_words(survey, set_step, shortened: bool = False, picks=()) -> str:
+        if survey is None or (picks and not any(n in survey["index"] for n, *_r in picks)):
+            return ""   # re-review 6: no suggestion was among the surveyed stars
         txt = (f" Chosen on {survey['frames']} of the night's {survey['of']} frames (comp survey: steadiness, the "
                "sharpest frames' peaks, every frame in view")
+        if abs(survey.get("radius", 0.0) - survey.get("radius_asked", survey.get("radius", 0.0))) > 0.06:
+            txt += f"; measured at r {survey['radius']:g}, the nearest it tried"   # re-review 7
         if survey["flip"]:
             txt += (f"; {survey['n_before']} before and {survey['n_after']} after the meridian flip, so steady on "
                     "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag against the stars nearest "
@@ -16436,11 +16458,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         aperture. True when the "no good comp" warning was given (the older catalog-only lines are then not added)."""
         if survey is None:
             return False
-        out = {n: why for n, why in survey["out"].items() if n in survey["window"]}
+        inside = getattr(self, "_survey_inside", None)   # re-review 11: the edge rules already explain the others
+        out = {n: why for n, why in survey["out"].items() if n in survey["window"] and (inside is None or n in inside)}
         if lin is not None and not getattr(self, "precalibrated", False):
             for name, j in survey["index"].items():
                 pk = survey["peak_max"][j]
-                if name in survey["window"] and name not in out and math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin:
+                if (name in survey["window"] and (inside is None or name in inside) and name not in out
+                        and math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin):
                     col = survey["peaks"][:, j]
                     over = int(np.sum(col >= lin))
                     out[name] = (f"raw peak up to {pk:,.0f} ADU on the sharpest frames "

@@ -317,7 +317,10 @@ The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P al
 anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
 lower left says *Comp survey… frame 12 of 30*. The green rings already shown stay until the new ones are ready. If you
 press **Run photometry** while it is still reading, the run waits and starts by itself when the survey is done (the
-Log says *Run photometry waits for the comp survey to finish, then starts by itself.*).
+Log says *Run photometry waits for the comp survey to finish, then starts by itself.*). **Cancel** calls the wait off
+(the survey goes on; it only changes the suggestions). The survey is read once per frame on the page and target: when
+you change the aperture afterwards it is not read again, it uses the nearest aperture it measured, and the
+suggestions line says so (*measured at r 5.4, the nearest it tried*).
 
 **Which frames.** About every 10th light (at least 8, at most 24), always the first and the last, the frame on the
 page, then the frames either side of the two sharpest ones read (so the night's brightest peaks are seen), and on a
