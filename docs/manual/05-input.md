@@ -145,6 +145,12 @@ Another camera:
   own. What a loaded series set is the series' own whatever the number: a series at the default 8, 14 and 22 px
   keeps them (they are not replaced by the star-size suggestion), and so does one whose sizes happen to equal
   last night's. Once you calibrate or run these lights, the boxes go with their camera again.
+- **A series from another camera.** The series' aperture and raw sat ADU are kept only when tonight's lights come
+  from the camera of the series' latest night. Lights from another camera reset them like any camera change, and the
+  log says *The series' aperture and raw sat ADU were for its … nights; these lights are from …, so they are reset as
+  for any camera change.* An older series that doesn't say which camera took it keeps them; if its raw sat ADU is
+  more than tonight's camera can record (60,000 on a 12-bit camera that stops at 4,095), a ⚠ in the Findings list
+  says so, because saturated stars would never be flagged. Closing the series ends all of this.
 - **Back to the camera before.** If you picked a folder from another camera by mistake and then choose the first
   camera's lights again in the same session, the aperture and sky ring are put back as that camera's lights last
   used them (*Aperture and sky ring put back to r 6, sky 11–17 px, as last used with this camera in this

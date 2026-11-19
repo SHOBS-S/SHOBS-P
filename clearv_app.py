@@ -4177,7 +4177,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self.series_path:
             return False
         try:
-            done = self._write_series(self.series_path, self._report_series_override()) is not None
+            done = self._write_series(self.series_path, self._report_series_override(), ask=False) is not None
         except OSError as exc:
             self.log(f"Series file not updated ({exc}).")
             return False
@@ -5630,6 +5630,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         """True when the box (or the three aperture boxes) still holds what it held with the last camera's lights
         (the snapshot), so it was carried over and a new camera resets it. Without a snapshot: `fallback` is the
         value the session started with (None: taken as carried over)."""
+        if key in (getattr(self, "_camera_force", None) or ()):
+            return True    # re-review 3 (S1): a series' value for another camera than these lights': reset it
         if key in (getattr(self, "_camera_series_set", None) or ()):
             return False   # re-review 2 (item 4): set by a series loaded since, whatever value it holds
         now = self._camera_values_now()[key]
@@ -5721,14 +5723,65 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if ap and all(v is not None for v in ap) and getattr(self, "_camera_aperture_pending", None) is None:
                 self.__dict__.setdefault("_camera_apertures", {})[camera_key(last)] = tuple(ap)
         back = (getattr(self, "_camera_apertures", None) or {}).get(camera_key(sig))
-        lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session, back),
-                 self._camera_reset_limits(header, sig, path)]
+        series_line = self._camera_series_check(sig)
+        try:
+            lines = [self._camera_reset_folders(header, last, sig), self._camera_reset_aperture(in_session, back),
+                     self._camera_reset_limits(header, sig, path)]
+        finally:
+            self._camera_force = set()
+        if series_line:
+            lines.append(series_line)
         self._camera_record(sig, changed=True)
         self.log(lines[0])
         for line in lines[1:]:
             self.log(line, keep_status=True)
         self._set_camera_note("\n".join(lines))
         return True
+
+    def _series_camera(self) -> str:
+        """Re-review 3 (S1): the INSTRUME of the open series' latest night ("" when the series does not say)."""
+        bins = getattr(self, "night_bin", None) or {}
+        if not bins:
+            return ""
+        try:
+            latest = max(bins, key=lambda n: str(n))
+        except Exception:
+            return ""
+        inst = str((bins.get(latest) or {}).get("instrument") or "").strip()
+        return " ".join(inst.split(" / ")[-1].split()) if inst else ""
+
+    def _camera_series_check(self, sig: dict) -> str:
+        """Re-review 3 (S1, John 18 Nov 2026): a loaded series' aperture and raw sat ADU are kept through a camera
+        change only when tonight's lights come from the camera of the series' latest night. Another camera: the
+        series' marks go, so those boxes reset like any camera change (said in one plain line). A series that does
+        not say its camera keeps them, with a warning finding when the kept raw sat ADU is above what this camera
+        can record (saturation would never be flagged). Returns the line to add ("" for none)."""
+        marks = getattr(self, "_camera_series_set", None) or set()
+        if not marks:
+            return ""
+        series_cam = self._series_camera()
+        new_cam = str(sig.get("instrume") or "").strip()
+        if series_cam and new_cam:
+            if series_cam.lower() == new_cam.lower():
+                return ""
+            self._camera_force = set(marks) & {"aperture", "sat"}
+            self._camera_series_set = set()
+            return (f"The series' aperture and raw sat ADU were for its {series_cam} nights; these lights are from "
+                    f"{new_cam}, so they are reset as for any camera change.")
+        bits = sig.get("bits")
+        sat = self._box_number(self.sat_limit)
+        if "sat" in marks and bits and bits < 16 and sat is not None and sat > (2 ** int(bits)) - 1:
+            words = (f"⚠ Raw sat ADU {sat:g} (from the series) is above what this {bits}-bit camera can record "
+                     f"({2 ** int(bits) - 1}): saturated stars would not be flagged. Set raw sat ADU for this camera.")
+            try:
+                store = getattr(self, "findings", None)
+                if store is not None:
+                    store.drop_step("Camera change: raw sat ADU")
+                    store.add("warn", words, step="Camera change: raw sat ADU", where="Input page")
+            except Exception:
+                traceback.print_exc()
+            return words
+        return ""
 
     def _camera_reset_folders(self, header: dict, last: dict, sig: dict) -> str:
         carried = getattr(self, "_camera_folders", None) or {}
@@ -18231,7 +18284,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.draw_output()
         if self.series_path:
             try:
-                if self._write_series(self.series_path) is not None:
+                if self._write_series(self.series_path, ask=False) is not None:
                     self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}."
                                     + self._held_words())
             except OSError as exc:
@@ -19687,25 +19740,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return (f" ({self._held_names(held)} {'is' if len(held) == 1 else 'are'} held, not in the file: Save series "
                 f"adds {'it' if len(held) == 1 else 'them'}.)")
 
-    def _save_series_words(self) -> str:
+    def _save_series_words(self, ask: bool = True) -> str:
         """2.3.5 (#81): write the open series and say what was written, for a status line. Raises OSError."""
-        if self._write_series(self.series_path) is None:
+        if self._write_series(self.series_path, ask=ask) is None:
             held = list(self._series_holds())
             return (f" Not saved: {self._held_names(held)} {'is' if len(held) == 1 else 'are'} held and the comps "
                     "changed since; Save series writes everything.")
         return f" Saved to {os.path.basename(self.series_path)}." + self._held_words()
 
-    def _write_series(self, path: str, meta_override: dict | None = None):
+    def _write_series(self, path: str, meta_override: dict | None = None, ask: bool = True):
         # 2.2.14 (item 17): keep one version back. The first write to a file in a session (Save series, or the
         # automatic save when a night is added, removed, or comps change) moves the file on disk to X_prev.cvseries
         # (replacing an older _prev); later writes in the same session leave that copy alone, so it stays the version
         # from before this session. The new file is written completely (X.part) before anything is renamed.
         # 2.4.0 step 4 (S033; re-review 2): a comp the user cleared that is still in the comps in use: asked once
         # (Leave it out re-derives every night first; Keep it leaves the choice), never trimmed without a re-derive.
-        try:
-            self._save_comps_question()
-        except Exception:
-            traceback.print_exc()
+        # Re-review 3 (M1): not asked (ask=False) on bookkeeping writes — a report note or sent mark (the report on
+        # disk was written from the numbers as they are), a night note, planet-transit flags — so the numbers never
+        # change under a report already saved; the user's clear stays pending and the next real save asks.
+        if ask:
+            try:
+                self._save_comps_question()
+            except Exception:
+                traceback.print_exc()
         holds = self._series_holds()
         nights_now = {o.night for o in self.observations}
         for gone in [n for n in holds if n not in nights_now]:
@@ -19957,6 +20014,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # series (a new series from tonight's run builds its records at its first save)
         self.star_records = []
         self._v_disagree = {}
+        self._camera_series_set = set()   # re-review 3 (S2): a closed series' aperture/sat no longer shield the boxes
         self.reports_saved = {}
         self.reports_sent = {}       # 2.2.18 (item 10)
         self.multinight_alt_eph = None   # 2.2.21 (#44)
@@ -21919,7 +21977,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             + " (the series is not saved yet: Save series keeps it).")
             return
         try:
-            words = self._save_series_words()
+            words = self._save_series_words(ask=False)   # re-review 3: a night note never re-derives the series
         except OSError as exc:
             messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
             self.status.set(f"Note for {night} " + ("set" if text else "removed") + ", but the file was not saved.")

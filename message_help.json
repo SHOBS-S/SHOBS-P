@@ -179,6 +179,20 @@
   {
    "section": "Input",
    "patterns": [
+    "The series' aperture and raw sat ADU were for its … nights; these lights are from …, so they are reset as for any camera change."
+   ],
+   "todo": "Check the boxes (Suggest… for the aperture)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Raw sat ADU … (from the series) is above what this …-bit camera can record (…): saturated stars would not be flagged. Set raw sat ADU for this camera."
+   ],
+   "todo": "Type this camera's saturation level in raw sat ADU (chapter 4)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Aperture and sky ring put back to r …, sky …–… px, as last used with this camera in this session."
    ],
    "todo": "Nothing."

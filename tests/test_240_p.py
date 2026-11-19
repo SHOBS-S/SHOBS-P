@@ -829,3 +829,60 @@ class TestTheManualKnowsTheNewMessages(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSeriesValuesFollowTheSeriesCamera(TestCameraChangeKeepsWhatWasSetSince):
+    """Re-review 3 (S1, John 18 Nov 2026): a loaded series' aperture and raw sat ADU are kept through a camera
+    change only when tonight's lights come from the camera of the series' latest night; another camera resets them
+    like any camera change. A series that does not say its camera keeps them, with a ⚠ finding when the kept raw
+    sat ADU is above what tonight's camera can record. (S2: Close series takes the series' marks with it.)"""
+    CAM_12 = {"NAXIS1": 1936, "NAXIS2": 1216, "INSTRUME": "ZWO ASI174MM", "XBINNING": 1, "BITPIX": 16,
+              "DATAMAX": 4095}
+
+    def setUp(self):
+        super().setUp()
+        self._bins = dict(self.app.night_bin or {})
+        self.addCleanup(lambda: setattr(self.app, "night_bin", self._bins))
+
+    def _series_on(self, inst):
+        app = self.app
+        app._apply_meta({"radius": 4.0, "sky_in": 8.0, "sky_out": 12.0, "sat_limit": 50000})
+        app.night_bin = {"JD2460990": {"instrument": inst}} if inst else {"JD2460990": {}}   # the series' nights
+        self.lines.clear()
+
+    def test_series_of_tonights_camera_keeps_its_values(self):
+        app = self.app
+        self._night_on_a()
+        self._series_on("RC14 / QHY 268M")
+        self.assertTrue(app._camera_check(CAM_B, ""))
+        self.assertEqual(self._boxes()[:4], (4.0, 8.0, 12.0, 50000))
+        self.assertFalse(any("reset as for any camera change" in ln for ln in self.lines), self.lines)
+
+    def test_series_of_another_camera_is_reset(self):
+        app = self.app
+        self._night_on_a()
+        self._series_on("RC14 / ZWO ASI2600MC Duo")
+        self.assertTrue(app._camera_check(self.CAM_12, ""))
+        self.assertEqual(self._boxes()[:3], (8.0, 14.0, 22.0))
+        self.assertEqual(float(app.sat_limit.get()), 4095.0)
+        self.assertTrue(any("reset as for any camera change" in ln for ln in self.lines), self.lines)
+        self.assertEqual(app._camera_force, set())
+        self.assertEqual(app._camera_series_set, set())
+
+    def test_series_without_a_camera_keeps_and_warns_when_sat_is_out_of_reach(self):
+        app = self.app
+        self._night_on_a()
+        self._series_on("")
+        app.findings.clear()
+        self.assertTrue(app._camera_check(self.CAM_12, ""))
+        self.assertEqual(float(app.sat_limit.get()), 50000.0)
+        self.assertTrue(any(ln.startswith("⚠ Raw sat ADU 50000") for ln in self.lines), self.lines)
+        self.assertTrue(any("4095" in f.text for f in app.findings.items))
+        app.findings.clear()
+
+    def test_close_series_takes_its_marks(self):
+        app = self.app
+        self._series_on("")
+        self.assertTrue(app._camera_series_set)
+        app._clear_series_state()
+        self.assertEqual(app._camera_series_set, set())

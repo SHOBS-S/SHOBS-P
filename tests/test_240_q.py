@@ -266,3 +266,27 @@ class TestLoadQuestionDefault(M.AppCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBookkeepingWritesDoNotAsk(M.AppCase):
+    """Re-review 3 (M1): a report note, a sent mark, a night note or planet-transit flags write the series without
+    the cleared-comp question (the report on disk was made from the numbers as they are); the next real save asks."""
+
+    def test_report_note_does_not_ask(self):
+        app = self.app
+        calls = []
+        with mock.patch.object(app, "_save_comps_question", side_effect=lambda: calls.append(1) or []):
+            path = self.write("r.cvseries", _old_meta([A, B], CAT), _points([A, B], CAT))
+            self.load(path)
+            calls.clear()
+            app._write_series(path, ask=False)
+            self.assertEqual(calls, [])
+            app._write_series(path)
+            self.assertEqual(calls, [1])
+
+    def test_callers_pass_ask_false(self):
+        import inspect
+        src = inspect.getsource(self.ca.App)
+        self.assertIn("self._report_series_override(), ask=False)", src)
+        self.assertIn("self._write_series(self.series_path, ask=False)", src)
+        self.assertIn("self._save_series_words(ask=False)", src)
