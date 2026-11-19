@@ -79,7 +79,9 @@ gets the note.)
 
 Every camera's response bends before it saturates: above a certain level, a pixel collects fewer counts than the light
 deserves, so a bright star reads too faint. On some cameras this starts well below full scale. If you know your camera's linear limit (from its data sheet, or from a linearity test), type it in raw ADU in
-the **linear ADU** box beside **raw sat ADU** on the Photometry page. SHOBS-P remembers it.
+the **linear ADU** box beside **raw sat ADU** on the Photometry page. SHOBS-P remembers it. If you have measured your
+camera with SHOBS-FLUX, you don't need to type it: from 2.4.0 SHOBS-P takes it from the SHOBS-FLUX camera profile each
+time it scans your lights (chapter 8, "Linear ADU").
 
 With the box filled, SHOBS-P checks each star's brightest raw pixel against it: when you pick a comparison star or the
 target (chapter 8), when it measures every frame (the log counts the frames over the limit for each star), and in Comp

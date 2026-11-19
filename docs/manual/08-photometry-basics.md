@@ -284,8 +284,9 @@ From 2.3.4 the rules are:
   ranked. The target's colour is its **measured** B−V when the loaded series has nights with **Also measure R and B**,
   otherwise the catalog's (the line says which). When too few stars pass, stars up to 0.6 apart fill in, and their line
   says **the closest color left here (no more within 0.3)**. A star with no colour in the catalogs only fills in (when the target's colour is known), and its line says so.
-- **Linear:** with a **linear ADU** set, the star's brightest raw pixel on the reference frame must be under 75 % of
-  it, so the sharpest frames of the night stay linear too.
+- **Linear:** with a **linear ADU** set, the star's brightest raw pixel must stay under 90 % of it on every frame the
+  comp survey read, the night's sharpest included (below). Before the survey is back (or with no survey: one light,
+  no masters), the frame on the page alone is checked, at 75 %, so the sharpest frames have room.
 - **Inside the frame all night (2.4.0):** at least 3 × the sky-out radius from every edge on **every frame of the
   night**, not only on the frame on the page. A star that the night's drift takes nearer the edge than that is
   **never** suggested, however short the field is: you then get fewer than four suggestions, and the Log says which
@@ -308,6 +309,63 @@ From 2.3.4 the rules are:
     alone. With 8 frames checked, a frame in
     between can drift a little further (a sudden jump of the mount), which the margin of 3 × the sky-out radius
     covers in most cases; the lines say how many frames were checked.
+
+#### The comp survey (2.4.0)
+
+The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P also measures the candidates on the
+**night's own frames** before you run, so S1–S4 are chosen on how the stars actually behaved tonight. You never press
+anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
+lower left says *Comp survey… frame 12 of 30*. The green rings already shown stay until the new ones are ready. If you
+press **Run photometry** while it is still reading, the run waits and starts by itself when the survey is done (the
+Log says *Run photometry waits for the comp survey to finish, then starts by itself.*).
+
+**Which frames.** About every 10th light (at least 8, at most 24), always the first and the last, the frame on the
+page, then the frames either side of the two sharpest ones read (so the night's brightest peaks are seen), and on a
+night with a meridian flip enough frames on each side of it, including the frames where it happened. Each is
+calibrated with your masters and lined up like the run itself. Measured on John's 14″ RC with the ASI2600MC
+(WASP-49 b, 19 Nov 2026): 36 of the night's 232 frames of 6248 × 4176 px in about 40 seconds, read from his data
+drive. Small frames (MicroObservatory) take a few seconds.
+
+**What each candidate must pass** (a star that fails any of these is never suggested, however good it looks
+otherwise):
+
+- measured on **every** frame the survey read;
+- not **over 90 % of the linear limit** on any of them (with a **linear ADU** set);
+- not **scattering like a variable** tonight: more than 3 × the scatter of the stars of about its brightness, and more
+  than 5 mmag. (A star a little noisier than that is ranked lower instead.)
+
+The edge, brightness and colour rules above still apply first.
+
+**How the rest are ranked.** By the night's own scatter first (each star against the other candidates, with clouds
+and airmass cancelling as they do in the run), then by the brightness and colour rules above. On a night with a
+meridian flip two more things count: each star's **step at the flip**, measured against the stars nearest the target,
+and its **distance from the target**. After the flip every star lands on the opposite side of the sensor, so a flat or
+optics error that does not cancel shows up as a step, and it grows away from the center. The stars nearest the target
+step most like it, so a set whose steps against them average to zero leaves the target's step out of your result. On
+WASP-49 b (19 Nov 2026) the two comps nearest the target left it a −1.6 mmag step, while three steadier-looking stars
+farther out, which agreed with each other to 3 mmag, gave it −26.5 mmag.
+
+**Choosing the set on a flip night.** From the 8 best-ranked survivors SHOBS-P takes the set (2 to 4 stars) whose
+steps average nearest zero, preferring stars that do not step much on their own (a set that only cancels big steps is
+fragile), and suggests fewer than four when the fourth would make it worse. The suggestions line ends with, for
+example, *Chosen on 36 of the night's 232 frames (comp survey: steadiness, the sharpest frames' peaks, every frame in
+view; 15 before and 21 after the meridian flip, so steady on both pier sides, expected flip step +0.4 mmag against
+the stars nearest the target).*
+
+**A loaded series.** The series' own comps come first when they pass tonight, so the series keeps its comps from night
+to night. A series comp that fails is named in the Log: *Series comp TYC … fails tonight: raw peak up to 62,100 ADU on
+the sharpest frames (over the linear limit 60,931 on 6 of 30). It is not suggested; Comp health after the run shows
+whether to keep it.*
+
+**What the lines say.** Each S line adds what the night's frames showed, for example *…, steady 2.1 mmag on 30
+frames, flip step +0.8 mmag (against the stars nearest the target), raw peak 41,200 ADU on the sharpest (68% of the
+linear limit)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
+(scatters 4.2 × the stars of its brightness tonight (18.3 mmag): it may vary); APASS … (not measured on frames 41, 42
+of the 30 read).* When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
+steadiest you can by hand and check Comp health after the run.
+
+The survey only changes which stars are **suggested**. The photometry itself is the same, and the comps you mark are
+yours: **Use comps…** and Comp health (chapter 11) stay as the safety net.
   - With a single light (or an image from another field) only the frame on the page is checked.
 - **AAVSO sequence stars** that pass come first, then other catalog stars.
 
@@ -422,6 +480,19 @@ can test other sizes."*). **raw sat ADU** and **linear ADU** are set for the new
 that a loaded series filled, after the last night is left as it is. See "Lights from another camera" in
 [5. Input](05-input.md).
 
+**The comp survey's aperture trial (2.4.0).** The comp survey (see "How S1–S4 are chosen") also measures its frames
+with a few other apertures: 1.0, 1.2, 1.5, 1.8, 2.2 and 2.5 × the stars' FWHM, each with its own sky ring. It judges
+them on the stars most like the target in brightness (within 0.75 mag, else the five nearest), each against the other
+candidates. When one aperture scatters at least 10 % less than the one in the boxes, SHOBS-P sets it and says so in
+the Log, with the whole trial: *Aperture trial on 30 of the night's frames, 6 stars like the target: r 2.6: 14.1 mmag,
+r 3.1: 12.5 mmag, r 4.6: 17.2 mmag, …. r 3.1, sky 7–10 px scatters 27% less than r 4.6 (12.5 mmag against 17.2 mmag),
+so it is set (Suggest… shows the FWHM rule's sizes).* This matters most for faint stars on a bright sky, where a
+smaller aperture collects less sky noise (Joanna's MicroObservatory WASP-43 b night: r 3 gave half the scatter of the
+suggested 4.6). It is never set on a loaded series (its nights keep one aperture), on defocused stars (the 95 % light
+rule decides), or when you changed the boxes while the survey ran; then the same line ends *… not set because a
+series is open and its nights keep one aperture. Type it in the Aperture boxes to use it.* When no aperture is clearly
+better, nothing is said and the boxes stay.
+
 ### Defocused stars (donuts)
 
 Many transit observers defocus on purpose, so each star becomes a ring (a "donut"). SHOBS-P decides once per run
@@ -464,8 +535,14 @@ saturated frames. Set it to your camera's real full-well value if you know it.
 
 ### Linear ADU
 
-**linear ADU** is your camera's linear limit, in raw units (chapter 4). Leave it empty if you don't know it; nothing
-changes then. With a value set below **raw sat ADU**, SHOBS-P cautions when you pick a star whose raw peak is over or
+**linear ADU** is your camera's linear limit, in raw units (chapter 4). From 2.4.0 it comes from your **SHOBS-FLUX
+camera profile** whenever there is one for these lights' camera, gain, offset and binning (on a color camera, the
+channel you measure), every time the lights are scanned, not only when the camera changes. The small grey word beside
+the box says where the number came from: **from SHOBS-FLUX**, **set here** (you typed it), or nothing (empty, or set
+before 2.4.0). A number you type wins for those lights until you scan other lights. The Log says when the profile
+changed the box: *Linear ADU 60,931 from the SHOBS-FLUX profile for this camera (measured 2026-11-09); it was
+40,000.* SHOBS-P only reads profiles; it never writes them, and it works the same without SHOBS-FLUX. Leave the box
+empty if you don't know the limit and have no profile; nothing changes then. With a value set below **raw sat ADU**, SHOBS-P cautions when you pick a star whose raw peak is over or
 near it (see "Comparison stars and the check star" above), counts after each run the frames where each star went over
 it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"), and Comp health shows an **Over linear limit**
 column (chapter 11).
