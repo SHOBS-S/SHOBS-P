@@ -27,9 +27,10 @@ LINEAR_MARGIN = 0.9        # a comp's highest raw peak must stay under 90 % of t
 VARIABLE_FACTOR = 3.0      # a candidate scattering 3x the stars of its brightness tonight is left out
 VARIABLE_MIN_PEERS = 5     # ... judged only when at least this many stars are of about its brightness
 VARIABLE_FLOOR = 0.005     # ... and only above 5 mmag (below that it is ranked lower, not left out)
-APERTURE_FACTORS = (1.2, 1.5, 1.8, 2.2, 2.5)   # x FWHM, the #61 trial
+APERTURE_FACTORS = (1.0, 1.2, 1.5, 1.8, 2.2, 2.5)   # x FWHM, the #61 trial
 APERTURE_GAIN = 0.10       # a trial aperture is offered only when its scatter is at least 10 % lower
-SET_STEP_SLACK = 0.003     # mag: sets whose expected flip step is this close to the best count as balanced
+SET_STEP_SLACK = 0.003     # mag: sets whose cost is this close to the best count as equal (then the best-ranked)
+SET_SIZE_COST = 0.003      # mag: what one comp fewer than asked costs a set (fewer comps, less S/N)
 SET_TOP = 8                # the set is chosen from the 8 best-ranked survivors
 
 
@@ -146,7 +147,9 @@ def ensemble_stats(mags, flipped=None, iterations: int = 3) -> dict:
             if not others.any():
                 continue
             with np.errstate(all="ignore"):
-                d = z[:, j] - np.nanmean(z[:, others], axis=1)
+                # the MEDIAN of the others: one star with a big pier-side step (an edge star) must not shift every
+                # other star's step (WASP-49 b 19 Nov: APASS J060338.6 +63 mmag made the central comps read -35)
+                d = z[:, j] - np.nanmedian(z[:, others], axis=1)
             a, b = d[sides], d[~sides]
             a, b = a[np.isfinite(a)], b[np.isfinite(b)]
             if a.size >= 2 and b.size >= 2:
@@ -196,10 +199,11 @@ def rank_key(base: float, scatter: float, ref_scatter: float, step: float = floa
 
 
 def choose_set(names: list, keys: list, steps: list, count: int = 4, top: int = SET_TOP) -> tuple[list, float]:
-    """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set of
-    min(count, n) whose expected flip step (the mean of its members' steps) is nearest zero; among sets within
-    SET_STEP_SLACK of that, the best-ranked (lowest total key). Stars without a measured step only join when there
-    are not enough with one. Returns (names in rank order, expected step)."""
+    """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set (2 up to
+    `count` stars) with the lowest cost = |expected flip step| (the mean of its members' steps) + half their mean
+    |step| (steady stars first: a set that only cancels big steps is fragile) + SET_SIZE_COST per comp fewer than
+    `count`; among sets within SET_STEP_SLACK of the lowest, the best-ranked (lowest total key). Stars without a
+    measured step only join when there are not enough with one. Returns (names in rank order, expected step)."""
     pool = [(n, k, s) for n, k, s in zip(names, keys, steps)][:top]
     stepped = [p for p in pool if math.isfinite(p[2])]
     k = min(count, len(pool))
@@ -210,8 +214,11 @@ def choose_set(names: list, keys: list, steps: list, count: int = 4, top: int = 
         vals = [p[2] for p in chosen if math.isfinite(p[2])]
         return [p[0] for p in chosen], (float(np.mean(vals)) if vals else float("nan"))
     combos = []
-    for c in itertools.combinations(stepped, k):
-        combos.append((abs(float(np.mean([p[2] for p in c]))), sum(p[1] for p in c), c))
+    for size in range(min(2, k), k + 1):
+        for c in itertools.combinations(stepped, size):
+            st = [p[2] for p in c]
+            cost = abs(float(np.mean(st))) + 0.5 * float(np.mean(np.abs(st))) + SET_SIZE_COST * (k - size)
+            combos.append((cost, sum(p[1] for p in c) / size, c))
     best = min(c[0] for c in combos)
     ok = [c for c in combos if c[0] <= best + SET_STEP_SLACK]
     pick = min(ok, key=lambda c: c[1])[2]
