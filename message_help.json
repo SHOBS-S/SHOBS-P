@@ -960,6 +960,79 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Left out by the comp survey: … (scatters … × the stars of its brightness tonight (… mmag): it may vary); … (raw peak up to … ADU on the sharpest frames (over the linear limit … on … of …)); … (not measured on frame … of the … read)."
+   ],
+   "todo": "Nothing to do. Don't pick them by hand unless the field has nothing better; Comp health after the run shows how they did."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Series comp … fails tonight: …. It is not suggested; Comp health after the run shows whether to keep it."
+   ],
+   "todo": "Run, then look at it in Comp health (chapter 11); untick it there if it really went bad tonight."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No good comp here tonight: every star of the right brightness and color failed the comp survey (above). …"
+   ],
+   "todo": "Pick the steadiest stars you can by hand; check Comp health after the run."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry waits for the comp survey to finish, then starts by itself."
+   ],
+   "todo": "Nothing: the run starts when the busy bar's survey ends."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry called off (it was waiting for the comp survey)."
+   ],
+   "todo": "Press Run photometry again when you are ready."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry did not start: the page changed while the comp survey read the frames. Press Run photometry again."
+   ],
+   "todo": "Press Run photometry again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The comp survey could not read the night's frames (…); the suggestions are from the catalog and this frame only.",
+    "The comp survey read fewer than 3 of the night's frames; …"
+   ],
+   "todo": "The green rings follow the catalog rules alone; check Comp health after the run."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Aperture trial on … of the night's frames, … stars like the target: r …: … mmag, …. r …, sky … px scatters …% less than r … (…), so it is set …",
+    "… not set because a series is open and its nights keep one aperture. …",
+    "… not set because the boxes were changed while the survey ran. …"
+   ],
+   "todo": "Nothing, or type the other size yourself when it was not set."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Linear ADU … from the SHOBS-FLUX profile for this camera (measured …); it was …."
+   ],
+   "todo": "Nothing. Type another number if you want; it wins for these lights."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The SHOBS-FLUX profile the linear ADU came from is not found for these lights' camera now; the box keeps … (now marked set here)."
+   ],
+   "todo": "Check the number still suits your camera."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "raw peak … ADU is over the linear limit (…): the camera's response bends there, so this star reads too faint …"
    ],
    "todo": "Pick a fainter comp; for the target, shorter exposures or more defocus."
