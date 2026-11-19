@@ -32,8 +32,9 @@ FREE_DEPTH_RATIO = 3.0
 
 # Labels for the fitted parameters (the order the corner plot uses).
 LABELS = {"tc": "Tc", "k": "Rp/R*", "a_rs": "a/R*", "b": "b", "q1": "q1 (LD)", "q2": "q2 (LD)",
-          "c0": "Baseline", "c_am": "Airmass slope", "c_t": "Time slope (/day)", "step": "Flip step (%)"}
-ORDER = ("tc", "k", "a_rs", "b", "step", "c0", "c_am", "c_t", "q1", "q2")
+          "c0": "Baseline", "c_am": "Airmass slope", "c_t": "Time slope (/day)", "c_t2": "Time curve (/day²)",
+          "step": "Flip step (%)"}
+ORDER = ("tc", "k", "a_rs", "b", "step", "c0", "c_am", "c_t", "c_t2", "q1", "q2")
 # Parameters whose pile-up at an edge is reported as a caution (limb darkening is prior-led by design; the baseline
 # terms have no hard bound in the MCMC).
 FLAG_PARAMS = ("tc", "k", "a_rs", "b", "step")
@@ -254,22 +255,23 @@ def single_detrend_dbic(prob, best: dict, starts) -> dict:
     t, flux, err, am = prob.t, prob.flux, prob.err, prob.am
     n = len(t)
     out = {"corr": float(np.corrcoef(am, t)[0, 1]) if np.std(am) > 0 and np.std(t) > 0 else float("nan")}
+    curve = "c_t2" in prob.free   # 2.4.0 (#103): "time" alone keeps the curve when the fit had one
     for which, use_am, use_t in (("airmass", True, False), ("time", False, True)):
         try:
             p1 = tc.TransitProblem(t, flux, err, am, prob.period, prob.priors, tuple(prob.free),
                                    dict(best), use_am, use_t, prob.ld_prior,
-                                   prob.t_flip)
+                                   prob.t_flip, detrend_curve=curve and use_t)
             # The start: the Both fit's shape, with this baseline only.
-            for name in ("c_am", "c_t"):
+            for name in ("c_am", "c_t", "c_t2"):
                 if name not in p1.free:
                     p1.fixed[name] = 0.0
             x, chi2_tr = tc.best_fit(p1, starts)
-            names = [p for p in ("c0", "c_am", "c_t", "step") if p in p1.free]
+            names = [p for p in ("c0", "c_am", "c_t", "c_t2", "step") if p in p1.free]
             after = p1.after if p1.after is not None else 0.0
 
             def flat(xx):
                 q = dict(zip(names, xx))
-                base = q.get("c0", 1.0) + q.get("c_am", 0.0) * am + q.get("c_t", 0.0) * (t - p1.t_mid)
+                base = tc.poly_baseline(q, am, t - p1.t_mid)
                 if "step" in q:
                     base = base * (1.0 + q["step"] * after)
                 return (flux - base) / err

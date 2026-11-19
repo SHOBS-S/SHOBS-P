@@ -16,6 +16,7 @@ you can do. Often the honest answer is "this night cannot tell", and that is a u
 |---|---|---|
 | **✓ Transit detected** | All four tests pass. | Tc, depth and shape. |
 | **✓ … Timing usable; depth unreliable: …** | Detected, but the depth is far from published and the night gives a reason. | Tc. Treat the depth with care. |
+| **✓ … ⚠ Size: depth … is …σ deeper (shallower) than …** (2.4.0) | Detected and timed, but the depth is more than 3σ outside every published (Rp/R\*)² (see below). | Tc. Check the depth before you rely on it. |
 | **⚠ Inconclusive** | The dip beats a flat line, but a jump at a gap explains it as well. | Possibly Tc, with that caveat. Not the depth. |
 | **✗ No transit measured** | The dip is not significant, Tc is not pinned, or the depth is impossible. | Nothing for submission. |
 
@@ -49,9 +50,27 @@ Untick time slope and fit again only if that trend is not real (a slope artifact
 The fit cannot tell when the transit happened. This usually means ingress or egress (or both) were not observed,
 or the noise is as large as the dip. More baseline and full coverage on the next night is the fix.
 
+### "⚠ Size: depth … % is …σ deeper than the nearest published (Rp/R\*)² … %; range …: check the comps, dilution by a neighbour, and the detrend" (2.4.0)
+
+The transit is detected (the dip beats a flat line and Tc is pinned), but its depth is more than 3σ outside the whole
+range of published (Rp/R\*)² values (σ is your fit's error and the nearest published value's error together). Inside
+that range, or within 3σ of it, nothing is flagged; with two or more published values the verdict then just adds
+*"Depth within the published range …"*. The detection and the size are separate questions: the size check never
+turns a detection into "no transit".
+
+Example: TOI-2046 b, an EXOTIC report of 3 Sep 2026 fitted with airmass: depth 2.22 ± 0.19 % against the only
+published (Rp/R\*)², 1.47 % (Kabáth et al. 2022), 3.8σ. The same report with **Auto** detrend (airmass + time slope)
+gives 1.62 %, within the published value: a trend was making the dip deeper.
+
+- Check the comps (**Comp health…**, the comp check on this page), a neighbour inside the aperture (a deeper dip
+  from a shallower one, or the other way round), and try another **Detrend**.
+- The report's NOTES carry *"detected; size caution: …"*.
+
 ### "the depth, …%, is …x the published …; a real transit of this planet cannot be that deep (shallow)"
 
-The fitted depth is more than three times (or less than a third of) the published depth, and far outside the error.
+From 2.4.0 this test is only used when no published Rp/R\* has an uncertainty (otherwise the size caution above
+decides). The fitted depth is more than three times (or less than a third of) the published depth, and far outside
+the error.
 Something in the light curve made the dip: a jump, a trend, a bad comp, or a calibration problem.
 
 - A much **deeper** dip almost always comes from the light curve itself. Check the comps (**Comp health…**), the
@@ -84,8 +103,8 @@ and the verdict is often inconclusive: put the flip well into the baseline next 
 
 ### "Timing usable; depth unreliable: depth …% vs published …, and …"
 
-The transit was detected, but its depth is more than 3σ from the published one, and the night shows why it might be
-off:
+The transit was detected, but its depth is more than 3σ from the published one (from 2.4.0: outside the published
+range by more than 3σ), and the night shows why it might be off:
 
 - *"a …% jump at the …-minute gap fits nearly as well"*, or
 - *"the baseline is one-sided (… min before, … min after)"*: less than 20 minutes of data on one side of the transit.

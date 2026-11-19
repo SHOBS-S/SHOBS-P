@@ -1651,6 +1651,57 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Detrend Auto (BIC): … ; the others: none ΔBIC +…, airmass ΔBIC +…, …"
+   ],
+   "todo": "Nothing. To compare, pick a choice yourself and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "✓ Transit detected … ⚠ Size: depth … % is …σ deeper (shallower) than … (Rp/R\\"
+   ],
+   "todo": "See 18. Inconclusive or none: check the comps, a neighbour in the aperture, another Detrend."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… Depth within the published range … (… values)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Prayer-bead check (… shifted refits): its error is larger than the MCMC's for …, so that error is the one shown"
+   ],
+   "todo": "Nothing; the report carries the larger error. Clouds, seeing or guiding often cause it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The free shape ran away AND the fit with the published shape has Rp/R\\"
+   ],
+   "todo": "Treat depth and Tc as suspect: check the comps, the residuals, high-airmass frames and clouds."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… frames past airmass 3 (up to …, at the end): in air that thick a red star and bluer comps dim differently … Trim airmass > 3 takes them out and refits."
+   ],
+   "todo": "Press Trim airmass > 3 if that baseline is enough; the limit is the settings file's transit_trim_airmass (3 if not set)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fitting the transit: choosing the detrend… 2 of 6",
+    "… looking up the published sizes…",
+    "… prayer-bead check of the errors…"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
    ],
    "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."

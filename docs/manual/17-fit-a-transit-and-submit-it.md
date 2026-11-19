@@ -59,18 +59,30 @@ strip; the page has no progress bar of its own.
 - **Open AAVSO exoplanet report (EXOTIC)…** (same row): fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
   **Close report** appears beside the Night box while a report is open.
 - **Points** row: **Trim** (below), and **Refit with flagged frames** when the night has cloud-flagged frames the fit
-  left out.
-- **Corrections** row. **Detrend**: **airmass** (on by default) and **time slope** (off). These are baseline trends fitted together with
-  the transit. Add **time slope** only when the baseline clearly drifts and airmass does not explain it. With both
-  ticked ("Both"), the two trends can together absorb a transit. When that happens, SHOBS-P refits with each trend
-  alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32). Untick
-  time slope and fit again only if that trend is not real …"*.
-  When the data have no airmass, **airmass** is unticked and grayed out, and the row says why: *no airmass: site not
-  set* (enter the site's latitude and longitude on the Input page), *no airmass in these data (run photometry again
-  with the site set)* (the site is set now, but the photometry ran before it was) or *no airmass in these data* (a
-  report without an airmass column). The fit never used airmass in that case; from 2.4.0 the box says so. With
-  airmass again, the box is live and your earlier choice is back. The Multi-night window starts with your own
-  choice, not with the grayed-out box.
+  left out. From 2.4.0, when some fitted frames are past airmass 3, a **Trim airmass > 3** button appears after the
+  fit, with a note saying how many frames that is and how much out-of-transit baseline a trim would leave before and
+  after the transit. Pressing it trims them (the same as a Trim span) and refits; **Clear trim** puts them back. The
+  limit can be changed with `transit_trim_airmass` in the settings file.
+- **Corrections** row. **Detrend** (a drop-down, from 2.4.0): the baseline trend fitted together with the transit.
+  The choices are **Auto (BIC)** (the default), **none**, **airmass**, **time slope**, **time curve**, **airmass + time
+  slope** and **airmass + time curve**. A *time curve* is a slope plus a gentle bend (quadratic in time); nothing
+  higher than that is offered, because higher powers start to fit the transit itself (ExoClock's advice).
+  **Auto** fits every choice and keeps the one with the lowest BIC. Choices within 2 of the lowest count as just as
+  good, and then the one with fewer terms is kept, so Auto never adds a term for nothing. On a night with a meridian
+  flip, the flip-step test runs *inside* each choice, because a time curve and a flip step can stand in for each
+  other. The Log lists every choice with its ΔBIC against the chosen one (for example *"Detrend Auto (BIC): airmass +
+  time slope; the others: none ΔBIC +16.4, airmass ΔBIC +12.1, …"*). The same list goes into the settings file
+  (*Fit input detrend*), and the report's NOTES name the choice and the runner-up. Pick a choice yourself to force
+  it, for example to compare with an earlier fit.
+  With airmass and a time trend together, the two can absorb a transit. When that happens, SHOBS-P refits with each
+  trend alone, and the verdict says so, for example *"No detection with Both: … Airmass alone detects it (ΔBIC 32).
+  Untick time slope and fit again only if that trend is not real …"*.
+  When the data have no airmass, the airmass choices leave the list (a chosen one becomes the same choice without
+  airmass, and Auto leaves them out itself), and the row says why: *no airmass: site not set* (enter the site's
+  latitude and longitude on the Input page), *no airmass in these data (run photometry again with the site set)* (the
+  site is set now, but the photometry ran before it was) or *no airmass in these data* (a report without an airmass
+  column). With airmass again, the full list and your earlier choice come back. The Multi-night window starts with
+  your own choice.
   For an opened report the row also has **meridian flip at the largest gap**.
 - **Fit** row. **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
   gives steadier error bars for a final result; Quick is fine while you try things.
@@ -124,7 +136,14 @@ Under the verdict a single line sums up the noise, for example:
 - **per 10-min bin**: the scatter after averaging 10 minutes of frames. Compare it with the depth: a 1% transit
   measured with 0.2% bins is clear; a 0.5% transit with 0.4% bins is not.
 - **red-noise β**: above 1 means the noise is correlated in time (seeing, guiding, thin cloud). The fit widens its
-  uncertainties by β, and the notes say so when β is above 1.5.
+  uncertainties by β, and the notes say so when β is above 1.5. From 2.4.0 β is worked out on bins of 10 to 30 minutes
+  only (before, 2-point bins counted too and kept β near 1 on sparse nights).
+- **Prayer-bead check (2.4.0).** After the MCMC, SHOBS-P shifts the fit's residuals around the light curve (up to 40
+  shifts), adds them back to the model and refits each one. Slow wiggles in the residuals move those refits; plain
+  white noise hardly does. Where the spread of the refits is larger than the MCMC's error (Tc, Rp/R\*, depth, a flip
+  step or a time curve), that larger error is the one shown, and a note says which (*"Prayer-bead check (40 shifted
+  refits): its error is larger than the MCMC's for Tc, depth …"*). The settings file always has both
+  (*Fit errors: prayer bead …*).
 - **χ²ν (raw errors)**: how the scatter compares with the error bars from the photometry. About 1 is right. Well
   below 1 or well above 2 gets a note explaining the likely cause (often the camera gain, EGAIN, in the headers).
 
@@ -144,6 +163,13 @@ figures. Its columns are:
   the published value (else the MCMC's), b more than 0.3 from it, or an error on a/R\* larger than half of it. A wide
   error on b alone is normal (b and a/R\* trade off on one night's light curve) and is not flagged.
 - **Published / prior**: the lookup's values. The published depth shown is (Rp/R\*)², so it compares like with like.
+  From 2.4.0 the **Depth** row shows the **range** of every published (Rp/R\*)² in the NASA Exoplanet Archive (for
+  example *2.71–2.91 (8 values)*), because one paper's number is not a fair yardstick when the papers disagree. A
+  **Listed depths** row under it shows the Archive's listed transit depths (including ExoFOP's TESS-band dip) for
+  information only: they are a different quantity (the limb-darkened dip, other bands, other analyses), so they are
+  never used to judge your fit. For an opened report, or a planet typed by hand, SHOBS-P fetches the list when you
+  press Fit transit (the busy bar says *looking up the published sizes*; the last good answer is kept for when the
+  Archive is down).
   The priors on a/R\* and b use the lookup's published uncertainties (at least 3 % of a/R\* and 0.04 in b). The
   Input page boxes show a/R\* and b to 3 decimals and Rp/R\* to 5; that rounding does not count as a change, so the
   lookup's uncertainties are kept (from 2.4.0; before, an a/R\* of 8.7312 shown as 8.731 lost its uncertainty and the

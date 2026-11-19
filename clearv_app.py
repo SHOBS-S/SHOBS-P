@@ -5243,6 +5243,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
              "ra": info.get("ra"), "dec": info.get("dec"),
              "from_cache": info.get("from_cache"),   # 2.2.21 (#21): "from cache (fetched …)" in the report
              "looked_up": info.get("looked_up")}   # 2.4.0 (#93): when the live lookup answered (fit inputs)
+        import lookup_cache
+        if lookup_cache.norm_key(info.get("name")) == lookup_cache.norm_key(p["name"]):
+            # 2.4.0 (#70): the literature's values stay with the planet whatever is typed in the boxes
+            for key in ("k_published", "depths_listed"):
+                if info.get(key):
+                    p[key] = info[key]
         t14 = num(self.pl_t14)
         p["t14"] = t14 / 24.0 if t14 else None
         depth = num(self.pl_depth)
@@ -15811,6 +15817,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # back the catalog suggestions below stand, and _survey_done suggests again with it.
         t_snr0 = self._star_snr(self.preview, self.target_xy)   # (as `faint` below: the survey judges in its window)
         survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
+        sc = getattr(self, "_survey_cache", None)
+        if (survey is None and sc is not None and sc.get("state") == "loading"
+                and (sc.get("key") or (None,))[0] == self.preview_path):
+            # 2.4.0 step 6 (nit a, John 19 Nov): while the survey reads the night, no suggestions at all (no S rings,
+            # no "Suggested comps" line): only the busy bar. _survey_done suggests with the survey's set; the catalog
+            # picks come only when the survey fails or reads fewer than 3 frames.
+            self.suggested_comps = []
+            self.suggested_info = {}
+            self._suggest_for = (self.target_xy, self.preview_path)
+            self._suggest_waiting_survey = True
+            return
+        self._suggest_waiting_survey = False
         target_star = self._chart_star_at(self.target_xy)
         t_bv_cat = core.catalog_bv(target_star) if target_star else None
         # 2.3.4 (e): the target's MEASURED B-V (the loaded series' nights with "Also measure R and B") when there is
@@ -16088,7 +16106,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 rings[rr] = (s_in, float(math.ceil(math.sqrt(s_in ** 2 + 4.0 * rr ** 2))))
         cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
                                       "aperture_at_start": (r, si, so), "stars": stars}
-        cache["tok"] = self.busy_begin("Comp survey… reading the night's frames")
+        cache["tok"] = self.busy_begin("Choosing comps from the night's frames…")   # step 6 nit a
         try:
             self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r)
         except Exception as exc:   # Fable nit 19: never a busy bar left on, nor a Run waiting forever
@@ -16262,7 +16280,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _survey_progress(self, cache, words: str):
         if cache.get("tok") is not None and getattr(self, "_survey_cache", None) is cache:
-            self.busy_words(cache["tok"], f"Comp survey… {words}")
+            self.busy_words(cache["tok"], f"Choosing comps from the night's frames… {words}")
 
     def _survey_done(self, cache, result: dict):
         """The survey's frames are read: apply the #61 aperture when it is clearly better (once per night and
