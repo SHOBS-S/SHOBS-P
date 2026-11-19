@@ -186,7 +186,7 @@ class TestTargetStep(unittest.TestCase):
         self.assertTrue(math.isnan(cs.set_target_step(d, [], b, a)[0]))
         names = ["A", "B", "C", "D", "E"]
         chosen, step, _e = cs.choose_set(names, [0.0, 0.1, 0.2, 0.3, 0.4],
-                                         lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+                                         lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
         self.assertNotIn("C", chosen)
         self.assertNotIn("D", chosen)
         self.assertLess(abs(step), 0.003)
@@ -199,7 +199,7 @@ class TestTargetStep(unittest.TestCase):
         d = cs.target_diffs(m[:, 0], m[:, 1:])
         names = ["C", "D", "A", "B"]
         chosen, step, _e = cs.choose_set(names, [0.0, 0.1, 0.5, 0.6],
-                                         lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+                                         lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
         self.assertEqual(chosen, ["A", "B"])
 
     def test_noise_does_not_override_the_ranking(self):
@@ -209,11 +209,51 @@ class TestTargetStep(unittest.TestCase):
         d = cs.target_diffs(m[:, 0], m[:, 1:])
         names = ["A", "B", "C", "D"]
         chosen, _s, err = cs.choose_set(names, [0.0, 0.1, 0.2, 0.3],
-                                        lambda nm: cs.set_target_step(d, [names.index(x) for x in nm], b, a))
+                                        lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
         self.assertTrue(math.isfinite(err))
-        self.assertEqual(chosen[:2], ["A", "B"])
+        self.assertEqual(len(chosen), 4)   # Fable S4: equal sets -> not a pair (the size nudge)
         # nothing measured: no set
-        self.assertEqual(cs.choose_set(names, [0, 1, 2, 3], lambda nm: (float("nan"), float("nan")))[0], [])
+        self.assertEqual(cs.choose_set(names, [0, 1, 2, 3], lambda nm: np.full(len(d), np.nan), b, a)[0], [])
+
+    def test_lowest_step_set_wins_over_the_best_ranked(self):
+        # Fable S3: four best-ranked comps step +10 mmag, four step 0, target 0: the zero-step set wins
+        m, after = _flip_night(frames=60, comp_steps=(0.01, 0.01, 0.01, 0.01, 0.0, 0.0, 0.0, 0.0), target_step=0.0,
+                               noise=0.001, seed=5)
+        b, a = cs.near_flip_rows(after)
+        d = cs.target_diffs(m[:, 0], m[:, 1:])
+        names = list("ABCDEFGH")
+        chosen, st, _e = cs.choose_set(names, [0.1 * k for k in range(8)],
+                                       lambda nm: cs.set_curve(d, [names.index(x) for x in nm]), b, a)
+        self.assertEqual(chosen, ["E", "F", "G", "H"])
+        self.assertLess(abs(st), 0.002)
+
+    def test_flip_pass_brackets_then_reads_the_neighbors(self):
+        # WASP-49 b: 232 frames, flip before frame 111 (0-based 110); first pass every ~10th
+        n, flip = 232, 110
+        tried = set(cs.sample_indices(n))
+        flags = lambda: {i: i >= flip for i in tried}
+        tried |= set(cs.second_pass(n, sorted(tried), {}, flags()))
+        rounds = 0
+        while True:
+            nxt = cs.flip_pass(n, tried, flags())
+            if not nxt:
+                break
+            tried |= set(nxt)
+            rounds += 1
+            self.assertLess(rounds, 20)
+        N = cs.FLIP_NEAR_TARGET
+        for j in range(flip - N, flip + N):
+            self.assertIn(j, tried)
+        idx = sorted(tried)
+        b, a = cs.near_flip_rows(cs.flip_sides([i >= flip for i in idx]), N, idx=idx)
+        self.assertEqual([idx[r] for r in b], list(range(flip - N, flip)))
+        self.assertEqual([idx[r] for r in a], list(range(flip, flip + N)))
+        # sparse rows only (no flip pass): the far ones are dropped
+        idx = list(range(0, 232, 10))
+        b, a = cs.near_flip_rows(cs.flip_sides([i >= 111 for i in idx]), cs.FLIP_NEAR_TARGET, idx=idx)
+        self.assertEqual([idx[r] for r in b], [110])               # within 19 frames of the first after (120) only
+        self.assertEqual([idx[r] for r in a], [120, 130])
+        self.assertEqual(cs.flip_pass(n, {0, 10}, {0: False, 10: False}), [])
 
     def test_transit_taken_out(self):
         import transit_core as tcore
@@ -235,6 +275,16 @@ class TestTargetStep(unittest.TestCase):
         self.assertTrue(cs.near_contact(near, model))
         self.assertIsNone(cs.transit_mags(t, {"period": 2.78}, tcore.occultation))
         self.assertTrue(cs.near_contact(t[:3], None))
+        self.assertTrue(cs.near_contact(np.array([np.nan]), model))        # Fable nit 2
+        # Fable S6: a huge uncertainty cannot step over ingress
+        wide = dict(model, t0_err=0.2)
+        self.assertTrue(cs.near_contact(np.array([planet["t0"]]), wide))
+        # Fable S5: no uncertainty given: 30 min more margin, so a frame 45 min from mid-transit (about 35 min
+        # inside second contact here) is fine with the error and "near" without it
+        self.assertFalse(cs.near_contact(np.array([planet["t0"]]), model))
+        t_in = np.array([planet["t0"] - 45 / 1440])
+        self.assertFalse(cs.near_contact(t_in, model))
+        self.assertTrue(cs.near_contact(t_in, dict(model, err_known=False)))
 
 
 class TestApertureChoice(unittest.TestCase):
@@ -763,7 +813,12 @@ class TestTargetStepInTheApp(unittest.TestCase):
         why, d2, _b, _a = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
         self.assertIsNone(d2)
         self.assertIn("outside Transits", why)
-        survey = {"index": {"A": 0}, "frames": 30, "of": 120, "flip": False, "flip_seen": True, "flip_why": why,
+        survey_v = {"index": {"A": 0}, "frames": 30, "of": 120, "flip": False, "flip_seen": True, "flip_why": why,
+                    "n_before": 15, "n_after": 15, "radius": 8.0, "radius_asked": 8.0}
+        self.assertIn("the target's flip step is not measured", app._survey_words(survey_v, float("nan"),
+                                                                                 picks=[("A", 0.1)]))
+        survey = {"index": {"A": 0}, "frames": 30, "of": 120, "flip": False, "flip_seen": True,
+                  "flip_why": "no ephemeris and transit shape on the Input page",
                   "n_before": 15, "n_after": 15, "radius": 8.0, "radius_asked": 8.0}
         words = app._survey_words(survey, float("nan"), picks=[("A", 0.1)])
         self.assertIn("the flip step is left to the transit fit", words)
@@ -780,3 +835,23 @@ class TestTargetStepInTheApp(unittest.TestCase):
         why, d3, _b, _a = app._survey_target_steps(res, 8.0, [0, 1], planet)
         self.assertIsNone(d3)
         self.assertIn("ingress or egress", why)
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestRoleTagByPosition(unittest.TestCase):
+    def test_slot_with_another_name_still_tagged(self):
+        import clearv_app as ca
+        app = ca.App()
+        try:
+            app.set_mode("variables")
+            role = ca.COMP_ROLES[0]
+            app.suggested_comps = [("TYC 5936-2073-1", 0.1, 100.0, 120.0)]
+            app.suggested_info = {"TYC 5936-2073-1": {"mag": 11.2}}
+            getattr(app, f"{role}_name").set("000-BQG-573")   # the slot shows the AUID
+            setattr(app, f"{role}_xy", (101.0, 121.0))
+            lines = app._suggested_lines()
+            self.assertTrue(any("— now" in ln for ln in lines), lines)
+            setattr(app, f"{role}_xy", (300.0, 300.0))          # another star: no tag
+            self.assertFalse(any("— now" in ln for ln in app._suggested_lines()))
+        finally:
+            app.destroy()

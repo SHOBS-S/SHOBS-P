@@ -345,25 +345,33 @@ meridian flip, stars nearer the target rank a little higher: after the flip ever
 the sensor, so a flat or optics error that does not cancel shows up as a step, and it grows away from the center.
 
 **Choosing the set on a flip night (Transits).** What matters is the step the *target* gets with a set of comps, so
-SHOBS-P measures exactly that. On the survey's frames nearest the flip (up to 6 on each side) it takes the target
-against each possible set (2 to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the
-ephemeris and shape from the Input page, and keeps the set whose step for the target is nearest zero. Sets within the
-measurement's own error of the best count as equal, and then the best-ranked of them wins, so the choice does not
-chase noise. It suggests fewer than four when the fourth would make the step worse. The suggestions line ends with, for
-example, *Chosen on 36 of the night's 232 frames (comp survey: steadiness, the sharpest frames' peaks, every frame in
-view; 15 before and 21 after the meridian flip, so steady on both pier sides, the target's flip step with these comps
-+0.4 ± 1.1 mmag (measured on the frames nearest the flip, the predicted transit taken out)).*
+SHOBS-P measures exactly that. Once its every-10th frames show which side of the flip each frame is on, the survey
+reads a few more frames to find the flip to the frame, then the 15 frames on each side of it (on a 232-frame night,
+about 51 frames in all, some 20–30 seconds more). On those 30 frames it takes the target against each possible set (2
+to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the ephemeris and shape from the
+Input page, and keeps the set whose step for the target is nearest zero (a fourth comp is preferred over three when
+the steps are within half a mmag). The suggestions line ends with, for example, *Chosen on 51 of the night's 232
+frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 24 before and 27 after the meridian
+flip, so steady on both pier sides, the target's flip step with these comps +0.1 ± 2.8 mmag (measured on the frames
+nearest the flip, the predicted transit taken out)).*
 
 Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
 3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,
-and on that night the forecast picked the set with the largest step of all.
+and on that night it picked a pair that left the target a +35 ppt step over the night. Measuring the target on 15
+frames a side picked sets whose step over the whole night was within 1 ppt of zero, at both apertures tried.
 
-**When the step is left to the transit fit.** The target's step is not measured, and the set is chosen on steadiness
-alone, when: the mode is not Transits (a variable target's own change would read as a step); the Input page has no
-ephemeris and shape (period, T0, Rp/R*, a/R*); the frames carry no times; or a frame used falls within 10 minutes (plus
-3 × the ephemeris uncertainty) of ingress or egress, where a small timing error changes the predicted dip fast. The
-line then says *…, the flip step is left to the transit fit (the flip is near ingress or egress, where the predicted
-transit is not exact enough)*, and the transit fit's own flip test handles it (chapter 17).
+**When the target's step is not measured.** The set is then chosen on steadiness alone, and a star that jumps at the
+flip against the other stars ranks lower. This happens when:
+- the mode is not Transits (a variable target's own change would read as a step). The line says *…, the target's
+  flip step is not measured (the target's own changes would read as a step outside Transits)*;
+- the Input page has no ephemeris and shape (period, T0, Rp/R*, a/R*);
+- the frames carry no times, or fewer than 3 frames could be read on a side right at the flip;
+- a frame used falls within 10 minutes (plus 3 × the ephemeris uncertainty) of ingress or egress, where a small
+  timing error changes the predicted dip fast. A typed T0 has no uncertainty, so 30 minutes more are allowed, and
+  without the target's RA and Dec another 10 minutes (the frame times can then be up to 8 minutes off BJD).
+
+In Transits the line says *…, the flip step is left to the transit fit (the reason)*, and the transit fit's own flip
+test handles it (chapter 17).
 
 **A loaded series.** The series' own comps come first when they pass tonight, so the series keeps its comps from night
 to night. A series comp that fails is named in the Log: *Series comp TYC … fails tonight: raw peak up to 62,100 ADU on
@@ -372,7 +380,7 @@ whether to keep it.*
 
 **What the lines say.** Each S line adds what the night's frames showed, for example *…, steady 2.1 mmag on 30
 frames, flip step +0.8 mmag (the target against this comp alone), raw peak 41,200 ADU on the sharpest (68% of the
-linear limit)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
+linear limit)*; when the target's step is not measured, the flip step reads *(against the other stars)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
 (scatters 4.2 × the stars of its brightness tonight (18.3 mmag): it may vary); APASS … (not measured on frames 41, 42
 of the 30 read).* When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
 steadiest you can by hand and check Comp health after the run.

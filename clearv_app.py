@@ -15877,7 +15877,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     keyed.append((1e3 + k, name, dm))
                     continue
                 keyed.append((cs.rank_key(k / n, survey["scatter"][j], survey["ref_scatter"],
-                                          survey["step"][j], survey["dist"][j], survey["flip"]), name, dm))
+                                          survey["step"][j], survey["dist"][j],
+                                          survey.get("flip_seen", survey["flip"]),
+                                          use_step=not survey["flip"]), name, dm))
             keyed.sort()
             return [(name, dm) for _k, name, dm in keyed]
 
@@ -16123,10 +16125,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 last = {"sources": None, "reg": None}
                 done = [0]
 
+                tried = set()
+
                 def read(idx_list, of_words):
                     for i in idx_list:
                         if not alive():
                             raise RuntimeError("Canceled")
+                        tried.add(i)
                         path = lights[i]
                         done[0] += 1
                         self.call_ui(self._survey_progress, cache, f"frame {done[0]} of {of_words}")
@@ -16195,6 +16200,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                       {i: f["fwhm"] for i, f in out["frames"].items()},
                                       {i: f["flipped"] for i, f in out["frames"].items()})
                 read(more, len(first) + len(more))
+                # Fable re-review M1: bracket the flip to adjacent frames, then read its neighbors on both sides, so
+                # the target's flip step is measured right at the flip
+                extra = 0
+                while extra < cs.FLIP_PASS_MAX and alive():
+                    nxt = cs.flip_pass(n, tried, {i: f["flipped"] for i, f in out["frames"].items()})[
+                        :cs.FLIP_PASS_MAX - extra]
+                    if not nxt:
+                        break
+                    extra += len(nxt)
+                    read(nxt, f"{len(first) + len(more) + extra} (finding the flip)")
                 # Fable 3: the statistics here, off the window's thread, with the busy bar still on
                 if len(out["frames"]) >= 3 and alive():
                     self.call_ui(self._survey_progress, cache, "comparing the stars")
@@ -16287,7 +16302,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         memo = result.setdefault("_views", {})
         names = tuple(c[0] for c in cands)
         planet = self.planet_from_fields() if self.mode_key == "transits" else None
-        p_key = tuple((planet or {}).get(k_) for k_ in ("period", "t0", "k", "a_rs", "b", "teff"))
+        p_key = tuple((planet or {}).get(k_) for k_ in ("period", "t0", "k", "a_rs", "b", "teff", "t0_err",
+                                                       "period_err")) + (self.ra_hours.get(), self.dec_deg.get())
         key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3), faint,
                self.mode_key, p_key)
         if key in memo:
@@ -16345,11 +16361,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows)[0] if cols[k] is not None else nan
                                  for k in range(len(cols))])
         else:
-            step_rel = np.full(len(cols), nan)
+            # Fable re-review S2: not judged on the target: each star's step against the others' median still ranks
+            # a star that jumps at the flip lower (the set is then the best-ranked)
+            step_rel = np.array([pick(st["step"], j) for j in cols]) if st["flip"] else np.full(len(cols), nan)
         view = {"index": {c[0]: k for k, c in enumerate(cands) if cols[k] is not None}, "scatter": scatter,
                 "step": step_rel, "peak_max": peak_max, "peaks": peaks_c, "dist": dist,
-                "flip": bool(st["flip"]) and bool(np.isfinite(step_rel).any()), "ref_scatter": ref_sc, "out": out,
-                "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
+                "flip": bool(st["flip"]) and tdiffs is not None and bool(np.isfinite(step_rel).any()),
+                "ref_scatter": ref_sc, "out": out, "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
                 "a_rows": a_rows,
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
@@ -16367,25 +16385,31 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if self.mode_key != "transits":
             return "the target's own changes would read as a step outside Transits", None, none, none
         after = cs.flip_sides(result.get("flipped"))
-        b_rows, a_rows = cs.near_flip_rows(after)
-        if b_rows.size < 2 or a_rows.size < 2:
-            return "too few frames read on one side of the flip", None, none, none
+        b_rows, a_rows = cs.near_flip_rows(after, cs.FLIP_NEAR_TARGET, idx=result.get("idx"))
+        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
+            return "too few frames read right at the flip", None, none, none
         jd = np.asarray(result.get("jd") if result.get("jd") is not None else [], dtype=float)
         if jd.size != len(result["idx"]) or not np.all(np.isfinite(jd[np.r_[b_rows, a_rows]])):
             return "the frames' times are not in their headers", None, none, none
+        margin = cs.TARGET_STEP_MARGIN
+        t = None
         try:
             ra, dec = self.target_radec_deg(planet)
-            t = jd + np.asarray(tcore.bjd_minus_jd_days(jd, ra, dec), dtype=float)
+            if math.isfinite(ra) and math.isfinite(dec):
+                t = jd + np.asarray(tcore.bjd_minus_jd_days(jd, ra, dec), dtype=float)
         except Exception:
-            t = jd   # JD for BJD: within 8.3 min, inside the margin below only when far from contact; judged on it
+            t = None
+        if t is None or not np.all(np.isfinite(t[np.r_[b_rows, a_rows]])):
+            t = jd   # Fable S5 / nit 2: JD for BJD (no RA/Dec): up to 8.3 min + TT, so a wider margin
+            margin += 9.5 / 1440.0
         try:
-            ld = tcore.limb_darkening_guess((planet or {}).get("teff"), (planet or {}).get("ld_band"))
+            ld = tcore.limb_darkening_guess((planet or {}).get("teff"), self._band())
         except Exception:
             ld = (0.4, 0.25)
         model = cs.transit_mags(t, planet, tcore.occultation, ld)
         if model is None:
             return "no ephemeris and transit shape on the Input page", None, none, none
-        if cs.near_contact(t[np.r_[b_rows, a_rows]], model):
+        if cs.near_contact(t[np.r_[b_rows, a_rows]], model, margin):
             return "the flip is near ingress or egress, where the predicted transit is not exact enough", None, none, \
                 none
         mags = result["mags"][rr]
@@ -16439,9 +16463,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names, t_bv):
         """2.4.0 step 5 (#76): with the survey: a loaded series' comps come first when they pass tonight (and the
-        ones that do not are said), and on a flip night the set whose expected flip step is nearest zero is chosen
-        from the 8 best-ranked survivors of the same colour tier as the picks (Fable 8). Returns (picks, expected
-        flip step or NaN, series comps kept, names from the 0.6 colour tier, shortened on purpose)."""
+        ones that do not are said), and on a flip night the set whose measured flip step for the target is nearest
+        zero is chosen from the 8 best-ranked survivors of the same colour tier as the picks (Fable 8; step 5 fix).
+        Returns (picks, the target's flip step with the set or NaN, series comps kept, names from the 0.6 colour
+        tier, shortened on purpose); the step's error is in self._survey_set_err."""
         self._survey_cand_inst = [c[1] for c in cands]
         if survey is None:
             return picks, float("nan"), set(), set(), False
@@ -16481,8 +16506,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 want = min(4, max(len(picks), 1))
                 index = survey["index"]
                 chosen, set_step, self._survey_set_err = cs.choose_set(
-                    names, keys, lambda nm: cs.set_target_step(survey["tdiffs"], [index[x] for x in nm],
-                                                               survey["b_rows"], survey["a_rows"]), count=want)
+                    names, keys, lambda nm: cs.set_curve(survey["tdiffs"], [index[x] for x in nm]),
+                    survey["b_rows"], survey["a_rows"], count=want)
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
@@ -16514,8 +16539,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         + (f" ± {1000 * err:.1f}" if math.isfinite(err) else "") + " mmag (measured on the frames "
                         "nearest the flip, the predicted transit taken out)")
             elif not survey["flip"]:
-                txt += ("; the flip step is left to the transit fit"
-                        + (f" ({survey['flip_why']})" if survey.get("flip_why") else ""))
+                why = survey.get("flip_why") or ""
+                lead = ("; the target's flip step is not measured" if "outside Transits" in why
+                        else "; the flip step is left to the transit fit")
+                txt += lead + (f" ({why})" if why else "")
             if shortened:
                 txt += "; fewer than four, because another star would make the flip step worse"
         return txt + ")."
@@ -16639,8 +16666,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if sv:
                 # 2.4.0 step 5 (#76): what the night's own frames said
                 why += f", steady {cs.mmag(sv['scatter'])} on {sv['frames']} frames"
-                if sv.get("flip") and math.isfinite(sv.get("step", float("nan"))):
-                    why += f", flip step {1000 * sv['step']:+.1f} mmag (the target against this comp alone)"
+                if math.isfinite(sv.get("step", float("nan"))):
+                    why += (f", flip step {1000 * sv['step']:+.1f} mmag "
+                            + ("(the target against this comp alone)" if sv.get("flip")
+                               else "(against the other stars)"))
                 if lin and math.isfinite(sv.get("peak", float("nan"))):
                     why += f", raw peak {sv['peak']:,.0f} ADU on the sharpest ({sv['peak'] / lin:.0%} of the linear limit)"
                 if info.get("series"):
