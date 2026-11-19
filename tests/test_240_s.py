@@ -11,7 +11,11 @@ import time
 import unittest
 from unittest import mock
 
+import itertools
+
 import numpy as np
+
+_KEYS = itertools.count(1)   # each made-up survey is another night
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -127,14 +131,32 @@ class TestEnsemble(unittest.TestCase):
         # WASP-49 b 19 Nov, r 8 (steps against the others' median, mmag) and distance from the target (px)
         step = np.array([-36.4, -34.0, 9.9, 15.8, 64.4]) / 1000
         dist = [155, 614, 702, 740, 1300]
-        rel = cs.steps_near_target(step, dist)
-        self.assertAlmostEqual(rel[0] * 1000, -2.4, places=6)      # the nearest stars step like the target
-        self.assertAlmostEqual(rel[1] * 1000, 0.0, places=6)
+        rel = cs.steps_near_target(step, dist, k=2)
+        self.assertAlmostEqual(rel[0] * 1000, -1.2, places=6)      # the nearest stars step like the target
+        self.assertAlmostEqual(rel[1] * 1000, 1.2, places=6)
         self.assertGreater(rel[4] * 1000, 90)                       # the edge star steps most
         names = ["2073", "2164", "2079", "2074", "J0603"]
         chosen, exp = cs.choose_set(names, [0, 0.1, 0.2, 0.3, 0.4], list(rel), count=4)
         self.assertEqual(chosen, ["2073", "2164"])                  # the pair that left the target -1.6 mmag
         self.assertTrue(np.all(np.isnan(cs.steps_near_target([0.01, np.nan], [1, 2]))))
+        # Fable 2: only eligible stars (comp brightness, through the gates) make the reference; the faint noisy
+        # stars nearest the target do not
+        noisy = np.array([0.05, -0.04, 0.0, 0.001, -0.001]); d = [1, 2, 10, 11, 12]
+        elig = [False, False, True, True, True]
+        rel = cs.steps_near_target(noisy, d, elig)
+        self.assertAlmostEqual(rel[2], 0.0, places=6)
+        self.assertTrue(np.all(np.isnan(cs.steps_near_target(noisy, d, [True, False, False, False, False]))))
+
+    def test_flip_sides_follow_time_order_and_trend_is_no_step(self):
+        # Fable 12: the reference frame may be after the flip; "after" is decided by time order
+        self.assertEqual(list(cs.flip_sides([True, True, False, False])), [False, False, True, True])
+        self.assertIsNone(cs.flip_sides([True, True]))
+        # Fable 11: a slow trend (20 mmag over the night) with no step reads as no step near the flip
+        m = _night(frames=40, stars=6, noise=0.0005)
+        m[:, 0] += np.linspace(0, 0.02, 40)
+        st = cs.ensemble_stats(m, [i >= 20 for i in range(40)])
+        self.assertLess(abs(st["step"][0]), 0.004, st["step"][0])
+        self.assertEqual((st["n_before"], st["n_after"]), (20, 20))
 
     def test_rank_key(self):
         steady = cs.rank_key(0.5, 0.002, 0.004)
@@ -329,6 +351,20 @@ class TestSurveyInTheApp(unittest.TestCase):
             app.comp_name.set("")
             app.observations = []
 
+    def test_no_false_no_good_comp_warning(self):
+        # Fable 4: nothing within the window failed the survey -> no "⚠ No good comp" (the catalog lines speak)
+        app = self._setup()
+        view = {"out": {}, "window": set(), "index": {}, "peak_max": np.zeros(0), "peaks": np.zeros((0, 0)),
+                "frames": 10}
+        app._survey_rejected = set()
+        app._survey_said = None
+        self.assertFalse(app._survey_report(view, None, []))
+        self.assertFalse(any("No good comp" in t for t in self.lines))
+        app._survey_rejected = {"X"}
+        app._survey_said = None
+        self.assertTrue(app._survey_report(view, None, []))
+        self.assertTrue(any(t.startswith("⚠ No good comp here tonight") for t in self.lines))
+
     def test_no_masters_no_survey(self):
         app = self._setup()
         app.masters = None
@@ -483,10 +519,21 @@ class TestNits(unittest.TestCase):
         self.assertIn("filter wheel (FITS FILTER)", app.filter_hint.get())
 
     def test_new_reduction_brings_your_own_setup_back(self):
-        src = _src()
-        body = src.split("    def new_reduction(self", 1)[1].split("\n    def ", 1)[0]
-        self.assertIn("self._restore_own_setup()", body)
-        self.assertLess(body.index("self._restore_own_setup()"), body.index("self._camera_folders_snapshot()"))
+        app = self.app
+        app._own_setup = {"aperture_mm": app.aperture_mm.get()} if hasattr(app, "aperture_mm") else {}
+        app._scanned_lights = "C:/borrowed lights"
+        with mock.patch.object(app, "_restore_own_setup", wraps=app._restore_own_setup) as back:
+            app.new_reduction()
+        back.assert_called()
+        # Fable 1: the borrowed lights are scanned again at Calibrate (their setup question comes back)
+        self.assertIsNone(app._scanned_lights)
+
+    def test_cancel_calls_off_a_waiting_run(self):
+        app = self.app
+        app._run_after_survey = True
+        app.cancel_job()
+        self.assertFalse(app._run_after_survey)
+        self.assertIn("called off", app.status.get())
 
 
 if __name__ == "__main__":
@@ -516,17 +563,13 @@ class TestSurveyAperture(unittest.TestCase):
     def tearDownClass(cls):
         cls.app.destroy()
 
-    def _cache(self, noise_small=0.004, noise_big=0.009):
-        rng = np.random.default_rng(4)
-        frames = {}
-        for i in range(12):
-            zp = rng.normal(0, 0.03)
-            frames[i] = {"mags": {3.0: 11 + zp + rng.normal(0, noise_small, 6),
-                                  4.6: 11 + zp + rng.normal(0, noise_big, 6)},
-                         "peaks": np.full(6, 1000.0), "fwhm": 2.6, "flipped": False, "path": f"f{i}"}
-        res = {"radii": [3.0, 4.6], "rings": {3.0: (6.9, 9.0), 4.6: (9.0, 13.0)}, "frames": frames, "of": 60,
-               "failed": 0}
-        return {"key": None, "state": "done", "result": res, "aperture_at_start": (4.6, 9.0, 13.0)}
+    def _cache(self, noise_small=0.004, noise_big=0.009, frames=14, like=6):
+        # what the survey's worker leaves: the trial's scatter per aperture for the stars like the target
+        res = {"radii": [3.0, 4.6], "rings": {3.0: (6.9, 9.0), 4.6: (9.0, 13.0)}, "idx": list(range(frames)),
+               "by_r": {3.0: noise_small, 4.6: noise_big}, "n_like": like, "of": 60, "failed": 0}
+        n = next(_KEYS)
+        return {"key": (f"ref{n}.fits", 0.0, (f"L{n}",)), "state": "done", "result": res,
+                "aperture_at_start": (4.6, 9.0, 13.0)}
 
     def _setup(self, observations=()):
         app = self.app
@@ -544,10 +587,9 @@ class TestSurveyAperture(unittest.TestCase):
         app._survey_aperture_apply(cache)
         self.assertEqual(float(app.radius.get()), 3.0)
         self.assertEqual((float(app.sky_in.get()), float(app.sky_out.get())), (6.9, 9.0))
-        line = [t for t in self.lines if t.startswith("Aperture trial on 12 of the night's frames")][-1]
+        line = [t for t in self.lines if t.startswith("Aperture trial on 14 of the night's frames")][-1]
         self.assertIn("r 3: ", line)
         self.assertIn("so it is set", line)
-        self.assertEqual(cache["result"]["aperture"]["pick"]["r"], 3.0)
 
     def test_not_set_on_a_series_or_when_the_boxes_changed(self):
         app = self._setup(observations=[object()])
@@ -565,3 +607,19 @@ class TestSurveyAperture(unittest.TestCase):
         app._survey_aperture_apply(self._cache(noise_small=0.009, noise_big=0.009))
         self.assertEqual(float(app.radius.get()), 4.6)
         self.assertFalse(any(t.startswith("Aperture trial") for t in self.lines))
+        # Fable 13: too few frames or stars like the target: not judged
+        app._survey_aperture_apply(self._cache(frames=8))
+        app._survey_aperture_apply(self._cache(like=2))
+        self.assertEqual(float(app.radius.get()), 4.6)
+
+    def test_set_once_per_night_and_target(self):
+        app = self._setup()
+        cache = self._cache()
+        app._survey_aperture_apply(cache)
+        self.assertEqual(float(app.radius.get()), 3.0)
+        app.radius.set(5.0)                       # yours afterwards
+        cache["aperture_at_start"] = (5.0, 9.0, 13.0)
+        cache["result"]["by_r"] = {3.0: 0.004, 5.0: 0.009}
+        cache["result"]["radii"] = [3.0, 5.0]
+        app._survey_aperture_apply(cache)         # a second read of the same night and target never sets it again
+        self.assertEqual(float(app.radius.get()), 5.0)

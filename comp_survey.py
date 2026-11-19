@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import warnings
 
 import numpy as np
 
@@ -32,6 +33,9 @@ APERTURE_GAIN = 0.10       # a trial aperture is offered only when its scatter i
 SET_STEP_SLACK = 0.003     # mag: sets whose cost is this close to the best count as equal (then the best-ranked)
 SET_SIZE_COST = 0.003      # mag: what one comp fewer than asked costs a set (fewer comps, less S/N)
 SET_TOP = 8                # the set is chosen from the 8 best-ranked survivors
+FLIP_NEAR = 6              # the flip step from the 6 frames read nearest the flip on each side
+APERTURE_MIN_STARS = 3     # #61: judged on at least 3 stars like the target ...
+APERTURE_MIN_FRAMES = 12   # ... on at least 12 frames, else a note only
 
 
 def sample_indices(n: int, every: int = SURVEY_EVERY, cap: int = SURVEY_MAX) -> list[int]:
@@ -84,96 +88,146 @@ def second_pass(n: int, read: list[int], fwhm: dict, flipped: dict) -> list[int]
 def _robust_sigma(a) -> float:
     """The scatter from the 10th to the 90th percentile (a Gaussian's sigma), so one cosmic ray or satellite in a
     frame does not count, but a star that changes on a third of the frames does (a median absolute deviation
-    reads a star that jumps on 40 % of the frames as steady)."""
+    reads a star that jumps on 40 % of the frames as steady). Below 12 frames the percentiles sit on the extreme
+    points, so there the standard deviation without the one point farthest from the median is used (Fable nit 17;
+    still no MAD, for the reason above)."""
     a = np.asarray(a, dtype=float)
     a = a[np.isfinite(a)]
     if a.size < 3:
         return float("nan")
+    if a.size < 12:
+        keep = np.delete(a, int(np.argmax(np.abs(a - np.median(a)))))
+        return float(np.std(keep, ddof=1)) if keep.size >= 2 else float("nan")
     q10, q90 = np.percentile(a, [10, 90])
     return float((q90 - q10) / 2.5631)
 
 
-def ensemble_stats(mags, flipped=None, iterations: int = 3) -> dict:
-    """mags: instrumental magnitudes, frames in rows, candidates in columns (NaN = not measured). flipped: per frame,
-    True after the meridian flip (None or all one value: no flip). Each candidate against the mean of the others
-    (each zero-pointed to its own median, so brightness does not matter), the ensemble rebuilt without stars that
-    scatter more than 3x the median, `iterations` times. Returns {"scatter": per star (mag, robust),
-    "step": per star (after minus before, mag; NaN without a flip or with fewer than 2 frames a side),
-    "n": frames measured per star, "frames": frames, "flip": bool}."""
+def _sigma_cols(d) -> np.ndarray:
+    return np.array([_robust_sigma(d[:, j]) for j in range(d.shape[1])])
+
+
+def _others_mean(z, use):
+    """Per frame and star: the mean of the OTHER stars in `use` (NaN-aware), vectorised: (sum - own) / (n - own)."""
+    zu = np.where(use[None, :] & np.isfinite(z), z, 0.0)
+    nu = (use[None, :] & np.isfinite(z)).astype(float)
+    tot, cnt = zu.sum(axis=1, keepdims=True), nu.sum(axis=1, keepdims=True)
+    with np.errstate(all="ignore"):
+        return (tot - zu) / (cnt - nu)
+
+
+def _others_median(z, use):
+    """Per frame and star: the median of the other stars in `use`. Exact for a few stars; with many, the median of
+    all of them (leaving one star out moves a median of 15 or more very little)."""
+    f, s = z.shape
+    cols = np.where(use)[0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        if cols.size >= 15:
+            med = np.nanmedian(z[:, cols], axis=1)
+            return np.repeat(med[:, None], s, axis=1)
+        out = np.full((f, s), np.nan)
+        for j in range(s):
+            o = cols[cols != j]
+            if o.size:
+                out[:, j] = np.nanmedian(z[:, o], axis=1)
+        return out
+
+
+def flip_sides(flipped):
+    """The frames (in time order) after the flip as a bool array: a frame is 'after' when its orientation differs
+    from the FIRST frame's (the flags are relative to the reference frame, which may itself be after the flip;
+    Fable 12). None when every frame has the same orientation."""
+    if flipped is None:
+        return None
+    fl = np.asarray([bool(v) for v in flipped])
+    if fl.size == 0 or fl.all() or (~fl).all():
+        return None
+    return fl != fl[0]
+
+
+def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLIP_NEAR) -> dict:
+    """mags: instrumental magnitudes, frames in TIME ORDER in rows, candidates in columns (NaN = not measured).
+    flipped: per frame, its orientation against the reference frame (None or all one value: no flip). Each
+    candidate against the mean of the others (each zero-pointed to its own median, so brightness does not matter),
+    the ensemble rebuilt without stars that scatter more than 3x the median, `iterations` times. The flip step is
+    taken from the `near_flip` frames on each side nearest the flip only, so a slow trend over the night does not
+    read as a step (Fable 11), against the median of the others (one big-stepping star must not shift the rest).
+    Returns {"scatter", "step" (after minus before, mag; NaN without a flip or with fewer than 2 frames a side),
+    "n", "frames", "flip", "n_before", "n_after", "in_ensemble"}."""
     m = np.asarray(mags, dtype=float)
     if m.ndim != 2 or m.shape[1] == 0:
-        return {"scatter": np.zeros(0), "step": np.zeros(0), "n": np.zeros(0, int), "frames": 0, "flip": False}
+        return {"scatter": np.zeros(0), "step": np.zeros(0), "n": np.zeros(0, int), "frames": 0, "flip": False,
+                "n_before": 0, "n_after": 0, "in_ensemble": np.zeros(0, bool)}
     f, s = m.shape
-    with np.errstate(all="ignore"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
         z = m - np.nanmedian(m, axis=0)
-    sides = None
-    if flipped is not None:
-        fl = np.asarray([bool(v) for v in flipped])
-        if fl.size == f and fl.any() and (~fl).any():
-            sides = fl
-    if sides is not None:
-        # each side zero-pointed on its own for the scatter, so a flip step is not counted as scatter
+        after = flip_sides(flipped) if flipped is not None and len(flipped) == f else None
         z_sc = z.copy()
-        with np.errstate(all="ignore"):
+        if after is not None:
+            # each side zero-pointed on its own for the scatter, so a flip step is not counted as scatter
             for side in (False, True):
-                rows = sides == side
+                rows = after == side
                 z_sc[rows] -= np.nanmedian(z[rows], axis=0)
-    else:
-        z_sc = z
-    use = np.ones(s, dtype=bool)
-    scatter = np.full(s, np.nan)
-    for _ in range(max(1, iterations)):
+        use = np.ones(s, dtype=bool)
         scatter = np.full(s, np.nan)
-        for j in range(s):
-            others = use.copy()
-            others[j] = False
-            if not others.any():
-                continue
-            with np.errstate(all="ignore"):
-                ens = np.nanmean(z_sc[:, others], axis=1)
-            scatter[j] = _robust_sigma(z_sc[:, j] - ens)
-        good = scatter[use & np.isfinite(scatter)]
-        if good.size < 3:
-            break
-        new = use & ~(np.isfinite(scatter) & (scatter > 3.0 * float(np.median(good))))
-        if new.sum() < 2 or np.array_equal(new, use):
-            break
-        use = new
-    step = np.full(s, np.nan)
-    if sides is not None:
-        for j in range(s):
-            others = use.copy()
-            others[j] = False
-            if not others.any():
-                continue
-            with np.errstate(all="ignore"):
-                # the MEDIAN of the others: one star with a big pier-side step (an edge star) must not shift every
-                # other star's step (WASP-49 b 19 Nov: APASS J060338.6 +63 mmag made the central comps read -35)
-                d = z[:, j] - np.nanmedian(z[:, others], axis=1)
-            a, b = d[sides], d[~sides]
-            a, b = a[np.isfinite(a)], b[np.isfinite(b)]
-            if a.size >= 2 and b.size >= 2:
-                step[j] = float(np.median(a) - np.median(b))
+        for _ in range(max(1, iterations)):
+            scatter = _sigma_cols(z_sc - _others_mean(z_sc, use))
+            good = scatter[use & np.isfinite(scatter)]
+            if good.size < 3:
+                break
+            new = use & ~(np.isfinite(scatter) & (scatter > 3.0 * float(np.median(good))))
+            if new.sum() < 2 or np.array_equal(new, use):
+                break
+            use = new
+        step = np.full(s, np.nan)
+        n_b = n_a = 0
+        if after is not None:
+            before_idx = np.where(~after)[0]
+            after_idx = np.where(after)[0]
+            n_b, n_a = int(before_idx.size), int(after_idx.size)
+            # the frames nearest the flip: the last of the first side and the first of the second (time order)
+            first_after = after_idx.min()
+            b_rows = before_idx[before_idx < first_after][-near_flip:]
+            a_rows = after_idx[after_idx > b_rows.max()][:near_flip] if b_rows.size else after_idx[:near_flip]
+            if b_rows.size >= 2 and a_rows.size >= 2:
+                d = z - _others_median(z, use)
+                for j in range(s):
+                    a, b = d[a_rows, j], d[b_rows, j]
+                    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+                    if a.size >= 2 and b.size >= 2:
+                        step[j] = float(np.median(a) - np.median(b))
     return {"scatter": scatter, "step": step, "n": np.sum(np.isfinite(m), axis=0).astype(int), "frames": f,
-            "flip": sides is not None, "in_ensemble": use}
+            "flip": after is not None and bool(np.isfinite(step).any()), "n_before": n_b, "n_after": n_a,
+            "in_ensemble": use}
 
 
-def steps_near_target(step, dist, k: int = 3):
-    """Each candidate's flip step against the median step of the k candidates nearest the target (dist: distance
-    from the target, any unit). The pier-side error depends on where a star sits on the sensor (the flat and the
-    optics are point-symmetric about the axis, and the flip turns the field 180 degrees), so the stars nearest the
-    target step most like it; a set whose steps against them average to zero leaves the target's step out of the
-    result. Against the other candidates instead, a set can agree with itself and still give the target a large
-    step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to -2.8 mmag among themselves but give the
-    target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6). NaN where the step is not measured, and all
-    NaN with fewer than 2 measured steps."""
+def steps_near_target(step, dist, eligible=None, scatter=None, k: int = 5):
+    """Each candidate's flip step against a reference: the weighted (1/sigma^2) mean step of the k candidates
+    nearest the target among the ELIGIBLE ones (those that could be comps: through the gates, in the comp brightness
+    window; Fable 2: the faint stars nearest the target are noise, not a reference). The pier-side error depends on
+    where a star sits on the sensor (the flat and the optics are point-symmetric about the axis, and the flip turns
+    the field 180 degrees), so the stars nearest the target step most like it; a set whose steps against them average
+    to zero leaves the target's step out of the result. Against the other candidates instead, a set can agree with
+    itself and still give the target a large step (WASP-49 b 19 Nov, r 8: TYC 5936-2079-1 + 2074-1 + 2164-1 agree to
+    -2.8 mmag among themselves but give the target -26.5 mmag; 2073-1 + 2164-1, the two nearest it, give -1.6).
+    All NaN with fewer than 2 eligible stars with a measured step."""
     st = np.asarray(step, dtype=float)
     d = np.asarray(dist, dtype=float)
     ok = np.isfinite(st) & np.isfinite(d)
+    if eligible is not None:
+        ok &= np.asarray(eligible, dtype=bool)
     if ok.sum() < 2:
         return np.full(st.shape, np.nan)
-    near = np.argsort(np.where(ok, d, np.inf))[:max(1, min(k, int(ok.sum())))]
-    return st - float(np.median(st[near]))
+    near = np.argsort(np.where(ok, d, np.inf))[:max(2, min(k, int(ok.sum())))]
+    if scatter is not None:
+        sc = np.asarray(scatter, dtype=float)[near]
+        w = np.where(np.isfinite(sc) & (sc > 0), 1.0 / np.maximum(sc, 1e-4) ** 2, 0.0)
+    else:
+        w = np.ones(near.size)
+    if w.sum() <= 0:
+        w = np.ones(near.size)
+    return st - float(np.sum(w * st[near]) / np.sum(w))
 
 
 def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,

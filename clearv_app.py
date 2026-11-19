@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import warnings
 from tkinter import (
     BOTH,
     END,
@@ -3431,21 +3432,25 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             prof, lin, rec = None, None, None
         folder = self.light_dir.get().strip()
         if lin is None or not (isinstance(lin, (int, float)) and math.isfinite(lin) and lin > 0):
-            if self.settings.get("linear_limit_source") == "flux" and not prof:
+            if self.settings.get("linear_limit_source") == "flux":
                 now = self._box_number(self.linear_limit)
                 self._set_linear_box(self.linear_limit.get(), "user")
-                line = ("The SHOBS-FLUX profile the linear ADU came from is not found for these lights' camera now; "
-                        "the box keeps " + (f"{now:,.0f}" if now else "its value") + " (now marked set here).")
+                line = (("The SHOBS-FLUX profile the linear ADU came from is not found for these lights' camera now; "
+                         if not prof else "The SHOBS-FLUX profile for these lights' camera has no linear limit; ")
+                        + "the box keeps " + (f"{now:,.0f}" if now else "its value") + " (now marked set here).")
                 self.log(line, keep_status=True)
                 return line
             return ""
-        if getattr(self, "_linear_typed_for", None) == folder and self.linear_source.get() == "set here":
-            return ""   # typed for these lights this session: yours wins
+        if getattr(self, "_linear_typed_for", None) == folder:
+            return ""   # typed (or emptied) for these lights this session: yours wins
         text = str(int(lin)) if float(lin).is_integer() else f"{float(lin):g}"
         before = self._box_number(self.linear_limit)
         if before is not None and abs(before - float(lin)) < 0.5 and self.linear_source.get() == "from SHOBS-FLUX":
             return ""
         self._set_linear_box(text, "flux")
+        snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+        if isinstance(snap, dict):   # Fable 10: the profile's value goes with this camera's lights (not "typed since")
+            snap["linear"] = self._box_number(self.linear_limit)
         if before is not None and abs(before - float(lin)) < 0.5:
             return ""
         how = sp.SOURCE_WORDS.get((rec or {}).get("source", ""), "") if rec else ""
@@ -5486,6 +5491,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # MicroObservatory setup) belonged to the last frames: your own come back, so they never carry into the
             # next night's boxes (254 mm stayed until the MicroObservatory setup question)
             self._restore_own_setup()
+            # Fable 1: the borrowed lights may still be in the Lights box: Calibrate scans them again, so their setup
+            # question comes back instead of your setup being used on them
+            self._scanned_lights = None
         self._camera_folders_snapshot()   # 2.4.0 (#111): the frame boxes as the last night left them
         self._set_camera_note("")
         self._flip_turn_note = None   # 2.3.4 review
@@ -12729,7 +12737,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # twice ("Comp 4: Comp 4: 000-BNX-001", "Comp 1: ✓ Comp 1: …")
         lab = f"{role_label(role)}: "
         body = text
-        for pre in ("✓ ", "⚠ ", "\u26a0 ", ""):
+        for pre in ("✓ ", "⚠ ", ""):
             if text.startswith(pre + lab):
                 body = pre + text[len(pre + lab):]
                 break
@@ -15836,15 +15844,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 return True
             if survey is not None and name in survey["index"]:
                 pk = survey["peak_max"][survey["index"][name]]
-                return not (math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin)
+                if math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin:
+                    self._survey_rejected.add(name)
+                    return False
+                return True
             pk = peak_of(name)
             return not (math.isfinite(pk) and pk >= 0.75 * lin)
 
+        self._survey_rejected = set()
+
         def survey_ok(name):
-            # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable
+            # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable (a
+            # star outside the survey's own list, past its cap, is judged on the catalog rules alone)
             if survey is None or name not in survey["index"]:
-                return survey is None
-            return not survey["out"].get(name)
+                return True
+            if survey["out"].get(name):
+                self._survey_rejected.add(name)
+                return False
+            return True
 
         def ranked(got):
             # 2.4.0 step 5 (#76): the night's own scatter first, the catalog order (brightness, color) second
@@ -15853,7 +15870,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             n = max(len(got) - 1, 1)
             keyed = []
             for k, (name, dm) in enumerate(got):
-                j = survey["index"][name]
+                j = survey["index"].get(name)
+                if j is None:   # not in the survey's own list: after the surveyed stars, in catalog order
+                    keyed.append((1e3 + k, name, dm))
+                    continue
                 keyed.append((cs.rank_key(k / n, survey["scatter"][j], survey["ref_scatter"],
                                           survey["step"][j], survey["dist"][j], survey["flip"]), name, dm))
             keyed.sort()
@@ -15889,12 +15909,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if gate > 0.3:
                 relaxed.update(n for n, _dm in got)
             picks += got
-        picks, set_step, series_kept = self._survey_final_picks(picks, survey, choose, cands, inside, seq_names)
+        picks, set_step, series_kept, relaxed_set, shortened = self._survey_final_picks(
+            picks, survey, choose, cands, inside, seq_names, t_bv)
+        if survey is not None:
+            relaxed = relaxed_set   # Fable 8: the colour-tier words follow the set actually chosen
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
         self._suggest_for = (self.target_xy, self.preview_path)   # Fable re-review nit: what they were made for
         # 2.4.0 (#78): the stars of the right brightness left out because they come near the edge during the night
         have = {n for n, _dm in picks}
-        edge_left = [] if len(picks) >= 4 else [
+        # Fable 8: not when the flip choice shortened the set on purpose (the suggestions line says why)
+        edge_left = [] if (len(picks) >= 4 or shortened) else [
             n for n, _dm in choose([c for c in cands if c[0] not in inside and c[0] not in have], 0.6)]
         self._suggest_edge_left = {n: (edge_px.get(n), edge_at.get(n, "")) for n in edge_left}
         self._suggest_drift = drift
@@ -15925,9 +15949,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                      + ", ".join(f"{name} ({dm:+.1f} mag" + (", AAVSO sequence" if name in seq_names else "") + ")"
                                  for name, dm, _x, _y in self.suggested_comps)
                      + ". Comps like the target cancel airmass, focus, and calibration errors best."
-                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step))
+                     + self._drift_words(drift, safe_edge) + self._survey_words(survey, set_step, shortened))
+        nogood = False
         if not getattr(self, "_suggest_quiet", False):
-            self._survey_report(survey, lin, picks)
+            nogood = self._survey_report(survey, lin, picks)
         if not getattr(self, "_suggest_quiet", False) and edge_left:
             # 2.4.0 (#78): say why there are fewer than four, by name; a warning only when none is left at all
             far = ", ".join(f"{n} ({max(d_, 0.0):.0f} px" + (f" on frame {lab}" if lab else "") + ")"
@@ -15943,7 +15968,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                          f"edge{during} than the {safe_edge:.0f} px a comp needs to stay clear: {far}. "
                          "Pick comps by hand further in, or reject the frames where the field drifted farthest.")
             return
-        if self.suggested_comps or getattr(self, "_suggest_quiet", False):
+        if self.suggested_comps or getattr(self, "_suggest_quiet", False) or nogood:
             return
         if self._closest_dm is not None and self._closest_dm <= 1.0:
             self.log("Labeled stars within 1 mag of the target here all differ from it in color (B−V more than 0.6 "
@@ -15954,15 +15979,54 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     # ---- 2.4.0 step 5 (#76, #61): the pre-run comp survey ----------------------------------------------------------
 
-    def _comp_survey(self, cands: list, t_inst: float):
-        """2.4.0 step 5 (#76): the comp candidates (name, inst mag, x, y, B-V) measured on a sample of the night's own
-        lights (comp_survey.sample_indices / second_pass), calibrated and lined up like the run. Returns None while the
-        frames are read (the busy bar says so; _survey_done suggests again) or when there is nothing to survey (one
-        light, no masters, Discovery), else the survey for the aperture in the boxes:
-        {"index": {name: column}, "scatter", "step", "peak_max", "peaks", "n", "dist", "flip", "ref_scatter",
-         "out": {name: why left out}, "frames", "of", "failed", "labels", "aperture": #61 trial or None}."""
-        if self.mode_key == "discovery" or not cands or self.preview is None:
+    SURVEY_STARS_MAX = 400   # labeled stars measured by the survey at most (nearest the target's catalog brightness)
+    SURVEY_MARGIN = 10.0     # px: stars this far inside the page's frame (the edge rules come after, per aperture)
+
+    def _survey_stars(self):
+        """The survey's own star list, the same whatever the aperture boxes say (Fable 5: the suggestion candidates
+        change with r and sky out, and a key built on them read the night again after every aperture change): the
+        target first, then every labeled, non-variable chart star with a magnitude, SURVEY_MARGIN inside the frame
+        and not on the target; with more than SURVEY_STARS_MAX, those nearest the target's catalog magnitude.
+        [(name, x, y)]."""
+        h, w = self.preview.shape[:2]
+        tx, ty = self.target_xy
+        m = self.SURVEY_MARGIN
+        stars = [(str(st.get("auid") or st.get("label") or ""), float(x), float(y), float(st["mag"]))
+                 for x, y, st in (self.chart_placed or []) if not st.get("variable") and st.get("mag") is not None
+                 and m <= x < w - m and m <= y < h - m and math.hypot(x - tx, y - ty) > 3.0]
+        stars = [s_ for s_ in stars if s_[0]]
+        if len(stars) > self.SURVEY_STARS_MAX:
+            t_star = self._chart_star_at(self.target_xy)
+            t_cat = (t_star or {}).get("mag")
+            ref = float(t_cat) if t_cat is not None else float(np.median([s_[3] for s_ in stars]))
+            stars = sorted(stars, key=lambda s_: abs(s_[3] - ref))[:self.SURVEY_STARS_MAX]
+        return [("\x00target", float(tx), float(ty))] + [(n, x, y) for n, x, y, _m in stars]
+
+    def _masters_token(self):
+        """Fable nit 20: a serial number per masters object (id() can be reused once one is freed)."""
+        if self.masters is None:
             return None
+        tok = getattr(self.masters, "_survey_token", None)
+        if tok is None:
+            self._masters_serial = getattr(self, "_masters_serial", 0) + 1
+            tok = self._masters_serial
+            try:
+                self.masters._survey_token = tok
+            except Exception:
+                return id(self.masters)
+        return tok
+
+    def _comp_survey(self, cands: list, t_inst: float):
+        """2.4.0 step 5 (#76): the night's own lights measured for the comp candidates: the survey's star list
+        (_survey_stars) on a sample of the lights (comp_survey.sample_indices / second_pass), calibrated and lined up
+        like the run, at the trial apertures (#61), with the statistics worked out in the background. Returns None
+        while the frames are read (the busy bar says so; _survey_done suggests again) or when there is nothing to
+        survey (fewer than 3 lights, no masters, Discovery, another field's image), else the view for the aperture in
+        the boxes (_survey_view)."""
+        if self.mode_key == "discovery" or not cands or self.preview is None or self.target_xy is None:
+            return None
+        if getattr(self, "_preview_foreign", ""):
+            return None   # Fable 14: an image of another field
         if self.masters is None and not getattr(self, "precalibrated", False):
             return None
         try:
@@ -15975,7 +16039,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not (r and si and so):
             return None
         try:
-            binning = max(int(self.binning.get()), 1)
+            binning = max(int(self._image_binning() or 1), 1)   # Fable 14: the image's binning, not the box
         except Exception:
             binning = 1
         pattern, mode = self.pattern.get(), self.debayer_mode.get()
@@ -15983,40 +16047,40 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             stamp = os.path.getmtime(self.preview_path or "")
         except OSError:
             stamp = 0.0
-        names = tuple(c[0] for c in cands)
-        xy = tuple((round(float(c[2]), 1), round(float(c[3]), 1)) for c in cands)
+        stars = self._survey_stars()
         donut = self._donut_apertures()
-        fwhm = self._seeing()
-        key = (self.preview_path, stamp, tuple(lights), names, xy, binning, pattern, mode, id(self.masters),
-               bool(getattr(self, "precalibrated", False)), donut is None)
+        key = (self.preview_path, stamp, tuple(lights), tuple(s_[0] for s_ in stars),
+               tuple((round(x, 1), round(y, 1)) for _n, x, y in stars), binning, pattern, mode,
+               self._masters_token(), bool(getattr(self, "precalibrated", False)), donut is None)
         cache = getattr(self, "_survey_cache", None)
         if cache is not None and cache.get("key") == key:
-            res = cache.get("result")
             if cache["state"] == "loading":
                 return None
+            res = cache.get("result")
             if not res or res.get("error"):
                 return None
-            # the aperture in the boxes must be one the survey measured, else read again with it added
-            if not any(abs(rr - r) <= 0.06 for rr in res["radii"]):
-                cache = None
-        if cache is None or cache.get("key") != key:
-            radii = cs.trial_radii(fwhm, r) if donut is None else [round(float(r), 1)]
-            rings = {}
-            for rr in radii:
-                if abs(rr - r) <= 0.06:
-                    rings[rr] = (si, so)
-                else:
-                    s_in = core.sky_inner_radius(rr, fwhm) if math.isfinite(fwhm) else max(si, rr + 3.0)
-                    rings[rr] = (s_in, float(math.ceil(math.sqrt(s_in ** 2 + 4.0 * rr ** 2))))
-            cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
-                                          "aperture_at_start": (r, si, so)}
-            cache["tok"] = self.busy_begin("Comp survey… reading the night's frames")
-            self._survey_start(cache, lights, np.asarray([(c[2], c[3]) for c in cands], dtype=float), radii, rings,
-                               binning, pattern, mode, r)
-            return None
-        return self._survey_view(cache["result"], cands, t_inst, r)
+            return self._survey_view(res, cands, t_inst, r)
+        fwhm = self._seeing()
+        radii = cs.trial_radii(fwhm, r) if donut is None else [round(float(r), 1)]
+        rings = {}
+        for rr in radii:
+            if abs(rr - r) <= 0.06:
+                rings[rr] = (si, so)
+            else:
+                s_in = core.sky_inner_radius(rr, fwhm) if math.isfinite(fwhm) else max(si, rr + 3.0)
+                rings[rr] = (s_in, float(math.ceil(math.sqrt(s_in ** 2 + 4.0 * rr ** 2))))
+        cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
+                                      "aperture_at_start": (r, si, so), "stars": stars}
+        cache["tok"] = self.busy_begin("Comp survey… reading the night's frames")
+        try:
+            self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r)
+        except Exception as exc:   # Fable nit 19: never a busy bar left on, nor a Run waiting forever
+            self.busy_end(cache.pop("tok", None))
+            cache["state"], cache["result"] = "done", {"error": f"{type(exc).__name__}: {exc}"}
+            log_to_file(f"Comp survey could not start: {exc}")
+        return None
 
-    def _survey_start(self, cache, lights, xy0, radii, rings, binning, pattern, mode, r_now):
+    def _survey_start(self, cache, lights, stars, radii, rings, binning, pattern, mode, r_now):
         masters, ref = self.masters, self.preview
         precal = bool(getattr(self, "precalibrated", False))
         total_bin = binning * (1 if pattern == core.MONO else 2)
@@ -16025,9 +16089,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         except Exception:
             altaz = False
         ref_path = self.preview_path
-        tx, ty = self.target_xy
+        xy0 = np.asarray([(x, y) for _n, x, y in stars], dtype=float)
         n = len(lights)
         alive = lambda: getattr(self, "_survey_cache", None) is cache
+        r_near = min(radii, key=lambda v: abs(v - r_now))
 
         def work():
             out = {"radii": list(radii), "rings": dict(rings), "frames": {}, "of": n, "failed": 0, "error": ""}
@@ -16049,7 +16114,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             raise RuntimeError("Canceled")
                         path = lights[i]
                         done[0] += 1
-                        self.call_ui(self._survey_progress, cache, done[0], of_words)
+                        self.call_ui(self._survey_progress, cache, f"frame {done[0]} of {of_words}")
                         try:
                             raw, header, cal = stack_load_frame(path, binning, masters)
                             img = core.debayer(cal, pattern, mode)
@@ -16076,7 +16141,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                     reg = core.refine_registration(img, reg, ref_pts, rmax, t_donut)
                                 last["sources"], last["reg"] = src, reg
                             pos = core.move_points(xy0, reg, img.shape)
-                            tpos = core.move_points(np.asarray([(tx, ty)], dtype=float), reg, img.shape)[0]
+                            hh, ww = img.shape[:2]
+                            edge = np.minimum.reduce([pos[:, 0], pos[:, 1], (ww - 1) - pos[:, 0], (hh - 1) - pos[:, 1]])
+                            tpos = pos[0]
                             y0, x0 = max(0, int(tpos[1]) - 300), max(0, int(tpos[0]) - 300)
                             try:
                                 fw = core.field_fwhm(img[y0:y0 + 600, x0:x0 + 600], n=6)["fwhm"]
@@ -16087,7 +16154,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             for rr in radii:
                                 flux, _sky = core.measure_many(img, pos, rr, *rings[rr])
                                 with np.errstate(divide="ignore", invalid="ignore"):
-                                    mags[rr] = np.where(flux > 0, -2.5 * np.log10(flux / exp), np.nan)
+                                    mg = np.where(flux > 0, -2.5 * np.log10(flux / exp), np.nan)
+                                # Fable 7: a star whose sky ring runs past the edge is a partial sum: not measured
+                                mg[~(edge >= rings[rr][1])] = np.nan
+                                mags[rr] = mg
                             peaks = (np.full(len(pos), np.nan) if precal
                                      else core.raw_peaks_many(raw, pos, r_now, total_bin))
                             out["frames"][i] = {"mags": mags, "peaks": np.asarray(peaks, float), "fwhm": fw,
@@ -16106,132 +16176,176 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                       {i: f["fwhm"] for i, f in out["frames"].items()},
                                       {i: f["flipped"] for i, f in out["frames"].items()})
                 read(more, len(first) + len(more))
+                # Fable 3: the statistics here, off the window's thread, with the busy bar still on
+                if len(out["frames"]) >= 3 and alive():
+                    self.call_ui(self._survey_progress, cache, "comparing the stars")
+                    idx = sorted(out["frames"])
+                    flipped = [out["frames"][i]["flipped"] for i in idx]
+                    out["idx"] = idx
+                    out["labels"] = core.frame_labels_for([out["frames"][i]["path"] for i in idx])
+                    out["peaks"] = np.array([out["frames"][i]["peaks"] for i in idx], dtype=float)
+                    out["fwhm"] = [out["frames"][i]["fwhm"] for i in idx]
+                    out["mags"] = {rr: np.array([out["frames"][i]["mags"][rr] for i in idx], dtype=float)
+                                   for rr in radii}
+                    # the target is column 0 and never in its own ensemble
+                    out["stats"] = {rr: cs.ensemble_stats(out["mags"][rr][:, 1:], flipped) for rr in radii}
+                    # #61: the stars like the target, by brightness on the reference frame at the current aperture
+                    k_ref = idx.index(lights.index(ref_path)) if ref_path in lights and \
+                        lights.index(ref_path) in idx else 0
+                    row = out["mags"][r_near][k_ref]
+                    d = np.abs(row[1:] - row[0]) if math.isfinite(row[0]) else np.full(len(row) - 1, np.inf)
+                    d = np.where(np.isfinite(d), d, np.inf)
+                    like = [int(j) for j in np.argsort(d) if d[j] <= 0.75]
+                    if len(like) < cs.APERTURE_MIN_STARS:
+                        like = [int(j) for j in np.argsort(d)[:5] if math.isfinite(d[j])]
+                    by_r = {}
+                    for rr in radii:
+                        sc = out["stats"][rr]["scatter"]
+                        vals = [sc[j] for j in like if math.isfinite(sc[j])]
+                        by_r[rr] = float(np.median(vals)) if vals else float("nan")
+                    out["by_r"], out["n_like"] = by_r, len(like)
+                    for i in idx:   # the per-frame copies are in the arrays now
+                        out["frames"][i].pop("mags", None)
             except Exception as exc:
                 out["error"] = f"{type(exc).__name__}: {exc}"
             self.call_ui(self._survey_done, cache, out)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _survey_progress(self, cache, done: int, of: int):
+    def _survey_progress(self, cache, words: str):
         if cache.get("tok") is not None and getattr(self, "_survey_cache", None) is cache:
-            self.busy_words(cache["tok"], f"Comp survey… frame {done} of {of}")
+            self.busy_words(cache["tok"], f"Comp survey… {words}")
 
     def _survey_done(self, cache, result: dict):
-        """The survey's frames are read: apply the #61 aperture when it is clearly better (and yours to change),
-        suggest again, and start a run that was waiting for it."""
+        """The survey's frames are read: apply the #61 aperture when it is clearly better (once per night and
+        target, and yours to change), suggest again, and start a run that was waiting for it. Fable 9: only while the
+        page still shows that frame in that mode; the waiting run is always handled, whatever goes wrong."""
         self.busy_end(cache.pop("tok", None))
+        run_after = getattr(self, "_run_after_survey", False)
+        self._run_after_survey = False
         if getattr(self, "_survey_cache", None) is not cache:
             return
         cache["state"], cache["result"] = "done", result
-        if result.get("error") and "Canceled" not in result["error"]:
-            self.log(f"The comp survey could not read the night's frames ({result['error']}); the suggestions are "
-                     "from the catalog and this frame only.", keep_status=True)
-        elif len(result.get("frames") or {}) < 3:
-            self.log("The comp survey read fewer than 3 of the night's frames; the suggestions are from the catalog "
-                     "and this frame only.", keep_status=True)
-            result["error"] = result.get("error") or "too few frames"
-        else:
-            self._survey_aperture_apply(cache)
-        self._suggest_comps()
-        self._update_pick_label()
-        self.update_star_panel()
-        self.refresh_preview()
-        if getattr(self, "_run_after_survey", False):
-            self._run_after_survey = False
-            self.after(10, self.run_photometry)
-
-    def _survey_columns(self, result: dict, r: float):
-        """(frame indexes in time order, mags F x S at the measured aperture nearest r, peaks F x S, flipped)."""
-        idx = sorted(result["frames"])
-        rr = min(result["radii"], key=lambda v: abs(v - r))
-        mags = np.array([result["frames"][i]["mags"][rr] for i in idx], dtype=float)
-        peaks = np.array([result["frames"][i]["peaks"] for i in idx], dtype=float)
-        flipped = [result["frames"][i]["flipped"] for i in idx]
-        return idx, mags, peaks, flipped, rr
+        current = (self.mode_key != "discovery" and self.preview is not None
+                   and self.preview_path == cache["key"][0] and self.target_xy is not None)
+        try:
+            if not current:
+                result["error"] = result.get("error") or "the page changed"
+            elif result.get("error") and "Canceled" not in result["error"]:
+                self.log(f"The comp survey could not read the night's frames ({result['error']}); the suggestions are "
+                         "from the catalog and this frame only.", keep_status=True)
+            elif "stats" not in result:
+                self.log("The comp survey read fewer than 3 of the night's frames; the suggestions are from the "
+                         "catalog and this frame only.", keep_status=True)
+                result["error"] = result.get("error") or "too few frames"
+            else:
+                self._survey_aperture_apply(cache)
+            if current:
+                self._suggest_comps()
+                self._update_pick_label()
+                self.update_star_panel()
+                self.refresh_preview()
+        except Exception:
+            log_to_file("Comp survey: " + traceback.format_exc())
+        finally:
+            if run_after and current:
+                self.after(10, self.run_photometry)
 
     def _survey_view(self, result: dict, cands: list, t_inst: float, r: float):
-        """The survey's numbers for the aperture in the boxes (see _comp_survey)."""
+        """The survey's numbers for the suggestion candidates (by name; the survey's own list holds them) at the
+        measured aperture nearest r: {"index": {name: column of these arrays}, "scatter", "step" (against the stars
+        nearest the target), "peak_max", "peaks", "dist", "flip", "ref_scatter", "out": {name: why left out},
+        "window": names in the comp brightness window, "frames", "of", "failed", "labels", "radius", "n_before",
+        "n_after"}."""
         memo = result.setdefault("_views", {})
-        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy))   # distances are from the target
+        names = tuple(c[0] for c in cands)
+        key = (round(float(r), 1), tuple(round(float(v), 1) for v in self.target_xy), names, round(t_inst, 3))
         if key in memo:
             return memo[key]
-        idx, mags, peaks, flipped, rr = self._survey_columns(result, r)
-        st = cs.ensemble_stats(mags, flipped)
+        stars = self._survey_cache.get("stars") or [] if getattr(self, "_survey_cache", None) else []
+        col = {n_: j - 1 for j, (n_, _x, _y) in enumerate(stars) if j > 0}   # columns of the stats (target left out)
+        rr = min(result["radii"], key=lambda v: abs(v - r))
+        st = result["stats"][rr]
+        mags = result["mags"][rr][:, 1:]
+        peaks = result["peaks"][:, 1:]
+        cols = [col.get(n_) for n_ in names]
+        have = [j is not None for j in cols]
+        nan = float("nan")
+        pick = lambda arr, j: float(arr[j]) if j is not None else nan
+        scatter = np.array([pick(st["scatter"], j) for j in cols])
+        step_raw = np.array([pick(st["step"], j) for j in cols])
         inst = np.array([c[1] for c in cands], dtype=float)
-        var = cs.variable_flags(st["scatter"], inst)
+        # Fable 6: the comp brightness window (faint target: brighter comps) decides what is judged and said
+        lo, hi = -2.0, 1.0
+        window = (inst - t_inst >= lo) & (inst - t_inst <= hi) & np.array(have)
+        var = cs.variable_flags(scatter, inst)
         h, w = self.preview.shape[:2]
         half_diag = 0.5 * math.hypot(w, h)
         tx, ty = self.target_xy
         dist = [math.hypot(c[2] - tx, c[3] - ty) / half_diag for c in cands]
-        labels = core.frame_labels_for([result["frames"][i]["path"] for i in idx])
+        labels = result["labels"]
+        idx = result["idx"]
         out = {}
-        for j, c in enumerate(cands):
-            miss = [labels[k] or str(idx[k] + 1) for k in range(len(idx)) if not math.isfinite(mags[k, j])]
+        for k, c in enumerate(cands):
+            j = cols[k]
+            if j is None or not window[k]:
+                continue
+            miss = [labels[f] or str(idx[f] + 1) for f in range(len(idx)) if not math.isfinite(mags[f, j])]
             if miss:
-                out[c[0]] = ("not measured on frame" + ("s " if len(miss) != 1 else " ")
+                out[c[0]] = ("not measured, or too near the frame edge, on frame" + ("s " if len(miss) != 1 else " ")
                              + core.frame_list_text(miss, 6) + f" of the {len(idx)} read")
-            elif var[j] is not None:
-                out[c[0]] = (f"scatters {var[j]:.1f} × the stars of its brightness tonight "
-                             f"({cs.mmag(st['scatter'][j])}): it may vary")
-        good = [st["scatter"][j] for j, c in enumerate(cands) if c[0] not in out and math.isfinite(st["scatter"][j])]
-        with np.errstate(all="ignore"):
-            peak_max = np.nanmax(np.where(np.isfinite(peaks), peaks, -np.inf), axis=0) if peaks.size else np.zeros(0)
-        peak_max = np.where(np.isfinite(peak_max), peak_max, np.nan)
-        fws = [result["frames"][i]["fwhm"] for i in idx]
-        fws_ok = [f for f in fws if math.isfinite(f)]
-        # the flip step against the stars nearest the target (comp_survey.steps_near_target), not the ensemble
-        step_rel = cs.steps_near_target(st["step"], dist) if st["flip"] else st["step"]
-        view = {"index": {c[0]: j for j, c in enumerate(cands)}, "scatter": st["scatter"], "step": step_rel,
-                "peak_max": peak_max, "peaks": peaks, "n": st["n"], "dist": dist, "flip": st["flip"],
-                "ref_scatter": float(np.median(good)) if good else float("nan"), "out": out, "frames": len(idx),
-                "of": result["of"], "failed": result["failed"], "labels": labels, "radius": rr,
-                "sharpest": (min(fws_ok) if fws_ok else float("nan")),
-                "n_after": int(sum(1 for f in flipped if f)), "n_before": int(sum(1 for f in flipped if not f)),
-                "aperture": result.get("aperture")}
+            elif var[k] is not None:
+                out[c[0]] = (f"scatters {var[k]:.1f} × the stars of its brightness tonight "
+                             f"({cs.mmag(scatter[k])}): it may vary")
+        good = [scatter[k] for k, c in enumerate(cands) if window[k] and c[0] not in out and math.isfinite(scatter[k])]
+        ref_sc = float(np.median(good)) if good else nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            pmax = np.nanmax(np.where(np.isfinite(peaks), peaks, -np.inf), axis=0) if peaks.size else np.zeros(0)
+        pmax = np.where(np.isfinite(pmax), pmax, np.nan)
+        peak_max = np.array([pick(pmax, j) for j in cols])
+        peaks_c = np.array([[peaks[f, j] if j is not None else nan for j in cols] for f in range(len(idx))])
+        eligible = window & np.array([c[0] not in out for c in cands]) & np.isfinite(scatter) & (
+            scatter <= 2.0 * ref_sc if math.isfinite(ref_sc) else True)
+        step_rel = (cs.steps_near_target(step_raw, dist, eligible, scatter) if st["flip"] else step_raw)
+        view = {"index": {c[0]: k for k, c in enumerate(cands) if cols[k] is not None}, "scatter": scatter,
+                "step": step_rel, "peak_max": peak_max, "peaks": peaks_c, "dist": dist,
+                "flip": bool(st["flip"]) and bool(np.isfinite(step_rel).any()), "ref_scatter": ref_sc, "out": out,
+                "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
+                "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
+                "n_after": st["n_after"]}
         memo[key] = view
         return view
 
     def _survey_aperture_apply(self, cache):
         """2.4.0 step 5 (#61): the apertures tried on the survey's frames, judged on the stars like the target (within
-        0.75 mag of it, else the 5 nearest in brightness) against the other candidates. When one beats the aperture in
-        the boxes by at least 10 % it is set, with the trial in the Log; but not on a loaded series (its nights keep
-        one aperture), not on defocused stars (the ring rule), and not when the boxes were changed while the survey
-        ran. Then it is a plain note."""
+        0.75 mag of it on the reference frame, else the 5 nearest in brightness) against the other candidates
+        (worked out in the background). When one beats the aperture in the boxes by at least 10 %, on at least 3
+        such stars and 12 frames, it is set, with the trial in the Log; but only once per night and target (Fable
+        5), not on a loaded series (its nights keep one aperture), not on defocused stars (the ring rule), and not
+        when the boxes were changed while the survey ran. Then it is a plain note."""
         res = cache["result"]
-        if len(res["radii"]) < 2 or self.target_xy is None:
+        by_r = res.get("by_r") or {}
+        if len(res["radii"]) < 2 or not by_r:
             return
+        once = (cache["key"][0], cache["key"][2], tuple(round(float(v), 0) for v in self.target_xy))
+        done = self.__dict__.setdefault("_survey_aperture_done", set())
+        if once in done:
+            return
+        done.add(once)
         r0, si0, so0 = cache["aperture_at_start"]
-        t_inst = self._inst_at(self.target_xy)
-        if not math.isfinite(t_inst):
-            return
-        idx = sorted(res["frames"])
-        n_cols = len(res["frames"][idx[0]]["peaks"]) if idx else 0
-        # the candidates' instrumental mags on the page's frame (set by the last suggestion), the target's likewise
-        cand_inst = getattr(self, "_survey_cand_inst", None)
-        if cand_inst is None or len(cand_inst) != n_cols:
-            return
-        d = np.abs(np.asarray(cand_inst, dtype=float) - t_inst)
-        like = [j for j in np.argsort(d) if d[j] <= 0.75]
-        if len(like) < 3:
-            like = [int(j) for j in np.argsort(d)[:5]]
-        by_r = {}
-        for rr in res["radii"]:
-            m = np.array([res["frames"][i]["mags"][rr] for i in idx], dtype=float)
-            st = cs.ensemble_stats(m, [res["frames"][i]["flipped"] for i in idx])
-            vals = [st["scatter"][j] for j in like if math.isfinite(st["scatter"][j])]
-            by_r[rr] = float(np.median(vals)) if vals else float("nan")
-        pick = cs.aperture_choice(by_r, r0)
+        nfr, nlike = len(res.get("idx") or []), int(res.get("n_like") or 0)
         trial = ", ".join(f"r {rr:g}: {cs.mmag(v)}" for rr, v in sorted(by_r.items()))
-        res["aperture"] = {"by_r": by_r, "pick": pick, "stars": len(like)}
-        if pick is None:
-            log_to_file(f"Comp survey aperture trial ({len(like)} stars like the target, {len(idx)} frames): {trial}; "
+        pick = cs.aperture_choice(by_r, r0)
+        if pick is None or nlike < cs.APERTURE_MIN_STARS or nfr < cs.APERTURE_MIN_FRAMES:
+            log_to_file(f"Comp survey aperture trial ({nlike} stars like the target, {nfr} frames): {trial}; "
                         f"r {r0:g} kept.")
             return
         now = (self._num(self.radius), self._num(self.sky_in), self._num(self.sky_out))
         si, so = res["rings"][pick["r"]]
         why_not = ("a series is open and its nights keep one aperture" if self.observations else
                    "the boxes were changed while the survey ran" if now != (r0, si0, so0) else "")
-        words = (f"Aperture trial on {len(idx)} of the night's frames, {len(like)} stars like the target: {trial}. "
+        words = (f"Aperture trial on {nfr} of the night's frames, {nlike} stars like the target: {trial}. "
                  f"r {pick['r']:g}, sky {si:g}–{so:g} px scatters {pick['gain']:.0%} less than r {r0:g} "
                  f"({cs.mmag(pick['scatter'])} against {cs.mmag(pick['current_scatter'])})")
         if why_not:
@@ -16240,48 +16354,58 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.radius.set(pick["r"])
         self.sky_in.set(si)
         self.sky_out.set(so)
+        snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+        if isinstance(snap, dict):   # Fable 10: these sizes go with this camera's lights (not "typed since")
+            snap["aperture"] = self._camera_values_now()["aperture"]
         self.log(words + ", so it is set (Suggest… shows the FWHM rule's sizes).", keep_status=True)
 
-    def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names):
+    def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names, t_bv):
         """2.4.0 step 5 (#76): with the survey: a loaded series' comps come first when they pass tonight (and the
         ones that do not are said), and on a flip night the set whose expected flip step is nearest zero is chosen
-        from the 8 best-ranked survivors. Returns (picks, expected flip step or NaN, series comps kept)."""
+        from the 8 best-ranked survivors of the same colour tier as the picks (Fable 8). Returns (picks, expected
+        flip step or NaN, series comps kept, names from the 0.6 colour tier, shortened on purpose)."""
         self._survey_cand_inst = [c[1] for c in cands]
         if survey is None:
-            return picks, float("nan"), set()
+            return picks, float("nan"), set(), set(), False
         dm_of = {n: dm for n, dm in picks}
-        ranked_all = []
+        ranked_all, tier_of = [], {}
         for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
-            pool = [c for c in cands if c[0] in pool_names and c[0] not in {n for n, _d in ranked_all}]
+            have = {n for n, _d in ranked_all}
+            pool = [c for c in cands if c[0] in pool_names and c[0] not in have
+                    and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
             for n_, dm in choose(pool, gate):
                 if n_ not in {n for n, _d in ranked_all}:
                     ranked_all.append((n_, dm))
+                    tier_of[n_] = gate
                     dm_of.setdefault(n_, dm)
         series_kept = set()
+        self._survey_series_failed = []
         if self.observations:
             mine = [getattr(self, f"{r}_name").get().strip() for r in COMP_ROLES]
             mine = [m for m in mine if m]
             ok = {n for n, _d in ranked_all}
             series_kept = {m for m in mine if m in ok}
-            failed = [m for m in mine if m in survey["index"] and m not in ok]
-            self._survey_series_failed = failed
+            self._survey_series_failed = [m for m in mine if m in survey["index"] and m not in ok]
             if series_kept:
                 front = [(m, dm_of[m]) for m in mine if m in series_kept]
                 picks = (front + [p for p in picks if p[0] not in series_kept])[:4]
-        else:
-            self._survey_series_failed = []
-        set_step = float("nan")
+        set_step, shortened = float("nan"), False
         if survey["flip"] and not series_kept and len(ranked_all) >= 2:
-            names = [n for n, _d in ranked_all][:cs.SET_TOP]
-            n_ = max(len(names) - 1, 1)
-            keys = [cs.rank_key(k / n_, survey["scatter"][survey["index"][nm]], survey["ref_scatter"],
-                                survey["step"][survey["index"][nm]], survey["dist"][survey["index"][nm]], True)
-                    for k, nm in enumerate(names)]
-            steps = [survey["step"][survey["index"][nm]] for nm in names]
-            chosen, set_step = cs.choose_set(names, keys, steps, count=min(4, max(len(picks), 1)))
-            if chosen:
-                picks = [(nm, dm_of[nm]) for nm in chosen]
-        return picks, set_step, series_kept
+            tight = [p for p in ranked_all if tier_of.get(p[0]) == 0.3]
+            pool = tight if len(tight) >= len(picks) else ranked_all
+            names = [n for n, _d in pool if n in survey["index"]][:cs.SET_TOP]
+            if len(names) >= 2:
+                n_ = max(len(names) - 1, 1)
+                ix = [survey["index"][nm] for nm in names]
+                keys = [cs.rank_key(k / n_, survey["scatter"][j], survey["ref_scatter"], survey["step"][j],
+                                    survey["dist"][j], True) for k, j in enumerate(ix)]
+                want = min(4, max(len(picks), 1))
+                chosen, set_step = cs.choose_set(names, keys, [survey["step"][j] for j in ix], count=want)
+                if chosen:
+                    shortened = len(chosen) < want
+                    picks = [(nm, dm_of[nm]) for nm in chosen]
+        relaxed = {n for n, _d in picks if tier_of.get(n) == 0.6}
+        return picks, set_step, series_kept, relaxed, shortened
 
     @staticmethod
     def _survey_info(survey, name):
@@ -16292,7 +16416,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "peak": float(survey["peak_max"][j]), "frames": survey["frames"], "flip": survey["flip"]}
 
     @staticmethod
-    def _survey_words(survey, set_step) -> str:
+    def _survey_words(survey, set_step, shortened: bool = False) -> str:
         if survey is None:
             return ""
         txt = (f" Chosen on {survey['frames']} of the night's {survey['of']} frames (comp survey: steadiness, the "
@@ -16300,28 +16424,32 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if survey["flip"]:
             txt += (f"; {survey['n_before']} before and {survey['n_after']} after the meridian flip, so steady on "
                     "both pier sides" + (f", expected flip step {1000 * set_step:+.1f} mmag against the stars nearest "
-                                         "the target"
-                                         if math.isfinite(set_step) else ""))
+                                         "the target" if math.isfinite(set_step) else ""))
+            if shortened:
+                txt += "; fewer than four, because another star would make the flip step worse"
         return txt + ")."
 
-    def _survey_report(self, survey, lin, picks):
-        """2.4.0 step 5 (#76): the stars the survey left out (by name, why), the loaded series' comps that fail
-        tonight, and "no good comp" instead of filling S1–S4 with poor stars. Said once per survey and aperture."""
+    def _survey_report(self, survey, lin, picks) -> bool:
+        """2.4.0 step 5 (#76): the stars in the comp brightness window that the survey left out (by name, why), the
+        loaded series' comps that fail tonight, and "no good comp" instead of S1–S4 filled with poor stars, only when
+        the survey itself removed the stars that would have been suggested (Fable 4). Said once per survey and
+        aperture. True when the "no good comp" warning was given (the older catalog-only lines are then not added)."""
         if survey is None:
-            return
-        out = dict(survey["out"])
+            return False
+        out = {n: why for n, why in survey["out"].items() if n in survey["window"]}
         if lin is not None and not getattr(self, "precalibrated", False):
             for name, j in survey["index"].items():
                 pk = survey["peak_max"][j]
-                if name not in out and math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin:
+                if name in survey["window"] and name not in out and math.isfinite(pk) and pk >= cs.LINEAR_MARGIN * lin:
                     col = survey["peaks"][:, j]
                     over = int(np.sum(col >= lin))
                     out[name] = (f"raw peak up to {pk:,.0f} ADU on the sharpest frames "
                                  + (f"(over the linear limit {lin:,.0f} on {over} of {survey['frames']})" if over
                                     else f"(within 10 % of the linear limit {lin:,.0f})"))
+        rejected = getattr(self, "_survey_rejected", set())
         said_key = (id(survey), lin, tuple(n for n, _d in picks))
         if getattr(self, "_survey_said", None) == said_key:
-            return
+            return getattr(self, "_survey_said_nogood", False)
         self._survey_said = said_key
         failed = [n for n in getattr(self, "_survey_series_failed", []) if n in out]
         for n in failed:
@@ -16331,9 +16459,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if rest:
             self.log("Left out by the comp survey: " + "; ".join(f"{n} ({out[n]})" for n in rest[:6])
                      + (f"; and {len(rest) - 6} more" if len(rest) > 6 else "") + ".", keep_status=True)
-        if not picks:
-            self.log("⚠ No good comp here tonight: every star of the right brightness and color failed the comp "
+        nogood = not picks and bool(rejected)
+        if nogood:
+            self.log("⚠ No good comp here tonight: the stars of the right brightness and color all failed the comp "
                      "survey (above). Pick the steadiest you can by hand, and check Comp health after the run.")
+        self._survey_said_nogood = nogood
+        return nogood
 
     @staticmethod
     def _drift_words(drift, safe_edge: float) -> str:
@@ -19773,6 +19904,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.refit_period()
 
     def cancel_job(self):
+        if getattr(self, "_run_after_survey", False):
+            # Fable 9: a run waiting for the comp survey is called off (the survey itself goes on: it only suggests)
+            self._run_after_survey = False
+            self.status.set("Run photometry called off; the comp survey goes on and only changes the suggestions.")
+            self.log("Run photometry called off (it was waiting for the comp survey).", keep_status=True)
+            return
         if not self.busy:
             self.status.set("Nothing is running.")
             return
