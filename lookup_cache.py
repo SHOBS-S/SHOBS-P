@@ -14,6 +14,7 @@ Service names in use (keep them stable, they are file names):
   nea         NASA Exoplanet Archive planet    key: the typed planet name
   toi         TESS TOI status (#32)            key: the planet name (or TIC)
   exoclock    ExoClock priority (#14)          key: the planet name
+  nea_rp      every published Rp/R* (#70)      key: the planet name
 
 SHOBS_P_NO_LOOKUP_CACHE=1 turns the cache off (tests set it, or point SHOBS_P_LOOKUP_CACHE_DIR at a temp folder).
 """

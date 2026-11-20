@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 import traceback
 from tkinter import BOTH, END, LEFT, RIGHT, W, X, BooleanVar, DoubleVar, StringVar, Text, Toplevel, \
     filedialog, messagebox, ttk
@@ -105,7 +106,12 @@ def quality_text(r) -> str:
 
 def fit_progress_words(phase, done, total) -> str:
     """2.2.20 (item 3): the transit fit's busy-bar words: "Fitting the transit: MCMC burn-in… 600 of 1,000", then
-    "Fitting the transit: MCMC step… 1,200 of 3,000" (the second count matches the MCMC menu, 2.2.12)."""
+    "Fitting the transit: MCMC step… 1,200 of 3,000" (the second count matches the MCMC menu, 2.2.12).
+    2.4.0 (#103): first, with Auto, "Fitting the transit: choosing the detrend… 2 of 6"."""
+    if phase == "detrend":
+        return f"Fitting the transit: choosing the detrend… {int(done)} of {int(total)}"
+    if phase == "prayer":   # 2.4.0 (#62)
+        return "Fitting the transit: prayer-bead check of the errors…"
     return f"Fitting the transit: MCMC {'burn-in' if phase == 'burn-in' else 'step'}… {int(done):,} of {int(total):,}"
 
 # 2.4.0 (#98): the Fit button's words; the second while a Points or Corrections setting differs from the shown fit's.
@@ -191,6 +197,10 @@ class TransitPage:
         self.refit_flagged_button = groups.add("points", ttk.Button(
             g, text=f"Refit with flagged frames (errors ×{tc.FLAGGED_ERR_FACTOR:g})",
             command=lambda: self.fit(with_flagged=True)), shown=False)
+        # 2.4.0 (#63): frames past the airmass limit, offered for trimming after a fit (shown only then)
+        self.trim_airmass_button = groups.add("points", ttk.Button(
+            g, text="Trim high airmass", command=self.trim_high_airmass), shown=False)
+        self._airmass_offer = None
         self.trim_text = StringVar(value="")
         groups.add("points", ttk.Label(g, textvariable=self.trim_text, style="Hint.TLabel", justify=LEFT), wrap=True)
         self._trims = []          # [(BJD_TDB from, to)]; ±inf for an open end
@@ -201,23 +211,29 @@ class TransitPage:
 
         # ---- 3. Corrections: trends taken out by the fit
         g = groups.parent("corrections")
+        # 2.4.0 (#103): one drop-down, Auto (BIC) by default: every choice is fitted and the lowest BIC wins (the
+        # flip step tested inside each). detrend_airmass / detrend_time follow it (read-only mirrors, for the
+        # Multi-night window's starting ticks): Auto counts as airmass on, time slope off.
+        self.detrend = StringVar(value=tc.DETREND_AUTO_LABEL)
         self.detrend_airmass = BooleanVar(value=True)
         self.detrend_time = BooleanVar(value=False)
         det_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(det_box, text="Detrend", style="Card.TLabel").pack(side=LEFT)
-        self.detrend_airmass_check = ttk.Checkbutton(det_box, text="airmass", variable=self.detrend_airmass,
-                                                     command=self._airmass_clicked)
-        self.detrend_airmass_check.pack(side=LEFT, padx=(4, 0))
-        ttk.Checkbutton(det_box, text="time slope", variable=self.detrend_time).pack(side=LEFT, padx=(6, 0))
+        self.detrend_box = ttk.Combobox(det_box, textvariable=self.detrend, values=self._detrend_values(True),
+                                        width=22, state="readonly")
+        self.detrend_box.pack(side=LEFT, padx=(4, 0))
+        self.detrend_box.bind("<<ComboboxSelected>>", lambda _e: self._detrend_clicked())
         groups.add("corrections", det_box, pad=8)
-        # 2.4.0 (#96): without airmass the box is greyed out and unticked, with the reason beside it.
+        # 2.4.0 (#96): without airmass the airmass choices leave the list (a chosen one becomes the same without
+        # airmass), with the reason beside it; the user's own choice comes back with airmass.
+        self._detrend_wanted = tc.DETREND_AUTO_LABEL
         self._airmass_wanted = True       # the user's own choice, put back when the data have airmass again
         self._airmass_off_why = ""
         self.airmass_hint = StringVar(value="")
         self.airmass_hint_label = groups.add("corrections", ttk.Label(g, textvariable=self.airmass_hint,
                                                                       style="Hint.TLabel"), pad=8, shown=False)
         try:
-            app._add_tooltip(self.detrend_airmass_check, lambda: self._airmass_off_why)
+            app._add_tooltip(self.detrend_box, lambda: self._airmass_off_why)
         except Exception:
             pass
         # 2.2.13: a report carries no flip segment: the user can say its largest gap is the meridian flip.
@@ -241,7 +257,7 @@ class TransitPage:
         # numbers go grey until it is pressed. The fit itself still always waits for the button (2.3.2 item 2).
         self._fit_settings = None         # (detrend airmass, time slope, flip at the gap) of the shown fit
         self._stale_shown = False
-        for var in (self.detrend_airmass, self.detrend_time, self.flip_at_gap):
+        for var in (self.detrend, self.flip_at_gap):
             try:
                 var.trace_add("write", lambda *_a: self._settings_changed())
             except Exception:
@@ -696,38 +712,87 @@ class TransitPage:
         except Exception:
             return False
 
-    def _airmass_clicked(self):
-        """The user's own tick, kept so it comes back when a source without airmass is left."""
+    # ---- 2.4.0 (#103): the Detrend drop-down ----------------------------------------------------
+    @staticmethod
+    def _detrend_values(airmass: bool) -> list:
+        return [tc.DETREND_AUTO_LABEL] + [lab for _k, lab, f in tc.DETREND_CHOICES if airmass or not f[0]]
+
+    def detrend_key(self) -> str:
+        """'auto' or a DETREND_CHOICES key, from the drop-down's words."""
+        text = self.detrend.get()
+        if text == tc.DETREND_AUTO_LABEL:
+            return tc.DETREND_AUTO
+        for key, lab, _f in tc.DETREND_CHOICES:
+            if lab == text:
+                return key
+        return tc.DETREND_AUTO
+
+    def set_detrend(self, key: str):
+        """Set the drop-down by key ('auto', 'airmass', 'airmass+slope', ...), as the user would; the airmass rule
+        (#96) still applies."""
+        self.detrend.set(tc.detrend_label(key))
+        self._detrend_clicked()
+
+    def _sync_detrend_mirrors(self):
+        key = self.detrend_key()
+        # Auto: airmass on when the data have it (Auto leaves the airmass choices out otherwise), time slope off
+        da, dt, _dq = (not self._airmass_off_why, False, False) if key == tc.DETREND_AUTO else tc.detrend_flags(key)
+        if self.detrend_airmass.get() != da:
+            self.detrend_airmass.set(da)
+        if self.detrend_time.get() != dt:
+            self.detrend_time.set(dt)
+
+    def _detrend_clicked(self):
+        """The user's own choice, kept so it comes back when a source without airmass is left. Fable S6: a choice
+        made while airmass is missing is kept too, with airmass added back when the earlier choice had it."""
+        key = self.detrend_key()
         if not self._airmass_off_why:
-            self._airmass_wanted = bool(self.detrend_airmass.get())
+            self._detrend_wanted = self.detrend.get()
+            self._airmass_wanted = key == tc.DETREND_AUTO or tc.detrend_flags(key)[0]
+        else:
+            if (key != tc.DETREND_AUTO and self._airmass_wanted
+                    and self._detrend_wanted != tc.DETREND_AUTO_LABEL):   # re-review nit: Auto adds nothing back
+                _da, dt, dq = tc.detrend_flags(key)
+                key = tc.detrend_key((True, dt, dq))
+            self._detrend_wanted = tc.detrend_label(key)
+        self._sync_detrend_mirrors()
+
+    def _airmass_clicked(self):   # kept for older callers: the drop-down's own handler
+        self._detrend_clicked()
 
     def _update_airmass_box(self):
-        """Grey out and untick 'airmass' when the data have none (the fit would run with 'Detrend: none' while the
-        box said airmass); with airmass again, the box is live and the user's earlier choice is back."""
+        """Take the airmass choices out of the list when the data have none (the fit would run without airmass while
+        the box said airmass); a chosen airmass choice becomes the same without airmass. With airmass again, the full
+        list is back and so is the user's earlier choice."""
         try:
             why = self._airmass_missing()
             if why:
                 if not self._airmass_off_why:
-                    self._airmass_wanted = bool(self.detrend_airmass.get())
+                    self._detrend_wanted = self.detrend.get()
+                    key = self.detrend_key()
+                    self._airmass_wanted = key == tc.DETREND_AUTO or tc.detrend_flags(key)[0]
                 self._airmass_off_why = why
-                if self.detrend_airmass.get():
-                    self.detrend_airmass.set(False)
-                self.detrend_airmass_check.state(["disabled"])
+                self.detrend_box.configure(values=self._detrend_values(False))
+                key = self.detrend_key()
+                if key != tc.DETREND_AUTO and tc.detrend_flags(key)[0]:
+                    _da, dt, dq = tc.detrend_flags(key)
+                    self.detrend.set(tc.detrend_label(tc.detrend_key((False, dt, dq))))
                 self.airmass_hint.set(why)
                 self.groups.show("corrections", self.airmass_hint_label, True)
             elif self._airmass_off_why:
                 self._airmass_off_why = ""
-                self.detrend_airmass_check.state(["!disabled"])
-                self.detrend_airmass.set(bool(self._airmass_wanted))
+                self.detrend_box.configure(values=self._detrend_values(True))
+                self.detrend.set(self._detrend_wanted)
                 self.airmass_hint.set("")
                 self.groups.show("corrections", self.airmass_hint_label, False)
+            self._sync_detrend_mirrors()
         except Exception:
             pass
 
     # ---- 2.4.0 (#98): the "refit needed" cue ------------------------------------------------
     def _settings_key(self) -> tuple:
         """The Points and Corrections settings a fit reads when it starts (a trim starts its own refit)."""
-        return (bool(self.detrend_airmass.get()), bool(self.detrend_time.get()), bool(self.flip_at_gap.get()))
+        return (self.detrend_key(), bool(self.flip_at_gap.get()))
 
     def fit_is_stale(self) -> bool:
         """A fit is shown and a Points or Corrections setting now differs from the one it was made with."""
@@ -1284,7 +1349,8 @@ class TransitPage:
                  f"Frames skipped at photometry (reason: frame numbers): {rep.get('skipped', 'none')}",   # 2.3.0 (#50)
                  f"Frames left out (flag: frame numbers): {rep.get('left_out', 'none')}",
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
-                 "Detrend: " + (", ".join(r.get("detrend") or []) or "none"),
+                 "Detrend: " + tc.detrend_text(r.get("detrend"))
+                 + (" (Auto, the lowest BIC)" if r.get("detrend_choice") else ""),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
         if rep.get("gain_check"):
             lines.append(rep["gain_check"])   # 2.4.0 (#104): EGAIN nights, the sky's own measurement
@@ -1336,7 +1402,7 @@ class TransitPage:
         tr = self._trimmed_frames(meta, r)
         if tr:
             parts.append("trimmed " + tr)
-        parts.append("detrend " + (", ".join(r.get("detrend") or []) or "none"))
+        parts.append("detrend " + tc.detrend_text(r.get("detrend")) + (" (auto, BIC)" if r.get("detrend_choice") else ""))
         if rep.get("stack"):   # 2.3.0 (#54): "points are stacks of N frames (effective exposure X s)"
             import stack_core
             parts.append(stack_core.report_note(meta.get("stack")))
@@ -1464,7 +1530,10 @@ class TransitPage:
             self._pending_signature = self._signature()
             self._pending_settings = self._settings_key()   # 2.4.0 (#98)
             steps = MCMC_CHOICES.get(self.mcmc.get(), 3000)
-            da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+            # 2.4.0 (#103): Auto, or the choice picked (airmass, time slope, time curve)
+            dkey = self.detrend_key()
+            auto = dkey == tc.DETREND_AUTO
+            da, dt, dq = (True, False, False) if auto else tc.detrend_flags(dkey)
             # 2.2.13: the flip segment, and the flagged frames (left out and listed, or put back with doubled errors).
             extra = dict(self._data_extra or {})
             after = extra.get("after_flip")
@@ -1498,7 +1567,7 @@ class TransitPage:
                     self._loo_pending = {"t": t, "flux": flux, "err": err, "am": am, "after": after,
                                          "flagged_mask": flagged_mask, "comp_mags": cmags,
                                          "names": list(extra.get("comp_names") or []), "planet": planet,
-                                         "da": da, "dt": dt}
+                                         "da": da, "dt": dt, "dq": dq}
             flip_source = extra.get("flip_source", "")
             # 2.2.20 (#45): the flip time (halfway across the flip gap) for the fit CSV's segment column and header
             meta.pop("t_flip", None)
@@ -1518,9 +1587,42 @@ class TransitPage:
             def progress(phase, done, total):
                 app.call_ui(self._progress, phase, done, total)
 
+            src_planet = (self.report or {}).get("planet") if self.report is not None else None
+            # Fable S4: a lookup that got no answer this session is not tried again for 10 minutes
+            failed_at = self.__dict__.setdefault("_rp_lookup_failed", {})
+            pname = str((planet or {}).get("name") or "")
+            want_rp = (planet is not None and "k_published" not in planet and pname
+                       and time.monotonic() - failed_at.get(pname, -1e9) > 600)
+
+            good = self.__dict__.setdefault("_rp_lookup_good", {})
+            if want_rp and pname in good:   # re-review nit: a hand-typed planet's answer, kept for this session
+                planet["k_published"], planet["depths_listed"] = good[pname]
+                want_rp = False
+
+            def keep_rp(ks, ds, ok):
+                if not ok:
+                    failed_at[pname] = time.monotonic()
+                    app.log(f"Published sizes for {pname} not available (the NASA Exoplanet Archive did not answer, "
+                            "and none are cached): the size check uses the planet's one Rp/R* for now.",
+                            keep_status=True)
+                    return
+                good[pname] = (ks, ds)
+                for target in (src_planet, getattr(app, "planet_info", None)):
+                    if (isinstance(target, dict) and target is not planet and _norm(target.get("name")) == _norm(pname)
+                            and "k_published" not in target):
+                        target["k_published"], target["depths_listed"] = ks, ds
+
             def work():
                 try:
+                    if want_rp:
+                        # 2.4.0 (#70): a report's planet (or one typed by hand) has no published list yet: fetch
+                        # every published Rp/R* once (cached), so the size check has its range
+                        app.call_ui(app._job_words, "Fitting the transit: looking up the published sizes…")
+                        ks, ds, ok = tc.published_rp_cached(pname, timeout=10, with_status=True)
+                        planet["k_published"], planet["depths_listed"] = ks, ds
+                        app.call_ui(keep_rp, ks, ds, ok)   # Fable N9: the page's dicts change on the Tk thread
                     result = tc.fit_transit(t, flux, err, am, planet, detrend_airmass=da, detrend_time=dt,
+                                            detrend_curve=dq, detrend_auto=auto,
                                             mcmc_steps=steps, progress=progress, cancel=cancel,
                                             log=lambda m: app.call_ui(app.log, m), after_flip=after,
                                             flip_source=flip_source, flagged_mask=flagged_mask, flagged_label=label,
@@ -1629,12 +1731,23 @@ class TransitPage:
         app = self.app
         cancel = app._cancel
         summary = dict(r["summary"])
+        fl_ = tuple(r.get("detrend_flags") or (job["da"], job["dt"], job.get("dq", False)))
+        if ((r.get("detrend_choice") or {}).get("dropped_no_airmass") and job.get("am") is not None
+                and not fl_[0]):
+            # re-review R1: the main fit left out the frames without airmass; so do the comp check's refits
+            keep = np.isfinite(np.asarray(job["am"], dtype=float))
+            job = dict(job)
+            for k_ in ("t", "flux", "err", "am", "after", "flagged_mask", "comp_mags"):
+                if job.get(k_) is not None and len(job[k_]) == len(keep):
+                    job[k_] = np.asarray(job[k_])[keep]
 
         def work():
             try:
                 loo = tc.leave_one_comp_out(job["t"], job["flux"], job["err"], job["am"], job["comp_mags"],
-                                            job["names"], job["planet"], summary, detrend_airmass=job["da"],
-                                            detrend_time=job["dt"], after_flip=job["after"],
+                                            job["names"], job["planet"], summary,
+                                            # 2.4.0 (#103): the main fit's detrend (Auto's choice, not Auto again)
+                                            detrend_airmass=fl_[0], detrend_time=fl_[1], detrend_curve=fl_[2],
+                                            after_flip=job["after"],
                                             # 2.3.0 (#8): the main fit's flip-step decision, for every refit
                                             flip_step=bool(r.get("flip")) if r.get("flip_test") or r.get("flip")
                                             else None,
@@ -1781,6 +1894,62 @@ class TransitPage:
         self.draw()
         self._show_refit_flagged()
         self._update_trim_text()
+        self._offer_airmass_trim(result)   # 2.4.0 (#63)
+
+    # ---- 2.4.0 (#63): offer to trim frames past the airmass limit ----------------------------------
+    def airmass_limit(self) -> float:
+        try:
+            v = float(self.app.settings.get("transit_trim_airmass", tc.TRIM_AIRMASS_DEFAULT))
+            return v if math.isfinite(v) and v > 1.0 else tc.TRIM_AIRMASS_DEFAULT
+        except Exception:
+            return tc.TRIM_AIRMASS_DEFAULT
+
+    def _offer_airmass_trim(self, result):
+        """After a fit: the fitted points past the limit get a note and the Trim high airmass button."""
+        offer = None
+        try:
+            s = result.get("summary") or {}
+            if result.get("airmass") is not None and "tc" in s and "t14" in s:
+                offer = tc.high_airmass_spans(result["t"], result["airmass"], self.airmass_limit(), s["tc"][0],
+                                              s["t14"][0])
+        except Exception:
+            offer = None
+        if offer is not None and offer["kept"] < 20:
+            offer = None   # trimming them would leave too few points to fit
+        self._airmass_offer = offer
+        try:
+            self.trim_airmass_button.configure(text=f"Trim airmass > {self.airmass_limit():g}")
+            self.groups.show("points", self.trim_airmass_button, offer is not None)
+        except Exception:
+            pass
+        if offer is not None:
+            self.app.status.set(f"Some fitted frames are past airmass {offer['limit']:g}: Trim airmass > "
+                                f"{offer['limit']:g} takes them out and refits.")
+        if offer is not None:
+            text = tc.high_airmass_text(offer)
+            flags = result.setdefault("flags", [])
+            if not any(t_ == text for _l, t_ in flags):
+                flags.append(("info", text))   # Fable N3: the button's instruction stays on the page (below)
+                self._notes_text(tc.cautions(flags, result.get("verdict")))
+            self.app.log("Transit fit: " + text)
+
+    def trim_high_airmass(self):
+        offer = self._airmass_offer
+        if not offer:
+            return
+        if self._fitting or getattr(self, "_checking", False) or self.app.busy:
+            self.app.status.set("Wait for the current fit or check to end, then Trim airmass.")
+            return
+        if self.report is None:
+            self._trim_source_check()
+        self._trim_gen = getattr(self.app, "_series_gen", 0)
+        self._trims = self._trims + [tuple(sp) for sp in offer["spans"]]
+        self._airmass_offer = None
+        self.groups.show("points", self.trim_airmass_button, False)
+        self.app.log(f"Transit fit: trimming {offer['n']} points past airmass {offer['limit']:g} "
+                     f"({offer['where']}) and refitting.")
+        self._update_trim_text()
+        self.fit()
 
     # ---- display ---------------------------------------------------------------------------
     def _set_columns(self):
@@ -2014,8 +2183,12 @@ class TransitPage:
             # 2.2.7: a real dip with good timing, but a depth the night cannot be trusted for.
             self.verdict.set("✓ " + pre + v["reason"] + " Timing usable; depth unreliable: " + v["depth_unreliable"] + ".")
             self.verdict_label.configure(foreground="#c26a00")
+        elif state == "detected" and v.get("size_caution"):
+            # 2.4.0 (#70): detected and timed, but the size is far outside every published value
+            self.verdict.set("✓ " + pre + v["reason"] + " ⚠ Size: " + v["size_caution"] + ".")
+            self.verdict_label.configure(foreground="#c26a00")
         elif state == "detected":
-            self.verdict.set("✓ " + pre + v["reason"])
+            self.verdict.set("✓ " + pre + v["reason"] + (" " + v["size_note"] if v.get("size_note") else ""))
             self.verdict_label.configure(foreground="#2e7d32")
         elif state == "inconclusive":
             tail = (" Neither Tc nor the depth is measured." if v.get("flip_inconclusive") else
@@ -2044,6 +2217,13 @@ class TransitPage:
         return True
 
     def _fill_table(self):
+        if self.result is None and getattr(self, "_airmass_offer", None) is not None:
+            # Fable N2: the high-airmass offer belongs to the fit it was made for
+            self._airmass_offer = None
+            try:
+                self.groups.show("points", self.trim_airmass_button, False)
+            except Exception:
+                pass
         self._set_columns()
         self._show_verdict()
         self._show_stale()   # 2.4.0 (#98): after the verdict (it sets its own colour)
@@ -2086,7 +2266,9 @@ class TransitPage:
             # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
             ("Depth (%)", val("depth", "{:.2f}", 100),
              NC if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
-             num(tc.published_depth(p)[0], "{:.2f}", 100), exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
+             # 2.4.0 (#70): every published (Rp/R*)² (the range the size check uses)
+             (tc.range_text(tc.published_range(p)).replace(" %", "") or num(tc.published_depth(p)[0], "{:.2f}", 100)),
+             exo("Radius-ratio area depth (Rp/R*)^2", "{:.2f}")),
             ("a/R*", val("a_rs", "{:.2f}"), NC if "a_rs" in runaway else num(ff.get("a_rs"), "{:.2f}"),
              num(p.get("a_rs"), "{:.2f}"), exo("a/R*", "{:.2f}")),
             ("Impact parameter b", val("b", "{:.3f}"), NC if "b" in runaway else num(ff.get("b"), "{:.3f}"),
@@ -2101,6 +2283,17 @@ class TransitPage:
             ("Limb darkening u2", val("u2", "{:.2f}"), "", num((r or {}).get("ld_prior", [None, None])[1] if r else None, "{:.2f}"), ""),
             ("Airmass slope", val("c_am", "{:.4f}"), "", "", ""),
         ]
+        # 2.4.0 (#103): the time terms when the fit had them
+        if "c_t" in s:
+            rows.append(("Time slope (/day)", val("c_t", "{:.4f}"), "", "", ""))
+        if "c_t2" in s:
+            rows.append(("Time curve (/day²)", val("c_t2", "{:.4f}"), "", "", ""))
+        if p.get("depths_listed"):
+            # 2.4.0 (#70): the Archive's listed depths, for information only (not (Rp/R*)², not used to judge)
+            dl = sorted(float(d[0]) for d in p["depths_listed"])
+            rows.insert(next(i for i, r_ in enumerate(rows) if r_[0] == "Depth (%)") + 1,
+                        ("Listed depths (%)", "", "", (f"{dl[0] * 100:.2f}" if len(dl) == 1 else
+                                                       f"{dl[0] * 100:.2f}–{dl[-1] * 100:.2f} ({len(dl)})"), ""))
         if r:
             # 2.2.19 (#29): O − C in minutes and in sigma (fit and ephemeris sigma in quadrature).
             o = tc.oc_summary(r)
@@ -2667,6 +2860,11 @@ class TransitPage:
     def _reset_trim(self):
         self._trims = []
         self._drag = None
+        self._airmass_offer = None   # 2.4.0 (#63): an offer belongs to the fit it was made for
+        try:
+            self.groups.show("points", self.trim_airmass_button, False)
+        except Exception:
+            pass
         try:
             self.trim_from.set("")
             self.trim_to.set("")
@@ -2868,6 +3066,12 @@ class TransitPage:
             # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "") + "SHOBS-P "
                              + tc.oc_text(o, ascii_only=True))
+        cnote = tc.curve_depth_note(self.result or {}, ascii_only=True)   # 2.4.0 (John 19 Nov)
+        if cnote:
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + cnote)
+        dnote = tc.detrend_report_note(self.result or {})   # 2.4.0 (#103)
+        if dnote:
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(dnote)
         fnote = tc.flip_report_note(self.result or {})
         if fnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
@@ -2877,6 +3081,9 @@ class TransitPage:
         for bf in [f for f in (self.result or {}).get("bound_flags") or [] if f.get("level", "warn") == "warn"]:
             # 2.2.19 (#31): a parameter pinned by its allowed range is said in the report too (not b against 0).
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + bf["text"])
+        if state == "detected" and v and v.get("size_caution"):   # 2.4.0 (#70)
+            meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
+                             + ascii_("SHOBS-P: detected; size caution: " + v["size_caution"]))
         if state == "detected" and v and v.get("depth_unreliable"):
             note = ascii_("SHOBS-P: timing usable, depth unreliable: " + v["depth_unreliable"])
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
@@ -3036,7 +3243,8 @@ class TransitPage:
         lines.append((self.verdict.get(), 11, {"detected": "#2e7d32", "inconclusive": "#c26a00",
                                               "none": "#b00020"}.get(_state(self.result.get("verdict")), "black"),
                       "bold"))
-        if (self.result.get("verdict") or {}).get("depth_unreliable"):
+        if (self.result.get("verdict") or {}).get("depth_unreliable") or \
+                (self.result.get("verdict") or {}).get("size_caution"):   # 2.4.0 (#70)
             lines[-1] = (lines[-1][0], 11, "#c26a00", "bold")
         if self.quality.get():
             lines.append((self.quality.get(), 9, "#33424d", "normal"))   # 2.2.14 (GitHub #5)
@@ -3468,7 +3676,7 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     # as the others: rel_flux is raw (only divided by its median), never detrended; the baseline is in "model".
     am = (r or {}).get("airmass")
     has_am = am is not None and bool(np.isfinite(np.asarray(am, dtype=float)).any())
-    det = ", ".join((r or {}).get("detrend") or []) or "none"
+    det = tc.tc_detrend_words(r or {})
     out.append(f"# Columns: rel_flux is the raw relative flux (divided by its median, NOT detrended); model = transit "
                f"x baseline (detrend: {det}); residual = rel_flux - model; airmass per point"
                + ("" if has_am else " (none in these data: blank)") + "; segment = before / after the meridian flip")

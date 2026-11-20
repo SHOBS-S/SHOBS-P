@@ -53,6 +53,8 @@ column per name, in the same order (`DETREND_1`, `DETREND_2`):
 | airmass | `AIRMASS` | `#DATE,DIFF,ERR,DETREND_1` | time, flux, error, the point's airmass |
 | time slope | `TIME` | `#DATE,DIFF,ERR,DETREND_1` | time, flux, error, the point's BJD_TDB again |
 | both | `AIRMASS, TIME` | `#DATE,DIFF,ERR,DETREND_1,DETREND_2` | time, flux, error, airmass, BJD_TDB |
+| time curve (2.4.0) | `TIME, TIME_SQUARED` | `#DATE,DIFF,ERR,DETREND_1,DETREND_2` | time, flux, error, BJD_TDB, (BJD_TDB − the night's mean)² in days² |
+| airmass + time curve (2.4.0) | `AIRMASS, TIME, TIME_SQUARED` | `#DATE,DIFF,ERR,DETREND_1,DETREND_2,DETREND_3` | time, flux, error, airmass, BJD_TDB, (BJD_TDB − mean)² |
 | neither | (empty) | `#DATE,DIFF,ERR` | time, flux, error |
 
 A point with no airmass has `na` in its airmass column. Before 2.4.0 every report had one detrend column holding the

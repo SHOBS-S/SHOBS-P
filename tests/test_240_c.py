@@ -207,8 +207,8 @@ class TestWithApp(unittest.TestCase):
         old = (app.observations, tp.night.get(), tp.report, app.lat.get(), app.lon.get())
         try:
             tp.report = None
-            tp.detrend_airmass.set(True)
-            tp._airmass_wanted, tp._airmass_off_why = True, ""
+            tp._airmass_off_why = ""
+            tp.set_detrend("auto")
             app.observations = [types.SimpleNamespace(night="JD2461234", airmass=None, jd=2461234.5 + i * 0.001,
                                                       mag=10.0, flag="") for i in range(30)]
             tp.night.set("JD2461234")
@@ -228,8 +228,7 @@ class TestWithApp(unittest.TestCase):
             tp._airmass_wanted = True
             tp._update_airmass_box()
             tp._airmass_off_why = ""
-            tp.detrend_airmass_check.state(["!disabled"])
-            tp.detrend_airmass.set(True)
+            tp.set_detrend("auto")
 
     # ---- 10 ----
     def test_airmass_hint_says_what_to_do(self):

@@ -1651,6 +1651,72 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Detrend Auto (BIC): … ; the others: none ΔBIC +…, airmass ΔBIC +…, …"
+   ],
+   "todo": "Nothing. To compare, pick a choice yourself and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "✓ Transit detected … ⚠ Size: depth … % is …σ deeper (shallower) than … (Rp/R\\"
+   ],
+   "todo": "See 18. Inconclusive or none: check the comps, a neighbour in the aperture, another Detrend."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… Depth within the published range … (… values)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Auto chose … time curve: depth … % with the time curve; the best choice without it, … (ΔBIC …), gives … % (least squares) …"
+   ],
+   "todo": "Compare the two depths; with little baseline on one side, prefer the one without the curve (choose it in Detrend)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "detrend …: no fit (…); left out of the choice",
+    "… frames without airmass left out, so every detrend choice is fitted on the same frames"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Prayer-bead check (… shifted refits): its error is larger than the MCMC's for …, so that error is the one shown"
+   ],
+   "todo": "Nothing; the report carries the larger error. Clouds, seeing or guiding often cause it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The free shape ran away AND the fit with the published shape has Rp/R\\"
+   ],
+   "todo": "Treat depth and Tc as suspect: check the comps, the residuals, high-airmass frames and clouds."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… frames past airmass 3 (up to …, at the end): in air that thick a red star and bluer comps dim differently … Trim airmass > 3 takes them out and refits."
+   ],
+   "todo": "Press Trim airmass > 3 if that baseline is enough; the limit is the settings file's transit_trim_airmass (3 if not set)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fitting the transit: choosing the detrend… 2 of 6",
+    "… looking up the published sizes…",
+    "… prayer-bead check of the errors…"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
    ],
    "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."
@@ -1714,9 +1780,10 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "No detection with Both: … alone detects it (ΔBIC …). …"
+    "No detection with airmass and time trend together: … alone detects it (ΔBIC …). …",
+    "No detection with Both: …"
    ],
-   "todo": "Untick one trend only if it is not real. See 18. When the fit says \"inconclusive\" or \"none\"."
+   "todo": "Choose the one trend in Detrend only if the other is not real. See 18. When the fit says \"inconclusive\" or \"none\"."
   },
   {
    "section": "Output, Transits mode",

@@ -133,8 +133,10 @@ class TestOutputPages(unittest.TestCase):
         for word in ("Trim", "Trim and refit", "Clear trim"):
             self.assertIn(word, g.texts("points"))
         self.assertEqual(g.group_of(tp.refit_flagged_button), "points")     # moved from the Fit row
-        for word in ("Detrend", "airmass", "time slope"):
-            self.assertIn(word, g.texts("corrections"))
+        self.assertIn("Detrend", g.texts("corrections"))
+        self.assertEqual(g.group_of(tp.detrend_box.master), "corrections")   # 2.4.0 (#103): one drop-down
+        for word in ("airmass", "time slope", "time curve", "Auto (BIC)"):
+            self.assertIn(word, " ".join(tp.detrend_box.cget("values")))
         self.assertEqual(g.group_of(tp.flip_at_gap_check), "corrections")
         self.assertEqual([t for t in g.texts("fit") if not t.startswith("PY_VAR")], ["MCMC", "Fit transit", "Cancel"])
         self.assertEqual(g.texts("comps")[:2], ["Comp health…", "Use comps…"])
@@ -211,8 +213,7 @@ class TestOutputPages(unittest.TestCase):
         tp.report = None
         tp.result = dict(self.fit)
         tp.meta_for_files = {}
-        tp.detrend_airmass.set(True)
-        tp.detrend_time.set(False)
+        tp.set_detrend("airmass")
         tp._fit_settings = tp._settings_key()
         tp._fill_table()
         return tp
@@ -224,7 +225,7 @@ class TestOutputPages(unittest.TestCase):
             self.assertFalse(tp.fit_is_stale())
             before = [tp.table.item(i)["values"] for i in tp.table.get_children()]
             with mock.patch.object(tp, "fit") as fit:
-                tp.detrend_time.set(True)          # a Corrections setting changes while the fit is shown
+                tp.set_detrend("airmass+slope")     # a Corrections setting changes while the fit is shown
                 self.app.update()
                 fit.assert_not_called()            # the fit always waits for the button
             self.assertTrue(tp.fit_is_stale())
@@ -238,35 +239,34 @@ class TestOutputPages(unittest.TestCase):
             # the numbers themselves are the shown fit's, untouched
             self.assertEqual([tp.table.item(i)["values"] for i in tp.table.get_children()], before)
             self.assertIs(tp.result["summary"], self.fit["summary"])
-            tp.detrend_time.set(False)             # set back: the fit matches its settings again
+            tp.set_detrend("airmass")              # set back: the fit matches its settings again
             self.assertFalse(tp.fit_is_stale())
             self.assertEqual(str(tp.fit_button.cget("text")), "Fit transit")
             self.assertNotIn(("stale",), {tuple(tp.table.item(i)["tags"]) for i in tp.table.get_children()})
             self.assertNotEqual(str(tp.verdict_label.cget("foreground")), self.tu.STALE_GRAY)
-            tp.detrend_airmass.set(False)          # the other Corrections box
+            tp.set_detrend("auto")                 # Auto is another setting too (#103)
             self.assertEqual(str(tp.fit_button.cget("text")), "Refit (settings changed)")
             tp.mcmc.set(list(self.tu.MCMC_CHOICES)[-1])     # a Fit-group setting is not a cue
-            tp.detrend_airmass.set(True)
+            tp.set_detrend("airmass")
             self.assertEqual(str(tp.fit_button.cget("text")), "Fit transit")
         finally:
             tp.result = None
             tp._fit_settings = None
-            tp.detrend_airmass.set(True)
-            tp.detrend_time.set(False)
+            tp.set_detrend("auto")
             tp._fill_table()
 
     def test_no_cue_without_a_fit(self):
         tp = self.app.transit_page
         tp.result = None
         tp._fill_table()
-        tp.detrend_time.set(True)
+        tp.set_detrend("slope")
         self.assertEqual(str(tp.fit_button.cget("text")), "Fit transit")
-        tp.detrend_time.set(False)
+        tp.set_detrend("auto")
 
     def test_new_fit_takes_its_settings_and_clears_the_cue(self):
         tp = self._show_fit()
         try:
-            tp.detrend_time.set(True)
+            tp.set_detrend("curve")
             self.assertTrue(tp.fit_is_stale())
             # what fit() records when it starts and _finish_fit takes over when the fit is shown
             tp._pending_settings = tp._settings_key()
@@ -277,7 +277,7 @@ class TestOutputPages(unittest.TestCase):
         finally:
             tp.result = None
             tp._fit_settings = None
-            tp.detrend_time.set(False)
+            tp.set_detrend("auto")
             tp._fill_table()
 
     def test_period_line_flashes_when_it_updates(self):
@@ -304,48 +304,58 @@ class TestOutputPages(unittest.TestCase):
                 for i, a in enumerate(airmass)]
 
     def test_airmass_greyed_out_without_airmass(self):
+        """#96 with #103's drop-down: no airmass = the airmass choices leave the list, a chosen one becomes the same
+        without airmass, and the user's own choice comes back with airmass."""
         app, tp = self.app, self.app.transit_page
         old = (app.observations, tp.night.get(), tp.report, app.lat.get(), app.lon.get())
         try:
             tp.report = None
-            tp.detrend_airmass.set(True)
-            tp._airmass_wanted, tp._airmass_off_why = True, ""
+            tp._airmass_off_why = ""
+            tp.set_detrend("airmass+curve")
             app.observations = self._obs([None] * 30)
             tp.night.set("JD2461234")
             app.lat.set("")
             app.lon.set("")
             tp._update_airmass_box()
-            self.assertFalse(tp.detrend_airmass.get())                       # unticked: what the fit will do
-            self.assertTrue(tp.detrend_airmass_check.instate(["disabled"]))  # greyed out
+            self.assertEqual(tp.detrend.get(), "time curve")                 # what the fit will do
+            self.assertFalse(tp.detrend_airmass.get())
+            self.assertNotIn("airmass", " ".join(tp.detrend_box.cget("values")))   # no airmass choice offered
+            self.assertIn("Auto (BIC)", tp.detrend_box.cget("values"))
             self.assertEqual(tp.airmass_hint.get(), "no airmass: site not set")
             self.assertIn(tp.airmass_hint_label, tp.groups.boxes["corrections"].shown_widgets())
             self.assertEqual(tp._airmass_off_why, "no airmass: site not set")     # the tooltip's words
-            self.assertEqual(tp._settings_key()[0], False)
-            # a site is set but the frames still carry no airmass: another reason, same greying
+            self.assertEqual(tp._settings_key()[0], "curve")
+            # a site is set but the frames still carry no airmass: another reason, same list
             app.lat.set("35.4")
             app.lon.set("-81.9")
             tp._update_airmass_box()
             self.assertEqual(tp.airmass_hint.get(),   # step 1 review: says what to do
                              "no airmass in these data (run photometry again with the site set)")
-            self.assertTrue(tp.detrend_airmass_check.instate(["disabled"]))
-            # airmass again: live, and the user's earlier tick is back
+            self.assertEqual(tp.detrend.get(), "time curve")
+            # airmass again: full list, and the user's earlier choice is back
             app.observations = self._obs([1.1 + 0.01 * i for i in range(30)])
             tp._update_airmass_box()
+            self.assertEqual(tp.detrend.get(), "airmass + time curve")
             self.assertTrue(tp.detrend_airmass.get())
-            self.assertFalse(tp.detrend_airmass_check.instate(["disabled"]))
+            self.assertIn("airmass", " ".join(tp.detrend_box.cget("values")))
             self.assertEqual(tp.airmass_hint.get(), "")
             self.assertNotIn(tp.airmass_hint_label, tp.groups.boxes["corrections"].shown_widgets())
+            # Auto stays Auto without airmass (it leaves the airmass choices out itself)
+            tp.set_detrend("auto")
+            app.observations = self._obs([None] * 30)
+            tp._update_airmass_box()
+            self.assertEqual(tp.detrend.get(), "Auto (BIC)")
         finally:
             app.observations = old[0]
             tp.night.set(old[1])
             tp.report = old[2]
             app.lat.set(old[3])
             app.lon.set(old[4])
-            tp._airmass_wanted = True
+            tp._airmass_off_why = ""
             tp._update_airmass_box()
-            tp.detrend_airmass.set(True)
+            tp.set_detrend("auto")
 
-    def test_users_untick_survives_a_night_without_airmass(self):
+    def test_users_choice_survives_a_night_without_airmass(self):
         app, tp = self.app, self.app.transit_page
         old = (app.observations, tp.night.get(), tp.report)
         try:
@@ -353,47 +363,46 @@ class TestOutputPages(unittest.TestCase):
             app.observations = self._obs([1.2 + 0.01 * i for i in range(30)])
             tp.night.set("JD2461234")
             tp._update_airmass_box()
-            self.assertFalse(tp.detrend_airmass_check.instate(["disabled"]))
-            tp.detrend_airmass.set(False)
-            tp._airmass_clicked()                       # the user unticked it
+            tp.set_detrend("slope")                       # the user picked time slope
             app.observations = self._obs([None] * 30)
             tp._update_airmass_box()
-            self.assertTrue(tp.detrend_airmass_check.instate(["disabled"]))
+            self.assertEqual(tp.detrend.get(), "time slope")
             app.observations = self._obs([1.2 + 0.01 * i for i in range(30)])
             tp._update_airmass_box()
-            self.assertFalse(tp.detrend_airmass.get())  # still the user's choice
-            # with airmass the box is never touched: ticked stays ticked
-            tp.detrend_airmass.set(True)
-            tp._airmass_clicked()
+            self.assertEqual(tp.detrend.get(), "time slope")   # still the user's choice
+            self.assertFalse(tp._airmass_wanted)               # Multi-night's starting tick follows it
+            tp.set_detrend("airmass")
             tp._update_airmass_box()
-            self.assertTrue(tp.detrend_airmass.get())
+            self.assertEqual(tp.detrend.get(), "airmass")
+            self.assertTrue(tp._airmass_wanted)
         finally:
             app.observations = old[0]
             tp.night.set(old[1])
             tp.report = old[2]
-            tp._airmass_wanted, tp._airmass_off_why = True, ""
+            tp._airmass_off_why = ""
             tp._update_airmass_box()
-            tp.detrend_airmass.set(True)
+            tp.set_detrend("auto")
 
     def test_report_without_airmass_column(self):
         tp = self.app.transit_page
         old = tp.report
         try:
-            tp.detrend_airmass.set(True)
-            tp._airmass_wanted, tp._airmass_off_why = True, ""
+            tp._airmass_off_why = ""
+            tp.set_detrend("airmass")
             tp.report = {"t": np.arange(30.0), "airmass": None}
             tp._update_airmass_box()
             self.assertFalse(tp.detrend_airmass.get())
+            self.assertEqual(tp.detrend.get(), "none")
             self.assertEqual(tp.airmass_hint.get(), "no airmass in these data")
             tp.report = {"t": np.arange(30.0), "airmass": np.linspace(1.1, 1.5, 30)}
             tp._update_airmass_box()
             self.assertTrue(tp.detrend_airmass.get())
-            self.assertFalse(tp.detrend_airmass_check.instate(["disabled"]))
+            self.assertEqual(tp.detrend.get(), "airmass")
         finally:
             tp.report = old
-            tp._airmass_wanted, tp._airmass_off_why = True, ""
+            tp._airmass_off_why = ""
             tp._update_airmass_box()
-            tp.detrend_airmass.set(True)
+            tp.set_detrend("auto")
 
     # ---- #101: Save field image after a saved report -------------------------------------------------------------
     INFO = {"title": "SZ Lyn — field", "subtitle": "x", "radius": 8, "sky_in": 14, "sky_out": 20, "north": None,

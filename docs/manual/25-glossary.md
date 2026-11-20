@@ -83,7 +83,11 @@ the headers.
 frames they also stand in for the bias. They go in the **Dark flats** row of the Input page (chapter 7).
 
 **Detrending** — Removing a slow trend from a light curve, for example with **airmass**, while fitting. In the
-transit fit the trend is fitted together with the transit.
+transit fit the trend is fitted together with the transit. From 2.4.0 **Auto (BIC)** picks the trend (none, airmass,
+time slope, time curve, or airmass with either) by the lowest BIC.
+
+**Prayer bead** — A check of the fit's errors: the residuals are shifted around the light curve and refitted many
+times; the spread of those refits shows correlated noise the formal errors can miss (2.4.0).
 
 **DTG** — Date-time group, the stamp on every file SHOBS-P writes: `121153Z OCT 26` means the 12th, 11:53 UTC,
 October 2026.

@@ -315,7 +315,11 @@ From 2.3.4 the rules are:
 The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P also measures the candidates on the
 **night's own frames** before you run, so S1–S4 are chosen on how the stars actually behaved tonight. You never press
 anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
-lower left says *Comp survey… frame 12 of 30*. The green rings already shown stay until the new ones are ready. If you
+lower left says *Choosing comps from the night's frames… frame 12 of 30*. From 2.4.0 nothing is suggested while it
+reads (no green rings, no *Suggested comps* line, only the busy bar): the survey's own set comes up when it is done,
+in one *Suggested comps* line. The catalog-and-this-frame picks appear only when the survey cannot run or fails (the
+Log then says *the suggestions are from the catalog and this frame only*). A loaded series' comps stay in the boxes
+as before. If you
 press **Run photometry** while it is still reading, the run waits and starts by itself when the survey is done (the
 Log says *Run photometry waits for the comp survey to finish, then starts by itself.*). **Cancel** calls the wait off
 (the survey goes on; it only changes the suggestions). The survey is read once per frame on the page and target: when

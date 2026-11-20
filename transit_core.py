@@ -143,10 +143,11 @@ def limb_darkening_guess(teff: float | None, band=None) -> tuple[float, float]:
 
 # ---- Parameters and priors ----------------------------------------------------------------------
 
-PARAMS = ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "step")
+PARAMS = ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "c_t2", "step")
 PARAM_LABELS = {"tc": "Mid-transit Tc (BJD_TDB)", "k": "Rp/R*", "a_rs": "a/R*", "b": "Impact parameter b",
                 "q1": "q1 (limb darkening)", "q2": "q2 (limb darkening)", "c0": "Baseline",
-                "c_am": "Airmass slope", "c_t": "Time slope (per day)", "step": "Flip step"}
+                "c_am": "Airmass slope", "c_t": "Time slope (per day)",
+                "c_t2": "Time curve (per day²)", "step": "Flip step"}
 
 # ---- 2.2.13: a meridian flip inside the data -----------------------------------------------------
 # After a flip every star sits on another part of the sensor and the flat, so the target/comp ratio can jump by a
@@ -181,15 +182,26 @@ FLAGGED_ERR_FACTOR = 2.0      # 2.2.13: flagged (cloud) frames put back into a r
 FLIP_NO_BASELINE_VERDICT = "inconclusive"
 
 
+def poly_baseline(p: dict, am, dtm):
+    """The baseline before the flip step: c0 + c_am·airmass + c_t·(t − t_mid) + c_t2·(t − t_mid)² (2.4.0, #103: the
+    one place it is written, so the transit model, the flat-line test, the step-at-gap test and the single-detrend
+    check can never disagree)."""
+    return (p.get("c0", 1.0) + p.get("c_am", 0.0) * am + p.get("c_t", 0.0) * dtm
+            + p.get("c_t2", 0.0) * np.square(dtm))
+
+
 class TransitProblem:
     """Data, fixed values, and priors for one transit light curve.
 
-    Model: flux = transit(t) * (c0 + c_am * (airmass - mean) + c_t * (t - t_mid)) * (1 + step * [t >= t_flip]).
+    Model: flux = transit(t) * (c0 + c_am * (airmass - mean) + c_t * (t - t_mid) + c_t2 * (t - t_mid)²)
+                  * (1 + step * [t >= t_flip]).
+    2.4.0 (#103): c_t2 (the time curve, quadratic in time) only with detrend_curve, which always comes with the time
+    slope (a curve without its slope is not one of the choices). Nothing above quadratic (ExoClock, 29 Oct 2026).
     The step term exists only when after (points after a meridian flip) is given with points on both sides.
     priors: {name: (mean, sigma)} Gaussian priors. Bounds keep everything physical."""
 
     def __init__(self, t, flux, err, airmass, period, priors: dict, free: tuple, start: dict,
-                 detrend_airmass=True, detrend_time=False, ld_prior=None, t_flip=None):
+                 detrend_airmass=True, detrend_time=False, ld_prior=None, t_flip=None, detrend_curve=False):
         self.t = np.asarray(t, dtype=float)
         self.flux = np.asarray(flux, dtype=float)
         self.err = np.asarray(err, dtype=float)
@@ -206,7 +218,9 @@ class TransitProblem:
         if not (detrend_airmass and self.has_airmass):
             names = [p for p in names if p != "c_am"]
         if not detrend_time:
-            names = [p for p in names if p != "c_t"]
+            names = [p for p in names if p not in ("c_t", "c_t2")]
+        elif not detrend_curve:
+            names = [p for p in names if p != "c_t2"]
         # 2.2.13: the flip step, only with points on both sides of the flip.
         self.t_flip = None
         if t_flip is not None and (self.t < t_flip).any() and (self.t >= t_flip).any():
@@ -237,7 +251,7 @@ class TransitProblem:
         own = t is None
         t = self.t if t is None else np.asarray(t, dtype=float)
         am = self.am if am is None else am
-        base = p["c0"] + p["c_am"] * am + p["c_t"] * (t - self.t_mid)
+        base = poly_baseline(p, am, t - self.t_mid)
         if self.t_flip is not None:
             after = self.after if own else (t >= self.t_flip).astype(float)
             base = base * (1.0 + p.get("step", 0.0) * after)
@@ -290,14 +304,14 @@ class TransitProblem:
 
     def scales(self) -> np.ndarray:
         s = {"tc": 1e-3, "k": 0.01, "a_rs": 0.3, "b": 0.03, "q1": 0.05, "q2": 0.05, "c0": 1e-3, "c_am": 1e-3,
-             "c_t": 1e-3, "step": 1e-3}
+             "c_t": 1e-3, "c_t2": 1e-2, "step": 1e-3}
         return np.array([s[p] for p in self.free])
 
     def bounds(self):
         lo = {"tc": self.t.min() - 0.2, "k": 0.006, "a_rs": 1.3, "b": 0.0, "q1": 1e-4, "q2": 1e-4, "c0": 0.5,
-              "c_am": -1.0, "c_t": -1.0, "step": -0.49}
+              "c_am": -1.0, "c_t": -1.0, "c_t2": -20.0, "step": -0.49}
         hi = {"tc": self.t.max() + 0.2, "k": 0.59, "a_rs": 199.0, "b": 1.5, "q1": 0.9999, "q2": 0.9999, "c0": 1.5,
-              "c_am": 1.0, "c_t": 1.0, "step": 0.49}
+              "c_am": 1.0, "c_t": 1.0, "c_t2": 20.0, "step": 0.49}
         return [lo[p] for p in self.free], [hi[p] for p in self.free]
 
 
@@ -365,17 +379,30 @@ def binned_rms(t, resid, minutes: float = 10.0, min_bins: int = 3):
     return float(np.std(means, ddof=1))   # ddof=1: few bins on a short run would read ~15% low
 
 
-def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = 30.0) -> float:
+BETA_MIN_MINUTES = 10.0   # 2.4.0 (#62): the shortest bin the time-averaging beta uses
+BETA_MAX_MINUTES = 30.0
+
+
+def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = BETA_MAX_MINUTES,
+                   min_minutes: float = BETA_MIN_MINUTES) -> float:
     """Time-averaging beta (Pont et al. 2006; Winn et al. 2008): how much faster than white noise the
-    residuals average down. 1 means white; 2 means binned errors are twice what white noise predicts."""
+    residuals average down. 1 means white; 2 means binned errors are twice what white noise predicts.
+    2.4.0 (#62): bins from min_minutes to max_minutes only (Winn et al. 2008 use bins near the ingress time, 10-30
+    min). Before, every bin from 2 points up counted and the median leaned on the shortest bins, which barely see a
+    slow wiggle: on a sparse night (WASP-43 b MOBs, 49 points at ~4.4 min) two of five bin sizes were under 10 min,
+    and beta came out 1.00 beside residuals with obvious structure. At least 2 points a bin, always."""
     resid = np.asarray(resid, dtype=float)
     n_tot = len(resid)
     sigma1 = np.std(resid)
     if n_tot < 20 or sigma1 <= 0:
         return 1.0
     betas = []
-    max_n = max(2, int(max_minutes / 1440.0 / max(cadence_days, 1e-6)))
-    for n in range(2, min(max_n, n_tot // 4) + 1):
+    cad_min = max(cadence_days, 1e-6) * 1440.0
+    max_n = max(2, int(max_minutes / cad_min))
+    min_n = min(max(2, int(math.ceil(min_minutes / cad_min))), max_n)
+    if min_n > min(max_n, n_tot // 4):
+        min_n = 2   # Fable N4: a run too short for a 10-min bin: the old 2-point bins, rather than no beta at all
+    for n in range(min_n, min(max_n, n_tot // 4) + 1):
         m = n_tot // n
         if m < 4:
             break
@@ -383,6 +410,66 @@ def red_noise_beta(t, resid, cadence_days: float, max_minutes: float = 30.0) -> 
         expected = sigma1 / math.sqrt(n) * math.sqrt(m / (m - 1.0))
         betas.append(np.std(means) / expected)
     return float(max(1.0, np.median(betas))) if betas else 1.0
+
+
+PB_MAX_SHIFTS = 40   # 2.4.0 (#62): residual shifts the prayer-bead check refits (evenly spread when there are more)
+PB_NAMES = ("tc", "k", "step", "c_t2")
+
+
+def prayer_bead(problem: TransitProblem, best: dict, max_shifts: int = PB_MAX_SHIFTS, cancel=None) -> dict | None:
+    """2.4.0 (#62): residual-permutation ("prayer bead") errors, a second opinion on red noise that needs no bin
+    sizes (Gillon et al. 2007; Southworth 2008). The best fit's residuals are shifted cyclically around the light
+    curve and added back to the model; each shifted light curve is refitted (least squares, from the best fit) and the
+    spread of the refits is the error. Correlated residuals (slow wiggles) move the refits; white noise hardly does.
+    Returns {"n": refits, "err": {name: std}, "depth_err"} or None with fewer than 20 points or 8 refits."""
+    t = problem.t
+    n = len(t)
+    if n < 20:
+        return None
+    model = problem.model(best)
+    resid = problem.flux - model
+    shifts = list(range(1, n))
+    if len(shifts) > max_shifts:
+        shifts = sorted({int(round(v)) for v in np.linspace(1, n - 1, max_shifts)})
+    x0 = np.array([best[p] for p in problem.free])
+    lo, hi = problem.bounds()
+    from scipy.optimize import least_squares
+    vals = {p: [best[p]] for p in problem.free if p in PB_NAMES}
+    depths = [best["k"] ** 2]
+    flux0 = problem.flux
+    try:
+        for j in shifts:
+            if cancel is not None and cancel.is_set():
+                raise RuntimeError("Canceled")
+            problem.flux = model + np.roll(resid, j)
+            try:
+                sol = least_squares(problem.residual_vector, np.clip(x0, np.asarray(lo) + 1e-9, np.asarray(hi) - 1e-9),
+                                    bounds=(lo, hi), x_scale=problem.scales(), max_nfev=600)
+            except Exception:
+                continue
+            p = problem.full(sol.x)
+            for name in vals:
+                vals[name].append(p[name])
+            depths.append(p["k"] ** 2)
+    finally:
+        problem.flux = flux0
+    if len(depths) < 8:
+        return None
+    return {"n": len(depths) - 1, "err": {name: float(np.std(v, ddof=1)) for name, v in vals.items()},
+            "depth_err": float(np.std(depths, ddof=1))}
+
+
+def apply_prayer_bead(summary: dict, pb: dict | None) -> list:
+    """2.4.0 (#62): where the prayer-bead error is larger than the MCMC's, it is the one reported (John, 19 Nov: the
+    larger of the two). Returns the names whose error was raised."""
+    if not pb:
+        return []
+    raised = []
+    for name, e in list(pb["err"].items()) + [("depth", pb["depth_err"])]:
+        if name in summary and math.isfinite(e) and e > summary[name][1]:
+            summary[name] = (summary[name][0], float(e))
+            raised.append(name)
+    return raised
 
 
 def run_mcmc(problem: TransitProblem, x0, n_walkers: int = 0, n_burn: int = 1000, n_steps: int = 2000,
@@ -693,7 +780,7 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
     a0 = planet.get("a_rs") or _a_rs_from_duration(period, planet.get("t14"), k0, min(b0, 0.9))
     a0 = max(a0, b0 + 0.5, 1.5)
     start = {"tc": tc_rel, "k": k0, "a_rs": a0, "b": b0, "q1": q1, "q2": q2, "c0": 1.0, "c_am": 0.0, "c_t": 0.0,
-             "step": 0.0}
+             "c_t2": 0.0, "step": 0.0}
     cadence = float(np.median(np.diff(t))) if len(t) > 1 else 1e-3
     dur = total_duration(period, a0, min(b0, 0.99), k0)
     starts = [{"tc": tc_rel + d} for d in (-0.25 * dur, 0.25 * dur)] + [{"k": k0 * 1.2}, {"k": k0 * 0.8}]
@@ -710,13 +797,13 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
             starts += [{"step": 0.02}, {"step": -0.02}]
     return {"t": t, "t_abs": t_abs, "t_ref": t_ref, "flux": flux, "err": err, "am": am, "flagged": fmask,
             "med": float(med), "period": period, "priors": prepare_priors(planet, a0), "start": start,
-            "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "step"), "ld": (u1g, u2g, 0.1),
+            "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "c_t2", "step"), "ld": (u1g, u2g, 0.1),
             "cadence": cadence, "starts": starts, "t_flip": t_flip, "flip_gap_min": flip_gap, "n": n,
             "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "tc_start": tc_start, "eph_err_known": eph_err_known,
             "has_eph": bool(tc0), "flip_gated": flip_step is None}
 
 
-def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False) -> dict | None:
+def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False, detrend_curve=False) -> dict | None:
     """2.3.0 (#8): on a night with a meridian flip (S from _setup_fit, with S["t_flip"]), fit the light curve with
     and without the flip step (least squares) on the same errors, scaled as for the MCMC (reduced chi-square and red
     noise of the fit WITH the step, the fuller model), and compare the BICs. kept: ΔBIC >= FLIP_STEP_DBIC.
@@ -727,7 +814,7 @@ def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False) -> dict | 
     t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
     starts = S["starts"]
     prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
-                          detrend_time, S["ld"], S["t_flip"])
+                          detrend_time, S["ld"], S["t_flip"], detrend_curve=detrend_curve)
     if prob.t_flip is None:
         return None
     x, chi2 = best_fit(prob, starts)
@@ -737,13 +824,13 @@ def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False) -> dict | 
     p1 = prob.full(x)
     # Without the step: from the usual starts, and from the stepped fit's values.
     prob_ns = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], S["start"],
-                             detrend_airmass, detrend_time, S["ld"], None)
+                             detrend_airmass, detrend_time, S["ld"], None, detrend_curve=detrend_curve)
     x_ns, chi2_ns = best_fit(prob_ns, [s for s in starts if "step" not in s]
                              + [{k: v for k, v in p1.items() if k != "step"}])
     p_ns = prob_ns.full(x_ns)
     # With the step: from the stepped fit, and from the no-step fit with step 0 (so it can never fit worse).
     prob_ws = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], p1, detrend_airmass,
-                             detrend_time, S["ld"], S["t_flip"])
+                             detrend_time, S["ld"], S["t_flip"], detrend_curve=detrend_curve)
     x_ws, chi2_ws = best_fit(prob_ws, [dict(p_ns, step=0.0)])
     e_ws = lsq_errors(prob_ws)
     n = len(t)
@@ -755,13 +842,259 @@ def flip_step_test(S: dict, detrend_airmass=True, detrend_time=False) -> dict | 
             "chi2_nostep": float(chi2_ns)}
 
 
-def _apply_flip_gate(S: dict, detrend_airmass, detrend_time, say=None) -> dict | None:
+# ---- 2.4.0 (#103): the detrend choice ------------------------------------------------------------
+# The baseline choices, simplest first: (key, label, (airmass, time slope, time curve)). The curve always comes with
+# its slope. Nothing above quadratic: ExoClock (29 Oct 2026) accepts a quadratic in time for systematics, higher
+# powers start to fit the transit itself.
+DETREND_CHOICES = (
+    ("none", "none", (False, False, False)),
+    ("airmass", "airmass", (True, False, False)),
+    ("slope", "time slope", (False, True, False)),
+    ("curve", "time curve", (False, True, True)),
+    ("airmass+slope", "airmass + time slope", (True, True, False)),
+    ("airmass+curve", "airmass + time curve", (True, True, True)),
+)
+DETREND_AUTO = "auto"
+AUTO_AIRMASS_DROP_MAX = 10      # Auto leaves out at most this many frames without airmass to try the airmass choices
+AUTO_AIRMASS_DROP_FRAC = 0.05   # ... or this share of the night, when that is more
+DETREND_AUTO_LABEL = "Auto (BIC)"
+# Choices whose BIC is within this of the lowest count as equally good, and the one with the fewest parameters is
+# taken (ΔBIC under 2: "not worth more than a bare mention", Kass & Raftery 1995), so Auto never adds a term for nothing.
+DETREND_TIE = 2.0
+
+
+def detrend_key(flags) -> str:
+    """The DETREND_CHOICES key for (airmass, time slope, time curve)."""
+    da, dt, dq = (bool(x) for x in flags)
+    dq = dq and dt
+    for key, _label, f in DETREND_CHOICES:
+        if f == (da, dt, dq):
+            return key
+    return "none"
+
+
+def detrend_label(key: str) -> str:
+    if key == DETREND_AUTO:
+        return DETREND_AUTO_LABEL
+    return {k: lab for k, lab, _f in DETREND_CHOICES}.get(key, key)
+
+
+def detrend_flags(key: str) -> tuple:
+    return {k: f for k, _lab, f in DETREND_CHOICES}.get(key, (False, False, False))
+
+
+def detrend_names(flags, has_airmass: bool = True) -> list:
+    """result["detrend"]: the terms actually fitted, in AAVSO column order ('airmass', 'time', 'time2')."""
+    da, dt, dq = flags
+    return [nm for nm, on in (("airmass", da and has_airmass), ("time", dt), ("time2", dt and dq)) if on]
+
+
+def detrend_text(names) -> str:
+    """'airmass, time slope' / 'time curve' / 'none' for the page, the Log and the reports."""
+    names = list(names or [])
+    words = (["airmass"] if "airmass" in names else []) + (
+        ["time curve"] if "time2" in names else ["time slope"] if "time" in names else [])
+    return ", ".join(words) or "none"
+
+
+def airmass_usable(airmass) -> bool:
+    """Every point has an airmass and it changes over the night (what TransitProblem needs to fit c_am)."""
+    if airmass is None:
+        return False
+    am = np.asarray(airmass, dtype=float)
+    return bool(am.size and np.isfinite(am).all() and np.ptp(am) > 1e-4)
+
+
+def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress=None) -> dict:
+    """2.4.0 (#103): Auto detrend. Every choice in DETREND_CHOICES (the airmass ones only with allow_airmass) is
+    fitted by least squares with the transit, on the same error bars (scaled once, by the reduced chi-square and the
+    red-noise beta of the fullest model), and compared by BIC. On a night with a meridian flip the step test (#8)
+    runs INSIDE each choice: the choice is fitted with and without the step and keeps the step only when it lowers the
+    BIC by FLIP_STEP_DBIC or more (always, when the fit was asked for the step: S["flip_gated"] False with t_flip set),
+    so a time curve and a flip step are judged together. The lowest BIC wins; choices within DETREND_TIE of it count
+    as equal and the one with the fewest parameters is taken.
+    Returns {"key", "label", "flags", "rows": [...], "scale", "flip_test" (the chosen choice's step test, the
+    flip_step_test format, or None)}. Each row: key, label, flags, k (free parameters), bic, dbic (row − chosen,
+    > 0 worse) and, with a flip, step (value, error), dbic_step, kept."""
+    t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
+    n = len(t)
+    choices = [c for c in DETREND_CHOICES if allow_airmass or not c[2][0]]
+    t_flip = S.get("t_flip")
+    gated = t_flip is not None and S.get("flip_gated")
+    forced = t_flip is not None and not S.get("flip_gated")
+    no_step = [st for st in S["starts"] if "step" not in st]
+    # One error scale for every choice (BICs are only comparable on the same errors): the fullest model's (Fable S3:
+    # the next fullest when that one does not converge).
+    prob = x = None
+    for _k, _lab, (fa, ft_, fq) in reversed(choices):
+        try:
+            prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], fa, ft_, S["ld"],
+                                  t_flip, detrend_curve=fq)
+            x, chi2 = best_fit(prob, S["starts"])
+            break
+        except ValueError:
+            prob = x = None
+    if prob is None:
+        raise ValueError("the least-squares fit did not converge with any detrend choice")
+    p_full = prob.full(x)
+    rchi = chi2 / max(n - len(prob.free), 1)
+    beta = red_noise_beta(t, flux - prob.model(p_full), S["cadence"])
+    scale = math.sqrt(max(rchi, 1.0)) * beta
+    e = err * scale
+    rows, failed = [], []
+    for j, (key, label, (da, dt, dq)) in enumerate(choices):
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("Canceled")
+        if progress is not None:
+            progress(j + 1, len(choices))
+        try:
+            row = _choice_row(S, key, label, (da, dt, dq), p_full, e, t_flip, forced, no_step, n)
+        except ValueError as exc:
+            failed.append(label)   # Fable S3: one choice that does not fit is left out, not the whole fit
+            if say:
+                say(f"  detrend {label}: no fit ({exc}); left out of the choice")
+            continue
+        rows.append(row)
+    if not rows:
+        raise ValueError("the least-squares fit did not converge with any detrend choice")
+    return _pick_choice(rows, failed, S, t_flip, gated, scale, allow_airmass, say)
+
+
+def _choice_row(S, key, label, flags, p_full, e, t_flip, forced, no_step, n) -> dict:
+    """One row of choose_detrend: the choice fitted without and (on a flip night) with the step."""
+    t, flux, am = S["t"], S["flux"], S["am"]
+    da, dt, dq = flags
+    st = {nm: v for nm, v in p_full.items() if nm != "step"}
+    for nm, on in (("c_am", da), ("c_t", dt), ("c_t2", dt and dq)):
+        if not on:
+            st[nm] = 0.0
+    if forced:
+        prob_ns = None
+    else:
+        prob_ns = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st, da, dt, S["ld"], None,
+                                 detrend_curve=dq)
+        x_ns, chi2_ns = best_fit(prob_ns, no_step[:2])
+        bic_ns = chi2_ns + len(prob_ns.free) * math.log(n)
+    row = {"key": key, "label": label, "flags": (da, dt, dq)}
+    if t_flip is not None:
+        st_ws = dict(prob_ns.full(x_ns), step=0.0) if prob_ns is not None else dict(st, step=p_full.get("step", 0.0))
+        prob_ws = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st_ws, da, dt, S["ld"], t_flip,
+                                 detrend_curve=dq)
+        x_ws, chi2_ws = best_fit(prob_ws, [{"step": 0.02}, {"step": -0.02}])
+        bic_ws = chi2_ws + len(prob_ws.free) * math.log(n)
+        try:
+            e_ws = lsq_errors(prob_ws)
+            s_err = float(e_ws[prob_ws.free.index("step")])
+        except Exception:
+            s_err = float("nan")
+        s_val = float(prob_ws.full(x_ws)["step"])
+        if forced:
+            row.update(step=(s_val, s_err), dbic_step=float("nan"), kept=True, bic=bic_ws, k=len(prob_ws.free),
+                       chi2_step=chi2_ws, chi2_nostep=float("nan"))
+        else:
+            dbs = bic_ns - bic_ws
+            kept = dbs >= FLIP_STEP_DBIC
+            row.update(step=(s_val, s_err), dbic_step=float(dbs), kept=bool(kept),
+                       bic=bic_ws if kept else bic_ns, k=len(prob_ws.free) if kept else len(prob_ns.free),
+                       chi2_step=chi2_ws, chi2_nostep=chi2_ns)
+    else:
+        row.update(bic=bic_ns, k=len(prob_ns.free))
+    # Fable S1: the least-squares depth of the variant this row stands for (with the step when it is kept)
+    if t_flip is not None and (forced or row.get("kept")):
+        row["depth"] = float(prob_ws.full(x_ws)["k"] ** 2)
+    else:
+        row["depth"] = float(prob_ns.full(x_ns)["k"] ** 2)
+    return row
+
+
+def _pick_choice(rows, failed, S, t_flip, gated, scale, allow_airmass, say) -> dict:
+    bmin = min(r["bic"] for r in rows)
+    near = [r for r in rows if r["bic"] <= bmin + DETREND_TIE]
+    # fewest parameters among the near-equal ones; at the same count, the lower BIC
+    chosen = min(near, key=lambda r: (r["k"], r["bic"], rows.index(r)))
+    for r in rows:
+        r["dbic"] = float(r["bic"] - chosen["bic"])
+    flip_test = None
+    if gated:
+        flip_test = {"t_flip": t_flip + S["t_ref"], "step": chosen["step"], "dbic": chosen["dbic_step"],
+                     "kept": chosen["kept"], "threshold": FLIP_STEP_DBIC, "gap_min": S.get("flip_gap_min"),
+                     "error_scale": float(scale), "chi2_step": float(chosen["chi2_step"]),
+                     "chi2_nostep": float(chosen["chi2_nostep"]), "detrend": chosen["label"]}
+    out = {"key": chosen["key"], "label": chosen["label"], "flags": chosen["flags"], "rows": rows,
+           "scale": float(scale), "flip_test": flip_test, "airmass_tried": bool(allow_airmass), "failed": failed,
+           "dropped_no_airmass": int(S.get("dropped_no_airmass") or 0)}
+    if say:
+        say("  " + detrend_choice_text(out))
+    return out
+
+
+def tc_detrend_words(result: dict) -> str:
+    """The detrend a fit used, for summaries: 'airmass, time curve (Auto, the lowest BIC)'."""
+    r = result or {}
+    return detrend_text(r.get("detrend")) + (" (Auto, the lowest BIC)" if r.get("detrend_choice") else "")
+
+
+def curve_depth_note(result: dict, ascii_only: bool = False) -> str:
+    """2.4.0 (John 19 Nov, Fable S1): when Auto chose a time curve, the depth with it and the depth the best choice
+    without a curve gives, because a curve can trade against the depth (TrES-3 b 4 Sep: 4.84 % with airmass + time
+    curve, 3.56 % with airmass alone). A plain note; '' otherwise."""
+    r = result or {}
+    ch = r.get("detrend_choice")
+    s = r.get("summary") or {}
+    if not ch or not ch["flags"][2] or "depth" not in s:
+        return ""
+    other = [row for row in ch["rows"] if not row["flags"][2] and row.get("depth") is not None]
+    if not other:
+        return ""
+    alt = min(other, key=lambda row: row["bic"])
+    d = "dBIC" if ascii_only else "ΔBIC"
+    return (f"Auto chose {ch['label']}: depth {s['depth'][0] * 100:.2f} % with the time curve; the best choice "
+            f"without it, {alt['label']} ({d} {alt['dbic']:+.1f}), gives {alt['depth'] * 100:.2f} % (least squares). "
+            "A time curve can trade against the depth, most of all with little baseline on one side: compare the two "
+            "before you rely on the depth.")
+
+
+def detrend_report_note(result: dict) -> str:
+    """2.4.0 (#103): one ASCII line for a report's NOTES when Auto chose the detrend: the choice and the runner-up."""
+    ch = (result or {}).get("detrend_choice")
+    if not ch:
+        return ""
+    others = sorted((r for r in ch["rows"] if r["key"] != ch["key"]), key=lambda r: r["dbic"])
+    nxt = f" (next {others[0]['label']}, dBIC {others[0]['dbic']:+.1f})" if others else ""
+    return f"SHOBS-P: detrend chosen by BIC: {ch['label']}{nxt}"
+
+
+def detrend_choice_text(choice: dict, ascii_only: bool = False) -> str:
+    """'Detrend Auto (BIC): airmass + time curve; the others: none ΔBIC +45, ...' (ΔBIC against the chosen one)."""
+    if not choice:
+        return ""
+    d = "dBIC" if ascii_only else "ΔBIC"   # ΔBIC = that choice's BIC − the chosen one's (> 0: worse)
+    others = [f"{r['label']} {d} {r['dbic']:+.1f}" for r in choice["rows"] if r["key"] != choice["key"]]
+    flip = ""
+    if any("kept" in r for r in choice["rows"]):
+        kept = [r["label"] for r in choice["rows"] if r.get("kept")]
+        flip = ("; flip step kept with " + (", ".join(kept) if kept else "none of them"))
+    simpler = any(r["dbic"] < 0 for r in choice["rows"])
+    text = (f"Detrend {DETREND_AUTO_LABEL}: {choice['label']}"
+            + (f" (fewer terms; any choice within {DETREND_TIE:g} of the lowest BIC counts as just as good)"
+               if simpler else "")
+            + ("; the others: " + ", ".join(others) if others else "")
+            + flip + ("" if choice.get("airmass_tried", True) else "; airmass not tried (no airmass for every point)")
+            + (f"; {_frames(choice['dropped_no_airmass'])} without airmass left out of every choice"
+               if choice.get("dropped_no_airmass") else "")
+            + (f"; could not be fitted: {', '.join(choice['failed'])}" if choice.get("failed") else ""))
+    if ascii_only:
+        text = text.replace("ΔBIC", "dBIC")
+    return text
+
+
+def _apply_flip_gate(S: dict, detrend_airmass, detrend_time, say=None, detrend_curve=False) -> dict | None:
     """2.3.0 (#8): run the gate when S asks for it; a step that is not needed is taken out of S (no t_flip, no step
     starts), so the rest of the fit is the plain one. Returns the test (or None)."""
     if S.get("t_flip") is None or not S.get("flip_gated"):
         return None
     try:
-        test = flip_step_test(S, detrend_airmass, detrend_time)
+        test = flip_step_test(S, detrend_airmass, detrend_time, detrend_curve)
     except Exception as exc:
         # 2.3.0 review fix: a test that cannot be done (a singular Jacobian in lsq_errors, a fit that fails) never
         # stops the transit fit: the fit goes on without a step and says why (S["flip_gate_error"]).
@@ -817,7 +1150,7 @@ def _flip_info(prob_s, flat, summary, best_rel: dict, chi2_s: float, setup: dict
     try:
         prob_ns = TransitProblem(setup["t"], setup["flux"], prob_s.err, setup["am"], setup["period"], setup["priors"],
                                  tuple(prob_s.free), dict(best_rel, step=0.0), "c_am" in prob_s.free,
-                                 "c_t" in prob_s.free, setup["ld"])
+                                 "c_t" in prob_s.free, setup["ld"], detrend_curve="c_t2" in prob_s.free)
         x_ns, chi2_ns = best_fit(prob_ns, [s for s in setup["starts"] if "step" not in s])
         e_ns = lsq_errors(prob_ns)
         p_ns = prob_ns.full(x_ns)
@@ -850,29 +1183,74 @@ def _flip_info(prob_s, flat, summary, best_rel: dict, chi2_s: float, setup: dict
             "error_scale": scale}
 
 
+def _setup_and_detrend(t, flux, err, airmass, planet, detrend_airmass, detrend_time, detrend_curve, detrend_auto,
+                       after_flip, flip_step, flagged_mask, say=None, cancel=None, progress=None):
+    """2.4.0 (#103): _setup_fit, then the detrend: Auto (choose_detrend, the flip step tested inside each choice) or
+    the given one (with the usual flip gate). Returns (S, (airmass, time, curve), flip_test, choice or None)."""
+    if detrend_auto:
+        allow = airmass_usable(airmass)
+        dropped = 0
+        if not allow and airmass is not None:
+            # Fable S2: a FEW frames without airmass (at most 10, or 5 % of the night when that is more; re-review
+            # R1): as manual airmass does, those frames are left out, so every choice is fitted on the same frames.
+            # With more missing, Auto leaves airmass out instead and keeps every frame.
+            am_ = np.asarray(airmass, dtype=float)
+            fin = np.isfinite(am_)
+            few = max(AUTO_AIRMASS_DROP_MAX, int(AUTO_AIRMASS_DROP_FRAC * am_.size))
+            if (am_.size and 0 < int((~fin).sum()) <= few and fin.sum() >= 20
+                    and np.ptp(am_[fin]) > 1e-4):
+                allow, dropped = True, int((~fin).sum())
+        S = _setup_fit(t, flux, err, airmass, planet, allow, after_flip, flip_step, flagged_mask)
+        S["dropped_no_airmass"] = dropped
+        if dropped and say:
+            say(f"  {_frames(dropped)} without airmass left out, so every detrend choice is fitted on the same frames")
+        choice = choose_detrend(S, allow, say, cancel, progress)
+        flags = choice["flags"]
+        flip_test = choice["flip_test"]
+        if S.get("t_flip") is not None and S.get("flip_gated") and flip_test is not None:
+            if say:
+                ft = flip_test
+                say(f"  meridian flip: step {ft['step'][0] * 1000:+.1f} ± {ft['step'][1] * 1000:.1f} ppt, ΔBIC "
+                    f"{ft['dbic']:.1f} with {choice['label']} (kept at {FLIP_STEP_DBIC:g} or more): "
+                    + ("kept, fitted with the transit" if ft["kept"] else "not needed, fitted without a step"))
+            if not flip_test["kept"]:
+                S["t_flip"] = None
+                S["starts"] = [st for st in S["starts"] if "step" not in st]
+        return S, flags, flip_test, choice
+    flags = (bool(detrend_airmass), bool(detrend_time), bool(detrend_time and detrend_curve))
+    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
+    flip_test = _apply_flip_gate(S, flags[0], flags[1], say, flags[2])
+    return S, flags, flip_test, None
+
+
 def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False, after_flip=None,
-            flip_step=None, flagged_mask=None) -> dict:
+            flip_step=None, flagged_mask=None, detrend_curve=False, detrend_auto=False) -> dict:
     """2.2.13: the fit_transit model by least squares only (no MCMC), with Jacobian errors after the same error
     rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step.
     2.2.16 (item 6): flagged_mask (flagged frames put back, error bars doubled) as in fit_transit."""
-    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
-    flip_test = _apply_flip_gate(S, detrend_airmass, detrend_time)   # 2.3.0 (#8): the step only when BIC wants it
+    # 2.3.0 (#8): the step only when BIC wants it. 2.4.0 (#103): the detrend given, or Auto.
+    S, (detrend_airmass, detrend_time, detrend_curve), flip_test, choice = _setup_and_detrend(
+        t, flux, err, airmass, planet, detrend_airmass, detrend_time, detrend_curve, detrend_auto, after_flip,
+        flip_step, flagged_mask)
     t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
     prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
-                          detrend_time, S["ld"], S["t_flip"])
+                          detrend_time, S["ld"], S["t_flip"], detrend_curve=detrend_curve)
     x, chi2 = best_fit(prob, S["starts"])
     rchi = chi2 / max(len(t) - len(prob.free), 1)
     beta = red_noise_beta(t, flux - prob.model(prob.full(x)), S["cadence"])
     scale = math.sqrt(max(rchi, 1.0)) * beta
     prob_s = TransitProblem(t, flux, err * scale, am, S["period"], S["priors"], S["free"], prob.full(x),
-                            detrend_airmass, detrend_time, S["ld"], S["t_flip"])
+                            detrend_airmass, detrend_time, S["ld"], S["t_flip"], detrend_curve=detrend_curve)
     x_s, chi2_s = best_fit(prob_s)
     e = lsq_errors(prob_s)
     p = prob_s.full(x_s)
     out = {"p": dict(p, tc=p["tc"] + S["t_ref"]), "err": dict(zip(prob_s.free, map(float, e))), "chi2": chi2_s,
            "error_scale": scale, "rchi_raw": float(rchi), "free": list(prob_s.free), "t_flip": (S["t_flip"] + S["t_ref"]) if prob_s.t_flip
            is not None else None, "cadence": S["cadence"], "t": S["t_abs"], "flip_test": flip_test,
-           "flip_gate_error": S.get("flip_gate_error")}
+           "flip_gate_error": S.get("flip_gate_error"),
+           "detrend": detrend_names((detrend_airmass, detrend_time, detrend_curve), prob_s.has_airmass),
+           "detrend_flags": (bool(detrend_airmass and prob_s.has_airmass), bool(detrend_time), bool(detrend_curve)),
+           "detrend_choice": choice}
     out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
     out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
     if prob_s.t_flip is not None:
@@ -886,7 +1264,8 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
 
 def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False,
                 mcmc_steps: int = 3000, progress=None, cancel=None, log=None, after_flip=None, flip_source: str = "",
-                flip_step=None, flagged_mask=None, flagged_label: str = "flagged", excluded=None) -> dict:
+                flip_step=None, flagged_mask=None, flagged_label: str = "flagged", excluded=None,
+                detrend_curve=False, detrend_auto=False) -> dict:
     """The full SHOBS-P transit fit.
 
     1. Least squares with the published shape as Gaussian priors (a/R*, b) and broad limb-darkening priors.
@@ -900,15 +1279,21 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     "cloud"} lists flagged frames left out, so the cautions can say when they emptied a baseline.
     """
     say = log or (lambda _m: None)
-    S = _setup_fit(t, flux, err, airmass, planet, detrend_airmass, after_flip, flip_step, flagged_mask)
     # 2.3.0 (#8): with a flip, fit with and without the step first; the step stays only when ΔBIC >= FLIP_STEP_DBIC.
-    flip_test = _apply_flip_gate(S, detrend_airmass, detrend_time, say)
+    # 2.4.0 (#103): detrend_auto: every detrend choice is fitted (the flip step tested inside each) and the lowest BIC
+    # wins; detrend_curve adds the time curve to the time slope.
+    if detrend_auto:
+        say("Transit fit: choosing the detrend (Auto: the lowest BIC)…")
+    S, (detrend_airmass, detrend_time, detrend_curve), flip_test, choice = _setup_and_detrend(
+        t, flux, err, airmass, planet, detrend_airmass, detrend_time, detrend_curve, detrend_auto, after_flip,
+        flip_step, flagged_mask, say, cancel,
+        (lambda j, m: progress("detrend", j, m)) if progress is not None else None)
     t, t_abs, t_ref, flux, err, am = S["t"], S["t_abs"], S["t_ref"], S["flux"], S["err"], S["am"]
     period, priors, free, ld, cadence, starts = S["period"], S["priors"], S["free"], S["ld"], S["cadence"], S["starts"]
     t_flip = S["t_flip"]
 
     prob = TransitProblem(t, flux, err, am, period, priors, free, S["start"], detrend_airmass, detrend_time, ld,
-                          t_flip)
+                          t_flip, detrend_curve=detrend_curve)
     say("Transit fit: least squares with the published shape as priors…")
     if prob.t_flip is not None:
         say(f"  meridian flip at BJD_TDB {t_flip + t_ref:.5f} ({flip_source or 'from the data'}): a baseline step "
@@ -921,18 +1306,37 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     scale = math.sqrt(max(rchi, 1.0)) * beta
     say(f"  reduced chi-square {rchi:.2f}; red-noise beta {beta:.2f}; error bars x{scale:.2f} for the MCMC")
     prob_s = TransitProblem(t, flux, err * scale, am, period, priors, free, prob.full(x), detrend_airmass,
-                            detrend_time, ld, t_flip)
+                            detrend_time, ld, t_flip, detrend_curve=detrend_curve)
     x_s, chi2_s = best_fit(prob_s)
     n_burn = max(500, mcmc_steps // 3)
     say(f"  MCMC: {max(2 * len(prob_s.free) + 2, 20)} walkers, {n_burn} burn-in + {mcmc_steps} steps…")
     chain = run_mcmc(prob_s, x_s, n_walkers=20, n_burn=n_burn, n_steps=mcmc_steps, progress=progress, cancel=cancel)
     summary = summarize(prob_s, chain["flat"])
     best = prob_s.full(np.array([summary[p][0] for p in prob_s.free]))
+    # 2.4.0 (#62): the prayer-bead check; its error is reported where it is larger than the MCMC's
+    pb, pb_raised = None, []
+    try:
+        if progress is not None:
+            progress("prayer", 0, 1)
+        pb = prayer_bead(prob_s, best, cancel=cancel)
+        mc = {name: summary[name][1] for name in ("tc", "depth", "k") if name in summary}
+        pb_raised = apply_prayer_bead(summary, pb)
+        if pb:
+            say(f"  prayer bead ({pb['n']} shifted refits): Tc ± {pb['err'].get('tc', float('nan')) * 1440:.2f} min "
+                f"(MCMC ± {mc.get('tc', float('nan')) * 1440:.2f}), depth ± {pb['depth_err'] * 100:.3f} % "
+                f"(MCMC ± {mc.get('depth', float('nan')) * 100:.3f})"
+                + (f"; the larger is reported for {', '.join(pb_raised)}" if pb_raised else "; MCMC errors kept"))
+            pb["mcmc"] = mc
+            pb["raised"] = pb_raised
+    except Exception as exc:
+        if str(exc) == "Canceled":
+            raise
+        say(f"  prayer-bead check skipped: {exc}")
     # Free shape check (no priors on a/R* and b), least squares only.
     free_fit = None
     try:
         prob_f = TransitProblem(t, flux, err * scale, am, period, {}, free, best, detrend_airmass, detrend_time, ld,
-                                t_flip)
+                                t_flip, detrend_curve=detrend_curve)
         xf, chi2f = best_fit(prob_f, [{"b": 0.1}, {"b": 0.5}, {"b": 0.8}, {"b": 0.95, "k": best["k"] * 1.3},
                                       {"b": min(1.0 + best["k"] * 1.5, 1.4), "k": best["k"] * 2.0}])
         pf = prob_f.full(xf)
@@ -986,8 +1390,10 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         "eph_source": ephemeris_source(planet) if S["has_eph"] else "",
         "tc_start": S["tc_start"],
         "free_fit": free_fit, "n_points": len(t), "flux_median": S["med"],
-        "detrend": [name for name, on in (("airmass", detrend_airmass and prob_s.has_airmass),
-                                          ("time", detrend_time)) if on],
+        "detrend": detrend_names((detrend_airmass, detrend_time, detrend_curve), prob_s.has_airmass),
+        # 2.4.0 (#103): what the fit used (airmass, time slope, time curve), and Auto's table (None: chosen by hand)
+        "detrend_flags": (bool(detrend_airmass and prob_s.has_airmass), bool(detrend_time), bool(detrend_curve)),
+        "detrend_choice": choice,
         # 2.2.13
         "flip": flip, "flagged": fmask,
         "flip_test": flip_test,   # 2.3.0 (#8): the with/without-step BIC test (None: no flip, or not gated)
@@ -996,12 +1402,14 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
                          if fmask.any() else None),
         "excluded": excluded if excluded and len(np.atleast_1d(excluded.get("t", []))) else None,
         "bound_flags": bound_flags, "bands": bands,   # 2.2.19 (#31)
+        "prayer_bead": pb,   # 2.4.0 (#62)
     }
     result["verdict"] = transit_verdict(result, prob_s)
     _both_detrend_check(result, prob_s, say)   # 2.2.19 (nit)
     result["flags"] = transit_flags(result)
     v = result["verdict"]
     v["depth_unreliable"] = depth_unreliable(result) if v["state"] == "detected" else ""
+    _size_verdict(result)   # 2.4.0 (#70)
     if (flip and not flip["baseline_ok"] and v["state"] == "detected"
             and FLIP_NO_BASELINE_VERDICT == "inconclusive"):
         # 2.2.13: no baseline of its own on one side of the flip: the step trades off against the timing as well as
@@ -1033,6 +1441,28 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
         result["flags"].insert(0, ("warn", note))
     v["note"] = note
     return result
+
+
+def _size_verdict(result: dict) -> None:
+    """2.4.0 (#70): "Detected" says a transit is there and timed; the size is a separate check. A detected depth
+    more than SIZE_SIGMA outside the published (Rp/R*)² range gets v["size_caution"] (shown with ⚠ beside the
+    verdict, written to the report's NOTES); inside a range of two or more values, v["size_note"] says so plainly.
+    Not when the depth is already called unreliable (that says more)."""
+    v = result.get("verdict") or {}
+    v["size_caution"], v["size_note"] = "", ""
+    if v.get("state") != "detected":
+        return
+    try:
+        sc = size_check(result)
+    except Exception:
+        sc = None
+    v["size_check"] = sc
+    if not sc:
+        return
+    if sc["state"] == "outside" and not v.get("depth_unreliable"):
+        v["size_caution"] = sc["text"]
+    elif sc["state"] == "inside" and len(sc["range"]["values"]) > 1:
+        v["size_note"] = f"Depth within the published range {sc['range_text']}."
 
 
 def _both_detrend_check(result: dict, prob_s, say) -> None:
@@ -1151,7 +1581,7 @@ def tied_ensemble(cm) -> np.ndarray:
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
                        detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
-                       cancel=None, log=None, flip_step=None) -> dict | None:
+                       cancel=None, log=None, flip_step=None, detrend_curve=False) -> dict | None:
     """2.2.16 (item 6): refit the light curve once per comp with that comp left out of the ensemble.
 
     flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
@@ -1174,7 +1604,7 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     err = np.asarray(err, dtype=float)
     # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), so every refit uses the same model
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
-              flagged_mask=flagged_mask, flip_step=flip_step)
+              flagged_mask=flagged_mask, flip_step=flip_step, detrend_curve=detrend_curve)
     # 2.3.5 (#88): np.mean made the ensemble NaN in every frame where any comp was missing (a comp off the frame
     # edge), so each refit lost those frames while the main fit kept them.
     ens_all = tied_ensemble(cm)
@@ -1437,13 +1867,13 @@ def transit_verdict(r: dict, prob) -> dict:
     am = prob.am
     # 2.2.13: with a meridian flip in the model the flat line gets the same step, so a plain jump at the flip is
     # never taken for a transit.
-    names = [p for p in ("c0", "c_am", "c_t", "step") if p in prob.free]
+    names = [p for p in ("c0", "c_am", "c_t", "c_t2", "step") if p in prob.free]
     t_mid = prob.t_mid
     after = prob.after if prob.after is not None else 0.0
 
     def flat(x):
         p = dict(zip(names, x))
-        base = p.get("c0", 1.0) + p.get("c_am", 0.0) * am + p.get("c_t", 0.0) * (t - t_mid)
+        base = poly_baseline(p, am, t - t_mid)
         if "step" in p:
             base = base * (1.0 + p["step"] * after)
         return (flux - base) / err
@@ -1543,6 +1973,9 @@ def depth_unreliable(r: dict) -> str:
     depth, err = s["depth"]
     if abs(depth - pub) <= 3 * max(err, 1e-6):
         return ""
+    sc = size_check(r)   # 2.4.0 (#70): inside the published range (or near it) is not "far from published"
+    if sc is not None and sc["state"] != "outside":
+        return ""
     causes = []
     step = (r.get("verdict") or {}).get("step")
     half_t14_h = s["t14"][0] * 12.0 if "t14" in s else None
@@ -1570,6 +2003,11 @@ def depth_plausibility(r: dict) -> str:
     pub, pub_label = published_depth(r.get("planet"))
     s = r.get("summary") or {}
     if not pub or pub <= 0 or "depth" not in s:
+        return ""
+    # 2.4.0 (#70): with published errors the size is judged by size_check (a caution beside "Detected"); this
+    # factor-of-3 bound stays only as the sanity bound when no published value has an error.
+    rng = published_range(r.get("planet"))
+    if rng and rng["has_errors"]:
         return ""
     depth, err = s["depth"]
     if depth <= 0:
@@ -1605,7 +2043,7 @@ def step_at_gap(t, flux, err, am, t_mid, names, best, chi2_transit, extra, tc_re
 
     def stepped(x):
         p = dict(zip(names, x[:-1]))
-        base = p.get("c0", 1.0) + p.get("c_am", 0.0) * am + p.get("c_t", 0.0) * (t - t_mid) + x[-1] * after
+        base = poly_baseline(p, am, t - t_mid) + x[-1] * after
         return (flux - base) / err
 
     start = [best.get(n, 0.0) if n != "c0" else 1.0 for n in names] + [0.0]
@@ -1617,6 +2055,72 @@ def step_at_gap(t, flux, err, am, t_mid, names, best, chi2_transit, extra, tc_re
     dbic = bic_tr - bic_step          # > 0: the step is preferred
     return {"step": float(sol.x[-1]), "gap_min": gap * 1440, "gap_at_h": (t[k] + gap / 2 - tc_rel) * 24,
             "chi2": chi2_step, "dbic": dbic, "explains": dbic > -2.0}
+
+
+TRIM_AIRMASS_DEFAULT = 3.0   # 2.4.0 (#63): frames past this airmass are offered for trimming (settings file:
+                             # "transit_trim_airmass")
+
+
+def high_airmass_spans(t, airmass, limit: float = TRIM_AIRMASS_DEFAULT, tc=None, t14=None) -> dict | None:
+    """2.4.0 (#63): the points past `limit` airmass, as trim spans, and what trimming them leaves.
+    In very thick air a red star against bluer comps picks up colour-extinction curvature a linear airmass term
+    cannot follow (WASP-43 b MOBs: 1.37 to 4.03 at 14° altitude, the after-transit baseline mostly past 3).
+    Returns None when no point is past the limit, else {"n", "max_airmass", "limit", "where" ('at the start' /
+    'at the end' / 'at both ends' / 'inside the night'), "spans": [(BJD from, to)] (open, ±inf, at an end; between
+    points the edge is halfway to the next point, so a trim takes exactly those points), "left": {"before": (min,
+    frames), "after": (min, frames)} of out-of-transit baseline after the trim (with tc and t14), "kept"}."""
+    t = np.asarray(t, dtype=float)
+    am = np.asarray(airmass, dtype=float) if airmass is not None else None
+    if am is None or am.shape != t.shape or not np.isfinite(am).any():
+        return None
+    order = np.argsort(t)
+    t, am = t[order], am[order]
+    high = np.isfinite(am) & (am > limit)
+    if not high.any():
+        return None
+    spans, i, n = [], 0, len(t)
+    while i < n:
+        if not high[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and high[j + 1]:
+            j += 1
+        lo = -math.inf if i == 0 else 0.5 * (t[i - 1] + t[i])
+        hi = math.inf if j == n - 1 else 0.5 * (t[j] + t[j + 1])
+        spans.append((float(lo), float(hi)))
+        i = j + 1
+    ends = [s_ for s_ in spans if math.isinf(s_[0]) or math.isinf(s_[1])]
+    if len(ends) == len(spans):
+        at_start = any(math.isinf(s_[0]) for s_ in spans)
+        at_end = any(math.isinf(s_[1]) for s_ in spans)
+        where = "at both ends" if at_start and at_end else ("at the start" if at_start else "at the end")
+    else:
+        where = "inside the night"
+    kept = ~high
+    out = {"n": int(high.sum()), "max_airmass": float(np.nanmax(am)), "limit": float(limit), "where": where,
+           "spans": spans, "kept": int(kept.sum()), "left": None}
+    if tc is not None and t14 and n > 1:
+        cad = float(np.median(np.diff(t)))
+        tk = t[kept]
+        nb = int((tk < tc - t14 / 2).sum())
+        na = int((tk > tc + t14 / 2).sum())
+        out["left"] = {"before": (nb * cad * 1440.0, nb), "after": (na * cad * 1440.0, na)}
+    return out
+
+
+def high_airmass_text(h: dict) -> str:
+    """The note beside the offer: '12 frames past airmass 3 (up to 4.03, at the end): trimming them leaves ...'."""
+    if not h:
+        return ""
+    text = (f"{h['n']} frame{'s' if h['n'] != 1 else ''} past airmass {h['limit']:g} (up to {h['max_airmass']:.2f}, "
+            f"{h['where']}): in air that thick a red star and bluer comps dim differently, a curve the airmass term "
+            "cannot follow.")
+    if h.get("left"):
+        b, a_ = h["left"]["before"], h["left"]["after"]
+        text += (f" Trimming them leaves {b[0]:.0f} min ({_frames(b[1])}) of out-of-transit baseline before the "
+                 f"transit and {a_[0]:.0f} min ({_frames(a_[1])}) after.")
+    return text
 
 
 def _a_rs_from_duration(period, t14_days, k, b):
@@ -1649,12 +2153,41 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         flags.append(("info", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
                               "heavily on the b prior."))
+    chd = r.get("detrend_choice") or {}
+    if chd.get("dropped_no_airmass"):   # re-review R1: on the page too, not only in the Log
+        flags.append(("info", f"Auto detrend left out {_frames(chd['dropped_no_airmass'])} without airmass, so every "
+                              "detrend choice was fitted on the same frames."))
+    cnote = curve_depth_note(r)   # 2.4.0 (John 19 Nov): Auto's time curve and the depth without it
+    if cnote:
+        flags.append(("info", cnote))
+    pb = r.get("prayer_bead") or {}
+    if pb.get("raised"):
+        # 2.4.0 (#62): which errors are the prayer bead's
+        words = {"tc": "Tc", "k": "Rp/R*", "depth": "depth", "step": "flip step", "c_t2": "time curve"}
+        flags.append(("info", "Prayer-bead check (" + str(pb["n"]) + " shifted refits): its error is larger than "
+                              "the MCMC's for " + ", ".join(words.get(n, n) for n in pb["raised"])
+                              + ", so that error is the one shown (correlated noise the MCMC errors miss)."))
     ff = r.get("free_fit")
     if ff and ff.get("unconstrained"):
         # 2.2.19 (nit): the free shape ran away; its numbers are not shown.
-        flags.append(("info", f"With the shape left free the fit is not constrained ({ff['unconstrained']}): this "
-                              "light curve alone cannot fix a/R* and b, so the Free shape column is left empty. The "
-                              "reported values use the published a/R* and b."))
+        # 2.4.0 (#62): ... and the prior-held fit is far too big too: the transit model is soaking up structure
+        # (WASP-43 b MOBs: free depth 34.8 %, prior-held Rp/R* 0.268 vs published 0.159, T14 and Tc pulled with it)
+        pk = (r.get("planet") or {}).get("k")
+        big = (isinstance(pk, (int, float)) and pk > 0 and "k" in s and s["k"][0] > 1.3 * pk
+               and s["k"][0] - pk > 3 * max(s["k"][1], 1e-6))
+        if big:
+            t14p = (r.get("planet") or {}).get("t14")
+            flags.append(("warn", f"The free shape ran away AND the fit with the published shape has Rp/R* "
+                                  f"{s['k'][0]:.3f}, {s['k'][0] / pk:.1f}× the published {pk:.3f}"
+                                  + (f" (T14 {s['t14'][0] * 24:.2f} h vs {t14p * 24:.2f} h)"
+                                     if t14p and "t14" in s else "")
+                                  + ": the transit model is absorbing structure in the light curve (red noise, a "
+                                  "trend, a bad comp, clouds), and Tc is pulled with it. Treat the depth and Tc as "
+                                  "suspect."))
+        else:
+            flags.append(("info", f"With the shape left free the fit is not constrained ({ff['unconstrained']}): "
+                                  "this light curve alone cannot fix a/R* and b, so the Free shape column is left "
+                                  "empty. The reported values use the published a/R* and b."))
     elif ff:
         dk = ff["p"]["k"] - k
         if "k" in s and s["k"][1] > 0 and abs(dk) > 2 * s["k"][1]:
@@ -1748,7 +2281,14 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     if r["planet"].get("depth_note"):
         flags.append(("info", r["planet"]["depth_note"]))
     flip = r.get("flip")
-    if pub and "depth" in s and not (flip and not flip.get("depth_ok", True)):
+    sc = (r.get("verdict") or {}).get("size_check")
+    if sc is None:
+        try:
+            sc = size_check(r)
+        except Exception:
+            sc = None
+    near_range = sc is not None and sc.get("state") in ("inside", "near")   # Fable S7: the range says it better
+    if pub and "depth" in s and not (flip and not flip.get("depth_ok", True)) and not near_range:
         dd = s["depth"][0] - pub
         if abs(dd) > 3 * max(s["depth"][1], 1e-5):
             why = ("a neighbor's light in the aperture dilutes a transit (makes it shallower)" if dd < 0 else
@@ -1915,13 +2455,13 @@ def _strip_tags(text: str) -> str:
     return html.unescape(html.unescape(re.sub(r"<[^>]+>", "", text or ""))).strip()
 
 
-def _nea_query(adql: str) -> list[dict]:
+def _nea_query(adql: str, timeout: float = 45) -> list[dict]:
     import csv
     import io
     import urllib.parse
 
     url = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync?" + urllib.parse.urlencode({"query": adql, "format": "csv"})
-    return list(csv.DictReader(io.StringIO(_http_get(url).decode("utf-8", "replace"))))
+    return list(csv.DictReader(io.StringIO(_http_get(url, timeout=timeout).decode("utf-8", "replace"))))
 
 
 class PlanetChoice(ValueError):
@@ -2063,8 +2603,11 @@ def lookup_nea(name: str) -> dict:
         period, period_err, t0, t0_err = best["period"], best["period_err"], best["t0"], best["t0_err"]
         refs[0] = best["reference"] or refs[0]
         eph_note = ephemeris_note(best["n"], best["sigma_min"])
+    # 2.4.0 (#70): every published Rp/R* (the range a fit's depth is judged against) and the listed depths (shown)
+    k_pub, depths_listed = published_rp_cached(pl_name)
     planet = {
         "name": pl_name, "host": row.get("hostname") or "",
+        "k_published": k_pub, "depths_listed": depths_listed,
         "period": period, "period_err": period_err, "t0": t0, "t0_err": t0_err,
         "t14": (_f(row.get("pl_trandur")) or 0) / 24.0 or None,
         "depth": (_f(row.get("pl_trandep")) or 0) / 100.0 or None,
@@ -2080,6 +2623,120 @@ def lookup_nea(name: str) -> dict:
         "typed": clean, "aliases": list((info or {}).get("aliases") or []) if info and info.get("resolved") == pl_name else [],
     }
     return complete_planet(planet)
+
+
+def published_rp_values(pl_name: str, timeout: float = 15) -> tuple:
+    """2.4.0 (#70): every published solution's Rp/R* in the NASA Exoplanet Archive's 'ps' table, and every listed
+    depth. Returns ([[k, k_err or None, reference], ...], [[depth (fraction), reference], ...]), each sorted. The
+    listed depths (pl_trandep, ExoFOP's TESS-band dips among them) are a different quantity from (Rp/R*)² (limb-
+    darkened, other bands, other analyses), so they are shown, never used to judge a fit."""
+    # Fable N8: the spellings lookup_nea tries ('WASP-12b', 'wasp-12 b'), any capitalization, no quotes
+    variants = _name_variants(str(pl_name or "").strip().replace("'", ""))
+    where = " or ".join(f"lower(pl_name) = '{v.lower()}'" for v in variants)
+    rows = _nea_query("select pl_ratror,pl_ratrorerr1,pl_ratrorerr2,pl_trandep,pl_refname from ps "
+                      f"where {where}", timeout=timeout)
+    ks, ds = [], []
+    for row in rows:
+        ref = unescape_name(_strip_tags(row.get("pl_refname", ""))).strip()
+        k = _f(row.get("pl_ratror"))
+        if k and 0 < k < 1:
+            errs = [abs(v) for v in (_f(row.get("pl_ratrorerr1")), _f(row.get("pl_ratrorerr2"))) if v]
+            ks.append([float(k), float(max(errs)) if errs else None, ref])
+        d = _f(row.get("pl_trandep"))
+        if d and 0 < d < 100:
+            ds.append([float(d) / 100.0, ref])
+    return sorted(ks, key=lambda x: x[0]), sorted(ds, key=lambda x: x[0])
+
+
+def published_rp_cached(pl_name: str, timeout: float = 15, with_status: bool = False) -> tuple:
+    """2.4.0 (#70): published_rp_values with the lookup cache (service 'nea_rp'): a live answer refreshes it, a
+    failed request falls back to the last good answer. ([], []) when there is neither. with_status: a third value,
+    True when the answer is real (live or cached), False when nothing could be had (Fable S4: not to be remembered
+    as "no published values")."""
+    import lookup_cache
+    key = lookup_cache.norm_key(pl_name)
+    if not key:
+        return ([], [], False) if with_status else ([], [])
+    try:
+        ks, ds = published_rp_values(pl_name, timeout=timeout)
+        lookup_cache.put("nea_rp", key, {"k": ks, "depths": ds})
+        return (ks, ds, True) if with_status else (ks, ds)
+    except Exception:
+        cached, _when = lookup_cache.get("nea_rp", key)
+        if isinstance(cached, dict):
+            out = (list(cached.get("k") or []), list(cached.get("depths") or []))
+            return out + (True,) if with_status else out
+        return ([], [], False) if with_status else ([], [])
+
+
+SIZE_SIGMA = 3.0   # 2.4.0 (#70): a depth this many sigma outside the published (Rp/R*)² range gets the size caution
+
+
+def published_range(planet: dict | None) -> dict | None:
+    """2.4.0 (#70): the published (Rp/R*)² values a fit's depth is judged against: every Archive solution's Rp/R*
+    (planet["k_published"]), or the planet's one Rp/R* when there is no list. {"values": [(depth, error or None,
+    reference)], "lo", "hi" (depths), "has_errors"} or None without any Rp/R*."""
+    p = planet or {}
+    vals = []
+    for item in p.get("k_published") or []:
+        try:
+            k, ke, ref = float(item[0]), item[1], str(item[2] if len(item) > 2 else "")
+        except (TypeError, ValueError, IndexError):
+            continue
+        if math.isfinite(k) and k > 0:
+            vals.append((k * k, (2 * k * float(ke)) if isinstance(ke, (int, float)) and ke > 0 else None, ref))
+    if not vals:
+        k = p.get("k")
+        if not (isinstance(k, (int, float)) and math.isfinite(k) and k > 0):
+            return None
+        ke = p.get("k_err")
+        vals = [(k * k, (2 * k * ke) if isinstance(ke, (int, float)) and math.isfinite(ke) and ke > 0 else None,
+                 str(p.get("reference") or p.get("source") or ""))]
+    vals.sort(key=lambda v: v[0])
+    return {"values": vals, "lo": vals[0][0], "hi": vals[-1][0], "has_errors": any(v[1] for v in vals)}
+
+
+def range_text(rng: dict | None, pct: bool = True) -> str:
+    """'1.47 %' or '1.43–1.72 % (5 values)' for one or several published (Rp/R*)²."""
+    if not rng:
+        return ""
+    f = (lambda v: f"{v * 100:.2f}") if pct else (lambda v: f"{v:.5f}")
+    unit = " %" if pct else ""
+    distinct = len({round(v[0], 6) for v in rng["values"]})
+    if distinct <= 1:
+        return f(rng["lo"]) + unit
+    return f"{f(rng['lo'])}–{f(rng['hi'])}{unit} ({len(rng['values'])} values)"
+
+
+def size_check(r: dict) -> dict | None:
+    """2.4.0 (#70): the fit's depth against the published (Rp/R*)² range. Inside the range, or within SIZE_SIGMA of
+    its nearest value (the fit's error and that value's in quadrature): {"state": "inside" / "near"}. Further out:
+    {"state": "outside", "sigma", "nearest", "text"} for the caution. None when the range has no error at all (the
+    factor-of-3 bound in depth_plausibility is the only check then) or there is no depth."""
+    rng = published_range(r.get("planet"))
+    s = r.get("summary") or {}
+    if not rng or "depth" not in s or not rng["has_errors"]:
+        return None
+    depth, err = s["depth"]
+    out = {"range": rng, "range_text": range_text(rng)}
+    if rng["lo"] <= depth <= rng["hi"]:
+        return dict(out, state="inside", sigma=0.0)
+    best = None
+    for v, ve, ref in rng["values"]:
+        sig = abs(depth - v) / max(math.hypot(err, ve or 0.0), 1e-9)
+        if best is None or sig < best[0]:
+            best = (sig, v, ve, ref)
+    sig, v, ve, ref = best
+    out.update(sigma=float(sig), nearest=(v, ve, ref))
+    if sig <= SIZE_SIGMA:
+        return dict(out, state="near")
+    which = "deeper" if depth > v else "shallower"
+    where = (f"the published (Rp/R*)² {v * 100:.2f} %" + (f" ({ref})" if ref else "")
+             if len(rng["values"]) == 1 else f"the nearest published (Rp/R*)² {v * 100:.2f} %" + (f" ({ref})" if ref else "")
+             + f"; range {range_text(rng)}")
+    out.update(state="outside", text=(f"depth {depth * 100:.2f} ± {err * 100:.2f} % is {sig:.1f}σ {which} than "
+                                      f"{where}: check the comps, dilution by a neighbour, and the detrend"))
+    return out
 
 
 def _predicted_sigma_days(period, period_err, t0, t0_err, when_jd) -> float:
@@ -2493,14 +3150,18 @@ def detrend_columns(result: dict) -> list:
     [(NAME, values, format)], one per detrend. airmass → each point's airmass; time → each point's BJD_TDB (the
     time slope's own variable, written like DATE). AAVSO wants as many DETREND_n columns on every data line as
     #DETREND_PARAMETERS has names (0 to 4); a fit with no detrend lists none and writes none."""
-    values = {"airmass": (result.get("airmass"), "{:.7f}"), "time": (result.get("t"), "{:.8f}")}
+    t = np.asarray(result.get("t"), dtype=float)
+    # 2.4.0 (#103): the time curve's own variable, (BJD_TDB − the night's mean)² in days², named TIME_SQUARED; with
+    # TIME and the baseline it spans the same curves as BJD² would, without 13-digit squares.
+    values = {"airmass": (result.get("airmass"), "{:.7f}", "AIRMASS"), "time": (result.get("t"), "{:.8f}", "TIME"),
+              "time2": ((t - float(np.mean(t))) ** 2 if t.size else None, "{:.9e}", "TIME_SQUARED")}
     out = []
     for name in result.get("detrend") or []:
         if name not in values:
             raise ValueError(f"the report has no data column for the detrend '{name}'")
-        col, fmt = values[name]
+        col, fmt, label = values[name]
         col = np.full(len(result["t"]), np.nan) if col is None else np.asarray(col, dtype=float)
-        out.append((str(name).upper(), col, fmt))
+        out.append((label, col, fmt))
     return out
 
 
@@ -2725,6 +3386,18 @@ def fit_inputs_lines(result: dict) -> list:
         out.append("Fit input shape priors used: " + ", ".join(f"{name} {_full(m)} +/- {_full(sd)}"
                                                                for name, (m, sd) in pri.items())
                    + " (published values with the sigma floors)")
+    pb = r.get("prayer_bead")   # 2.4.0 (#62)
+    if pb:
+        mc = pb.get("mcmc") or {}
+        out.append(f"Fit errors: prayer bead {pb['n']} refits, Tc +/- {_full(pb['err'].get('tc'))} d (MCMC "
+                   f"{_full(mc.get('tc'))}), depth +/- {_full(pb['depth_err'])} (MCMC {_full(mc.get('depth'))}); "
+                   + ("the larger reported for " + ", ".join(pb.get("raised") or []) if pb.get("raised")
+                      else "MCMC errors reported") + f"; red-noise beta {_full(r.get('beta'))}")
+    ch = r.get("detrend_choice")   # 2.4.0 (#103): every choice's BIC, so the pick can be checked
+    if curve_depth_note(r):
+        out.append("Fit input detrend note: " + curve_depth_note(r, ascii_only=True))
+    out.append("Fit input detrend: " + (detrend_choice_text(ch, ascii_only=True) if ch
+                                        else detrend_text(r.get("detrend")) + " (chosen by hand)"))
     src = str(pl.get("source") or "").strip() or "not recorded"
     ref = str(pl.get("reference") or "").strip()
     eph = str(r.get("eph_source") or "").strip()
@@ -2782,11 +3455,11 @@ def fit_text(result: dict, meta: dict) -> str:
     if meta.get("exoclock_status"):
         lines.append(f"ExoClock       {meta['exoclock_status'].replace('ExoClock: ', '')}")
     lines += ["", "Fitted values (MCMC median and 68% interval):"]
-    for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t", "step"):
+    for name in ("tc", "k", "depth", "a_rs", "b", "inc", "t14", "u1", "u2", "c_am", "c_t", "c_t2", "step"):
         if name in s:
             label = {"tc": "Tc (BJD_TDB)", "k": "Rp/R*", "depth": "Depth", "a_rs": "a/R*", "b": "b", "inc": "inc (deg)",
                      "t14": "T14 (days)", "u1": "u1", "u2": "u2", "c_am": "airmass slope", "c_t": "time slope",
-                     "step": "flip step"}[name]
+                     "c_t2": "time curve", "step": "flip step"}[name]
             v, e = s[name]
             fmt = "{:.6f}" if name == "tc" else "{:.5f}"
             lines.append(f"  {label:<16}{fmt.format(v)} ± {fmt.format(e)}")
@@ -2808,8 +3481,8 @@ def fit_text(result: dict, meta: dict) -> str:
               + (f" ({result['rms_bin10'] * 100:.3f}% per 10-min bin)" if result.get("rms_bin10") is not None else "")
               + f", reduced chi-square {result['rchi2']:.2f}, "
               f"red-noise beta {result['beta']:.2f}, error bars x{result['error_scale']:.2f}",
-              "Detrending       " + (", ".join(result["detrend"] + (["meridian flip step"] if result.get("flip")
-                                                                  else [])) or "none"),   # 2.3.0 (#8)
+              "Detrending       " + ", ".join(w for w in ([tc_detrend_words(result)] + (["meridian flip step"]
+                                                                  if result.get("flip") else [])) if w),   # 2.3.0 (#8)
               f"MCMC             {ch['walkers']} walkers, {ch['burn']} burn-in + {ch['steps']} steps, "
               f"acceptance {ch['acceptance']:.2f}"]
     ff = result.get("free_fit")

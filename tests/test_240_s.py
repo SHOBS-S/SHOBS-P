@@ -472,6 +472,29 @@ class TestSurveyInTheApp(unittest.TestCase):
         app._survey_cache = None   # the read ends itself
         app._run_after_survey = False
 
+    def test_no_suggestions_while_the_survey_reads(self):
+        """2.4.0 step 6 (nit a): while the survey reads the night, no S rings and no "Suggested comps" line; the
+        survey's own set when it is done."""
+        app = self._setup()
+        app._suggest_comps()
+        t0 = time.time()
+        while getattr(app, "_survey_cache", None) is None and time.time() - t0 < 30:
+            app.update()
+            time.sleep(0.02)
+            app._suggest_comps() if not getattr(app, "_suggest_drift_pending", False) else None
+        if app._survey_cache["state"] == "loading":
+            app._suggest_comps()   # a redraw while it reads
+            self.assertEqual(app.suggested_comps, [])
+            self.assertTrue(app._suggest_waiting_survey)
+            self.assertFalse(any(t.startswith("Suggested comps") for t in self.lines))
+            self.assertFalse(app._suggested_lines() and any("S1" in ln for ln in app._suggested_lines()))
+        names = self._wait(app)
+        self.assertEqual(len(names), 4)
+        self.assertFalse(app._suggest_waiting_survey)
+        said = [t for t in self.lines if t.startswith("Suggested comps")]
+        self.assertEqual(len(said), 1, said)                 # one line, the survey's set
+        self.assertIn("comp survey", said[0])
+
     def test_series_comp_that_fails_is_said(self):
         app = self._setup()
         obs = [core.Obs(jd=2461000.5, mag=12.0, merr=0.01, cmag=12.0, kmag=None, airmass=None, path="x",
