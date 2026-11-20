@@ -316,14 +316,15 @@ The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P al
 **night's own frames** before you run, so S1–S4 are chosen on how the stars actually behaved tonight. You never press
 anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
 lower left counts the frames it reads: *Choosing comps from the night's frames… frame 20 (first pass)*, then
-*frame 31 of 37* once the total can no longer change. On a Transits night with a meridian flip it keeps counting
-without a total (*frame 45 (at the meridian flip)*, *frame 52 (baseline beside the transit)*), because how many
-more frames the flip needs is only known as it reads them. From 2.4.0 nothing is suggested while it
+*frame 31 of 37* once the total can no longer change. On a Transits night with a meridian flip it counts without a
+total while it looks for the flip (*frame 45 (at the meridian flip)*), because how many frames that takes is only
+known as it reads them; the last pass, the baseline frames beside the transit, shows its total again (*frame 52 of
+59*). From 2.4.0 nothing is suggested while it
 reads (no green rings, no *Suggested comps* line, only the busy bar): the survey's own set comes up when it is done,
 in one *Suggested comps* line. The catalog-and-this-frame picks appear only when the survey cannot run or fails (the
 Log then says *the suggestions are from the catalog and this frame only*). A loaded series' comps stay in the boxes
-as before. When a loaded series' comps (and its check) are **all placed** on the image, the survey is skipped: there
-is nothing for it to suggest, and **Run photometry** starts at once instead of waiting (the Log says *Comp survey
+as before. When **every** comp the series uses (and its check) is placed on the image, the survey is skipped: there
+is nothing for it to suggest, no S rings are drawn, and **Run photometry** starts at once instead of waiting (the Log says *Comp survey
 skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health
 after the run shows how they did)*). If the survey was already reading when the last comp got its marker, pressing
 **Run photometry** calls it off and runs. If you
@@ -370,7 +371,9 @@ frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view
 flip, so steady on both pier sides, the target's flip step with these comps +0.8 ± 1.2 ppt (measured as the transit
 fit measures it: the whole night's frames read outside the predicted transit, on both sides of the flip)).* The step
 is in the fit's own units and sign (ppt of flux, + means brighter after the flip), so you can hold it against the
-*flip step* the fit reports.
+*flip step* the fit reports. On a night with too little baseline on one side of the flip (a flip in transit on a
+night that ends at egress), it is measured on the frames right at the flip instead, and the line says *measured at
+the flip: too little baseline on one side to measure it as the fit does*.
 
 Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
 3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,

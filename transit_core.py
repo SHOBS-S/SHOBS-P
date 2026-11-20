@@ -1807,18 +1807,33 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
         return None
 
     jobs = []   # (group, label, callable -> lsq_fit result)
-    left_out = []
+    left_out, too_few = [], []
     # every other detrend choice that is a reasonable one
+    rows_in = list(detrend_rows or [])
+    if not rows_in:
+        # Fable S3: a detrend picked by hand has no Auto table: Auto's own BIC comparison, on the same data, decides
+        # which choices are reasonable (none of its results is used otherwise)
+        try:
+            rows_in = (lsq_fit(t, flux, err, am, planet, after_flip=after_flip, flagged_mask=flagged_mask,
+                               flip_step=flip_step, detrend_auto=True).get("detrend_choice") or {}).get("rows") or []
+        except Exception as exc:
+            say(f"  robustness check: no BIC table for the detrend choices ({exc}); every choice is tried")
+            rows_in = []
     dbic = {}
-    for row in detrend_rows or []:
+    for row in rows_in:
         if row.get("key") and row.get("dbic") is not None and math.isfinite(float(row["dbic"])):
             dbic[row["key"]] = float(row["dbic"])
+    best = min(dbic.values()) if dbic else 0.0   # Fable S3: against the lowest BIC, not the choice used
     here = detrend_key((da, dt, dq))
     for key, label, flags in DETREND_CHOICES:
-        if key == here or (flags[0] and not allow_airmass):
+        if key == here:
             continue
-        if dbic and key in dbic and dbic[key] - dbic.get(here, 0.0) > ROBUST_DBIC_MAX:
-            left_out.append(f"detrend {label} (ΔBIC {dbic[key] - dbic.get(here, 0.0):+.0f})")
+        if flags[0] and not allow_airmass:
+            if "the airmass choices (frames without airmass)" not in left_out:
+                left_out.append("the airmass choices (frames without airmass)")
+            continue
+        if dbic and key in dbic and dbic[key] - best > ROBUST_DBIC_MAX:
+            left_out.append(f"detrend {label} (ΔBIC {dbic[key] - best:+.0f})")
             continue
         jobs.append(("detrend", f"detrend {label}",
                      lambda f_=flags: fit(t, flux, err, am, after_flip, flagged_mask, detrend_airmass=f_[0],
@@ -1874,7 +1889,7 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
             continue
         ok = np.isfinite(fac) & (fac > 0)
         if ok.sum() < max(10, int(0.5 * t.size)):
-            left_out.append(f"{label} (measured on too few frames)")
+            too_few.append(label)
             continue
         jobs.append((group, label, lambda f_=fac, k_=ok: fit(t[k_], (flux * f_)[k_], (err * f_)[k_], _cut(am, k_),
                                                              _cut(after_flip, k_), _cut(flagged_mask, k_))))
@@ -1909,7 +1924,7 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
     most = {"depth": max(rows, key=lambda r_: abs(r_["depth"] - ref_row["depth"])),
             "tc": max(rows, key=lambda r_: abs(r_["tc"] - ref_row["tc"]))}
     out = {"rows": rows, "ref": ref_row, "spread": spread, "formal": formal, "most": most, "left_out": left_out,
-           "skipped": skipped, "groups": [g for g, _w in ROBUST_GROUPS if any(r_["group"] == g for r_ in rows)]}
+           "skipped": skipped + [f"{x} (measured on too few frames)" for x in too_few], "groups": [g for g, _w in ROBUST_GROUPS if any(r_["group"] == g for r_ in rows)]}
     flags = []
     for key, what in (("depth", "depth"), ("tc", "Tc")):
         sp, fe = spread[key], formal[key]
@@ -1953,10 +1968,14 @@ def robustness_text(rob: dict | None, ascii_only: bool = False) -> str:
     if m.get("depth") is not None:
         txt += (f". Moves the depth most: {m['depth']['label']}; Tc most: {m['tc']['label']}")
     if rob.get("left_out"):
-        txt += ". Not tried (not reasonable): " + "; ".join(rob["left_out"])
+        txt += ". Not tried (not reasonable choices here): " + "; ".join(rob["left_out"])
     if rob.get("skipped"):
         txt += ". No fit: " + "; ".join(rob["skipped"])
     txt += "."
+    if rob.get("measure_note"):   # Fable N14: why the aperture and sky ring were not tried, in every file too
+        tried = any(r_["group"] in ("aperture", "sky") for r_ in rob["rows"])
+        txt += (f" ({rob['measure_note']}.)" if tried else
+                f" Aperture and sky ring not tried: {rob['measure_note']}.")
     if ascii_only:
         txt = txt.replace("–", "-").replace("Δ", "d").replace("±", pm)
     return txt
@@ -3733,7 +3752,8 @@ def fit_text(result: dict, meta: dict) -> str:
         # 2.2.16 (item 6)
         lines.append("Comp-choice check (diagnostic) " + comp_systematic_text(result["comp_loo"]))
     if result.get("robust"):
-        lines.append(robustness_text(result["robust"], ascii_only=True))   # 2.4.0 step 6b (#35)
+        lines.append("Robustness check " + robustness_text(result["robust"], ascii_only=True)
+                     .replace("Robustness check ", "", 1))   # 2.4.0 step 6b (#35)
     lines += [f"Meridian flip    {ln}" if i == 0 else f"                 {ln}" for i, ln in enumerate(flip_lines(result))]
     wf = result.get("with_flagged")
     if wf:

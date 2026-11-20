@@ -1882,19 +1882,35 @@ class TransitPage:
         if self._signature() != self._fit_signature:
             app.status.set("The data changed since this fit: press Fit transit first, then Robustness check.")
             return
-        if app.busy or not app._start_job("Robustness check…"):
+        if app.busy:
+            app.status.set("Another step is still running. Wait for it to finish, then press Robustness check.")
             return
+        if not app._start_job("Robustness check…"):
+            return
+        try:   # Fable S7 (the fit's own rule): nothing between here and the thread may leave the run lock taken
+            self._robust_start(r, src)
+        except Exception as exc:
+            self._robust_token = None
+            app._end_job()
+            app.log(f"Robustness check not made: {type(exc).__name__}: {exc}")
+
+    def _robust_start(self, r, src):
+        app = self.app
         job = dict(src[1])
         fl_ = tuple(r.get("detrend_flags") or (True, False, False))
-        if (r.get("detrend_choice") or {}).get("dropped_no_airmass") and job.get("am") is not None and not fl_[0]:
-            # re-review R1 (as the comp check): the main fit left out the frames without airmass; so do these refits
-            keep = np.isfinite(np.asarray(job["am"], dtype=float))
-            for k_ in ("t", "flux", "err", "am", "after", "flagged_mask", "comp_mags", "obs"):
-                if job.get(k_) is not None and len(job[k_]) == len(keep):
-                    job[k_] = np.asarray(job[k_])[keep]
+        am0 = np.asarray(job["am"], dtype=float) if job.get("am") is not None else None
+        if am0 is not None and (fl_[0] or (r.get("detrend_choice") or {}).get("dropped_no_airmass")):
+            # Fable S2: the main fit left out the frames without airmass (it used airmass, or Auto dropped them to try
+            # the airmass choices): every refit, with or without airmass, on those same frames
+            keep = np.isfinite(am0)
+            if not keep.all():
+                for k_ in ("t", "flux", "err", "am", "after", "flagged_mask", "comp_mags", "obs"):
+                    if job.get(k_) is not None and len(job[k_]) == len(keep):
+                        job[k_] = np.asarray(job[k_])[keep]
         token = object()
         self._robust_token = token
-        self._robust_done_text = self.prog_text.get()
+        # Fable N9: a second press does not repeat the first one's "Robustness: …" on the result line
+        self._robust_done_text = self.prog_text.get().split("   Robustness:")[0].split("Robustness:")[0].rstrip()
         summary = dict(r["summary"])
         choice = r.get("detrend_choice") or {}
         rows = choice.get("rows") or []
@@ -1916,8 +1932,10 @@ class TransitPage:
                     comp_mags=job.get("comp_mags"), comp_names=job.get("names"), measured=measured, cancel=cancel,
                     progress=lambda j, n: app.call_ui(self._robust_progress, token, f"refit {j} of {n}"),
                     log=lambda msg: app.call_ui(app.log, msg, True))
-                if rob is not None:
+                if rob is not None and why_not:
                     rob["measure_note"] = why_not
+                    rob["note"] = tc.robustness_text(rob)
+                    rob["flags"] = [f for f in rob["flags"] if f[0] != "info"] + [("info", rob["note"])]
                 app.call_ui(self._robust_done, token, r, rob, None)
             except Exception as exc:
                 app.call_ui(self._robust_done, token, r, None, str(exc))
@@ -1937,7 +1955,8 @@ class TransitPage:
         variants = tc.aperture_variants(r_, si, so)
         if not variants:
             return {"why": "the night's aperture is not recorded"}
-        if app.masters is None:
+        precal = bool(getattr(app, "precalibrated", False))
+        if app.masters is None and not precal:
             return {"why": "the night's frames are not calibrated in this session (Calibrate first)"}
         binning = int(info.get("binning") or 1)
         try:
@@ -1945,17 +1964,17 @@ class TransitPage:
                 return {"why": f"the night was measured at Bin {binning} and the Binning box now says another"}
         except Exception:
             pass
+        # Fable M1: a night's pos["c"] is in the SERIES' comp layout (app.comps_used; remap_night_comps puts a night
+        # measured with other comps into it), and a comp in use that is a spare there has its spot in pos["s"], as
+        # core.star_inst reads its magnitude. So each comp in use is looked up by name in that layout, per frame.
         name_key = _app_module(app).name_key
-        comps_meas = list(info.get("comps") or app.comps_used or [])
-        keys = [name_key(n) for n in comps_meas]
-        cols = []
-        for n_ in job.get("names") or list(app.active_comps or app.comps_used):
-            k_ = name_key(n_)
-            cols.append(keys.index(k_) if k_ in keys else None)
-        if not cols or any(c is None for c in cols):
-            return {"why": "the comps in use are not all among the comps the night measured"}
+        layout = [name_key(n) for n in list(app.comps_used or [])]
+        names = list(job.get("names") or list(app.active_comps or app.comps_used))
+        if not names:
+            return {"why": "no comps in use"}
+        cols = [(layout.index(name_key(n_)) if name_key(n_) in layout else None, n_) for n_ in names]
         return {"obs": list(job["obs"]), "r": float(r_), "si": float(si), "so": float(so), "variants": variants,
-                "cols": cols, "binning": binning, "masters": app.masters,
+                "cols": cols, "binning": binning, "masters": app.masters if app.masters is not None else core.Masters(),
                 "pattern": info.get("pattern") or app.pattern.get(),
                 "debayer": info.get("debayer") or app.debayer_mode.get(), "why": ""}
 
@@ -1981,8 +2000,8 @@ class TransitPage:
             pos = getattr(o, "pos", None) or {}
             try:
                 tp = pos.get("t")
-                cp = [(pos.get("c") or [None] * (max(cols) + 1))[c] if c < len(pos.get("c") or []) else None
-                      for c in cols]
+                cpos, spos = list(pos.get("c") or []), dict(pos.get("s") or {})
+                cp = [(cpos[c] if c is not None and c < len(cpos) else None) or spos.get(nm) for c, nm in cols]
                 if tp is None:
                     raise ValueError("no target position")
                 xy = np.array([tp] + [c if c is not None else (np.nan, np.nan) for c in cp], dtype=float)
@@ -1992,7 +2011,11 @@ class TransitPage:
                 ok = np.all(np.isfinite(xy), axis=1)
                 for k, (_g, _l, r_, si, so) in enumerate(sets):
                     flux, _sky = core.measure_many(img, np.where(ok[:, None], xy, 0.0), r_, si, so)
-                    flux = np.where(ok & (np.asarray(flux) > 0), flux, np.nan)
+                    # Fable N11: a star whose aperture or sky ring runs off the frame is a partial sum: not measured
+                    edge = np.array([bool(ok[j]) and not core.aperture_clip_reason(img.shape, xy[j, 0], xy[j, 1],
+                                                                                   r_, si, so)
+                                     for j in range(len(xy))])
+                    flux = np.where(edge & (np.asarray(flux) > 0), flux, np.nan)
                     with np.errstate(divide="ignore", invalid="ignore"):
                         mags = -2.5 * np.log10(flux)
                     tm[k, i], cm[k, i, :] = mags[0], mags[1:]
@@ -2038,11 +2061,6 @@ class TransitPage:
                 app.log("Robustness check finished for an earlier fit; not shown (press it again).",
                         keep_status=True)
                 return
-            if rob.get("measure_note"):
-                rob["note"] += f" Aperture and sky ring not tried: {rob['measure_note']}." \
-                    if not any(x["group"] in ("aperture", "sky") for x in rob["rows"]) \
-                    else f" ({rob['measure_note']}.)"
-                rob["flags"] = [f for f in rob["flags"] if f[0] != "info"] + [("info", rob["note"])]
             old = r.get("robust")
             if old:   # a second press replaces the first one's lines
                 r["flags"] = [f for f in (r.get("flags") or []) if f not in old.get("flags", [])]
@@ -2050,8 +2068,7 @@ class TransitPage:
             r["flags"] = list(r.get("flags") or []) + list(rob["flags"])
             self._notes_text(tc.cautions(r["flags"], r.get("verdict")))
             for level, text in rob["flags"]:
-                app.log(("Transit fit: " + text) if level == "info" else text, level="warn" if level == "warn"
-                        else None)
+                app.log(("Transit fit: " + text) if level == "info" else "⚠ " + text)
             sp, fe = rob["spread"], rob["formal"]
             done = getattr(self, "_robust_done_text", "")
             self.prog_text.set(done + ("   " if done else "")
@@ -2470,6 +2487,7 @@ class TransitPage:
         return True
 
     def _fill_table(self):
+        self._update_robust_button()   # 2.4.0 (Fable N13): grayed whenever the page has no fit
         if self.result is None and getattr(self, "_airmass_offer", None) is not None:
             # Fable N2: the high-airmass offer belongs to the fit it was made for
             self._airmass_offer = None

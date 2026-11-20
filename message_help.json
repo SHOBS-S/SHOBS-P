@@ -1236,7 +1236,9 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comps are fine per frame: their noise is … (about …% of each point's error), so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."
+    "Comps are fine per frame: their noise is … (about …% of each point's error), so stacking is not needed.",
+    "…: stacking would gain little (…).",
+    "To stack anyway, type a number of frames in the Stack N box."
    ],
    "todo": "Nothing."
   },
@@ -1704,6 +1706,22 @@
     "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is … (…)."
    ],
    "todo": "Report the larger spread with the result, or find out which choice is right (Comp health for a comp, the plot for a trimmed stretch) before reporting."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit the transit first: the robustness check refits the fit on the page.",
+    "The data changed since this fit: press Fit transit first, then Robustness check."
+   ],
+   "todo": "Press Fit transit, then Robustness check."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness check finished for an earlier fit; not shown (press it again).",
+    "Robustness check not made: …"
+   ],
+   "todo": "Press Robustness check again; if it says not made, read the reason."
   },
   {
    "section": "Output, Transits mode",

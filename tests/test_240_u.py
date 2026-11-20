@@ -61,7 +61,10 @@ class TestRobustnessCore(unittest.TestCase):
         groups = {r["group"] for r in rob["rows"]}
         self.assertEqual(groups, {"detrend", "trim", "comp", "aperture", "sky"})
         self.assertEqual(sum(r["group"] == "comp" for r in rob["rows"]), 3)
-        self.assertEqual(sum(r["group"] == "detrend" for r in rob["rows"]), 5)   # every other choice
+        # every other choice that Auto's own BIC table (made here: no table given) calls reasonable
+        n_det = sum(r["group"] == "detrend" for r in rob["rows"])
+        self.assertEqual(n_det + sum(x.startswith("detrend ") for x in rob["left_out"]), 5)
+        self.assertGreaterEqual(n_det, 3)
         self.assertFalse([f_ for f_ in rob["flags"] if f_[0] == "warn"])
         self.assertIn("across choices (formal ± 0.080 %)", rob["note"])
         self.assertIn("aperture ±20 %", rob["note"])
@@ -95,7 +98,7 @@ class TestRobustnessCore(unittest.TestCase):
         self.assertEqual(labels, ["detrend time slope", "detrend time curve (quadratic)",
                                   "detrend airmass + time slope"])
         self.assertTrue(any("detrend none (ΔBIC +25)" in x for x in rob["left_out"]))
-        self.assertIn("Not tried (not reasonable)", rob["note"])
+        self.assertIn("Not tried (not reasonable choices here)", rob["note"])
 
     def test_flagged_frames_both_ways(self):
         t, f, e, am, after = night()
@@ -200,6 +203,13 @@ class TestMessageNits(unittest.TestCase):
         self.assertIn("type a number of frames in the Stack N box", text)
         self.assertNotIn("Type N", text)
         self.assertNotIn("× the target's", text)
+        # Fable S6: comps 1.5x the target's and no scintillation: never "beside the scintillation"
+        noise2 = dict(noise, sig_c=0.0015, ratio=1.5, sig_point=math.hypot(0.001, 0.0015))
+        sug2 = stack_core.suggest_n(noise2, 30.0, {"seconds": 600, "known": True, "text": "x"}, 200)
+        text2, _ = stack_core.suggest_text("variables", noise2, sug2, {"seconds": 600, "known": True, "text": "x"},
+                                           200, None)
+        self.assertNotIn("scintillation", text2)
+        self.assertIn("stacking would gain little", text2)
 
     def test_param_words(self):
         self.assertEqual(tc.PARAM_WORDS["k"], "Rp/R*")
@@ -240,6 +250,8 @@ class TestAppPieces(unittest.TestCase):
             self.assertFalse(app._series_comps_all_placed())
             app.series_path = "x.json"
             app.comp_coords = {"A": (1.0, 2.0), "B": (1.0, 2.1)}
+            old_used, app.comps_used = app.comps_used, ["A", "B"]
+            old_active, app.active_comps = getattr(app, "active_comps", None), None
             for r in roles + ("check",):
                 getattr(app, f"{r}_name").set("")
                 setattr(app, f"{r}_xy", None)
@@ -249,6 +261,11 @@ class TestAppPieces(unittest.TestCase):
             self.assertFalse(app._series_comps_all_placed())     # B has no marker yet
             setattr(app, f"{roles[1]}_xy", (20.0, 20.0))
             self.assertTrue(app._series_comps_all_placed())
+            app.comps_used = ["A", "B", "C"]                      # Fable S4: a series comp in no box: survey runs
+            self.assertFalse(app._series_comps_all_placed())
+            app.active_comps = ["A", "B"]                         # ... unless Use comps left it out
+            self.assertTrue(app._series_comps_all_placed())
+            app.comps_used, app.active_comps = ["A", "B"], None
             getattr(app, f"{roles[2]}_name").set("Z")            # a new comp typed in tonight
             setattr(app, f"{roles[2]}_xy", (30.0, 30.0))
             self.assertFalse(app._series_comps_all_placed())
@@ -270,6 +287,48 @@ class TestAppPieces(unittest.TestCase):
                 setattr(app, f"{r}_xy", None)
             app.comp_coords = {}
             app.series_path = old_path
+            app.comps_used, app.active_comps = old_used, old_active
+
+    def test_remeasure_reads_comps_in_the_series_layout(self):        # Fable M1
+        import photometry_core as core
+        import stack_ui
+        app = self.app
+        tp = app.transit_page
+        yy, xx = np.mgrid[0:100, 0:120]
+
+        def star(x, y, f):
+            return f / (2 * math.pi * 2.0 ** 2) * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / 8.0)
+        img = (100.0 + star(60, 50, 50000) + star(20, 20, 30000) + star(95, 75, 20000)
+               + star(30, 80, 10000)).astype(np.float32)
+
+        class O:
+            def __init__(self, i):
+                self.path = f"f{i}.fits"
+                # the series layout A, B, C; A was not measured tonight (None); D is a spare
+                self.pos = {"t": [60.0, 50.0], "c": [None, [20.0, 20.0], [95.0, 75.0]], "s": {"D": [30.0, 80.0]}}
+        old_used, old_info = app.comps_used, dict(app.night_bin)
+        try:
+            app.comps_used = ["A", "B", "C"]
+            app.night_bin["N1"] = {"radius": 4.0, "sky_in": 8.0, "sky_out": 13.0, "binning": 1,
+                                   "comps": ["B", "C"], "pattern": core.MONO, "debayer": "superpixel"}
+            app.masters = core.Masters()
+            app.binning.set(1)
+            obs = [O(i) for i in range(12)]
+            plan = tp._robust_measure_plan({"obs": obs, "night": "N1", "names": ["B", "D"]})
+            self.assertEqual(plan["why"], "")
+            self.assertEqual(plan["cols"], [(1, "B"), (None, "D")])
+            with mock.patch.object(stack_ui, "load_frame", return_value=(None, {}, img)):
+                out, why = tp._robust_remeasure(plan, object(), mock.Mock(is_set=lambda: False))
+            self.assertEqual(why, "")
+            self.assertEqual([x[0] for x in out], ["aperture", "aperture", "sky"])
+            for _g, _l, fac in out:   # every frame measured (B and D found), and a smooth star: ratios near 1
+                self.assertTrue(np.all(np.isfinite(fac)))
+                self.assertTrue(np.all(np.abs(fac - 1) < 0.05), fac)
+        finally:
+            app.comps_used = old_used
+            app.night_bin.clear()
+            app.night_bin.update(old_info)
+            app.masters = None
 
     def test_survey_words_in_ppt_like_the_fit(self):
         survey = {"index": {"A": 0}, "frames": 59, "of": 232, "flip": True, "flip_seen": True, "flip_why": "",
@@ -277,6 +336,9 @@ class TestAppPieces(unittest.TestCase):
         words = self.app._survey_words(survey, -0.0065, picks=[("A", 0.1)], err=0.0013)
         self.assertIn("+6.0 ± 1.2 ppt", words)   # -6.5 mmag = brighter after = +6.0 ppt of flux
         self.assertIn("as the transit fit measures it", words)
+        survey["step_how"] = "at_flip"   # Fable S5: no baseline on one side: measured at the flip, and it says so
+        self.assertIn("measured at the flip: too little baseline on one side",
+                      self.app._survey_words(survey, -0.0065, picks=[("A", 0.1)], err=0.0013))
 
     def test_robust_button_follows_the_fit(self):
         tp = self.app.transit_page

@@ -878,12 +878,13 @@ class TestTargetStepInTheApp(unittest.TestCase):
         why, d3, b3, a3, w3 = app._survey_target_steps(res, 8.0, [0, 1], planet)
         self.assertEqual(why, "")
         self.assertAlmostEqual(cs.set_target_step(d3, [0, 1], b3, a3, w3)[0], 0.0, delta=0.003)
-        # too few baseline frames before the flip: not judged, and it says why
+        # too few frames before the flip at all: not judged, and it says why (a side with frames but no baseline
+        # falls back to the frames at the flip: Fable S5)
         flip = 2
         res = self._result(t, flip, (0.0, 0.0), 0.0, model["mag"])
         why, d4, _b, _a, _w = app._survey_target_steps(res, 8.0, [0, 1], planet)
         self.assertIsNone(d4)
-        self.assertIn("too few frames read outside the predicted transit", why)
+        self.assertIn("too few frames read on one side of the flip", why)
 
 
 @unittest.skipUnless(HAVE_TK, "needs a display")

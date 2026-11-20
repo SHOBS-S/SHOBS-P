@@ -512,6 +512,10 @@ def curve_step(lc, b_rows, a_rows, min_side: int = FLIP_MIN_SIDE, weights=None) 
         neff = float(ww.sum() ** 2 / np.sum(ww * ww))
         v = float(np.sum(ww * (x - mean) ** 2) / ww.sum()) * neff / max(neff - 1.0, 1.0)
         return mean, v / max(neff, 1.0)
+    # Fable N16: a side whose weight sits on one or two rows (weights 40/1/1) has too few effective frames for an error
+    for ww in (wa, wb):
+        if float(ww.sum() ** 2 / np.sum(ww * ww)) < min_side:
+            return float("nan"), float("nan")
     ma, va = side(a, wa)
     mb, vb = side(b, wb)
     return ma - mb, math.sqrt(va + vb)

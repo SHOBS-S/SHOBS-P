@@ -345,9 +345,10 @@ optional: press it after a fit. It refits the night once per variation, by least
 planet priors and the same meridian-flip decision as the fit on the page, in the background (the busy bar counts
 *Robustness check: refit 7 of 12*; **Cancel** stops it). The variations are:
 
-- **every other detrend choice** that is a reasonable one. A choice whose BIC is more than 10 above the best in
-  Auto's table is not reasonable and is not tried (the note lists it: *Not tried (not reasonable): detrend none
-  (ΔBIC +25)*);
+- **every other detrend choice** that is a reasonable one. A choice whose BIC is more than 10 above the lowest is
+  not reasonable and is not tried (the note lists it: *Not tried (not reasonable choices here): detrend none (ΔBIC
+  +25)*). The BICs are Auto's; when you picked the detrend by hand, the check works them out the same way first.
+  The airmass choices are not tried when some frames have no airmass and your fit kept those frames;
 - the **first 10 %** of the points trimmed, and the **last 10 %** (two refits);
 - the **flagged frames** the other way: put back when the fit left them out, left out when you refitted with them;
 - **each comp left out** (as the comp check below);
@@ -356,12 +357,13 @@ planet priors and the same meridian-flip decision as the fit on the page, in the
   the run measured them, so expect a minute or more on a long night of large frames (*Robustness check:
   re-measuring frame 31 of 232*). When the bigger aperture would reach the sky ring, the ring moves out with it.
   These are left out, with the reason in the note, for an opened report (no frames), when the night's frames are
-  not calibrated in this session, or when the Binning box no longer matches the night.
+  not calibrated in this session, or when the Binning box no longer matches the night. A star whose aperture or sky
+  ring would run off the frame in a variation is not measured in that frame.
 
 The result goes into the notes, the Log, the report's NOTES and the settings file, for example *"Robustness check
 (12 least-squares refits: detrend choice, trim first/last 10 %, each comp left out, aperture ±20 %, sky ring
-shifted): depth 1.37–1.73 %, ± 0.180 % across choices (formal ± 0.293 %); Tc ± 4.48 min across choices (formal
-± 6.32 min); rms 15.5–21.0 ppt. Moves the depth most: last 10 % of the points trimmed; Tc most: aperture r 3.2
+shifted): depth 1.37-1.73 %, ± 0.180 % across choices (formal ± 0.293 %); Tc ± 4.48 min across choices (formal
+± 6.32 min); rms 15.53-21.00 ppt. Moves the depth most: last 10 % of the points trimmed; Tc most: aperture r 3.2
 px."* The result line adds *"Robustness: depth ± 0.180 % (formal ± 0.293 %), Tc ± 4.48 min (formal ± 6.32 min)"*.
 The **spread** is half the full range of the refits (with the fit itself), so it reads like a ± and can be held
 against the fit's formal error. The settings file also lists every refit's depth, Tc, rms and points.
