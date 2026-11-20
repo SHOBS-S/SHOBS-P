@@ -452,7 +452,7 @@ class TestSurveyInTheApp(unittest.TestCase):
 
     def test_own_flip_step_lets_the_steadiest_back(self):
         """step 6c-2 (Fable M1/S1): stars beyond the own flip-step limit are left out; when that leaves fewer than
-        2 comps after every gate, the steadiest of them come back, and the S line says how many passed."""
+        3 comps after every gate (step 6d), the steadiest of them come back, and the S line says how many passed."""
         app = self._setup()
         real = app._survey_view
         jumps = {"STEADY B": 12.0, "STEADY C": -15.0, "STEADY D": 30.0}
@@ -468,13 +468,19 @@ class TestSurveyInTheApp(unittest.TestCase):
             return v
         with mock.patch.object(app, "_survey_view", side_effect=view):
             names = self._wait(app)
-        self.assertEqual(set(names), {"STEADY A", "STEADY B"})
+        # step 6d (John 20 Nov): let back until there are 3, steadiest first (B +12, then C -15; D +30 stays out)
+        self.assertEqual(set(names), {"STEADY A", "STEADY B", "STEADY C"})
         # (said on the S line of a flip night; this made-up night has no flip, so read it from the survey)
-        self.assertEqual(seen[-1]["own_note"], "only 1 comp candidate stays within ±10 ppt at the flip on its own, "
-                                               "so the steadiest of the others is used too: STEADY B +12.0 ppt")
+        note = seen[-1]["own_note"]
+        self.assertTrue(note.startswith("only 1 comp candidate stays within ±10 ppt at the flip on its own, "
+                                        "so the steadiest of the others are used too: "), note)
+        self.assertIn("STEADY B (own step +12.0 ppt)", note)
+        self.assertIn("STEADY C (own step -15.0 ppt)", note)
+        self.assertNotIn("STEADY D", note)
         left = [t for t in self.lines if t.startswith("Left out by the comp survey")][-1]
-        self.assertIn("STEADY C (jumps", left)
+        self.assertIn("STEADY D (jumps", left)
         self.assertNotIn("STEADY B (jumps", left)
+        self.assertNotIn("STEADY C (jumps", left)
 
     def test_without_the_linear_limit_the_peaky_star_may_stay(self):
         app = self._setup(linear=None)

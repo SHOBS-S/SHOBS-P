@@ -16100,7 +16100,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         self._survey_rejected = set()
 
-        own_back = set()   # step 6c-2: stars beyond the own flip-step limit let back so the night gets 2 comps
+        own_back = set()   # step 6c-2/6d: stars beyond the own flip-step limit let back so the night gets 3 comps
 
         def survey_ok(name):
             # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable (a
@@ -16163,34 +16163,45 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return picks_, relaxed_
 
         picks, relaxed = pick_all()
-        # step 6c-2 (Fable M1/S1): fewer than 2 comps after every gate because stars jump at the flip on their own:
-        # let the steadiest of those back, one at a time, until 2 are picked (or none is left)
+        # step 6c-2 (Fable M1/S1), step 6d (John 20 Nov, S2 option A): fewer than 3 comps after every gate because
+        # stars jump at the flip on their own: let the steadiest of those back (smallest |own step|, then the
+        # night's scatter), one at a time, until 3 are picked (or none is left)
+        need = cs.OWN_STEP_MIN_COMPS
         own_out = dict((survey or {}).get("own_out") or {})
-        if len(picks) < 2 and own_out:
-            rejected_before = set(self._survey_rejected)
-            for name in sorted(own_out, key=lambda n_: abs(own_out[n_])):
+
+        def steadiness(n_):
+            j_ = (survey or {}).get("index", {}).get(n_)
+            v = float(survey["scatter"][j_]) if j_ is not None else float("nan")
+            return v if math.isfinite(v) else float("inf")
+        rejected_before = set(self._survey_rejected)
+        if len(picks) < need and own_out:
+            for name in sorted(own_out, key=lambda n_: (abs(own_out[n_]), steadiness(n_))):
                 own_back.add(name)
                 self._survey_rejected = set(rejected_before)
                 picks, relaxed = pick_all()
-                if len(picks) >= 2:
+                if len(picks) >= need:
                     break
-            back_used = [n for n, _dm in picks if n in own_back]
-            own_back.intersection_update(back_used)
+            own_back.intersection_update(n for n, _dm in picks)
             self._survey_rejected = set(rejected_before) - own_back
+        picks, set_step, series_kept, relaxed_set, shortened = self._survey_final_picks(
+            picks, survey, choose, cands, inside, seq_names, t_bv, min_size=need if own_back else 2)
+        # step 6d: the note names the let-back comps in the set actually chosen (the flip choice may swap them)
+        back_used = [n for n, _dm in picks if n in own_back]
+        if own_back - set(back_used):
+            self._survey_rejected = (set(self._survey_rejected) | (own_back - set(back_used)))
+        own_back.intersection_update(back_used)
+        if survey is not None:
+            survey["own_note"] = ""
             if back_used:
                 n_ok = len(picks) - len(back_used)
                 lead = (f"no comp candidate stays within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own"
                         if n_ok == 0 else f"only {n_ok} comp candidate{'s' if n_ok != 1 else ''} "
                         f"stay{'s' if n_ok == 1 else ''} within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on "
-                        "its own")
+                        + ("its own" if n_ok == 1 else "their own"))
                 survey["own_note"] = (lead + ", so the steadiest of the others "
                                       + ("is" if len(back_used) == 1 else "are") + " used too: "
-                                      + ", ".join(f"{n} {own_out[n]:+.1f} ppt" for n in back_used))
-        if survey is not None and not own_back:
-            survey["own_note"] = ""
+                                      + ", ".join(f"{n} (own step {own_out[n]:+.1f} ppt)" for n in back_used))
         self._survey_own_back = set(own_back)
-        picks, set_step, series_kept, relaxed_set, shortened = self._survey_final_picks(
-            picks, survey, choose, cands, inside, seq_names, t_bv)
         if survey is not None:
             relaxed = relaxed_set   # Fable 8: the colour-tier words follow the set actually chosen
         self.suggested_comps = [(name, dm, where[name][0], where[name][1]) for name, dm in picks]
@@ -16871,7 +16882,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             snap["aperture"] = self._camera_values_now()["aperture"]
         self.log(words + ", so it is set (Suggest… shows the FWHM rule's sizes).", keep_status=True)
 
-    def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names, t_bv):
+    def _survey_final_picks(self, picks, survey, choose, cands, inside, seq_names, t_bv, min_size=2):
         """2.4.0 step 5 (#76): with the survey: a loaded series' comps come first when they pass tonight (and the
         ones that do not are said), and on a flip night the set whose measured flip step for the target is nearest
         zero is chosen from the 8 best-ranked survivors of the same colour tier as the picks (Fable 8; step 5 fix).
@@ -16918,7 +16929,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 chosen, set_step, self._survey_set_err = cs.choose_set(
                     names, keys, lambda nm: cs.set_curve(survey["tdiffs"], [index[x] for x in nm]),
                     survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix],
-                    weights=survey.get("weights"))
+                    weights=survey.get("weights"), min_size=min(min_size, want))
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
