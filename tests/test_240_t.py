@@ -462,3 +462,19 @@ class TestStep6aReviewFixesPage(unittest.TestCase):
         tp._fill_table()
         self.assertIsNone(tp._airmass_offer)
         self.assertNotIn(tp.trim_airmass_button, tp.groups.boxes["points"].shown_widgets())
+
+
+class TestStep6aReReview(unittest.TestCase):
+    def test_only_a_few_frames_are_left_out_for_airmass(self):          # R1
+        t, f, e, am, _a = night()
+        third = am.copy()
+        third[::3] = np.nan                                              # a third missing: keep every frame
+        r = tc.lsq_fit(t, f, e, third, PLANET, detrend_auto=True)
+        self.assertFalse(r["detrend_choice"]["airmass_tried"])
+        self.assertEqual(len(r["t"]), len(t))
+        few = am.copy()
+        few[:4] = np.nan
+        r = tc.lsq_fit(t, f, e, few, PLANET, detrend_auto=True)
+        ch = r["detrend_choice"]
+        self.assertEqual(ch["dropped_no_airmass"], 4)
+        self.assertIn("4 frames without airmass left out of every choice", tc.detrend_choice_text(ch))

@@ -855,6 +855,8 @@ DETREND_CHOICES = (
     ("airmass+curve", "airmass + time curve", (True, True, True)),
 )
 DETREND_AUTO = "auto"
+AUTO_AIRMASS_DROP_MAX = 10      # Auto leaves out at most this many frames without airmass to try the airmass choices
+AUTO_AIRMASS_DROP_FRAC = 0.05   # ... or this share of the night, when that is more
 DETREND_AUTO_LABEL = "Auto (BIC)"
 # Choices whose BIC is within this of the lowest count as equally good, and the one with the fewest parameters is
 # taken (ΔBIC under 2: "not worth more than a bare mention", Kass & Raftery 1995), so Auto never adds a term for nothing.
@@ -1077,7 +1079,10 @@ def detrend_choice_text(choice: dict, ascii_only: bool = False) -> str:
             + (f" (fewer terms; any choice within {DETREND_TIE:g} of the lowest BIC counts as just as good)"
                if simpler else "")
             + ("; the others: " + ", ".join(others) if others else "")
-            + flip + ("" if choice.get("airmass_tried", True) else "; airmass not tried (no airmass for every point)"))
+            + flip + ("" if choice.get("airmass_tried", True) else "; airmass not tried (no airmass for every point)")
+            + (f"; {_frames(choice['dropped_no_airmass'])} without airmass left out of every choice"
+               if choice.get("dropped_no_airmass") else "")
+            + (f"; could not be fitted: {', '.join(choice['failed'])}" if choice.get("failed") else ""))
     if ascii_only:
         text = text.replace("ΔBIC", "dBIC")
     return text
@@ -1186,11 +1191,14 @@ def _setup_and_detrend(t, flux, err, airmass, planet, detrend_airmass, detrend_t
         allow = airmass_usable(airmass)
         dropped = 0
         if not allow and airmass is not None:
-            # Fable S2: a few frames without airmass (as manual airmass does, those frames are left out, so every
-            # choice is fitted on the same frames); with half or more missing, Auto leaves airmass out instead
+            # Fable S2: a FEW frames without airmass (at most 10, or 5 % of the night when that is more; re-review
+            # R1): as manual airmass does, those frames are left out, so every choice is fitted on the same frames.
+            # With more missing, Auto leaves airmass out instead and keeps every frame.
             am_ = np.asarray(airmass, dtype=float)
             fin = np.isfinite(am_)
-            if am_.size and fin.mean() >= 0.5 and fin.sum() >= 20 and np.ptp(am_[fin]) > 1e-4:
+            few = max(AUTO_AIRMASS_DROP_MAX, int(AUTO_AIRMASS_DROP_FRAC * am_.size))
+            if (am_.size and 0 < int((~fin).sum()) <= few and fin.sum() >= 20
+                    and np.ptp(am_[fin]) > 1e-4):
                 allow, dropped = True, int((~fin).sum())
         S = _setup_fit(t, flux, err, airmass, planet, allow, after_flip, flip_step, flagged_mask)
         S["dropped_no_airmass"] = dropped
@@ -2145,6 +2153,10 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         flags.append(("info", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
                               "heavily on the b prior."))
+    chd = r.get("detrend_choice") or {}
+    if chd.get("dropped_no_airmass"):   # re-review R1: on the page too, not only in the Log
+        flags.append(("info", f"Auto detrend left out {_frames(chd['dropped_no_airmass'])} without airmass, so every "
+                              "detrend choice was fitted on the same frames."))
     cnote = curve_depth_note(r)   # 2.4.0 (John 19 Nov): Auto's time curve and the depth without it
     if cnote:
         flags.append(("info", cnote))

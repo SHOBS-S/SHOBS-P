@@ -750,7 +750,8 @@ class TransitPage:
             self._detrend_wanted = self.detrend.get()
             self._airmass_wanted = key == tc.DETREND_AUTO or tc.detrend_flags(key)[0]
         else:
-            if key != tc.DETREND_AUTO and self._airmass_wanted:
+            if (key != tc.DETREND_AUTO and self._airmass_wanted
+                    and self._detrend_wanted != tc.DETREND_AUTO_LABEL):   # re-review nit: Auto adds nothing back
                 _da, dt, dq = tc.detrend_flags(key)
                 key = tc.detrend_key((True, dt, dq))
             self._detrend_wanted = tc.detrend_label(key)
@@ -1593,10 +1594,19 @@ class TransitPage:
             want_rp = (planet is not None and "k_published" not in planet and pname
                        and time.monotonic() - failed_at.get(pname, -1e9) > 600)
 
+            good = self.__dict__.setdefault("_rp_lookup_good", {})
+            if want_rp and pname in good:   # re-review nit: a hand-typed planet's answer, kept for this session
+                planet["k_published"], planet["depths_listed"] = good[pname]
+                want_rp = False
+
             def keep_rp(ks, ds, ok):
                 if not ok:
                     failed_at[pname] = time.monotonic()
+                    app.log(f"Published sizes for {pname} not available (the NASA Exoplanet Archive did not answer, "
+                            "and none are cached): the size check uses the planet's one Rp/R* for now.",
+                            keep_status=True)
                     return
+                good[pname] = (ks, ds)
                 for target in (src_planet, getattr(app, "planet_info", None)):
                     if (isinstance(target, dict) and target is not planet and _norm(target.get("name")) == _norm(pname)
                             and "k_published" not in target):
@@ -1722,6 +1732,14 @@ class TransitPage:
         cancel = app._cancel
         summary = dict(r["summary"])
         fl_ = tuple(r.get("detrend_flags") or (job["da"], job["dt"], job.get("dq", False)))
+        if ((r.get("detrend_choice") or {}).get("dropped_no_airmass") and job.get("am") is not None
+                and not fl_[0]):
+            # re-review R1: the main fit left out the frames without airmass; so do the comp check's refits
+            keep = np.isfinite(np.asarray(job["am"], dtype=float))
+            job = dict(job)
+            for k_ in ("t", "flux", "err", "am", "after", "flagged_mask", "comp_mags"):
+                if job.get(k_) is not None and len(job[k_]) == len(keep):
+                    job[k_] = np.asarray(job[k_])[keep]
 
         def work():
             try:
