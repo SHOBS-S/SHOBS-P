@@ -315,11 +315,18 @@ From 2.3.4 the rules are:
 The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P also measures the candidates on the
 **night's own frames** before you run, so S1–S4 are chosen on how the stars actually behaved tonight. You never press
 anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
-lower left says *Choosing comps from the night's frames… frame 12 of 30*. From 2.4.0 nothing is suggested while it
+lower left counts the frames it reads: *Choosing comps from the night's frames… frame 20 (first pass)*, then
+*frame 31 of 37* once the total can no longer change. On a Transits night with a meridian flip it keeps counting
+without a total (*frame 45 (at the meridian flip)*, *frame 52 (baseline beside the transit)*), because how many
+more frames the flip needs is only known as it reads them. From 2.4.0 nothing is suggested while it
 reads (no green rings, no *Suggested comps* line, only the busy bar): the survey's own set comes up when it is done,
 in one *Suggested comps* line. The catalog-and-this-frame picks appear only when the survey cannot run or fails (the
 Log then says *the suggestions are from the catalog and this frame only*). A loaded series' comps stay in the boxes
-as before. If you
+as before. When a loaded series' comps (and its check) are **all placed** on the image, the survey is skipped: there
+is nothing for it to suggest, and **Run photometry** starts at once instead of waiting (the Log says *Comp survey
+skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health
+after the run shows how they did)*). If the survey was already reading when the last comp got its marker, pressing
+**Run photometry** calls it off and runs. If you
 press **Run photometry** while it is still reading, the run waits and starts by itself when the survey is done (the
 Log says *Run photometry waits for the comp survey to finish, then starts by itself.*). **Cancel** calls the wait off
 (the survey goes on; it only changes the suggestions). The survey is read once per frame on the page and target: when
@@ -349,21 +356,27 @@ meridian flip, stars nearer the target rank a little higher: after the flip ever
 the sensor, so a flat or optics error that does not cancel shows up as a step, and it grows away from the center.
 
 **Choosing the set on a flip night (Transits).** What matters is the step the *target* gets with a set of comps, so
-SHOBS-P measures exactly that. Once its every-10th frames show which side of the flip each frame is on, the survey
-reads a few more frames to find the flip to the frame, then the 15 frames on each side of it (on a 232-frame night,
-about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture trial
-still use only the evenly spread frames). On those 30 frames it takes the target against each possible set (2
-to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the ephemeris and shape from the
-Input page, and keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
-step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The suggestions line ends with, for example, *Chosen on 51 of the night's 232
-frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 24 before and 27 after the meridian
-flip, so steady on both pier sides, the target's flip step with these comps +0.1 ± 2.8 mmag (measured on the frames
-nearest the flip, the predicted transit taken out)).*
+SHOBS-P measures exactly that, the way the transit fit will. Once its every-10th frames show which side of the flip
+each frame is on, the survey reads a few more frames to find the flip to the frame, then the 15 frames on each side of
+it (on a 232-frame night, about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture
+trial still use only the evenly spread frames). It then takes the target against each possible set (2 to 4 of the 8
+best-ranked survivors) on **every frame it read outside the predicted transit**, before and after the flip, using the
+ephemeris and shape from the Input page. Each frame counts for the stretch of the night it stands for (an every-10th
+frame for ten frames, a frame at the flip for one), as the fit counts every frame alike, so the number is a forecast
+of the step the fit will find on the whole night's baseline. It keeps the set with the lowest step for the target
+plus its own noise, so a set has to earn a smaller step against noisier comps (a fourth comp is preferred over three
+when the rest is within half a mmag). The suggestions line ends with, for example, *Chosen on 59 of the night's 232
+frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 25 before and 34 after the meridian
+flip, so steady on both pier sides, the target's flip step with these comps +0.8 ± 1.2 ppt (measured as the transit
+fit measures it: the whole night's frames read outside the predicted transit, on both sides of the flip)).* The step
+is in the fit's own units and sign (ppt of flux, + means brighter after the flip), so you can hold it against the
+*flip step* the fit reports.
 
 Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
 3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,
-and on that night it picked a pair that left the target a +35 ppt step over the night. Measuring the target on 15
-frames a side picked sets whose step over the whole night was within 1 ppt of zero, at both apertures tried.
+and on that night it picked a pair that left the target a +35 ppt step over the night. The next try measured the
+target on the 15 frames each side of the flip only; it forecast +0.1 mmag for a set where the fit, on the whole night,
+found +6.4 ppt with the same comps. From step 6b the step is measured on the same baseline the fit uses.
 
 **When the target's step is not measured.** The set is then chosen on steadiness alone, and a star that jumps at the
 flip against the other stars ranks lower. This happens when:
@@ -833,8 +846,10 @@ The line reads (N and the numbers are examples):
   no stacking (…). Brighter comps, or longer exposures, would help."*
 - **The comps are fine, but your precision goal is not reached per frame**: *"Per-frame points are about 3.1 ppt;
   your 2 ppt goal needs stacks of 3 frames (9 s each); …"*
-- **The comps are fine** (gray): *"Comps are fine per frame (comp noise 35% of the target's): stacking is not needed.
-  Type N to stack anyway."*
+- **The comps are fine** (gray): *"Comps are fine per frame: their noise is small beside the scintillation (about 20%
+  of each point's error), so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."*
+  When the comps are quieter than the target itself, it says *"their noise is below the target's own (about …)"*
+  instead.
 - **Discovery** has no comps, so the line is never orange: *"Stacking (optional): stacks of 6 frames (18 s each); 60
   frames → 10 points. Time cap 5.0 min: a stack hides events faster than itself."*
 

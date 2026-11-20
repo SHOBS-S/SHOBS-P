@@ -7,7 +7,8 @@ about every 10th light, the first and last, the frames next to the sharpest ones
 meridian flip. From those frames each candidate gets:
   - its scatter against the other candidates (an iterative ensemble, like Comp health),
   - on a Transits night with a meridian flip, the TARGET's step there against it (and, for the set, against the set's
-    mean), from the frames nearest the flip with the predicted transit taken out (step 5 fix),
+    mean), with the predicted transit taken out (step 5 fix), measured like the transit fit measures it: every frame
+    read on each side of the flip, weighted by the span of the night each stands for (step 6b, John 19 Nov),
   - its highest raw peak (the sharpest frames read), for the linear-limit gate,
   - whether it was measured on every sampled frame.
 #61: the same frames are measured at a few apertures, and the one with the lowest scatter for stars like the target
@@ -211,6 +212,90 @@ def near_flip_rows(after, near_flip: int = FLIP_NEAR, idx=None, reach: int = FLI
     return b_rows, a_rows
 
 
+def whole_night_rows(after, idx, n_frames: int, usable=None):
+    """2.4.0 step 6b (John 19 Nov, "match the fit"): the rows for the target's flip step measured the way the transit
+    fit measures it: EVERY frame read on each side of the flip (the whole night's baseline), not only the frames
+    nearest it. after: per row (frames in time order), True after the flip (flip_sides); idx: each row's frame
+    number in the night (0 .. n_frames - 1); usable: rows that may be used (finite times, not near ingress or
+    egress), all when None. The survey reads ~30 frames right at the flip and only every ~10th elsewhere, so each
+    row is weighted by the span of the night's frames it stands for (half-way to its neighbors on its own side,
+    the side's first and last rows out to the side's ends), as the fit weights every frame alike.
+    Returns (b_rows, a_rows, weights: an array over ALL rows, 0 where not used); empty rows without a flip."""
+    none = np.zeros(0, int), np.zeros(0, int), np.zeros(0)
+    if after is None:
+        return none
+    after = np.asarray(after, dtype=bool)
+    fr = np.asarray(idx, dtype=float) if idx is not None else np.arange(after.size, dtype=float)
+    if fr.size != after.size or not after.any() or after.all():
+        return none
+    ok = np.ones(after.size, bool) if usable is None else np.asarray(usable, dtype=bool)
+    first_after = int(np.where(after)[0].min())
+    edge = 0.5 * (fr[first_after - 1] + fr[first_after]) if first_after > 0 else fr[first_after]
+    w = np.zeros(after.size)
+    out = []
+    for side, lo, hi in ((False, -0.5, edge), (True, edge, float(n_frames) - 0.5)):
+        # spans from EVERY row read on this side, so a row next to the frames left out (in transit) does not take
+        # their span over; then only the usable rows keep theirs
+        rows_all = np.where(after == side)[0]
+        if rows_all.size:
+            f = fr[rows_all]
+            mids = 0.5 * (f[1:] + f[:-1])
+            w[rows_all] = np.maximum(np.r_[mids, hi] - np.r_[lo, mids], 0.5)
+        rows = rows_all[ok[rows_all]]
+        out.append(rows)
+    w[~ok] = 0.0
+    return out[0], out[1], w
+
+
+BASELINE_SIDE = 15        # step 6b: frames wanted outside the predicted transit on each side of a flip (Transits)
+BASELINE_PASS_MAX = 30    # ... at most this many extra reads for them
+
+
+def baseline_pass(n: int, tried, read_jd: dict, flipped: dict, is_baseline, want: int = BASELINE_SIDE) -> list[int]:
+    """2.4.0 step 6b: on a Transits flip night, the next frames to read so the target's step is measured on enough
+    of the night's BASELINE (outside the predicted transit) on each side of the flip: the every-10th frames give
+    only ~5 there when the flip falls near mid-transit (WASP-49 b 19 Nov), and the frames read at the flip are all
+    in transit. tried: frames read or tried; read_jd: {frame: JD} of the frames read (times of the others are
+    interpolated, the lights being in time order); flipped: {frame: orientation}; is_baseline(jd array) -> bool
+    array. Frames spread evenly over each side's baseline, up to `want` baseline frames a side in all."""
+    sides = {i: bool(v) for i, v in flipped.items() if v is not None}
+    have_jd = sorted((i, float(j)) for i, j in read_jd.items() if j is not None and math.isfinite(float(j)))
+    if len(set(sides.values())) < 2 or len(have_jd) < 2:
+        return []
+    first = sides[min(sides)]
+    after_read = [i for i, v in sides.items() if v != first]
+    before_read = [i for i, v in sides.items() if v == first and i < min(after_read)]
+    if not before_read:
+        return []
+    cut = 0.5 * (max(before_read) + min(after_read))   # between the last frame read before and the first after
+    xi, xj = np.array([p[0] for p in have_jd], float), np.array([p[1] for p in have_jd], float)
+    all_i = np.arange(n)
+    jd_all = np.interp(all_i, xi, xj)
+    base = np.asarray(is_baseline(jd_all), dtype=bool)
+    out = []
+    for lo, hi in ((0, cut), (cut, n)):
+        side_i = all_i[(all_i >= lo) & (all_i < hi) & base]
+        if not side_i.size:
+            continue
+        have = sum(1 for i in read_jd if lo <= i < hi and base[i])
+        need = want - have
+        if need <= 0:
+            continue
+        free = [int(i) for i in side_i if int(i) not in tried]
+        if not free:
+            continue
+        pick = np.unique(np.linspace(0, len(free) - 1, min(need, len(free))).round().astype(int))
+        out += [free[k] for k in pick]
+    return sorted(out)
+
+
+def _wmedian(x, w) -> float:
+    o = np.argsort(x)
+    x, w = x[o], w[o]
+    c = np.cumsum(w)
+    return float(x[np.searchsorted(c, 0.5 * c[-1])])
+
+
 def ensemble_stats(mags, flipped=None, iterations: int = 3, near_flip: int = FLIP_NEAR) -> dict:
     """mags: instrumental magnitudes, frames in TIME ORDER in rows, candidates in columns (NaN = not measured).
     flipped: per frame, its orientation against the reference frame (None or all one value: no flip). Each
@@ -338,6 +423,37 @@ def near_contact(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> bool:
     return False
 
 
+def out_of_transit(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> np.ndarray:
+    """2.4.0 step 6b: per time, True when it lies outside the predicted transit (first to fourth contact) by more
+    than `margin` + 3 sigma of the predicted Tc (EPHEM_ERR_MISSING more without a known Tc error, as near_contact):
+    the baseline frames, on which the target's flip step is measured as the fit measures it (the fit's free depth
+    comes from the frames in transit, the step from the baseline on both sides of the flip). Times that are not
+    finite are never baseline. All True without a transit (no first contact)."""
+    t = np.asarray(t, dtype=float)
+    ok = np.isfinite(t)
+    if model is None:
+        return np.zeros(t.size, bool)
+    P, a_rs, b, k = model["period"], model["a_rs"], model["b"], model["k"]
+    inc = math.acos(min(max(b / a_rs, 0.0), 0.9999))
+    s_i = a_rs * math.sin(inc)
+    arg = (1.0 + k) ** 2 - b * b
+    h14 = P / (2 * math.pi) * math.asin(min(math.sqrt(arg) / s_i, 1.0)) if arg > 0 else 0.0
+    if h14 <= 0:
+        return ok
+    out = ok.copy()
+    p_err = model.get("period_err")
+    for i in np.where(ok)[0]:
+        n = round((t[i] - model["t0"]) / P)
+        tcn = model["t0"] + n * P
+        if model.get("err_known", True) and model.get("t0_err") is not None and (p_err is not None or n == 0):
+            m = margin + 3.0 * math.hypot(model["t0_err"], abs(n) * (p_err or 0.0))
+        else:
+            m = margin + EPHEM_ERR_MISSING
+        if abs(t[i] - tcn) <= h14 + m:
+            out[i] = False
+    return out
+
+
 def target_diffs(t_mag, comp_mags, t_model=None):
     """step 5 fix (#76): per frame (rows) and candidate (columns): the target's magnitude minus the candidate's, each
     zero-pointed to its own median, with the predicted transit taken out of the target (t_model, mag, positive in
@@ -361,25 +477,54 @@ def set_curve(diffs, cols) -> np.ndarray:
     return np.where(ok, d.mean(axis=1), np.nan)
 
 
-def curve_step(lc, b_rows, a_rows, min_side: int = FLIP_MIN_SIDE) -> tuple[float, float]:
-    """(median after - median before, its 1-sigma error) of a per-frame curve on the near-flip rows; NaNs with fewer
-    than min_side finite frames a side."""
+def curve_step(lc, b_rows, a_rows, min_side: int = FLIP_MIN_SIDE, weights=None) -> tuple[float, float]:
+    """(median after - median before, its 1-sigma error) of a per-frame curve on the given rows; NaNs with fewer
+    than min_side finite frames a side. weights (step 6b, whole_night_rows): over all rows, a weighted median per
+    side, its error from the weighted scatter and the effective number of frames."""
     lc = np.asarray(lc, dtype=float)
+    a_rows, b_rows = np.asarray(a_rows, dtype=int), np.asarray(b_rows, dtype=int)
     a, b = lc[a_rows], lc[b_rows]
-    a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+    if weights is None:
+        a, b = a[np.isfinite(a)], b[np.isfinite(b)]
+        if a.size < max(2, min_side) or b.size < max(2, min_side):
+            return float("nan"), float("nan")
+        err = 1.2533 * math.sqrt(float(np.var(a, ddof=1)) / a.size + float(np.var(b, ddof=1)) / b.size)
+        return float(np.median(a) - np.median(b)), err
+    w = np.asarray(weights, dtype=float)
+    wa, wb = w[a_rows], w[b_rows]
+    ka, kb = np.isfinite(a) & (wa > 0), np.isfinite(b) & (wb > 0)
+    a, b, wa, wb = a[ka], b[kb], wa[ka], wb[kb]
     if a.size < max(2, min_side) or b.size < max(2, min_side):
         return float("nan"), float("nan")
-    err = 1.2533 * math.sqrt(float(np.var(a, ddof=1)) / a.size + float(np.var(b, ddof=1)) / b.size)
-    return float(np.median(a) - np.median(b)), err
+    # the fit is least squares, so a weighted MEAN (WASP-49 b 19 Nov, every frame: mean +5.7 ppt against the fit's
+    # +6.4, median +3.7), with points beyond 4 sigma of the median left out so one bad frame does not set it
+    def side(x, ww):
+        keep = np.ones(x.size, bool)
+        for _ in range(3):
+            med = _wmedian(x[keep], ww[keep])
+            sig = 1.4826 * _wmedian(np.abs(x[keep] - med), ww[keep])
+            new = np.abs(x - med) <= 4.0 * sig if sig > 0 else keep
+            if new.sum() < 2 or np.array_equal(new, keep):
+                break
+            keep = new
+        x, ww = x[keep], ww[keep]
+        mean = float(np.sum(ww * x) / ww.sum())
+        neff = float(ww.sum() ** 2 / np.sum(ww * ww))
+        v = float(np.sum(ww * (x - mean) ** 2) / ww.sum()) * neff / max(neff - 1.0, 1.0)
+        return mean, v / max(neff, 1.0)
+    ma, va = side(a, wa)
+    mb, vb = side(b, wb)
+    return ma - mb, math.sqrt(va + vb)
 
 
-def set_target_step(diffs, cols, b_rows, a_rows) -> tuple[float, float]:
+def set_target_step(diffs, cols, b_rows, a_rows, weights=None) -> tuple[float, float]:
     """The target's flip step (after minus before, mag) with the comps in columns `cols`, and its 1-sigma error: the
-    median over the near-flip frames after minus the median before, of the target minus the set's mean. (NaN, NaN)
+    median over the frames after minus the median before (step 6b: every frame read on each side, weighted as the
+    fit weights the night, with weights from whole_night_rows), of the target minus the set's mean. (NaN, NaN)
     with fewer than FLIP_MIN_SIDE frames a side where every comp of the set was measured."""
     if not len(cols):
         return float("nan"), float("nan")
-    return curve_step(set_curve(diffs, cols), b_rows, a_rows)
+    return curve_step(set_curve(diffs, cols), b_rows, a_rows, weights=weights)
 
 
 def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,
@@ -428,7 +573,7 @@ def rank_key(base: float, scatter: float, ref_scatter: float, step: float = floa
 
 
 def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
-               top: int = SET_TOP, scatter=None) -> tuple[list, float, float]:
+               top: int = SET_TOP, scatter=None, weights=None) -> tuple[list, float, float]:
     """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set (2 up to
     `count` stars) whose MEASURED flip step for the target is nearest zero. curve(names) -> per-frame target minus
     the set's mean (set_curve); the step is from the near-flip rows (curve_step). Step 5 fix (#76): on WASP-49 b a
@@ -453,7 +598,7 @@ def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
     best = None
     for size in range(2, k + 1):
         for c in itertools.combinations(pool, size):
-            st, er = curve_step(curve([p[0] for p in c]), b_rows, a_rows)
+            st, er = curve_step(curve([p[0] for p in c]), b_rows, a_rows, weights=weights)
             if not math.isfinite(st):
                 continue
             noise = (math.sqrt(sum(sc_of[p[0]] ** 2 for p in c)) / size) if all(p[0] in sc_of for p in c) else 0.0

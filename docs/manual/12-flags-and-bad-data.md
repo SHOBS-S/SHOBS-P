@@ -135,7 +135,8 @@ After a run, SHOBS-P may warn that a comp or the check star sat **near the frame
 
 When the **check star** leaves the frame in some frames, those frames have no check value. The line says which frames, and it names the spare nearest the check's brightness that stayed farther in all night, for example "check APASS J175240.3+373049 comes within 0 px of the frame edge (stars at least 66 px in are safe): … The check star was off the frame in 19 frames (194-195, 197-213), which have no check value. A better check star stays farther in: TYC 2620-391-1 (V 12.20), 0.9 mag brighter than APASS J175240.3+373049, at least 194 px in all night (measured as a spare). Pick it as the check next time."
 
-A **spare** near the edge gets only a line in the Log: spares are measured but not used, so there is nothing to do.
+A **spare** near the edge is not shown at all (2.4.0): spares are measured but not used, so there is nothing to do.
+The line goes only to the log file (`.shobs_p.log`), for troubleshooting.
 
 ## Frames without the target
 

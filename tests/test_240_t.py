@@ -341,9 +341,9 @@ class TestStep6aReviewFixes(unittest.TestCase):
         with mock.patch.object(tc, "best_fit", side_effect=flaky):
             S, _fl, _ft, ch = tc._setup_and_detrend(t, f, e, am, PLANET, True, False, False, True, None, None, None,
                                                    say=said.append)
-        self.assertEqual(ch["failed"], ["time curve"])
+        self.assertEqual(ch["failed"], ["time curve (quadratic)"])
         self.assertNotIn("curve", [r_["key"] for r_ in ch["rows"]])
-        self.assertTrue(any("detrend time curve: no fit" in m for m in said))
+        self.assertTrue(any("detrend time curve (quadratic): no fit" in m for m in said))
 
     def test_curve_depth_note(self):                                     # S1 (John: note with / without)
         ch = {"key": "airmass+curve", "label": "airmass + time curve", "flags": (True, True, True), "rows": [
@@ -443,7 +443,7 @@ class TestStep6aReviewFixesPage(unittest.TestCase):
             tp.set_detrend("curve")                                    # picked while airmass is missing
             tp.report = {"t": np.arange(30.0), "airmass": np.linspace(1.1, 1.5, 30)}
             tp._update_airmass_box()
-            self.assertEqual(tp.detrend.get(), "airmass + time curve")  # airmass added back, the curve kept
+            self.assertEqual(tp.detrend.get(), "airmass + time curve (quadratic)")  # airmass added back, the curve kept
         finally:
             tp.report = old
             tp._airmass_off_why = ""

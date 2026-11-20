@@ -64,9 +64,9 @@ strip; the page has no progress bar of its own.
   after the transit. Pressing it trims them (the same as a Trim span) and refits; **Clear trim** puts them back. The
   limit can be changed with `transit_trim_airmass` in the settings file.
 - **Corrections** row. **Detrend** (a drop-down, from 2.4.0): the baseline trend fitted together with the transit.
-  The choices are **Auto (BIC)** (the default), **none**, **airmass**, **time slope**, **time curve**, **airmass + time
-  slope** and **airmass + time curve**. A *time curve* is a slope plus a gentle bend (quadratic in time); nothing
-  higher than that is offered, because higher powers start to fit the transit itself (ExoClock's advice).
+  The choices are **Auto (BIC)** (the default), **none**, **airmass**, **time slope**, **time curve (quadratic)**,
+  **airmass + time slope** and **airmass + time curve (quadratic)**. A *time curve* is a slope plus a gentle bend
+  (quadratic in time); nothing higher than that is offered, because higher powers start to fit the transit itself (ExoClock's advice).
   **Auto** fits every choice and keeps the one with the lowest BIC. Choices within 2 of the lowest count as just as
   good, and then the one with fewer terms is kept, so Auto never adds a term for nothing. On a night with a meridian
   flip, the flip-step test runs *inside* each choice, because a time curve and a flip step can stand in for each
@@ -97,8 +97,9 @@ strip; the page has no progress bar of its own.
   the table and the result line) turn gray: they are still the earlier fit's, until you press the button. Setting the
   box back makes them black again.
 - **Comps** row: **Comp health…**, **Use comps…** (below).
-- **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…** and **Fit the series' nights…** (all below).
-  **Fit the series' nights…** is grayed unless a Transits series with two or more nights is open.
+- **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** and
+  **Robustness check** (all below). **Fit the series' nights…** is grayed unless a Transits series with two or more
+  nights is open; **Robustness check** is grayed until there is a fit on the page.
 - **View** row: the **credible bands** box and the **Plot bins** box (see "Read the plot"). Display only.
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
@@ -335,6 +336,41 @@ detrend and press Fit transit."*; nothing is fitted until you press it.
 
 These two buttons work only on this session's photometry. While an EXOTIC report is shown they are grayed out, and
 the hint beside them says why.
+
+## How robust is the result? (Robustness check, 2.4.0)
+
+The depth and Tc can move with choices that are all reasonable: the detrend, how much baseline is kept, the flagged
+frames, the comps, the aperture and the sky ring. **Robustness check** (Analysis row) makes that visible. It is
+optional: press it after a fit. It refits the night once per variation, by least squares (no MCMC), with the same
+planet priors and the same meridian-flip decision as the fit on the page, in the background (the busy bar counts
+*Robustness check: refit 7 of 12*; **Cancel** stops it). The variations are:
+
+- **every other detrend choice** that is a reasonable one. A choice whose BIC is more than 10 above the best in
+  Auto's table is not reasonable and is not tried (the note lists it: *Not tried (not reasonable): detrend none
+  (ΔBIC +25)*);
+- the **first 10 %** of the points trimmed, and the **last 10 %** (two refits);
+- the **flagged frames** the other way: put back when the fit left them out, left out when you refitted with them;
+- **each comp left out** (as the comp check below);
+- for this session's photometry, the **aperture ×0.8 and ×1.2**, and the **sky ring moved out** by half its
+  width. For these, SHOBS-P measures the target and the comps in use again on every frame of the fit, at the spots
+  the run measured them, so expect a minute or more on a long night of large frames (*Robustness check:
+  re-measuring frame 31 of 232*). When the bigger aperture would reach the sky ring, the ring moves out with it.
+  These are left out, with the reason in the note, for an opened report (no frames), when the night's frames are
+  not calibrated in this session, or when the Binning box no longer matches the night.
+
+The result goes into the notes, the Log, the report's NOTES and the settings file, for example *"Robustness check
+(12 least-squares refits: detrend choice, trim first/last 10 %, each comp left out, aperture ±20 %, sky ring
+shifted): depth 1.37–1.73 %, ± 0.180 % across choices (formal ± 0.293 %); Tc ± 4.48 min across choices (formal
+± 6.32 min); rms 15.5–21.0 ppt. Moves the depth most: last 10 % of the points trimmed; Tc most: aperture r 3.2
+px."* The result line adds *"Robustness: depth ± 0.180 % (formal ± 0.293 %), Tc ± 4.48 min (formal ± 6.32 min)"*.
+The **spread** is half the full range of the refits (with the fit itself), so it reads like a ± and can be held
+against the fit's formal error. The settings file also lists every refit's depth, Tc, rms and points.
+
+A plain note means every spread is within its formal error. When the depth or Tc moves **more** than its formal
+error, the notes get a ⚠ that names the choice that moves it most, for example *"Robustness: the Tc moves more
+across reasonable reduction choices than its formal error (± 3.10 min against ± 1.20 min); the most is aperture r
+6.4 px (4.2 min). Report the larger spread with the result, or find out which choice is right before reporting."*
+Press it again after a new fit: the check belongs to the fit it was run on.
 
 ## Leave out a bad stretch (Trim)
 

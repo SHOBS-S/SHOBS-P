@@ -12840,6 +12840,26 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return set()
         return {str(n) for n in list(self.comp_coords) + list(getattr(self, "comp_catalog_mags", None) or {})}
 
+    def _series_comps_all_placed(self) -> bool:
+        """2.4.0 step 6b (John 19 Nov): a loaded series whose comps are all in the boxes AND marked on this image
+        (and its check, when it names one): the comp survey is skipped and Run photometry starts at once; Comp health
+        after the run judges those comps. Not in Discovery, never without a series."""
+        if self.mode_key == "discovery" or not getattr(self, "series_path", ""):
+            return False
+        known = {name_key(n) for n in self._series_star_names()}
+        named = 0
+        for role in COMP_ROLES + ("check",):
+            name = getattr(self, f"{role}_name").get().strip()
+            if not name:
+                continue
+            if getattr(self, f"{role}_xy") is None:
+                return False
+            if role != "check":
+                named += 1
+                if known and name_key(name) not in known:
+                    return False   # a comp typed in tonight that the series does not know: the survey still helps
+        return named >= 1
+
     def _sky_on_frame(self, ra: float, dec: float):
         """2.4.0 step 4 (#72): where a sky position falls on this image: {"px", "py", "state", "beyond", "side"}.
         state "on" (inside the image), "edge" (outside it by no more than the aperture radius: a weak solve near the
@@ -13077,6 +13097,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if same:
                 return same[0]
         return star_record.display_name(names) or str((star or {}).get("auid") or (star or {}).get("label") or "")
+
+    def _cat_name(self, star) -> str:
+        """2.4.0 step 6b (John 19 Nov, #72 rule): the one name a catalog star goes by everywhere on the Photometry
+        page: the suggestions, their S lines, the comp survey, the spares and the comp boxes all use _slot_name_for
+        (the series' name for a star it knows, else AUID / AAVSO label, then TYC, Gaia, APASS). Before, the
+        suggestions used the catalog's own ID (TYC 5936-2073-1, APASS J060338.6-170306) while the boxes and the
+        settings said 000-BQG-573 and Gaia DR3 2991287972537580288 for the same two stars (WASP-49 b, 19 Nov)."""
+        if not star:
+            return ""
+        try:
+            return self._slot_name_for(star)
+        except Exception:
+            return str(star.get("auid") or star.get("label") or "")
 
     def _brightest_star_within(self, xy, wide: float, radius: float, fwhm):
         """2.4.0 step 4 (#71): the center of the brightest star within wide px of xy (a real star: 10 sigma, see
@@ -15317,7 +15350,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.chart_solution = None
         auto_target = diag.get("radec_given", True) and self._auto_target_marker()   # 2.2.15 (GitHub #3): before
         # the comps are suggested around it
-        self._seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in self.chart_placed
+        self._seq_names = {self._cat_name(st) for _x, _y, st in self.chart_placed
                            if st.get("seq")} if self.mode_key != "discovery" else set()
         self._seq_note_for = None
         self._apply_field_check(vet, solved, diag)
@@ -15799,7 +15832,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             box = self.preview[max(0, y0 - ri):y0 + ri + 1, max(0, x0 - ri):x0 + ri + 1]
             if box.size and np.nanmax(box) >= sat:
                 continue
-            name = str(st.get("auid") or st.get("label") or "")
+            name = self._cat_name(st)   # step 6b: the #72 display name, as the boxes use
             if not name:
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
@@ -15916,7 +15949,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
         # within 0.3 in color first, then the rest. 2.4.0 (#78): only stars that stay at least safe_edge in all night
         # (no pool lets a star nearer the edge back in; the field gets fewer suggestions instead, and the log says so).
-        seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in stars if st.get("seq")}
+        seq_names = {self._cat_name(st) for _x, _y, st in stars if st.get("seq")}
         inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
         relaxed = set()
         picks = []
@@ -16017,7 +16050,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         h, w = self.preview.shape[:2]
         tx, ty = self.target_xy
         m = self.SURVEY_MARGIN
-        stars = [(str(st.get("auid") or st.get("label") or ""), float(x), float(y), float(st["mag"]))
+        stars = [(self._cat_name(st), float(x), float(y), float(st["mag"]))
                  for x, y, st in (self.chart_placed or []) if not st.get("variable") and st.get("mag") is not None
                  and m <= x < w - m and m <= y < h - m and math.hypot(x - tx, y - ty) > 3.0]
         stars = [s_ for s_ in stars if s_[0]]
@@ -16027,8 +16060,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if t_cat is None and cands and math.isfinite(t_inst):
                 # re-review 6: an uncatalogued target: its catalog-scale magnitude from the candidates' zero point,
                 # rounded to 0.5 mag so the list (and the survey's key) does not change with the aperture
-                mag_of = {str(st.get("auid") or st.get("label") or ""): st.get("mag")
-                          for _x, _y, st in (self.chart_placed or [])}
+                mag_of = {self._cat_name(st): st.get("mag") for _x, _y, st in (self.chart_placed or [])}
                 zp = [float(mag_of[c[0]]) - c[1] for c in cands if mag_of.get(c[0]) is not None
                       and math.isfinite(c[1])]
                 if len(zp) >= 3:
@@ -16062,6 +16094,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return None
         if getattr(self, "_preview_foreign", ""):
             return None   # Fable 14: an image of another field
+        if self._series_comps_all_placed():
+            # step 6b (John 19 Nov): the series' comps are all placed: no survey (Comp health after the run judges them)
+            self._say_survey_skipped()
+            return None
         if self.masters is None and not getattr(self, "precalibrated", False):
             return None
         try:
@@ -16107,15 +16143,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
                                       "aperture_at_start": (r, si, so), "stars": stars}
         cache["tok"] = self.busy_begin("Choosing comps from the night's frames…")   # step 6 nit a
+        base_model = None
+        if self.mode_key == "transits":
+            # step 6b: the predicted transit, so the survey also reads baseline frames on each side of a flip
+            try:
+                base_model = cs.transit_mags(np.zeros(1), self.planet_from_fields(), tcore.occultation)
+            except Exception:
+                base_model = None
         try:
-            self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r)
+            self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r, base_model)
         except Exception as exc:   # Fable nit 19: never a busy bar left on, nor a Run waiting forever
             self.busy_end(cache.pop("tok", None))
             cache["state"], cache["result"] = "done", {"error": f"{type(exc).__name__}: {exc}"}
             log_to_file(f"Comp survey could not start: {exc}")
         return None
 
-    def _survey_start(self, cache, lights, stars, radii, rings, binning, pattern, mode, r_now):
+    def _survey_start(self, cache, lights, stars, radii, rings, binning, pattern, mode, r_now, base_model=None):
         masters, ref = self.masters, self.preview
         precal = bool(getattr(self, "precalibrated", False))
         total_bin = binning * (1 if pattern == core.MONO else 2)
@@ -16153,7 +16196,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         tried.add(i)
                         path = lights[i]
                         done[0] += 1
-                        self.call_ui(self._survey_progress, cache, f"frame {done[0]} of {of_words}")
+                        # step 6b (John 19 Nov): a total only once it can no longer change; until then a running
+                        # count ("frame 20 (first pass)", then "frame 31 of 59"), never a total that jumps 24 -> 59
+                        words = (f"frame {done[0]} of {of_words}" if isinstance(of_words, int)
+                                 else f"frame {done[0]} ({of_words})" if of_words else f"frame {done[0]}")
+                        self.call_ui(self._survey_progress, cache, words)
                         try:
                             raw, header, cal = stack_load_frame(path, binning, masters)
                             img = core.debayer(cal, pattern, mode)
@@ -16214,11 +16261,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 first = cs.sample_indices(n)
                 if ref_path in lights and lights.index(ref_path) not in first:
                     first = sorted(set(first) | {lights.index(ref_path)})
-                read(first, len(first))
+                read(first, "first pass")
                 more = cs.second_pass(n, sorted(out["frames"]),
                                       {i: f["fwhm"] for i, f in out["frames"].items()},
                                       {i: f["flipped"] for i, f in out["frames"].items()})
-                read(more, len(first) + len(more))
+                # the total is known now unless the flip pass below will add frames (Transits, a flip seen)
+                seen = {bool(f["flipped"]) for f in out["frames"].values()}
+                final = not (transits and len(seen) == 2)
+                read(more, (done[0] + len(more)) if final else "more frames")
                 # Fable re-review M1: bracket the flip to adjacent frames, then read its neighbors on both sides, so
                 # the target's flip step is measured right at the flip
                 extra = 0
@@ -16229,7 +16279,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     if not nxt:
                         break
                     extra += len(nxt)
-                    read(nxt, f"{len(first) + len(more) + extra} (finding the flip)")
+                    read(nxt, "at the meridian flip")
+                # step 6b (John 19 Nov, "match the fit"): enough frames outside the predicted transit on each side
+                # of the flip (JD here, not BJD: 9.5 min more margin), so the target's step is measured on the
+                # night's baseline as the fit measures it
+                if transits and base_model is not None and alive():
+                    is_base = lambda jd_: cs.out_of_transit(jd_, base_model, cs.TARGET_STEP_MARGIN + 9.5 / 1440.0)
+                    try:
+                        nxt = cs.baseline_pass(n, tried, {i: f.get("jd") for i, f in out["frames"].items()},
+                                               {i: f["flipped"] for i, f in out["frames"].items()},
+                                               is_base)[:cs.BASELINE_PASS_MAX]
+                    except Exception as exc:
+                        nxt = []
+                        log_to_file(f"Comp survey: baseline pass skipped ({type(exc).__name__}: {exc}).")
+                    read(nxt, "baseline beside the transit")
                 # Fable 3: the statistics here, off the window's thread, with the busy bar still on
                 if len(out["frames"]) >= 3 and alive():
                     self.call_ui(self._survey_progress, cache, "comparing the stars")
@@ -16277,6 +16340,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.call_ui(self._survey_done, cache, out)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _say_survey_skipped(self):
+        """step 6b: one Log line per image and target that the survey was skipped for the series' own comps."""
+        key = (self.preview_path, tuple(self.target_xy or ()))
+        if getattr(self, "_survey_skip_said", None) == key:
+            return
+        self._survey_skip_said = key
+        self.log("Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can "
+                 "start at once (Comp health after the run shows how they did).", keep_status=True)
+
+    def _drop_survey_for_series(self) -> bool:
+        """step 6b: Run photometry pressed while the survey reads, with the series' comps all placed: the survey is
+        called off (it would only change suggestions nobody needs) and the run starts now. True when dropped."""
+        cache = getattr(self, "_survey_cache", None)
+        if cache is None or cache.get("state") != "loading" or not self._series_comps_all_placed():
+            return False
+        self._survey_cache = None   # its worker sees this and stops at the next frame
+        self.busy_end(cache.pop("tok", None))
+        self._suggest_waiting_survey = False
+        self._say_survey_skipped()
+        return True
 
     def _survey_progress(self, cache, words: str):
         if cache.get("tok") is not None and getattr(self, "_survey_cache", None) is cache:
@@ -16391,14 +16475,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # step 5 fix (#76): the TARGET's own step at the flip against each comp (and, in choose_set, each set), with
         # the predicted transit taken out; a forecast from the stars nearest the target chose the worst set on
         # WASP-49 b. Judged only in Transits, with an ephemeris, and when no frame used is near ingress or egress
-        tdiffs, b_rows, a_rows, flip_why = None, np.zeros(0, int), np.zeros(0, int), ""
+        tdiffs, b_rows, a_rows, flip_why, wts = None, np.zeros(0, int), np.zeros(0, int), "", None
         if st["flip"] and abs(rr - float(r)) > 0.06:
             # re-review nit: the flip step depends strongly on the aperture (WASP-49 b: +35 at r 8, +16 at r 10.3)
             flip_why = f"measured at r {rr:g}, not at r {float(r):g}"
         elif st["flip"]:
-            flip_why, tdiffs, b_rows, a_rows = self._survey_target_steps(result, rr, cols, planet)
+            flip_why, tdiffs, b_rows, a_rows, wts = self._survey_target_steps(result, rr, cols, planet)
         if tdiffs is not None:
-            step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows)[0] if cols[k] is not None else nan
+            step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows, wts)[0] if cols[k] is not None
+                                 else nan
                                  for k in range(len(cols))])
         else:
             # Fable re-review S2: not judged on the target: each star's step against the others' median still ranks
@@ -16408,7 +16493,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "step": step_rel, "peak_max": peak_max, "peaks": peaks_c, "dist": dist,
                 "flip": bool(st["flip"]) and tdiffs is not None and bool(np.isfinite(step_rel).any()),
                 "ref_scatter": ref_sc, "out": out, "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
-                "a_rows": a_rows,
+                "a_rows": a_rows, "weights": wts,
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
                 "n_after": st["n_after"], "radius_asked": float(r)}
@@ -16416,21 +16501,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return view
 
     def _survey_target_steps(self, result, rr, cols, planet):
-        """step 5 fix (#76): (why not judged or "", target-minus-candidate differences per frame with the predicted
-        transit taken out (rows: the survey's frames, columns: the suggestion candidates; NaN where not surveyed),
-        near-flip rows before, after). Not judged (None): outside Transits (a variable target's own change would read
-        as a step), without a usable ephemeris and shape, without frame times, or when a frame used lies within
-        10 min (plus 3 sigma of Tc) of ingress or egress, where the predicted dip depends on the ephemeris."""
+        """step 5 fix (#76), step 6b (John 19 Nov, "match the fit"): (why not judged or "", target-minus-candidate
+        differences per frame (rows: the survey's frames, columns: the suggestion candidates; NaN where not
+        surveyed), rows before, rows after, weights). The step is measured the way the transit fit measures it: on
+        the whole night's baseline, every frame read on each side of the flip that lies outside the predicted
+        transit (by 10 min plus 3 sigma of Tc), each weighted by the span of the night it stands for
+        (comp_survey.whole_night_rows). Step 6a measured it on the ~15 frames nearest the flip only and forecast
+        +0.1 mmag on WASP-49 b 19 Nov, where the fit found +6.4 ppt. Not judged (None): outside Transits (a variable
+        target's own change would read as a step), without a usable ephemeris and shape, without frame times, or
+        with fewer than 3 baseline frames read on a side."""
         none = np.zeros(0, int)
         if self.mode_key != "transits":
-            return "the target's own changes would read as a step outside Transits", None, none, none
+            return "the target's own changes would read as a step outside Transits", None, none, none, None
         after = cs.flip_sides(result.get("flipped"))
-        b_rows, a_rows = cs.near_flip_rows(after, cs.FLIP_NEAR_TARGET, idx=result.get("idx"))
-        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
-            return "too few frames read right at the flip", None, none, none
+        if after is None:
+            return "no meridian flip among the frames read", None, none, none, None
         jd = np.asarray(result.get("jd") if result.get("jd") is not None else [], dtype=float)
-        if jd.size != len(result["idx"]) or not np.all(np.isfinite(jd[np.r_[b_rows, a_rows]])):
-            return "the frames' times are not in their headers", None, none, none
+        if jd.size != len(result["idx"]) or np.isfinite(jd).sum() < 2 * cs.FLIP_MIN_SIDE:
+            return "the frames' times are not in their headers", None, none, none, None
         margin = cs.TARGET_STEP_MARGIN
         t = None
         try:
@@ -16439,7 +16527,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 t = jd + np.asarray(tcore.bjd_minus_jd_days(jd, ra, dec), dtype=float)
         except Exception:
             t = None
-        if t is None or not np.all(np.isfinite(t[np.r_[b_rows, a_rows]])):
+        if t is None or not np.isfinite(t).any():
             t = jd   # Fable S5 / nit 2: JD for BJD (no RA/Dec): up to 8.3 min + TT, so a wider margin
             margin += 9.5 / 1440.0
         try:
@@ -16448,16 +16536,18 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             ld = (0.4, 0.25)
         model = cs.transit_mags(t, planet, tcore.occultation, ld)
         if model is None:
-            return "no ephemeris and transit shape on the Input page", None, none, none
-        if cs.near_contact(t[np.r_[b_rows, a_rows]], model, margin):
-            return "the flip is near ingress or egress, where the predicted transit is not exact enough", None, none, \
-                none
+            return "no ephemeris and transit shape on the Input page", None, none, none, None
+        base = cs.out_of_transit(t, model, margin)
+        b_rows, a_rows, w = cs.whole_night_rows(after, result.get("idx"), int(result.get("of") or len(after)), base)
+        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
+            return ("too few frames read outside the predicted transit on one side of the flip", None, none, none,
+                    None)
         mags = result["mags"][rr]
         comp = np.full((mags.shape[0], len(cols)), np.nan)
         for k, j in enumerate(cols):
             if j is not None:
                 comp[:, k] = mags[:, j + 1]
-        return "", cs.target_diffs(mags[:, 0], comp, model["mag"]), b_rows, a_rows
+        return "", cs.target_diffs(mags[:, 0], comp, model["mag"]), b_rows, a_rows, w
 
     def _survey_aperture_apply(self, cache):
         """2.4.0 step 5 (#61): the apertures tried on the survey's frames, judged on the stars like the target (within
@@ -16547,7 +16637,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 index = survey["index"]
                 chosen, set_step, self._survey_set_err = cs.choose_set(
                     names, keys, lambda nm: cs.set_curve(survey["tdiffs"], [index[x] for x in nm]),
-                    survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix])
+                    survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix],
+                    weights=survey.get("weights"))
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
@@ -16575,9 +16666,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "both pier sides")
             if survey["flip"] and math.isfinite(set_step):
                 err = err if err is not None and math.isfinite(err) else float("nan")
-                txt += (f", the target's flip step with these comps {1000 * set_step:+.1f}"
-                        + (f" ± {1000 * err:.1f}" if math.isfinite(err) else "") + " mmag (measured on the frames "
-                        "nearest the flip, the predicted transit taken out)")
+                # step 6b (John 19 Nov): a forecast of the fit's own step, so in the fit's units and sign (ppt of
+                # flux, + = brighter after the flip); the survey's step is in mag (+ = fainter after)
+                ppt = (10 ** (-0.4 * set_step) - 1.0) * 1000.0
+                txt += (f", the target's flip step with these comps {ppt:+.1f}"
+                        + (f" ± {921.0 * err:.1f}" if math.isfinite(err) else "") + " ppt (measured as the transit "
+                        "fit measures it: the whole night's frames read outside the predicted transit, on both "
+                        "sides of the flip)")
             elif not survey["flip"]:
                 why = survey.get("flip_why") or ""
                 lead = ("; the target's flip step is not measured" if "outside Transits" in why
@@ -17677,6 +17772,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         survey = getattr(self, "_survey_cache", None)
+        if stack_run is None and only is None and self._drop_survey_for_series():
+            survey = None   # step 6b: the series' comps are all placed, so the run does not wait for the survey
         if (stack_run is None and only is None and survey is not None and survey.get("state") == "loading"
                 and self.mode_key != "discovery"):
             # 2.4.0 step 5 (#76, John 19 Nov): Run photometry waits for the comp survey (its spares and S rings)
@@ -17920,7 +18017,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 for x, y, star in ordered:
                     if len(spares) >= 8:
                         break
-                    name = str(star.get("auid") or star.get("label") or f"spare {len(spares) + 1}")
+                    name = self._cat_name(star) or f"spare {len(spares) + 1}"   # step 6b: the #72 name
                     if name in taken:
                         continue
                     cx, cy, moved = core.recenter(self.preview, x, y, radius)
@@ -19492,7 +19589,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         spares = [p for p in problems if p.startswith("spare ")]
         loud = [p for p in problems if not p.startswith("spare ")]
         for p in spares:
-            self.log(f"{night}: {p.split(':')[0]} (a spare: only measured, not used; nothing to do).", keep_status=True)
+            # 2.4.0 step 6b (John 19 Nov, so-what test): nothing to do, so not on the page: the log file only
+            log_to_file(f"{night}: {p.split(':')[0]} (a spare: only measured, not used).")
         # review S1: the check's own line (edge distance or vignetting) is kept; the frames it was off the frame and a
         # better spare are added to it
         orig = next((p for p in loud if p.startswith("check ")), "")

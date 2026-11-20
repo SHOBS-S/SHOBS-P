@@ -967,6 +967,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health after the run shows how they did)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Series comp … fails tonight: …. It is not suggested; Comp health after the run shows whether to keep it."
    ],
    "todo": "Run, then look at it in Comp health (chapter 11); untick it there if it really went bad tonight."
@@ -1187,13 +1194,6 @@
   {
    "section": "Photometry",
    "patterns": [
-    "…: spare … comes within … px of the frame edge … (a spare: only measured, not used; nothing to do)."
-   ],
-   "todo": "Nothing."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
     "16 frames skipped: every comp lost (off the frame edge) (frames 25–40)."
    ],
    "todo": "Choose comps further from the edge, or keep the field better centered."
@@ -1236,7 +1236,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comps are fine per frame (…): stacking is not needed. Type N to stack anyway."
+    "Comps are fine per frame: their noise is … (about …% of each point's error), so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."
    ],
    "todo": "Nothing."
   },
@@ -1690,6 +1690,20 @@
     "Prayer-bead check (… shifted refits): its error is larger than the MCMC's for …, so that error is the one shown"
    ],
    "todo": "Nothing; the report carries the larger error. Clouds, seeing or guiding often cause it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness check (… least-squares refits: …): depth …, ± … across choices (formal ± …); Tc ± … across choices (formal ± …); rms …"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is … (…)."
+   ],
+   "todo": "Report the larger spread with the result, or find out which choice is right (Comp health for a comp, the plot for a trimmed stretch) before reporting."
   },
   {
    "section": "Output, Transits mode",

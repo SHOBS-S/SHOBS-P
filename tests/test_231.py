@@ -308,7 +308,10 @@ class TestInApp(unittest.TestCase):
         self.assertNotIn(" .", text)
         self.assertIn("A better check star stays farther in: FAR", text)
         self.assertNotIn("spare EDGE", text)   # spares near the edge: log only
-        self.assertTrue(any("spare EDGE" in t and "nothing to do" in t for t in self.logged), self.logged)
+        # 2.4.0 step 6b (John 19 Nov): a spare near the edge is not on the page at all (the log file only)
+        self.assertFalse(any("spare EDGE" in t for t in self.logged), self.logged)
+        with open(ca.LOG_FILE, encoding="utf-8") as fh:
+            self.assertIn("spare EDGE", fh.read())
         # the night's setup records the Telescope aperture; the Variables settings file says it
         self.assertEqual(app._night_info(night).get("aperture_mm"), 203.0)
         rpt = os.path.join(self.dir, "AAVSO_T_CV_02-OCT-2026_SHOBS-P.txt")

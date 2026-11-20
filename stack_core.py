@@ -321,11 +321,18 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
     if goal_needs and n > 1:
         return (f"Per-frame points are about {noise['sig_point'] / 1.0857362e-3:.1f} ppt; your {goal_ppt:g} ppt goal "
                 f"needs stacks of {n} frames ({span} each){tail}.{cap_note}", False)
-    if noise["ratio"] > 1.0:
-        return (f"Comps are fine per frame (comp noise {noise['ratio']:.1f}× the target's, a small part of each "
-                f"point's error): stacking is not needed. Type N to stack anyway.", False)
-    return (f"Comps are fine per frame (comp noise {noise['ratio']:.0%} of the target's): stacking is not needed. "
-            f"Type N to stack anyway.", False)
+    # 2.4.0 step 6b (John 19 Nov): say WHY the comps are fine (their noise is small beside the scintillation and the
+    # target's own noise), not "5.0x the target's, a small part ...", and name the real box (Stack N)
+    anyway = "To stack anyway, type a number of frames in the Stack N box."
+    sp, sc_ = noise.get("sig_point", float("nan")), noise.get("sig_c", float("nan"))
+    share = sc_ / sp if (math.isfinite(sp) and sp > 0 and math.isfinite(sc_)) else float("nan")
+    if noise["ratio"] > 1.0 and math.isfinite(share):
+        return (f"Comps are fine per frame: their noise is small beside the scintillation (about {share:.0%} of "
+                f"each point's error), so stacking is not needed. {anyway}", False)
+    if math.isfinite(share):
+        return (f"Comps are fine per frame: their noise is below the target's own (about {share:.0%} of each "
+                f"point's error), so stacking is not needed. {anyway}", False)
+    return f"Comps are fine per frame: stacking is not needed. {anyway}", False
 
 
 # ---- groups --------------------------------------------------------------------------------------------------

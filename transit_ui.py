@@ -38,6 +38,12 @@ PART_TIME_MIN_SHARE = 0.05
 PINK = "#c2185b"
 
 
+
+def _app_module(app):
+    """2.4.0 (#35): the window's own module (clearv_app, or __main__ when SHOBS-P was started as a script), for its
+    shared helpers, without importing a second copy of it."""
+    return sys.modules[type(app).__module__]
+
 def fit_to_content(win, min_w: int = 480, min_h: int = 320) -> None:
     """2.2.2: open a pop-up at the size its contents ask for, no bigger than 90% of the screen (as in clearv_app)."""
     try:
@@ -292,6 +298,10 @@ class TransitPage:
         self.multinight_series_button = groups.add("analysis", ttk.Button(
             g, text="Fit the series' nights…", command=self.open_multinight_series))
         self.multinight_series_button.state(["disabled"])
+        # 2.4.0 step 6b (#35): optional: how far the result moves over reasonable reduction choices
+        self.robust_button = groups.add("analysis", ttk.Button(g, text="Robustness check",
+                                                               command=self.robustness_check))
+        self.robust_button.state(["disabled"])
 
         # ---- 7. View only
         g = groups.parent("view")
@@ -725,7 +735,7 @@ class TransitPage:
         for key, lab, _f in tc.DETREND_CHOICES:
             if lab == text:
                 return key
-        return tc.DETREND_AUTO
+        return tc.DETREND_OLD_LABELS.get(text, tc.DETREND_AUTO)
 
     def set_detrend(self, key: str):
         """Set the drop-down by key ('auto', 'airmass', 'airmass+slope', ...), as the user would; the airmass rule
@@ -1159,7 +1169,8 @@ class TransitPage:
         after = np.array([o.segment == "flip" for o in obs], dtype=bool)
         extra = {"after_flip": after if (after.any() and (~after).any()) else None,
                  "flip_source": "the frames' flip segment", "flagged": None,
-                 "jd": jd}   # 2.2.17 (item 5): JD UTC beside BJD_TDB, for the trim's local clock times
+                 "jd": jd,   # 2.2.17 (item 5): JD UTC beside BJD_TDB, for the trim's local clock times
+                 "obs": np.array(obs, dtype=object)}   # 2.4.0 (#35): the frames, for the robustness re-measure
         used = {id(o) for o in obs}
         clouded = [o for o in app.observations if o.night == night and id(o) not in used and math.isfinite(o.mag)
                    and o.flag and set(o.flag.split()) <= {"cloud", "cloudedge", core.HAZE_FLAG}]   # 2.2.14 (items 10, 18)
@@ -1171,7 +1182,8 @@ class TransitPage:
             cam = np.array([o.airmass if o.airmass is not None else np.nan for o in clouded], dtype=float)
             extra["flagged"] = {"t": core.convert_times(cjd, "BJD_TDB", ra, dec, lat, lon), "jd": cjd, "flux": cflux,
                                 "err": cerr, "airmass": cam, "after_flip": np.array([o.segment == "flip" for o in clouded],
-                                                                                    dtype=bool), "label": "cloud"}
+                                                                                    dtype=bool), "label": "cloud",
+                                "obs": np.array(clouded, dtype=object)}   # 2.4.0 (#35)
         # 2.2.16 (item 6): each comp's instrumental magnitude in every frame, for the leave-one-comp-out check
         # (comps only: nothing here needs a plate solution, header pointing or a color camera).
         try:
@@ -1367,6 +1379,12 @@ class TransitPage:
         wf = r.get("with_flagged")
         if wf:
             lines.append(f"Flagged frames put back: {wf['n']} {wf['label']} (error bars x{wf['factor']:g})")
+        if r.get("robust"):   # 2.4.0 step 6b (#35)
+            lines.append(tc.robustness_text(r["robust"], ascii_only=True).replace("Robustness check (",
+                                                                                  "Robustness check: (", 1))
+            for row in r["robust"]["rows"]:
+                lines.append(f"  {row['label']}: depth {row['depth'] * 100:.3f} %, Tc {row['tc']:.6f}, "
+                             f"rms {row['rms'] * 1000:.2f} ppt, {row['n']} points")
         return lines
 
     @staticmethod
@@ -1568,6 +1586,26 @@ class TransitPage:
                                          "flagged_mask": flagged_mask, "comp_mags": cmags,
                                          "names": list(extra.get("comp_names") or []), "planet": planet,
                                          "da": da, "dt": dt, "dq": dq}
+            # 2.4.0 (#35): the same data and settings, kept for the Robustness check button after the fit
+            obs_fit = extra.get("obs")
+            if obs_fit is not None and flagged_mask is not None:
+                fo = (fl or {}).get("obs")
+                obs_fit = (np.r_[np.asarray(obs_fit, dtype=object), np.asarray(fo, dtype=object)]
+                           if fo is not None else None)
+            cm_all = extra.get("comp_mags")
+            if cm_all is not None and flagged_mask is not None:
+                fc = (fl or {}).get("comp_mags")
+                cm_all = (np.vstack([cm_all, fc]) if fc is not None and np.ndim(cm_all) == 2
+                          and np.shape(fc)[1:] == np.shape(cm_all)[1:] else None)
+            self._robust_pending = {
+                "t": t, "flux": flux, "err": err, "am": am, "after": after, "flagged_mask": flagged_mask,
+                "flagged": None if (with_flagged or fl is None or not len(fl.get("t", []))) else
+                {k_: fl.get(k_) for k_ in ("t", "flux", "err", "airmass", "after_flip")},
+                "comp_mags": cm_all if (self.report is None and cm_all is not None and np.ndim(cm_all) == 2
+                                        and len(cm_all) == len(t)) else None,
+                "names": list(extra.get("comp_names") or []), "planet": planet,
+                "obs": obs_fit if (self.report is None and obs_fit is not None and len(obs_fit) == len(t)) else None,
+                "night": self.night.get() if self.report is None else ""}
             flip_source = extra.get("flip_source", "")
             # 2.2.20 (#45): the flip time (halfway across the flip gap) for the fit CSV's segment column and header
             meta.pop("t_flip", None)
@@ -1652,6 +1690,7 @@ class TransitPage:
             self._loo_shown = False
             self.prog_text.set("")
             self._show_progress()
+        self._update_robust_button()   # 2.4.0 (#35)
 
     def _show_target_lines(self):
         """The TESS TOI line and the ExoClock line under the Results row: shown while they have text, hidden (no
@@ -1700,6 +1739,11 @@ class TransitPage:
             self._finish_fit(result, meta, error)
         finally:
             self._show_progress()
+        # 2.4.0 (#35): the data this result was fitted on, for the Robustness check button
+        pend, self._robust_pending = getattr(self, "_robust_pending", None), None
+        self._robust_src = (result, pend) if (error is None and result is not None and result is self.result
+                                              and pend) else None
+        self._update_robust_button()
         # 2.2.16 (item 6): then the leave-one-comp-out check; it can never undo or fail the fit just shown.
         try:
             if error is None and result is not None and result is self.result:
@@ -1812,6 +1856,215 @@ class TransitPage:
             except Exception:
                 pass
             self._run_pending_refit()   # 2.2.17 (item 4): comps changed while the check ran
+
+    # ---- 2.4.0 step 6b (#35): the robustness check --------------------------------------------
+    def _update_robust_button(self):
+        try:
+            src = getattr(self, "_robust_src", None)
+            ok = bool(src) and src[0] is self.result and self.result is not None
+            self.robust_button.state(["!disabled"] if ok else ["disabled"])
+        except Exception:
+            pass
+
+    def robustness_check(self):
+        """Refit the shown fit over reasonable reduction choices (least squares, in the background, the busy bar
+        counting): every other reasonable detrend choice, the first and the last 10 % trimmed, the flagged frames
+        the other way, each comp left out, and (photometry of this session's night) the target and the comps in use
+        re-measured on every frame with the aperture ±20 % and with the sky ring moved out. Adds a plain note, or a
+        ⚠ when the depth or Tc moves more than its formal error, to the notes, the Log, the report NOTES and the
+        settings file."""
+        app = self.app
+        r = self.result
+        src = getattr(self, "_robust_src", None)
+        if r is None or not src or src[0] is not r:
+            app.status.set("Fit the transit first: the robustness check refits the fit on the page.")
+            return
+        if self._signature() != self._fit_signature:
+            app.status.set("The data changed since this fit: press Fit transit first, then Robustness check.")
+            return
+        if app.busy or not app._start_job("Robustness check…"):
+            return
+        job = dict(src[1])
+        fl_ = tuple(r.get("detrend_flags") or (True, False, False))
+        if (r.get("detrend_choice") or {}).get("dropped_no_airmass") and job.get("am") is not None and not fl_[0]:
+            # re-review R1 (as the comp check): the main fit left out the frames without airmass; so do these refits
+            keep = np.isfinite(np.asarray(job["am"], dtype=float))
+            for k_ in ("t", "flux", "err", "am", "after", "flagged_mask", "comp_mags", "obs"):
+                if job.get(k_) is not None and len(job[k_]) == len(keep):
+                    job[k_] = np.asarray(job[k_])[keep]
+        token = object()
+        self._robust_token = token
+        self._robust_done_text = self.prog_text.get()
+        summary = dict(r["summary"])
+        choice = r.get("detrend_choice") or {}
+        rows = choice.get("rows") or []
+        allow_am = bool(np.isfinite(np.asarray(job["am"], dtype=float)).all()) if job.get("am") is not None else False
+        flip_step = bool(r.get("flip")) if r.get("flip_test") or r.get("flip") else None
+        plan = self._robust_measure_plan(job)
+        cancel = app._cancel
+        app._job_words("Robustness check: refitting…")
+
+        def work():
+            try:
+                measured, why_not = [], (plan or {}).get("why", "")
+                if plan and not why_not:
+                    measured, why_not = self._robust_remeasure(plan, token, cancel)
+                rob = tc.robustness_check(
+                    job["t"], job["flux"], job["err"], job["am"], job["planet"], summary, fl_,
+                    after_flip=job["after"], flip_step=flip_step, flagged_mask=job["flagged_mask"],
+                    allow_airmass=allow_am, detrend_rows=rows, flagged=job.get("flagged"),
+                    comp_mags=job.get("comp_mags"), comp_names=job.get("names"), measured=measured, cancel=cancel,
+                    progress=lambda j, n: app.call_ui(self._robust_progress, token, f"refit {j} of {n}"),
+                    log=lambda msg: app.call_ui(app.log, msg, True))
+                if rob is not None:
+                    rob["measure_note"] = why_not
+                app.call_ui(self._robust_done, token, r, rob, None)
+            except Exception as exc:
+                app.call_ui(self._robust_done, token, r, None, str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _robust_measure_plan(self, job) -> dict | None:
+        """What the aperture and sky-ring variations need, gathered on the window's thread: the night's frames,
+        aperture, binning, masters and comps in use. {"why": ...} when they cannot be re-measured (a loaded report,
+        no calibration in this session, a night measured with another binning); None for a report."""
+        app = self.app
+        if self.report is not None or job.get("obs") is None:
+            return {"why": "a loaded report has no frames to re-measure"} if self.report is not None else None
+        night = job.get("night") or ""
+        info = app._night_info(night) or {}
+        r_, si, so = info.get("radius"), info.get("sky_in"), info.get("sky_out")
+        variants = tc.aperture_variants(r_, si, so)
+        if not variants:
+            return {"why": "the night's aperture is not recorded"}
+        if app.masters is None:
+            return {"why": "the night's frames are not calibrated in this session (Calibrate first)"}
+        binning = int(info.get("binning") or 1)
+        try:
+            if int(app.binning.get() or 1) != binning and not getattr(app, "precalibrated", False):
+                return {"why": f"the night was measured at Bin {binning} and the Binning box now says another"}
+        except Exception:
+            pass
+        name_key = _app_module(app).name_key
+        comps_meas = list(info.get("comps") or app.comps_used or [])
+        keys = [name_key(n) for n in comps_meas]
+        cols = []
+        for n_ in job.get("names") or list(app.active_comps or app.comps_used):
+            k_ = name_key(n_)
+            cols.append(keys.index(k_) if k_ in keys else None)
+        if not cols or any(c is None for c in cols):
+            return {"why": "the comps in use are not all among the comps the night measured"}
+        return {"obs": list(job["obs"]), "r": float(r_), "si": float(si), "so": float(so), "variants": variants,
+                "cols": cols, "binning": binning, "masters": app.masters,
+                "pattern": info.get("pattern") or app.pattern.get(),
+                "debayer": info.get("debayer") or app.debayer_mode.get(), "why": ""}
+
+    def _robust_remeasure(self, plan, token, cancel) -> tuple:
+        """(worker thread) The target and the comps in use measured on every frame of the fit at the night's own
+        aperture and at each variation, at the positions the run measured them (each frame's own centers). Each
+        variation's curve is turned into a per-point flux ratio against the night's own aperture measured the same
+        way, so it carries only what the change of aperture or sky ring does. ([(group, label, factor)], why)."""
+        app = self.app
+        from stack_ui import load_frame as stack_load_frame   # (no import cycle: stack_ui needs no window module)
+        log_to_file = _app_module(app).log_to_file
+        obs, cols = plan["obs"], plan["cols"]
+        n, m = len(obs), len(cols)
+        sets = [("base", "as measured", plan["r"], plan["si"], plan["so"])] + list(plan["variants"])
+        tm = np.full((len(sets), n), np.nan)
+        cm = np.full((len(sets), n, m), np.nan)
+        failed = 0
+        for i, o in enumerate(obs):
+            if cancel.is_set():
+                raise RuntimeError("Canceled")
+            if i % 5 == 0:
+                app.call_ui(self._robust_progress, token, f"re-measuring frame {i + 1} of {n}")
+            pos = getattr(o, "pos", None) or {}
+            try:
+                tp = pos.get("t")
+                cp = [(pos.get("c") or [None] * (max(cols) + 1))[c] if c < len(pos.get("c") or []) else None
+                      for c in cols]
+                if tp is None:
+                    raise ValueError("no target position")
+                xy = np.array([tp] + [c if c is not None else (np.nan, np.nan) for c in cp], dtype=float)
+                _raw, _hdr, cal = stack_load_frame(o.path, plan["binning"], plan["masters"])
+                img = core.debayer(cal, plan["pattern"], plan["debayer"])
+                del cal
+                ok = np.all(np.isfinite(xy), axis=1)
+                for k, (_g, _l, r_, si, so) in enumerate(sets):
+                    flux, _sky = core.measure_many(img, np.where(ok[:, None], xy, 0.0), r_, si, so)
+                    flux = np.where(ok & (np.asarray(flux) > 0), flux, np.nan)
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        mags = -2.5 * np.log10(flux)
+                    tm[k, i], cm[k, i, :] = mags[0], mags[1:]
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                failed += 1
+                log_to_file(f"Robustness check: {os.path.basename(getattr(o, 'path', '') or '?')} not re-measured "
+                            f"({type(exc).__name__}: {exc}).")
+        if failed > 0.5 * n:
+            return [], f"{failed} of {n} frames could not be read again"
+        base = tm[0] - tc.tied_ensemble(cm[0])
+        out = []
+        for k, (g, label, *_rest) in enumerate(sets[1:], start=1):
+            d = (tm[k] - tc.tied_ensemble(cm[k])) - base
+            out.append((g, label, 10 ** (-0.4 * d)))
+        why = f"{failed} frame{'s' if failed != 1 else ''} could not be read again (left out of those refits)" \
+            if failed else ""
+        return out, why
+
+    def _robust_progress(self, token, words):
+        if token is getattr(self, "_robust_token", None):
+            self.app._job_words(f"Robustness check: {words}")
+
+    def _robust_done(self, token, r, rob, error):
+        if token is not getattr(self, "_robust_token", None):
+            return
+        self._robust_token = None
+        app = self.app
+        app._end_job()
+        try:
+            if error is not None:
+                if error == "Canceled":
+                    app._discard_job_findings()
+                    app.status.set("Robustness check canceled.")
+                else:
+                    app.log(f"Robustness check not made: {error}")
+                return
+            if not rob:
+                app.log("Robustness check: no refit could be made.")
+                return
+            if r is not self.result or self._signature() != self._fit_signature:
+                app.log("Robustness check finished for an earlier fit; not shown (press it again).",
+                        keep_status=True)
+                return
+            if rob.get("measure_note"):
+                rob["note"] += f" Aperture and sky ring not tried: {rob['measure_note']}." \
+                    if not any(x["group"] in ("aperture", "sky") for x in rob["rows"]) \
+                    else f" ({rob['measure_note']}.)"
+                rob["flags"] = [f for f in rob["flags"] if f[0] != "info"] + [("info", rob["note"])]
+            old = r.get("robust")
+            if old:   # a second press replaces the first one's lines
+                r["flags"] = [f for f in (r.get("flags") or []) if f not in old.get("flags", [])]
+            r["robust"] = rob
+            r["flags"] = list(r.get("flags") or []) + list(rob["flags"])
+            self._notes_text(tc.cautions(r["flags"], r.get("verdict")))
+            for level, text in rob["flags"]:
+                app.log(("Transit fit: " + text) if level == "info" else text, level="warn" if level == "warn"
+                        else None)
+            sp, fe = rob["spread"], rob["formal"]
+            done = getattr(self, "_robust_done_text", "")
+            self.prog_text.set(done + ("   " if done else "")
+                               + f"Robustness: depth {tc.robust_pm('depth', sp['depth'])} (formal "
+                               + f"{tc.robust_pm('depth', fe['depth'])}), Tc {tc.robust_pm('tc', sp['tc'])} (formal "
+                               + f"{tc.robust_pm('tc', fe['tc'])})")
+            warned = any(lv == "warn" for lv, _x in rob["flags"])
+            app.status.set("Robustness check done" + (": the result moves more than its formal error, see the notes."
+                                                      if warned else ": within the formal errors."))
+        except Exception as exc:
+            app.log(f"Robustness check not shown: {exc}")
+        finally:
+            self._show_progress()
 
     def _finish_fit(self, result, meta, error):
         if error is not None:
@@ -2796,7 +3049,7 @@ class TransitPage:
         flux, err, am = np.asarray(flux, dtype=float), np.asarray(err, dtype=float), np.asarray(am, dtype=float)
         ex = self._data_extra if self._data_extra is not None else {}
         n = len(t)
-        for key in ("after_flip", "comp_mags", "jd"):
+        for key in ("after_flip", "comp_mags", "jd", "obs"):
             v = ex.get(key)
             if v is not None and len(v) == n:
                 ex[key] = np.asarray(v)[keep]
@@ -3072,6 +3325,10 @@ class TransitPage:
         dnote = tc.detrend_report_note(self.result or {})   # 2.4.0 (#103)
         if dnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(dnote)
+        rob = (self.result or {}).get("robust")
+        if rob:   # 2.4.0 step 6b (#35): the robustness check, when it was run on this fit
+            meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
+                             + ascii_("SHOBS-P " + tc.robustness_text(rob, ascii_only=True)))
         fnote = tc.flip_report_note(self.result or {})
         if fnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(fnote)
