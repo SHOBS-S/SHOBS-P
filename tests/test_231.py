@@ -303,7 +303,7 @@ class TestInApp(unittest.TestCase):
         self.assertEqual(len(warns), 1, [c[0][1] for c in self.boxes["showwarning"].call_args_list])
         text = warns[0]
         self.assertIn("check K", text)
-        self.assertIn("check K comes within", text)   # review S1: the edge distance is kept
+        self.assertRegex(text, r"check K (comes within \d+ px of|reaches) the frame edge")   # review S1; step 6c (e)
         self.assertIn("The check star was off the frame in 20 frames", text)
         self.assertNotIn(" .", text)
         self.assertIn("A better check star stays farther in: FAR", text)

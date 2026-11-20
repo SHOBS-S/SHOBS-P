@@ -510,6 +510,24 @@ class TransitPage:
         return plot_bin_width_h(getattr(self, "plot_bins", None).get() if getattr(self, "plot_bins", None) else
                                 PLOT_BIN_CHOICES[0], cadence_h)
 
+    def _bins_that_work(self, x, width_h: float, cadence_h: float) -> tuple[float, str]:
+        """step 6c (item f): plot_bins_that_work for the Plot bins box's choice; the note goes in the Log once per
+        choice and night too."""
+        choice = self.plot_bins.get() if getattr(self, "plot_bins", None) else PLOT_BIN_CHOICES[0]
+        try:
+            use, note = plot_bins_that_work(x, width_h, choice, cadence_h)
+        except Exception:
+            return width_h, ""
+        if note:
+            key = (choice, round(float(cadence_h), 4), len(np.atleast_1d(x)))
+            if getattr(self, "_bin_note_said", None) != key:
+                self._bin_note_said = key
+                try:
+                    self.app.log("Transit plot: " + note + ".")
+                except Exception:
+                    pass
+        return use, note
+
     def _flow_row4(self, width: int):
         """Lay the rows out again in as many lines as the width needs. 2.4.0 (#98): every group row wraps by itself
         (group_rows.FlowBox); this keeps the old name and lays them all out."""
@@ -2422,10 +2440,12 @@ class TransitPage:
             ax.plot(x, f, ".", color="#9aa7b0", ms=4, label="each frame")
             cadence = float(np.median(np.diff(np.sort(t)))) * 24 if t.size > 1 else 0.0
             width = self._plot_bin_width(cadence)   # 2.3.2 (item 6)
+            width, bin_note = self._bins_that_work(x, width, cadence)   # step 6c (item f)
             bins = _bin(x, f, width)
             if bins:
+                lab = plot_bin_label(width) + (f"\n({bin_note})" if bin_note else "")
                 ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k",
-                            ms=4, capsize=2, label=plot_bin_label(width))
+                            ms=4, capsize=2, label=lab)
             lo, hi = np.percentile(f, 1), np.percentile(f, 99)
             pad = max((hi - lo) * 0.15, 0.002)
             ax.set_ylim(lo - pad, hi + pad)
@@ -2735,10 +2755,11 @@ class TransitPage:
             ax.plot(x[fmask], y[fmask], "o", ms=4, mfc="none", mec="#d08a2e", mew=0.8,
                     label=f"flagged {wf.get('label', '')} (errors ×{wf.get('factor', 2):g})".replace("  ", " "))
         width = self._plot_bin_width(r["cadence_days"] * 24)   # 2.3.2 (item 6): Plot bins box; legend names it
+        width, bin_note = self._bins_that_work(x, width, r["cadence_days"] * 24)   # step 6c (item f)
         bins = _bin(x, y, width)
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
-                        capsize=2, label=plot_bin_label(width))
+                        capsize=2, label=plot_bin_label(width) + (f"\n({bin_note})" if bin_note else ""))
         bands = r.get("bands") if self.show_bands.get() else None
         if bands:
             # 2.2.19 (#31): 68 % and 95 % envelopes of transit × baseline over posterior draws (the baseline's spread
@@ -3461,12 +3482,15 @@ class TransitPage:
         suffix). A fit of an opened report (no photometry) saves the fit CSV alone."""
         app = self.app
         path = ""
-        if app.observations:
+        # step 6c (item d): a fit of an opened report saves its fit CSV alone: the Output page's light curve is
+        # another run's (TOI-2046 b's save wrote WASP-49 b's light curve again, 20 Nov)
+        own_lc = bool(app.observations) and self.report is None
+        if own_lc:
             path = app.save_csv()
             if not path:
                 return
         if not self.result:
-            if not app.observations:
+            if not own_lc:
                 messagebox.showinfo("SHOBS-P", "Run photometry or open an exoplanet report, and fit a transit first.")
             return
         name = self.family_names()[2]
@@ -4163,6 +4187,33 @@ def plot_bin_width_h(choice: str, cadence_h: float) -> float:
 def plot_bin_label(width_h: float) -> str:
     """The legend's words for the real bin width: "13-minute bins"."""
     return f"{max(1, int(round(width_h * 60)))}-minute bins"
+
+
+def plot_bins_that_work(x, width_h: float, choice: str, cadence_h: float) -> tuple[float, str]:
+    """2.4.0 step 6c (item f, John 20 Nov, MOBS WASP-50 b): (the bin width to draw in hours, a short note or ""). A
+    width chosen in the Plot bins box whose bins mostly hold fewer than PLOT_BIN_MIN_FRAMES frames (5-min bins on
+    frames 3 min apart: one bin drawn, the rest dropped silently, and it looked broken) gives way to the next
+    width in the box that works, then to Auto's; the note says so for the legend. Auto is drawn as it is."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if not re.match(r"\s*\d", str(choice or "")) or x.size < 4 or not width_h > 0:
+        return width_h, ""
+
+    def works(w):
+        edges = np.arange(x.min(), x.max() + w, w)
+        counts = np.histogram(x, bins=edges)[0] if edges.size > 1 else np.array([x.size])
+        held = counts[counts > 0]
+        return held.size > 0 and int((held >= PLOT_BIN_MIN_FRAMES).sum()) * 2 >= held.size
+    if works(width_h):
+        return width_h, ""
+    tries = sorted({plot_bin_width_h(c, cadence_h) for c in PLOT_BIN_CHOICES[1:]} | {plot_bin_width_h("Auto",
+                                                                                                    cadence_h)})
+    use = next((w for w in tries if w > width_h + 1e-9 and works(w)), None)
+    if use is None:
+        use = max(tries)
+    every = f" (one every {cadence_h * 60:.0f} min)" if math.isfinite(cadence_h) and cadence_h > 0 else ""
+    return use, (f"{max(1, int(round(width_h * 60)))}-min bins hold under {PLOT_BIN_MIN_FRAMES} frames on this "
+                 f"night{every}: showing {max(1, int(round(use * 60)))}-min bins")
 
 
 def _bin(x, y, width, min_n: int = PLOT_BIN_MIN_FRAMES):

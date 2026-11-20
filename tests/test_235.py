@@ -68,7 +68,7 @@ class TestLeaveOneOutMissingComp(unittest.TestCase):
 
     def test_full_frames_give_plain_mean(self):
         cm = np.random.default_rng(1).normal(10, 0.1, (30, 3))
-        np.testing.assert_array_equal(tc.tied_ensemble(cm), np.mean(cm, axis=1))
+        np.testing.assert_allclose(tc.tied_ensemble(cm), np.mean(cm, axis=1), rtol=0, atol=1e-12)   # step 6c: fsum
 
     def test_note_names_a_refit_with_fewer_points(self):
         # C1-C3 missing in frames 0-9: C4 is the only comp there, so the refit without C4 loses those frames.

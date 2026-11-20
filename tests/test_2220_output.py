@@ -243,7 +243,7 @@ class TestNotesInApp(unittest.TestCase):
                 mock.patch.object(tp, "_confirm_export", return_value=True):
             path = app.save_exoclock()
         self.assertEqual(os.path.basename(path), "ExoClock_TOI-2046b_20261027.txt")
-        self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_info.txt")))
+        self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_TOI-2046b_20261027_info.txt")))   # step 6c
         with open(path) as fh:
             rows = [ln.split() for ln in fh if ln.strip() and not ln.startswith("#")]
         self.assertEqual(len(rows), 28)   # 2.2.20 review: put-back flagged frames are left out

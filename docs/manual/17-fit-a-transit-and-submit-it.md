@@ -207,7 +207,9 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 - Black points with error bars: bins of several frames, also shown on the residual panel. The **Plot bins** box
   sets their width: **Auto** (10 minutes, or 3 frames' spacing when the frames are farther apart than 3⅓ minutes),
   **5 min**, **10 min**, **15 min** or **30 min**. A bin needs at least 3 frames, and the legend names the real width
-  (for example *"13-minute bins"* on MicroObservatory frames). The bins are only for the eye: changing them redraws
+  (for example *"13-minute bins"* on MicroObservatory frames). A width whose bins would mostly hold fewer than 3
+  frames gives way to the next one that works, and the legend says so, for example *"10-minute bins (5-min bins hold
+  under 3 frames on this night (one every 3 min): showing 10-min bins)"*. The bins are only for the eye: changing them redraws
   the plot without refitting, and the fit, the red-noise beta and the **rms per 10-min bin** line use every frame
   as before.
 - Green line: the SHOBS-P model, labeled with its Rp/R\* and depth.
@@ -371,7 +373,7 @@ against the fit's formal error. The settings file also lists every refit's depth
 A plain note means every spread is within its formal error. When the depth or Tc moves **more** than its formal
 error, the notes get a ⚠ that names the choice that moves it most, for example *"Robustness: the Tc moves more
 across reasonable reduction choices than its formal error (± 3.10 min against ± 1.20 min); the most is aperture r
-6.4 px (4.2 min). Report the larger spread with the result, or find out which choice is right before reporting."*
+6.4 px, which moves it by 4.2 min. Report the larger spread with the result, or find out which choice is right before reporting."*
 Press it again after a new fit: the check belongs to the fit it was run on.
 
 ## Leave out a bad stretch (Trim)
@@ -497,12 +499,13 @@ recent observations it has, and whether it asks for a bigger telescope than your
    - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt` (the planet without spaces,
      and the UTC date of the first frame). This is the file you upload. It has three columns: the time in JD_UTC at
      mid-exposure, the relative flux (not detrended), and its error. Only the frames the fit used are in it.
-   - `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file.
+   - `ExoClock_TOI-2046b_20261027_info.txt` (named after the upload file): what to pick on ExoClock's upload form
+     for that file.
 
    The status line says *"✔ Saved. On the form, pick Mid-exposure (ExoClock_TOI-2046b_20261027.txt; what to pick is
-   in ExoClock_info.txt)."*
+   in ExoClock_TOI-2046b_20261027_info.txt)."*
 2. Click **Go to ExoClock…**. The upload page opens in your browser. Log in.
-3. Fill in the form from `ExoClock_info.txt`:
+3. Fill in the form from the `_info.txt` file:
    - **Planet**: the name with no space, for example `TOI-2046b`.
    - **Time format**: **JD_UTC**.
    - **Time stamp**: **Mid-exposure**. The form starts on **Exposure start**, so change it. This is the one most

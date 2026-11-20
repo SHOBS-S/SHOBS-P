@@ -1550,6 +1550,13 @@ COMP_TIE_MIN_FRAMES = 5
 COMP_NIGHT_SHARE = 0.5
 
 
+def _omean(values) -> float:
+    """2.4.0 step 6c: the order-free mean (photometry_core.omean: math.fsum), so the comps' order does not change
+    the bits."""
+    vals = [float(v) for v in np.ravel(np.asarray(values, dtype=float))]
+    return math.fsum(vals) / len(vals) if vals else float("nan")
+
+
 def tied_ensemble(cm) -> np.ndarray:
     """2.3.5 (#88): the comp ensemble per frame on the night's scale, from cm (points x comps, NaN = not measured).
 
@@ -1574,9 +1581,9 @@ def tied_ensemble(cm) -> np.ndarray:
     a = np.zeros(len(keep))
     with np.errstate(invalid="ignore"):
         for _ in range(12):
-            level = np.array([float(np.mean(mk[f, ok[f]] - a[ok[f]])) if ok[f].any() else np.nan for f in range(n)])
+            level = np.array([_omean(mk[f, ok[f]] - a[ok[f]]) if ok[f].any() else np.nan for f in range(n)])
             new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
-            new_a -= new_a.mean()
+            new_a -= _omean(new_a)
             if np.allclose(new_a, a, atol=1e-7):
                 a = new_a
                 break
@@ -1585,7 +1592,7 @@ def tied_ensemble(cm) -> np.ndarray:
     for f in range(n):
         if not ok[f].any():
             continue
-        ens[f] = float(np.mean(mk[f])) if ok[f].all() else float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean())
+        ens[f] = _omean(mk[f]) if ok[f].all() else _omean(mk[f, ok[f]] - a[ok[f]]) + _omean(a)   # step 6c: order-free
     return ens
 
 
@@ -1934,8 +1941,8 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
                     else f"{abs(m['tc'] - ref_row['tc']) * 1440:.1f} min")
             flags.append(("warn", f"Robustness: the {what} moves more across reasonable reduction choices than its "
                                   f"formal error ({robust_pm(key, sp)} against {robust_pm(key, fe)}); the most is "
-                                  f"{m['label']} ({move}). Report the larger spread with the result, or find out "
-                                  "which choice is right before reporting."))
+                                  f"{m['label']}, which moves it by {move}. Report the larger spread with the "
+                                  "result, or find out which choice is right before reporting."))
     out["flags"] = flags
     out["note"] = robustness_text(out)
     out["flags"].append(("info", out["note"]))

@@ -1187,7 +1187,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "check … comes within … px of the frame edge … The check star was off the frame in N frames (…). A better check star stays farther in: … Pick it as the check next time."
+    "check … comes within … px of (or reaches) the frame edge … The check star was off the frame in N frames (…). A better check star stays farther in: … Pick it as the check next time."
    ],
    "todo": "Pick that star as the check next time."
   },
@@ -1701,7 +1701,7 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is … (…)."
+    "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is …, which moves it by …."
    ],
    "todo": "Report the larger spread with the result, or find out which choice is right (Comp health for a comp, the plot for a trimmed stretch) before reporting."
   },

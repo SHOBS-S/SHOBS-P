@@ -868,7 +868,8 @@ def exoclock_upload_text(jd_utc, flux, err, planet: str, meta: dict) -> str:
 
 
 def exoclock_info_text(planet: str, meta: dict, upload_name: str) -> str:
-    """2.2.20 (#47): ExoClock_info.txt: what to pick on ExoClock's upload form for the file just saved."""
+    """2.2.20 (#47): ExoClock_<planet>_<date>_info.txt (step 6c; ExoClock_info.txt before): what to pick on ExoClock's
+    upload form for the file just saved."""
     lines = [f"ExoClock upload form, for {upload_name} (SHOBS-P {meta.get('version', '')})",
              "",
              f"Planet: {exoclock_planet(planet)}   (ExoClock spells planet names with no space)",
@@ -3857,9 +3858,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.17 (item 9 nit): the Transit fit page's report and PNG join the set, so one fit's report, CSV and
             # PNG share one number (the PNG had its own counter: _5 beside _4).
             try:
-                names += tp.family_names()
+                fit_names = tp.family_names()
             except Exception:
-                pass
+                fit_names = []
+            if getattr(tp, "report", None) is not None:
+                # step 6c (item d): a fit of an opened report has no photometry of its own: the light curve on the
+                # Output page (another target's run) is not in its set, so its old files do not number it (TOI-2046 b
+                # saved as _2 beside WASP-49 b's light curve, 20 Nov)
+                return fit_names
+            names += fit_names
         return names
 
     def _save_dates(self) -> str:
@@ -4149,7 +4156,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def save_exoclock(self) -> str:
         """2.2.20 (#47): the shown transit fit as ExoClock's upload file (ExoClock_<planet>_<YYYYMMDD>.txt: JD_UTC at
         mid-exposure, relative flux not detrended, error; the frames the fit used, as the AAVSO exoplanet report) and
-        ExoClock_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if none)."""
+        ExoClock_<planet>_<date>_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if
+        none)."""
         tp = getattr(self, "transit_page", None)
         r = getattr(tp, "result", None) if tp is not None else None
         if not r:
@@ -4188,7 +4196,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                 filetypes=[("Text", "*.txt")], parent=self)
         if not path:
             return ""
-        info_path = self._unique_path(os.path.join(os.path.dirname(path), "ExoClock_info.txt"))
+        # step 6c (item d): named after its upload file (ExoClock_TOI-2046b_20260903_info.txt), so each pairs with
+        # its own upload; one ExoClock_info.txt for every planet piled up as _2, _3 … in a night's folder
+        info_path = self._unique_path(os.path.splitext(path)[0] + "_info.txt")
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(exoclock_upload_text(jd, flux, err, planet, meta))

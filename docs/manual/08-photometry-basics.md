@@ -361,36 +361,40 @@ SHOBS-P measures exactly that, the way the transit fit will. Once its every-10th
 each frame is on, the survey reads a few more frames to find the flip to the frame, then the 15 frames on each side of
 it (on a 232-frame night, about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture
 trial still use only the evenly spread frames). It then takes the target against each possible set (2 to 4 of the 8
-best-ranked survivors) on **every frame it read outside the predicted transit**, before and after the flip, using the
-ephemeris and shape from the Input page. Each frame counts for the stretch of the night it stands for (an every-10th
-frame for ten frames, a frame at the flip for one), as the fit counts every frame alike, so the number is a forecast
-of the step the fit will find on the whole night's baseline. It keeps the set with the lowest step for the target
-plus its own noise, so a set has to earn a smaller step against noisier comps (a fourth comp is preferred over three
-when the rest is within half a mmag). The suggestions line ends with, for example, *Chosen on 59 of the night's 232
-frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 25 before and 34 after the meridian
-flip, so steady on both pier sides, the target's flip step with these comps +0.8 ± 1.2 ppt (measured as the transit
-fit measures it: the whole night's frames read outside the predicted transit, on both sides of the flip)).* The step
-is in the fit's own units and sign (ppt of flux, + means brighter after the flip), so you can hold it against the
-*flip step* the fit reports. On a night with too little baseline on one side of the flip (a flip in transit on a
-night that ends at egress), it is measured on the frames right at the flip instead, and the line says *measured at
-the flip: too little baseline on one side to measure it as the fit does*.
+best-ranked survivors) on **every frame it read away from ingress and egress**, before and after the flip, in transit
+too, using the ephemeris and shape from the Input page. "Away from ingress and egress" means more than 10 minutes
+(plus 3 × the ephemeris uncertainty) from them, where a small timing error changes the predicted dip fast; a typed T0
+has no uncertainty, so 30 minutes more, and without the target's RA and Dec another 10 minutes (the frame times can
+then be up to 8 minutes off BJD). Each star is centred on its own light in every frame read,
+exactly as the run centres it. Through those frames it fits a level, the step at the flip and the transit's depth (the
+depth is fitted, not taken from the catalog, as the fit fits it), so the number is a forecast of the step the fit
+will find. It keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
+step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The
+suggestions line ends with, for example, *Chosen on 76 of the night's 232 frames (comp survey: steadiness, the
+sharpest frames' peaks, every frame in view; 35 before and 41 after the meridian flip, so steady on both pier sides,
+the target's flip step with these comps +6.2 ± 1.4 ppt (fitted as the transit fit finds it: level, step and depth
+through the frames read on both sides of the flip, away from ingress and egress)).* The step is in the fit's own units
+and sign (ppt of flux, + means brighter after the flip), so you can hold it against the *flip step* the fit reports.
+Expect the two to agree within the forecast's ±; the forecast's ± is larger, as it reads a third of the frames.
 
-Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
-3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,
-and on that night it picked a pair that left the target a +35 ppt step over the night. The next try measured the
-target on the 15 frames each side of the flip only; it forecast +0.1 mmag for a set where the fit, on the whole night,
-found +6.4 ppt with the same comps. From step 6b the step is measured on the same baseline the fit uses.
+Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) the four comps on their own stepped −63, −2, +26
+and +66 ppt at the flip and cancelled in the set, leaving the target +6.4 ppt. Three stars that agreed with each other
+to 3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest
+it, and on that night it picked a pair that left the target a +35 ppt step over the night. Later tries measured the
+target on the 15 frames each side of the flip (+0.1 mmag), then on the baseline frames only, without centring each
+star (+1.1 ppt), where the fit found +6.4 ppt with the same comps. From step 6c the stars are centred as the run
+centres them (a few tenths of a pixel moved the forecast by 1.5 ppt, as the comps' own steps are so large) and the
+step is fitted with a free depth on every frame read away from ingress and egress; on the same frames that gives
+about +6.2 ppt.
 
 **When the target's step is not measured.** The set is then chosen on steadiness alone, and a star that jumps at the
 flip against the other stars ranks lower. This happens when:
 - the mode is not Transits (a variable target's own change would read as a step). The line says *…, the target's
   flip step is not measured (the target's own changes would read as a step outside Transits)*;
 - the Input page has no ephemeris and shape (period, T0, Rp/R*, a/R*);
-- the frames carry no times, or fewer than 3 frames could be read on a side right at the flip;
+- the frames carry no times, or fewer than 3 frames away from ingress and egress could be read on a side of the flip
+  (the line says *too few frames read away from ingress and egress on one side of the flip*);
 - the aperture boxes hold a size the survey did not measure (the step changes a lot with the aperture);
-- a frame used falls within 10 minutes (plus 3 × the ephemeris uncertainty) of ingress or egress, where a small
-  timing error changes the predicted dip fast. A typed T0 has no uncertainty, so 30 minutes more are allowed, and
-  without the target's RA and Dec another 10 minutes (the frame times can then be up to 8 minutes off BJD).
 
 In Transits the line says *…, the flip step is left to the transit fit (the reason)*, and the transit fit's own flip
 test handles it (chapter 17).
