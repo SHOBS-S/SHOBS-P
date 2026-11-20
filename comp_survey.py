@@ -775,13 +775,16 @@ def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float 
     measured); judged: per candidate, True when it is one the suggestions could use (in the brightness window and not
     already left out). A judged candidate is out when |step| is beyond `limit` (flux fraction) and beyond `sigma` x its
     error. When that would leave fewer than `keep_min` judged candidates with a measured step, the steadiest
-    (smallest |step|) are kept instead, so the night still gets comps. Returns ({index: step in ppt} for those left
+    (smallest |step|) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
+    itself, after its other gates). Returns ({index: step in ppt} for those left
     out, [indices kept although beyond the limit])."""
     st = np.asarray(steps, dtype=float)
     er = np.asarray(errs, dtype=float)
     ok = np.asarray(judged, dtype=bool) & np.isfinite(st)
-    lim_mag = -2.5 * math.log10(1.0 - limit)   # 1 % brighter is ~0.0109 mag
-    big = ok & (np.abs(st) > lim_mag) & ~(np.isfinite(er) & (np.abs(st) <= sigma * er))
+    # Fable N1: judged in ppt of flux, the units the message gives (+-10 ppt on both sides)
+    with np.errstate(invalid="ignore", over="ignore"):
+        ppt = np.where(np.isfinite(st), (10 ** (-0.4 * np.where(np.isfinite(st), st, 0.0)) - 1.0) * 1000.0, np.nan)
+    big = ok & (np.abs(ppt) > limit * 1000.0) & ~(np.isfinite(er) & (np.abs(st) <= sigma * er))
     out = {int(j) for j in np.where(big)[0]}
     kept_anyway = []
     passing = int((ok & ~big).sum())

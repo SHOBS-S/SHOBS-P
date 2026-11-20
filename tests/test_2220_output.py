@@ -302,6 +302,35 @@ class TestNotesInApp(unittest.TestCase):
                 text = info.call_args[0][1]
             self.assertIn("needs TOI-2046 b's RA/Dec. SHOBS-P could not look up its position", text)
             self.assertNotIn("Input page", text)
+            self.assertNotIn(".;", text)
+            # the site from the report header, not the Input page (a different longitude would move JD_UTC)
+            app.lon.set("0.0")
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target",
+                                      return_value={"ra_hours": ra / 15.0, "dec_deg": dec, "source": "SIMBAD"}), \
+                    mock.patch.object(ca, "exoclock_jd_utc", wraps=ca.exoclock_jd_utc) as conv:
+                app.save_exoclock()
+                self.assertEqual(conv.call_args[0][4:6], (lat, lon))
+            # the page changed during the lookup: nothing saved, and it says so
+            tp.result["planet"]["ra"] = tp.result["planet"]["dec"] = None
+            rep["planet"].pop("ra", None)
+            rep["planet"].pop("dec", None)
+            import threading as _th
+            gate = _th.Event()
+
+            def slow(_n):
+                gate.wait(2)
+                return {"ra_hours": ra / 15.0, "dec_deg": dec}
+            res = tp.result
+            app.after(50, lambda: (setattr(tp, "result", dict(res)), gate.set()))
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target", side_effect=slow), \
+                    mock.patch.object(ca.messagebox, "showinfo") as info:
+                tp.result = res
+                self.assertEqual(app.save_exoclock(), "")
+                self.assertIn("changed during the lookup", info.call_args[0][1])
         finally:
             tp.result = None
             tp.report = None

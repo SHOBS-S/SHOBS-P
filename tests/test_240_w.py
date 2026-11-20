@@ -37,6 +37,19 @@ class TestCompCheckOwnStep(unittest.TestCase):
         self.assertFalse(by_old["A"]["step"])
         self.assertLess(new["depth_spread"], old["depth_spread"])
         self.assertLess(new["depth_spread"], 0.003)
+        # Fable S3: said in the note even when no comp is flagged
+        self.assertEqual(sorted(new["step_other"]), ["A", "B"])
+        self.assertIn("Without A, B the night needs a flip step of its own: those comps jump", new["note"])
+        self.assertEqual(old["step_other"], [])
+
+    def test_forced_step_kept_in_every_refit(self):
+        t, f, e, am, after = night(noise=0.0015)
+        cm = np.full((t.size, 3), 10.0)
+        summary = {"depth": (0.01, 0.0005), "tc": (2461000.70, 0.0010)}
+        rob = tc.robustness_check(t, f, e, am, PLANET, summary, (True, False, False), after_flip=after,
+                                  flip_step=True, comp_mags=cm, comp_names=["A", "B", "C"], flip_gated=False)
+        self.assertTrue(rob["ref"]["step"])
+        self.assertTrue(all(r["step"] for r in rob["rows"]))
 
 
 class TestRobustnessOwnStep(unittest.TestCase):
@@ -61,7 +74,8 @@ class TestRobustnessOwnStep(unittest.TestCase):
         for k in ("A left out", "B left out"):
             self.assertAlmostEqual(rows[k]["depth"], rob["ref"]["depth"], delta=0.0015)
         self.assertIn("Flip step: 2 of", rob["note"])
-        self.assertIn("better with one than the night as fitted (A left out; B left out", rob["note"])
+        self.assertIn("refits need a flip step of their own, though the night as fitted has none (A left out; B left out",
+                      rob["note"])
         self.assertTrue(all(ord(c) < 128 for c in tc.robustness_text(rob, ascii_only=True).replace("±", "")))
 
     def test_inherited_step_is_the_old_behaviour(self):
@@ -109,6 +123,12 @@ class TestOwnStepGate(unittest.TestCase):
         gone, kept = cs.own_step_out(st, np.full(4, 0.001), np.ones(4, bool))
         self.assertEqual(kept, [1, 2])
         self.assertEqual(sorted(gone), [0, 3])
+
+    def test_limit_in_ppt_both_sides(self):
+        # Fable N1: +10.03 ppt is beyond +-10 ppt (the mag limit used to allow +10.1 on the bright side)
+        st = mag_of_ppt(np.array([10.03, -10.03, 9.9, -9.9]))
+        gone, _k = cs.own_step_out(st, np.full(4, 1e-4), np.ones(4, bool), keep_min=0)
+        self.assertEqual(sorted(gone), [0, 1])
 
     def test_only_judged_candidates(self):
         st = mag_of_ppt(np.array([50.0, 1.0, -1.0, np.nan]))

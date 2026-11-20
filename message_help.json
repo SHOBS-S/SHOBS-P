@@ -974,7 +974,8 @@
   {
    "section": "Photometry",
    "patterns": [
-    "…; every comp candidate jumps more than ±10 ppt at the flip on its own, so the steadiest are used: …"
+    "…; only … comp candidate(s) stay(s) within ±10 ppt at the flip on its own, so the steadiest of the others is (are) used too: …",
+    "…; no comp candidate stays within ±10 ppt …"
    ],
    "todo": "Check the transit fit's flip step and the Robustness check before reporting."
   },
@@ -1722,7 +1723,8 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "… Flip step: … of … refits are better with (without) one than the night as fitted (…)"
+    "… Flip step: … of … refits need a flip step of their own, though the night as fitted has none (…)",
+    "… keep no flip step, though the night as fitted keeps one (…)"
    ],
    "todo": "Nothing by itself; read it with the spread."
   },
@@ -1732,6 +1734,13 @@
     "Leaving out … makes the transit … % deeper … (the night without it needs a flip step of its own)"
    ],
    "todo": "Check that comp (Comp health); on a flip night prefer comps that stay steady on both pier sides."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Comp choice check (…): … Without … the night needs a flip step of its own: that comp jumps at the meridian flip, so check it before reporting."
+   ],
+   "todo": "Check that comp (Comp health) before reporting; on a flip night prefer comps steady on both pier sides."
   },
   {
    "section": "Output, Transits mode",

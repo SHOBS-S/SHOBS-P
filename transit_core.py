@@ -1741,6 +1741,16 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         note += " With 2 comps each refit uses a single comp."
     if skipped:
         note += f" No refit without {', '.join(skipped)} (too few usable points)."
+    # step 6c-2 (Fable S3): with its own flip step a refit can hide a comp that jumps at the flip (its shift is
+    # small once the step absorbs it), so say which refits decided the step otherwise, flagged or not
+    ref_step = ref.get("t_flip") is not None
+    other = [f["name"] for f in fits if f.get("step") != ref_step]
+    out["step_other"] = other
+    if other:
+        note += (f" Without {', '.join(other)} the night needs "
+                 + ("no flip step" if ref_step else "a flip step of its own")
+                 + (": that comp jumps" if len(other) == 1 else ": those comps jump")
+                 + " at the meridian flip, so check it before reporting.")
     if not flags and math.isfinite(sd) and math.isfinite(st):
         note += f" No comp moves the depth or Tc by more than {COMP_LOO_SIGMA:g}σ beyond its own noise."
     out["note"] = note
@@ -1789,7 +1799,7 @@ def _cut(arr, keep):
 def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, detrend_flags=(True, False, False),
                      after_flip=None, flip_step=None, flagged_mask=None, allow_airmass: bool = True,
                      detrend_rows=None, flagged=None, comp_mags=None, comp_names=None, measured=None,
-                     cancel=None, progress=None, log=None, flip_gated: bool = True) -> dict | None:
+                     cancel=None, progress=None, log=None, flip_gated: bool = False) -> dict | None:
     """2.4.0 step 6b (#35): least-squares refits of one night over reasonable reduction choices.
 
     t, flux, err, airmass, after_flip, flagged_mask: the main fit's data and settings (flagged_mask: flagged frames
@@ -1945,6 +1955,10 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
               "tc": float((main_summary.get("tc") or (float("nan"), float("nan")))[1])}
     most = {"depth": max(rows, key=lambda r_: abs(r_["depth"] - ref_row["depth"])),
             "tc": max(rows, key=lambda r_: abs(r_["tc"] - ref_row["tc"]))}
+    for k_ in ("depth", "tc"):   # Fable N4: say when the refit that moves it most also decided the step otherwise
+        if bool(most[k_].get("step")) != bool(ref_row.get("step")) and "(its flip step differs)" not in \
+                most[k_]["label"]:
+            most[k_] = dict(most[k_], label=most[k_]["label"] + " (its flip step differs)")
     out = {"rows": rows, "ref": ref_row, "spread": spread, "formal": formal, "most": most, "left_out": left_out,
            "skipped": skipped + [f"{x} (measured on too few frames)" for x in too_few], "groups": [g for g, _w in ROBUST_GROUPS if any(r_["group"] == g for r_ in rows)]}
     flags = []
@@ -1997,9 +2011,10 @@ def robustness_text(rob: dict | None, ascii_only: bool = False) -> str:
     ref_step = bool(rob["ref"].get("step"))
     other = [r_["label"] for r_ in rob["rows"] if bool(r_.get("step", ref_step)) != ref_step]
     if other:
-        how = "without" if ref_step else "with"
-        txt += (f". Flip step: {len(other)} of {len(rob['rows'])} refits are better {how} one than the night as "
-                f"fitted ({'; '.join(other[:4])}{'; …' if len(other) > 4 and not ascii_only else ''}"
+        how = "keep no flip step, though the night as fitted keeps one" if ref_step else \
+            "need a flip step of their own, though the night as fitted has none"
+        txt += (f". Flip step: {len(other)} of {len(rob['rows'])} refits {how} "
+                f"({'; '.join(other[:4])}{'; …' if len(other) > 4 and not ascii_only else ''}"
                 f"{'; ...' if len(other) > 4 and ascii_only else ''})")
     txt += "."
     if rob.get("measure_note"):   # Fable N14: why the aperture and sky ring were not tried, in every file too

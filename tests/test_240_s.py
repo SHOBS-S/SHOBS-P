@@ -450,6 +450,32 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertIn(0, res["frames"])
         self.assertIn(N_FRAMES - 1, res["frames"])
 
+    def test_own_flip_step_lets_the_steadiest_back(self):
+        """step 6c-2 (Fable M1/S1): stars beyond the own flip-step limit are left out; when that leaves fewer than
+        2 comps after every gate, the steadiest of them come back, and the S line says how many passed."""
+        app = self._setup()
+        real = app._survey_view
+        jumps = {"STEADY B": 12.0, "STEADY C": -15.0, "STEADY D": 30.0}
+
+        seen = []
+
+        def view(*a, **k):
+            v = real(*a, **k)
+            v = dict(v, out=dict(v["out"]), own_out=dict(jumps))
+            seen.append(v)
+            for n, ppt in jumps.items():
+                v["out"][n] = f"jumps {ppt:+.1f} ppt at the meridian flip on its own (test)"
+            return v
+        with mock.patch.object(app, "_survey_view", side_effect=view):
+            names = self._wait(app)
+        self.assertEqual(set(names), {"STEADY A", "STEADY B"})
+        # (said on the S line of a flip night; this made-up night has no flip, so read it from the survey)
+        self.assertEqual(seen[-1]["own_note"], "only 1 comp candidate stays within ±10 ppt at the flip on its own, "
+                                               "so the steadiest of the others is used too: STEADY B +12.0 ppt")
+        left = [t for t in self.lines if t.startswith("Left out by the comp survey")][-1]
+        self.assertIn("STEADY C (jumps", left)
+        self.assertNotIn("STEADY B (jumps", left)
+
     def test_without_the_linear_limit_the_peaky_star_may_stay(self):
         app = self._setup(linear=None)
         names = self._wait(app)

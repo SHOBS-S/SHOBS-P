@@ -422,8 +422,10 @@ sides))*. Without this, the set could be two stars that jump the opposite way an
 but the result then rests on both of them. On WASP-49 b, 19 Nov 2026, the comps' own steps ran smoothly across the
 frame from −59 ppt at one edge to +63 ppt at the other, and a set of one from each end moved the depth from 1.3 % to
 over 3 % and Tc by about 55 minutes when either was left out. Stars in the target's own part of the frame stay under
-10 ppt. When every candidate jumps more than that, the two steadiest are used and the S line says so: *…; every comp
-candidate jumps more than ±10 ppt at the flip on its own, so the steadiest are used: …*. When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
+10 ppt. When that, with the other tests (frame edge, linear limit, colour), would leave fewer than two comps, the
+steadiest of the stars that jump are let back, one at a time, until there are two, and the S line says so: *…; only 1
+comp candidate stays within ±10 ppt at the flip on its own, so the steadiest of the others is used too: TYC …
++12.4 ppt* (or *no comp candidate stays within …*). When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
 steadiest you can by hand and check Comp health after the run.
 
 The survey only changes which stars are **suggested**. The photometry itself is the same, and the comps you mark are

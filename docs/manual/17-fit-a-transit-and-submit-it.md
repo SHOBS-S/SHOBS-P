@@ -296,7 +296,9 @@ without step and Step–depth correlation rows.*
 
 The leave-one-comp-out check and the Robustness check (below) decide the step for each of their refits the same
 way the fit does (kept only at ΔBIC 10 or more), so a refit whose data need a step gets one even when the fit on the
-page has none, and the other way round (2.4.0). Before 2.4.0 every refit took the main fit's decision, which hid the
+page has none, and the other way round (2.4.0). The comp check's note names the comps whose refit decided otherwise:
+*"… Without TYC 5936-2126-1 the night needs a flip step of its own: that comp jumps at the meridian flip, so check
+it before reporting."* (A step forced on for a test keeps that setting in every refit.) Before 2.4.0 every refit took the main fit's decision, which hid the
 size of the step a single comp brings. The reports carry the flip time either way (chapter 19), so a later refit of a
 report uses the same time.
 
@@ -385,8 +387,9 @@ across reasonable reduction choices than its formal error (± 3.10 min against �
 Press it again after a new fit: the check belongs to the fit it was run on.
 
 On a night with a meridian flip, each refit decides the flip step for itself, as the fit does (above). When some
-refits decide otherwise than the fit on the page, the note says which: *"… Flip step: 2 of 10 refits are better with
-one than the night as fitted (TYC 5936-2126-1 left out; Gaia DR3 2991287972537580288 left out)."* A comp whose
+refits decide otherwise than the fit on the page, the note says which: *"… Flip step: 2 of 10 refits need a flip step
+of their own, though the night as fitted has none (TYC 5936-2126-1 left out; Gaia DR3 2991287972537580288 left
+out)."* The refit that moves the depth or Tc most adds *(its flip step differs)* when it decided the step otherwise. A comp whose
 leave-out needs a step of its own is one that jumps at the flip; the comp survey (chapter 8) now keeps such stars
 out of the suggestions.
 

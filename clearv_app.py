@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 import warnings
+from tkinter import TclError  # step 6c-2 (Fable S4)
 from tkinter import (
     BOTH,
     END,
@@ -827,6 +828,10 @@ def exoclock_filter(code: str) -> str:
     """2.2.20 (#47): ExoClock's Filter choice for an AAVSO filter code (the code itself when not in the table)."""
     c = str(code or "").strip()
     return EXOCLOCK_FILTERS.get(c.upper(), c or "Clear (no filter)")
+
+
+class _WindowGone(Exception):
+    """step 6c-2 (Fable S4): the window closed while save_exoclock waited for a lookup."""
 
 
 def _float_or_none_app(v):
@@ -4233,31 +4238,49 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         def work():
             for n in names:
+                if cancelled.is_set():
+                    return
                 try:
                     found = core.lookup_target(n)
                     box["radec"] = (float(found["ra_hours"]) * 15.0, float(found["dec_deg"]))
                     box["name"] = n
+                    box["source"] = str(found.get("source") or "SIMBAD")   # Fable N8
                     return
                 except Exception as exc:
-                    errors.append(f"{n}: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}")
+                    first = str(exc).splitlines()[0].strip().rstrip(".") if str(exc) else type(exc).__name__
+                    errors.append(f"{n}: {first}")   # Fable N6: no "TOI-2046.;"
 
+        cancelled = threading.Event()
+        tp = getattr(self, "transit_page", None)
         self._radec_lookup_busy = True
         tok = self.busy_begin(f"Looking up {names[0]}'s position for the ExoClock file…")
         try:
             th = threading.Thread(target=work, daemon=True)
             th.start()
             while th.is_alive():   # the window stays live (busy bar) while SIMBAD answers
-                self.update()
+                try:
+                    self.update()
+                except TclError:   # Fable S4: the window was closed during the lookup
+                    cancelled.set()
+                    raise _WindowGone() from None
+                if tp is not None and (getattr(tp, "result", None) is not r or getattr(tp, "report", None)
+                                       is not report):
+                    cancelled.set()   # Fable S4: another fit or report took the page meanwhile
+                    raise ValueError("The fit on the Transit page changed during the lookup, so nothing was saved; "
+                                     "press Save for ExoClock… again for the fit now shown")
                 time.sleep(0.03)
         finally:
-            self.busy_end(tok)
             self._radec_lookup_busy = False
+            try:
+                self.busy_end(tok)
+            except TclError:
+                pass
         if "radec" not in box:
             raise ValueError("SHOBS-P could not look up its position (" + "; ".join(errors[:3]) + "). Try again "
                              "when the lookup services answer")
         for p in planets:
             p["ra"], p["dec"] = box["radec"]
-        self.log(f"ExoClock file: {box['name']}'s RA/Dec from SIMBAD/VSX ({box['radec'][0]:.5f}, "
+        self.log(f"ExoClock file: {box['name']}'s RA/Dec from {box['source']} ({box['radec'][0]:.5f}, "
                  f"{box['radec'][1]:+.5f}) for the JD_UTC times.", keep_status=True)
         return box["radec"]
 
@@ -4288,11 +4311,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     h = report.get("header") or {}
                     lat, lon = _float_or_none_app(h.get("OBSLAT")), _float_or_none_app(h.get("OBSLON"))
                     if lat is None or lon is None:   # the report does not say where: the site on the Input page
+                        if h.get("OBSLAT") or h.get("OBSLON"):   # Fable N7: say so when it says it unreadably
+                            self.log(f"ExoClock file: the report's OBSLAT/OBSLON ({h.get('OBSLAT', '')}, "
+                                     f"{h.get('OBSLON', '')}) are not decimal degrees, so the Input page's site is "
+                                     "used (tens of milliseconds at most).", keep_status=True)
                         lat, lon = float(self.lat.get()), float(self.lon.get())
+                    elif not (-90 <= lat <= 90 and -360 <= lon <= 360):
+                        raise ValueError(f"The report's OBSLAT/OBSLON ({lat}, {lon}) are not a place on Earth")
                 else:
                     ra, dec = self.target_radec_deg(r.get("planet"))
                     lat, lon = float(self.lat.get()), float(self.lon.get())
             jd = exoclock_jd_utc(r["t"], system, ra, dec, lat, lon)
+        except _WindowGone:
+            return ""
         except (ValueError, TypeError) as exc:
             why = str(exc).rstrip(".")
             why = why[:1].upper() + why[1:]
@@ -16058,12 +16089,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         self._survey_rejected = set()
 
+        own_back = set()   # step 6c-2: stars beyond the own flip-step limit let back so the night gets 2 comps
+
         def survey_ok(name):
             # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable (a
             # star outside the survey's own list, past its cap, is judged on the catalog rules alone)
             if survey is None or name not in survey["index"]:
                 return True
-            if survey["out"].get(name):
+            if survey["out"].get(name) and name not in own_back:
                 self._survey_rejected.add(name)
                 return False
             return True
@@ -16103,19 +16136,48 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # (no pool lets a star nearer the edge back in; the field gets fewer suggestions instead, and the log says so).
         seq_names = {self._cat_name(st) for _x, _y, st in stars if st.get("seq")}
         inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
-        relaxed = set()
-        picks = []
-        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
-            if len(picks) >= 4:
-                break
-            have = {n for n, _dm in picks}
-            pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)
-                    # review nit: with the target's colour known, a star of unknown colour only fills in (0.6 passes)
-                    and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
-            got = choose(pool, gate)[:4 - len(picks)]
-            if gate > 0.3:
-                relaxed.update(n for n, _dm in got)
-            picks += got
+        def pick_all():
+            relaxed_, picks_ = set(), []
+            for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
+                if len(picks_) >= 4:
+                    break
+                have = {n for n, _dm in picks_}
+                pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)
+                        # review nit: with the target's colour known, a star of unknown colour only fills in (0.6)
+                        and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
+                got = choose(pool, gate)[:4 - len(picks_)]
+                if gate > 0.3:
+                    relaxed_.update(n for n, _dm in got)
+                picks_ += got
+            return picks_, relaxed_
+
+        picks, relaxed = pick_all()
+        # step 6c-2 (Fable M1/S1): fewer than 2 comps after every gate because stars jump at the flip on their own:
+        # let the steadiest of those back, one at a time, until 2 are picked (or none is left)
+        own_out = dict((survey or {}).get("own_out") or {})
+        if len(picks) < 2 and own_out:
+            rejected_before = set(self._survey_rejected)
+            for name in sorted(own_out, key=lambda n_: abs(own_out[n_])):
+                own_back.add(name)
+                self._survey_rejected = set(rejected_before)
+                picks, relaxed = pick_all()
+                if len(picks) >= 2:
+                    break
+            back_used = [n for n, _dm in picks if n in own_back]
+            own_back.intersection_update(back_used)
+            self._survey_rejected = set(rejected_before) - own_back
+            if back_used:
+                n_ok = len(picks) - len(back_used)
+                lead = (f"no comp candidate stays within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own"
+                        if n_ok == 0 else f"only {n_ok} comp candidate{'s' if n_ok != 1 else ''} "
+                        f"stay{'s' if n_ok == 1 else ''} within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on "
+                        "its own")
+                survey["own_note"] = (lead + ", so the steadiest of the others "
+                                      + ("is" if len(back_used) == 1 else "are") + " used too: "
+                                      + ", ".join(f"{n} {own_out[n]:+.1f} ppt" for n in back_used))
+        if survey is not None and not own_back:
+            survey["own_note"] = ""
+        self._survey_own_back = set(own_back)
         picks, set_step, series_kept, relaxed_set, shortened = self._survey_final_picks(
             picks, survey, choose, cands, inside, seq_names, t_bv)
         if survey is not None:
@@ -16653,13 +16715,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # egress on both sides of the flip
         tdiffs, b_rows, a_rows, flip_why, wts = None, np.zeros(0, int), np.zeros(0, int), "", None
         self._survey_step_how = ""
-        self._survey_own_note = ""
         if st["flip"] and abs(rr - float(r)) > 0.06:
             # re-review nit: the flip step depends strongly on the aperture (WASP-49 b: +35 at r 8, +16 at r 10.3)
             flip_why = f"measured at r {rr:g}, not at r {float(r):g}"
         elif st["flip"]:
             flip_why, tdiffs, b_rows, a_rows, wts = self._survey_target_steps(result, rr, cols, planet)
-        own_kept = []
+        own_out = {}   # step 6c-2: name -> its own flip step (ppt) beyond the limit
         if tdiffs is not None:
             pairs = [cs.set_target_step(tdiffs, [k], b_rows, a_rows, wts) if cols[k] is not None else (nan, nan)
                      for k in range(len(cols))]
@@ -16668,17 +16729,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # step 6c-2 (John 20 Nov): each comp's OWN flip step against the target, not only the set's: a comp
             # that jumps more than 10 ppt on its own is left out, so the set cannot rest on two big opposite steps
             # cancelling (WASP-49 b 19 Nov: -59 and +63 ppt in one set)
+            # Fable M1/S1: the fallback (too few comps left) is decided in _suggest_comps, after the edge, linear and
+            # colour gates, from own_out; here only who is beyond the limit
             judged = [cols[k] is not None and bool(window[k]) and c[0] not in out for k, c in enumerate(cands)]
-            gone, own_kept = cs.own_step_out(step_rel, step_err, judged)
+            gone, _k = cs.own_step_out(step_rel, step_err, judged, keep_min=0)
             for k, ppt in gone.items():
+                own_out[cands[k][0]] = ppt
                 out[cands[k][0]] = (f"jumps {ppt:+.1f} ppt at the meridian flip on its own (the target against it "
                                     f"alone; a comp should stay within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt on both "
                                     "pier sides)")
-            if own_kept:
-                self._survey_own_note = (
-                    f"every comp candidate jumps more than ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own, "
-                    "so the steadiest are used: " + ", ".join(
-                        f"{cands[k][0]} {cs.own_step_ppt(float(step_rel[k])):+.1f} ppt" for k in own_kept))
             good = [scatter[k] for k, c in enumerate(cands)
                     if window[k] and c[0] not in out and math.isfinite(scatter[k])]
             ref_sc = float(np.median(good)) if good else nan
@@ -16691,7 +16750,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "flip": bool(st["flip"]) and tdiffs is not None and bool(np.isfinite(step_rel).any()),
                 "ref_scatter": ref_sc, "out": out, "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
                 "a_rows": a_rows, "weights": wts, "step_how": getattr(self, "_survey_step_how", ""),
-                "own_note": getattr(self, "_survey_own_note", ""),
+                "own_out": own_out, "own_note": "",
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
                 "n_after": st["n_after"], "radius_asked": float(r)}
@@ -16902,7 +16961,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if survey is None:
             return False
         inside = getattr(self, "_survey_inside", None)   # re-review 11: the edge rules already explain the others
-        out = {n: why for n, why in survey["out"].items() if n in survey["window"] and (inside is None or n in inside)}
+        back = getattr(self, "_survey_own_back", set())   # step 6c-2: let back (the S line says so), not left out
+        out = {n: why for n, why in survey["out"].items() if n in survey["window"] and (inside is None or n in inside)
+               and n not in back}
         if lin is not None and not getattr(self, "precalibrated", False):
             for name, j in survey["index"].items():
                 pk = survey["peak_max"][j]
