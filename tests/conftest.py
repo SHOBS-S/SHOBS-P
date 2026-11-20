@@ -5,6 +5,7 @@ ask_choice (buttons that say what they do, with the safe one as the default), wh
 wait forever. This stand-in answers them the way the tests already answer: when the test has mocked askyesno, its
 Yes picks the first non-safe button (the old Yes) and its No the safe one; otherwise the safe button, as Enter or
 Escape would."""
+import os
 from unittest import mock
 
 import pytest
@@ -27,3 +28,31 @@ def _ask_choice_without_a_window():
 
     with mock.patch.object(ca, "ask_choice", answer):
         yield
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _settings_file_of_its_own(tmp_path_factory):
+    """2.4.0 step 6c: the tests never read or write the user's own ~/.shobs_p_settings.json. A test that set the
+    Mount to alt-az saved it there, and every later App (in this run, or the next) started alt-az, which failed two
+    drift tests run on their own (and would change a tester's real settings)."""
+    try:
+        import clearv_app as ca
+    except Exception:
+        yield
+        return
+    path = str(tmp_path_factory.mktemp("settings") / ".shobs_p_settings.json")
+    with mock.patch.object(ca, "SETTINGS_FILE", path):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _settings_start_fresh(_settings_file_of_its_own):
+    """step 6c: and what one test saved (an alt-az Mount) does not reach the next test's new App."""
+    yield
+    try:
+        import clearv_app as ca
+        path = ca.SETTINGS_FILE
+        if os.path.exists(path) and os.path.basename(os.path.dirname(path)).startswith("settings"):
+            os.remove(path)   # only the session's own temp file (a test's own patched file is left to it)
+    except Exception:
+        pass

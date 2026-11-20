@@ -251,6 +251,8 @@ class TestSuggestionsFollowTheDrift(unittest.TestCase):
         app = self._setup(observations=obs)
         app.night_bin = {"2026-10-24": {"binning": 1, "pattern": app.pattern.get()}}   # Fable N4 (+ grid, re-review)
         app._drift_cache = None
+        app._series_drift_memo = None
+        app.masters_binning = None   # step 6c: a sibling test's masters (binning 2) are not this test's
         app._suggest_comps()
         self.assertFalse(app._suggest_drift_pending)   # nothing to read: the series' own frame shifts
         self.assertIsNone(app._drift_cache)

@@ -356,7 +356,7 @@ class TransitPage:
         _rbutton(text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet)
         _rbutton(text="Save ExoFOP package…", command=self.save_package)
         _rbutton(text="Open ExoFOP…", command=self.open_exofop)
-        # 2.2.20 (#47): ExoClock's upload file (+ ExoClock_info.txt) and its upload page (App.save_exoclock).
+        # 2.2.20 (#47): ExoClock's upload file (+ its _info.txt) and its upload page (App.save_exoclock).
         _rbutton(text="Save for ExoClock…", command=app.save_exoclock)
         _rbutton(text="Go to ExoClock…", command=app.open_exoclock)
         # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
@@ -510,16 +510,16 @@ class TransitPage:
         return plot_bin_width_h(getattr(self, "plot_bins", None).get() if getattr(self, "plot_bins", None) else
                                 PLOT_BIN_CHOICES[0], cadence_h)
 
-    def _bins_that_work(self, x, width_h: float, cadence_h: float) -> tuple[float, str]:
+    def _bins_that_work(self, x, width_h: float, cadence_h: float, y=None) -> tuple[float, str]:
         """step 6c (item f): plot_bins_that_work for the Plot bins box's choice; the note goes in the Log once per
         choice and night too."""
         choice = self.plot_bins.get() if getattr(self, "plot_bins", None) else PLOT_BIN_CHOICES[0]
         try:
-            use, note = plot_bins_that_work(x, width_h, choice, cadence_h)
+            use, note = plot_bins_that_work(x, width_h, choice, cadence_h, y)
         except Exception:
             return width_h, ""
         if note:
-            key = (choice, round(float(cadence_h), 4), len(np.atleast_1d(x)))
+            key = (choice, note)   # Fable N3: once per choice and night (not per plot: the preview has other frames)
             if getattr(self, "_bin_note_said", None) != key:
                 self._bin_note_said = key
                 try:
@@ -2440,7 +2440,7 @@ class TransitPage:
             ax.plot(x, f, ".", color="#9aa7b0", ms=4, label="each frame")
             cadence = float(np.median(np.diff(np.sort(t)))) * 24 if t.size > 1 else 0.0
             width = self._plot_bin_width(cadence)   # 2.3.2 (item 6)
-            width, bin_note = self._bins_that_work(x, width, cadence)   # step 6c (item f)
+            width, bin_note = self._bins_that_work(x, width, cadence, f)   # step 6c (item f)
             bins = _bin(x, f, width)
             if bins:
                 lab = plot_bin_label(width) + (f"\n({bin_note})" if bin_note else "")
@@ -2755,7 +2755,7 @@ class TransitPage:
             ax.plot(x[fmask], y[fmask], "o", ms=4, mfc="none", mec="#d08a2e", mew=0.8,
                     label=f"flagged {wf.get('label', '')} (errors ×{wf.get('factor', 2):g})".replace("  ", " "))
         width = self._plot_bin_width(r["cadence_days"] * 24)   # 2.3.2 (item 6): Plot bins box; legend names it
-        width, bin_note = self._bins_that_work(x, width, r["cadence_days"] * 24)   # step 6c (item f)
+        width, bin_note = self._bins_that_work(x, width, r["cadence_days"] * 24, y)   # step 6c (item f)
         bins = _bin(x, y, width)
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
@@ -4189,13 +4189,15 @@ def plot_bin_label(width_h: float) -> str:
     return f"{max(1, int(round(width_h * 60)))}-minute bins"
 
 
-def plot_bins_that_work(x, width_h: float, choice: str, cadence_h: float) -> tuple[float, str]:
+def plot_bins_that_work(x, width_h: float, choice: str, cadence_h: float, y=None) -> tuple[float, str]:
     """2.4.0 step 6c (item f, John 20 Nov, MOBS WASP-50 b): (the bin width to draw in hours, a short note or ""). A
     width chosen in the Plot bins box whose bins mostly hold fewer than PLOT_BIN_MIN_FRAMES frames (5-min bins on
     frames 3 min apart: one bin drawn, the rest dropped silently, and it looked broken) gives way to the next
-    width in the box that works, then to Auto's; the note says so for the legend. Auto is drawn as it is."""
+    width in the box that works, then to Auto's; the note says so for the legend. Auto is drawn as it is. y: the
+    values plotted (only frames with a finite value count, as _bin counts them)."""
     x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
+    ok = np.isfinite(x) if y is None else np.isfinite(x) & np.isfinite(np.asarray(y, dtype=float))
+    x = x[ok]
     if not re.match(r"\s*\d", str(choice or "")) or x.size < 4 or not width_h > 0:
         return width_h, ""
 
@@ -4211,6 +4213,8 @@ def plot_bins_that_work(x, width_h: float, choice: str, cadence_h: float) -> tup
     use = next((w for w in tries if w > width_h + 1e-9 and works(w)), None)
     if use is None:
         use = max(tries)
+    if use <= width_h + 1e-9:
+        return width_h, ""   # Fable S5: nothing wider in the box; drawn as chosen
     every = f" (one every {cadence_h * 60:.0f} min)" if math.isfinite(cadence_h) and cadence_h > 0 else ""
     return use, (f"{max(1, int(round(width_h * 60)))}-min bins hold under {PLOT_BIN_MIN_FRAMES} frames on this "
                  f"night{every}: showing {max(1, int(round(use * 60)))}-min bins")

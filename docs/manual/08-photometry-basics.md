@@ -366,7 +366,8 @@ too, using the ephemeris and shape from the Input page. "Away from ingress and e
 (plus 3 × the ephemeris uncertainty) from them, where a small timing error changes the predicted dip fast; a typed T0
 has no uncertainty, so 30 minutes more, and without the target's RA and Dec another 10 minutes (the frame times can
 then be up to 8 minutes off BJD). Each star is centred on its own light in every frame read,
-exactly as the run centres it. Through those frames it fits a level, the step at the flip and the transit's depth (the
+as the run centres it (first on the reference frame, then on each frame from there). Through those frames it fits
+a level, the step at the flip and the transit's depth (the
 depth is fitted, not taken from the catalog, as the fit fits it), so the number is a forecast of the step the fit
 will find. It keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
 step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The
@@ -394,6 +395,9 @@ flip against the other stars ranks lower. This happens when:
 - the Input page has no ephemeris and shape (period, T0, Rp/R*, a/R*);
 - the frames carry no times, or fewer than 3 frames away from ingress and egress could be read on a side of the flip
   (the line says *too few frames read away from ingress and egress on one side of the flip*);
+- the flip falls at ingress or egress with no baseline beyond it (a night that ends in transit): a step after the
+  flip then looks just like a deeper transit (*the flip is at ingress or egress with no baseline beyond it, so the
+  step cannot be told from the depth*);
 - the aperture boxes hold a size the survey did not measure (the step changes a lot with the aperture);
 
 In Transits the line says *…, the flip step is left to the transit fit (the reason)*, and the transit fit's own flip

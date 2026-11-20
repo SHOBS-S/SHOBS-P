@@ -90,7 +90,10 @@ strip; the page has no progress bar of its own.
   your own choice.
   For an opened report the row also has **meridian flip at the largest gap**.
 - **Fit** row. **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
-  gives steadier error bars for a final result; Quick is fine while you try things.
+  gives steadier error bars for a final result; Quick is fine while you try things. The MCMC starts from the same
+  random seed every time, so the same night with the same comps gives the same numbers, whichever Comp boxes the comps
+  are in (from 2.4.0; before, a different order could move the result by a few hundredths of its error). A refit of a
+  night measured by an earlier version can differ from that version's numbers by about as much, for the same reason.
 - **Fit transit** (the one colored button above the plot) runs the fit with the current settings. **Cancel** stops
   it. The fit always waits for this button. If you change a **Points** or **Corrections** setting while a fit is
   shown, the button reads **Refit (settings changed)** and the shown fit's numbers (the verdict, the quality line,

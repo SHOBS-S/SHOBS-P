@@ -3858,16 +3858,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # 2.2.17 (item 9 nit): the Transit fit page's report and PNG join the set, so one fit's report, CSV and
             # PNG share one number (the PNG had its own counter: _5 beside _4).
             try:
-                fit_names = tp.family_names()
+                names += tp.family_names()
             except Exception:
-                fit_names = []
-            if getattr(tp, "report", None) is not None:
-                # step 6c (item d): a fit of an opened report has no photometry of its own: the light curve on the
-                # Output page (another target's run) is not in its set, so its old files do not number it (TOI-2046 b
-                # saved as _2 beside WASP-49 b's light curve, 20 Nov)
-                return fit_names
-            names += fit_names
+                pass
         return names
+
+    def _report_fit_shown(self) -> bool:
+        """step 6c (item d): the Transit fit page shows a fit of an opened report (no photometry of its own)."""
+        tp = getattr(self, "transit_page", None)
+        return (self.mode_key == "transits" and tp is not None and tp.result is not None
+                and getattr(tp, "report", None) is not None)
 
     def _save_dates(self) -> str:
         """2.2.5: DD-MON-YYYY of the first point being saved, or first_to_last when they fall on different UTC dates."""
@@ -3932,6 +3932,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
         state = getattr(self, "_save_set", None)
         names = self._family_names()
+        if self._report_fit_shown():
+            # step 6c (item d, Fable M1): a fit of an opened report and the Output page's run (another target, TOI-2046 b
+            # beside WASP-49 b's light curve on 20 Nov) are two sets: each is numbered against its own names only
+            fit_names = names[3:]
+            names = fit_names if filename in fit_names else names[:3]
         if filename not in names:
             names = names + [filename]
         if state and state["key"] == key and filename not in state["used"]:
@@ -16222,6 +16227,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 except Exception:
                     t_def = {"donut": False}
                 t_donut = bool(t_def.get("donut"))
+                # step 6c (Fable S2): the stars centred once on the reference frame first (a star placed from the
+                # plate solution can sit 1-3 px off), so each frame's centring starts from its real centre and its
+                # jump limit is measured from there, as the run's markers are
+                xy0[:] = core.recenter_points(ref, xy0, r_now)
                 rmax = max(radii)
                 ref_pts = core.refine_points(ref, ref_sources, rmax, t_donut) if len(ref_sources) >= 3 else []
                 last = {"sources": None, "reg": None}
@@ -16325,11 +16334,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         break
                     extra += len(nxt)
                     read(nxt, "at the meridian flip")
-                # step 6b (John 19 Nov, "match the fit"): enough frames outside the predicted transit on each side
-                # of the flip (JD here, not BJD: 9.5 min more margin), so the target's step is measured on the
-                # night's baseline as the fit measures it
+                # step 6b (John 19 Nov, "match the fit"): enough frames on each side of the flip that the step's fit
+                # can use (JD here, not BJD: 9.5 min more margin)
                 if transits and base_model is not None and alive():
-                    is_base = lambda jd_: cs.out_of_transit(jd_, base_model, cs.TARGET_STEP_MARGIN + 9.5 / 1440.0)
+                    # step 6c (Fable S3): every frame the free-depth fit can use counts (away from ingress and
+                    # egress, in transit too), not the baseline only
+                    is_base = lambda jd_: cs.contact_free(jd_, base_model, cs.TARGET_STEP_MARGIN + 9.5 / 1440.0)
                     try:
                         nxt = cs.baseline_pass(n, tried, {i: f.get("jd") for i, f in out["frames"].items()},
                                                {i: f["flipped"] for i, f in out["frames"].items()},
@@ -16519,7 +16529,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         peaks_c = np.array([[peaks[f, j] if j is not None else nan for j in cols] for f in range(len(idx))])
         # step 5 fix (#76): the TARGET's own step at the flip against each comp (and, in choose_set, each set), with
         # the predicted transit taken out; a forecast from the stars nearest the target chose the worst set on
-        # WASP-49 b. Judged only in Transits, with an ephemeris, and when no frame used is near ingress or egress
+        # WASP-49 b. Judged only in Transits, with an ephemeris, and (step 6c) with frames away from ingress and
+        # egress on both sides of the flip
         tdiffs, b_rows, a_rows, flip_why, wts = None, np.zeros(0, int), np.zeros(0, int), "", None
         self._survey_step_how = ""
         if st["flip"] and abs(rr - float(r)) > 0.06:
@@ -16593,6 +16604,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
             return ("too few frames read away from ingress and egress on one side of the flip",
                     None, none, none, None)
+        rows = np.r_[b_rows, a_rows]
+        sh = np.asarray(model["mag"], dtype=float)[rows]
+        if (int((np.nan_to_num(sh) > 1e-4).sum()) >= 3
+                and cs.step_depth_vif(after[rows], sh) > cs.STEP_VIF_MAX):
+            # Fable M2: the flip at ingress or egress with no baseline beyond it (a night that ends in transit)
+            return ("the flip is at ingress or egress with no baseline beyond it, so the step cannot be told from "
+                    "the depth", None, none, none, None)
         mags = result["mags"][rr]
         comp = np.full((mags.shape[0], len(cols)), np.nan)
         for k, j in enumerate(cols):

@@ -2223,7 +2223,9 @@ def _defocus_cache_put(img, out: dict) -> None:
     import weakref
 
     try:
-        for k in [k for k, v in _FIELD_DEFOCUS.items() if v[0]() is None]:
+        # step 6c (Fable N1): a snapshot of the items, as the comp survey's thread now puts an entry on every frame
+        # while the window's thread may put one too ("dictionary changed size during iteration")
+        for k in [k for k, v in list(_FIELD_DEFOCUS.items()) if v[0]() is None]:
             _FIELD_DEFOCUS.pop(k, None)
         if len(_FIELD_DEFOCUS) > 64:
             _FIELD_DEFOCUS.clear()

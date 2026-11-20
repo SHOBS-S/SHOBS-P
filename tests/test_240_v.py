@@ -138,5 +138,88 @@ class TestRobustWords(unittest.TestCase):
         self.assertIn("which moves it by", src)
 
 
+class TestStepDepthTogether(unittest.TestCase):
+    def test_flip_at_ingress_on_a_night_that_ends_in_transit_is_not_judged(self):
+        rng = np.random.default_rng(9)
+        t = 2461363.70 + np.arange(150) * 0.00073
+        model = cs.transit_mags(t, PLANET, tc.occultation, (0.49, 0.23))
+        ing = int(np.where(model["mag"] > 1e-4)[0][0])
+        after = np.arange(150) >= ing
+        lc = -0.0064 * after + rng.normal(0, 0.003, 150)
+        usable = cs.contact_free(t, model)
+        self.assertGreater(cs.step_depth_vif(after[usable], model["mag"][usable]), cs.STEP_VIF_MAX)
+        st, er = cs.free_depth_step(lc, np.where(usable & ~after)[0], np.where(usable & after)[0],
+                                    cs.step_plan(after, model["mag"]))
+        self.assertTrue(math.isnan(st) and math.isnan(er))
+
+    def test_mid_transit_flip_is_well_conditioned(self):
+        t, model, after, _lc = flip_night()
+        usable = cs.contact_free(t, model)
+        self.assertLess(cs.step_depth_vif(after[usable], model["mag"][usable]), 3.0)
+
+    def test_one_or_two_transit_frames_without_the_depth_term_are_left_out(self):
+        n = 100
+        after = np.arange(n) >= 50
+        shape = np.zeros(n)
+        shape[60:62] = 0.012            # two frames in transit after the flip
+        lc = 0.0 * after + 0.012 * (shape > 0)   # the predicted transit not taken out of them
+        st, _er = cs.free_depth_step(lc + np.random.default_rng(1).normal(0, 1e-4, n), np.arange(50),
+                                     np.arange(50, n), cs.step_plan(after, shape))
+        self.assertAlmostEqual(st, 0.0, delta=0.0002)
+
+
+class TestPlotBinsFallback(unittest.TestCase):
+    def test_no_wider_width_keeps_the_choice_without_a_note(self):
+        import transit_ui as tu
+        x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])   # a few frames an hour apart; nothing wider than 30 min in the box
+        self.assertEqual(tu.plot_bins_that_work(x, 0.5, "30 min", 1 / 60), (0.5, ""))
+
+
+try:
+    import tkinter
+    tkinter.Tk().destroy()
+    HAVE_TK = True
+except Exception:   # pragma: no cover
+    HAVE_TK = False
+
+
+@unittest.skipUnless(HAVE_TK, "needs a display")
+class TestReportFitSaveSet(unittest.TestCase):
+    def test_report_fit_and_output_run_are_numbered_apart(self):
+        import tempfile
+        from unittest import mock
+        import clearv_app as ca
+        app = ca.App()
+        try:
+            folder = tempfile.mkdtemp()
+            app.set_mode("transits")
+            tp = app.transit_page
+            fit = ["AAVSO_TOI-2046b_03-SEP-2026_SHOBS-P.txt", "TOI-2046b_V_03-SEP-2026_SHOBS-P_transit.png",
+                   "TOI-2046b_V_03-SEP-2026_SHOBS-P_transit_fit.csv"]
+            with mock.patch.object(tp, "family_names", return_value=fit), \
+                    mock.patch.object(app, "_family_names",
+                                      return_value=["AAVSO_wasp-49_TG_SHOBS-P.txt", "wasp-49_TG_SHOBS-P_lightcurve.csv",
+                                                    "wasp-49_TG_SHOBS-P_lightcurve.png"] + fit):
+                open(os.path.join(folder, "wasp-49_TG_SHOBS-P_lightcurve.csv"), "w").close()
+                tp.result, tp.report = {"summary": {}}, {"t": [0.0]}
+                app._save_set = None
+                # the report fit's own files: no _2 from the other run's light curve
+                self.assertEqual(os.path.basename(app._family_path(folder, fit[0])), fit[0])
+                app._save_set = None
+                self.assertEqual(os.path.basename(app._family_path(folder, fit[2])), fit[2])
+                # the Output page's own save still numbers against its own names
+                app._save_set = None
+                self.assertEqual(os.path.basename(app._family_path(folder, "wasp-49_TG_SHOBS-P_lightcurve.csv")),
+                                 "wasp-49_TG_SHOBS-P_lightcurve_2.csv")
+                tp.report = None   # a fit of the run itself: one set again
+                app._save_set = None
+                self.assertEqual(os.path.basename(app._family_path(folder, fit[0])),
+                                 "AAVSO_TOI-2046b_03-SEP-2026_SHOBS-P_2.txt")
+        finally:
+            app.transit_page.result = None
+            app.transit_page.report = None
+            app.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()

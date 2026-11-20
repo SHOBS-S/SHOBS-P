@@ -439,6 +439,30 @@ def step_plan(after, shape) -> dict:
     return {"after": np.asarray(after, dtype=bool), "shape": np.asarray(shape, dtype=float)}
 
 
+STEP_VIF_MAX = 10.0   # step 6c (Fable M2): above this the step and the depth stand in for each other
+
+
+def step_depth_vif(after, shape) -> float:
+    """2.4.0 step 6c (Fable M2): how much the depth term inflates the step's error (variance inflation factor,
+    1/(1 - R^2) of `after` regressed on [1, shape]). 1-3 on a night with frames in transit on both sides of the flip
+    or baseline on both sides; hundreds when the flip falls at ingress or egress with no baseline beyond it (a night
+    that ends in transit): a step after the flip then looks just like a deeper transit, and the fitted step is noise.
+    inf with nothing to fit."""
+    a = np.asarray(after, dtype=float)
+    sh = np.asarray(shape, dtype=float)
+    sh = np.where(np.isfinite(sh), sh, 0.0)
+    if a.size < 4 or np.ptp(a) == 0:
+        return float("inf")
+    X = np.column_stack([np.ones(a.size), sh])
+    beta, *_ = np.linalg.lstsq(X, a, rcond=None)
+    ss_res = float(np.sum((a - X @ beta) ** 2))
+    ss_tot = float(np.sum((a - a.mean()) ** 2))
+    if ss_tot <= 0:
+        return float("inf")
+    r2 = 1.0 - ss_res / ss_tot
+    return float("inf") if r2 >= 1.0 - 1e-12 else 1.0 / (1.0 - r2)
+
+
 def free_depth_step(lc, b_rows, a_rows, plan: dict, min_side: int = FLIP_MIN_SIDE) -> tuple[float, float]:
     """2.4.0 step 6c (John 20 Nov, item 3 "match the fit"): the target's flip step fitted the way the transit fit
     finds it: a least-squares line through every row given (both sides of the flip, in transit too, away from
@@ -446,9 +470,9 @@ def free_depth_step(lc, b_rows, a_rows, plan: dict, min_side: int = FLIP_MIN_SID
     published depth that is a little off is fitted, not read as a step. Points beyond 4 sigma (MAD) of the fit are
     left out, up to three times. lc: per-row curve (the target minus a set, mag, with the predicted transit already
     taken out by target_diffs: the depth term then fits what is left of it). Without frames in transit the depth
-    term is dropped (a baseline-only step, as step 6b). WASP-49 b 19 Nov: on the survey's ~80 frames this gave
-    +6.4 ppt (sd 0.8 over samplings) against the fit's +6.4 +/- 0.9; step 6b's baseline-only mean on the same
-    frames gave 4.6 +/- 1.4 (and +1.1 in the app). Returns (step after minus before in mag, 1-sigma error), NaNs
+    term is dropped (a baseline-only step, as step 6b). WASP-49 b 19 Nov: on survey-like samples of ~80 of the real
+    frames (stars centred as the run centres them) this gave about +6.2 +/- 1.4 ppt against the fit's +6.4 +/- 0.9;
+    step 6b's baseline-only mean on uncentred stars gave 4.6 +/- 1.4 on such samples (+1.1 in the app). Returns (step after minus before in mag, 1-sigma error), NaNs
     with fewer than min_side usable rows a side or when the step cannot be told from the depth."""
     nan = float("nan")
     lc = np.asarray(lc, dtype=float)
@@ -462,6 +486,10 @@ def free_depth_step(lc, b_rows, a_rows, plan: dict, min_side: int = FLIP_MIN_SID
     keep = np.isfinite(y)
     # the depth term only with a few frames really in transit (a grazing or baseline-only night has none)
     use_depth = int((keep & (shape > 1e-4)).sum()) >= 3 and float(np.ptp(shape[keep])) > 1e-4 if keep.any() else False
+    if not use_depth:
+        keep &= ~(shape > 1e-4)   # Fable S1: one or two frames in transit would carry the depth into the step
+    if use_depth and step_depth_vif(after[keep], shape[keep]) > STEP_VIF_MAX:
+        return nan, nan           # Fable M2: the step cannot be told from the depth
     X_all = np.column_stack([np.ones(y.size), after.astype(float)] + ([shape] if use_depth else []))
 
     def enough(k):
@@ -492,6 +520,8 @@ def free_depth_step(lc, b_rows, a_rows, plan: dict, min_side: int = FLIP_MIN_SID
     err = math.sqrt(cov[1, 1]) if cov[1, 1] > 0 else nan
     if not math.isfinite(err):
         return nan, nan
+    if X.shape[1] == 3 and step_depth_vif(after[keep], shape[keep]) > STEP_VIF_MAX:
+        return nan, nan   # (the clipping can leave a side without baseline)
     return float(beta[1]), err
 
 
@@ -552,7 +582,9 @@ def set_curve(diffs, cols) -> np.ndarray:
 def curve_step(lc, b_rows, a_rows, min_side: int = FLIP_MIN_SIDE, weights=None) -> tuple[float, float]:
     """(median after - median before, its 1-sigma error) of a per-frame curve on the given rows; NaNs with fewer
     than min_side finite frames a side. weights (step 6b, whole_night_rows): over all rows, a weighted median per
-    side, its error from the weighted scatter and the effective number of frames."""
+    side, its error from the weighted scatter and the effective number of frames. Step 6c (Fable N5): `weights` may
+    instead be a step_plan (a dict): the step is then fitted with a free depth (free_depth_step), which is what the
+    app passes; the weighted and plain branches stay for the tests and older callers."""
     if isinstance(weights, dict):   # step 6c: a step_plan: the free-depth fit (free_depth_step)
         return free_depth_step(lc, b_rows, a_rows, weights, min_side)
     lc = np.asarray(lc, dtype=float)
