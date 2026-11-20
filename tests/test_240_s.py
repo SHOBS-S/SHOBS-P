@@ -844,9 +844,10 @@ class TestTargetStepInTheApp(unittest.TestCase):
         self.assertEqual(why, "")
         self.assertEqual(d.shape, (240, 5))
         self.assertTrue(np.all(np.isnan(d[:, 4])))
-        # step 6b: only baseline frames (outside the predicted transit), every one on each side, weighted
-        self.assertTrue(np.all(model["mag"][np.r_[b, a]] == 0.0))
-        self.assertGreater(len(b) + len(a), 40)
+        # step 6c: every frame away from ingress and egress (in transit too), fitted with a free depth
+        self.assertIsInstance(w, dict)
+        self.assertTrue(np.any(model["mag"][np.r_[b, a]] > 0.005))   # flat-bottom frames are used
+        self.assertGreater(len(b) + len(a), 120)
         self.assertAlmostEqual(cs.set_target_step(d, [0, 1], b, a, w)[0], 0.0, delta=0.003)
         self.assertAlmostEqual(cs.set_target_step(d, [2, 3], b, a, w)[0], -0.026, delta=0.003)
         # Variables: not judged, and the words say the fit decides
@@ -867,7 +868,7 @@ class TestTargetStepInTheApp(unittest.TestCase):
         words = app._survey_words(survey, 0.0012, picks=[("A", 0.1)], err=0.0009)
         # step 6b: in the fit's units and sign (ppt of flux, + = brighter after): +1.2 mmag is -1.1 ppt
         self.assertIn("-1.1 ± 0.8 ppt", words)
-        self.assertIn("as the transit fit measures it", words)
+        self.assertIn("as the transit fit finds it", words)
         self.assertNotIn("nearest the target", words)
         # step 6b: a flip at ingress is judged too (on the baseline frames, as the fit judges it)
         app.set_mode("transits")
@@ -878,13 +879,12 @@ class TestTargetStepInTheApp(unittest.TestCase):
         why, d3, b3, a3, w3 = app._survey_target_steps(res, 8.0, [0, 1], planet)
         self.assertEqual(why, "")
         self.assertAlmostEqual(cs.set_target_step(d3, [0, 1], b3, a3, w3)[0], 0.0, delta=0.003)
-        # too few frames before the flip at all: not judged, and it says why (a side with frames but no baseline
-        # falls back to the frames at the flip: Fable S5)
+        # too few frames before the flip at all: not judged, and it says why
         flip = 2
         res = self._result(t, flip, (0.0, 0.0), 0.0, model["mag"])
         why, d4, _b, _a, _w = app._survey_target_steps(res, 8.0, [0, 1], planet)
         self.assertIsNone(d4)
-        self.assertIn("too few frames read on one side of the flip", why)
+        self.assertIn("too few frames read away from ingress and egress on one side of the flip", why)
 
 
 @unittest.skipUnless(HAVE_TK, "needs a display")

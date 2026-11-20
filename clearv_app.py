@@ -16257,6 +16257,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                     reg = core.refine_registration(img, reg, ref_pts, rmax, t_donut)
                                 last["sources"], last["reg"] = src, reg
                             pos = core.move_points(xy0, reg, img.shape)
+                            # step 6c (item 3): each star centred on its light as the run centres it (the run's
+                            # defocus decision, at the boxes' aperture); the aligned positions alone moved the
+                            # target's forecast flip step 1.5 ppt on WASP-49 b 19 Nov
+                            core.seed_field_defocus(img, t_def if t_donut else False)
+                            pos = core.recenter_points(img, pos, r_now)
                             hh, ww = img.shape[:2]
                             edge = np.minimum.reduce([pos[:, 0], pos[:, 1], (ww - 1) - pos[:, 0], (hh - 1) - pos[:, 1]])
                             tpos = pos[0]
@@ -16534,13 +16539,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
     def _survey_target_steps(self, result, rr, cols, planet):
         """step 5 fix (#76), step 6b (John 19 Nov, "match the fit"): (why not judged or "", target-minus-candidate
         differences per frame (rows: the survey's frames, columns: the suggestion candidates; NaN where not
-        surveyed), rows before, rows after, weights). The step is measured the way the transit fit measures it: on
-        the whole night's baseline, every frame read on each side of the flip that lies outside the predicted
-        transit (by 10 min plus 3 sigma of Tc), each weighted by the span of the night it stands for
-        (comp_survey.whole_night_rows). Step 6a measured it on the ~15 frames nearest the flip only and forecast
-        +0.1 mmag on WASP-49 b 19 Nov, where the fit found +6.4 ppt. Not judged (None): outside Transits (a variable
-        target's own change would read as a step), without a usable ephemeris and shape, without frame times, or
-        with fewer than 3 baseline frames read on a side."""
+        surveyed), rows before, rows after, the step plan). Step 6c (John 20 Nov): the step is fitted the way the
+        transit fit finds it: every frame read away from ingress and egress (by 10 min plus 3 sigma of Tc), in
+        transit too, fitted with level + step + a free depth (comp_survey.free_depth_step), on stars centred as the
+        run centres them. Step 6a measured it on the ~15 frames nearest the flip and step 6b on the baseline only
+        (WASP-49 b 19 Nov: +0.1 mmag and +1.1 ppt where the fit found +6.4 ppt). Not judged (None): outside
+        Transits (a variable target's own change would read as a step), without a usable ephemeris and shape,
+        without frame times, or with fewer than 3 usable frames read on a side."""
         none = np.zeros(0, int)
         if self.mode_key != "transits":
             return "the target's own changes would read as a step outside Transits", None, none, none, None
@@ -16568,28 +16573,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         model = cs.transit_mags(t, planet, tcore.occultation, ld)
         if model is None:
             return "no ephemeris and transit shape on the Input page", None, none, none, None
-        base = cs.out_of_transit(t, model, margin)
-        b_rows, a_rows, w = cs.whole_night_rows(after, result.get("idx"), int(result.get("of") or len(after)), base)
-        self._survey_step_how = "baseline"
-
-        def neff(rows):   # re-review 3: the effective frames a side (one heavy row is not three frames)
-            ww = w[rows] if rows.size else np.zeros(0)
-            return float(ww.sum() ** 2 / np.sum(ww * ww)) if ww.size and np.sum(ww * ww) > 0 else 0.0
-        if (b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE
-                or neff(b_rows) < cs.FLIP_MIN_SIDE or neff(a_rows) < cs.FLIP_MIN_SIDE):
-            # Fable S5: no baseline on one side (a flip in transit on a night that ends at egress): the step 6a
-            # measure on the frames at the flip, away from ingress and egress, is the best there is (and on such a
-            # night the fit can hardly tell a step from the depth, so the comps matter most)
-            b_rows, a_rows = cs.near_flip_rows(after, cs.FLIP_NEAR_TARGET, idx=result.get("idx"))
-            w = None
-            self._survey_step_how = "at_flip"
-            if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
-                return "too few frames read on one side of the flip", None, none, none, None
-            if not np.all(np.isfinite(t[np.r_[b_rows, a_rows]])):
-                return "the frames' times are not in their headers", None, none, none, None
-            if cs.near_contact(t[np.r_[b_rows, a_rows]], model, margin):
-                return ("too few frames outside the transit on one side, and the flip is near ingress or egress",
-                        None, none, none, None)
+        # step 6c (John 20 Nov, item 3): fitted with a free depth on every frame read away from ingress and egress
+        # (in transit too), as the fit finds the step; step 6b's baseline-only mean forecast +1.1 ppt on WASP-49 b
+        # 19 Nov where the fit found +6.4
+        usable = cs.contact_free(t, model, margin)
+        b_rows, a_rows = np.where(usable & ~after)[0], np.where(usable & after)[0]
+        w = cs.step_plan(after, model["mag"])
+        self._survey_step_how = "free_depth"
+        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
+            return ("too few frames read away from ingress and egress on one side of the flip",
+                    None, none, none, None)
         mags = result["mags"][rr]
         comp = np.full((mags.shape[0], len(cols)), np.nan)
         for k, j in enumerate(cols):
@@ -16717,10 +16710,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 # step 6b (John 19 Nov): a forecast of the fit's own step, so in the fit's units and sign (ppt of
                 # flux, + = brighter after the flip); the survey's step is in mag (+ = fainter after)
                 ppt = (10 ** (-0.4 * set_step) - 1.0) * 1000.0
-                how = ("measured at the flip: too little baseline on one side to measure it as the fit does"
-                       if survey.get("step_how") == "at_flip" else
-                       "measured as the transit fit measures it: the whole night's frames read outside the "
-                       "predicted transit, on both sides of the flip")
+                how = ("fitted as the transit fit finds it: level, step and depth through the frames read on "
+                       "both sides of the flip, away from ingress and egress")
                 txt += (f", the target's flip step with these comps {ppt:+.1f}"
                         + (f" ± {921.0 * err:.1f}" if math.isfinite(err) else "") + f" ppt ({how})")
             elif not survey["flip"]:

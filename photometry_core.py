@@ -2575,6 +2575,28 @@ def recenter_jump_limit(radius: float) -> float:
     return max(3.0, 0.5 * float(radius))
 
 
+def recenter_points(img: np.ndarray, xy: np.ndarray, radius: float) -> np.ndarray:
+    """2.4.0 step 6c: reduce_frame's centring for an array of (x, y) aligned positions: each star centred on its
+    light as a run centres it (recenter at the aperture radius), kept where it was when the centring moves it
+    further than recenter_jump_limit (it found another star) or the position is not finite. The comp survey
+    measured at the aligned positions only, so on WASP-49 b 19 Nov (comps stepping -63 to +66 ppt at the flip,
+    cancelling in the set) a few tenths of a pixel moved the target's forecast step by 1.5 ppt."""
+    xy = np.asarray(xy, dtype=float)
+    out = xy.copy()
+    lim = recenter_jump_limit(radius)
+    for j in range(len(xy)):
+        x, y = xy[j]
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        try:
+            cx, cy, shift = recenter(img, x, y, radius)
+        except Exception:
+            continue
+        if math.isfinite(shift) and shift <= lim and math.isfinite(cx) and math.isfinite(cy):
+            out[j] = (cx, cy)
+    return out
+
+
 def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
                   wing: str = "gauss") -> dict:
     """2.2.18 (item 5, review): the check before a run, from what reduce_frame will actually do with this marker.

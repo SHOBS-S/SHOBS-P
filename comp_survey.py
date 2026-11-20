@@ -423,6 +423,78 @@ def near_contact(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> bool:
     return False
 
 
+def contact_free(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> np.ndarray:
+    """2.4.0 step 6c: per time, True when it lies away from ingress and egress (near_contact for that one time is
+    False): the frames on which the target's flip step is fitted with a free depth (free_depth_step). Frames in the
+    flat bottom of the transit count (their depth is fitted, as the transit fit fits it); times that are not
+    finite never do. All True without a transit."""
+    t = np.asarray(t, dtype=float)
+    return np.array([bool(math.isfinite(ti)) and not near_contact(np.array([ti]), model, margin) for ti in t],
+                    dtype=bool)
+
+
+def step_plan(after, shape) -> dict:
+    """2.4.0 step 6c: what free_depth_step needs, passed where curve_step takes its weights: per row, True after
+    the flip, and the predicted transit's shape (mag, positive in transit; NaN or 0 outside)."""
+    return {"after": np.asarray(after, dtype=bool), "shape": np.asarray(shape, dtype=float)}
+
+
+def free_depth_step(lc, b_rows, a_rows, plan: dict, min_side: int = FLIP_MIN_SIDE) -> tuple[float, float]:
+    """2.4.0 step 6c (John 20 Nov, item 3 "match the fit"): the target's flip step fitted the way the transit fit
+    finds it: a least-squares line through every row given (both sides of the flip, in transit too, away from
+    ingress and egress) of level + step x (after the flip) + depth scale x (the predicted transit's shape), so a
+    published depth that is a little off is fitted, not read as a step. Points beyond 4 sigma (MAD) of the fit are
+    left out, up to three times. lc: per-row curve (the target minus a set, mag, with the predicted transit already
+    taken out by target_diffs: the depth term then fits what is left of it). Without frames in transit the depth
+    term is dropped (a baseline-only step, as step 6b). WASP-49 b 19 Nov: on the survey's ~80 frames this gave
+    +6.4 ppt (sd 0.8 over samplings) against the fit's +6.4 +/- 0.9; step 6b's baseline-only mean on the same
+    frames gave 4.6 +/- 1.4 (and +1.1 in the app). Returns (step after minus before in mag, 1-sigma error), NaNs
+    with fewer than min_side usable rows a side or when the step cannot be told from the depth."""
+    nan = float("nan")
+    lc = np.asarray(lc, dtype=float)
+    rows = np.r_[np.asarray(b_rows, dtype=int), np.asarray(a_rows, dtype=int)]
+    if not rows.size:
+        return nan, nan
+    after = np.asarray(plan["after"], dtype=bool)[rows]
+    shape = np.asarray(plan["shape"], dtype=float)[rows]
+    shape = np.where(np.isfinite(shape), shape, 0.0)
+    y = lc[rows]
+    keep = np.isfinite(y)
+    # the depth term only with a few frames really in transit (a grazing or baseline-only night has none)
+    use_depth = int((keep & (shape > 1e-4)).sum()) >= 3 and float(np.ptp(shape[keep])) > 1e-4 if keep.any() else False
+    X_all = np.column_stack([np.ones(y.size), after.astype(float)] + ([shape] if use_depth else []))
+
+    def enough(k):
+        return (int((k & after).sum()) >= max(2, min_side) and int((k & ~after).sum()) >= max(2, min_side)
+                and int(k.sum()) > X_all.shape[1] + 1)
+    for _ in range(3):
+        if not enough(keep):
+            return nan, nan
+        beta, *_ = np.linalg.lstsq(X_all[keep], y[keep], rcond=None)
+        res = y - X_all @ beta
+        r_k = res[keep]
+        sig = 1.4826 * float(np.median(np.abs(r_k - np.median(r_k))))
+        if not sig > 0:
+            break
+        new = np.isfinite(y) & (np.abs(res) <= 4.0 * sig)
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    if not enough(keep):
+        return nan, nan
+    X, yk = X_all[keep], y[keep]
+    beta, *_ = np.linalg.lstsq(X, yk, rcond=None)
+    s2 = float(np.sum((yk - X @ beta) ** 2)) / (X.shape[0] - X.shape[1])
+    try:
+        cov = s2 * np.linalg.inv(X.T @ X)
+    except np.linalg.LinAlgError:
+        return nan, nan
+    err = math.sqrt(cov[1, 1]) if cov[1, 1] > 0 else nan
+    if not math.isfinite(err):
+        return nan, nan
+    return float(beta[1]), err
+
+
 def out_of_transit(t, model: dict, margin: float = TARGET_STEP_MARGIN) -> np.ndarray:
     """2.4.0 step 6b: per time, True when it lies outside the predicted transit (first to fourth contact) by more
     than `margin` + 3 sigma of the predicted Tc (EPHEM_ERR_MISSING more without a known Tc error, as near_contact):
@@ -481,6 +553,8 @@ def curve_step(lc, b_rows, a_rows, min_side: int = FLIP_MIN_SIDE, weights=None) 
     """(median after - median before, its 1-sigma error) of a per-frame curve on the given rows; NaNs with fewer
     than min_side finite frames a side. weights (step 6b, whole_night_rows): over all rows, a weighted median per
     side, its error from the weighted scatter and the effective number of frames."""
+    if isinstance(weights, dict):   # step 6c: a step_plan: the free-depth fit (free_depth_step)
+        return free_depth_step(lc, b_rows, a_rows, weights, min_side)
     lc = np.asarray(lc, dtype=float)
     a_rows, b_rows = np.asarray(a_rows, dtype=int), np.asarray(b_rows, dtype=int)
     a, b = lc[a_rows], lc[b_rows]

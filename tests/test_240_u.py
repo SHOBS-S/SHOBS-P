@@ -335,10 +335,7 @@ class TestAppPieces(unittest.TestCase):
                   "n_before": 25, "n_after": 34, "radius": 8.5, "radius_asked": 8.5}
         words = self.app._survey_words(survey, -0.0065, picks=[("A", 0.1)], err=0.0013)
         self.assertIn("+6.0 ± 1.2 ppt", words)   # -6.5 mmag = brighter after = +6.0 ppt of flux
-        self.assertIn("as the transit fit measures it", words)
-        survey["step_how"] = "at_flip"   # Fable S5: no baseline on one side: measured at the flip, and it says so
-        self.assertIn("measured at the flip: too little baseline on one side",
-                      self.app._survey_words(survey, -0.0065, picks=[("A", 0.1)], err=0.0013))
+        self.assertIn("as the transit fit finds it", words)   # step 6c: level, step and free depth
 
     def test_robust_button_follows_the_fit(self):
         tp = self.app.transit_page
