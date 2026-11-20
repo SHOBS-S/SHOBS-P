@@ -206,7 +206,9 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 
 ## Read the plot
 
-- Gray dots: each frame, detrended.
+- Gray dots: each frame. The legend says what was taken out of them: *each frame, detrended* when a detrend term
+  (airmass, time slope or curve) was fitted, *each frame, flip step taken out* when only a flip step was, and just
+  *each frame* when nothing was.
 - Black points with error bars: bins of several frames, also shown on the residual panel. The **Plot bins** box
   sets their width: **Auto** (10 minutes, or 3 frames' spacing when the frames are farther apart than 3⅓ minutes),
   **5 min**, **10 min**, **15 min** or **30 min**. A bin needs at least 3 frames, and the legend names the real width
@@ -292,8 +294,11 @@ Where you see the decision:
 *A night with a meridian flip: the purple dash-dot line marks the flip, and the table has the Flip step (ppt), Depth
 without step and Step–depth correlation rows.*
 
-The leave-one-comp-out check uses the main fit's decision (step or no step) for every refit. The reports carry the
-flip time either way (chapter 19), so a later refit of a report uses the same time.
+The leave-one-comp-out check and the Robustness check (below) decide the step for each of their refits the same
+way the fit does (kept only at ΔBIC 10 or more), so a refit whose data need a step gets one even when the fit on the
+page has none, and the other way round (2.4.0). Before 2.4.0 every refit took the main fit's decision, which hid the
+size of the step a single comp brings. The reports carry the flip time either way (chapter 19), so a later refit of a
+report uses the same time.
 
 For an opened report, which carries no flip segment, tick **meridian flip at the largest gap** to tell the fit that
 the report's largest gap is the flip; the same ΔBIC ≥ 10 rule then decides.
@@ -378,6 +383,12 @@ error, the notes get a ⚠ that names the choice that moves it most, for example
 across reasonable reduction choices than its formal error (± 3.10 min against ± 1.20 min); the most is aperture r
 6.4 px, which moves it by 4.2 min. Report the larger spread with the result, or find out which choice is right before reporting."*
 Press it again after a new fit: the check belongs to the fit it was run on.
+
+On a night with a meridian flip, each refit decides the flip step for itself, as the fit does (above). When some
+refits decide otherwise than the fit on the page, the note says which: *"… Flip step: 2 of 10 refits are better with
+one than the night as fitted (TYC 5936-2126-1 left out; Gaia DR3 2991287972537580288 left out)."* A comp whose
+leave-out needs a step of its own is one that jumps at the flip; the comp survey (chapter 8) now keeps such stars
+out of the suggestions.
 
 ## Leave out a bad stretch (Trim)
 
@@ -504,6 +515,13 @@ recent observations it has, and whether it asks for a bigger telescope than your
      mid-exposure, the relative flux (not detrended), and its error. Only the frames the fit used are in it.
    - `ExoClock_TOI-2046b_20261027_info.txt` (named after the upload file): what to pick on ExoClock's upload form
      for that file.
+
+   ExoClock wants JD_UTC times, and turning BJD_TDB back into JD_UTC needs the star's RA/Dec. For your own
+   photometry that is the Input page's. For a fit of an **opened report** it is the report's own star: the planet
+   lookup's RA/Dec, or, when that has none (an ExoFOP TOI), the star looked up by name (SIMBAD, then VSX; the busy bar
+   shows it and the Log says *ExoClock file: TOI-2046's RA/Dec from SIMBAD/VSX …*). It is never the Input page's,
+   which may hold another target. The site is the report's OBSLAT/OBSLON, else the Input page's. If the lookup does not
+   answer, nothing is saved and the message says why; try again later.
 
    The status line says *"✔ Saved. On the form, pick Mid-exposure (ExoClock_TOI-2046b_20261027.txt; what to pick is
    in ExoClock_TOI-2046b_20261027_info.txt)."*

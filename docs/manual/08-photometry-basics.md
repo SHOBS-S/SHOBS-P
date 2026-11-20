@@ -412,7 +412,18 @@ whether to keep it.*
 frames, flip step +0.8 mmag (the target against this comp alone), raw peak 41,200 ADU on the sharpest (68% of the
 linear limit)*; when the target's step is not measured, the flip step reads *(against the other stars)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
 (scatters 4.2 × the stars of its brightness tonight (18.3 mmag): it may vary); APASS … (not measured on frames 41, 42
-of the 30 read).* When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
+of the 30 read).*
+
+**Each comp steady on both pier sides (2.4.0).** On a Transits night with a meridian flip the survey also judges each
+comp on its own: the target's flip step against that one comp. A comp that jumps more than ±10 ppt at the flip (and
+by more than 3 times its own error) is left out, with the reason in the same Log line: *TYC 5936-2126-1 (jumps −58.7
+ppt at the meridian flip on its own (the target against it alone; a comp should stay within ±10 ppt on both pier
+sides))*. Without this, the set could be two stars that jump the opposite way and cancel: the set's step looks small,
+but the result then rests on both of them. On WASP-49 b, 19 Nov 2026, the comps' own steps ran smoothly across the
+frame from −59 ppt at one edge to +63 ppt at the other, and a set of one from each end moved the depth from 1.3 % to
+over 3 % and Tc by about 55 minutes when either was left out. Stars in the target's own part of the frame stay under
+10 ppt. When every candidate jumps more than that, the two steadiest are used and the S line says so: *…; every comp
+candidate jumps more than ±10 ppt at the flip on its own, so the steadiest are used: …*. When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
 steadiest you can by hand and check Comp health after the run.
 
 The survey only changes which stars are **suggested**. The photometry itself is the same, and the comps you mark are

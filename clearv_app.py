@@ -829,6 +829,15 @@ def exoclock_filter(code: str) -> str:
     return EXOCLOCK_FILTERS.get(c.upper(), c or "Clear (no filter)")
 
 
+def _float_or_none_app(v):
+    """step 6c-2: a report header's number (OBSLAT/OBSLON), or None."""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def exoclock_jd_utc(t, system: str = "BJD_TDB", ra_deg=None, dec_deg=None, lat=None, lon=None) -> np.ndarray:
     """2.2.20 (#47): the fit's times as geocentric JD_UTC (ExoClock's Time format JD_UTC). The transit fit works in
     BJD_TDB (photometry_core.convert_times from each frame's mid-exposure JD_UTC, photometry_core.mid_jd); this undoes
@@ -4194,6 +4203,64 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "exoclock": ("ExoClock", "ExoClock", "ExoClock")}   # 2.2.20 (#47)
 
     # ---- 2.2.20 (#47): Save for ExoClock / Go to ExoClock (Transit fit page's Results row) ----------------------------
+    def _report_fit_radec(self, r: dict, report: dict) -> tuple[float, float]:
+        """step 6c-2 (John 20 Nov): RA/Dec (degrees) of a REPORT fit's own star: the fit's planet lookup when it has
+        them (NASA Exoplanet Archive), else the report's planet looked up by name (SIMBAD/VSX, host star first; the
+        answer is kept on the fit and the report so a second save does not ask again). Never the Input page, which
+        may hold another target. Raises ValueError saying why not. Tk thread: the lookup runs on a worker thread
+        while the busy bar shows it."""
+        planets = [p for p in (r.get("planet"), report.get("planet")) if isinstance(p, dict)]
+        for p in planets:
+            if p.get("ra") is not None and p.get("dec") is not None:
+                try:
+                    ra, dec = float(p["ra"]), float(p["dec"])
+                    if math.isfinite(ra) and math.isfinite(dec):
+                        return ra, dec
+                except (TypeError, ValueError):
+                    pass
+        h = report.get("header") or {}
+        # the star's names first (host, the report's STAR_NAME), then the planet's, a TIC number last
+        names = [str(p.get("host") or "") for p in planets] + [str(h.get("STAR_NAME") or "")]
+        names += [str(p.get("name") or "") for p in planets] + [str(h.get("EXOPLANET_NAME") or "")]
+        names = list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
+        names = [n for n in names if not n.upper().startswith("TIC ")] + \
+                [n for n in names if n.upper().startswith("TIC ")]
+        if not names:
+            raise ValueError("The report names no star or planet to look up")
+        if getattr(self, "_radec_lookup_busy", False):
+            raise ValueError("A lookup of its position is already running; try again in a moment")
+        box, errors = {}, []
+
+        def work():
+            for n in names:
+                try:
+                    found = core.lookup_target(n)
+                    box["radec"] = (float(found["ra_hours"]) * 15.0, float(found["dec_deg"]))
+                    box["name"] = n
+                    return
+                except Exception as exc:
+                    errors.append(f"{n}: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}")
+
+        self._radec_lookup_busy = True
+        tok = self.busy_begin(f"Looking up {names[0]}'s position for the ExoClock file…")
+        try:
+            th = threading.Thread(target=work, daemon=True)
+            th.start()
+            while th.is_alive():   # the window stays live (busy bar) while SIMBAD answers
+                self.update()
+                time.sleep(0.03)
+        finally:
+            self.busy_end(tok)
+            self._radec_lookup_busy = False
+        if "radec" not in box:
+            raise ValueError("SHOBS-P could not look up its position (" + "; ".join(errors[:3]) + "). Try again "
+                             "when the lookup services answer")
+        for p in planets:
+            p["ra"], p["dec"] = box["radec"]
+        self.log(f"ExoClock file: {box['name']}'s RA/Dec from SIMBAD/VSX ({box['radec'][0]:.5f}, "
+                 f"{box['radec'][1]:+.5f}) for the JD_UTC times.", keep_status=True)
+        return box["radec"]
+
     def save_exoclock(self) -> str:
         """2.2.20 (#47): the shown transit fit as ExoClock's upload file (ExoClock_<planet>_<YYYYMMDD>.txt: JD_UTC at
         mid-exposure, relative flux not detrended, error; the frames the fit used, as the AAVSO exoplanet report) and
@@ -4213,12 +4280,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             ra = dec = lat = lon = None
             if system != "JD_UTC":
-                ra, dec = self.target_radec_deg(r.get("planet"))
-                lat, lon = float(self.lat.get()), float(self.lon.get())
+                if report is not None:
+                    # step 6c-2 (John 20 Nov): a report fit's RA/Dec is its OWN planet's (looked up by name when the
+                    # report has none), never the Input page's: in 6b the Input page still held WASP-49 b, so
+                    # TOI-2046 b's BJD_TDB -> JD_UTC used another star's position, silently
+                    ra, dec = self._report_fit_radec(r, report)
+                    h = report.get("header") or {}
+                    lat, lon = _float_or_none_app(h.get("OBSLAT")), _float_or_none_app(h.get("OBSLON"))
+                    if lat is None or lon is None:   # the report does not say where: the site on the Input page
+                        lat, lon = float(self.lat.get()), float(self.lon.get())
+                else:
+                    ra, dec = self.target_radec_deg(r.get("planet"))
+                    lat, lon = float(self.lat.get()), float(self.lon.get())
             jd = exoclock_jd_utc(r["t"], system, ra, dec, lat, lon)
         except (ValueError, TypeError) as exc:
-            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the times need the target's RA/Dec and your site's "
-                                           f"latitude and longitude on the Input page ({exc}).")
+            why = str(exc).rstrip(".")
+            why = why[:1].upper() + why[1:]
+            if report is not None:
+                text = (f"ExoClock file not saved. ExoClock wants JD_UTC times, and turning the report's BJD_TDB "
+                        f"times into JD_UTC needs {planet or 'the planet'}'s RA/Dec. {why}.")
+            else:
+                text = ("ExoClock file not saved. ExoClock wants JD_UTC times, and turning the fit's BJD_TDB times "
+                        f"into JD_UTC needs the target's RA/Dec and your site's latitude and longitude. {why}.")
+            messagebox.showinfo(APP_TITLE, text)
             return ""
         # 2.2.20 (review): the measurement errors (ExoClock rescales them itself), and flagged frames put back with
         # "Fit with flagged" (errors doubled) are left out, as the file's header says.
@@ -16569,15 +16653,35 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # egress on both sides of the flip
         tdiffs, b_rows, a_rows, flip_why, wts = None, np.zeros(0, int), np.zeros(0, int), "", None
         self._survey_step_how = ""
+        self._survey_own_note = ""
         if st["flip"] and abs(rr - float(r)) > 0.06:
             # re-review nit: the flip step depends strongly on the aperture (WASP-49 b: +35 at r 8, +16 at r 10.3)
             flip_why = f"measured at r {rr:g}, not at r {float(r):g}"
         elif st["flip"]:
             flip_why, tdiffs, b_rows, a_rows, wts = self._survey_target_steps(result, rr, cols, planet)
+        own_kept = []
         if tdiffs is not None:
-            step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows, wts)[0] if cols[k] is not None
-                                 else nan
-                                 for k in range(len(cols))])
+            pairs = [cs.set_target_step(tdiffs, [k], b_rows, a_rows, wts) if cols[k] is not None else (nan, nan)
+                     for k in range(len(cols))]
+            step_rel = np.array([p_[0] for p_ in pairs], dtype=float)
+            step_err = np.array([p_[1] for p_ in pairs], dtype=float)
+            # step 6c-2 (John 20 Nov): each comp's OWN flip step against the target, not only the set's: a comp
+            # that jumps more than 10 ppt on its own is left out, so the set cannot rest on two big opposite steps
+            # cancelling (WASP-49 b 19 Nov: -59 and +63 ppt in one set)
+            judged = [cols[k] is not None and bool(window[k]) and c[0] not in out for k, c in enumerate(cands)]
+            gone, own_kept = cs.own_step_out(step_rel, step_err, judged)
+            for k, ppt in gone.items():
+                out[cands[k][0]] = (f"jumps {ppt:+.1f} ppt at the meridian flip on its own (the target against it "
+                                    f"alone; a comp should stay within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt on both "
+                                    "pier sides)")
+            if own_kept:
+                self._survey_own_note = (
+                    f"every comp candidate jumps more than ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own, "
+                    "so the steadiest are used: " + ", ".join(
+                        f"{cands[k][0]} {cs.own_step_ppt(float(step_rel[k])):+.1f} ppt" for k in own_kept))
+            good = [scatter[k] for k, c in enumerate(cands)
+                    if window[k] and c[0] not in out and math.isfinite(scatter[k])]
+            ref_sc = float(np.median(good)) if good else nan
         else:
             # Fable re-review S2: not judged on the target: each star's step against the others' median still ranks
             # a star that jumps at the flip lower (the set is then the best-ranked)
@@ -16587,6 +16691,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "flip": bool(st["flip"]) and tdiffs is not None and bool(np.isfinite(step_rel).any()),
                 "ref_scatter": ref_sc, "out": out, "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
                 "a_rows": a_rows, "weights": wts, "step_how": getattr(self, "_survey_step_how", ""),
+                "own_note": getattr(self, "_survey_own_note", ""),
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
                 "n_after": st["n_after"], "radius_asked": float(r)}
@@ -16783,6 +16888,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 lead = ("; the target's flip step is not measured" if "outside Transits" in why
                         else "; the flip step is left to the transit fit")
                 txt += lead + (f" ({why})" if why else "")
+            if survey.get("own_note"):   # step 6c-2
+                txt += "; " + survey["own_note"]
             if shortened:
                 txt += "; fewer than four, because another star would make the flip step worse"
         return txt + ")."

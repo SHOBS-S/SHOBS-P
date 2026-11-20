@@ -1598,7 +1598,8 @@ def tied_ensemble(cm) -> np.ndarray:
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
                        detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
-                       cancel=None, log=None, flip_step=None, detrend_curve=False) -> dict | None:
+                       cancel=None, log=None, flip_step=None, detrend_curve=False,
+                       flip_gated: bool = False) -> dict | None:
     """2.2.16 (item 6): refit the light curve once per comp with that comp left out of the ensemble.
 
     flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
@@ -1619,14 +1620,18 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     names = [str(n) for n in names][:m] + [f"comp {k + 1}" for k in range(len(names), m)]
     flux = np.asarray(flux, dtype=float)
     err = np.asarray(err, dtype=float)
-    # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), so every refit uses the same model
+    # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), for the reference fit.
+    # 2.4.0 step 6c-2 (John 20 Nov): with flip_gated (the main step came from the BIC gate) each refit decides its
+    # OWN step by the same gate: on WASP-49 b 19 Nov two comps step ~+-65 ppt at the flip and cancel in the set, so
+    # the night without either one needs a step that the full set does not.
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
-              flagged_mask=flagged_mask, flip_step=flip_step, detrend_curve=detrend_curve)
+              flagged_mask=flagged_mask, flip_step=None if flip_gated else flip_step, detrend_curve=detrend_curve)
+    ref_kw = dict(kw, flip_step=flip_step)
     # 2.3.5 (#88): np.mean made the ensemble NaN in every frame where any comp was missing (a comp off the frame
     # edge), so each refit lost those frames while the main fit kept them.
     ens_all = tied_ensemble(cm)
     try:
-        ref = lsq_fit(t, flux, err, airmass, planet, **kw)
+        ref = lsq_fit(t, flux, err, airmass, planet, **ref_kw)
     except Exception as exc:
         say(f"  comp check skipped: no least-squares fit of the full ensemble ({exc})")
         return None
@@ -1668,7 +1673,8 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
             continue
         fits.append({"name": names[j], "depth": float(f["depth"][0]), "tc": float(f["p"]["tc"]),
                      "d_depth": float(f["depth"][0]) - ref_depth, "d_tc": float(f["p"]["tc"]) - ref_tc,
-                     "n_points": int(len(f["t"])), "exp_depth": ref_sd * ratio, "exp_tc": ref_st * ratio})
+                     "n_points": int(len(f["t"])), "exp_depth": ref_sd * ratio, "exp_tc": ref_st * ratio,
+                     "step": f.get("t_flip") is not None})   # 6c-2: this refit kept a flip step
     if not fits:
         return None
 
@@ -1703,6 +1709,9 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         if "d_tc" in f["why"]:
             parts.append(f"moves Tc {abs(f['d_tc']) * 86400:.0f} s {'later' if f['d_tc'] > 0 else 'earlier'} "
                          f"({abs(f['d_tc']) / st:.1f}σ)")
+        if f.get("step") != (ref.get("t_flip") is not None):   # 6c-2: say when its refit decided the step otherwise
+            parts[-1] += (" (the night without it needs a flip step of its own)" if f.get("step")
+                          else " (the night without it needs no flip step)")
         flags.append(("warn", f"Leaving out {f['name']} " + " and ".join(parts) + ". The comp choice moves this "
                               "result by more than its statistical error: check that comp (variable? a trend?) "
                               "before reporting."))
@@ -1780,12 +1789,16 @@ def _cut(arr, keep):
 def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, detrend_flags=(True, False, False),
                      after_flip=None, flip_step=None, flagged_mask=None, allow_airmass: bool = True,
                      detrend_rows=None, flagged=None, comp_mags=None, comp_names=None, measured=None,
-                     cancel=None, progress=None, log=None) -> dict | None:
+                     cancel=None, progress=None, log=None, flip_gated: bool = True) -> dict | None:
     """2.4.0 step 6b (#35): least-squares refits of one night over reasonable reduction choices.
 
     t, flux, err, airmass, after_flip, flagged_mask: the main fit's data and settings (flagged_mask: flagged frames
     put back with doubled errors, as in the main fit); detrend_flags: the main fit's detrend (Auto's choice);
-    flip_step: its flip-step decision. Variations: every other detrend choice (detrend_rows: Auto's table, choices
+    flip_step: its flip-step decision, used for the "as fitted" reference. 2.4.0 step 6c-2: with flip_gated (the
+    main fit's step was decided by the BIC gate, not forced) every refit decides its OWN step by the same gate
+    (ΔBIC >= FLIP_STEP_DBIC), so a refit whose data want a step (or no step) gets it, instead of inheriting the main
+    fit's choice (WASP-49 b 19 Nov: two comps with big opposite flip steps cancelled in the set; leaving either out
+    needs a step the main fit did not keep). Each row's "step" says whether that refit kept one. Variations: every other detrend choice (detrend_rows: Auto's table, choices
     more than ROBUST_DBIC_MAX above the lowest BIC are not reasonable and are left out; the airmass choices only
     with allow_airmass), the first and the last ROBUST_TRIM of the points, the flagged frames the other way (out
     when the main fit put them back; in, from `flagged` = {"t", "flux", "err", "airmass", "after_flip"}, when it
@@ -1801,14 +1814,15 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
     err = np.asarray(err, dtype=float)
     am = None if airmass is None else np.asarray(airmass, dtype=float)
     da, dt, dq = (bool(x) for x in detrend_flags)
-    base_kw = dict(detrend_airmass=da, detrend_time=dt, detrend_curve=dq, flip_step=flip_step)
+    base_kw = dict(detrend_airmass=da, detrend_time=dt, detrend_curve=dq,
+                   flip_step=None if flip_gated else flip_step)   # 6c-2: each refit's own gate
 
     def fit(tt, ff, ee, aa, af, fm, **kw):
         k = dict(base_kw, **kw)
         return lsq_fit(tt, ff, ee, aa, planet, after_flip=af, flagged_mask=fm, **k)
 
-    try:
-        ref = fit(t, flux, err, am, after_flip, flagged_mask)
+    try:   # the reference is the night as fitted: the main fit's own step decision
+        ref = fit(t, flux, err, am, after_flip, flagged_mask, flip_step=flip_step)
     except Exception as exc:
         say(f"  robustness check skipped: no least-squares fit of the night as fitted ({exc})")
         return None
@@ -1903,7 +1917,8 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
 
     def row_of(group, label, r_):
         return {"group": group, "label": label, "depth": float(r_["depth"][0]), "tc": float(r_["p"]["tc"]),
-                "rms": float(r_.get("rms", float("nan"))), "n": int(len(r_["t"]))}
+                "rms": float(r_.get("rms", float("nan"))), "n": int(len(r_["t"])),
+                "step": r_.get("t_flip") is not None}   # 6c-2: this fit kept a flip step
 
     rows, skipped = [], []
     for i, (group, label, job) in enumerate(jobs):
@@ -1978,6 +1993,14 @@ def robustness_text(rob: dict | None, ascii_only: bool = False) -> str:
         txt += ". Not tried (not reasonable choices here): " + "; ".join(rob["left_out"])
     if rob.get("skipped"):
         txt += ". No fit: " + "; ".join(rob["skipped"])
+    # 6c-2: each refit decides its own flip step; say when some decide otherwise than the night as fitted
+    ref_step = bool(rob["ref"].get("step"))
+    other = [r_["label"] for r_ in rob["rows"] if bool(r_.get("step", ref_step)) != ref_step]
+    if other:
+        how = "without" if ref_step else "with"
+        txt += (f". Flip step: {len(other)} of {len(rob['rows'])} refits are better {how} one than the night as "
+                f"fitted ({'; '.join(other[:4])}{'; …' if len(other) > 4 and not ascii_only else ''}"
+                f"{'; ...' if len(other) > 4 and ascii_only else ''})")
     txt += "."
     if rob.get("measure_note"):   # Fable N14: why the aperture and sky ring were not tried, in every file too
         tried = any(r_["group"] in ("aperture", "sky") for r_ in rob["rows"])

@@ -45,6 +45,14 @@ FLIP_PASS_MAX = 40         # at most this many extra reads to bracket the flip a
 EPHEM_ERR_MISSING = 30.0 / 1440.0   # days: extra margin when the ephemeris gives no Tc uncertainty (typed values)
 TARGET_STEP_MARGIN = 10.0 / 1440.0   # days: a near-flip frame this near (plus 3 sigma of Tc) to ingress or egress
                                      # makes the target's measured step depend on the ephemeris: not judged then
+OWN_STEP_MAX = 0.010         # step 6c-2 (John 20 Nov): a comp whose own flip step for the target (target minus that
+                             # comp alone) is beyond +-1 % (10 ppt) of flux is left out, so "steady on both pier
+                             # sides" holds per comp, not only for the set. WASP-49 b 19 Nov, all 232 frames, 16
+                             # candidates: own steps ran smoothly across the frame from -59 ppt (left edge) to +63
+                             # (right edge); the 6c set took one from each end and they cancelled, so leaving either
+                             # out moved the depth 1.3 % -> 3.2-3.4 % and Tc by ~55 min. Stars near the target's
+                             # column step under 10 ppt.
+OWN_STEP_SIGMA = 3.0         # ... and only when the step is also beyond 3 sigma of its own error (noise is not judged)
 APERTURE_MIN_STARS = 3     # #61: judged on at least 3 stars like the target ...
 APERTURE_MIN_FRAMES = 12   # ... on at least 12 frames, else a note only
 
@@ -753,3 +761,33 @@ def aperture_choice(scatter_by_r: dict, current: float) -> dict | None:
 
 def mmag(v: float) -> str:
     return f"{1000.0 * v:.1f} mmag" if v is not None and math.isfinite(v) else "—"
+
+
+def own_step_ppt(step_mag: float) -> float:
+    """A step in mag (+ = fainter after the flip) as ppt of flux (+ = brighter after), the fit's units and sign."""
+    return (10 ** (-0.4 * step_mag) - 1.0) * 1000.0 if math.isfinite(step_mag) else float("nan")
+
+
+def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float = OWN_STEP_SIGMA,
+                 keep_min: int = 2) -> tuple[dict, list]:
+    """step 6c-2 (John 20 Nov): which candidates jump too much at the meridian flip on their own.
+    steps, errs: per candidate, the target's flip step against that comp alone and its error (mag; NaN = not
+    measured); judged: per candidate, True when it is one the suggestions could use (in the brightness window and not
+    already left out). A judged candidate is out when |step| is beyond `limit` (flux fraction) and beyond `sigma` x its
+    error. When that would leave fewer than `keep_min` judged candidates with a measured step, the steadiest
+    (smallest |step|) are kept instead, so the night still gets comps. Returns ({index: step in ppt} for those left
+    out, [indices kept although beyond the limit])."""
+    st = np.asarray(steps, dtype=float)
+    er = np.asarray(errs, dtype=float)
+    ok = np.asarray(judged, dtype=bool) & np.isfinite(st)
+    lim_mag = -2.5 * math.log10(1.0 - limit)   # 1 % brighter is ~0.0109 mag
+    big = ok & (np.abs(st) > lim_mag) & ~(np.isfinite(er) & (np.abs(st) <= sigma * er))
+    out = {int(j) for j in np.where(big)[0]}
+    kept_anyway = []
+    passing = int((ok & ~big).sum())
+    if passing < keep_min:
+        need = keep_min - passing
+        for j in sorted(out, key=lambda j_: abs(st[j_]))[:need]:
+            out.discard(j)
+            kept_anyway.append(j)
+    return {j: own_step_ppt(float(st[j])) for j in sorted(out)}, sorted(kept_anyway)

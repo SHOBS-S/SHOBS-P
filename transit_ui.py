@@ -1813,6 +1813,8 @@ class TransitPage:
                                             # 2.3.0 (#8): the main fit's flip-step decision, for every refit
                                             flip_step=bool(r.get("flip")) if r.get("flip_test") or r.get("flip")
                                             else None,
+                                            # 6c-2: a gated main step means every refit gates its own step
+                                            flip_gated=bool(r.get("flip_test")) or not r.get("flip"),
                                             flagged_mask=job["flagged_mask"],
                                             progress=lambda j, n: app.call_ui(self._comp_progress, token, j, n),
                                             cancel=cancel, log=lambda msg: app.call_ui(app.log, msg))
@@ -1946,6 +1948,8 @@ class TransitPage:
                 rob = tc.robustness_check(
                     job["t"], job["flux"], job["err"], job["am"], job["planet"], summary, fl_,
                     after_flip=job["after"], flip_step=flip_step, flagged_mask=job["flagged_mask"],
+                    # 6c-2: a gated main step means every refit gates its own step
+                    flip_gated=bool(r.get("flip_test")) or flip_step is None,
                     allow_airmass=allow_am, detrend_rows=rows, flagged=job.get("flagged"),
                     comp_mags=job.get("comp_mags"), comp_names=job.get("names"), measured=measured, cancel=cancel,
                     progress=lambda j, n: app.call_ui(self._robust_progress, token, f"refit {j} of {n}"),
@@ -2748,7 +2752,7 @@ class TransitPage:
         fmask = np.asarray(r.get("flagged")) if r.get("flagged") is not None else np.zeros(len(t), dtype=bool)
         if fmask.shape != x.shape:
             fmask = np.zeros(len(t), dtype=bool)
-        ax.plot(x[~fmask], y[~fmask], ".", color="#9aa7b0", ms=4, label="each frame, detrended")
+        ax.plot(x[~fmask], y[~fmask], ".", color="#9aa7b0", ms=4, label=frame_points_label(r))
         if fmask.any():
             # 2.2.13: flagged frames put back in the fit, drawn apart.
             wf = r.get("with_flagged") or {}
@@ -4061,6 +4065,22 @@ def _state(verdict) -> str:
     if not verdict:
         return "detected"
     return verdict.get("state") or ("detected" if verdict.get("detected", True) else "none")
+
+
+def frame_points_label(r: dict) -> str:
+    """step 6c-2 (John 20 Nov, Joanna's Qatar-1 b): the frames' legend says what was taken out of them: "each frame,
+    detrended" only when a detrend term (airmass, time slope or curve) was fitted, "each frame, flip step taken out"
+    when only the flip step was, else just "each frame"."""
+    flags = tuple(r.get("detrend_flags") or ())
+    detrended = any(bool(f) for f in flags) if flags else bool(r.get("detrend") and r.get("detrend") != "none")
+    step = bool(r.get("flip"))
+    if detrended and step:
+        return "each frame, detrended, flip step taken out"
+    if detrended:
+        return "each frame, detrended"
+    if step:
+        return "each frame, flip step taken out"
+    return "each frame"
 
 
 def _norm(name) -> str:

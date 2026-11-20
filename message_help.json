@@ -967,6 +967,20 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Left out by the comp survey: … (jumps … ppt at the meridian flip on its own (the target against it alone; a comp should stay within ±10 ppt on both pier sides))"
+   ],
+   "todo": "Nothing. A set with such a star would rest on another star jumping the other way."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "…; every comp candidate jumps more than ±10 ppt at the flip on its own, so the steadiest are used: …"
+   ],
+   "todo": "Check the transit fit's flip step and the Robustness check before reporting."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health after the run shows how they did)."
    ],
    "todo": "Nothing."
@@ -1704,6 +1718,34 @@
     "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is …, which moves it by …."
    ],
    "todo": "Report the larger spread with the result, or find out which choice is right (Comp health for a comp, the plot for a trimmed stretch) before reporting."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… Flip step: … of … refits are better with (without) one than the night as fitted (…)"
+   ],
+   "todo": "Nothing by itself; read it with the spread."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Leaving out … makes the transit … % deeper … (the night without it needs a flip step of its own)"
+   ],
+   "todo": "Check that comp (Comp health); on a flip night prefer comps that stay steady on both pier sides."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file not saved. ExoClock wants JD_UTC times, and turning the report's BJD_TDB times into JD_UTC needs …'s RA/Dec. SHOBS-P could not look up its position (…)."
+   ],
+   "todo": "Try again when the lookup services answer."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file: …'s RA/Dec from SIMBAD/VSX (…, …) for the JD_UTC times."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Output, Transits mode",
