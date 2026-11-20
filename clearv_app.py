@@ -18,6 +18,7 @@ import threading
 import time
 import traceback
 import warnings
+from tkinter import TclError  # step 6c-2 (Fable S4)
 from tkinter import (
     BOTH,
     END,
@@ -829,6 +830,23 @@ def exoclock_filter(code: str) -> str:
     return EXOCLOCK_FILTERS.get(c.upper(), c or "Clear (no filter)")
 
 
+class _WindowGone(Exception):
+    """step 6c-2 (Fable S4): the window closed while save_exoclock waited for a lookup."""
+
+
+class _PageChanged(Exception):
+    """step 6c-2 (Fable S4): another fit or report took the Transit page while save_exoclock waited for a lookup."""
+
+
+def _float_or_none_app(v):
+    """step 6c-2: a report header's number (OBSLAT/OBSLON), or None."""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 def exoclock_jd_utc(t, system: str = "BJD_TDB", ra_deg=None, dec_deg=None, lat=None, lon=None) -> np.ndarray:
     """2.2.20 (#47): the fit's times as geocentric JD_UTC (ExoClock's Time format JD_UTC). The transit fit works in
     BJD_TDB (photometry_core.convert_times from each frame's mid-exposure JD_UTC, photometry_core.mid_jd); this undoes
@@ -868,7 +886,8 @@ def exoclock_upload_text(jd_utc, flux, err, planet: str, meta: dict) -> str:
 
 
 def exoclock_info_text(planet: str, meta: dict, upload_name: str) -> str:
-    """2.2.20 (#47): ExoClock_info.txt: what to pick on ExoClock's upload form for the file just saved."""
+    """2.2.20 (#47): ExoClock_<planet>_<date>_info.txt (step 6c; ExoClock_info.txt before): what to pick on ExoClock's
+    upload form for the file just saved."""
     lines = [f"ExoClock upload form, for {upload_name} (SHOBS-P {meta.get('version', '')})",
              "",
              f"Planet: {exoclock_planet(planet)}   (ExoClock spells planet names with no space)",
@@ -3862,6 +3881,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 pass
         return names
 
+    def _report_fit_shown(self) -> bool:
+        """step 6c (item d): the Transit fit page shows a fit of an opened report (no photometry of its own)."""
+        tp = getattr(self, "transit_page", None)
+        return (self.mode_key == "transits" and tp is not None and tp.result is not None
+                and getattr(tp, "report", None) is not None)
+
     def _save_dates(self) -> str:
         """2.2.5: DD-MON-YYYY of the first point being saved, or first_to_last when they fall on different UTC dates."""
         points = self._usable() if self.observations else []
@@ -3922,9 +3947,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         number free for all three names; the others reuse it. Saving the same kind again starts a new set.
         2.2.19 (r2: S8): peek=True only suggests the name (the set is left as it is), for a dialog that may be
         canceled."""
-        key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
-        state = getattr(self, "_save_set", None)
+        key = self._set_key(folder, filename)
+        state = self._set_state(filename)
         names = self._family_names()
+        if self._report_fit_shown():
+            # step 6c (item d, Fable M1): a fit of an opened report and the Output page's run (another target, TOI-2046 b
+            # beside WASP-49 b's light curve on 20 Nov) are two sets: each is numbered against its own names only,
+            # and (re-review S1) each keeps its own number while files of both are saved in turn
+            fit_names = names[3:]
+            names = fit_names if self._in_fit_set(filename) else names[:3]
         if filename not in names:
             names = names + [filename]
         if state and state["key"] == key and filename not in state["used"]:
@@ -3938,8 +3969,43 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         while self._set_taken(folder, names, k):
             k += 1
         if not peek:
-            self._save_set = {"key": key, "k": k, "used": {filename}}
+            self._put_set_state(filename, {"key": key, "k": k, "used": {filename}})
         return self._suffixed(os.path.join(folder, filename), k)
+
+    def _in_fit_set(self, filename: str) -> bool:
+        """step 6c (re-review S1): with a report fit shown, is this file one of the fit's set (its report, plot, fit
+        CSV, or a file named from one of them: corner plot, settings file)?"""
+        tp = getattr(self, "transit_page", None)
+        try:
+            stems = [os.path.splitext(n)[0] for n in tp.family_names()]
+        except Exception:
+            return False
+        base = os.path.basename(filename)
+        return any(base.startswith(st_) for st_ in stems if st_)
+
+    def _set_tag(self, filename: str):
+        """None (one set, as before 2.4.0) unless a report fit is shown: then "fit" or "out" (step 6c)."""
+        if not self._report_fit_shown():
+            return None
+        return "fit" if self._in_fit_set(filename) else "out"
+
+    def _set_key(self, folder: str, filename: str):
+        key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
+        tag = self._set_tag(filename)
+        return key if tag is None else key + (tag,)
+
+    def _set_state(self, filename: str):
+        tag = self._set_tag(filename)
+        if tag is None:
+            return getattr(self, "_save_set", None)
+        return (getattr(self, "_save_sets", None) or {}).get(tag)
+
+    def _put_set_state(self, filename: str, state: dict) -> None:
+        tag = self._set_tag(filename)
+        if tag is None:
+            self._save_set = state
+        else:
+            self.__dict__.setdefault("_save_sets", {})[tag] = state
 
     def _out_folder(self) -> str:
         folder = self.output_dir.get().strip()
@@ -4146,10 +4212,86 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "exoclock": ("ExoClock", "ExoClock", "ExoClock")}   # 2.2.20 (#47)
 
     # ---- 2.2.20 (#47): Save for ExoClock / Go to ExoClock (Transit fit page's Results row) ----------------------------
+    def _report_fit_radec(self, r: dict, report: dict) -> tuple[float, float]:
+        """step 6c-2 (John 20 Nov): RA/Dec (degrees) of a REPORT fit's own star: the fit's planet lookup when it has
+        them (NASA Exoplanet Archive), else the report's planet looked up by name (SIMBAD/VSX, host star first; the
+        answer is kept on the fit and the report so a second save does not ask again). Never the Input page, which
+        may hold another target. Raises ValueError saying why not. Tk thread: the lookup runs on a worker thread
+        while the busy bar shows it."""
+        planets = [p for p in (r.get("planet"), report.get("planet")) if isinstance(p, dict)]
+        for p in planets:
+            if p.get("ra") is not None and p.get("dec") is not None:
+                try:
+                    ra, dec = float(p["ra"]), float(p["dec"])
+                    if math.isfinite(ra) and math.isfinite(dec):
+                        return ra, dec
+                except (TypeError, ValueError):
+                    pass
+        h = report.get("header") or {}
+        # the star's names first (host, the report's STAR_NAME), then the planet's, a TIC number last
+        names = [str(p.get("host") or "") for p in planets] + [str(h.get("STAR_NAME") or "")]
+        names += [str(p.get("name") or "") for p in planets] + [str(h.get("EXOPLANET_NAME") or "")]
+        names = list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
+        names = [n for n in names if not n.upper().startswith("TIC ")] + \
+                [n for n in names if n.upper().startswith("TIC ")]
+        if not names:
+            raise ValueError("The report names no star or planet to look up")
+        if getattr(self, "_radec_lookup_busy", False):
+            raise ValueError("A lookup of its position is already running; try again in a moment")
+        box, errors = {}, []
+
+        def work():
+            for n in names:
+                if cancelled.is_set():
+                    return
+                try:
+                    found = core.lookup_target(n)
+                    box["radec"] = (float(found["ra_hours"]) * 15.0, float(found["dec_deg"]))
+                    box["name"] = n
+                    box["source"] = str(found.get("source") or "SIMBAD")   # Fable N8
+                    return
+                except Exception as exc:
+                    first = str(exc).splitlines()[0].strip().rstrip(".") if str(exc) else type(exc).__name__
+                    errors.append(f"{n}: {first}")   # Fable N6: no "TOI-2046.;"
+
+        cancelled = threading.Event()
+        tp = getattr(self, "transit_page", None)
+        self._radec_lookup_busy = True
+        tok = self.busy_begin(f"Looking up {names[0]}'s position for the ExoClock file…")
+        try:
+            th = threading.Thread(target=work, daemon=True)
+            th.start()
+            while th.is_alive():   # the window stays live (busy bar) while SIMBAD answers
+                try:
+                    self.update()
+                except TclError:   # Fable S4: the window was closed during the lookup
+                    cancelled.set()
+                    raise _WindowGone() from None
+                if tp is not None and (getattr(tp, "result", None) is not r or getattr(tp, "report", None)
+                                       is not report):
+                    cancelled.set()   # Fable S4: another fit or report took the page meanwhile
+                    raise _PageChanged()
+                time.sleep(0.03)
+        finally:
+            self._radec_lookup_busy = False
+            try:
+                self.busy_end(tok)
+            except TclError:
+                pass
+        if "radec" not in box:
+            raise ValueError("SHOBS-P could not look up its position (" + "; ".join(errors[:3]) + "). Try again "
+                             "when the lookup services answer")
+        for p in planets:
+            p["ra"], p["dec"] = box["radec"]
+        self.log(f"ExoClock file: {box['name']}'s RA/Dec from {box['source']} ({box['radec'][0]:.5f}, "
+                 f"{box['radec'][1]:+.5f}) for the JD_UTC times.", keep_status=True)
+        return box["radec"]
+
     def save_exoclock(self) -> str:
         """2.2.20 (#47): the shown transit fit as ExoClock's upload file (ExoClock_<planet>_<YYYYMMDD>.txt: JD_UTC at
         mid-exposure, relative flux not detrended, error; the frames the fit used, as the AAVSO exoplanet report) and
-        ExoClock_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if none)."""
+        ExoClock_<planet>_<date>_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if
+        none)."""
         tp = getattr(self, "transit_page", None)
         r = getattr(tp, "result", None) if tp is not None else None
         if not r:
@@ -4164,12 +4306,45 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         try:
             ra = dec = lat = lon = None
             if system != "JD_UTC":
-                ra, dec = self.target_radec_deg(r.get("planet"))
-                lat, lon = float(self.lat.get()), float(self.lon.get())
+                if report is not None:
+                    # step 6c-2 (John 20 Nov): a report fit's RA/Dec is its OWN planet's (looked up by name when the
+                    # report has none), never the Input page's: in 6b the Input page still held WASP-49 b, so
+                    # TOI-2046 b's BJD_TDB -> JD_UTC used another star's position, silently
+                    ra, dec = self._report_fit_radec(r, report)
+                    h = report.get("header") or {}
+                    lat, lon = _float_or_none_app(h.get("OBSLAT")), _float_or_none_app(h.get("OBSLON"))
+                    if lat is None or lon is None:   # the report does not say where: the site on the Input page
+                        if h.get("OBSLAT") or h.get("OBSLON"):   # Fable N7: say so when it says it unreadably
+                            self.log(f"ExoClock file: the report's OBSLAT/OBSLON ({h.get('OBSLAT', '')}, "
+                                     f"{h.get('OBSLON', '')}) are not decimal degrees, so the Input page's site is "
+                                     "used (tens of milliseconds at most).", keep_status=True)
+                        lat, lon = float(self.lat.get()), float(self.lon.get())
+                    elif not (-90 <= lat <= 90 and -360 <= lon <= 360):   # re-review N-b: fall back, say so
+                        self.log(f"ExoClock file: the report's OBSLAT/OBSLON ({lat}, {lon}) are not a place on "
+                                 "Earth, so the Input page's site is used (tens of milliseconds at most).",
+                                 keep_status=True)
+                        lat, lon = float(self.lat.get()), float(self.lon.get())
+                else:
+                    ra, dec = self.target_radec_deg(r.get("planet"))
+                    lat, lon = float(self.lat.get()), float(self.lon.get())
             jd = exoclock_jd_utc(r["t"], system, ra, dec, lat, lon)
+        except _WindowGone:
+            return ""
+        except _PageChanged:   # re-review N-a: its own words
+            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the fit on the Transit page changed while "
+                                           "SHOBS-P looked up the star's position. Press Save for ExoClock… again "
+                                           "for the fit now shown.")
+            return ""
         except (ValueError, TypeError) as exc:
-            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the times need the target's RA/Dec and your site's "
-                                           f"latitude and longitude on the Input page ({exc}).")
+            why = str(exc).rstrip(".")
+            why = why[:1].upper() + why[1:]
+            if report is not None:
+                text = (f"ExoClock file not saved. ExoClock wants JD_UTC times, and turning the report's BJD_TDB "
+                        f"times into JD_UTC needs {planet or 'the planet'}'s RA/Dec. {why}.")
+            else:
+                text = ("ExoClock file not saved. ExoClock wants JD_UTC times, and turning the fit's BJD_TDB times "
+                        f"into JD_UTC needs the target's RA/Dec and your site's latitude and longitude. {why}.")
+            messagebox.showinfo(APP_TITLE, text)
             return ""
         # 2.2.20 (review): the measurement errors (ExoClock rescales them itself), and flagged frames put back with
         # "Fit with flagged" (errors doubled) are left out, as the file's header says.
@@ -4188,7 +4363,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                 filetypes=[("Text", "*.txt")], parent=self)
         if not path:
             return ""
-        info_path = self._unique_path(os.path.join(os.path.dirname(path), "ExoClock_info.txt"))
+        # step 6c (item d): named after its upload file (ExoClock_TOI-2046b_20260903_info.txt), so each pairs with
+        # its own upload; one ExoClock_info.txt for every planet piled up as _2, _3 … in a night's folder
+        info_path = self._unique_path(os.path.splitext(path)[0] + "_info.txt")
         try:
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(exoclock_upload_text(jd, flux, err, planet, meta))
@@ -12840,6 +13017,29 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return set()
         return {str(n) for n in list(self.comp_coords) + list(getattr(self, "comp_catalog_mags", None) or {})}
 
+    def _series_comps_all_placed(self) -> bool:
+        """2.4.0 step 6b (John 19 Nov): a loaded series whose comps are all in the boxes AND marked on this image
+        (and its check, when it names one): the comp survey is skipped and Run photometry starts at once; Comp health
+        after the run judges those comps. Not in Discovery, never without a series."""
+        if self.mode_key == "discovery" or not getattr(self, "series_path", ""):
+            return False
+        known = {name_key(n) for n in self._series_star_names()}
+        placed = set()
+        for role in COMP_ROLES + ("check",):
+            name = getattr(self, f"{role}_name").get().strip()
+            if not name:
+                continue
+            if getattr(self, f"{role}_xy") is None:
+                return False
+            if role != "check":
+                if known and name_key(name) not in known:
+                    return False   # a comp typed in tonight that the series does not know: the survey still helps
+                placed.add(name_key(name))
+        # Fable S4: EVERY comp the series uses must be placed (one off tonight's frame, or a box left empty, and the
+        # survey still has comps to choose)
+        wanted = {name_key(n) for n in (list(getattr(self, "active_comps", None) or []) or list(self.comps_used or []))}
+        return bool(placed) and bool(wanted) and wanted <= placed
+
     def _sky_on_frame(self, ra: float, dec: float):
         """2.4.0 step 4 (#72): where a sky position falls on this image: {"px", "py", "state", "beyond", "side"}.
         state "on" (inside the image), "edge" (outside it by no more than the aperture radius: a weak solve near the
@@ -13077,6 +13277,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if same:
                 return same[0]
         return star_record.display_name(names) or str((star or {}).get("auid") or (star or {}).get("label") or "")
+
+    def _cat_name(self, star) -> str:
+        """2.4.0 step 6b (John 19 Nov, #72 rule): the one name a catalog star goes by everywhere on the Photometry
+        page: the suggestions, their S lines, the comp survey, the spares and the comp boxes all use _slot_name_for
+        (the series' name for a star it knows, else AUID / AAVSO label, then TYC, Gaia, APASS). Before, the
+        suggestions used the catalog's own ID (TYC 5936-2073-1, APASS J060338.6-170306) while the boxes and the
+        settings said 000-BQG-573 and Gaia DR3 2991287972537580288 for the same two stars (WASP-49 b, 19 Nov)."""
+        if not star:
+            return ""
+        try:
+            return self._slot_name_for(star)
+        except Exception:
+            return str(star.get("auid") or star.get("label") or "")
 
     def _brightest_star_within(self, xy, wide: float, radius: float, fwhm):
         """2.4.0 step 4 (#71): the center of the brightest star within wide px of xy (a real star: 10 sigma, see
@@ -15317,7 +15530,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.chart_solution = None
         auto_target = diag.get("radec_given", True) and self._auto_target_marker()   # 2.2.15 (GitHub #3): before
         # the comps are suggested around it
-        self._seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in self.chart_placed
+        self._seq_names = {self._cat_name(st) for _x, _y, st in self.chart_placed
                            if st.get("seq")} if self.mode_key != "discovery" else set()
         self._seq_note_for = None
         self._apply_field_check(vet, solved, diag)
@@ -15799,7 +16012,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             box = self.preview[max(0, y0 - ri):y0 + ri + 1, max(0, x0 - ri):x0 + ri + 1]
             if box.size and np.nanmax(box) >= sat:
                 continue
-            name = str(st.get("auid") or st.get("label") or "")
+            name = self._cat_name(st)   # step 6b: the #72 display name, as the boxes use
             if not name:
                 continue
             cands.append((name, -2.5 * math.log10(f), x, y, core.catalog_bv(st)))
@@ -15816,7 +16029,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 2.4.0 step 5 (#76): the night's own frames. Started here (background, busy bar) the first time; until it is
         # back the catalog suggestions below stand, and _survey_done suggests again with it.
         t_snr0 = self._star_snr(self.preview, self.target_xy)   # (as `faint` below: the survey judges in its window)
+        self._survey_skipped_now = False
         survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
+        if survey is None and self._survey_skipped_now:
+            # step 6b (Fable S4): the series' comps are all placed and the survey was skipped: no catalog-only
+            # suggestions (unvetted) beside them. Re-review 1: the boxes' colour and brightness hints still need these
+            target_star = self._chart_star_at(self.target_xy)
+            t_bv_meas = self._measured_target_bv()
+            self._target_bv = t_bv_meas if t_bv_meas is not None else (
+                core.catalog_bv(target_star) if target_star else None)
+            self._closest_dm = min((abs(c[1] - t_inst) for c in cands), default=None)
+            self.suggested_comps = []
+            self.suggested_info = {}
+            self._suggest_for = (self.target_xy, self.preview_path)
+            self._suggest_waiting_survey = False
+            return
         sc = getattr(self, "_survey_cache", None)
         if (survey is None and sc is not None and sc.get("state") == "loading"
                 and (sc.get("key") or (None,))[0] == self.preview_path):
@@ -15873,12 +16100,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
         self._survey_rejected = set()
 
+        own_back = set()   # step 6c-2: stars beyond the own flip-step limit let back so the night gets 2 comps
+
         def survey_ok(name):
             # 2.4.0 step 5 (#76): measured on every frame the survey read, and not scattering like a variable (a
             # star outside the survey's own list, past its cap, is judged on the catalog rules alone)
             if survey is None or name not in survey["index"]:
                 return True
-            if survey["out"].get(name):
+            if survey["out"].get(name) and name not in own_back:
                 self._survey_rejected.add(name)
                 return False
             return True
@@ -15916,21 +16145,50 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # the sequence runs short (a faint transit host, a sparse field). 2.3.4: stars well inside the frame and
         # within 0.3 in color first, then the rest. 2.4.0 (#78): only stars that stay at least safe_edge in all night
         # (no pool lets a star nearer the edge back in; the field gets fewer suggestions instead, and the log says so).
-        seq_names = {str(st.get("auid") or st.get("label") or "") for _x, _y, st in stars if st.get("seq")}
+        seq_names = {self._cat_name(st) for _x, _y, st in stars if st.get("seq")}
         inside = {c[0] for c in cands if edge_px.get(c[0], 0.0) >= safe_edge}
-        relaxed = set()
-        picks = []
-        for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
-            if len(picks) >= 4:
-                break
-            have = {n for n, _dm in picks}
-            pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)
-                    # review nit: with the target's colour known, a star of unknown colour only fills in (0.6 passes)
-                    and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
-            got = choose(pool, gate)[:4 - len(picks)]
-            if gate > 0.3:
-                relaxed.update(n for n, _dm in got)
-            picks += got
+        def pick_all():
+            relaxed_, picks_ = set(), []
+            for pool_names, gate in ((seq_names & inside, 0.3), (inside, 0.3), (inside, 0.6)):
+                if len(picks_) >= 4:
+                    break
+                have = {n for n, _dm in picks_}
+                pool = [c for c in cands if c[0] not in have and (pool_names is None or c[0] in pool_names)
+                        # review nit: with the target's colour known, a star of unknown colour only fills in (0.6)
+                        and (gate > 0.3 or t_bv is None or (len(c) > 4 and c[4] is not None))]
+                got = choose(pool, gate)[:4 - len(picks_)]
+                if gate > 0.3:
+                    relaxed_.update(n for n, _dm in got)
+                picks_ += got
+            return picks_, relaxed_
+
+        picks, relaxed = pick_all()
+        # step 6c-2 (Fable M1/S1): fewer than 2 comps after every gate because stars jump at the flip on their own:
+        # let the steadiest of those back, one at a time, until 2 are picked (or none is left)
+        own_out = dict((survey or {}).get("own_out") or {})
+        if len(picks) < 2 and own_out:
+            rejected_before = set(self._survey_rejected)
+            for name in sorted(own_out, key=lambda n_: abs(own_out[n_])):
+                own_back.add(name)
+                self._survey_rejected = set(rejected_before)
+                picks, relaxed = pick_all()
+                if len(picks) >= 2:
+                    break
+            back_used = [n for n, _dm in picks if n in own_back]
+            own_back.intersection_update(back_used)
+            self._survey_rejected = set(rejected_before) - own_back
+            if back_used:
+                n_ok = len(picks) - len(back_used)
+                lead = (f"no comp candidate stays within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own"
+                        if n_ok == 0 else f"only {n_ok} comp candidate{'s' if n_ok != 1 else ''} "
+                        f"stay{'s' if n_ok == 1 else ''} within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on "
+                        "its own")
+                survey["own_note"] = (lead + ", so the steadiest of the others "
+                                      + ("is" if len(back_used) == 1 else "are") + " used too: "
+                                      + ", ".join(f"{n} {own_out[n]:+.1f} ppt" for n in back_used))
+        if survey is not None and not own_back:
+            survey["own_note"] = ""
+        self._survey_own_back = set(own_back)
         picks, set_step, series_kept, relaxed_set, shortened = self._survey_final_picks(
             picks, survey, choose, cands, inside, seq_names, t_bv)
         if survey is not None:
@@ -16017,7 +16275,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         h, w = self.preview.shape[:2]
         tx, ty = self.target_xy
         m = self.SURVEY_MARGIN
-        stars = [(str(st.get("auid") or st.get("label") or ""), float(x), float(y), float(st["mag"]))
+        stars = [(self._cat_name(st), float(x), float(y), float(st["mag"]))
                  for x, y, st in (self.chart_placed or []) if not st.get("variable") and st.get("mag") is not None
                  and m <= x < w - m and m <= y < h - m and math.hypot(x - tx, y - ty) > 3.0]
         stars = [s_ for s_ in stars if s_[0]]
@@ -16027,8 +16285,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if t_cat is None and cands and math.isfinite(t_inst):
                 # re-review 6: an uncatalogued target: its catalog-scale magnitude from the candidates' zero point,
                 # rounded to 0.5 mag so the list (and the survey's key) does not change with the aperture
-                mag_of = {str(st.get("auid") or st.get("label") or ""): st.get("mag")
-                          for _x, _y, st in (self.chart_placed or [])}
+                mag_of = {self._cat_name(st): st.get("mag") for _x, _y, st in (self.chart_placed or [])}
                 zp = [float(mag_of[c[0]]) - c[1] for c in cands if mag_of.get(c[0]) is not None
                       and math.isfinite(c[1])]
                 if len(zp) >= 3:
@@ -16084,9 +16341,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             stamp = 0.0
         stars = self._survey_stars(cands, t_inst)
         donut = self._donut_apertures()
+        eph = None
+        if self.mode_key == "transits":
+            # step 6b (Fable S8): the predicted transit decides which frames the baseline pass reads, so a planet
+            # filled in after the survey started reads the night again
+            try:
+                pl = self.planet_from_fields() or {}
+                # re-review 5: rounded, so a small refinement (a second Lookup) does not read the night again
+                eph = tuple(None if pl.get(k_) is None else round(float(pl[k_]), nd)
+                            for k_, nd in (("period", 5), ("t0", 3), ("k", 3), ("a_rs", 2), ("b", 2)))
+            except Exception:
+                eph = None
         key = (self.preview_path, stamp, tuple(lights), tuple(s_[0] for s_ in stars),
                tuple((round(x, 1), round(y, 1)) for _n, x, y in stars), binning, pattern, mode,
-               self._masters_token(), bool(getattr(self, "precalibrated", False)), donut is None)
+               self._masters_token(), bool(getattr(self, "precalibrated", False)), donut is None, eph)
         cache = getattr(self, "_survey_cache", None)
         if cache is not None and cache.get("key") == key:
             if cache["state"] == "loading":
@@ -16095,6 +16363,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             if not res or res.get("error"):
                 return None
             return self._survey_view(res, cands, t_inst, r, faint)
+        if self._series_comps_all_placed():
+            # step 6b (John 19 Nov): the series' comps are all placed: no survey (Comp health after the run judges
+            # them). Fable S4: below the cache, so a survey already done for this image is still used
+            self._say_survey_skipped()
+            self._survey_skipped_now = True
+            return None
         fwhm = self._seeing()
         radii = cs.trial_radii(fwhm, r) if donut is None else [round(float(r), 1)]
         rings = {}
@@ -16107,15 +16381,22 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         cache = self._survey_cache = {"key": key, "state": "loading", "result": None,
                                       "aperture_at_start": (r, si, so), "stars": stars}
         cache["tok"] = self.busy_begin("Choosing comps from the night's frames…")   # step 6 nit a
+        base_model = None
+        if self.mode_key == "transits":
+            # step 6b: the predicted transit, so the survey also reads baseline frames on each side of a flip
+            try:
+                base_model = cs.transit_mags(np.zeros(1), self.planet_from_fields(), tcore.occultation)
+            except Exception:
+                base_model = None
         try:
-            self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r)
+            self._survey_start(cache, lights, stars, radii, rings, binning, pattern, mode, r, base_model)
         except Exception as exc:   # Fable nit 19: never a busy bar left on, nor a Run waiting forever
             self.busy_end(cache.pop("tok", None))
             cache["state"], cache["result"] = "done", {"error": f"{type(exc).__name__}: {exc}"}
             log_to_file(f"Comp survey could not start: {exc}")
         return None
 
-    def _survey_start(self, cache, lights, stars, radii, rings, binning, pattern, mode, r_now):
+    def _survey_start(self, cache, lights, stars, radii, rings, binning, pattern, mode, r_now, base_model=None):
         masters, ref = self.masters, self.preview
         precal = bool(getattr(self, "precalibrated", False))
         total_bin = binning * (1 if pattern == core.MONO else 2)
@@ -16139,6 +16420,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 except Exception:
                     t_def = {"donut": False}
                 t_donut = bool(t_def.get("donut"))
+                # step 6c (Fable S2): the stars centred once on the reference frame first (a star placed from the
+                # plate solution can sit 1-3 px off), so each frame's centring starts from its real centre and its
+                # jump limit is measured from there, as the run's markers are
+                xy0[:] = core.recenter_points(ref, xy0, r_now)
                 rmax = max(radii)
                 ref_pts = core.refine_points(ref, ref_sources, rmax, t_donut) if len(ref_sources) >= 3 else []
                 last = {"sources": None, "reg": None}
@@ -16153,7 +16438,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         tried.add(i)
                         path = lights[i]
                         done[0] += 1
-                        self.call_ui(self._survey_progress, cache, f"frame {done[0]} of {of_words}")
+                        # step 6b (John 19 Nov): a total only once it can no longer change; until then a running
+                        # count ("frame 20 (first pass)", then "frame 31 of 59"), never a total that jumps 24 -> 59
+                        words = (f"frame {done[0]} of {of_words}" if isinstance(of_words, int)
+                                 else f"frame {done[0]} ({of_words})" if of_words else f"frame {done[0]}")
+                        self.call_ui(self._survey_progress, cache, words)
                         try:
                             raw, header, cal = stack_load_frame(path, binning, masters)
                             img = core.debayer(cal, pattern, mode)
@@ -16180,6 +16469,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                     reg = core.refine_registration(img, reg, ref_pts, rmax, t_donut)
                                 last["sources"], last["reg"] = src, reg
                             pos = core.move_points(xy0, reg, img.shape)
+                            # step 6c (item 3): each star centred on its light as the run centres it (the run's
+                            # defocus decision, at the boxes' aperture); the aligned positions alone moved the
+                            # target's forecast flip step 1.5 ppt on WASP-49 b 19 Nov
+                            core.seed_field_defocus(img, t_def if t_donut else False)
+                            pos = core.recenter_points(img, pos, r_now)
                             hh, ww = img.shape[:2]
                             edge = np.minimum.reduce([pos[:, 0], pos[:, 1], (ww - 1) - pos[:, 0], (hh - 1) - pos[:, 1]])
                             tpos = pos[0]
@@ -16214,11 +16508,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 first = cs.sample_indices(n)
                 if ref_path in lights and lights.index(ref_path) not in first:
                     first = sorted(set(first) | {lights.index(ref_path)})
-                read(first, len(first))
+                read(first, "first pass")
                 more = cs.second_pass(n, sorted(out["frames"]),
                                       {i: f["fwhm"] for i, f in out["frames"].items()},
                                       {i: f["flipped"] for i, f in out["frames"].items()})
-                read(more, len(first) + len(more))
+                # the total is known now unless the flip pass below will add frames (Transits, a flip seen)
+                seen = {bool(f["flipped"]) for f in out["frames"].values()}
+                final = not (transits and len(seen) == 2)
+                read(more, (done[0] + len(more)) if final else "more frames")
                 # Fable re-review M1: bracket the flip to adjacent frames, then read its neighbors on both sides, so
                 # the target's flip step is measured right at the flip
                 extra = 0
@@ -16229,7 +16526,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     if not nxt:
                         break
                     extra += len(nxt)
-                    read(nxt, f"{len(first) + len(more) + extra} (finding the flip)")
+                    read(nxt, "at the meridian flip")
+                # step 6b (John 19 Nov, "match the fit"): enough frames on each side of the flip that the step's fit
+                # can use (JD here, not BJD: 9.5 min more margin)
+                if transits and base_model is not None and alive():
+                    # step 6c (Fable S3): every frame the free-depth fit can use counts (away from ingress and
+                    # egress, in transit too), not the baseline only
+                    is_base = lambda jd_: cs.contact_free(jd_, base_model, cs.TARGET_STEP_MARGIN + 9.5 / 1440.0)
+                    try:
+                        nxt = cs.baseline_pass(n, tried, {i: f.get("jd") for i, f in out["frames"].items()},
+                                               {i: f["flipped"] for i, f in out["frames"].items()},
+                                               is_base)[:cs.BASELINE_PASS_MAX]
+                    except Exception as exc:
+                        nxt = []
+                        log_to_file(f"Comp survey: baseline pass skipped ({type(exc).__name__}: {exc}).")
+                    read(nxt, done[0] + len(nxt))   # Fable N12: the last pass: its total is known
                 # Fable 3: the statistics here, off the window's thread, with the busy bar still on
                 if len(out["frames"]) >= 3 and alive():
                     self.call_ui(self._survey_progress, cache, "comparing the stars")
@@ -16277,6 +16588,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self.call_ui(self._survey_done, cache, out)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _say_survey_skipped(self):
+        """step 6b: one Log line per image and target that the survey was skipped for the series' own comps."""
+        key = (self.preview_path, tuple(self.target_xy or ()))
+        if getattr(self, "_survey_skip_said", None) == key:
+            return
+        self._survey_skip_said = key
+        self.log("Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can "
+                 "start at once (Comp health after the run shows how they did).", keep_status=True)
+
+    def _drop_survey_for_series(self) -> bool:
+        """step 6b: Run photometry pressed while the survey reads, with the series' comps all placed: the survey is
+        called off (it would only change suggestions nobody needs) and the run starts now. True when dropped."""
+        cache = getattr(self, "_survey_cache", None)
+        if cache is None or cache.get("state") != "loading" or not self._series_comps_all_placed():
+            return False
+        self._survey_cache = None   # its worker sees this and stops at the next frame
+        self.busy_end(cache.pop("tok", None))
+        self._suggest_waiting_survey = False
+        self._say_survey_skipped()
+        return True
 
     def _survey_progress(self, cache, words: str):
         if cache.get("tok") is not None and getattr(self, "_survey_cache", None) is cache:
@@ -16390,16 +16722,36 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         peaks_c = np.array([[peaks[f, j] if j is not None else nan for j in cols] for f in range(len(idx))])
         # step 5 fix (#76): the TARGET's own step at the flip against each comp (and, in choose_set, each set), with
         # the predicted transit taken out; a forecast from the stars nearest the target chose the worst set on
-        # WASP-49 b. Judged only in Transits, with an ephemeris, and when no frame used is near ingress or egress
-        tdiffs, b_rows, a_rows, flip_why = None, np.zeros(0, int), np.zeros(0, int), ""
+        # WASP-49 b. Judged only in Transits, with an ephemeris, and (step 6c) with frames away from ingress and
+        # egress on both sides of the flip
+        tdiffs, b_rows, a_rows, flip_why, wts = None, np.zeros(0, int), np.zeros(0, int), "", None
+        self._survey_step_how = ""
         if st["flip"] and abs(rr - float(r)) > 0.06:
             # re-review nit: the flip step depends strongly on the aperture (WASP-49 b: +35 at r 8, +16 at r 10.3)
             flip_why = f"measured at r {rr:g}, not at r {float(r):g}"
         elif st["flip"]:
-            flip_why, tdiffs, b_rows, a_rows = self._survey_target_steps(result, rr, cols, planet)
+            flip_why, tdiffs, b_rows, a_rows, wts = self._survey_target_steps(result, rr, cols, planet)
+        own_out = {}   # step 6c-2: name -> its own flip step (ppt) beyond the limit
         if tdiffs is not None:
-            step_rel = np.array([cs.set_target_step(tdiffs, [k], b_rows, a_rows)[0] if cols[k] is not None else nan
-                                 for k in range(len(cols))])
+            pairs = [cs.set_target_step(tdiffs, [k], b_rows, a_rows, wts) if cols[k] is not None else (nan, nan)
+                     for k in range(len(cols))]
+            step_rel = np.array([p_[0] for p_ in pairs], dtype=float)
+            step_err = np.array([p_[1] for p_ in pairs], dtype=float)
+            # step 6c-2 (John 20 Nov): each comp's OWN flip step against the target, not only the set's: a comp
+            # that jumps more than 10 ppt on its own is left out, so the set cannot rest on two big opposite steps
+            # cancelling (WASP-49 b 19 Nov: -59 and +63 ppt in one set)
+            # Fable M1/S1: the fallback (too few comps left) is decided in _suggest_comps, after the edge, linear and
+            # colour gates, from own_out; here only who is beyond the limit
+            judged = [cols[k] is not None and bool(window[k]) and c[0] not in out for k, c in enumerate(cands)]
+            gone, _k = cs.own_step_out(step_rel, step_err, judged, keep_min=0)
+            for k, ppt in gone.items():
+                own_out[cands[k][0]] = ppt
+                out[cands[k][0]] = (f"jumps {ppt:+.1f} ppt at the meridian flip on its own (the target against it "
+                                    f"alone; a comp should stay within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt on both "
+                                    "pier sides)")
+            good = [scatter[k] for k, c in enumerate(cands)
+                    if window[k] and c[0] not in out and math.isfinite(scatter[k])]
+            ref_sc = float(np.median(good)) if good else nan
         else:
             # Fable re-review S2: not judged on the target: each star's step against the others' median still ranks
             # a star that jumps at the flip lower (the set is then the best-ranked)
@@ -16408,7 +16760,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 "step": step_rel, "peak_max": peak_max, "peaks": peaks_c, "dist": dist,
                 "flip": bool(st["flip"]) and tdiffs is not None and bool(np.isfinite(step_rel).any()),
                 "ref_scatter": ref_sc, "out": out, "flip_seen": bool(st["flip"]), "flip_why": flip_why, "tdiffs": tdiffs, "b_rows": b_rows,
-                "a_rows": a_rows,
+                "a_rows": a_rows, "weights": wts, "step_how": getattr(self, "_survey_step_how", ""),
+                "own_out": own_out, "own_note": "",
                 "window": {c[0] for k, c in enumerate(cands) if window[k]}, "frames": len(idx), "of": result["of"],
                 "failed": result["failed"], "labels": labels, "radius": rr, "n_before": st["n_before"],
                 "n_after": st["n_after"], "radius_asked": float(r)}
@@ -16416,21 +16769,24 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         return view
 
     def _survey_target_steps(self, result, rr, cols, planet):
-        """step 5 fix (#76): (why not judged or "", target-minus-candidate differences per frame with the predicted
-        transit taken out (rows: the survey's frames, columns: the suggestion candidates; NaN where not surveyed),
-        near-flip rows before, after). Not judged (None): outside Transits (a variable target's own change would read
-        as a step), without a usable ephemeris and shape, without frame times, or when a frame used lies within
-        10 min (plus 3 sigma of Tc) of ingress or egress, where the predicted dip depends on the ephemeris."""
+        """step 5 fix (#76), step 6b (John 19 Nov, "match the fit"): (why not judged or "", target-minus-candidate
+        differences per frame (rows: the survey's frames, columns: the suggestion candidates; NaN where not
+        surveyed), rows before, rows after, the step plan). Step 6c (John 20 Nov): the step is fitted the way the
+        transit fit finds it: every frame read away from ingress and egress (by 10 min plus 3 sigma of Tc), in
+        transit too, fitted with level + step + a free depth (comp_survey.free_depth_step), on stars centred as the
+        run centres them. Step 6a measured it on the ~15 frames nearest the flip and step 6b on the baseline only
+        (WASP-49 b 19 Nov: +0.1 mmag and +1.1 ppt where the fit found +6.4 ppt). Not judged (None): outside
+        Transits (a variable target's own change would read as a step), without a usable ephemeris and shape,
+        without frame times, or with fewer than 3 usable frames read on a side."""
         none = np.zeros(0, int)
         if self.mode_key != "transits":
-            return "the target's own changes would read as a step outside Transits", None, none, none
+            return "the target's own changes would read as a step outside Transits", None, none, none, None
         after = cs.flip_sides(result.get("flipped"))
-        b_rows, a_rows = cs.near_flip_rows(after, cs.FLIP_NEAR_TARGET, idx=result.get("idx"))
-        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
-            return "too few frames read right at the flip", None, none, none
+        if after is None:
+            return "no meridian flip among the frames read", None, none, none, None
         jd = np.asarray(result.get("jd") if result.get("jd") is not None else [], dtype=float)
-        if jd.size != len(result["idx"]) or not np.all(np.isfinite(jd[np.r_[b_rows, a_rows]])):
-            return "the frames' times are not in their headers", None, none, none
+        if jd.size != len(result["idx"]) or np.isfinite(jd).sum() < 2 * cs.FLIP_MIN_SIDE:
+            return "the frames' times are not in their headers", None, none, none, None
         margin = cs.TARGET_STEP_MARGIN
         t = None
         try:
@@ -16439,7 +16795,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 t = jd + np.asarray(tcore.bjd_minus_jd_days(jd, ra, dec), dtype=float)
         except Exception:
             t = None
-        if t is None or not np.all(np.isfinite(t[np.r_[b_rows, a_rows]])):
+        if t is None or not np.isfinite(t).any():
             t = jd   # Fable S5 / nit 2: JD for BJD (no RA/Dec): up to 8.3 min + TT, so a wider margin
             margin += 9.5 / 1440.0
         try:
@@ -16448,16 +16804,30 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             ld = (0.4, 0.25)
         model = cs.transit_mags(t, planet, tcore.occultation, ld)
         if model is None:
-            return "no ephemeris and transit shape on the Input page", None, none, none
-        if cs.near_contact(t[np.r_[b_rows, a_rows]], model, margin):
-            return "the flip is near ingress or egress, where the predicted transit is not exact enough", None, none, \
-                none
+            return "no ephemeris and transit shape on the Input page", None, none, none, None
+        # step 6c (John 20 Nov, item 3): fitted with a free depth on every frame read away from ingress and egress
+        # (in transit too), as the fit finds the step; step 6b's baseline-only mean forecast +1.1 ppt on WASP-49 b
+        # 19 Nov where the fit found +6.4
+        usable = cs.contact_free(t, model, margin)
+        b_rows, a_rows = np.where(usable & ~after)[0], np.where(usable & after)[0]
+        w = cs.step_plan(after, model["mag"])
+        self._survey_step_how = "free_depth"
+        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
+            return ("too few frames read away from ingress and egress on one side of the flip",
+                    None, none, none, None)
+        rows = np.r_[b_rows, a_rows]
+        sh = np.asarray(model["mag"], dtype=float)[rows]
+        if (int((np.nan_to_num(sh) > 1e-4).sum()) >= 3
+                and cs.step_depth_vif(after[rows], sh) > cs.STEP_VIF_MAX):
+            # Fable M2: the flip at ingress or egress with no baseline beyond it (a night that ends in transit)
+            return ("the flip is at ingress or egress with no baseline beyond it, so the step cannot be told from "
+                    "the depth", None, none, none, None)
         mags = result["mags"][rr]
         comp = np.full((mags.shape[0], len(cols)), np.nan)
         for k, j in enumerate(cols):
             if j is not None:
                 comp[:, k] = mags[:, j + 1]
-        return "", cs.target_diffs(mags[:, 0], comp, model["mag"]), b_rows, a_rows
+        return "", cs.target_diffs(mags[:, 0], comp, model["mag"]), b_rows, a_rows, w
 
     def _survey_aperture_apply(self, cache):
         """2.4.0 step 5 (#61): the apertures tried on the survey's frames, judged on the stars like the target (within
@@ -16547,7 +16917,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 index = survey["index"]
                 chosen, set_step, self._survey_set_err = cs.choose_set(
                     names, keys, lambda nm: cs.set_curve(survey["tdiffs"], [index[x] for x in nm]),
-                    survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix])
+                    survey["b_rows"], survey["a_rows"], count=want, scatter=[survey["scatter"][j] for j in ix],
+                    weights=survey.get("weights"))
                 if chosen:
                     shortened = len(chosen) < min(want, len(names))   # re-review 9
                     picks = [(nm, dm_of[nm]) for nm in chosen]
@@ -16575,14 +16946,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "both pier sides")
             if survey["flip"] and math.isfinite(set_step):
                 err = err if err is not None and math.isfinite(err) else float("nan")
-                txt += (f", the target's flip step with these comps {1000 * set_step:+.1f}"
-                        + (f" ± {1000 * err:.1f}" if math.isfinite(err) else "") + " mmag (measured on the frames "
-                        "nearest the flip, the predicted transit taken out)")
+                # step 6b (John 19 Nov): a forecast of the fit's own step, so in the fit's units and sign (ppt of
+                # flux, + = brighter after the flip); the survey's step is in mag (+ = fainter after)
+                ppt = (10 ** (-0.4 * set_step) - 1.0) * 1000.0
+                how = ("fitted as the transit fit finds it: level, step and depth through the frames read on "
+                       "both sides of the flip, away from ingress and egress")
+                txt += (f", the target's flip step with these comps {ppt:+.1f}"
+                        + (f" ± {921.0 * err:.1f}" if math.isfinite(err) else "") + f" ppt ({how})")
             elif not survey["flip"]:
                 why = survey.get("flip_why") or ""
                 lead = ("; the target's flip step is not measured" if "outside Transits" in why
                         else "; the flip step is left to the transit fit")
                 txt += lead + (f" ({why})" if why else "")
+            if survey.get("own_note"):   # step 6c-2
+                txt += "; " + survey["own_note"]
             if shortened:
                 txt += "; fewer than four, because another star would make the flip step worse"
         return txt + ")."
@@ -16595,7 +16972,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if survey is None:
             return False
         inside = getattr(self, "_survey_inside", None)   # re-review 11: the edge rules already explain the others
-        out = {n: why for n, why in survey["out"].items() if n in survey["window"] and (inside is None or n in inside)}
+        back = getattr(self, "_survey_own_back", set())   # step 6c-2: let back (the S line says so), not left out
+        out = {n: why for n, why in survey["out"].items() if n in survey["window"] and (inside is None or n in inside)
+               and n not in back}
         if lin is not None and not getattr(self, "precalibrated", False):
             for name, j in survey["index"].items():
                 pk = survey["peak_max"][j]
@@ -17677,6 +18056,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         2.3.0 (#54): stack_run (from the Stack step) = the same run on the stacks instead of the lights; the
         checks and questions already answered for the per-frame run are not asked again, and it ends in _stack_done."""
         survey = getattr(self, "_survey_cache", None)
+        if stack_run is None and only is None and self._drop_survey_for_series():
+            survey = None   # step 6b: the series' comps are all placed, so the run does not wait for the survey
         if (stack_run is None and only is None and survey is not None and survey.get("state") == "loading"
                 and self.mode_key != "discovery"):
             # 2.4.0 step 5 (#76, John 19 Nov): Run photometry waits for the comp survey (its spares and S rings)
@@ -17891,7 +18272,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             taken = {c.name for c in comps} | ({check.name} if check is not None else set()) | {sp.name for sp in spares}
             # The suggested comps (near the target in brightness and color) first, so Use comps can switch to them
             # later without reducing again (2.2.1).
-            preferred = [(x, y, self._chart_star_named(name)) for name, _dm, x, y in self.suggested_comps]
+            # step 6b (Fable N15): a suggestion named by the series (_cat_name) may answer to no catalog name: by place
+            preferred = [(x, y, self._chart_star_named(name) or self._chart_star_at((x, y)))
+                         for name, _dm, x, y in self.suggested_comps]
             preferred = [(x, y, st) for x, y, st in preferred if st is not None and st.get("mag") is not None
                          and all(p is None or math.hypot(x - p[0], y - p[1]) >= 2 * radius for p in avoid)]
             # 2.2.2: in a thin field, widen the brightness window (out to 4 mag fainter than the comps) until at
@@ -17920,7 +18303,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 for x, y, star in ordered:
                     if len(spares) >= 8:
                         break
-                    name = str(star.get("auid") or star.get("label") or f"spare {len(spares) + 1}")
+                    name = self._cat_name(star) or f"spare {len(spares) + 1}"   # step 6b: the #72 name
                     if name in taken:
                         continue
                     cx, cy, moved = core.recenter(self.preview, x, y, radius)
@@ -19492,7 +19875,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         spares = [p for p in problems if p.startswith("spare ")]
         loud = [p for p in problems if not p.startswith("spare ")]
         for p in spares:
-            self.log(f"{night}: {p.split(':')[0]} (a spare: only measured, not used; nothing to do).", keep_status=True)
+            # 2.4.0 step 6b (John 19 Nov, so-what test): nothing to do, so not on the page: the log file only
+            log_to_file(f"{night}: {p.split(':')[0]} (a spare: only measured, not used).")
         # review S1: the check's own line (edge distance or vignetting) is kept; the frames it was off the frame and a
         # better spare are added to it
         orig = next((p for p in loud if p.startswith("check ")), "")

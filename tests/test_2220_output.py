@@ -243,7 +243,7 @@ class TestNotesInApp(unittest.TestCase):
                 mock.patch.object(tp, "_confirm_export", return_value=True):
             path = app.save_exoclock()
         self.assertEqual(os.path.basename(path), "ExoClock_TOI-2046b_20261027.txt")
-        self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_info.txt")))
+        self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_TOI-2046b_20261027_info.txt")))   # step 6c
         with open(path) as fh:
             rows = [ln.split() for ln in fh if ln.strip() and not ln.startswith("#")]
         self.assertEqual(len(rows), 28)   # 2.2.20 review: put-back flagged frames are left out
@@ -255,6 +255,86 @@ class TestNotesInApp(unittest.TestCase):
             self.assertEqual(ol.call_args[0][0], "https://www.exoclock.space/upload/")
         tp.result = None
         app.output_dir.set("")
+
+    def test_exoclock_report_fit_uses_its_own_star(self):
+        """step 6c-2: a report fit's JD_UTC uses the report planet's RA/Dec, never the Input page's (6b: WASP-49 b
+        on the Input page converted TOI-2046 b's times)."""
+        app = self.app
+        tp = app.transit_page
+        folder = tempfile.mkdtemp()
+        jd = np.linspace(2461287.60, 2461287.75, 30)
+        ra, dec, lat, lon = 30.85, 74.03, 35.37, -81.96          # TOI-2046 (illustrative)
+        app.ra_hours.set(f"{91.0896 / 15:.6f}")                  # WASP-49 on the Input page
+        app.dec_deg.set("-16.9653")
+        app.lat.set(str(lat))
+        app.lon.set(str(lon))
+        app.output_dir.set(folder)
+        bjd = core.convert_times(jd, "BJD_TDB", ra, dec, lat, lon)
+        rep = {"header": {"STAR_NAME": "TOI-2046", "OBSLAT": str(lat), "OBSLON": str(lon)},
+               "planet": {"name": "TOI-2046 b", "host": "TIC 468574941"}, "date_type": "BJD_TDB"}
+        tp.result = {"t": bjd, "flux": np.ones(30), "err": np.full(30, 0.002), "summary": {},
+                     "planet": {"name": "TOI-2046 b", "host": "TIC 468574941", "ra": None, "dec": None}}
+        tp.report = rep
+        meta = {"filter": "V", "exposure": "60.0", "obscode": "JABA", "version": "2.4.0"}
+        try:
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target",
+                                      return_value={"ra_hours": ra / 15.0, "dec_deg": dec}) as look:
+                path = app.save_exoclock()
+                self.assertEqual(look.call_args[0][0], "TOI-2046")     # the star's name, not the TIC, first
+                with open(path) as fh:
+                    rows = [ln.split() for ln in fh if ln.strip() and not ln.startswith("#")]
+                self.assertLess(abs(float(rows[0][0]) - jd[0]) * 86400, 0.1)
+                self.assertEqual(tp.result["planet"]["ra"], ra)        # kept: a second save does not ask again
+                look.reset_mock()
+                app.save_exoclock()
+                look.assert_not_called()
+            # no lookup answers: refused, saying why, in one plain sentence (no nested parentheses)
+            tp.result["planet"]["ra"] = tp.result["planet"]["dec"] = None
+            rep["planet"].pop("ra", None)
+            rep["planet"].pop("dec", None)
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target", side_effect=ValueError("Could not find it")), \
+                    mock.patch.object(ca.messagebox, "showinfo") as info:
+                self.assertEqual(app.save_exoclock(), "")
+                text = info.call_args[0][1]
+            self.assertIn("needs TOI-2046 b's RA/Dec. SHOBS-P could not look up its position", text)
+            self.assertNotIn("Input page", text)
+            self.assertNotIn(".;", text)
+            # the site from the report header, not the Input page (a different longitude would move JD_UTC)
+            app.lon.set("0.0")
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target",
+                                      return_value={"ra_hours": ra / 15.0, "dec_deg": dec, "source": "SIMBAD"}), \
+                    mock.patch.object(ca, "exoclock_jd_utc", wraps=ca.exoclock_jd_utc) as conv:
+                app.save_exoclock()
+                self.assertEqual(conv.call_args[0][4:6], (lat, lon))
+            # the page changed during the lookup: nothing saved, and it says so
+            tp.result["planet"]["ra"] = tp.result["planet"]["dec"] = None
+            rep["planet"].pop("ra", None)
+            rep["planet"].pop("dec", None)
+            import threading as _th
+            gate = _th.Event()
+
+            def slow(_n):
+                gate.wait(2)
+                return {"ra_hours": ra / 15.0, "dec_deg": dec}
+            res = tp.result
+            app.after(50, lambda: (setattr(tp, "result", dict(res)), gate.set()))
+            with mock.patch.object(tp, "_file_meta", return_value=meta), \
+                    mock.patch.object(tp, "_confirm_export", return_value=True), \
+                    mock.patch.object(core, "lookup_target", side_effect=slow), \
+                    mock.patch.object(ca.messagebox, "showinfo") as info:
+                tp.result = res
+                self.assertEqual(app.save_exoclock(), "")
+                self.assertIn("the fit on the Transit page changed while SHOBS-P looked up", info.call_args[0][1])
+        finally:
+            tp.result = None
+            tp.report = None
+            app.output_dir.set("")
 
 
 if __name__ == "__main__":

@@ -82,6 +82,7 @@ class TestDriftReadFixes(unittest.TestCase):
         app._drift_cache = None
         app._series_drift_memo = None
         app.night_bin = {}
+        app.masters_binning = None   # step 6c: a sibling test's masters (binning 2) are not this test's
         return app
 
     def _wait(self, app, timeout=30.0):
@@ -107,6 +108,7 @@ class TestDriftReadFixes(unittest.TestCase):
         app = self._setup()
         old = [("OLD 1", 0.1, 330.0, 90.0), ("OLD 2", -0.2, 300.0, 220.0)]
         app.suggested_comps = list(old)
+        app._suggest_for = (app.target_xy, app.preview_path)   # step 6c (Fable): made for this target and frame
         app._suggest_comps()
         self.assertTrue(app._suggest_drift_pending)
         self.assertEqual(app.suggested_comps, old)   # kept while the drift frames are read

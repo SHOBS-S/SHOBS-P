@@ -141,7 +141,8 @@ class TestOutputPages(unittest.TestCase):
         self.assertEqual([t for t in g.texts("fit") if not t.startswith("PY_VAR")], ["MCMC", "Fit transit", "Cancel"])
         self.assertEqual(g.texts("comps")[:2], ["Comp health…", "Use comps…"])
         self.assertEqual(g.texts("analysis"), ["Nearby-binary (NEB) check…", "Multi-night…",
-                                               "Fit the series' nights…"])   # moved from the Results row
+                                               "Fit the series' nights…",    # moved from the Results row
+                                               "Robustness check"])          # 2.4.0 step 6b (#35)
         self.assertEqual(g.group_of(tp.multinight_series_button), "analysis")
         self.assertEqual([t for t in g.texts("view") if not t.startswith("PY_VAR")], ["credible bands", "Plot bins"])
         saves = [str(b.cget("text")) for b in tp._results_box.winfo_children()]
@@ -317,7 +318,7 @@ class TestOutputPages(unittest.TestCase):
             app.lat.set("")
             app.lon.set("")
             tp._update_airmass_box()
-            self.assertEqual(tp.detrend.get(), "time curve")                 # what the fit will do
+            self.assertEqual(tp.detrend.get(), "time curve (quadratic)")                 # what the fit will do
             self.assertFalse(tp.detrend_airmass.get())
             self.assertNotIn("airmass", " ".join(tp.detrend_box.cget("values")))   # no airmass choice offered
             self.assertIn("Auto (BIC)", tp.detrend_box.cget("values"))
@@ -331,11 +332,11 @@ class TestOutputPages(unittest.TestCase):
             tp._update_airmass_box()
             self.assertEqual(tp.airmass_hint.get(),   # step 1 review: says what to do
                              "no airmass in these data (run photometry again with the site set)")
-            self.assertEqual(tp.detrend.get(), "time curve")
+            self.assertEqual(tp.detrend.get(), "time curve (quadratic)")
             # airmass again: full list, and the user's earlier choice is back
             app.observations = self._obs([1.1 + 0.01 * i for i in range(30)])
             tp._update_airmass_box()
-            self.assertEqual(tp.detrend.get(), "airmass + time curve")
+            self.assertEqual(tp.detrend.get(), "airmass + time curve (quadratic)")
             self.assertTrue(tp.detrend_airmass.get())
             self.assertIn("airmass", " ".join(tp.detrend_box.cget("values")))
             self.assertEqual(tp.airmass_hint.get(), "")

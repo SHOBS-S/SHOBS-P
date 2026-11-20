@@ -450,6 +450,32 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertIn(0, res["frames"])
         self.assertIn(N_FRAMES - 1, res["frames"])
 
+    def test_own_flip_step_lets_the_steadiest_back(self):
+        """step 6c-2 (Fable M1/S1): stars beyond the own flip-step limit are left out; when that leaves fewer than
+        2 comps after every gate, the steadiest of them come back, and the S line says how many passed."""
+        app = self._setup()
+        real = app._survey_view
+        jumps = {"STEADY B": 12.0, "STEADY C": -15.0, "STEADY D": 30.0}
+
+        seen = []
+
+        def view(*a, **k):
+            v = real(*a, **k)
+            v = dict(v, out=dict(v["out"]), own_out=dict(jumps))
+            seen.append(v)
+            for n, ppt in jumps.items():
+                v["out"][n] = f"jumps {ppt:+.1f} ppt at the meridian flip on its own (test)"
+            return v
+        with mock.patch.object(app, "_survey_view", side_effect=view):
+            names = self._wait(app)
+        self.assertEqual(set(names), {"STEADY A", "STEADY B"})
+        # (said on the S line of a flip night; this made-up night has no flip, so read it from the survey)
+        self.assertEqual(seen[-1]["own_note"], "only 1 comp candidate stays within ±10 ppt at the flip on its own, "
+                                               "so the steadiest of the others is used too: STEADY B +12.0 ppt")
+        left = [t for t in self.lines if t.startswith("Left out by the comp survey")][-1]
+        self.assertIn("STEADY C (jumps", left)
+        self.assertNotIn("STEADY B (jumps", left)
+
     def test_without_the_linear_limit_the_peaky_star_may_stay(self):
         app = self._setup(linear=None)
         names = self._wait(app)
@@ -835,20 +861,24 @@ class TestTargetStepInTheApp(unittest.TestCase):
         app = self.app
         planet = self._planet(app)
         # frame times are JD UTC; the app turns them into BJD before the ephemeris
-        t = 2461363.74 + np.arange(120) * 0.0015
+        t = 2461363.66 + np.arange(240) * 0.0015   # step 6b: baseline on both sides of the transit
         bjd = t + np.asarray(tcore.bjd_minus_jd_days(t, 6.07 * 15, -17.1))
         model = cs.transit_mags(bjd, planet, tcore.occultation, tcore.limb_darkening_guess(planet.get("teff")))
         flip = int(np.argmin(np.abs(bjd - 2461363.826)))
         res = self._result(t, flip, (0.0, 0.004, 0.030, 0.026), 0.002, model["mag"])
-        why, d, b, a = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
+        why, d, b, a, w = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
         self.assertEqual(why, "")
-        self.assertEqual(d.shape, (120, 5))
+        self.assertEqual(d.shape, (240, 5))
         self.assertTrue(np.all(np.isnan(d[:, 4])))
-        self.assertAlmostEqual(cs.set_target_step(d, [0, 1], b, a)[0], 0.0, delta=0.003)
-        self.assertAlmostEqual(cs.set_target_step(d, [2, 3], b, a)[0], -0.026, delta=0.003)
+        # step 6c: every frame away from ingress and egress (in transit too), fitted with a free depth
+        self.assertIsInstance(w, dict)
+        self.assertTrue(np.any(model["mag"][np.r_[b, a]] > 0.005))   # flat-bottom frames are used
+        self.assertGreater(len(b) + len(a), 120)
+        self.assertAlmostEqual(cs.set_target_step(d, [0, 1], b, a, w)[0], 0.0, delta=0.003)
+        self.assertAlmostEqual(cs.set_target_step(d, [2, 3], b, a, w)[0], -0.026, delta=0.003)
         # Variables: not judged, and the words say the fit decides
         app.set_mode("variables")
-        why, d2, _b, _a = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
+        why, d2, _b, _a, _w = app._survey_target_steps(res, 8.0, [0, 1, 2, 3, None], planet)
         self.assertIsNone(d2)
         self.assertIn("outside Transits", why)
         survey_v = {"index": {"A": 0}, "frames": 30, "of": 120, "flip": False, "flip_seen": True, "flip_why": why,
@@ -862,17 +892,25 @@ class TestTargetStepInTheApp(unittest.TestCase):
         self.assertIn("the flip step is left to the transit fit", words)
         survey.update(flip=True, flip_why="")
         words = app._survey_words(survey, 0.0012, picks=[("A", 0.1)], err=0.0009)
-        self.assertIn("+1.2 ± 0.9 mmag", words)
+        # step 6b: in the fit's units and sign (ppt of flux, + = brighter after): +1.2 mmag is -1.1 ppt
+        self.assertIn("-1.1 ± 0.8 ppt", words)
+        self.assertIn("as the transit fit finds it", words)
         self.assertNotIn("nearest the target", words)
-        # a flip at ingress: not judged
+        # step 6b: a flip at ingress is judged too (on the baseline frames, as the fit judges it)
         app.set_mode("transits")
         planet = self._planet(app)
         t1 = 2461363.826 - tcore.total_duration(2.78, 7.0, 0.3, 0.12) / 2
         flip = int(np.argmin(np.abs(bjd - t1)))
         res = self._result(t, flip, (0.0, 0.0), 0.0, model["mag"])
-        why, d3, _b, _a = app._survey_target_steps(res, 8.0, [0, 1], planet)
-        self.assertIsNone(d3)
-        self.assertIn("ingress or egress", why)
+        why, d3, b3, a3, w3 = app._survey_target_steps(res, 8.0, [0, 1], planet)
+        self.assertEqual(why, "")
+        self.assertAlmostEqual(cs.set_target_step(d3, [0, 1], b3, a3, w3)[0], 0.0, delta=0.003)
+        # too few frames before the flip at all: not judged, and it says why
+        flip = 2
+        res = self._result(t, flip, (0.0, 0.0), 0.0, model["mag"])
+        why, d4, _b, _a, _w = app._survey_target_steps(res, 8.0, [0, 1], planet)
+        self.assertIsNone(d4)
+        self.assertIn("too few frames read away from ingress and egress on one side of the flip", why)
 
 
 @unittest.skipUnless(HAVE_TK, "needs a display")

@@ -18,7 +18,9 @@ asks you to save when it is done, so the files carry its result.
 If the Input page has an **Output** folder, every save goes there without a dialog, and the status bar says what
 was saved. A file already there is never overwritten: a new copy gets `_2`, `_3` and so on. The AAVSO report,
 light-curve CSV, fit CSV, plot PNG, and the corner plot, settings file and field image saved beside them share one
-number, so they sort together. Without an Output folder, each save
+number, so they sort together. A fit of an opened report (EXOTIC or another program) numbers only its own files: the
+light curve of an earlier run still on the Output page is neither saved with it nor counted. Without an Output folder,
+each save
 asks where to put the file.
 
 See [22. Files SHOBS-P writes](22-files-shobs-p-writes.md) for the full list of names.
@@ -206,13 +208,14 @@ ExoClock (exoclock.space) collects transit times to keep planets' ephemerides up
   time in **JD_UTC** at **mid-exposure**, the relative flux (divided by its median, not detrended; ExoClock fits its
   own baseline) and its measurement error (ExoClock scales the errors itself). Only the frames the fit used are in
   it, as in the AAVSO report; flagged frames you put back with **Fit with flagged** are left out too.
-- `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
+- `ExoClock_<planet>_<YYYYMMDD>_info.txt` (named after its upload file, for example
+  `ExoClock_TOI-2046b_20261027_info.txt`): what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
   **Time format** `JD_UTC`, **Time stamp** `Mid-exposure`, **Flux format** `Flux`, **Filter** (a color camera's `TG`
   is listed as Johnson V), **Exposure time** in seconds, and the upload page's address.
 
 > **Caution:** ExoClock's form starts on **Exposure start**. Change it to **Mid-exposure**, or every time is off by
 > half an exposure. The status line reminds you: *"✔ Saved. On the form, pick Mid-exposure (…; what to pick is in
-> ExoClock_info.txt)."*
+> ExoClock_TOI-2046b_20261027_info.txt)."*
 
 **Go to ExoClock…** opens the upload page (https://www.exoclock.space/upload/) in your browser; log in and upload the
 `ExoClock_…txt` file. As with the other upload pages, the night of the file you saved last is marked sent (**Sent**

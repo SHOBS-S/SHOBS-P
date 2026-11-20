@@ -850,11 +850,16 @@ DETREND_CHOICES = (
     ("none", "none", (False, False, False)),
     ("airmass", "airmass", (True, False, False)),
     ("slope", "time slope", (False, True, False)),
-    ("curve", "time curve", (False, True, True)),
+    ("curve", "time curve (quadratic)", (False, True, True)),
     ("airmass+slope", "airmass + time slope", (True, True, False)),
-    ("airmass+curve", "airmass + time curve", (True, True, True)),
+    ("airmass+curve", "airmass + time curve (quadratic)", (True, True, True)),
 )
+# 2.4.0 step 6b (John 19 Nov): the curve choices say "(quadratic)"; the 6a labels still read back (a choice typed or
+# kept from before keeps its meaning)
+DETREND_OLD_LABELS = {"time curve": "curve", "airmass + time curve": "airmass+curve"}
 DETREND_AUTO = "auto"
+# The fit's parameter names in plain words, for the page, the Log and the reports (step 6b: the Log said "k")
+PARAM_WORDS = {"tc": "Tc", "k": "Rp/R*", "depth": "depth", "step": "flip step", "c_t2": "time curve"}
 AUTO_AIRMASS_DROP_MAX = 10      # Auto leaves out at most this many frames without airmass to try the airmass choices
 AUTO_AIRMASS_DROP_FRAC = 0.05   # ... or this share of the night, when that is more
 DETREND_AUTO_LABEL = "Auto (BIC)"
@@ -1251,6 +1256,10 @@ def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_t
            "detrend": detrend_names((detrend_airmass, detrend_time, detrend_curve), prob_s.has_airmass),
            "detrend_flags": (bool(detrend_airmass and prob_s.has_airmass), bool(detrend_time), bool(detrend_curve)),
            "detrend_choice": choice}
+    try:   # 2.4.0 (#35): the residual rms (flux units), for the robustness check
+        out["rms"] = float(np.std(flux - prob_s.model(p)))
+    except Exception:
+        out["rms"] = float("nan")
     out["depth"] = (p["k"] ** 2, 2 * p["k"] * out["err"]["k"])
     out["t14"] = total_duration(S["period"], p["a_rs"], min(p["b"], p["a_rs"] * 0.999), p["k"])
     if prob_s.t_flip is not None:
@@ -1325,7 +1334,8 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
             say(f"  prayer bead ({pb['n']} shifted refits): Tc ± {pb['err'].get('tc', float('nan')) * 1440:.2f} min "
                 f"(MCMC ± {mc.get('tc', float('nan')) * 1440:.2f}), depth ± {pb['depth_err'] * 100:.3f} % "
                 f"(MCMC ± {mc.get('depth', float('nan')) * 100:.3f})"
-                + (f"; the larger is reported for {', '.join(pb_raised)}" if pb_raised else "; MCMC errors kept"))
+                + (f"; the larger is reported for {', '.join(PARAM_WORDS.get(n_, n_) for n_ in pb_raised)}"
+                   if pb_raised else "; MCMC errors kept"))   # step 6b (John 19 Nov): "Rp/R*", not "k"
             pb["mcmc"] = mc
             pb["raised"] = pb_raised
     except Exception as exc:
@@ -1540,6 +1550,13 @@ COMP_TIE_MIN_FRAMES = 5
 COMP_NIGHT_SHARE = 0.5
 
 
+def _omean(values) -> float:
+    """2.4.0 step 6c: the order-free mean (photometry_core.omean: math.fsum), so the comps' order does not change
+    the bits."""
+    vals = [float(v) for v in np.ravel(np.asarray(values, dtype=float))]
+    return math.fsum(vals) / len(vals) if vals else float("nan")
+
+
 def tied_ensemble(cm) -> np.ndarray:
     """2.3.5 (#88): the comp ensemble per frame on the night's scale, from cm (points x comps, NaN = not measured).
 
@@ -1564,9 +1581,9 @@ def tied_ensemble(cm) -> np.ndarray:
     a = np.zeros(len(keep))
     with np.errstate(invalid="ignore"):
         for _ in range(12):
-            level = np.array([float(np.mean(mk[f, ok[f]] - a[ok[f]])) if ok[f].any() else np.nan for f in range(n)])
+            level = np.array([_omean(mk[f, ok[f]] - a[ok[f]]) if ok[f].any() else np.nan for f in range(n)])
             new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
-            new_a -= new_a.mean()
+            new_a -= _omean(new_a)
             if np.allclose(new_a, a, atol=1e-7):
                 a = new_a
                 break
@@ -1575,13 +1592,14 @@ def tied_ensemble(cm) -> np.ndarray:
     for f in range(n):
         if not ok[f].any():
             continue
-        ens[f] = float(np.mean(mk[f])) if ok[f].all() else float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean())
+        ens[f] = _omean(mk[f]) if ok[f].all() else _omean(mk[f, ok[f]] - a[ok[f]]) + _omean(a)   # step 6c: order-free
     return ens
 
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
                        detrend_airmass=True, detrend_time=False, after_flip=None, flagged_mask=None, progress=None,
-                       cancel=None, log=None, flip_step=None, detrend_curve=False) -> dict | None:
+                       cancel=None, log=None, flip_step=None, detrend_curve=False,
+                       flip_gated: bool = False) -> dict | None:
     """2.2.16 (item 6): refit the light curve once per comp with that comp left out of the ensemble.
 
     flux/err are the main fit's data (target against the mean of all comps); comp_mags (points x comps) holds each
@@ -1602,14 +1620,18 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     names = [str(n) for n in names][:m] + [f"comp {k + 1}" for k in range(len(names), m)]
     flux = np.asarray(flux, dtype=float)
     err = np.asarray(err, dtype=float)
-    # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), so every refit uses the same model
+    # 2.3.0 (#8): flip_step = the main fit's decision (True kept, False not needed), for the reference fit.
+    # 2.4.0 step 6c-2 (John 20 Nov): with flip_gated (the main step came from the BIC gate) each refit decides its
+    # OWN step by the same gate: on WASP-49 b 19 Nov two comps step ~+-65 ppt at the flip and cancel in the set, so
+    # the night without either one needs a step that the full set does not.
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
-              flagged_mask=flagged_mask, flip_step=flip_step, detrend_curve=detrend_curve)
+              flagged_mask=flagged_mask, flip_step=None if flip_gated else flip_step, detrend_curve=detrend_curve)
+    ref_kw = dict(kw, flip_step=flip_step)
     # 2.3.5 (#88): np.mean made the ensemble NaN in every frame where any comp was missing (a comp off the frame
     # edge), so each refit lost those frames while the main fit kept them.
     ens_all = tied_ensemble(cm)
     try:
-        ref = lsq_fit(t, flux, err, airmass, planet, **kw)
+        ref = lsq_fit(t, flux, err, airmass, planet, **ref_kw)
     except Exception as exc:
         say(f"  comp check skipped: no least-squares fit of the full ensemble ({exc})")
         return None
@@ -1651,7 +1673,8 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
             continue
         fits.append({"name": names[j], "depth": float(f["depth"][0]), "tc": float(f["p"]["tc"]),
                      "d_depth": float(f["depth"][0]) - ref_depth, "d_tc": float(f["p"]["tc"]) - ref_tc,
-                     "n_points": int(len(f["t"])), "exp_depth": ref_sd * ratio, "exp_tc": ref_st * ratio})
+                     "n_points": int(len(f["t"])), "exp_depth": ref_sd * ratio, "exp_tc": ref_st * ratio,
+                     "step": f.get("t_flip") is not None})   # 6c-2: this refit kept a flip step
     if not fits:
         return None
 
@@ -1686,6 +1709,9 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         if "d_tc" in f["why"]:
             parts.append(f"moves Tc {abs(f['d_tc']) * 86400:.0f} s {'later' if f['d_tc'] > 0 else 'earlier'} "
                          f"({abs(f['d_tc']) / st:.1f}σ)")
+        if f.get("step") != (ref.get("t_flip") is not None):   # 6c-2: say when its refit decided the step otherwise
+            parts[-1] += (" (the night without it needs a flip step of its own)" if f.get("step")
+                          else " (the night without it needs no flip step)")
         flags.append(("warn", f"Leaving out {f['name']} " + " and ".join(parts) + ". The comp choice moves this "
                               "result by more than its statistical error: check that comp (variable? a trend?) "
                               "before reporting."))
@@ -1715,12 +1741,289 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         note += " With 2 comps each refit uses a single comp."
     if skipped:
         note += f" No refit without {', '.join(skipped)} (too few usable points)."
+    # step 6c-2 (Fable S3): with its own flip step a refit can hide a comp that jumps at the flip (its shift is
+    # small once the step absorbs it), so say which refits decided the step otherwise, flagged or not
+    ref_step = ref.get("t_flip") is not None
+    other = [f["name"] for f in fits if f.get("step") != ref_step]
+    out["step_other"] = other
+    if other:
+        note += (f" Without {', '.join(other)} the night needs "
+                 + ("no flip step" if ref_step else "a flip step of its own")
+                 + (": that comp jumps" if len(other) == 1 else ": those comps jump")
+                 + " at the meridian flip, so check it before reporting.")
     if not flags and math.isfinite(sd) and math.isfinite(st):
         note += f" No comp moves the depth or Tc by more than {COMP_LOO_SIGMA:g}σ beyond its own noise."
     out["note"] = note
     out["flags"] = flags + [("info", note)]
     out["text"] = comp_systematic_text(out)
     return out
+
+
+# ---- 2.4.0 step 6b (#35): the robustness check -------------------------------------------------------------
+# A beta tester (25 Oct 2026): the depth and Tc can move with reasonable reduction choices; make that visible. The
+# check refits the night (least squares, no MCMC, the main fit's priors and flip-step decision) once per reasonable
+# variation and reports how far the depth, Tc and rms move, beside the main fit's formal errors. "Spread" is half the
+# full range over the main least-squares fit and every variation (± spread), so it reads like the formal ±.
+# ⚠ only when a spread is larger than its formal error (John, 19 Nov); otherwise a plain note.
+ROBUST_DBIC_MAX = 10.0   # a detrend choice whose BIC is more than this above the best is not a reasonable choice
+ROBUST_TRIM = 0.10       # the first and the last 10 % of the points (each its own refit)
+ROBUST_APERTURE = 0.20   # aperture r x 0.8 and x 1.2
+ROBUST_GROUPS = (("detrend", "detrend choice"), ("trim", "trim first/last 10 %"), ("flagged", "flagged frames"),
+                 ("comp", "each comp left out"), ("aperture", "aperture ±20 %"), ("sky", "sky ring shifted"))
+
+
+def aperture_variants(radius: float, sky_in: float, sky_out: float) -> list:
+    """2.4.0 (#35): the measuring variations: (group, label, r, sky in, sky out). r x 0.8 and r x 1.2 (the sky ring
+    moved out with r when the bigger aperture would reach it, keeping the same gap), and the sky ring moved out by
+    half its width. [] for an aperture that cannot be read."""
+    try:
+        r, si, so = float(radius), float(sky_in), float(sky_out)
+    except (TypeError, ValueError):
+        return []
+    if not (0 < r < si < so):
+        return []
+    out = [("aperture", f"aperture r {r * (1 - ROBUST_APERTURE):.1f} px", round(r * (1 - ROBUST_APERTURE), 2), si, so)]
+    r_up = round(r * (1 + ROBUST_APERTURE), 2)
+    gap = si - r
+    s_in = max(si, r_up + gap)
+    out.append(("aperture", f"aperture r {r_up:.1f} px", r_up, s_in, so + (s_in - si)))
+    half = 0.5 * (so - si)
+    out.append(("sky", f"sky ring {si + half:.1f}–{so + half:.1f} px", r, si + half, so + half))
+    return out
+
+
+def _cut(arr, keep):
+    return None if arr is None else np.asarray(arr)[keep]
+
+
+def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, detrend_flags=(True, False, False),
+                     after_flip=None, flip_step=None, flagged_mask=None, allow_airmass: bool = True,
+                     detrend_rows=None, flagged=None, comp_mags=None, comp_names=None, measured=None,
+                     cancel=None, progress=None, log=None, flip_gated: bool = False) -> dict | None:
+    """2.4.0 step 6b (#35): least-squares refits of one night over reasonable reduction choices.
+
+    t, flux, err, airmass, after_flip, flagged_mask: the main fit's data and settings (flagged_mask: flagged frames
+    put back with doubled errors, as in the main fit); detrend_flags: the main fit's detrend (Auto's choice);
+    flip_step: its flip-step decision, used for the "as fitted" reference. 2.4.0 step 6c-2: with flip_gated (the
+    main fit's step was decided by the BIC gate, not forced) every refit decides its OWN step by the same gate
+    (ΔBIC >= FLIP_STEP_DBIC), so a refit whose data want a step (or no step) gets it, instead of inheriting the main
+    fit's choice (WASP-49 b 19 Nov: two comps with big opposite flip steps cancelled in the set; leaving either out
+    needs a step the main fit did not keep). Each row's "step" says whether that refit kept one. Variations: every other detrend choice (detrend_rows: Auto's table, choices
+    more than ROBUST_DBIC_MAX above the lowest BIC are not reasonable and are left out; the airmass choices only
+    with allow_airmass), the first and the last ROBUST_TRIM of the points, the flagged frames the other way (out
+    when the main fit put them back; in, from `flagged` = {"t", "flux", "err", "airmass", "after_flip"}, when it
+    left them out), each comp left out (comp_mags: points x comps, as leave_one_comp_out), and each re-measured
+    curve in `measured` = [(group, label, factor)] with factor the per-point flux ratio (NaN where the star could
+    not be measured: that point is left out of that refit). Returns {"rows": [{group, label, depth, tc, rms, n}],
+    "ref", "spread": {"depth", "tc", "rms_lo", "rms_hi"}, "formal": {"depth", "tc"}, "most": {"depth", "tc"},
+    "left_out": [labels], "skipped": [labels], "flags", "note", "groups"} or None without a reference fit.
+    cancel: a threading.Event; set, it raises RuntimeError("Canceled") between refits."""
+    say = log or (lambda _m: None)
+    t = np.asarray(t, dtype=float)
+    flux = np.asarray(flux, dtype=float)
+    err = np.asarray(err, dtype=float)
+    am = None if airmass is None else np.asarray(airmass, dtype=float)
+    da, dt, dq = (bool(x) for x in detrend_flags)
+    base_kw = dict(detrend_airmass=da, detrend_time=dt, detrend_curve=dq,
+                   flip_step=None if flip_gated else flip_step)   # 6c-2: each refit's own gate
+
+    def fit(tt, ff, ee, aa, af, fm, **kw):
+        k = dict(base_kw, **kw)
+        return lsq_fit(tt, ff, ee, aa, planet, after_flip=af, flagged_mask=fm, **k)
+
+    try:   # the reference is the night as fitted: the main fit's own step decision
+        ref = fit(t, flux, err, am, after_flip, flagged_mask, flip_step=flip_step)
+    except Exception as exc:
+        say(f"  robustness check skipped: no least-squares fit of the night as fitted ({exc})")
+        return None
+
+    jobs = []   # (group, label, callable -> lsq_fit result)
+    left_out, too_few = [], []
+    # every other detrend choice that is a reasonable one
+    rows_in = list(detrend_rows or [])
+    if not rows_in:
+        # Fable S3: a detrend picked by hand has no Auto table: Auto's own BIC comparison, on the same data, decides
+        # which choices are reasonable (none of its results is used otherwise)
+        try:
+            rows_in = (lsq_fit(t, flux, err, am, planet, after_flip=after_flip, flagged_mask=flagged_mask,
+                               flip_step=flip_step, detrend_auto=True).get("detrend_choice") or {}).get("rows") or []
+        except Exception as exc:
+            say(f"  robustness check: no BIC table for the detrend choices ({exc}); every choice is tried")
+            rows_in = []
+    dbic = {}
+    for row in rows_in:
+        if row.get("key") and row.get("dbic") is not None and math.isfinite(float(row["dbic"])):
+            dbic[row["key"]] = float(row["dbic"])
+    best = min(dbic.values()) if dbic else 0.0   # Fable S3: against the lowest BIC, not the choice used
+    here = detrend_key((da, dt, dq))
+    for key, label, flags in DETREND_CHOICES:
+        if key == here:
+            continue
+        if flags[0] and not allow_airmass:
+            if "the airmass choices (frames without airmass)" not in left_out:
+                left_out.append("the airmass choices (frames without airmass)")
+            continue
+        if dbic and key in dbic and dbic[key] - best > ROBUST_DBIC_MAX:
+            left_out.append(f"detrend {label} (ΔBIC {dbic[key] - best:+.0f})")
+            continue
+        jobs.append(("detrend", f"detrend {label}",
+                     lambda f_=flags: fit(t, flux, err, am, after_flip, flagged_mask, detrend_airmass=f_[0],
+                                          detrend_time=f_[1], detrend_curve=f_[2])))
+    # the first and the last 10 % of the points
+    order = np.argsort(t)
+    n_cut = int(round(ROBUST_TRIM * t.size))
+    if n_cut >= 1 and t.size - n_cut >= 10:
+        for label, drop in (("first 10 % of the points trimmed", order[:n_cut]),
+                            ("last 10 % of the points trimmed", order[-n_cut:])):
+            keep = np.ones(t.size, bool)
+            keep[drop] = False
+            jobs.append(("trim", label, lambda k_=keep: fit(t[k_], flux[k_], err[k_], _cut(am, k_),
+                                                            _cut(after_flip, k_), _cut(flagged_mask, k_))))
+    # the flagged frames the other way
+    fm = None if flagged_mask is None else np.asarray(flagged_mask, dtype=bool)
+    if fm is not None and fm.any() and (~fm).sum() >= 10:
+        k_ = ~fm
+        jobs.append(("flagged", f"the {int(fm.sum())} flagged frames left out",
+                     lambda: fit(t[k_], flux[k_], err[k_], _cut(am, k_), _cut(after_flip, k_), None)))
+    elif fm is None and flagged and len(flagged.get("t", [])):
+        n0, n1 = t.size, len(flagged["t"])
+        tt = np.r_[t, np.asarray(flagged["t"], float)]
+        ff = np.r_[flux, np.asarray(flagged["flux"], float)]
+        ee = np.r_[err, np.asarray(flagged["err"], float)]
+        aa = None if am is None else np.r_[am, np.asarray(flagged.get("airmass", np.full(n1, np.nan)), float)]
+        af = None
+        if after_flip is not None or flagged.get("after_flip") is not None:
+            base_af = np.zeros(n0, bool) if after_flip is None else np.asarray(after_flip, bool)
+            fl_af = np.zeros(n1, bool) if flagged.get("after_flip") is None else np.asarray(flagged["after_flip"],
+                                                                                              bool)
+            af = np.r_[base_af, fl_af]
+        mask = np.r_[np.zeros(n0, bool), np.ones(n1, bool)]
+        jobs.append(("flagged", f"the {n1} flagged frames put back", lambda: fit(tt, ff, ee, aa, af, mask)))
+    # each comp left out (as leave_one_comp_out: the ensemble without it, on the same frames)
+    cm = None if comp_mags is None else np.asarray(comp_mags, dtype=float)
+    if cm is not None and cm.ndim == 2 and cm.shape[1] >= 2 and cm.shape[0] == t.size:
+        names = [str(n_) for n_ in (comp_names or [])][:cm.shape[1]]
+        names += [f"comp {k + 1}" for k in range(len(names), cm.shape[1])]
+        ens_all = tied_ensemble(cm)
+        for j in range(cm.shape[1]):
+            def one(j_=j):
+                with np.errstate(invalid="ignore", over="ignore"):
+                    factor = 10 ** (0.4 * (tied_ensemble(np.delete(cm, j_, axis=1)) - ens_all))
+                ok = np.isfinite(factor)
+                return fit(t[ok], (flux * factor)[ok], (err * factor)[ok], _cut(am, ok), _cut(after_flip, ok),
+                           _cut(flagged_mask, ok))
+            jobs.append(("comp", f"{names[j]} left out", one))
+    # the re-measured curves (aperture, sky ring)
+    for group, label, factor in measured or []:
+        fac = np.asarray(factor, dtype=float)
+        if fac.size != t.size:
+            continue
+        ok = np.isfinite(fac) & (fac > 0)
+        if ok.sum() < max(10, int(0.5 * t.size)):
+            too_few.append(label)
+            continue
+        jobs.append((group, label, lambda f_=fac, k_=ok: fit(t[k_], (flux * f_)[k_], (err * f_)[k_], _cut(am, k_),
+                                                             _cut(after_flip, k_), _cut(flagged_mask, k_))))
+
+    def row_of(group, label, r_):
+        return {"group": group, "label": label, "depth": float(r_["depth"][0]), "tc": float(r_["p"]["tc"]),
+                "rms": float(r_.get("rms", float("nan"))), "n": int(len(r_["t"])),
+                "step": r_.get("t_flip") is not None}   # 6c-2: this fit kept a flip step
+
+    rows, skipped = [], []
+    for i, (group, label, job) in enumerate(jobs):
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("Canceled")
+        if progress is not None:
+            progress(i + 1, len(jobs))
+        try:
+            rows.append(row_of(group, label, job()))
+        except Exception as exc:
+            skipped.append(label)
+            say(f"  robustness check: {label}: no fit ({exc})")
+    ref_row = row_of("ref", "as fitted", ref)
+    if not rows:
+        return None
+    every = [ref_row] + rows
+    dep = np.array([r_["depth"] for r_ in every])
+    tcs = np.array([r_["tc"] for r_ in every])
+    rms = np.array([r_["rms"] for r_ in every])
+    spread = {"depth": 0.5 * float(np.ptp(dep)), "tc": 0.5 * float(np.ptp(tcs)),
+              "rms_lo": float(np.nanmin(rms)) if np.isfinite(rms).any() else float("nan"),
+              "rms_hi": float(np.nanmax(rms)) if np.isfinite(rms).any() else float("nan")}
+    formal = {"depth": float((main_summary.get("depth") or (float("nan"), float("nan")))[1]),
+              "tc": float((main_summary.get("tc") or (float("nan"), float("nan")))[1])}
+    most = {"depth": max(rows, key=lambda r_: abs(r_["depth"] - ref_row["depth"])),
+            "tc": max(rows, key=lambda r_: abs(r_["tc"] - ref_row["tc"]))}
+    for k_ in ("depth", "tc"):   # Fable N4: say when the refit that moves it most also decided the step otherwise
+        if bool(most[k_].get("step")) != bool(ref_row.get("step")) and "(its flip step differs)" not in \
+                most[k_]["label"]:
+            most[k_] = dict(most[k_], label=most[k_]["label"] + " (its flip step differs)")
+    out = {"rows": rows, "ref": ref_row, "spread": spread, "formal": formal, "most": most, "left_out": left_out,
+           "skipped": skipped + [f"{x} (measured on too few frames)" for x in too_few], "groups": [g for g, _w in ROBUST_GROUPS if any(r_["group"] == g for r_ in rows)]}
+    flags = []
+    for key, what in (("depth", "depth"), ("tc", "Tc")):
+        sp, fe = spread[key], formal[key]
+        if math.isfinite(fe) and fe > 0 and sp > fe:
+            m = most[key]
+            move = (f"{_pct(abs(m['depth'] - ref_row['depth']))}" if key == "depth"
+                    else f"{abs(m['tc'] - ref_row['tc']) * 1440:.1f} min")
+            flags.append(("warn", f"Robustness: the {what} moves more across reasonable reduction choices than its "
+                                  f"formal error ({robust_pm(key, sp)} against {robust_pm(key, fe)}); the most is "
+                                  f"{m['label']}, which moves it by {move}. Report the larger spread with the "
+                                  "result, or find out which choice is right before reporting."))
+    out["flags"] = flags
+    out["note"] = robustness_text(out)
+    out["flags"].append(("info", out["note"]))
+    return out
+
+
+def robust_pm(key: str, v: float, ascii_only: bool = False) -> str:
+    pm = "+/-" if ascii_only else "±"
+    if not math.isfinite(v):
+        return f"{pm} n/a"
+    return f"{pm} {v * 100:.3f} %" if key == "depth" else f"{pm} {v * 1440:.2f} min"
+
+
+def robustness_text(rob: dict | None, ascii_only: bool = False) -> str:
+    """2.4.0 (#35): one line for the page notes, the Log, the settings file and (ASCII) the report NOTES."""
+    if not rob:
+        return ""
+    pm = "+/-" if ascii_only else "±"
+    sp, fe = rob["spread"], rob["formal"]
+    dep = [r_["depth"] for r_ in rob["rows"]] + [rob["ref"]["depth"]]
+    names = {g: w for g, w in ROBUST_GROUPS}
+    what = ", ".join(names[g] for g in rob.get("groups") or [])
+    txt = (f"Robustness check ({len(rob['rows'])} least-squares refits: {what}): depth "
+           f"{min(dep) * 100:.2f}-{max(dep) * 100:.2f} %, {robust_pm('depth', sp['depth'], ascii_only)} across "
+           f"choices (formal {robust_pm('depth', fe['depth'], ascii_only)}); Tc "
+           f"{robust_pm('tc', sp['tc'], ascii_only)} across choices (formal {robust_pm('tc', fe['tc'], ascii_only)})")
+    if math.isfinite(sp.get("rms_lo", float("nan"))):
+        txt += f"; rms {sp['rms_lo'] * 1000:.2f}-{sp['rms_hi'] * 1000:.2f} ppt"
+    m = rob.get("most") or {}
+    if m.get("depth") is not None:
+        txt += (f". Moves the depth most: {m['depth']['label']}; Tc most: {m['tc']['label']}")
+    if rob.get("left_out"):
+        txt += ". Not tried (not reasonable choices here): " + "; ".join(rob["left_out"])
+    if rob.get("skipped"):
+        txt += ". No fit: " + "; ".join(rob["skipped"])
+    # 6c-2: each refit decides its own flip step; say when some decide otherwise than the night as fitted
+    ref_step = bool(rob["ref"].get("step"))
+    other = [r_["label"] for r_ in rob["rows"] if bool(r_.get("step", ref_step)) != ref_step]
+    if other:
+        how = "keep no flip step, though the night as fitted keeps one" if ref_step else \
+            "need a flip step of their own, though the night as fitted has none"
+        txt += (f". Flip step: {len(other)} of {len(rob['rows'])} refits {how} "
+                f"({'; '.join(other[:4])}{'; …' if len(other) > 4 and not ascii_only else ''}"
+                f"{'; ...' if len(other) > 4 and ascii_only else ''})")
+    txt += "."
+    if rob.get("measure_note"):   # Fable N14: why the aperture and sky ring were not tried, in every file too
+        tried = any(r_["group"] in ("aperture", "sky") for r_ in rob["rows"])
+        txt += (f" ({rob['measure_note']}.)" if tried else
+                f" Aperture and sky ring not tried: {rob['measure_note']}.")
+    if ascii_only:
+        txt = txt.replace("–", "-").replace("Δ", "d").replace("±", pm)
+    return txt
 
 
 def comp_systematic_text(loo: dict | None) -> str:
@@ -2163,7 +2466,7 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     pb = r.get("prayer_bead") or {}
     if pb.get("raised"):
         # 2.4.0 (#62): which errors are the prayer bead's
-        words = {"tc": "Tc", "k": "Rp/R*", "depth": "depth", "step": "flip step", "c_t2": "time curve"}
+        words = PARAM_WORDS
         flags.append(("info", "Prayer-bead check (" + str(pb["n"]) + " shifted refits): its error is larger than "
                               "the MCMC's for " + ", ".join(words.get(n, n) for n in pb["raised"])
                               + ", so that error is the one shown (correlated noise the MCMC errors miss)."))
@@ -3493,6 +3796,9 @@ def fit_text(result: dict, meta: dict) -> str:
     if result.get("comp_loo"):
         # 2.2.16 (item 6)
         lines.append("Comp-choice check (diagnostic) " + comp_systematic_text(result["comp_loo"]))
+    if result.get("robust"):
+        lines.append("Robustness check " + robustness_text(result["robust"], ascii_only=True)
+                     .replace("Robustness check ", "", 1))   # 2.4.0 step 6b (#35)
     lines += [f"Meridian flip    {ln}" if i == 0 else f"                 {ln}" for i, ln in enumerate(flip_lines(result))]
     wf = result.get("with_flagged")
     if wf:

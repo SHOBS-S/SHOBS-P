@@ -1870,6 +1870,15 @@ def _crop(img: np.ndarray, x: float, y: float, radius: int) -> tuple[np.ndarray,
     return img[y1:y2, x1:x2], x0 - x1, y0 - y1
 
 
+def omean(values) -> float:
+    """2.4.0 step 6c (item b): the mean with an exactly rounded sum (math.fsum), so it does not depend on the order of
+    the values: the same comps in other boxes (Comp 1-4) give the same bits. np.mean's sum rounds in order, and the
+    seeded transit-fit MCMC turns a last-bit difference into a different chain (MOBS WASP-50 b 23-24 Oct, step 6b:
+    comps 2 and 4 swapped, Tc 3.8 s and depth 0.02 % different). NaN for no values (as np.mean, without its warning)."""
+    vals = [float(v) for v in np.ravel(np.asarray(values, dtype=float))]
+    return math.fsum(vals) / len(vals) if vals else float("nan")
+
+
 def measure_aperture(
     img: np.ndarray,
     x: float,
@@ -2214,7 +2223,9 @@ def _defocus_cache_put(img, out: dict) -> None:
     import weakref
 
     try:
-        for k in [k for k, v in _FIELD_DEFOCUS.items() if v[0]() is None]:
+        # step 6c (Fable N1): a snapshot of the items, as the comp survey's thread now puts an entry on every frame
+        # while the window's thread may put one too ("dictionary changed size during iteration")
+        for k in [k for k, v in list(_FIELD_DEFOCUS.items()) if v[0]() is None]:
             _FIELD_DEFOCUS.pop(k, None)
         if len(_FIELD_DEFOCUS) > 64:
             _FIELD_DEFOCUS.clear()
@@ -2573,6 +2584,28 @@ def recenter_jump_limit(radius: float) -> float:
     """2.2.18 (item 5): how far reduce_frame lets a frame's centring move a star from its aligned position (further
     and the centring is taken to have found another star, so the star is measured where it was marked)."""
     return max(3.0, 0.5 * float(radius))
+
+
+def recenter_points(img: np.ndarray, xy: np.ndarray, radius: float) -> np.ndarray:
+    """2.4.0 step 6c: reduce_frame's centring for an array of (x, y) aligned positions: each star centred on its
+    light as a run centres it (recenter at the aperture radius), kept where it was when the centring moves it
+    further than recenter_jump_limit (it found another star) or the position is not finite. The comp survey
+    measured at the aligned positions only, so on WASP-49 b 19 Nov (comps stepping -63 to +66 ppt at the flip,
+    cancelling in the set) a few tenths of a pixel moved the target's forecast step by 1.5 ppt."""
+    xy = np.asarray(xy, dtype=float)
+    out = xy.copy()
+    lim = recenter_jump_limit(radius)
+    for j in range(len(xy)):
+        x, y = xy[j]
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        try:
+            cx, cy, shift = recenter(img, x, y, radius)
+        except Exception:
+            continue
+        if math.isfinite(shift) and shift <= lim and math.isfinite(cx) and math.isfinite(cy):
+            out[j] = (cx, cy)
+    return out
 
 
 def marker_offset(img: np.ndarray, x: float, y: float, radius: float, fwhm: float | None = None,
@@ -3802,10 +3835,12 @@ def reduce_frame(
                              + ")", comp_drop)
     # The comps present in this frame. 2.3.0 (#50): when one is missing, the run re-derives the frame from the
     # comps present on the night's scale (recompute_with_comps / night_ensemble), so the light curve has no step.
-    c_inst = float(np.mean([comp_inst[k] for k in kept]))
-    c_cat = float(np.mean([comps[k].catalog_mag for k in kept]))
+    # step 6c (item b): order-free sums (omean), so the same comps in other boxes give the same bits and the
+    # seeded MCMC the same answer (MOBS WASP-50 b 23-24 Oct: comps 2 and 4 swapped moved Tc 3.8 s)
+    c_inst = omean([comp_inst[k] for k in kept])
+    c_cat = omean([comps[k].catalog_mag for k in kept])
     # Error of a mean of n independent comp magnitudes.
-    c_var = float(np.sum([comp_mag_var[k] for k in kept])) / len(kept) ** 2
+    c_var = math.fsum(float(comp_mag_var[k]) for k in kept) / len(kept) ** 2
 
     chk = None
     k_pos = None
@@ -3876,7 +3911,7 @@ def reduce_frame(
         path=str(header.get("_PATH", "")),
         exptime=exp,
         flux_var=var["flux"],
-        flux_comp=float(np.sum(comp_fluxes)),
+        flux_comp=math.fsum(float(f) for f in comp_fluxes),   # step 6c: order-free
         fwhm=fwhm,
         elong=elong,
         peak=peak,
@@ -6920,7 +6955,7 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
             if math.isfinite(obs.comp_insts[k]) and math.isfinite(obs.comp_vars[k]) and obs.comp_vars[k] > 0]
     if not refs:
         return float("nan")
-    total = 0.0
+    parts = []   # step 6c: summed order-free (math.fsum), as omean
     for name in selection:
         own_var = (float(obs.comp_vars[comp_names.index(name)])
                    if name in comp_names and comp_names.index(name) < len(obs.comp_vars) else float("nan"))
@@ -6936,7 +6971,8 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
             v = v_ref * 10 ** (0.4 * (m - m_ref))
         if not math.isfinite(v):
             return float("nan")
-        total += v
+        parts.append(float(v))
+    total = math.fsum(parts)
     # 2.2.17 (item 8, review): a point keeps the model it was measured with: the fixed 0.005 mag only for points
     # reduced before 2.2.17 (e_model 0), so a comps change never invents a third error model.
     floor = OLD_ERR_FLOOR ** 2 if not getattr(obs, "e_model", 0) else 0.0
@@ -6993,9 +7029,9 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
     full = ok.all(axis=1)
     with np.errstate(invalid="ignore"):
         for _ in range(12):
-            level = np.array([float(np.mean(mk[f, ok[f]] - a[ok[f]])) if ok[f].any() else np.nan for f in range(n)])
+            level = np.array([omean(mk[f, ok[f]] - a[ok[f]]) if ok[f].any() else np.nan for f in range(n)])
             new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
-            new_a -= new_a.mean()
+            new_a -= omean(new_a)
             if np.allclose(new_a, a, atol=1e-7):
                 a = new_a
                 break
@@ -7008,9 +7044,9 @@ def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str
         if not ok[f].any():
             ens.append(float("nan"))
         elif full[f]:
-            ens.append(float(np.mean(mk[f])))
+            ens.append(omean(mk[f]))   # step 6c: order-free, as reduce_frame
         else:
-            ens.append(float(np.mean(mk[f, ok[f]] - a[ok[f]]) + a.mean()))
+            ens.append(omean(mk[f, ok[f]] - a[ok[f]]) + omean(a))
     return {"ens": ens, "present": present, "use": [sel[j] for j in keep], "out": out, "absent": absent, "few": few}
 
 
@@ -7047,7 +7083,7 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
         if ne.get("few"):
             night_few[night] = list(ne["few"])
         use = ne["use"]
-        ens_cat = float(np.mean([catalog[n] for n in use])) if use else float("nan")
+        ens_cat = omean([catalog[n] for n in use]) if use else float("nan")
         for obs, ens, names in zip(pts, ne["ens"], ne["present"]):
             words = [w for w in obs.flag.split() if w != "nocomp"]
             if not math.isfinite(obs.target_inst) or not math.isfinite(ens):
@@ -7106,7 +7142,7 @@ def fill_comp_flux(points: list[Obs], comp_names: list[str], catalog: dict) -> i
             continue
         exp = o.exptime if o.exptime and o.exptime > 0 else 1.0
         zp = o.comp_cat - o.cmag   # catalog minus instrumental, on the night's ensemble scale
-        total = 0.0
+        parts = []
         for k, name in enumerate(comp_names):
             v = o.comp_insts[k] if k < len(o.comp_insts) else float("nan")
             if not math.isfinite(v):
@@ -7114,7 +7150,8 @@ def fill_comp_flux(points: list[Obs], comp_names: list[str], catalog: dict) -> i
                 if cat is None or not math.isfinite(float(cat)):
                     continue
                 v = float(cat) - zp
-            total += exp * 10 ** (-0.4 * v)
+            parts.append(exp * 10 ** (-0.4 * v))
+        total = math.fsum(parts)   # step 6c: order-free
         if total > 0:
             o.flux_comp = float(total)
             changed += 1
@@ -11321,8 +11358,10 @@ def edge_problems(observations: list, shape: tuple, comp_names: list[str], check
         problem = []
         if closest < margin:
             # 2.2.19 (nit): say how far in a star has to be, so the user knows where to pick instead
-            problem.append(f"comes within {max(closest, 0):.0f} px of the frame edge (stars at least {margin:.0f} px "
-                           "in are safe)")
+            # step 6c (item e): "within 0 px" read oddly: a star that reaches the edge says so
+            near = ("reaches the frame edge" if round(closest) <= 0
+                    else f"comes within {closest:.0f} px of the frame edge")
+            problem.append(f"{near} (stars at least {margin:.0f} px in are safe)")
         if flat_img is not None:
             fx = np.clip(np.round(xy[:, 0]).astype(int), 0, flat_img.shape[1] - 1)
             fy = np.clip(np.round(xy[:, 1]).astype(int), 0, flat_img.shape[0] - 1)

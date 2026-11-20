@@ -64,9 +64,9 @@ strip; the page has no progress bar of its own.
   after the transit. Pressing it trims them (the same as a Trim span) and refits; **Clear trim** puts them back. The
   limit can be changed with `transit_trim_airmass` in the settings file.
 - **Corrections** row. **Detrend** (a drop-down, from 2.4.0): the baseline trend fitted together with the transit.
-  The choices are **Auto (BIC)** (the default), **none**, **airmass**, **time slope**, **time curve**, **airmass + time
-  slope** and **airmass + time curve**. A *time curve* is a slope plus a gentle bend (quadratic in time); nothing
-  higher than that is offered, because higher powers start to fit the transit itself (ExoClock's advice).
+  The choices are **Auto (BIC)** (the default), **none**, **airmass**, **time slope**, **time curve (quadratic)**,
+  **airmass + time slope** and **airmass + time curve (quadratic)**. A *time curve* is a slope plus a gentle bend
+  (quadratic in time); nothing higher than that is offered, because higher powers start to fit the transit itself (ExoClock's advice).
   **Auto** fits every choice and keeps the one with the lowest BIC. Choices within 2 of the lowest count as just as
   good, and then the one with fewer terms is kept, so Auto never adds a term for nothing. On a night with a meridian
   flip, the flip-step test runs *inside* each choice, because a time curve and a flip step can stand in for each
@@ -90,15 +90,19 @@ strip; the page has no progress bar of its own.
   your own choice.
   For an opened report the row also has **meridian flip at the largest gap**.
 - **Fit** row. **MCMC**: **Quick (1,500 steps)**, **Standard (3,000 steps)** (default) or **Thorough (8,000 steps)**. Thorough
-  gives steadier error bars for a final result; Quick is fine while you try things.
+  gives steadier error bars for a final result; Quick is fine while you try things. The MCMC starts from the same
+  random seed every time, so the same night with the same comps gives the same numbers, whichever Comp boxes the comps
+  are in (from 2.4.0; before, a different order could move the result by a few hundredths of its error). A refit of a
+  night measured by an earlier version can differ from that version's numbers by about as much, for the same reason.
 - **Fit transit** (the one colored button above the plot) runs the fit with the current settings. **Cancel** stops
   it. The fit always waits for this button. If you change a **Points** or **Corrections** setting while a fit is
   shown, the button reads **Refit (settings changed)** and the shown fit's numbers (the verdict, the quality line,
   the table and the result line) turn gray: they are still the earlier fit's, until you press the button. Setting the
   box back makes them black again.
 - **Comps** row: **Comp health…**, **Use comps…** (below).
-- **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…** and **Fit the series' nights…** (all below).
-  **Fit the series' nights…** is grayed unless a Transits series with two or more nights is open.
+- **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** and
+  **Robustness check** (all below). **Fit the series' nights…** is grayed unless a Transits series with two or more
+  nights is open; **Robustness check** is grayed until there is a fit on the page.
 - **View** row: the **credible bands** box and the **Plot bins** box (see "Read the plot"). Display only.
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
@@ -202,11 +206,15 @@ ephemeris"*, which is still useful: that is what timing observations are for.
 
 ## Read the plot
 
-- Gray dots: each frame, detrended.
+- Gray dots: each frame. The legend says what was taken out of them: *each frame, detrended* when a detrend term
+  (airmass, time slope or curve) was fitted, *each frame, flip step taken out* when only a flip step was, and just
+  *each frame* when nothing was.
 - Black points with error bars: bins of several frames, also shown on the residual panel. The **Plot bins** box
   sets their width: **Auto** (10 minutes, or 3 frames' spacing when the frames are farther apart than 3⅓ minutes),
   **5 min**, **10 min**, **15 min** or **30 min**. A bin needs at least 3 frames, and the legend names the real width
-  (for example *"13-minute bins"* on MicroObservatory frames). The bins are only for the eye: changing them redraws
+  (for example *"13-minute bins"* on MicroObservatory frames). A width whose bins would mostly hold fewer than 3
+  frames gives way to the next one that works, and the legend says so, for example *"10-minute bins (5-min bins hold
+  under 3 frames on this night (one every 3 min): showing 10-min bins)"*. The bins are only for the eye: changing them redraws
   the plot without refitting, and the fit, the red-noise beta and the **rms per 10-min bin** line use every frame
   as before.
 - Green line: the SHOBS-P model, labeled with its Rp/R\* and depth.
@@ -286,8 +294,13 @@ Where you see the decision:
 *A night with a meridian flip: the purple dash-dot line marks the flip, and the table has the Flip step (ppt), Depth
 without step and Step–depth correlation rows.*
 
-The leave-one-comp-out check uses the main fit's decision (step or no step) for every refit. The reports carry the
-flip time either way (chapter 19), so a later refit of a report uses the same time.
+The leave-one-comp-out check and the Robustness check (below) decide the step for each of their refits the same
+way the fit does (kept only at ΔBIC 10 or more), so a refit whose data need a step gets one even when the fit on the
+page has none, and the other way round (2.4.0). The comp check's note names the comps whose refit decided otherwise:
+*"… Without TYC 5936-2126-1 the night needs a flip step of its own: that comp jumps at the meridian flip, so check
+it before reporting."* (A step forced on for a test keeps that setting in every refit.) Before 2.4.0 every refit took the main fit's decision, which hid the
+size of the step a single comp brings. The reports carry the flip time either way (chapter 19), so a later refit of a
+report uses the same time.
 
 For an opened report, which carries no flip segment, tick **meridian flip at the largest gap** to tell the fit that
 the report's largest gap is the flip; the same ΔBIC ≥ 10 rule then decides.
@@ -335,6 +348,50 @@ detrend and press Fit transit."*; nothing is fitted until you press it.
 
 These two buttons work only on this session's photometry. While an EXOTIC report is shown they are grayed out, and
 the hint beside them says why.
+
+## How robust is the result? (Robustness check, 2.4.0)
+
+The depth and Tc can move with choices that are all reasonable: the detrend, how much baseline is kept, the flagged
+frames, the comps, the aperture and the sky ring. **Robustness check** (Analysis row) makes that visible. It is
+optional: press it after a fit. It refits the night once per variation, by least squares (no MCMC), with the same
+planet priors and the same meridian-flip decision as the fit on the page, in the background (the busy bar counts
+*Robustness check: refit 7 of 12*; **Cancel** stops it). The variations are:
+
+- **every other detrend choice** that is a reasonable one. A choice whose BIC is more than 10 above the lowest is
+  not reasonable and is not tried (the note lists it: *Not tried (not reasonable choices here): detrend none (ΔBIC
+  +25)*). The BICs are Auto's; when you picked the detrend by hand, the check works them out the same way first.
+  The airmass choices are not tried when some frames have no airmass and your fit kept those frames;
+- the **first 10 %** of the points trimmed, and the **last 10 %** (two refits);
+- the **flagged frames** the other way: put back when the fit left them out, left out when you refitted with them;
+- **each comp left out** (as the comp check below);
+- for this session's photometry, the **aperture ×0.8 and ×1.2**, and the **sky ring moved out** by half its
+  width. For these, SHOBS-P measures the target and the comps in use again on every frame of the fit, at the spots
+  the run measured them, so expect a minute or more on a long night of large frames (*Robustness check:
+  re-measuring frame 31 of 232*). When the bigger aperture would reach the sky ring, the ring moves out with it.
+  These are left out, with the reason in the note, for an opened report (no frames), when the night's frames are
+  not calibrated in this session, or when the Binning box no longer matches the night. A star whose aperture or sky
+  ring would run off the frame in a variation is not measured in that frame.
+
+The result goes into the notes, the Log, the report's NOTES and the settings file, for example *"Robustness check
+(12 least-squares refits: detrend choice, trim first/last 10 %, each comp left out, aperture ±20 %, sky ring
+shifted): depth 1.37-1.73 %, ± 0.180 % across choices (formal ± 0.293 %); Tc ± 4.48 min across choices (formal
+± 6.32 min); rms 15.53-21.00 ppt. Moves the depth most: last 10 % of the points trimmed; Tc most: aperture r 3.2
+px."* The result line adds *"Robustness: depth ± 0.180 % (formal ± 0.293 %), Tc ± 4.48 min (formal ± 6.32 min)"*.
+The **spread** is half the full range of the refits (with the fit itself), so it reads like a ± and can be held
+against the fit's formal error. The settings file also lists every refit's depth, Tc, rms and points.
+
+A plain note means every spread is within its formal error. When the depth or Tc moves **more** than its formal
+error, the notes get a ⚠ that names the choice that moves it most, for example *"Robustness: the Tc moves more
+across reasonable reduction choices than its formal error (± 3.10 min against ± 1.20 min); the most is aperture r
+6.4 px, which moves it by 4.2 min. Report the larger spread with the result, or find out which choice is right before reporting."*
+Press it again after a new fit: the check belongs to the fit it was run on.
+
+On a night with a meridian flip, each refit decides the flip step for itself, as the fit does (above). When some
+refits decide otherwise than the fit on the page, the note says which: *"… Flip step: 2 of 10 refits need a flip step
+of their own, though the night as fitted has none (TYC 5936-2126-1 left out; Gaia DR3 2991287972537580288 left
+out)."* The refit that moves the depth or Tc most adds *(its flip step differs)* when it decided the step otherwise. A comp whose
+leave-out needs a step of its own is one that jumps at the flip; the comp survey (chapter 8) now keeps such stars
+out of the suggestions.
 
 ## Leave out a bad stretch (Trim)
 
@@ -459,12 +516,20 @@ recent observations it has, and whether it asks for a bigger telescope than your
    - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt` (the planet without spaces,
      and the UTC date of the first frame). This is the file you upload. It has three columns: the time in JD_UTC at
      mid-exposure, the relative flux (not detrended), and its error. Only the frames the fit used are in it.
-   - `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file.
+   - `ExoClock_TOI-2046b_20261027_info.txt` (named after the upload file): what to pick on ExoClock's upload form
+     for that file.
+
+   ExoClock wants JD_UTC times, and turning BJD_TDB back into JD_UTC needs the star's RA/Dec. For your own
+   photometry that is the Input page's. For a fit of an **opened report** it is the report's own star: the planet
+   lookup's RA/Dec, or, when that has none (an ExoFOP TOI), the star looked up by name (SIMBAD, then VSX; the busy bar
+   shows it and the Log says *ExoClock file: TOI-2046's RA/Dec from SIMBAD …*). It is never the Input page's,
+   which may hold another target. The site is the report's OBSLAT/OBSLON, else the Input page's. If the lookup does not
+   answer, nothing is saved and the message says why; try again later.
 
    The status line says *"✔ Saved. On the form, pick Mid-exposure (ExoClock_TOI-2046b_20261027.txt; what to pick is
-   in ExoClock_info.txt)."*
+   in ExoClock_TOI-2046b_20261027_info.txt)."*
 2. Click **Go to ExoClock…**. The upload page opens in your browser. Log in.
-3. Fill in the form from `ExoClock_info.txt`:
+3. Fill in the form from the `_info.txt` file:
    - **Planet**: the name with no space, for example `TOI-2046b`.
    - **Time format**: **JD_UTC**.
    - **Time stamp**: **Mid-exposure**. The form starts on **Exposure start**, so change it. This is the one most

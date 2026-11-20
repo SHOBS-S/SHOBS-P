@@ -315,11 +315,19 @@ From 2.3.4 the rules are:
 The rules above use the catalog and the frame on the page. From 2.4.0 SHOBS-P also measures the candidates on the
 **night's own frames** before you run, so S1–S4 are chosen on how the stars actually behaved tonight. You never press
 anything: once the image is solved and the target is placed, the survey runs in the background and the busy bar in the
-lower left says *Choosing comps from the night's frames… frame 12 of 30*. From 2.4.0 nothing is suggested while it
+lower left counts the frames it reads: *Choosing comps from the night's frames… frame 20 (first pass)*, then
+*frame 31 of 37* once the total can no longer change. On a Transits night with a meridian flip it counts without a
+total while it looks for the flip (*frame 45 (at the meridian flip)*), because how many frames that takes is only
+known as it reads them; the last pass, the baseline frames beside the transit, shows its total again (*frame 52 of
+59*). From 2.4.0 nothing is suggested while it
 reads (no green rings, no *Suggested comps* line, only the busy bar): the survey's own set comes up when it is done,
 in one *Suggested comps* line. The catalog-and-this-frame picks appear only when the survey cannot run or fails (the
 Log then says *the suggestions are from the catalog and this frame only*). A loaded series' comps stay in the boxes
-as before. If you
+as before. When **every** comp the series uses (and its check) is placed on the image, the survey is skipped: there
+is nothing for it to suggest, no S rings are drawn, and **Run photometry** starts at once instead of waiting (the Log says *Comp survey
+skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health
+after the run shows how they did)*). If the survey was already reading when the last comp got its marker, pressing
+**Run photometry** calls it off and runs. If you
 press **Run photometry** while it is still reading, the run waits and starts by itself when the survey is done (the
 Log says *Run photometry waits for the comp survey to finish, then starts by itself.*). **Cancel** calls the wait off
 (the survey goes on; it only changes the suggestions). The survey is read once per frame on the page and target: when
@@ -349,32 +357,48 @@ meridian flip, stars nearer the target rank a little higher: after the flip ever
 the sensor, so a flat or optics error that does not cancel shows up as a step, and it grows away from the center.
 
 **Choosing the set on a flip night (Transits).** What matters is the step the *target* gets with a set of comps, so
-SHOBS-P measures exactly that. Once its every-10th frames show which side of the flip each frame is on, the survey
-reads a few more frames to find the flip to the frame, then the 15 frames on each side of it (on a 232-frame night,
-about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture trial
-still use only the evenly spread frames). On those 30 frames it takes the target against each possible set (2
-to 4 of the 8 best-ranked survivors), with the predicted transit taken out using the ephemeris and shape from the
-Input page, and keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
-step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The suggestions line ends with, for example, *Chosen on 51 of the night's 232
-frames (comp survey: steadiness, the sharpest frames' peaks, every frame in view; 24 before and 27 after the meridian
-flip, so steady on both pier sides, the target's flip step with these comps +0.1 ± 2.8 mmag (measured on the frames
-nearest the flip, the predicted transit taken out)).*
+SHOBS-P measures exactly that, the way the transit fit will. Once its every-10th frames show which side of the flip
+each frame is on, the survey reads a few more frames to find the flip to the frame, then the 15 frames on each side of
+it (on a 232-frame night, about 55 frames in all, some 20–30 seconds more; the steadiness ranking and the aperture
+trial still use only the evenly spread frames). It then takes the target against each possible set (2 to 4 of the 8
+best-ranked survivors) on **every frame it read away from ingress and egress**, before and after the flip, in transit
+too, using the ephemeris and shape from the Input page. "Away from ingress and egress" means more than 10 minutes
+(plus 3 × the ephemeris uncertainty) from them, where a small timing error changes the predicted dip fast; a typed T0
+has no uncertainty, so 30 minutes more, and without the target's RA and Dec another 10 minutes (the frame times can
+then be up to 8 minutes off BJD). Each star is centred on its own light in every frame read,
+as the run centres it (first on the reference frame, then on each frame from there). Through those frames it fits
+a level, the step at the flip and the transit's depth (the
+depth is fitted, not taken from the catalog, as the fit fits it), so the number is a forecast of the step the fit
+will find. It keeps the set with the lowest step for the target plus its own noise, so a set has to earn a smaller
+step against noisier comps (a fourth comp is preferred over three when the rest is within half a mmag). The
+suggestions line ends with, for example, *Chosen on 76 of the night's 232 frames (comp survey: steadiness, the
+sharpest frames' peaks, every frame in view; 35 before and 41 after the meridian flip, so steady on both pier sides,
+the target's flip step with these comps +6.2 ± 1.4 ppt (fitted as the transit fit finds it: level, step and depth
+through the frames read on both sides of the flip, away from ingress and egress)).* The step is in the fit's own units
+and sign (ppt of flux, + means brighter after the flip), so you can hold it against the *flip step* the fit reports.
+Expect the two to agree within the forecast's ±; the forecast's ± is larger, as it reads a third of the frames.
 
-Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) three stars that agreed with each other to
-3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest it,
-and on that night it picked a pair that left the target a +35 ppt step over the night. Measuring the target on 15
-frames a side picked sets whose step over the whole night was within 1 ppt of zero, at both apertures tried.
+Why measure the target and not the comps: on WASP-49 b (19 Nov 2026) the four comps on their own stepped −63, −2, +26
+and +66 ppt at the flip and cancelled in the set, leaving the target +6.4 ppt. Three stars that agreed with each other
+to 3 mmag gave the target a step of −26.5 mmag. 2.4.0's first try forecast the target's step from the stars nearest
+it, and on that night it picked a pair that left the target a +35 ppt step over the night. Later tries measured the
+target on the 15 frames each side of the flip (+0.1 mmag), then on the baseline frames only, without centring each
+star (+1.1 ppt), where the fit found +6.4 ppt with the same comps. From step 6c the stars are centred as the run
+centres them (a few tenths of a pixel moved the forecast by 1.5 ppt, as the comps' own steps are so large) and the
+step is fitted with a free depth on every frame read away from ingress and egress; on the same frames that gives
+about +6.2 ppt.
 
 **When the target's step is not measured.** The set is then chosen on steadiness alone, and a star that jumps at the
 flip against the other stars ranks lower. This happens when:
 - the mode is not Transits (a variable target's own change would read as a step). The line says *…, the target's
   flip step is not measured (the target's own changes would read as a step outside Transits)*;
 - the Input page has no ephemeris and shape (period, T0, Rp/R*, a/R*);
-- the frames carry no times, or fewer than 3 frames could be read on a side right at the flip;
+- the frames carry no times, or fewer than 3 frames away from ingress and egress could be read on a side of the flip
+  (the line says *too few frames read away from ingress and egress on one side of the flip*);
+- the flip falls at ingress or egress with no baseline beyond it (a night that ends in transit): a step after the
+  flip then looks just like a deeper transit (*the flip is at ingress or egress with no baseline beyond it, so the
+  step cannot be told from the depth*);
 - the aperture boxes hold a size the survey did not measure (the step changes a lot with the aperture);
-- a frame used falls within 10 minutes (plus 3 × the ephemeris uncertainty) of ingress or egress, where a small
-  timing error changes the predicted dip fast. A typed T0 has no uncertainty, so 30 minutes more are allowed, and
-  without the target's RA and Dec another 10 minutes (the frame times can then be up to 8 minutes off BJD).
 
 In Transits the line says *…, the flip step is left to the transit fit (the reason)*, and the transit fit's own flip
 test handles it (chapter 17).
@@ -388,7 +412,20 @@ whether to keep it.*
 frames, flip step +0.8 mmag (the target against this comp alone), raw peak 41,200 ADU on the sharpest (68% of the
 linear limit)*; when the target's step is not measured, the flip step reads *(against the other stars)*. The stars left out are named once in the Log with the reason: *Left out by the comp survey: TYC …
 (scatters 4.2 × the stars of its brightness tonight (18.3 mmag): it may vary); APASS … (not measured on frames 41, 42
-of the 30 read).* When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
+of the 30 read).*
+
+**Each comp steady on both pier sides (2.4.0).** On a Transits night with a meridian flip the survey also judges each
+comp on its own: the target's flip step against that one comp. A comp that jumps more than ±10 ppt at the flip (and
+by more than 3 times its own error) is left out, with the reason in the same Log line: *TYC 5936-2126-1 (jumps −58.7
+ppt at the meridian flip on its own (the target against it alone; a comp should stay within ±10 ppt on both pier
+sides))*. Without this, the set could be two stars that jump the opposite way and cancel: the set's step looks small,
+but the result then rests on both of them. On WASP-49 b, 19 Nov 2026, the comps' own steps ran smoothly across the
+frame from −59 ppt at one edge to +63 ppt at the other, and a set of one from each end moved the depth from 1.3 % to
+over 3 % and Tc by about 55 minutes when either was left out. Stars in the target's own part of the frame stay under
+10 ppt. When that, with the other tests (frame edge, linear limit, colour), would leave fewer than two comps, the
+steadiest of the stars that jump are let back, one at a time, until there are two, and the S line says so: *…; only 1
+comp candidate stays within ±10 ppt at the flip on its own, so the steadiest of the others is used too: TYC …
++12.4 ppt* (or *no comp candidate stays within …*). When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
 steadiest you can by hand and check Comp health after the run.
 
 The survey only changes which stars are **suggested**. The photometry itself is the same, and the comps you mark are
@@ -833,8 +870,10 @@ The line reads (N and the numbers are examples):
   no stacking (…). Brighter comps, or longer exposures, would help."*
 - **The comps are fine, but your precision goal is not reached per frame**: *"Per-frame points are about 3.1 ppt;
   your 2 ppt goal needs stacks of 3 frames (9 s each); …"*
-- **The comps are fine** (gray): *"Comps are fine per frame (comp noise 35% of the target's): stacking is not needed.
-  Type N to stack anyway."*
+- **The comps are fine** (gray): *"Comps are fine per frame: their noise is small beside the scintillation (about 20%
+  of each point's error), so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."*
+  When the comps are quieter than the target itself, it says *"their noise is below the target's own (about …)"*
+  instead.
 - **Discovery** has no comps, so the line is never orange: *"Stacking (optional): stacks of 6 frames (18 s each); 60
   frames → 10 points. Time cap 5.0 min: a stack hides events faster than itself."*
 

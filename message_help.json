@@ -967,6 +967,28 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Left out by the comp survey: … (jumps … ppt at the meridian flip on its own (the target against it alone; a comp should stay within ±10 ppt on both pier sides))"
+   ],
+   "todo": "Nothing. A set with such a star would rest on another star jumping the other way."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "…; only … comp candidate(s) stay(s) within ±10 ppt at the flip on its own, so the steadiest of the others is (are) used too: …",
+    "…; no comp candidate stays within ±10 ppt …"
+   ],
+   "todo": "Check the transit fit's flip step and the Robustness check before reporting."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health after the run shows how they did)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Series comp … fails tonight: …. It is not suggested; Comp health after the run shows whether to keep it."
    ],
    "todo": "Run, then look at it in Comp health (chapter 11); untick it there if it really went bad tonight."
@@ -1180,16 +1202,9 @@
   {
    "section": "Photometry",
    "patterns": [
-    "check … comes within … px of the frame edge … The check star was off the frame in N frames (…). A better check star stays farther in: … Pick it as the check next time."
+    "check … comes within … px of (or reaches) the frame edge … The check star was off the frame in N frames (…). A better check star stays farther in: … Pick it as the check next time."
    ],
    "todo": "Pick that star as the check next time."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
-    "…: spare … comes within … px of the frame edge … (a spare: only measured, not used; nothing to do)."
-   ],
-   "todo": "Nothing."
   },
   {
    "section": "Photometry",
@@ -1236,7 +1251,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comps are fine per frame (…): stacking is not needed. Type N to stack anyway."
+    "Comps are fine per frame: their noise is …, so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."
    ],
    "todo": "Nothing."
   },
@@ -1690,6 +1705,79 @@
     "Prayer-bead check (… shifted refits): its error is larger than the MCMC's for …, so that error is the one shown"
    ],
    "todo": "Nothing; the report carries the larger error. Clouds, seeing or guiding often cause it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness check (… least-squares refits: …): depth …, ± … across choices (formal ± …); Tc ± … across choices (formal ± …); rms …"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness: the depth (or Tc) moves more across reasonable reduction choices than its formal error (± … against ± …); the most is …, which moves it by …."
+   ],
+   "todo": "Report the larger spread with the result, or find out which choice is right (Comp health for a comp, the plot for a trimmed stretch) before reporting."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… Flip step: … of … refits need a flip step of their own, though the night as fitted has none (…)",
+    "… keep no flip step, though the night as fitted keeps one (…)"
+   ],
+   "todo": "Nothing by itself; read it with the spread."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Leaving out … makes the transit … % deeper … (the night without it needs a flip step of its own)"
+   ],
+   "todo": "Check that comp (Comp health); on a flip night prefer comps that stay steady on both pier sides."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Comp choice check (…): … Without … the night needs a flip step of its own: that comp jumps at the meridian flip, so check it before reporting."
+   ],
+   "todo": "Check that comp (Comp health) before reporting; on a flip night prefer comps steady on both pier sides."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file not saved. ExoClock wants JD_UTC times, and turning the report's BJD_TDB times into JD_UTC needs …'s RA/Dec. SHOBS-P could not look up its position (…)."
+   ],
+   "todo": "Try again when the lookup services answer."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file: …'s RA/Dec from SIMBAD (or VSX) (…, …) for the JD_UTC times."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file not saved: the fit on the Transit page changed while SHOBS-P looked up the star's position."
+   ],
+   "todo": "Press Save for ExoClock… again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit the transit first: the robustness check refits the fit on the page.",
+    "The data changed since this fit: press Fit transit first, then Robustness check."
+   ],
+   "todo": "Press Fit transit, then Robustness check."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Robustness check finished for an earlier fit; not shown (press it again).",
+    "Robustness check not made: …"
+   ],
+   "todo": "Press Robustness check again; if it says not made, read the reason."
   },
   {
    "section": "Output, Transits mode",
