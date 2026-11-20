@@ -257,7 +257,9 @@ def baseline_pass(n: int, tried, read_jd: dict, flipped: dict, is_baseline, want
     only ~5 there when the flip falls near mid-transit (WASP-49 b 19 Nov), and the frames read at the flip are all
     in transit. tried: frames read or tried; read_jd: {frame: JD} of the frames read (times of the others are
     interpolated, the lights being in time order); flipped: {frame: orientation}; is_baseline(jd array) -> bool
-    array. Frames spread evenly over each side's baseline, up to `want` baseline frames a side in all."""
+    array. Frames spread evenly over each side's baseline, up to `want` baseline frames a side in all. Step 6c: the
+    app passes contact_free as is_baseline (every frame the free-depth step fit can use, in transit too, counts),
+    so "baseline" here means "usable for the step"."""
     sides = {i: bool(v) for i, v in flipped.items() if v is not None}
     have_jd = sorted((i, float(j)) for i, j in read_jd.items() if j is not None and math.isfinite(float(j)))
     if len(set(sides.values())) < 2 or len(have_jd) < 2:

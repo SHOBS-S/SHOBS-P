@@ -3929,14 +3929,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         number free for all three names; the others reuse it. Saving the same kind again starts a new set.
         2.2.19 (r2: S8): peek=True only suggests the name (the set is left as it is), for a dialog that may be
         canceled."""
-        key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
-        state = getattr(self, "_save_set", None)
+        key = self._set_key(folder, filename)
+        state = self._set_state(filename)
         names = self._family_names()
         if self._report_fit_shown():
             # step 6c (item d, Fable M1): a fit of an opened report and the Output page's run (another target, TOI-2046 b
-            # beside WASP-49 b's light curve on 20 Nov) are two sets: each is numbered against its own names only
+            # beside WASP-49 b's light curve on 20 Nov) are two sets: each is numbered against its own names only,
+            # and (re-review S1) each keeps its own number while files of both are saved in turn
             fit_names = names[3:]
-            names = fit_names if filename in fit_names else names[:3]
+            names = fit_names if self._in_fit_set(filename) else names[:3]
         if filename not in names:
             names = names + [filename]
         if state and state["key"] == key and filename not in state["used"]:
@@ -3950,8 +3951,43 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         while self._set_taken(folder, names, k):
             k += 1
         if not peek:
-            self._save_set = {"key": key, "k": k, "used": {filename}}
+            self._put_set_state(filename, {"key": key, "k": k, "used": {filename}})
         return self._suffixed(os.path.join(folder, filename), k)
+
+    def _in_fit_set(self, filename: str) -> bool:
+        """step 6c (re-review S1): with a report fit shown, is this file one of the fit's set (its report, plot, fit
+        CSV, or a file named from one of them: corner plot, settings file)?"""
+        tp = getattr(self, "transit_page", None)
+        try:
+            stems = [os.path.splitext(n)[0] for n in tp.family_names()]
+        except Exception:
+            return False
+        base = os.path.basename(filename)
+        return any(base.startswith(st_) for st_ in stems if st_)
+
+    def _set_tag(self, filename: str):
+        """None (one set, as before 2.4.0) unless a report fit is shown: then "fit" or "out" (step 6c)."""
+        if not self._report_fit_shown():
+            return None
+        return "fit" if self._in_fit_set(filename) else "out"
+
+    def _set_key(self, folder: str, filename: str):
+        key = (self._results_key(), os.path.normcase(os.path.abspath(folder)))
+        tag = self._set_tag(filename)
+        return key if tag is None else key + (tag,)
+
+    def _set_state(self, filename: str):
+        tag = self._set_tag(filename)
+        if tag is None:
+            return getattr(self, "_save_set", None)
+        return (getattr(self, "_save_sets", None) or {}).get(tag)
+
+    def _put_set_state(self, filename: str, state: dict) -> None:
+        tag = self._set_tag(filename)
+        if tag is None:
+            self._save_set = state
+        else:
+            self.__dict__.setdefault("_save_sets", {})[tag] = state
 
     def _out_folder(self) -> str:
         folder = self.output_dir.get().strip()

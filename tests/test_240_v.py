@@ -211,6 +211,17 @@ class TestReportFitSaveSet(unittest.TestCase):
                 app._save_set = None
                 self.assertEqual(os.path.basename(app._family_path(folder, "wasp-49_TG_SHOBS-P_lightcurve.csv")),
                                  "wasp-49_TG_SHOBS-P_lightcurve_2.csv")
+                # re-review S1: files of both sets saved in turn keep each set's own number
+                app._save_set, app._save_sets = None, {}
+                got = [os.path.basename(app._family_path(folder, n)) for n in
+                       (fit[0], "wasp-49_TG_SHOBS-P_lightcurve.csv", fit[1], fit[2],
+                        "TOI-2046b_V_03-SEP-2026_SHOBS-P_transit_corner.png")]
+                self.assertEqual(got, [fit[0], "wasp-49_TG_SHOBS-P_lightcurve_2.csv", fit[1], fit[2],
+                                       "TOI-2046b_V_03-SEP-2026_SHOBS-P_transit_corner.png"])
+                app._save_set, app._save_sets = None, {}
+                got = [os.path.basename(app._family_path(folder, n)) for n in
+                       ("wasp-49_TG_SHOBS-P_lightcurve.csv", fit[0])]
+                self.assertEqual(got, ["wasp-49_TG_SHOBS-P_lightcurve_2.csv", fit[0]])
                 tp.report = None   # a fit of the run itself: one set again
                 app._save_set = None
                 self.assertEqual(os.path.basename(app._family_path(folder, fit[0])),

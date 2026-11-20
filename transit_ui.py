@@ -3456,8 +3456,8 @@ class TransitPage:
             return "", "new"
         stem = os.path.splitext(self.family_names()[1])[0]
         name = stem + "_corner.png"
-        state = getattr(self.app, "_save_set", None)
-        key = (self.app._results_key(), os.path.normcase(os.path.abspath(folder)))
+        state = self.app._set_state(name)   # step 6c: a report fit's own set
+        key = self.app._set_key(folder, name)
         if state and state.get("key") == key:
             path = self.app._suffixed(os.path.join(folder, name), state["k"])   # the set this fit was saved in
         else:
