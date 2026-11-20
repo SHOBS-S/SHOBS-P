@@ -209,7 +209,7 @@ class TestMessageNits(unittest.TestCase):
         text2, _ = stack_core.suggest_text("variables", noise2, sug2, {"seconds": 600, "known": True, "text": "x"},
                                            200, None)
         self.assertNotIn("scintillation", text2)
-        self.assertIn("stacking would gain little", text2)
+        self.assertIn("1.5× the target's, under the 2× at which stacking starts to help", text2)
 
     def test_param_words(self):
         self.assertEqual(tc.PARAM_WORDS["k"], "Rp/R*")

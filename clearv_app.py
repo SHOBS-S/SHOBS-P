@@ -15856,7 +15856,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
         if survey is None and self._survey_skipped_now:
             # step 6b (Fable S4): the series' comps are all placed and the survey was skipped: no catalog-only
-            # suggestions (unvetted) beside them
+            # suggestions (unvetted) beside them. Re-review 1: the boxes' colour and brightness hints still need these
+            target_star = self._chart_star_at(self.target_xy)
+            t_bv_meas = self._measured_target_bv()
+            self._target_bv = t_bv_meas if t_bv_meas is not None else (
+                core.catalog_bv(target_star) if target_star else None)
+            self._closest_dm = min((abs(c[1] - t_inst) for c in cands), default=None)
             self.suggested_comps = []
             self.suggested_info = {}
             self._suggest_for = (self.target_xy, self.preview_path)
@@ -16134,7 +16139,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             # filled in after the survey started reads the night again
             try:
                 pl = self.planet_from_fields() or {}
-                eph = tuple(pl.get(k_) for k_ in ("period", "t0", "k", "a_rs", "b"))
+                # re-review 5: rounded, so a small refinement (a second Lookup) does not read the night again
+                eph = tuple(None if pl.get(k_) is None else round(float(pl[k_]), nd)
+                            for k_, nd in (("period", 5), ("t0", 3), ("k", 3), ("a_rs", 2), ("b", 2)))
             except Exception:
                 eph = None
         key = (self.preview_path, stamp, tuple(lights), tuple(s_[0] for s_ in stars),
@@ -16564,7 +16571,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         base = cs.out_of_transit(t, model, margin)
         b_rows, a_rows, w = cs.whole_night_rows(after, result.get("idx"), int(result.get("of") or len(after)), base)
         self._survey_step_how = "baseline"
-        if b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE:
+
+        def neff(rows):   # re-review 3: the effective frames a side (one heavy row is not three frames)
+            ww = w[rows] if rows.size else np.zeros(0)
+            return float(ww.sum() ** 2 / np.sum(ww * ww)) if ww.size and np.sum(ww * ww) > 0 else 0.0
+        if (b_rows.size < cs.FLIP_MIN_SIDE or a_rows.size < cs.FLIP_MIN_SIDE
+                or neff(b_rows) < cs.FLIP_MIN_SIDE or neff(a_rows) < cs.FLIP_MIN_SIDE):
             # Fable S5: no baseline on one side (a flip in transit on a night that ends at egress): the step 6a
             # measure on the frames at the flip, away from ingress and egress, is the best there is (and on such a
             # night the fit can hardly tell a step from the depth, so the comps matter most)

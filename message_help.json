@@ -1236,9 +1236,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Comps are fine per frame: their noise is … (about …% of each point's error), so stacking is not needed.",
-    "…: stacking would gain little (…).",
-    "To stack anyway, type a number of frames in the Stack N box."
+    "Comps are fine per frame: their noise is …, so stacking is not needed. To stack anyway, type a number of frames in the Stack N box."
    ],
    "todo": "Nothing."
   },

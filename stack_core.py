@@ -330,15 +330,19 @@ def suggest_text(mode: str, noise: dict | None, sug: dict, cap: dict, n_kept: in
     # Fable S6: "beside the scintillation" only when the scintillation really is a point's largest term (what is
     # left of its error once the target's and the comps' photon noise are taken out)
     scint2 = (sp * sp - st_ * st_ - sc_ * sc_) if all(math.isfinite(v) for v in (sp, st_, sc_)) else float("nan")
-    if math.isfinite(share) and math.isfinite(scint2) and scint2 > max(st_ * st_, sc_ * sc_):
+    # re-review 2: and clearly larger than the comps' (at least twice their sigma), so "small beside" is true
+    if math.isfinite(share) and math.isfinite(scint2) and scint2 > max(st_ * st_, 4.0 * sc_ * sc_):
         return (f"Comps are fine per frame: their noise is small beside the scintillation (about {share:.0%} of "
                 f"each point's error), so stacking is not needed. {anyway}", False)
     if math.isfinite(share) and noise["ratio"] <= 1.0:
         return (f"Comps are fine per frame: their noise is below the target's own (about {share:.0%} of each "
                 f"point's error), so stacking is not needed. {anyway}", False)
+    if math.isfinite(share) and noise["ratio"] < COMP_DOMINATE:
+        return (f"Comps are fine per frame: their noise is {noise['ratio']:.1f}× the target's, under the "
+                f"{COMP_DOMINATE:g}× at which stacking starts to help, so stacking is not needed. {anyway}", False)
     if math.isfinite(share):
-        return (f"Comps are fine per frame: stacking would gain little (their noise is about {share:.0%} of each "
-                f"point's error, not enough to set the noise floor). {anyway}", False)
+        return (f"Comps are fine per frame: their noise is under half of each point's error (about {share:.0%}), "
+                f"so stacking is not needed. {anyway}", False)
     return f"Comps are fine per frame: stacking is not needed. {anyway}", False
 
 

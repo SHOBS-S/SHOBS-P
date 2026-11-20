@@ -2034,6 +2034,10 @@ class TransitPage:
             out.append((g, label, 10 ** (-0.4 * d)))
         why = f"{failed} frame{'s' if failed != 1 else ''} could not be read again (left out of those refits)" \
             if failed else ""
+        # re-review 4: a comp in use found in no frame's positions is not quietly dropped from the ensemble
+        lost = [nm for j, (_c, nm) in enumerate(cols) if not np.isfinite(cm[0, :, j]).any()]
+        if lost:
+            return [], f"{', '.join(lost)} could not be measured again (no position for it in the night's frames)"
         return out, why
 
     def _robust_progress(self, token, words):
