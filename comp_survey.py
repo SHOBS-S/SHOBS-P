@@ -780,7 +780,7 @@ def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float 
     measured); judged: per candidate, True when it is one the suggestions could use (in the brightness window and not
     already left out). A judged candidate is out when |step| is beyond `limit` (flux fraction) and beyond `sigma` x its
     error. When that would leave fewer than `keep_min` judged candidates with a measured step, the steadiest
-    (smallest |step|, then smallest `scatter` when given; step 6d) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
+    (smallest |step| to 0.1 ppt, then smallest `scatter` when given; step 6d) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
     itself, after its other gates). Returns ({index: step in ppt} for those left
     out, [indices kept although beyond the limit])."""
     st = np.asarray(steps, dtype=float)
@@ -797,7 +797,7 @@ def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float 
         need = keep_min - passing
         sc = np.asarray(scatter, dtype=float) if scatter is not None else None
         # step 6d: steadiest = smallest |own step| in ppt (the gate's units, as the app sorts), then scatter
-        for j in sorted(out, key=lambda j_: (round(abs(float(ppt[j_])), 6),
+        for j in sorted(out, key=lambda j_: (round(abs(float(ppt[j_])), 1),
                                              sc[j_] if sc is not None and math.isfinite(sc[j_]) else float("inf")))[:need]:
             out.discard(j)
             kept_anyway.append(j)

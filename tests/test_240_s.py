@@ -472,8 +472,9 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertEqual(set(names), {"STEADY A", "STEADY B", "STEADY C"})
         # (said on the S line of a flip night; this made-up night has no flip, so read it from the survey)
         note = seen[-1]["own_note"]
-        self.assertTrue(note.startswith("only 1 comp candidate stays within ±10 ppt at the flip on its own, "
-                                        "so the steadiest of the others are used too: "), note)
+        self.assertTrue(note.startswith("only 1 comp candidate passes every test (frame edge, linear limit, colour, "
+                                        "own flip step within ±10 ppt), so the steadiest of the others are used "
+                                        "too: "), note)
         self.assertIn("STEADY B (own step +12.0 ppt)", note)
         self.assertIn("STEADY C (own step -15.0 ppt)", note)
         self.assertNotIn("STEADY D", note)
@@ -481,6 +482,54 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertIn("STEADY D (jumps", left)
         self.assertNotIn("STEADY B (jumps", left)
         self.assertNotIn("STEADY C (jumps", left)
+
+    def test_two_pass_one_let_back(self):
+        """step 6d (John 20 Nov): the WASP-49 b case, 2 comps pass, the steadiest reject comes back for a third."""
+        app = self._setup()
+        real = app._survey_view
+        jumps = {"STEADY C": -14.0, "STEADY D": 22.0}
+        seen = []
+
+        def view(*a, **k):
+            v = real(*a, **k)
+            v = dict(v, out=dict(v["out"]), own_out=dict(jumps))
+            seen.append(v)
+            for n, ppt in jumps.items():
+                v["out"][n] = f"jumps {ppt:+.1f} ppt at the meridian flip on its own (test)"
+            return v
+        with mock.patch.object(app, "_survey_view", side_effect=view):
+            names = self._wait(app)
+        self.assertEqual(set(names), {"STEADY A", "STEADY B", "STEADY C"})
+        self.assertEqual(seen[-1]["own_note"],
+                         "only 2 comp candidates pass every test (frame edge, linear limit, colour, own flip step "
+                         "within ±10 ppt), so the steadiest of the others is used too: STEADY C (own step -14.0 ppt)")
+        left = [t for t in self.lines if t.startswith("Left out by the comp survey")][-1]
+        self.assertIn("STEADY D (jumps", left)
+        self.assertNotIn("STEADY C (jumps", left)
+
+    def test_flip_set_choice_gets_the_minimum(self):
+        """step 6d: on a flip night with let-backs, the set choice is asked for at least 3 comps."""
+        app = self._setup()
+        names = ["A", "B", "C", "D"]
+        survey = {"index": {n: i for i, n in enumerate(names)}, "scatter": [0.002] * 4, "ref_scatter": 0.002,
+                  "step": [0.0] * 4, "dist": [10.0] * 4, "flip": True, "tdiffs": None, "b_rows": [], "a_rows": [],
+                  "weights": None}
+        picks = [(n, 0.0) for n in names[:3]]
+
+        def choose(pool, _gate):
+            return [(c[0], 0.0) for c in pool]
+        cands = [(n, 0.0, 0.0, 0.0, 0.5) for n in names]
+        got = {}
+
+        def fake_set(nm, *_a, **k):
+            got.update(k)
+            return list(nm[:3]), 0.0, 0.001
+        with mock.patch.object(cs, "choose_set", side_effect=fake_set):
+            out = app._survey_final_picks(picks, survey, choose, cands, set(names), set(), 0.5, min_size=3)
+            self.assertEqual(got.get("min_size"), 3)
+            self.assertEqual(len(out[0]), 3)
+            app._survey_final_picks(picks, survey, choose, cands, set(names), set(), 0.5)
+            self.assertEqual(got.get("min_size"), 2)
 
     def test_without_the_linear_limit_the_peaky_star_may_stay(self):
         app = self._setup(linear=None)

@@ -974,8 +974,8 @@
   {
    "section": "Photometry",
    "patterns": [
-    "…; only … comp candidate(s) stay(s) within ±10 ppt at the flip on its own, so the steadiest of the others is (are) used too: …",
-    "…; no comp candidate stays within ±10 ppt …"
+    "…; only … comp candidate(s) pass(es) every test (frame edge, linear limit, colour, own flip step within ±10 ppt), so the steadiest of the others is (are) used too: … (own step … ppt)",
+    "…; no comp candidate passes every test …"
    ],
    "todo": "Check the transit fit's flip step and the Robustness check before reporting."
   },

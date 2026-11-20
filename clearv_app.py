@@ -16175,10 +16175,20 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return v if math.isfinite(v) else float("inf")
         rejected_before = set(self._survey_rejected)
         if len(picks) < need and own_out:
-            for name in sorted(own_out, key=lambda n_: (abs(own_out[n_]), steadiness(n_))):
+            # Fable 6d nit: only stars a pool could use (inside the safe edge, among the candidates)
+            usable = {c[0] for c in cands} & inside
+            for name in sorted((n_ for n_ in own_out if n_ in usable),
+                               key=lambda n_: (round(abs(own_out[n_]), 1), steadiness(n_))):
                 own_back.add(name)
                 self._survey_rejected = set(rejected_before)
-                picks, relaxed = pick_all()
+                new_picks, new_relaxed = pick_all()
+                had = {n for n, _dm in picks}
+                # Fable 6d S1: a let-back is kept only when it adds to the comps that passed, never when it pushes
+                # them out (a faint target's narrow window would otherwise drop the wide-window passers)
+                if had <= {n for n, _dm in new_picks} and len(new_picks) > len(picks):
+                    picks, relaxed = new_picks, new_relaxed
+                else:
+                    own_back.discard(name)
                 if len(picks) >= need:
                     break
             own_back.intersection_update(n for n, _dm in picks)
@@ -16194,10 +16204,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             survey["own_note"] = ""
             if back_used:
                 n_ok = len(picks) - len(back_used)
-                lead = (f"no comp candidate stays within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on its own"
-                        if n_ok == 0 else f"only {n_ok} comp candidate{'s' if n_ok != 1 else ''} "
-                        f"stay{'s' if n_ok == 1 else ''} within ±{cs.OWN_STEP_MAX * 1000:.0f} ppt at the flip on "
-                        + ("its own" if n_ok == 1 else "their own"))
+                # Fable 6d S3: say what the count is (comps passing every test), not only the own-step gate
+                tests_ = (f"(frame edge, linear limit, colour, own flip step within ±{cs.OWN_STEP_MAX * 1000:.0f} "
+                          "ppt)")
+                lead = (f"no comp candidate passes every test {tests_}" if n_ok == 0 else
+                        f"only {n_ok} comp candidate{'s' if n_ok != 1 else ''} pass{'es' if n_ok == 1 else ''} "
+                        f"every test {tests_}")
                 survey["own_note"] = (lead + ", so the steadiest of the others "
                                       + ("is" if len(back_used) == 1 else "are") + " used too: "
                                       + ", ".join(f"{n} (own step {own_out[n]:+.1f} ppt)" for n in back_used))
