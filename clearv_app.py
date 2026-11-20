@@ -16174,7 +16174,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             v = float(survey["scatter"][j_]) if j_ is not None else float("nan")
             return v if math.isfinite(v) else float("inf")
         rejected_before = set(self._survey_rejected)
-        if len(picks) < need and own_out:
+        # step 6d (John 20 Nov): a loaded series is left alone (its comps are the record, e.g. the HD 219134
+        # campaign); the let-back is for the first night, so a new series starts with 3 comps chosen right
+        if len(picks) < need and own_out and not self.observations:
             # Fable 6d nit: only stars a pool could use (inside the safe edge, among the candidates)
             usable = {c[0] for c in cands} & inside
             for name in sorted((n_ for n_ in own_out if n_ in usable),

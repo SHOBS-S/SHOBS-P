@@ -507,6 +507,28 @@ class TestSurveyInTheApp(unittest.TestCase):
         self.assertIn("STEADY D (jumps", left)
         self.assertNotIn("STEADY C (jumps", left)
 
+    def test_series_night_is_left_alone(self):
+        """step 6d (John 20 Nov): with a series loaded, no star is let back (the series' comps are the record)."""
+        app = self._setup(observations=[object()])
+        real = app._survey_view
+        jumps = {"STEADY C": -14.0, "STEADY D": 22.0}
+        seen = []
+
+        def view(*a, **k):
+            v = real(*a, **k)
+            v = dict(v, out=dict(v["out"]), own_out=dict(jumps))
+            seen.append(v)
+            for n, ppt in jumps.items():
+                v["out"][n] = f"jumps {ppt:+.1f} ppt at the meridian flip on its own (test)"
+            return v
+        try:
+            with mock.patch.object(app, "_survey_view", side_effect=view):
+                names = self._wait(app)
+        finally:
+            app.observations = []
+        self.assertEqual(set(names), {"STEADY A", "STEADY B"})
+        self.assertEqual(seen[-1]["own_note"], "")
+
     def test_flip_set_choice_gets_the_minimum(self):
         """step 6d: on a flip night with let-backs, the set choice is asked for at least 3 comps."""
         app = self._setup()

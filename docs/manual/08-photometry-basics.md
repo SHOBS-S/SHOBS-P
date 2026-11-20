@@ -427,7 +427,9 @@ steadiest of the stars that jump (smallest own step first, then the steadiest to
 until there are three (or none is left), and the S line says so: *…; only 2 comp candidates pass every test (frame
 edge, linear limit, colour, own flip step within ±10 ppt), so the steadiest of the others is used too: TYC … (own step
 +12.4 ppt)* (or *no comp candidate passes every test …*). A star let back only ever adds to the comps that passed; it
-never pushes one of them out.
+never pushes one of them out. With a series loaded nothing is let back: the series' comps are its record (a
+campaign such as HD 219134 keeps the comps its first night chose), so the let-back is there to start a new series off
+with three well-chosen comps.
 Three, not two: with only two comps, each refit of the Robustness check that leaves one out rests on a single star,
 and the two refits just mirror each other. The flip-step set choice then keeps all three rather than going back to
 a pair. When nothing passes you get *⚠ No good comp here tonight: …* instead of four poor rings: pick the
