@@ -330,7 +330,7 @@ class TestNotesInApp(unittest.TestCase):
                     mock.patch.object(ca.messagebox, "showinfo") as info:
                 tp.result = res
                 self.assertEqual(app.save_exoclock(), "")
-                self.assertIn("changed during the lookup", info.call_args[0][1])
+                self.assertIn("the fit on the Transit page changed while SHOBS-P looked up", info.call_args[0][1])
         finally:
             tp.result = None
             tp.report = None

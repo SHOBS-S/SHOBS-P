@@ -834,6 +834,10 @@ class _WindowGone(Exception):
     """step 6c-2 (Fable S4): the window closed while save_exoclock waited for a lookup."""
 
 
+class _PageChanged(Exception):
+    """step 6c-2 (Fable S4): another fit or report took the Transit page while save_exoclock waited for a lookup."""
+
+
 def _float_or_none_app(v):
     """step 6c-2: a report header's number (OBSLAT/OBSLON), or None."""
     try:
@@ -4266,8 +4270,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 if tp is not None and (getattr(tp, "result", None) is not r or getattr(tp, "report", None)
                                        is not report):
                     cancelled.set()   # Fable S4: another fit or report took the page meanwhile
-                    raise ValueError("The fit on the Transit page changed during the lookup, so nothing was saved; "
-                                     "press Save for ExoClock… again for the fit now shown")
+                    raise _PageChanged()
                 time.sleep(0.03)
         finally:
             self._radec_lookup_busy = False
@@ -4316,13 +4319,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                      f"{h.get('OBSLON', '')}) are not decimal degrees, so the Input page's site is "
                                      "used (tens of milliseconds at most).", keep_status=True)
                         lat, lon = float(self.lat.get()), float(self.lon.get())
-                    elif not (-90 <= lat <= 90 and -360 <= lon <= 360):
-                        raise ValueError(f"The report's OBSLAT/OBSLON ({lat}, {lon}) are not a place on Earth")
+                    elif not (-90 <= lat <= 90 and -360 <= lon <= 360):   # re-review N-b: fall back, say so
+                        self.log(f"ExoClock file: the report's OBSLAT/OBSLON ({lat}, {lon}) are not a place on "
+                                 "Earth, so the Input page's site is used (tens of milliseconds at most).",
+                                 keep_status=True)
+                        lat, lon = float(self.lat.get()), float(self.lon.get())
                 else:
                     ra, dec = self.target_radec_deg(r.get("planet"))
                     lat, lon = float(self.lat.get()), float(self.lon.get())
             jd = exoclock_jd_utc(r["t"], system, ra, dec, lat, lon)
         except _WindowGone:
+            return ""
+        except _PageChanged:   # re-review N-a: its own words
+            messagebox.showinfo(APP_TITLE, "ExoClock file not saved: the fit on the Transit page changed while "
+                                           "SHOBS-P looked up the star's position. Press Save for ExoClock… again "
+                                           "for the fit now shown.")
             return ""
         except (ValueError, TypeError) as exc:
             why = str(exc).rstrip(".")

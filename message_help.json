@@ -1752,9 +1752,16 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "ExoClock file: …'s RA/Dec from SIMBAD/VSX (…, …) for the JD_UTC times."
+    "ExoClock file: …'s RA/Dec from SIMBAD (or VSX) (…, …) for the JD_UTC times."
    ],
    "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ExoClock file not saved: the fit on the Transit page changed while SHOBS-P looked up the star's position."
+   ],
+   "todo": "Press Save for ExoClock… again."
   },
   {
    "section": "Output, Transits mode",

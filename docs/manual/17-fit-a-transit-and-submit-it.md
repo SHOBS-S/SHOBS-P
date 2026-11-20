@@ -522,7 +522,7 @@ recent observations it has, and whether it asks for a bigger telescope than your
    ExoClock wants JD_UTC times, and turning BJD_TDB back into JD_UTC needs the star's RA/Dec. For your own
    photometry that is the Input page's. For a fit of an **opened report** it is the report's own star: the planet
    lookup's RA/Dec, or, when that has none (an ExoFOP TOI), the star looked up by name (SIMBAD, then VSX; the busy bar
-   shows it and the Log says *ExoClock file: TOI-2046's RA/Dec from SIMBAD/VSX …*). It is never the Input page's,
+   shows it and the Log says *ExoClock file: TOI-2046's RA/Dec from SIMBAD …*). It is never the Input page's,
    which may hold another target. The site is the report's OBSLAT/OBSLON, else the Input page's. If the lookup does not
    answer, nothing is saved and the message says why; try again later.
 
