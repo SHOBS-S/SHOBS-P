@@ -1,18 +1,18 @@
-# 21. Follow a candidate
+# 21. Follow a suspect
 
 A field scan gives you leads. One night is never enough to call a star variable: you want to see it change again, on
 another night, with the same behavior. This chapter covers:
 
-- deciding which candidates are worth following,
+- deciding which suspects are worth following,
 - putting them on the watch list,
 - measuring them on more nights,
 - exporting their light curves, for your own analysis or a VSX submission.
 
-## Decide which candidates are worth following
+## Decide which suspects are worth following
 
-Work down the scan table (see [20. Scan a field](20-scan-a-field.md)) and, for each candidate:
+Work down the scan table (see [20. Scan a field](20-scan-a-field.md)) and, for each suspect:
 
-1. Read **Check first**. A candidate whose change begins at a flip or a gap, that is near saturation or clipped, or
+1. Read **Check first**. A suspect whose change begins at a flip or a gap, that is near saturation or clipped, or
    that has a blended neighbor, is most likely instrumental. Follow it only if its light curve also changes well away from the flip or gap.
 2. Read **VSX**. **KNOWN (VSX): …** is already cataloged. It may still be worth following if the catalog lacks a
    period or type, but it is not a new variable. Tick **Hide known variables** to take them out of the table, the
@@ -21,29 +21,34 @@ Work down the scan table (see [20. Scan a field](20-scan-a-field.md)) and, for e
    spike is usually a cosmic ray, a satellite or a hot pixel. A **Best period** of **no period (drift)** means the
    periodogram's best peak sat at the long end of the search: the star drifts slowly, which may be the star or may be
    the instrument. Click the row again (or press **Esc**) to clear the selection.
-4. Click **Mark candidates on image** and look at the star in the image. A bright neighbor, a diffraction spike,
+4. Click **Mark suspects on image** and look at the star in the image. A bright neighbor, a diffraction spike,
    a column defect or the frame edge can each make a star "vary".
 5. Look at **× normal** together with **Scatter**. A faint star at 3× normal may scatter 0.1 mag from noise alone; a
    bright star at 3× normal with 0.02 mag scatter is a cleaner lead.
+6. Look at **Suspect by** and **χ²ν × normal**. A star that is a suspect by its **own errors** only scatters
+   modestly but far more than its error bars allow: a low-amplitude variable (S033 was one), or something its error
+   bars do not cover, such as a neighbor in the sky ring. **Nights** says **Suspect again (N nights)** when it was a
+   suspect on other nights of this field too: a much stronger lead.
 
 ### Pick stars on the scatter plot
 
-Not every interesting star reaches the candidate level. On the **Scatter vs brightness** plot you can pick any
+Not every interesting star reaches a suspect level. On the **Scatter vs brightness** plot you can pick any
 measured star:
 
 - **Click** a point to pick that star (and draw its light curve); click it again to clear.
 - **Ctrl+click** adds a star to the picked set, or takes it out.
 - **Drag** a box to pick every star inside it.
 
-Picked stars are ringed on the plot. Press **Mark on image** to mark them on the Photometry image: candidates keep
+Picked stars are ringed on the plot. Press **Mark on image** to mark them on the Photometry image: suspects keep
 their rank number, other stars are labeled with SHOBS-P's label (for example `S066`) and drawn as **Picked on the scan
-plot**. From there you can look at each one, and watch it (below).
+plot**. From there you can look at each one, and watch it (below). Press **Add as suspect** to make the picked stars
+suspects by hand (chapter 20): they are kept in the night's suspects file with the others.
 
-## Put a candidate on the watch list
+## Put a suspect on the watch list
 
 Watch stars are measured on every later run, with their own light curves. There are three ways to add one:
 
-- On the **Output – Field scan** page, click the candidate's row (or its point on the scatter plot) and press **Watch
+- On the **Output – Field scan** page, click the suspect's row (or its point on the scatter plot) and press **Watch
   selected star**. The status bar says *"Watching …"*.
 - In **Known variables measured…**, select a known variable and press **Watch selected**. This works even for one the
   scan could not measure (it is watched by its sky position).
@@ -63,16 +68,17 @@ not a labeled catalog star, so click it again on later nights."*
 2. Blink and calibrate as before. The field is solved again, and the watch stars are found by name and sky position.
    The log says how many were found, for example *"Watch stars: 2 of 3 found on this frame"*.
 3. Press **Scan field**. Watch stars appear in the table as **W** rows (with their periodogram), whether or not they
-   reach the candidate level that night.
+   reach a suspect level that night.
 
-Compare the two nights. A star that is a candidate again, with similar behavior, is a much stronger lead.
+Compare the two nights. A star that is a suspect again, with similar behavior, is a much stronger lead: the
+**Nights** column says **Suspect again (N nights)** when the field's other nights have a suspects file (chapter 20).
 
 Discovery watch stars are remembered between sessions, with their sky positions. After the next solve, the ones
 that fall on the new frame are watched again, and the log says, for example, *"Watch stars remembered for this field
 (2): …"*. A star clicked on an unsolved frame has no sky position, so it cannot be found again and is not remembered.
 Right-click a watch star (or **Remove selected**) to stop watching it.
 
-> **Tip:** Discovery keeps the watch list, but not each night's measurements. To keep a candidate's history across
+> **Tip:** Discovery keeps the watch list, but not each night's measurements. To keep a suspect's history across
 > nights, follow it in Variables mode with a series, as below.
 
 ### Over many nights (Variables mode)
@@ -80,10 +86,10 @@ Right-click a watch star (or **Remove selected**) to stop watching it.
 A series in Variables mode keeps the watch list and every night's measurements in one file. There are two ways to
 use it.
 
-**The candidate as the target** (best when one candidate matters most):
+**The suspect as the target** (best when one suspect matters most):
 
 1. Switch to **Variables** mode. Marked stars and calibrated frames are kept.
-2. On the Input page, type the candidate's catalog name in **Star ID** (the name in brackets in the scan table), or
+2. On the Input page, type the suspect's catalog name in **Star ID** (the name in brackets in the scan table), or
    type its **RA (hours)** and **Dec (degrees)**.
 3. On the Photometry page mark it as the **Target**, choose comparison stars and a check star, and press **Run
    photometry**.
@@ -94,10 +100,10 @@ You get the full Variables-mode tools: the period search with its significance t
 check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night](09-reduce-a-variable-night.md),
 [10. Build a multi-night series](10-build-a-multi-night-series.md) and [13. Look for a period](13-look-for-a-period.md).
 
-**The candidate as a watch star** (best for several candidates in one field):
+**The suspect as a watch star** (best for several suspects in one field):
 
 1. In Variables mode, pick any good star in the field as the target, with comps and a check star.
-2. Make sure the candidates are on the watch list (they stay on it when you switch modes in the same session).
+2. Make sure the suspects are on the watch list (they stay on it when you switch modes in the same session).
 3. Run photometry and save the series. The watch list is saved with it.
 4. On later nights, **Load series…** before reducing; the watch stars are found again after the solve and measured
    on every run.
@@ -111,7 +117,8 @@ check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night
 | What you want | Where | File |
 |---|---|---|
 | One row per measured star, with scatter, excess and period | **Save CSV…** on the Field scan page | `<field>_<filter>_<date>_SHOBS-P_scan.csv` |
-| One row per candidate, ready to start a VSX new-variable submission | **Export candidates CSV…** | `field_scan_candidates.csv` |
+| One row per suspect, ready to start a VSX new-variable submission | **Export suspects CSV…** | `field_scan_suspects.csv` |
+| The night's suspects, kept for **Suspect again** on later nights | written by the scan (and by **Add as suspect**) | `<field>_<filter>_<date>_SHOBS-P_suspects.json` |
 | Every star's light curve from one scan (label, JD, magnitude) | **Export all light curves CSV…** | `field_scan_lightcurves.csv` |
 | Watch stars' light curves across a series | **Export watch light curves CSV…** in the Watch stars window | `watch_stars.csv` |
 | The target's full light curve | **Save light-curve CSV** or **Export…** on the Variables Output page | see chapter 22 |
@@ -125,7 +132,7 @@ Every CSV starts with a `# Created …` line.
 - Rule out a neighbor: look at the image at full zoom, and try a smaller aperture.
 - Check the comparison stars: a variable comp makes every other star look variable in the opposite sense.
 - Check that the star is not already cataloged under another name (SIMBAD, VSX search by position).
-- Follow the VSX submission guidelines. The candidates CSV gives position, magnitude, scatter, period and color as a
+- Follow the VSX submission guidelines. The suspects CSV gives position, magnitude, scatter, period and color as a
   starting point.
 
 ---
