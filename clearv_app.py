@@ -17283,24 +17283,47 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         by = result.setdefault("suspect_by", {})
         back, lost = [], []
         for e in hand:
-            hit = None
+            hit, best = None, float("inf")   # Fable re-review: the NEAREST match, not the first
             for i in range(len(result["labels"])):
                 star = {"gaia_dr3": gaia[i] if i < len(gaia) else "",
                         "ra_deg": radec[i][0] if radec else None, "dec_deg": radec[i][1] if radec else None}
                 if core.same_suspect(e, star):
-                    hit = i
-                    break
+                    try:
+                        d = core.sky_separation_arcsec(float(e["ra_deg"]), float(e["dec_deg"]), *map(float, radec[i]))
+                    except (KeyError, TypeError, ValueError, IndexError):
+                        d = 0.0
+                    if not math.isfinite(d):
+                        d = 0.0
+                    if d < best:
+                        hit, best = i, d
             if hit is None:
                 lost.append(str(e.get("label") or e.get("gaia_dr3") or "?"))
             elif hit not in result["candidates"]:
                 result["candidates"].append(hit)
                 by[hit] = "by hand"
+                self._suspect_period(result, hit)   # Fable re-review: its periodogram, as the others have
                 back.append(result["labels"][hit])
         if back:
             self.log(f"  Kept from this night's earlier suspects file, added by hand: {', '.join(back)}.")
         if lost:
             self.log(f"  Added by hand before but not found in this scan (not kept): {', '.join(lost)}.")
         return len(back)
+
+    @staticmethod
+    def _suspect_period(result, i) -> None:
+        """2.4.0 step 7a: a star made a Suspect by hand gets its periodogram over the scan's period range, as the scan's
+        own Suspects have."""
+        if i in (result.get("periods") or {}):
+            return
+        rng = result.get("period_range") or (core.DEFAULT_MIN_PERIOD, 20.0)
+        try:
+            good = np.isfinite(result["light_curves"][:, i])
+            ls = core.lomb_scargle(np.asarray(result["jd"])[good], result["light_curves"][good, i],
+                                   float(rng[0]), float(rng[1]))
+        except Exception:
+            ls = None
+        if ls:
+            result.setdefault("periods", {})[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls}
 
     def _save_suspects(self, result, carry_hand: bool = False) -> str:
         """2.4.0 step 7a (#92): keep the night's Suspects beside its results, and mark the ones that were Suspects on
@@ -18005,6 +18028,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             self._stack_scan_done(result)
         except Exception as exc:
             self.log(f"  (stacking step skipped: {type(exc).__name__}: {exc})")
+        saved_err = ""
+        if self.mode_key == "discovery":
+            try:   # 2.4.0 step 7a (#92): the night's Suspects kept beside its results (and earlier by-hand ones back)
+                self._save_suspects(result, carry_hand=True)
+                saved_err = result.get("suspects_error") or ""
+            except Exception as exc:
+                self.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
+            n = len(result["candidates"])
+            known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
         src = core.check_sources_text(result.get("vsx_sources") or ["VSX"])   # 2.2.21 (#48)
         by = result.get("suspect_by") or {}
         n_err = sum(1 for v in by.values() if v == "own errors")
@@ -18012,14 +18044,6 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                  + (f" ({n_err} by their own error bars only)" if n_err else "")
                  + (f", {known} already known ({src})" if result.get("vsx") is not None
                     else ", no sky positions (run Solve for the VSX/SIMBAD check)"))
-        saved_err = ""
-        if self.mode_key == "discovery":
-            try:   # 2.4.0 step 7a (#92): the night's Suspects kept beside its results
-                self._save_suspects(result, carry_hand=True)
-                saved_err = result.get("suspects_error") or ""
-            except Exception as exc:
-                self.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
-            n = len(result["candidates"])   # stars added by hand before may have come back
         self.status.set(f"Field scan: {n} suspect(s)."
                         + (f" Suspects file not written ({saved_err})." if saved_err else ""))   # Fable N1
         if self.mode_key == "discovery":
@@ -28197,6 +28221,8 @@ class ScanView:
         # 2.4.0 step 7a (#92): a star you judge suspect by eye joins tonight's Suspects (kept in the suspects file)
         self.add_suspect_button = ttk.Button(nav, text="Add as suspect", command=self.add_suspect)
         self.add_suspect_button.pack(side=LEFT, padx=(0, 6))
+        # Fable re-review: a star added by hand by mistake can be taken off again (the scan's own suspects cannot)
+        ttk.Button(nav, text="Remove added suspect", command=self.remove_added_suspect).pack(side=LEFT, padx=(0, 6))
         ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
         # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
         # they still match the marks on the image).
@@ -28780,19 +28806,10 @@ class ScanView:
                                 "Select a star first (a point on the plot or a row in the table), then Add as suspect.")
             return
         by = r.setdefault("suspect_by", {})
-        rng = r.get("period_range") or (core.DEFAULT_MIN_PERIOD, 20.0)
         for i in new:
             r["candidates"].append(i)
             by[i] = "by hand"
-            if i not in (r.get("periods") or {}):   # its periodogram, as the scan's own suspects have
-                try:
-                    good = np.isfinite(r["light_curves"][:, i])
-                    ls = core.lomb_scargle(np.asarray(r["jd"])[good], r["light_curves"][good, i],
-                                           float(rng[0]), float(rng[1]))
-                except Exception:
-                    ls = None
-                if ls:
-                    r.setdefault("periods", {})[i] = {"period": ls["period_days"], "power": ls["power"], "ls": ls}
+            self.app._suspect_period(r, i)   # its periodogram, as the scan's own suspects have
         names = ", ".join(r["labels"][i] for i in new)
         self.app.log(f"Added as suspect by hand: {names}.")
         if self.app.mode_key == "discovery":
@@ -28815,6 +28832,41 @@ class ScanView:
                 traceback.print_exc()
         err = r.get("suspects_error") if self.app.mode_key == "discovery" else ""
         self.app.status.set(f"Added as suspect: {names}." + (f" Suspects file not written ({err})." if err else ""))
+
+    def remove_added_suspect(self):
+        """2.4.0 step 7a (Fable re-review): take the selected suspects that were added BY HAND off tonight's list (and
+        the night's suspects file). The scan's own suspects stay: a new scan would find them again."""
+        r = self.r
+        by = r.get("suspect_by") or {}
+        rows = [self.rows[iid] for iid in self.tree.selection() if iid in self.rows]
+        chosen = rows or list(self.picked) or ([self.selected] if self.selected is not None else [])
+        gone = [i for i in chosen if i in r["candidates"] and by.get(i) == "by hand"]
+        if not gone:
+            self.app.status.set("Only a suspect you added by hand can be removed (select its row first).")
+            return
+        for i in gone:
+            r["candidates"].remove(i)
+            by.pop(i, None)
+            (r.get("suspect_nights") or {}).pop(i, None)
+        names = ", ".join(r["labels"][i] for i in gone)
+        self.app.log(f"Removed from the suspects (added by hand): {names}.")
+        if self.app.mode_key == "discovery":
+            try:
+                self.app._save_suspects(r)
+            except Exception as exc:
+                self.app.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
+        self.n_known = sum(1 for i in r["candidates"] if self._is_known(i))
+        self._update_header()
+        self._fill_table()
+        if getattr(self, "fig", None) is not None:
+            self.draw()
+        if self.app.scan_marks and self.app.last_scan is r and getattr(self.app, "_scan_marks_source", None) != "selection":
+            try:
+                self.app.mark_scan_candidates(r, skip=self._hidden(), show=False)
+                self._update_mark_button()
+            except Exception:
+                traceback.print_exc()
+        self.app.status.set(f"Removed from the suspects: {names}.")
 
     def _scan_stem(self) -> str:
         """<field>_<filter>_<date>_SHOBS-P_scan, the 2.2.5 file-name pattern (2.2.9)."""

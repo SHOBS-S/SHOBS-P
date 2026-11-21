@@ -420,9 +420,12 @@ class TestInTheApp(unittest.TestCase):
             # a new scan of the night: the star added by hand comes back
             r2 = scan_result()
             r2["suspects_where"] = dict(r["suspects_where"])
+            r2.update({"light_curves": np.random.default_rng(2).normal(12, 0.01, (40, 5)),
+                       "jd": np.linspace(2461358.5, 2461358.8, 40), "period_range": (0.02, 2.0)})
             self.app._save_suspects(r2, carry_hand=True)
             self.assertIn(3, r2["candidates"])
             self.assertEqual(r2["suspect_by"][3], "by hand")
+            self.assertIn(3, r2["periods"])             # Fable re-review: with its periodogram
 
     def test_add_as_suspect(self):
         import tkinter as tk
@@ -446,6 +449,16 @@ class TestInTheApp(unittest.TestCase):
             self.assertEqual(len(r["candidates"]), n)
             self.assertIn("Already a suspect", self.app.status.get())
             self.assertIn("1 added by hand", view.header_text.get())
+            view.tree.selection_set([iid for iid, i in view.rows.items() if i == 1])
+            view.remove_added_suspect()                 # a scan suspect: stays
+            self.assertIn(1, r["candidates"])
+            self.assertIn("Only a suspect you added by hand", self.app.status.get())
+            view.tree.selection_set([iid for iid, i in view.rows.items() if i == 2])
+            view.remove_added_suspect()
+            self.assertNotIn(2, r["candidates"])
+            self.assertNotIn(2, r["suspect_by"])
+            view.selected, view.picked = 2, []
+            view.add_suspect()                          # put it back for the checks below
             vals = [view.tree.item(iid, "values") for iid, i in view.rows.items() if i == 1][0]
             cols = list(view.tree["columns"])
             self.assertEqual(vals[cols.index("why")], "own errors")

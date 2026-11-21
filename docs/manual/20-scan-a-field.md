@@ -225,7 +225,9 @@ The **Check first** column lists warnings that often explain a suspect away:
 You may judge a star suspect by eye that neither test flagged (S033 itself was found that way). Click it on the
 scatter plot (or pick several), then press **Add as suspect**. It joins tonight's suspects at the end of the list,
 **Suspect by** reads **by hand**, its period is searched like the others', and it is kept in the night's suspects file
-(below). A star that is already a suspect says *"Already a suspect."*
+(below). A star that is already a suspect says *"Already a suspect."* To take a star you added by mistake off the
+list, select its row and press **Remove added suspect**; the scan's own suspects cannot be removed (a new scan would
+find them again).
 
 ### The suspect kinds
 

@@ -2031,6 +2031,13 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "Only a suspect you added by hand can be removed (select its row first)."
+   ],
+   "todo": "Select a by hand row."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "… Suspects file not written (…)."
    ],
    "todo": "Fix the Output folder, then Add as suspect or scan again."
