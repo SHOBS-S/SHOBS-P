@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -30,6 +31,9 @@ class TestStep7bFixes(unittest.TestCase):
         for nm in ("askyesno", "askokcancel", "askyesnocancel"):
             setattr(ca.messagebox, nm, lambda *a, **k: False)
         cls.ca = ca
+        # never the user's own ~/.shobs_p_settings.json (conftest does this under pytest; this covers a direct run)
+        cls.patch = mock.patch.object(ca, "SETTINGS_FILE", os.path.join(cls.tmp.name, "s.json"))
+        cls.patch.start()
         cls.app = ca.App()
         cls.app.set_mode("variables")
         cls.app.update()
@@ -37,6 +41,7 @@ class TestStep7bFixes(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.app.destroy()
+        cls.patch.stop()
         os.environ.pop("SHOBS_DATA_HOME", None)
         cls.tmp.cleanup()
 
@@ -55,27 +60,41 @@ class TestStep7bFixes(unittest.TestCase):
         self.app.linear_limit.set("")
         self.assertEqual(self.app._gate_settings()["linear_limit"], 60000.0)
 
-    def test_accent_disabled_and_pressed_look(self):
-        style = self.ca.ttk.Style(self.app)
-        bg = style.map("Accent.TButton", "background")
-        states = {tuple(s[:-1]) if len(s) > 2 else (s[0],): s[-1] for s in bg}
-        keys = [" ".join(map(str, k)) for k in states]
-        self.assertTrue(any("disabled" in k for k in keys), bg)
-        self.assertTrue(any("pressed" in k for k in keys), bg)
-        # disabled is listed before pressed and active, so it wins
-        flat = [" ".join(map(str, s[:-1])) for s in bg]
-        self.assertLess(flat.index(next(k for k in flat if "disabled" in k)),
-                        flat.index(next(k for k in flat if "active" in k)))
-        b = self.ca.ttk.Button(self.app, text="x", style="Accent.TButton")
-        b.state(["disabled"])
-        self.assertNotEqual(style.lookup("Accent.TButton", "background", ["disabled"]),
-                            style.lookup("Accent.TButton", "background"))
-        b.destroy()
+    def test_odd_linear_text_falls_back_to_saturation(self):
+        self.app.sat_limit.set("60000.0")
+        for text in ("0", "nan", "60931 ADU", "-5"):
+            self.app.linear_limit.set(text)
+            self.assertEqual(self.app._gate_settings()["linear_limit"], 60000.0, text)
 
-    def test_every_button_style_sinks_when_pressed(self):
+    def styles(self):
+        return ["TButton", "Accent.TButton", "Compact.TButton", "Step.TButton"] + [
+            f"Mode{k}.TButton" for k in self.ca.MODES]
+
+    def test_disabled_buttons_look_disabled(self):
         style = self.ca.ttk.Style(self.app)
-        for name in ("TButton", "Accent.TButton", "Step.TButton", "Compact.TButton"):
-            self.assertEqual(str(style.lookup(name, "relief", ["pressed"])), "sunken", name)
+        for name in ("TButton", "Accent.TButton", "Compact.TButton"):
+            self.assertNotEqual(str(style.lookup(name, "background", ["disabled"])),
+                                str(style.lookup(name, "background")), name)
+            self.assertNotEqual(str(style.lookup(name, "foreground", ["disabled"])),
+                                str(style.lookup(name, "foreground")), name)
+        self.assertEqual(str(style.lookup("Accent.TButton", "background", ["disabled", "active"])), "#d9cbbd")
+
+    def test_every_button_darkens_when_pressed_in_every_mode(self):
+        style = self.ca.ttk.Style(self.app)
+        for mode in self.ca.MODES:
+            self.app.set_mode(mode)
+            self.app.update()
+            for name in self.styles():
+                pressed = str(style.lookup(name, "background", ["pressed", "active"]))
+                self.assertNotEqual(pressed, str(style.lookup(name, "background", ["active"])), (mode, name))
+                self.assertNotEqual(pressed, str(style.lookup(name, "background")), (mode, name))
+                self.assertTrue(str(style.lookup(name, "lightcolor", ["pressed", "active"])), (mode, name))
+        self.app.set_mode("variables")
+
+    def test_button_state_map_order(self):
+        m = self.ca.button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd", disabled_fg="#6e5e4e")
+        self.assertEqual([s[0] for s in m["background"]], ["disabled", "pressed", "active"])
+        self.assertEqual(self.ca.mix_color("#c47a2c", "#000000", 0.35), m["background"][1][1])
 
 
 if __name__ == "__main__":

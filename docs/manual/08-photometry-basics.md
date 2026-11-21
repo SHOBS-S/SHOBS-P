@@ -616,7 +616,8 @@ changed the box: *Linear ADU 60,931 from the SHOBS-FLUX profile for this camera 
 empty if you don't know the limit and have no profile; nothing changes then. With a value set below **raw sat ADU**, SHOBS-P cautions when you pick a star whose raw peak is over or
 near it (see "Comparison stars and the check star" above), counts after each run the frames where each star went over
 it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"), and Comp health shows an **Over linear limit**
-column (chapter 11).
+column (chapter 11). The promotion gates in **Candidates…** (chapter 21) are the one place that uses the linear ADU
+even when it is at or above **raw sat ADU**, because SHOBS-FLUX measured it.
 
 ### Color
 

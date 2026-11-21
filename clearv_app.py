@@ -304,6 +304,27 @@ def mix_color(c1: str, c2: str, f: float) -> str:
     return "#" + "".join(f"{round(x + (y - x) * f):02x}" for x, y in zip(a, b))
 
 
+def button_state_map(base: str, hover: str, fg: str, disabled_bg: str | None = None,
+                     disabled_fg: str | None = None, disabled_border: str | None = None) -> dict:
+    """7b regression (John 21 Nov 2026): the ttk style.map options for a button whose normal color is `base`:
+    disabled looks disabled (when colors are given), pressed is clearly darker than hover with a real inset (dark
+    top-left bevel, light bottom-right), so every click shows at once. Order matters: disabled wins over pressed,
+    pressed over hover. style.map replaces an option's whole state list, so callers pass every option here."""
+    pressed = mix_color(base, "#000000", 0.35)
+    bg, fgs, border = [], [], [("pressed", mix_color(base, "#000000", 0.6))]
+    if disabled_bg:
+        bg.append(("disabled", disabled_bg))
+    if disabled_fg:
+        fgs.append(("disabled", disabled_fg))
+    if disabled_border:
+        border.insert(0, ("disabled", disabled_border))
+    bg += [("pressed", pressed), ("active", hover)]
+    fgs += [("pressed", fg), ("active", fg)]
+    return {"background": bg, "foreground": fgs, "bordercolor": border,
+            "lightcolor": [("pressed", mix_color(base, "#000000", 0.55))],
+            "darkcolor": [("pressed", mix_color(base, "#ffffff", 0.25))]}
+
+
 def no_auid_warning_needed(mode: str, in_vsx: bool, auid: str, looked_up_name: str, star_name: str) -> bool:
     """2.2.20 (item 4): the Output page's "No AUID" warning: Variables mode, and the Input lookup of this Star ID
     found the star in VSX but VSX gave no AUID (and no series supplied one). Not when the star is not in VSX at all,
@@ -2270,23 +2291,17 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background="#16324a", foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background="#16324a", foreground="#b7c7d1")
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background="#1f4464", foreground="#f4f7f8")
-        style.map("Step.TButton", background=[("pressed", "#0f2a40"), ("active", "#2a5a80")],
-                  foreground=[("active", "#ffffff")], relief=[("pressed", "sunken"), ("!pressed", "raised")])
+        style.map("Step.TButton", **button_state_map("#1f4464", "#2a5a80", "#ffffff"))
         style.configure("Accent.TButton", padding=(12, 6), background="#c47a2c", foreground="#ffffff")
         style.configure("Compact.TButton", padding=(6, 0))   # 2.3.2 (item 10): Hide/Show tips, a thin status row
         # 7b regression (John 21 Nov): a disabled orange button must look disabled (it looked live), and every
         # button shows the press itself: darker and pushed in while the mouse is down, so the user sees the click
         # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
-        style.map("Accent.TButton",
-                  background=[("disabled", "#d9cbbd"), ("pressed", "#7f4c17"), ("active", "#a86622")],
-                  foreground=[("disabled", "#8a7a6a"), ("pressed", "#ffffff"), ("active", "#ffffff")],
-                  relief=[("pressed", "sunken"), ("!pressed", "raised")],
-                  bordercolor=[("pressed", "#5a360f")])
-        style.map("TButton", background=[("disabled", "#e3e8eb"), ("pressed", "#b9c6ce"), ("active", "#f0f4f6")],
-                  relief=[("pressed", "sunken"), ("!pressed", "raised")])
-        style.map("Compact.TButton", background=[("disabled", "#e3e8eb"), ("pressed", "#b9c6ce"),
-                                                 ("active", "#f0f4f6")],
-                  relief=[("pressed", "sunken"), ("!pressed", "raised")])
+        style.map("Accent.TButton", **button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd",
+                                                       disabled_fg="#6e5e4e", disabled_border="#bfae9c"))
+        for name in ("TButton", "Compact.TButton"):
+            style.map(name, **button_state_map("#dcdad5", "#eeebe7", "#1c2b33", disabled_bg="#d5dce0",
+                                               disabled_fg="#8a949a"))
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
@@ -2305,8 +2320,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for key, m in MODES.items():
             style.configure(f"Mode{key}.TButton", anchor=W, padding=(12, 7), background=m["step"], foreground="#ffffff",
                             bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
-            style.map(f"Mode{key}.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")],
-                      relief=[("pressed", "sunken"), ("!pressed", "raised")])
+            style.map(f"Mode{key}.TButton", **button_state_map(m["step"], m["active"], "#ffffff"))
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
@@ -2331,7 +2345,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background=m["side"], foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background=m["side"], foreground=m["hint"])
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background=m["step"], foreground="#f4f7f8")
-        style.map("Step.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
+        style.map("Step.TButton", **button_state_map(m["step"], m["active"], "#ffffff"))
         style.configure("Status.TLabel", background=m["status"], foreground="#d5e0e6")
         # 2.3.3 (#57): the new-version note at the right of the status strip, a link (as SHOBS-SCHED's)
         style.configure("StatusLink.TLabel", background=m["status"], foreground="#9fd3ff",
