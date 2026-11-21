@@ -52,6 +52,9 @@ OWN_STEP_MAX = 0.010         # step 6c-2 (John 20 Nov): a comp whose own flip st
                              # (right edge); the 6c set took one from each end and they cancelled, so leaving either
                              # out moved the depth 1.3 % -> 3.2-3.4 % and Tc by ~55 min. Stars near the target's
                              # column step under 10 ppt.
+OWN_STEP_MIN_COMPS = 3       # step 6d (John 20 Nov, S2 option A): when fewer than 3 comps pass every gate, the
+                             # steadiest of the own-step rejects are let back one at a time until there are 3
+                             # (with 2, each Robustness leave-out is a single comp and the two refits mirror)
 OWN_STEP_SIGMA = 3.0         # ... and only when the step is also beyond 3 sigma of its own error (noise is not judged)
 APERTURE_MIN_STARS = 3     # #61: judged on at least 3 stars like the target ...
 APERTURE_MIN_FRAMES = 12   # ... on at least 12 frames, else a note only
@@ -693,7 +696,7 @@ def rank_key(base: float, scatter: float, ref_scatter: float, step: float = floa
 
 
 def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
-               top: int = SET_TOP, scatter=None, weights=None) -> tuple[list, float, float]:
+               top: int = SET_TOP, scatter=None, weights=None, min_size: int = 2) -> tuple[list, float, float]:
     """On a flip night: from the `top` best-ranked (names in rank order, keys their rank keys), the set (2 up to
     `count` stars) whose MEASURED flip step for the target is nearest zero. curve(names) -> per-frame target minus
     the set's mean (set_curve); the step is from the near-flip rows (curve_step). Step 5 fix (#76): on WASP-49 b a
@@ -706,7 +709,9 @@ def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
     on WASP-49 b, with every frame measured, the measured step tracked the night's fitted step to 2 mmag
     (correlation 0.95-0.99 over all 154 sets), and the lowest measured step chose sets within 1 ppt of zero at both
     apertures, where a 1 mmag tie slack let in sets stepping up to 5 ppt. Returns (names in rank order, step,
-    error); ([], NaN, NaN) when no set of 2 or more has a measured step."""
+    error); ([], NaN, NaN) when no set of 2 or more has a measured step. min_size (step 6d): the smallest set tried
+    (capped at what the pool holds, never under 2), so a night whose comps were let back to reach
+    OWN_STEP_MIN_COMPS is not shortened below that again."""
     sc_of = {}
     if scatter is not None:
         sc_of = {n: float(v) for n, v in zip(names, scatter) if v is not None and math.isfinite(float(v))}
@@ -716,7 +721,7 @@ def choose_set(names: list, keys: list, curve, b_rows, a_rows, count: int = 4,
     if k < 2:
         return [], nan, nan
     best = None
-    for size in range(2, k + 1):
+    for size in range(max(2, min(int(min_size), k)), k + 1):
         for c in itertools.combinations(pool, size):
             st, er = curve_step(curve([p[0] for p in c]), b_rows, a_rows, weights=weights)
             if not math.isfinite(st):
@@ -769,13 +774,13 @@ def own_step_ppt(step_mag: float) -> float:
 
 
 def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float = OWN_STEP_SIGMA,
-                 keep_min: int = 2) -> tuple[dict, list]:
+                 keep_min: int = OWN_STEP_MIN_COMPS, scatter=None) -> tuple[dict, list]:
     """step 6c-2 (John 20 Nov): which candidates jump too much at the meridian flip on their own.
     steps, errs: per candidate, the target's flip step against that comp alone and its error (mag; NaN = not
     measured); judged: per candidate, True when it is one the suggestions could use (in the brightness window and not
     already left out). A judged candidate is out when |step| is beyond `limit` (flux fraction) and beyond `sigma` x its
     error. When that would leave fewer than `keep_min` judged candidates with a measured step, the steadiest
-    (smallest |step|) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
+    (smallest |step| to 0.1 ppt, then smallest `scatter` when given; step 6d) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
     itself, after its other gates). Returns ({index: step in ppt} for those left
     out, [indices kept although beyond the limit])."""
     st = np.asarray(steps, dtype=float)
@@ -790,7 +795,10 @@ def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float 
     passing = int((ok & ~big).sum())
     if passing < keep_min:
         need = keep_min - passing
-        for j in sorted(out, key=lambda j_: abs(st[j_]))[:need]:
+        sc = np.asarray(scatter, dtype=float) if scatter is not None else None
+        # step 6d: steadiest = smallest |own step| in ppt (the gate's units, as the app sorts), then scatter
+        for j in sorted(out, key=lambda j_: (round(abs(float(ppt[j_])), 1),
+                                             sc[j_] if sc is not None and math.isfinite(sc[j_]) else float("inf")))[:need]:
             out.discard(j)
             kept_anyway.append(j)
     return {j: own_step_ppt(float(st[j])) for j in sorted(out)}, sorted(kept_anyway)

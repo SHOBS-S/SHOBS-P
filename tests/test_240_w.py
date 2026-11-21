@@ -107,9 +107,13 @@ class TestOwnStepGate(unittest.TestCase):
         ppt = np.array([0.5, 47.6, 30.2, -2.2, 23.2, 11.0, -19.9, -42.8, 25.2, 62.9, -58.7])
         st = mag_of_ppt(ppt)
         err = np.full(st.size, 0.0015)
-        gone, kept = cs.own_step_out(st, err, np.ones(st.size, bool))
+        gone, kept = cs.own_step_out(st, err, np.ones(st.size, bool), keep_min=2)
         self.assertEqual(sorted(gone), [1, 2, 4, 5, 6, 7, 8, 9, 10])
         self.assertEqual(kept, [])
+        # step 6d default (3): only 2 pass, so the steadiest reject (+11.0 ppt) is kept
+        gone3, kept3 = cs.own_step_out(st, err, np.ones(st.size, bool))
+        self.assertEqual(kept3, [5])
+        self.assertNotIn(5, gone3)
         self.assertAlmostEqual(gone[10], -58.7, places=1)
 
     def test_noise_is_not_judged(self):
@@ -121,8 +125,19 @@ class TestOwnStepGate(unittest.TestCase):
     def test_steadiest_kept_when_all_jump(self):
         st = mag_of_ppt(np.array([30.0, -14.0, 22.0, -60.0]))
         gone, kept = cs.own_step_out(st, np.full(4, 0.001), np.ones(4, bool))
+        # step 6d: the steadiest are kept until there are 3 (OWN_STEP_MIN_COMPS)
+        self.assertEqual(kept, [0, 1, 2])
+        self.assertEqual(sorted(gone), [3])
+        gone, kept = cs.own_step_out(st, np.full(4, 0.001), np.ones(4, bool), keep_min=2)
         self.assertEqual(kept, [1, 2])
         self.assertEqual(sorted(gone), [0, 3])
+
+    def test_ties_go_to_the_steadiest(self):
+        # step 6d: same |own step|, the lower scatter tonight is let back first
+        st = mag_of_ppt(np.array([20.0, -20.0, 40.0]))
+        _g, kept = cs.own_step_out(st, np.full(3, 0.001), np.ones(3, bool), keep_min=1,
+                                   scatter=np.array([0.004, 0.002, 0.001]))
+        self.assertEqual(kept, [1])
 
     def test_limit_in_ppt_both_sides(self):
         # Fable N1: +10.03 ppt is beyond +-10 ppt (the mag limit used to allow +10.1 on the bright side)
@@ -150,6 +165,26 @@ class TestFrameLegend(unittest.TestCase):
                          "each frame, flip step taken out")
         self.assertEqual(tu.frame_points_label({"detrend_flags": (False, True, False), "flip": {"step": 1}}),
                          "each frame, detrended, flip step taken out")
+
+
+class TestChooseSetMinSize(unittest.TestCase):
+    def test_min_size_keeps_three(self):
+        # step 6d: a pair that cancels best is not chosen when the night was let back to 3 comps
+        names = ["A", "B", "C", "D"]
+        keys = [0.0, 0.1, 0.2, 0.3]
+        steps = {"A": 0.004, "B": -0.004, "C": 0.003, "D": 0.006}
+        b_rows, a_rows = np.arange(5), np.arange(5, 10)
+
+        def curve(sel):
+            s_ = np.mean([steps[n] for n in sel])
+            return np.r_[np.zeros(5), np.full(5, s_)]
+        two, _st, _er = cs.choose_set(names, keys, curve, b_rows, a_rows, count=3)
+        self.assertEqual(len(two), 2)
+        three, _st, _er = cs.choose_set(names, keys, curve, b_rows, a_rows, count=3, min_size=3)
+        self.assertEqual(len(three), 3)
+        # never asks for more than the pool holds
+        small, _st, _er = cs.choose_set(names[:2], keys[:2], curve, b_rows, a_rows, count=3, min_size=3)
+        self.assertEqual(len(small), 2)
 
 
 if __name__ == "__main__":
