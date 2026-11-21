@@ -2291,7 +2291,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background="#16324a", foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background="#16324a", foreground="#b7c7d1")
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background="#1f4464", foreground="#f4f7f8")
-        style.map("Step.TButton", **button_state_map("#1f4464", "#2a5a80", "#ffffff"))
+        style.map("Step.TButton", **button_state_map("#1f4464", "#2a5a80", "#ffffff",
+                                                     disabled_bg=mix_color("#1f4464", "#16324a", 0.5),
+                                                     disabled_fg="#7f93a3"))
         style.configure("Accent.TButton", padding=(12, 6), background="#c47a2c", foreground="#ffffff")
         style.configure("Compact.TButton", padding=(6, 0))   # 2.3.2 (item 10): Hide/Show tips, a thin status row
         # 7b regression (John 21 Nov): a disabled orange button must look disabled (it looked live), and every
@@ -2299,8 +2301,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
         style.map("Accent.TButton", **button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd",
                                                        disabled_fg="#6e5e4e", disabled_border="#bfae9c"))
-        for name in ("TButton", "Compact.TButton"):
-            style.map(name, **button_state_map("#dcdad5", "#eeebe7", "#1c2b33", disabled_bg="#d5dce0",
+        # plain buttons sit on the page color (#e7eef2); the Outcome… menu button (TMenubutton) follows them
+        for name in ("TButton", "Compact.TButton", "TMenubutton"):
+            style.map(name, **button_state_map("#e7eef2", "#f0f4f6", "#1c2b33", disabled_bg="#d5dce0",
                                                disabled_fg="#8a949a"))
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
@@ -2320,7 +2323,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for key, m in MODES.items():
             style.configure(f"Mode{key}.TButton", anchor=W, padding=(12, 7), background=m["step"], foreground="#ffffff",
                             bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
-            style.map(f"Mode{key}.TButton", **button_state_map(m["step"], m["active"], "#ffffff"))
+            style.map(f"Mode{key}.TButton", **button_state_map(m["step"], m["active"], "#ffffff",
+                                                              disabled_bg=mix_color(m["step"], m["side"], 0.5),
+                                                              disabled_fg=m["hint"]))
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
@@ -2345,7 +2350,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background=m["side"], foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background=m["side"], foreground=m["hint"])
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background=m["step"], foreground="#f4f7f8")
-        style.map("Step.TButton", **button_state_map(m["step"], m["active"], "#ffffff"))
+        style.map("Step.TButton", **button_state_map(m["step"], m["active"], "#ffffff",
+                                                     disabled_bg=mix_color(m["step"], m["side"], 0.5),
+                                                     disabled_fg=mix_color(m["hint"], m["side"], 0.4)))
         style.configure("Status.TLabel", background=m["status"], foreground="#d5e0e6")
         # 2.3.3 (#57): the new-version note at the right of the status strip, a link (as SHOBS-SCHED's)
         style.configure("StatusLink.TLabel", background=m["status"], foreground="#9fd3ff",
@@ -19031,6 +19038,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         obs.watch_insts = {wst.name: float(v) for wst, v in zip(watch, wvals) if math.isfinite(v)}
                         obs.pos["w"] = {wst.name: [round(float(fw.x), 1), round(float(fw.y), 1)]
                                         for wst, fw in zip(watch, f_watch)}
+                        if not precalibrated and getattr(obs, "raw_peaks", None) is not None:
+                            # 7b regression (Fable M1): the Watch stars' raw peaks too, so the promotion gates'
+                            # Linear limit check can judge them (it read "not recorded" for every Watch star)
+                            for wst, fw in zip(watch, f_watch):
+                                if wst.name not in obs.raw_peaks:
+                                    obs.raw_peaks[wst.name] = core.raw_peak_near(raw, fw, radius, total_bin)
                     if spares:
                         f_spares = [core.move_star(sp, reg, data.shape) for sp in spares]
                         spare_vals = core.channel_inst_mags(data, f_spares, radius, sky_in, sky_out,
@@ -25031,8 +25044,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not self.observations or not (self.watch_list or self.gate_reports):
             return
         nights = sorted({o.night for o in self.observations})
-        if nights != list(getattr(self, "_gate_nights", [])):
+        if nights != list(getattr(self, "_gate_nights", [])) or self._gate_reports_outdated():
             self.after(300, lambda: self.run_gates(why="after save"))
+
+    def _gate_reports_outdated(self) -> bool:
+        """A stored gate report made under an older rule set (promotion.GATES_VERSION) is stale like a new night."""
+        return any(int(r.get("version") or 1) < promotion.GATES_VERSION for r in (self.gate_reports or {}).values()
+                   if isinstance(r, dict))
 
     def show_candidates(self):
         if not self.observations:
@@ -25049,7 +25067,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 self._candidates_win = None
         self._candidates_win = CandidatesWindow(self)
         nights = sorted({o.night for o in self.observations})
-        stale = nights != list(self._gate_nights or [])
+        stale = nights != list(self._gate_nights or []) or self._gate_reports_outdated()
         if (not self.gate_reports or stale) and self.gate_stars():
             # Fable S7: the target only with "Check the target too" (or when it is tracked already)
             self.run_gates(why="window opened",

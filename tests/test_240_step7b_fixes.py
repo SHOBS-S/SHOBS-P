@@ -96,6 +96,43 @@ class TestStep7bFixes(unittest.TestCase):
                 self.assertTrue(str(style.lookup(name, "lightcolor", ["pressed", "active"])), (mode, name))
         self.app.set_mode("variables")
 
+    def test_pressed_is_darker(self):
+        style = self.ca.ttk.Style(self.app)
+
+        def lum(c):
+            r, g, b = (int(str(c)[i:i + 2], 16) for i in (1, 3, 5))
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        for name in self.styles() + ["TMenubutton"]:
+            self.assertLess(lum(style.lookup(name, "background", ["pressed", "active"])),
+                            lum(style.lookup(name, "background", ["active"])) - 10, name)
+
+    def test_old_gate_reports_are_outdated(self):
+        self.app.gate_reports = {"S": {"version": 1}}
+        self.assertTrue(self.app._gate_reports_outdated())
+        self.app.gate_reports = {"S": {"version": self.ca.promotion.GATES_VERSION}}
+        self.assertFalse(self.app._gate_reports_outdated())
+        self.app.gate_reports = {}
+
+    def test_registry_counts_a_rule_change_as_new_data(self):
+        import registry
+        doc = registry.empty()
+        lin_ok = {"key": "linear", "label": "Linear limit", "set": "campaign", "value": "", "need": "", "pass": True,
+                  "cleared_by": "ours", "why": ""}
+        rep = {"star": "S", "period_days": 0.1, "nights": ["JD1", "JD2"], "n_points": 100, "candidate": True,
+               "campaign": True, "gates": [lin_ok], "summary": "", "version": 1}
+        rec, _ = registry.upsert_from_report(doc, rep, "S", ra=10.0, dec=20.0)
+        self.assertEqual(rec["evidence"]["gates_version"], 1)
+        registry.set_campaign(rec, True, by="John")
+        # same nights and points, judged again under the new rule set: the saturation failure turns the campaign off
+        lin_bad = dict(lin_ok, **{"pass": False, "cleared_by": None, "why": "saturation"})
+        rec2, event = registry.upsert_from_report(doc, dict(rep, version=2, gates=[lin_bad]), "S", ra=10.0, dec=20.0)
+        self.assertEqual(event, "campaign_fail")
+        self.assertFalse(rec2["campaign"])
+        self.assertEqual(rec2["evidence"]["gates_version"], 2)
+        # and the same report again is not new data
+        rec3, event3 = registry.upsert_from_report(doc, dict(rep, version=2, gates=[lin_bad]), "S", ra=10.0, dec=20.0)
+        self.assertNotEqual(event3, "campaign_fail")
+
     def test_button_state_map_order(self):
         m = self.ca.button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd", disabled_fg="#6e5e4e")
         self.assertEqual([s[0] for s in m["background"]], ["disabled", "pressed", "active"])

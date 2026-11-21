@@ -148,9 +148,14 @@ period (**null tests**); no correlation of |r| 0.3 or more with airmass, FWHM, s
 none of those with strong, significant power at the period; every frame under the linear limit (the **linear ADU**
 on the Photometry page, SHOBS-FLUX's number when it came from there; the raw saturation level only when no linear
 ADU is set), and never at or above **raw sat ADU** (a star that saturates on any frame fails even when the linear
-ADU is higher); the star clear of
+ADU is higher, and so does a frame SHOBS-P itself flagged saturated); the star clear of
 the frame edges on 95 % of frames. Nights whose check star scatters more than 1.5 times its typical night are left out
 before any gate runs (the quiet-nights strip shows them as *skipped*).
+
+The Linear limit gate reads *not recorded* when the series holds no raw peaks for the star: pre-calibrated lights,
+nights run before 2.2.19, and Watch stars on nights run before 2.4.0 (run those nights again to record them). When
+a new SHOBS-P changes how a gate judges, the stored results count as out of date: opening **Candidates…** or
+saving the series runs the gates again, and the Registry treats the new verdict like new data.
 
 **Quiet nights** (the chips above the gate list) give each night's χ²ν: against the star's own errors for a target,
 against its point-to-point scatter for a watch star. *quiet* (2 or less), *active* (3 or more). A quiet night shows the

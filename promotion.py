@@ -35,7 +35,7 @@ try:
 except Exception:   # pragma: no cover - astropy is a requirement
     LombScargle = None
 
-GATES_VERSION = 1
+GATES_VERSION = 2   # 2 (21 Nov 2026): Linear limit also fails on saturation (raw sat level or the frame's sat flag)
 SIDEREAL_DAY = 0.99726958
 
 # ---- thresholds (the design doc's numbers; John's decisions 12 and 13) -------------------------------------------
@@ -87,7 +87,8 @@ MIN_NIGHT_POINTS = 8
 class Curve:
     """One star's light curve (one row per frame, all arrays the same length). err: per-point errors (mag) when known
     (the target's merr), else empty. x, y: the star's pixel position per frame (NaN when not recorded). peak: its
-    brightest raw pixel per frame (ADU; NaN when not recorded)."""
+    brightest raw pixel per frame (ADU; NaN when not recorded). sat: 1 where SHOBS-P flagged the frame saturated for
+    this star (the target's 'sat' flag; also pre-calibrated lights' flat-topped cores), else 0; empty when unknown."""
     name: str
     jd: np.ndarray
     mag: np.ndarray
@@ -101,6 +102,7 @@ class Curve:
     y: np.ndarray = field(default_factory=lambda: np.array([]))
     peak: np.ndarray = field(default_factory=lambda: np.array([]))
     role: str = ""
+    sat: np.ndarray = field(default_factory=lambda: np.array([]))
 
     def take(self, keep: np.ndarray) -> "Curve":
         def cut(a):
@@ -108,7 +110,7 @@ class Curve:
             return a[keep] if a.size == keep.size else a
         return Curve(self.name, self.jd[keep], self.mag[keep], [n for n, k in zip(self.night, keep) if k],
                      [s for s, k in zip(self.segment, keep) if k], cut(self.err), cut(self.airmass), cut(self.fwhm),
-                     cut(self.sky), cut(self.x), cut(self.y), cut(self.peak), self.role)
+                     cut(self.sky), cut(self.x), cut(self.y), cut(self.peak), self.role, cut(self.sat))
 
 
 def make_curve(name, jd, mag, night, segment, **extra) -> Curve:
@@ -127,6 +129,17 @@ def make_curve(name, jd, mag, night, segment, **extra) -> Curve:
 
 
 # ---- small pieces ------------------------------------------------------------------------------------------------
+def _positive(v) -> float | None:
+    """A limit as a positive finite float, else None (bools, text, 0, NaN are not limits)."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) and f > 0 else None
+
+
 def remove_medians(values, groups) -> np.ndarray:
     """Each group's (night's, or night and flip side's) median taken out."""
     v = np.asarray(values, float).copy()
@@ -675,23 +688,36 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
         gates.append(_gate("corr", "Airmass, FWHM, sky, x/y", "systematics", "campaign", "not recorded",
                            "|r| < 0.3", None))
     # systematics guards
+    lin, sat = _positive(linear_limit), _positive(sat_level)
+    if lin is None:
+        lin = sat
     pk = np.asarray(c.peak, float)
-    if linear_limit and pk.size == c.jd.size and np.isfinite(pk).any():
-        mx = float(np.nanmax(pk))
-        sat = float(sat_level) if sat_level and math.isfinite(float(sat_level)) and sat_level > 0 else None
-        ok = mx < linear_limit and (sat is None or mx < sat)
-        value = f"peak {mx:,.0f} ADU = {mx / linear_limit * 100:.0f}% of {linear_limit:,.0f}"
+    satf = np.asarray(c.sat, float)
+    n_flag = int(np.nansum(satf > 0)) if satf.size == c.jd.size else 0
+    have_pk = bool(lin) and pk.size == c.jd.size and np.isfinite(pk).any()
+    if have_pk or n_flag:
+        mx = float(np.nanmax(pk)) if have_pk else float("nan")
+        n_sat = int(np.sum(pk[np.isfinite(pk)] >= sat)) if (have_pk and sat is not None) else 0
+        over = have_pk and mx >= lin
+        saturated = n_sat > 0 or n_flag > 0
+        ok = not over and not saturated
         need = "every frame under the linear limit"
-        if sat is not None and sat <= linear_limit:
+        if sat is not None and lin is not None and sat < lin:
             need += f" and the saturation level {sat:,.0f}"
-            if mx >= sat:
-                n_sat = int(np.sum(pk[np.isfinite(pk)] >= sat))
-                value = f"peak {mx:,.0f} ADU: saturated (at or above {sat:,.0f}) in {n_sat} frame(s)"
+        if saturated:
+            n = max(n_sat, n_flag)
+            value = (f"saturated in {n} frame(s)" + (f" (peak {mx:,.0f} ADU)" if have_pk else " (flagged by SHOBS-P)"))
+        elif over:
+            value = f"peak {mx:,.0f} ADU: at or above the linear limit {lin:,.0f}"
+        else:
+            value = f"peak {mx:,.0f} ADU = {mx / lin * 100:.0f}% of {lin:,.0f}"
         gates.append(_gate("linear", "Linear limit", "systematics", "campaign", value, need, ok,
                            "" if ok else "saturation"))
-        rep["peak_max"] = mx
+        if have_pk:
+            rep["peak_max"] = mx
     else:
-        gates.append(_gate("linear", "Linear limit", "systematics", "campaign", "not recorded",
+        gates.append(_gate("linear", "Linear limit", "systematics", "campaign",
+                           "not recorded (run the nights again to record this star's peaks)",
                            "every frame under the linear limit", None))
     xs, ys_ = np.asarray(c.x, float), np.asarray(c.y, float)
     if frame_shape and xs.size == c.jd.size and np.isfinite(xs).any():
@@ -809,6 +835,7 @@ def star_curve(observations, name: str, is_target: bool = False, target_name: st
             xy = _pos(o, "", "t")
             pk = (o.raw_peaks or {}).get(target_name or name, float("nan"))
             err = float(o.merr) if math.isfinite(float(o.merr)) else float("nan")
+            satf = 1.0 if "sat" in str(o.flag or "").split() else 0.0
         else:
             inst = (o.watch_insts or {}).get(name)
             kind = "w"
@@ -821,13 +848,15 @@ def star_curve(observations, name: str, is_target: bool = False, target_name: st
             xy = _pos(o, name, kind)
             pk = (o.raw_peaks or {}).get(name, float("nan"))
             err = float("nan")
+            satf = 0.0   # the frame's sat flag is about the target, not this star (its raw peak decides)
         rows.append((o.jd, m, o.night, o.segment, err, o.airmass if o.airmass is not None else float("nan"),
-                     o.fwhm, o.sky, xy[0], xy[1], pk))
+                     o.fwhm, o.sky, xy[0], xy[1], pk, satf))
     if not rows:
         return make_curve(name, [], [], [], [])
     cols = list(zip(*rows))
     return make_curve(name, cols[0], cols[1], cols[2], cols[3], err=cols[4], airmass=cols[5], fwhm=cols[6],
-                      sky=cols[7], x=cols[8], y=cols[9], peak=cols[10], role="target" if is_target else "watch")
+                      sky=cols[7], x=cols[8], y=cols[9], peak=cols[10], role="target" if is_target else "watch",
+                      sat=cols[11])
 
 
 def null_curves(observations, comp_names, check_name: str = "", others=(), aliases=None) -> tuple[list, Curve | None]:

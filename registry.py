@@ -189,6 +189,7 @@ def evidence_from(report: dict, series_file: str = "", parent_target: str = "") 
         "series_files": [os.path.basename(series_file)] if series_file else [],
         "parent_target": parent_target,
         "nights": list(report.get("nights") or []),
+        "gates_version": int(report.get("version") or 1),
         "baseline_days": _num(report.get("span_days"), 3), "cycles": _num(report.get("cycles"), 1),
         "n_points": int(report.get("n_points") or 0),
         "period_days": _num(report.get("period_days"), 7), "power": _num(report.get("power"), 4),
@@ -252,7 +253,9 @@ def upsert_from_report(doc: dict, report: dict, name: str, gaia="", ra=None, dec
     old_p = old_ev.get("period_days")
     # Fable M2: a failure counts toward demotion only on NEW data (other nights or points than last time)
     new_data = (list(report.get("nights") or []) != list(old_ev.get("nights") or [])
-                or int(report.get("n_points") or 0) != int(old_ev.get("n_points") or 0))
+                or int(report.get("n_points") or 0) != int(old_ev.get("n_points") or 0)
+                # a newer gate rule set judging the same data counts too (21 Nov 2026: saturation rule)
+                or int(report.get("version") or 1) != int(old_ev.get("gates_version") or 1))
     rec["evidence"] = evidence_from(report, series_file, parent_target)
     rec["evidence"]["series_files"] = list(dict.fromkeys(old_files + rec["evidence"]["series_files"]))
     # keep a gate cleared by outside data (decision 10) when our own run still fails it

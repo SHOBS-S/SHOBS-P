@@ -119,7 +119,45 @@ class TestGates(unittest.TestCase):
         self.assertFalse(g["pass"])
         self.assertIn("saturated", g["value"])
         self.assertIn("5 frame", g["value"])
-        self.assertEqual(g["why"] or "saturation", "saturation")
+        self.assertEqual(g["why"], "saturation")
+
+    def test_frame_flagged_sat_fails_without_peaks(self):
+        # pre-calibrated lights: no raw peaks, but SHOBS-P flagged the frame saturated (flat-topped core)
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        star.peak[:] = np.nan
+        star.sat = np.zeros(star.jd.size)
+        star.sat[3] = 1.0
+        g = self.gate(self.report(star, linear_limit=60931, sat_level=60000), "linear")
+        self.assertFalse(g["pass"])
+        self.assertIn("flagged by SHOBS-P", g["value"])
+
+    def test_odd_limits_are_not_limits(self):
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        for lin, sat in ((float("nan"), 60000), (None, 60000), (60931, "abc"), (60931, True), (60931, 0)):
+            g = self.gate(self.report(star, linear_limit=lin, sat_level=sat), "linear")
+            self.assertTrue(g["pass"], (lin, sat, g["value"]))
+            self.assertNotIn("nan", g["value"])
+        star.peak[0] = 61000.0
+        g = self.gate(self.report(star, linear_limit=60931, sat_level=None), "linear")
+        self.assertFalse(g["pass"])
+        self.assertIn("at or above the linear limit", g["value"])
+
+    def test_watch_star_curve_carries_peaks_and_no_target_flag(self):
+        import photometry_core as core
+        obs = []
+        for k, (jd, nt, sg) in enumerate(zip(self.t[:30], self.n[:30], self.s[:30])):
+            o = core.Obs(jd=float(jd), mag=12.0, merr=0.004, cmag=-8.0, kmag=None, airmass=1.1, path="", exptime=60,
+                         flux_var=1.0, flux_comp=1.0, night=nt)
+            o.comp_cat = 12.0
+            o.watch_insts = {"W": -7.5}
+            o.raw_peaks = {"T": 61000.0, "W": 12000.0 + k}
+            o.flag = "sat"
+            obs.append(o)
+        w = pr.star_curve(obs, "W")
+        self.assertTrue(np.isfinite(w.peak).all())
+        self.assertEqual(float(np.nansum(w.sat)), 0.0)   # the frame's sat flag is the target's
+        t = pr.star_curve(obs, "T", is_target=True, target_name="T")
+        self.assertEqual(float(np.nansum(t.sat)), 30.0)
 
     def test_under_both_limits_passes_and_reads_the_flux_number(self):
         star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
