@@ -58,7 +58,7 @@ the same, in the same order, on both pages:
 | **Corrections** | **Detrend** (Auto (BIC), none, airmass, time slope, time curve (quadratic), or airmass with either), **meridian flip at the largest gap** | **Line up segments**, **Line up flip only**, **Pier side as segments**, **Check-star correction** |
 | **Fit** | **MCMC**, **Fit transit**, **Cancel** | **Period search (days)**, **Period from**, **Refit period** |
 | **Comps** | **Comp health…**, **Use comps…** | **Comp health…**, **Use comps…** |
-| **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Time of max/min…** |
+| **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Candidates…**, **Time of max/min…** |
 | **View** | **credible bands**, **Plot bins** | **Time axis**, **Bin**, **Mark periods** and **Show**, **Airmass-corrected night means** |
 
 - **Points** and **Corrections** hold the settings that feed the result. Hover over a row's label to read what the
@@ -86,6 +86,10 @@ You can click any step at any time; none is ever locked. Some steps also move yo
 calibration goes straight to Photometry, and a finished photometry run goes straight to Output.
 
 Most pages also have **Back** and **Next: …** buttons at the bottom.
+
+Every button shows your click: while the mouse button is down it darkens and looks pushed in, so you can see
+the click landed before the job starts. A button that can't be used right now is greyed out (the colored ones turn a
+pale tan); clicking it does nothing.
 
 ## Page titles and hints
 

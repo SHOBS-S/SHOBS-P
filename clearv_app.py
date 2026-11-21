@@ -33,7 +33,9 @@ from tkinter import (
     Canvas,
     DoubleVar,
     IntVar,
+    Label,
     Listbox,
+    Menu,
     PhotoImage,
     StringVar,
     Text,
@@ -58,6 +60,8 @@ import transit_core as tcore
 import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
+import promotion   # 2.4.0 step 7b (#92): the Watch -> Candidate -> Campaign gates
+import registry   # 2.4.0 step 7b (#92): campaign_registry.json, one per observatory
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -298,6 +302,27 @@ def mix_color(c1: str, c2: str, f: float) -> str:
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
     b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
     return "#" + "".join(f"{round(x + (y - x) * f):02x}" for x, y in zip(a, b))
+
+
+def button_state_map(base: str, hover: str, fg: str, disabled_bg: str | None = None,
+                     disabled_fg: str | None = None, disabled_border: str | None = None) -> dict:
+    """7b regression (John 21 Nov 2026): the ttk style.map options for a button whose normal color is `base`:
+    disabled looks disabled (when colors are given), pressed is clearly darker than hover with a real inset (dark
+    top-left bevel, light bottom-right), so every click shows at once. Order matters: disabled wins over pressed,
+    pressed over hover. style.map replaces an option's whole state list, so callers pass every option here."""
+    pressed = mix_color(base, "#000000", 0.35)
+    bg, fgs, border = [], [], [("pressed", mix_color(base, "#000000", 0.6))]
+    if disabled_bg:
+        bg.append(("disabled", disabled_bg))
+    if disabled_fg:
+        fgs.append(("disabled", disabled_fg))
+    if disabled_border:
+        border.insert(0, ("disabled", disabled_border))
+    bg += [("pressed", pressed), ("active", hover)]
+    fgs += [("pressed", fg), ("active", fg)]
+    return {"background": bg, "foreground": fgs, "bordercolor": border,
+            "lightcolor": [("pressed", mix_color(base, "#000000", 0.55))],
+            "darkcolor": [("pressed", mix_color(base, "#ffffff", 0.25))]}
 
 
 def no_auid_warning_needed(mode: str, in_vsx: bool, auid: str, looked_up_name: str, star_name: str) -> bool:
@@ -1841,6 +1866,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.spare_catalog = {}
         self.watch_list = []
         self.watch_xy = {}
+        self.gate_reports = {}           # 2.4.0 step 7b (#92): last promotion-gate report per star of the series
+        self._gate_nights = []           # the nights the last gate run saw (a new night saved runs them again)
         self.field_variables = []
         self.field_check_sources = []
         self.variable_marks = []
@@ -2264,10 +2291,21 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background="#16324a", foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background="#16324a", foreground="#b7c7d1")
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background="#1f4464", foreground="#f4f7f8")
-        style.map("Step.TButton", background=[("active", "#2a5a80")], foreground=[("active", "#ffffff")])
+        style.map("Step.TButton", **button_state_map("#1f4464", "#2a5a80", "#ffffff",
+                                                     disabled_bg=mix_color("#1f4464", "#16324a", 0.5),
+                                                     disabled_fg="#7f93a3"))
         style.configure("Accent.TButton", padding=(12, 6), background="#c47a2c", foreground="#ffffff")
         style.configure("Compact.TButton", padding=(6, 0))   # 2.3.2 (item 10): Hide/Show tips, a thin status row
-        style.map("Accent.TButton", background=[("active", "#a86622")], foreground=[("active", "#ffffff")])
+        # 7b regression (John 21 Nov): a disabled orange button must look disabled (it looked live), and every
+        # button shows the press itself: darker and pushed in while the mouse is down, so the user sees the click
+        # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
+        style.map("Accent.TButton", **button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd",
+                                                       disabled_fg="#6e5e4e", disabled_border="#bfae9c"))
+        # plain buttons sit on the page color (#e7eef2); the Outcome… menu button (TMenubutton) follows them
+        for name in ("TButton", "Compact.TButton", "TMenubutton"):
+            style.map(name, **button_state_map("#e7eef2", "#f0f4f6", "#1c2b33", disabled_bg="#d5dce0",
+                                               disabled_fg="#8a949a"))
+        style.map("TMenubutton", arrowcolor=[("disabled", "#8a949a")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
@@ -2286,7 +2324,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for key, m in MODES.items():
             style.configure(f"Mode{key}.TButton", anchor=W, padding=(12, 7), background=m["step"], foreground="#ffffff",
                             bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
-            style.map(f"Mode{key}.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
+            style.map(f"Mode{key}.TButton", **button_state_map(m["step"], m["active"], "#ffffff",
+                                                              disabled_bg=mix_color(m["step"], m["side"], 0.5),
+                                                              disabled_fg=mix_color(m["hint"], m["side"], 0.4)))
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
@@ -2311,7 +2351,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background=m["side"], foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background=m["side"], foreground=m["hint"])
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background=m["step"], foreground="#f4f7f8")
-        style.map("Step.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
+        style.map("Step.TButton", **button_state_map(m["step"], m["active"], "#ffffff",
+                                                     disabled_bg=mix_color(m["step"], m["side"], 0.5),
+                                                     disabled_fg=mix_color(m["hint"], m["side"], 0.4)))
         style.configure("Status.TLabel", background=m["status"], foreground="#d5e0e6")
         # 2.3.3 (#57): the new-version note at the right of the status strip, a link (as SHOBS-SCHED's)
         style.configure("StatusLink.TLabel", background=m["status"], foreground="#9fd3ff",
@@ -17254,7 +17296,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         with (the night's results; Fable S6: kept in result["suspects_where"]), '' with no Output folder. One file
         per night and filter: a new scan of the night replaces it."""
         where = result.get("suspects_where") or {"folder": self.output_dir.get().strip(),
-                                                 "field": (self.star_id.get() or "").strip(),
+                                                 "field": core.suspects_field_name(
+                                                     self.output_dir.get().strip(), (self.star_id.get() or "").strip()),
                                                  "filter": self._filter_code()}
         folder = str(where.get("folder") or "").strip()
         if not folder:
@@ -17658,7 +17701,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         scan_electrons = self._scan_electrons(lights, binning, pattern, mode, masters, precal)   # 2.4.0 step 7a (#91)
         # Fable S6: where the night's suspects file goes is fixed when the scan starts (a Star ID, filter or Output
         # folder changed afterwards does not move it); "points" says whether the scan was on frames or stacks
-        suspects_where = {"folder": self.output_dir.get().strip(), "field": (self.star_id.get() or "").strip(),
+        suspects_where = {"folder": self.output_dir.get().strip(),
+                          "field": core.suspects_field_name(self.output_dir.get().strip(),
+                                                            (self.star_id.get() or "").strip()),   # 7b (7a nit a)
                           "filter": self._filter_code(), "points": "stacks" if stack_run else "frames"}
         if not self._start_job(f"Scanning {len(xy)} stars in {len(lights)} frames…"):
             return
@@ -18994,6 +19039,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         obs.watch_insts = {wst.name: float(v) for wst, v in zip(watch, wvals) if math.isfinite(v)}
                         obs.pos["w"] = {wst.name: [round(float(fw.x), 1), round(float(fw.y), 1)]
                                         for wst, fw in zip(watch, f_watch)}
+                        if not precalibrated and getattr(obs, "raw_peaks", None) is not None:
+                            # 7b regression (Fable M1): the Watch stars' raw peaks too, so the promotion gates'
+                            # Linear limit check can judge them (it read "not recorded" for every Watch star)
+                            for wst, fw in zip(watch, f_watch):
+                                if wst.name not in obs.raw_peaks:
+                                    obs.raw_peaks[wst.name] = core.raw_peak_near(raw, fw, radius, total_bin)
                     if spares:
                         f_spares = [core.move_star(sp, reg, data.shape) for sp in spares]
                         spare_vals = core.channel_inst_mags(data, f_spares, radius, sky_in, sky_out,
@@ -20985,6 +21036,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         meta["color_cal"] = self.color_cal
         meta["mode"] = self.series_mode or self.mode_key
         meta["watch_list"] = self.watch_list
+        # 2.4.0 step 7b (#92): the last gate report per star (design doc: meta["candidates"]), compact
+        meta["candidates"] = {n: promotion.compact_report(r) for n, r in (self.gate_reports or {}).items()}
+        meta["gate_nights"] = list(self._gate_nights or [])
         meta["spare_catalog"] = self.spare_catalog
         meta["comp_catalog_mags"] = self.comp_catalog_mags
         meta["active_comps"] = list(self.active_comps)
@@ -21176,6 +21230,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
+        # 2.4.0 step 7b (#92): the series' last gate reports (the window shows them until the gates run again)
+        if isinstance(meta.get("candidates"), dict):
+            self.gate_reports = {str(n): r for n, r in meta["candidates"].items() if isinstance(r, dict)}
+            self._gate_nights = [str(n) for n in meta.get("gate_nights") or []]
         if isinstance(meta.get("watch_list"), list):
             self._drop_session_watch_aliases([w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name")])
             known = {w["name"] for w in self.watch_list}
@@ -21576,6 +21634,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
         self._series_check = ("", "")
         self.star_records, self._v_disagree, self._user_cleared = [], {}, set()   # 2.4.0 step 4 (#72)
+        self.gate_reports, self._gate_nights = {}, []   # 2.4.0 step 7b (#92)
         self._series_names = set()   # 2.2.16 (item 11, review)
         self._series_site = {}   # 2.2.21 (nit j)
         self._zp_caution_cache = None
@@ -21695,6 +21754,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self.update_series_status()   # 2.3.5 (#81): the series line drops the held night
         self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
                         + f". Next night, load this file before reducing: {path}")
+        self._gates_after_save()   # 2.4.0 step 7b (#92): a gate run after each night is saved
 
     def load_series(self):
         # 2.2.15 (review): an open series with unsaved points is offered a save first, as Close series does.
@@ -21967,6 +22027,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # ---- 6. More analysis
         g = groups.parent("analysis")
         groups.add("analysis", ttk.Button(g, text="Watch stars…", command=self.show_watch))
+        # 2.4.0 step 7b (#92): the promotion gates, the Registry and the Campaign switch
+        groups.add("analysis", ttk.Button(g, text="Candidates…", command=self.show_candidates))
         # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
         groups.add("analysis", ttk.Button(g, text="Time of max/min…", command=self.show_extremum))
 
@@ -24801,6 +24863,222 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                            "or use Watch in Comp health or the field scan.")
             return
         WatchWindow(self)
+
+    # ---- 2.4.0 step 7b (#92): the promotion gates, the Registry and the Campaign switch -------------------------
+    def _gate_settings(self) -> dict:
+        """What the gate runner needs from the open series (Tk thread): period range, linear limit, frame size and
+        edge margin, the look-elsewhere M (the series' Watch stars), comps, check, spares and aliases."""
+        def num(var, default):
+            try:
+                v = float(str(var.get()).strip().replace(",", ""))
+                return v if math.isfinite(v) and v > 0 else default
+            except Exception:
+                return default
+        # 7b regression (John 21 Nov): the gate judges against the linear ADU (SHOBS-FLUX's number when it came
+        # from FLUX) even when it sits above the raw saturation setting; _linear_limit() drops it then, which
+        # left the gate on the saturation level. The saturation level is only the fallback when no linear ADU is set.
+        # John 21 Nov (13:30): a star whose own raw peak reaches the raw saturation level fails the gate too, even
+        # when the linear ADU sits above it (a frame SHOBS-P flags saturated never passes).
+        lin = num(self.linear_limit, None) if hasattr(self, "linear_limit") else None
+        sat = num(self.sat_limit, None) if hasattr(self, "sat_limit") else None
+        if lin is None:
+            lin = sat
+        shape = None
+        for o in self.observations[:20]:
+            try:
+                if o.path and os.path.isfile(o.path):
+                    shape = promotion.frame_shape_from_header(core.read_header(o.path), int(self.binning.get() or 1))
+                    if shape:
+                        break
+            except Exception:
+                continue
+        return {"min_period": num(self.min_period, 0.02), "max_period": num(self.max_period, 20.0),
+                "linear_limit": lin, "sat_level": sat, "frame_shape": shape, "edge_margin_px": num(self.sky_out, 0.0),
+                "m_trials": max(1, len(self.watch_list)),
+                "comp_names": list(self.comps_used), "check_name": self.check_used or self.check_name.get().strip(),
+                "watch_names": [w["name"] for w in self.watch_list], "spare_names": self._spares_in_series(),
+                "aliases": self._star_aliases(), "target": self.star_id.get().strip(),
+                "series": self.series_path or ""}
+
+    def _target_gate_entry(self) -> dict | None:
+        name = self.star_id.get().strip()
+        if not name or self.mode_key != "variables":
+            return None
+        try:
+            ra, dec = self.target_radec_deg()
+        except ValueError:
+            ra = dec = None
+        return {"name": name, "is_target": True, "ra": ra, "dec": dec, "gaia": "", "variable": ""}
+
+    def gate_stars(self, with_target: bool = False) -> list[dict]:
+        """The stars the gates run on: every Watch star of the series, plus the target when it is in the Registry
+        already or with_target (the Candidates window's "Check the target too")."""
+        out = [{"name": w["name"], "is_target": False, "ra": w.get("ra"), "dec": w.get("dec"),
+                "gaia": w.get("gaia_dr3") or "", "variable": w.get("variable") or ""} for w in self.watch_list]
+        tgt = self._target_gate_entry()
+        if tgt is not None:
+            try:
+                in_reg = registry.find(registry.load(), "", tgt["ra"], tgt["dec"]) is not None
+            except Exception:
+                in_reg = False
+            if with_target or in_reg or tgt["name"] in self.gate_reports:
+                out.insert(0, tgt)
+        return out
+
+    def run_gates(self, why: str = "", with_target: bool = False, on_done=None) -> bool:
+        """Run the promotion gates on the series' Watch stars (and the target, see gate_stars) in the background, then
+        update the Registry: a star whose Candidate gates pass becomes a Candidate (automatic, decision 3), a Campaign
+        star that fails a hard gate on new data has its campaign switched off (two failures in a row: Rejected)."""
+        if not self.observations:
+            return False
+        if getattr(self, "_gates_running", False):
+            return False
+        stars = self.gate_stars(with_target=with_target)
+        if not stars:
+            return False
+        cfg = self._gate_settings()
+        obs = list(self.observations)
+        nights = sorted({o.night for o in obs})
+        self._gates_running = True
+        tok = self.busy_begin(f"Promotion gates: {len(stars)} star(s)…")
+
+        gen = getattr(self, "_series_gen", 0)   # Fable S4: a run in flight never lands in another series
+
+        def work():
+            reports, error = {}, ""
+            try:
+                for k, st in enumerate(stars, 1):
+                    self.call_ui(self.busy_words, tok, f"Promotion gates: {st['name']} ({k} of {len(stars)})…")
+                    try:
+                        rep = promotion.series_gate_report(
+                            obs, st["name"], is_target=st["is_target"], target_name=cfg["target"],
+                            comp_names=cfg["comp_names"], check_name=cfg["check_name"],
+                            watch_names=cfg["watch_names"], spare_names=cfg["spare_names"], aliases=cfg["aliases"],
+                            min_period=cfg["min_period"], max_period=cfg["max_period"], m_trials=cfg["m_trials"],
+                            linear_limit=cfg["linear_limit"], sat_level=cfg.get("sat_level"),
+                            frame_shape=cfg["frame_shape"],
+                            edge_margin_px=cfg["edge_margin_px"])
+                    except Exception as exc:
+                        rep = {"star": st["name"], "gates": [], "candidate": False, "campaign": False,
+                               "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": [],
+                               "version": promotion.GATES_VERSION}   # Fable S1: not re-run on every open
+                    rep["is_target"] = st["is_target"]
+                    reports[st["name"]] = rep
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+            self.call_ui(self._gates_done, tok, reports, stars, cfg, error, nights, why, on_done, gen)
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _gates_done(self, tok, reports, stars, cfg, error, nights, why, on_done, gen=None):
+        self._gates_running = False
+        self.busy_end(tok)
+        if gen is not None and gen != getattr(self, "_series_gen", 0):
+            self.log("Promotion gates: the series changed while they ran; their results were dropped.")
+            return
+        events = []
+        if not error:
+            # Fable S5: the Registry is read, changed and written here on the Tk thread, so a Promote / End campaign /
+            # Outcome made while the gates ran is never written over by an older copy
+            try:
+                doc = registry.load()
+                for st in stars:
+                    rep = reports.get(st["name"]) or {}
+                    if not rep.get("gates"):
+                        continue
+                    rec, ev = registry.upsert_from_report(
+                        doc, rep, st["name"], st["gaia"], st["ra"], st["dec"], series_file=cfg["series"],
+                        parent_target=cfg["target"] if not st["is_target"] else "")
+                    if rec is not None and ev == "new" and st.get("variable"):
+                        registry.set_status(rec, "known", by="auto", note=f"already listed: {st['variable']}")
+                        ev = "new_known"
+                    if rec is not None:
+                        rep["registry"] = registry.status_text(rec)
+                        rep["registry_key"] = rec["key"]
+                    if ev:
+                        events.append((st["name"], ev, rep))
+                if events:
+                    registry.save(doc)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+        self.gate_reports.update(reports)
+        if not error:
+            self._gate_nights = list(nights)   # Fable nit: a failed Registry update runs again after the next save
+        new = [n for n, ev, _r in events if ev in ("new", "new_known")]
+        for name, ev, rep in events:
+            if ev == "new":
+                self.log(f"New Candidate: {name} ({rep.get('summary', '')}) — entered in the Registry.")
+            elif ev == "new_known":
+                self.log(f"{name} entered in the Registry as Known (already listed as a variable).")
+            elif ev == "campaign_fail":
+                self.log(f"⚠ {name}: campaign switched off: it failed a hard gate on the new data "
+                         f"({', '.join(registry.hard_failures(rep.get('gates')))}). It stays a Candidate.")
+            elif ev == "rejected":
+                self.log(f"⚠ {name}: Rejected after failing a hard gate twice in a row.")
+        bad = [(n, ev) for n, ev, _r in events if ev in ("campaign_fail", "rejected")]
+        if error:
+            self.log(f"⚠ Promotion gates: the Registry was not updated ({error}).")
+            messagebox.showwarning(APP_TITLE, f"The promotion gates ran, but the Registry file could not be updated:"
+                                              f"\n\n{error}")
+        elif bad:
+            messagebox.showwarning(APP_TITLE, "\n".join(
+                f"{n}: " + ("its campaign was switched off (a hard gate failed on the new data); it stays a Candidate."
+                            if ev == "campaign_fail" else "Rejected (a hard gate failed twice in a row).")
+                for n, ev in bad) + "\n\nSee Candidates… for the gates.")
+        n_c = sum(1 for r in reports.values() if r.get("candidate"))
+        self.status.set(f"Promotion gates: {len(reports)} star(s) checked, {n_c} pass the Candidate gates"
+                        + (f"; new Candidate: {', '.join(new)}" if new else "") + ". Candidates… shows them.")
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:
+                pass
+        win = getattr(self, "_candidates_win", None)
+        if win is not None:
+            try:
+                win.refresh()
+            except Exception:
+                self._candidates_win = None
+
+    def _gates_after_save(self):
+        """After Save series: run the gates when the series holds a night the last gate run did not see."""
+        if not self.observations or not (self.watch_list or self.gate_reports):
+            return
+        nights = sorted({o.night for o in self.observations})
+        if nights != list(getattr(self, "_gate_nights", [])) or self._gate_reports_outdated():
+            self.after(300, lambda: self.run_gates(why="after save"))
+
+    def _gate_reports_outdated(self) -> bool:
+        """A stored gate report made under an older rule set (promotion.GATES_VERSION) is stale like a new night."""
+        try:
+            current = {st["name"] for st in self.gate_stars()}
+        except Exception:
+            current = set(self.gate_reports or {})
+        # only the stars the gates still run on (a removed Watch star's old report never updates: Fable S1)
+        return any(int(r.get("version") or 1) < promotion.GATES_VERSION
+                   for n, r in (self.gate_reports or {}).items() if isinstance(r, dict) and n in current)
+
+    def show_candidates(self):
+        if not self.observations:
+            messagebox.showinfo(APP_TITLE, "Load or run a series first: the gates judge a star's light curve over "
+                                           "several nights.")
+            return
+        win = getattr(self, "_candidates_win", None)
+        if win is not None:
+            try:
+                win.win.lift()
+                win.refresh()
+                return
+            except Exception:
+                self._candidates_win = None
+        self._candidates_win = CandidatesWindow(self)
+        nights = sorted({o.night for o in self.observations})
+        stale = nights != list(self._gate_nights or []) or self._gate_reports_outdated()
+        if (not self.gate_reports or stale) and self.gate_stars():
+            # Fable S7: the target only with "Check the target too" (or when it is tracked already)
+            self.run_gates(why="window opened",
+                           with_target=any(r.get("is_target") for r in self.gate_reports.values()))
 
     def choose_comps(self):
         if not self.observations:
@@ -27830,6 +28108,264 @@ class WatchWindow:
                         rows[0] += 1
         if self.app.guarded_write(path, write, self.win):
             self.app.status.set(f"Wrote {rows[0]} rows to {path}")
+
+
+class CandidatesWindow:
+    """2.4.0 step 7b (#92): the promotion path for the open series' Watch stars (and its target when it is tracked):
+    each star's gates (Watch -> Candidate, then the full Campaign set), its quiet-nights strip (evidence only), its
+    Registry status, and the Campaign switch. Design: "SHOBS-P: Suspect -> Watch -> Candidate -> Campaign"."""
+
+    CHIP = {"quiet": ("#d8f0dc", "quiet"), "active": ("#fde2c4", "active"), "between": ("#eceff1", "between"),
+            "skipped": ("#ffffff", "skipped")}
+
+    def __init__(self, app):
+        self.app = app
+        win = Toplevel(app)
+        self.win = win
+        win.title(f"{APP_TITLE} — candidates and campaigns")
+        win.protocol("WM_DELETE_WINDOW", self.close)
+        top = ttk.Frame(win, style="Card.TFrame", padding=10)
+        top.pack(fill=BOTH, expand=True)
+        ttk.Label(top, text="Candidates and campaigns", font=(core.UI_FONT, 15, "bold"),
+                  style="Card.TLabel").pack(anchor=W)
+        ttk.Label(top, text="Each Watch star is tested against the promotion gates after each night is saved. A star "
+                            "that passes the Candidate gates goes into the Registry, one file for your observatory "
+                            "that SHOBS-SCHED can read. Campaign is a switch: on, the star gets its own nights.",
+                  style="Hint.TLabel", wraplength=text_wrap_px(win, chars=120), justify=LEFT).pack(anchor=W,
+                                                                                                    pady=(2, 6))
+        nav = ttk.Frame(top, style="Card.TFrame")
+        nav.pack(fill=X, side="bottom", pady=(8, 0))
+        self.run_btn = ttk.Button(nav, text="Run gates now", command=self.run)
+        self.run_btn.pack(side=LEFT)
+        self.target_btn = ttk.Button(nav, text="Check the target too", command=lambda: self.run(with_target=True))
+        self.target_btn.pack(side=LEFT, padx=6)
+        self.promote_btn = ttk.Button(nav, text="Promote to campaign", style="Accent.TButton", command=self.promote)
+        self.promote_btn.pack(side=LEFT, padx=(14, 0))
+        self.end_btn = ttk.Button(nav, text="End campaign", command=self.end_campaign)
+        self.end_btn.pack(side=LEFT, padx=6)
+        self.outcome_btn = ttk.Menubutton(nav, text="Outcome…")
+        menu = Menu(self.outcome_btn, tearoff=False)
+        for label, status in (("Confirmed new", "confirmed_new"), ("Known (already catalogued)", "known"),
+                              ("Rejected…", "rejected"), ("Back to Candidate", "candidate")):
+            menu.add_command(label=label, command=lambda s=status: self.set_outcome(s))
+        self.outcome_btn["menu"] = menu
+        self.outcome_btn.pack(side=LEFT, padx=6)
+        ttk.Button(nav, text="Export for SHOBS-SCHED…", command=self.export_sched).pack(side=LEFT, padx=(14, 0))
+        ttk.Button(nav, text="Close", command=self.close).pack(side=RIGHT)
+        self.note = StringVar(value="")
+        ttk.Label(top, textvariable=self.note, style="Card.TLabel", justify=LEFT,
+                  wraplength=text_wrap_px(win, chars=120)).pack(fill=X, side="bottom", pady=(6, 0))
+        cols = ("star", "status", "period", "snr", "cand", "camp", "quiet")
+        self.tree = ttk.Treeview(top, columns=cols, show="headings", height=6, selectmode="browse")
+        for col, label, width, stretch in (("star", "Star", 250, True), ("status", "Registry", 170, False),
+                                           ("period", "Period (d)", 100, False), ("snr", "A/σA", 70, False),
+                                           ("cand", "Candidate gates", 130, False),
+                                           ("camp", "All gates", 100, False), ("quiet", "Quiet nights", 120, False)):
+            self.tree.heading(col, text=label, anchor=W)
+            cw = col_width(self.tree, label, width)
+            self.tree.column(col, width=cw, minwidth=cw, anchor=W, stretch=stretch)
+        self.tree.pack(fill=X)
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_star())
+        self.summary = StringVar(value="")
+        ttk.Label(top, textvariable=self.summary, style="Card.TLabel", font=(core.UI_FONT, 10, "bold"),
+                  wraplength=text_wrap_px(win, chars=120), justify=LEFT).pack(anchor=W, pady=(8, 2))
+        self.strip = ttk.Frame(top, style="Card.TFrame")
+        self.strip.pack(fill=X, pady=(0, 6))
+        gcols = ("result", "gate", "value", "need", "set")
+        self.gates = ttk.Treeview(top, columns=gcols, show="headings", height=14)
+        for col, label, width, stretch in (("result", "", 90, False), ("gate", "Gate", 230, False),
+                                           ("value", "Measured", 420, True), ("need", "Needs", 300, True),
+                                           ("set", "For", 90, False)):
+            self.gates.heading(col, text=label, anchor=W)
+            self.gates.column(col, width=col_width(self.gates, label, width), anchor=W, stretch=stretch)
+        self.gates.tag_configure("fail", foreground="#b23b2b")
+        self.gates.tag_configure("unknown", foreground="#6b7780")
+        self.gates.pack(fill=BOTH, expand=True)
+        self.rows = {}
+        win.after_idle(lambda: fit_to_content(win))
+        self.refresh()
+
+    # -- data --
+    def _registry(self):
+        try:
+            return registry.load(), ""
+        except Exception as exc:
+            return None, str(exc)
+
+    def _record(self, doc, name, rep):
+        if doc is None:
+            return None
+        key = (rep or {}).get("registry_key")
+        if key and key in doc.get("stars", {}):
+            return doc["stars"][key]
+        entry = next((w for w in self.app.watch_list if w["name"] == name), None)
+        if entry is None and (rep or {}).get("is_target"):
+            t = self.app._target_gate_entry()
+            entry = {"ra": t["ra"], "dec": t["dec"]} if t else None
+        if entry is None:
+            return None
+        return registry.find(doc, entry.get("gaia_dr3") or "", entry.get("ra"), entry.get("dec"))
+
+    def refresh(self):
+        doc, err = self._registry()
+        sel = self.selected()
+        self.tree.delete(*self.tree.get_children())
+        self.rows = {}
+        names = [s["name"] for s in self.app.gate_stars()]
+        names += [n for n in self.app.gate_reports if n not in names]
+        for name in names:
+            rep = self.app.gate_reports.get(name) or {}
+            rec = self._record(doc, name, rep)
+            gates = rep.get("gates") or []
+            cand = [g for g in gates if g.get("set") == "candidate"]
+            chips = rep.get("quiet_nights") or []
+            quiet = (f"{sum(1 for c in chips if c.get('state') == 'quiet')} of "
+                     f"{sum(1 for c in chips if c.get('state') != 'skipped')}") if chips else "—"
+            p = rep.get("period_days")
+            snr = rep.get("amp_snr")
+            vals = (name + ("  (target)" if rep.get("is_target") else ""),
+                    registry.status_text(rec) if rec else ("Watch" if gates else "not run yet"),
+                    f"{p:.5f}" if isinstance(p, (int, float)) and p else "—",
+                    f"{snr:.1f}" if isinstance(snr, (int, float)) and math.isfinite(snr) else "—",
+                    f"{sum(1 for g in cand if g.get('pass') is True)} of {len(cand)}" if cand else "—",
+                    f"{sum(1 for g in gates if g.get('pass') is True)} of {len(gates)}" if gates else "—", quiet)
+            item = self.tree.insert("", END, values=vals)
+            self.rows[item] = name
+            if name == sel:
+                self.tree.selection_set(item)
+        if not self.tree.selection() and self.tree.get_children():
+            self.tree.selection_set(self.tree.get_children()[0])
+        self.target_btn.state(["disabled"] if self.app._target_gate_entry() is None
+                              or any(r.get("is_target") for r in self.app.gate_reports.values()) else ["!disabled"])
+        self.note.set(("⚠ " + err) if err else f"Registry: {registry.registry_path()}")
+        self.show_star()
+
+    def selected(self):
+        sel = self.tree.selection()
+        return self.rows.get(sel[0]) if sel else None
+
+    def show_star(self):
+        name = self.selected()
+        self.gates.delete(*self.gates.get_children())
+        for w in self.strip.winfo_children():
+            w.destroy()
+        rep = self.app.gate_reports.get(name) if name else None
+        doc, _err = self._registry()
+        rec = self._record(doc, name, rep) if name else None
+        self.summary.set((rep or {}).get("summary") or ("" if not name else "Gates not run yet: Run gates now."))
+        if rep:
+            ttk.Label(self.strip, text="Quiet nights (evidence only, not a gate):", style="Card.TLabel").pack(
+                side=LEFT, padx=(0, 6))
+            for chip in rep.get("quiet_nights") or []:
+                bg, word = self.CHIP.get(chip.get("state"), ("#ffffff", chip.get("state") or ""))
+                chi = chip.get("chi2nu")
+                text = f"{self.app.night_label(chip.get('night'), short=True)}  {word}" + (
+                    f" {chi:.1f}" if isinstance(chi, (int, float)) else "")
+                Label(self.strip, text=text, bg=bg, fg="#1d2b33", relief="solid", bd=1, padx=6, pady=2,
+                      font=(core.UI_FONT, 9)).pack(side=LEFT, padx=2)
+            for g in rep.get("gates") or []:
+                ok = g.get("pass")
+                res = "✓ pass" if ok is True else ("✗ fail" if ok is False else "– not known")
+                if ok is True and g.get("cleared_by") not in (None, "", "ours"):
+                    res = f"✓ {g['cleared_by']}"
+                self.gates.insert("", END, values=(res, g.get("label"), g.get("value"), g.get("need"),
+                                                   "Candidate" if g.get("set") == "candidate" else "Campaign"),
+                                  tags=(() if ok is True else (("fail",) if ok is False else ("unknown",))))
+        can_promote = bool(rec) and registry.campaign_ready(rec) and not rec.get("campaign") \
+            and rec.get("status") != "rejected"
+        self.promote_btn.state(["!disabled"] if can_promote else ["disabled"])
+        self.end_btn.state(["!disabled"] if rec and rec.get("campaign") else ["disabled"])
+        self.outcome_btn.state(["!disabled"] if rec else ["disabled"])
+
+    # -- actions --
+    def run(self, with_target: bool = False):
+        if not self.app.run_gates(why="by hand", with_target=with_target):
+            messagebox.showinfo(APP_TITLE, "The gates are already running, or there is no Watch star to test.",
+                                parent=self.win)
+
+    def _change(self, func):
+        name = self.selected()
+        rep = self.app.gate_reports.get(name) if name else None
+        doc, err = self._registry()
+        if doc is None:
+            messagebox.showerror(APP_TITLE, err, parent=self.win)
+            return
+        rec = self._record(doc, name, rep)
+        if rec is None:
+            messagebox.showinfo(APP_TITLE, f"{name} is not in the Registry: only a Candidate (its Candidate gates "
+                                           "passed) is.", parent=self.win)
+            return
+        if getattr(self.app, "_gates_running", False):
+            messagebox.showinfo(APP_TITLE, "The gates are running; try again when they finish.", parent=self.win)
+            return
+        if func(rec, name) is False:
+            return
+        try:
+            registry.save(doc)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"The Registry could not be saved: {exc}", parent=self.win)
+            return
+        if rep is not None:
+            rep["registry"] = registry.status_text(rec)
+            rep["registry_key"] = rec["key"]
+        self.refresh()
+
+    def promote(self):
+        def do(rec, name):
+            registry.set_campaign(rec, True, by="John")
+            self.app.log(f"{name}: campaign switched on (Registry). Export for SHOBS-SCHED gives it its own nights.")
+            self.app.status.set(f"{name}: campaign on.")
+        self._change(do)
+
+    def end_campaign(self):
+        def do(rec, name):
+            registry.set_campaign(rec, False, by="John")
+            self.app.log(f"{name}: campaign ended (it keeps its Registry record and outcome).")
+            self.app.status.set(f"{name}: campaign off.")
+        self._change(do)
+
+    def set_outcome(self, status):
+        def do(rec, name):
+            code, note = "", ""
+            if status == "rejected":
+                code = simpledialog.askstring(
+                    APP_TITLE, "Why is it rejected? One of: " + ", ".join(registry.REJECTION_CODES)
+                    + "\n(or leave blank and write a note next)", parent=self.win)
+                if code is None:
+                    return False
+                code = code.strip()
+                if code and code not in registry.REJECTION_CODES:
+                    note, code = code, ""
+                if not note:
+                    note = simpledialog.askstring(APP_TITLE, "A note (optional):", parent=self.win) or ""
+            registry.set_status(rec, status, by="John", code=code, note=note)
+            self.app.log(f"{name}: outcome set to {registry.STATUS_WORDS.get(status, status)} (Registry).")
+        self._change(do)
+
+    def export_sched(self):
+        doc, err = self._registry()
+        if doc is None:
+            messagebox.showerror(APP_TITLE, err, parent=self.win)
+            return
+        if not registry.sched_targets(doc):
+            messagebox.showinfo(APP_TITLE, "No star has its campaign switched on, so there is nothing for "
+                                           "SHOBS-SCHED yet.", parent=self.win)
+            return
+        path = self.app.output_path("SHOBS-P_campaigns_for_SHOBS-SCHED.json", title="Export for SHOBS-SCHED",
+                                    defaultextension=".json", filetypes=[("JSON", "*.json")], parent=self.win)
+        if not path:
+            return
+        try:
+            n = registry.write_sched_export(doc, path, APP_VERSION)
+        except OSError as exc:
+            messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}", parent=self.win)
+            return
+        self.app.status.set(f"Wrote {n} campaign star(s) for SHOBS-SCHED to {path}")
+        self.note.set(f"Wrote {n} campaign star(s) for SHOBS-SCHED: {path}")
+
+    def close(self):
+        self.app._candidates_win = None
+        self.win.destroy()
 
 
 EXPORT_SETUPS_FILE = os.path.join(os.path.expanduser("~"), ".shiloh_photometry_exports.json")

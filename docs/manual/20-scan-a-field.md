@@ -107,18 +107,22 @@ A star is a suspect when it passes **either** test:
 
 The second test catches low-amplitude variables the first one misses. Its motivating case is S033 (APASS
 J024812.2+505255), a δ Scuti star found by eye on 13–14 Nov 2026 at only 2.06 × normal. Against its own error bars it
-scatters 2.78 times as much as stars as bright, so the second test makes it a suspect. Because each star is judged
+scatters about 2.7 times as much as stars as bright, so the second test makes it a suspect. Because each star is judged
 against stars as bright on the same night, a night whose error bars read a little low (a camera gain that is somewhat
 off, haze) lifts every star alike and does not flood the list. One wild point (a cosmic ray, a satellite) counts at
-most as a 5 σ point, so it cannot make a star a suspect by itself.
+most as a 5 σ point, so it cannot make a star a suspect by itself. From 2.4.0 the 5 σ is measured against the noise
+stars as bright really show that night: each star's error bars are first widened by the χ²ν of its brightness
+(never narrowed), then each point is capped.
 
 On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
 star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks
 often has 10 to 30); from 24 points up the level stays 2.5. The header under the page title says *(more on short
 runs)*.
 
-One limit to know: the error bars have no scintillation or flat-field floor in them, so on the brightest stars they
-read low, and a bright star of low amplitude can read under the level there. The **× normal** test still sees it.
+The error bars have no flat-field floor in them, so on the brightest stars they read low. Before 2.4.0 that let a
+bright star of low amplitude read under the level (each point was capped at 5 σ of the too-small error bar); the
+widening above fixes it. On the 13–14 Nov GSC 03308-00462 night it lists a few more bright stars than before (15
+instead of 9 in the tuning run), which you review like any other suspect.
 
 **Saturated** means the star's raw core reached **raw sat ADU** on 2 or more frames (or it was near saturation on the
 reference frame). A star clipped on one frame only (a cosmic ray or a hot pixel can do that) is still a suspect,
@@ -263,7 +267,8 @@ name, when the field was solved with Gaia), position, magnitude, scatter, both t
 best period, and whether the scan was on the frames or on stacks. **Add as suspect** writes the file again, and so
 does a new period search (Enter in the period boxes). A new scan of the same night replaces it, but the stars you
 added by hand to the night's file come back as **by hand** suspects (the log names them, and any not found in the new
-scan). The file always goes to the Output folder the scan started with, under the Star ID and filter it started with. The log says, for
+scan). The file always goes to the Output folder the scan started with. From 2.4.0 its name starts with the **field
+folder's** name (the folder that holds the night folders, for example *GSC 03308-00462*), else the Star ID. The log says, for
 example, *"10 suspect(s) kept in GSC_03308-00462_TG_14-NOV-2026_SHOBS-P_suspects.json; 1 were suspects on other
 nights of this field too."*
 

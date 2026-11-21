@@ -96,7 +96,8 @@ class TestExcessChi2(unittest.TestCase):
         inst, merr, _ = make_field()
         honest = core.field_variability(inst, merr=merr)["excess_chi2"]
         low = core.field_variability(inst, merr=merr * 0.7)
-        self.assertAlmostEqual(float(np.nanmedian(low["chi2nu"])), 1.0 / 0.49, delta=0.3)
+        # 2.4.0 step 7b (#115): the errors are widened by the field's own chi2nu first, so chi2nu stays near 1
+        self.assertAlmostEqual(float(np.nanmedian(low["chi2nu"])), 1.0, delta=0.3)
         np.testing.assert_allclose(low["excess_chi2"], honest, rtol=0.1)   # the cap and the zero-point error do not scale
 
     def test_low_amplitude_pulsator_is_caught_by_its_own_errors(self):
