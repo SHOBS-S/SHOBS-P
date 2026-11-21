@@ -8753,7 +8753,84 @@ def parse_coordinates(text: str):
     return ra, dec
 
 
-def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None) -> dict:
+# 2.4.0 step 7a (#91, John 21 Nov): a Discovery star is a Suspect at SUSPECT_FACTOR x the scatter of stars as bright
+# (the scan's "Suspect at (x normal)" box) OR at SUSPECT_EXCESS_CHI2 x the chi2nu that stars as bright show against
+# their own errors that night. Tuned on the 13-14 Nov GSC 03308-00462 scan: S033 (APASS J024812.2+505255, a delta Sct
+# found by eye at 2.06x) has excess chi2nu 2.78; at 2.5 that night has 10 Suspects of 693 usable stars (2 by 3x).
+SUSPECT_FACTOR = 3.0
+SUSPECT_EXCESS_CHI2 = 2.5
+CHI2_TERM_CAP = 25.0   # one point adds at most 5 sigma squared to chi2 (a cosmic ray or hot pixel stays one point)
+
+
+def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
+    """2.4.0 step 7a (#91): each star's predicted magnitude error on one frame: photon noise (flux / electrons per
+    image unit) and the sky noise in the aperture (measure_many's noise), in quadrature. NaN where the flux is not
+    positive or the inputs are missing. electrons: a number (the run's median electrons per unit); the scale cancels in
+    the excess chi2nu (each star is compared with stars as bright), so a gain that is somewhat off does no harm."""
+    flux = np.asarray(flux, dtype=float)
+    noise = np.asarray(sky_noise, dtype=float) if sky_noise is not None else np.zeros_like(flux)
+    try:
+        k = float(electrons)
+    except (TypeError, ValueError):
+        k = float("nan")
+    if not (math.isfinite(k) and k > 0):
+        k = 1.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        var = np.where(np.isfinite(noise), noise, 0.0) ** 2 + np.clip(flux, 0.0, None) / k
+        err = 1.0857362 * np.sqrt(var) / flux
+    return np.where((flux > 0) & np.isfinite(err) & (err > 0), err, np.nan)
+
+
+def frame_zero_point_errors(inst: np.ndarray, ref, star_med: np.ndarray, zp: np.ndarray) -> np.ndarray:
+    """2.4.0 step 7a (#91): the error of each frame's zero point (the median of the reference stars' offsets):
+    1.2533 x their robust scatter about it / sqrt(how many). Without it every star looks too noisy against its own
+    errors on a cloudy frame. 0 where a frame has fewer than 3 reference stars."""
+    res = inst[:, ref] - star_med[ref][None, :] - zp[:, None]
+    n = np.sum(np.isfinite(res), axis=1)
+    with np.errstate(all="ignore"):
+        centre = np.nanmedian(res, axis=1)
+        mad = np.nanmedian(np.abs(res - centre[:, None]), axis=1)
+        out = 1.2533 * 1.4826 * mad / np.sqrt(np.maximum(n, 1))
+    return np.where((n >= 3) & np.isfinite(out), out, 0.0)
+
+
+def chi2nu_against_errors(corrected: np.ndarray, med: np.ndarray, sigma: np.ndarray,
+                          cap: float = CHI2_TERM_CAP) -> np.ndarray:
+    """2.4.0 step 7a (#91): each star's reduced chi-square about its own median, against its own per-point errors
+    (frames x stars), each point's term capped at `cap` so one bad point cannot make a star look variable. NaN for a
+    star with fewer than 3 usable points."""
+    with np.errstate(all="ignore"):
+        z = (corrected - med[None, :]) / sigma
+        terms = np.minimum(z ** 2, cap)
+    terms = np.where(np.isfinite(terms), terms, np.nan)
+    n = np.sum(np.isfinite(terms), axis=0)
+    with np.errstate(all="ignore"):
+        chi2 = np.nansum(terms, axis=0) / np.maximum(n - 1, 1)
+    return np.where(n >= 3, chi2, np.nan)
+
+
+def suspect_reason(excess: float, excess_chi2: float, factor_limit: float = SUSPECT_FACTOR,
+                   chi2_limit: float = SUSPECT_EXCESS_CHI2) -> str:
+    """2.4.0 step 7a (#91): why a star is a Suspect: "scatter" (x normal at or over factor_limit), "own errors"
+    (excess chi2nu at or over chi2_limit), "both", or "" (not a Suspect)."""
+    by_scatter = math.isfinite(excess) and excess >= factor_limit
+    by_errors = math.isfinite(excess_chi2) and chi2_limit > 0 and excess_chi2 >= chi2_limit
+    if by_scatter and by_errors:
+        return "both"
+    return "scatter" if by_scatter else ("own errors" if by_errors else "")
+
+
+def suspect_score(excess: float, excess_chi2: float, factor_limit: float = SUSPECT_FACTOR,
+                  chi2_limit: float = SUSPECT_EXCESS_CHI2) -> float:
+    """2.4.0 step 7a (#91): how far a star stands over the nearer of the two Suspect levels (1 = just at one of
+    them), to list the Suspects and the near misses in one order."""
+    a = excess / factor_limit if (math.isfinite(excess) and factor_limit > 0) else float("-inf")
+    b = excess_chi2 / chi2_limit if (math.isfinite(excess_chi2) and chi2_limit > 0) else float("-inf")
+    s = max(a, b)
+    return s if math.isfinite(s) else float("-inf")
+
+
+def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None) -> dict:
     """Variability statistics for every star in a field.
 
     inst: frames x stars instrumental magnitudes (NaN where unmeasured).
@@ -8761,6 +8838,10 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None)
     medians, so clouds and airmass cancel. Scatter is the robust standard deviation
     (1.4826 x MAD). The expected scatter at each brightness is a running median of all stars;
     'excess' is scatter / expected, and real variables stand well above 1.
+    2.4.0 step 7a (#91): merr (frames x stars predicted magnitude errors, scan_mag_errors) adds each star's chi2nu
+    against its own errors (plus the frame zero-point error), the chi2nu stars as bright show that night (the same
+    running median as the scatter's), and 'excess_chi2' = chi2nu / that. A night whose error model reads low lifts
+    every star alike and cancels out.
     """
     inst = np.asarray(inst, dtype=float)
     n_frames, n_stars = inst.shape
@@ -8778,7 +8859,7 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None)
     scatter = 1.4826 * mad
     expected = typical_scatter(med, scatter, usable, exclude=exclude)
     excess = scatter / expected
-    return {
+    out = {
         "corrected": corrected,
         "median": med,
         "scatter": scatter,
@@ -8788,6 +8869,18 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None)
         "n_good": good_count,
         "zero_point": zp,
     }
+    if merr is not None:
+        merr = np.asarray(merr, dtype=float)
+        if merr.shape != inst.shape:
+            raise ValueError("the error table does not match the magnitudes")
+        zp_err = frame_zero_point_errors(inst, ref, star_med, zp)
+        sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2)
+        chi2 = chi2nu_against_errors(corrected, med, sigma)
+        chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
+        with np.errstate(all="ignore"):
+            out["excess_chi2"] = chi2 / chi2_expected
+        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err})
+    return out
 
 
 def typical_scatter(mag, scatter, usable, half_width: float = 0.5, n_min: int = 5, clip: float = 2.5,
@@ -9422,11 +9515,17 @@ def scan_period_value(per: dict):
 
 
 def write_scan_candidates(path: str, result: dict) -> None:
-    """One row per star that stands out, ready to start a VSX new-variable submission."""
+    """One row per Suspect (2.4.0 step 7a: the stars that stand out), ready to start a VSX new-variable submission.
+    Step 7a (#91): with the excess chi2nu, why it is a Suspect, its Gaia DR3 ID and how many nights it was one."""
+    by = result.get("suspect_by") or {}
+    gaia = result.get("gaia") or []
+    nights = result.get("suspect_nights") or {}
+    ex2 = result.get("excess_chi2")
     with AsciiWriter(path) as fh:
         fh.write(created_line() + "\n")
-        fh.write("rank,label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,best_period_days,"
-                 "period_power,b_minus_v,v_minus_r,color_method,vsx_name,vsx_type,vsx_period,n_points,caution\n")
+        fh.write("rank,label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,excess_chi2,suspect_by,"
+                 "gaia_dr3,suspect_nights,best_period_days,period_power,b_minus_v,v_minus_r,color_method,vsx_name,"
+                 "vsx_type,vsx_period,n_points,caution\n")
         for rank, i in enumerate(result["candidates"], 1):
             def num(v, fmt="{:.4f}"):
                 return "" if v is None or not (isinstance(v, (int, float)) and math.isfinite(v)) else fmt.format(v)
@@ -9438,7 +9537,10 @@ def write_scan_candidates(path: str, result: dict) -> None:
                 num(ra, "{:.6f}"), num(dec, "{:.6f}"),
                 format_radec(ra, dec) if math.isfinite(ra) else "",
                 num(result["mag"][i], "{:.3f}"), num(result["scatter"][i]), num(result["expected"][i]),
-                num(result["excess"][i], "{:.2f}"), num(scan_period_value(per)), num(per.get("power"), "{:.3f}"),
+                num(result["excess"][i], "{:.2f}"),
+                num(float(ex2[i]), "{:.2f}") if ex2 is not None and i < len(ex2) else "",
+                by.get(i, ""), (gaia[i] if i < len(gaia) else "") or "", str(len(nights.get(i) or []) + 1) if i in by else "",
+                num(scan_period_value(per)), num(per.get("power"), "{:.3f}"),
                 num(result["bv"][i], "{:.3f}") if result.get("bv") is not None else "",
                 num(result["vr"][i], "{:.3f}") if result.get("vr") is not None else "",
                 (result.get("color_method") or {}).get("bv", ""),
@@ -9459,8 +9561,10 @@ def write_scan_stars(path: str, result: dict) -> None:
 
     with AsciiWriter(path) as fh:
         fh.write(created_line() + "\n")
-        fh.write("label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,candidate_rank,candidate_kind,"
-                 "saturated,usable,best_period_days,vsx_name,vsx_type,n_points,caution\n")
+        # 2.4.0 step 7a (#91): excess_chi2; the Discovery stage is now called Suspect (suspect_rank, suspect_kind)
+        fh.write("label,x,y,ra_deg,dec_deg,radec,mag,scatter,expected_scatter,excess,excess_chi2,suspect_rank,"
+                 "suspect_kind,saturated,usable,best_period_days,vsx_name,vsx_type,n_points,caution\n")
+        ex2 = result.get("excess_chi2")
         for i, label in enumerate(result["labels"]):
             ra, dec = result["radec"][i] if result.get("radec") else (float("nan"), float("nan"))
             vsx = result["vsx"][i] if result.get("vsx") else None
@@ -9470,11 +9574,139 @@ def write_scan_stars(path: str, result: dict) -> None:
                 str(label).replace(",", " "), f"{result['xy'][i][0]:.1f}", f"{result['xy'][i][1]:.1f}",
                 num(ra, "{:.6f}"), num(dec, "{:.6f}"), format_radec(ra, dec) if math.isfinite(ra) else "",
                 num(result["mag"][i], "{:.3f}"), num(result["scatter"][i]), num(result["expected"][i]),
-                num(result["excess"][i], "{:.2f}"), str(cand_rank.get(i, "")), kind,
+                num(result["excess"][i], "{:.2f}"),
+                num(float(ex2[i]), "{:.2f}") if ex2 is not None and i < len(ex2) else "",
+                str(cand_rank.get(i, "")), kind,
                 "yes" if i in sat else "", "yes" if result["usable"][i] else "no", num(scan_period_value(per)),
                 (vsx or {}).get("name", "").replace(",", " "), (vsx or {}).get("type", "").replace(",", " "),
                 str(int(result["n_good"][i])), "; ".join(scan_cautions(result, i)).replace(",", ";"),
             ]) + "\n")
+
+
+# ---- 2.4.0 step 7a (#92): the Suspect stage --------------------------------------------------------------------
+# A Suspect lives only on its night's Discovery results (no Registry entry; John, 15 Nov). Each night's Suspects are
+# kept in <field>_<filter>_<date>_SHOBS-P_suspects.json in that night's Output folder, written when the scan ends and
+# again when a star is added by hand; another night of the same field reads them to flag "Suspect again (N nights)".
+SUSPECTS_SUFFIX = "_SHOBS-P_suspects.json"
+SUSPECT_MATCH_ARCSEC = 3.0   # the same star on another night: within this, when no Gaia DR3 ID decides it
+
+
+def suspect_entries(result: dict) -> list[dict]:
+    """The night's Suspects as plain records for the suspects file: label, Gaia DR3 ID (the lasting ID, "" when the
+    field was not solved with Gaia), position, magnitude, scatter, x normal, excess chi2nu, why ("scatter", "own
+    errors", "both" or "by hand") and best period."""
+    by = result.get("suspect_by") or {}
+    gaia = result.get("gaia") or []
+    radec = result.get("radec")
+    ex2 = result.get("excess_chi2")
+    out = []
+
+    def num(v, nd):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return round(v, nd) if math.isfinite(v) else None
+
+    for i in result.get("candidates") or []:
+        ra, dec = radec[i] if radec else (None, None)
+        per = (result.get("periods") or {}).get(i, {})
+        out.append({
+            "label": str(result["labels"][i]), "gaia_dr3": (gaia[i] if i < len(gaia) else "") or "",
+            "ra_deg": num(ra, 6), "dec_deg": num(dec, 6),
+            "x": num(result["xy"][i][0], 1), "y": num(result["xy"][i][1], 1),
+            "mag": num(result["mag"][i], 3), "scatter": num(result["scatter"][i], 4),
+            "excess": num(result["excess"][i], 2),
+            "excess_chi2": num(ex2[i], 2) if ex2 is not None and i < len(ex2) else None,
+            "suspect_by": by.get(i, "scatter"), "period_days": num(scan_period_value(per), 6),
+        })
+    return out
+
+
+def suspects_document(result: dict, field: str, night: str, filt: str, app_version: str) -> dict:
+    """2.4.0 step 7a: the suspects file's content for one night's scan."""
+    jd = [float(j) for j in np.ravel(np.asarray(result.get("jd") if result.get("jd") is not None else [], float))
+          if math.isfinite(float(j))]
+    return {
+        "kind": "SHOBS-P Discovery suspects", "version": 1, "app": f"SHOBS-P {app_version}", "created": dtg(),
+        "field": field, "night": night, "filter": filt,
+        "jd_first": round(min(jd), 6) if jd else None, "jd_last": round(max(jd), 6) if jd else None,
+        "levels": {"factor": result.get("excess_limit", SUSPECT_FACTOR),
+                   "excess_chi2": result.get("chi2_limit", SUSPECT_EXCESS_CHI2)},
+        "frames": int(result.get("frames") or 0), "stars": len(result.get("labels") or []),
+        "suspects": suspect_entries(result),
+    }
+
+
+def read_suspects_file(path: str) -> dict | None:
+    """A suspects file's content, or None when it cannot be read or is not one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict) or doc.get("kind") != "SHOBS-P Discovery suspects":
+        return None
+    if not isinstance(doc.get("suspects"), list):
+        return None
+    return doc
+
+
+def other_suspect_files(out_folder: str) -> list[str]:
+    """The suspects files of the OTHER nights of the same field: the night's Output folder sits in the night folder,
+    which sits in the field's folder (W:\\Variables\\<field>\\<night>\\Output), so the field's other night
+    folders are searched one and two levels down (their Output, "SHOBS-P Output" or any results folder)."""
+    import glob
+    if not out_folder:
+        return []
+    here = os.path.normcase(os.path.abspath(out_folder))
+    night_dir = os.path.dirname(os.path.abspath(out_folder))
+    field_dir = os.path.dirname(night_dir)
+    if not field_dir or field_dir == night_dir:
+        return []
+    found = []
+    for pattern in ("*" + SUSPECTS_SUFFIX, os.path.join("*", "*" + SUSPECTS_SUFFIX),
+                    os.path.join("*", "*", "*" + SUSPECTS_SUFFIX)):
+        for path in glob.glob(os.path.join(field_dir, pattern)):
+            if os.path.normcase(os.path.dirname(os.path.abspath(path))) != here:
+                found.append(path)
+    return sorted(set(found))
+
+
+def same_suspect(a: dict, b: dict, tol_arcsec: float = SUSPECT_MATCH_ARCSEC) -> bool:
+    """Whether two suspect records are the same star: the same Gaia DR3 ID when both have one, else within
+    tol_arcsec on the sky. Records with neither are never matched (pixel positions move between nights)."""
+    ga, gb = str(a.get("gaia_dr3") or ""), str(b.get("gaia_dr3") or "")
+    if ga and gb:
+        return ga == gb
+    try:
+        ra1, de1, ra2, de2 = (float(a["ra_deg"]), float(a["dec_deg"]), float(b["ra_deg"]), float(b["dec_deg"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not all(math.isfinite(v) for v in (ra1, de1, ra2, de2)):
+        return False
+    return sky_separation_arcsec(ra1, de1, ra2, de2) <= tol_arcsec
+
+
+def suspect_repeats(entries: list[dict], others: list[dict]) -> list[list[str]]:
+    """2.4.0 step 7a: for each of tonight's suspect entries, the other nights (their "night" labels, oldest first by
+    jd_first) where the same star was a Suspect too. others = the other nights' suspects documents."""
+    docs = sorted((d for d in others if d), key=lambda d: (d.get("jd_first") is None, d.get("jd_first") or 0.0))
+    out = []
+    for e in entries:
+        seen = []
+        for d in docs:
+            if any(same_suspect(e, s) for s in d.get("suspects") or []):
+                label = str(d.get("night") or "another night")
+                if label not in seen:
+                    seen.append(label)
+        out.append(seen)
+    return out
+
+
+def suspect_again_text(n_other_nights: int) -> str:
+    """'Suspect again (N nights)' with N counting tonight, or '' for a first-time Suspect."""
+    return f"Suspect again ({n_other_nights + 1} nights)" if n_other_nights > 0 else ""
 
 
 def write_scan_lightcurves(path: str, result: dict) -> None:
