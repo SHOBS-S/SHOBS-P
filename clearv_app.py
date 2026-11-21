@@ -17229,54 +17229,124 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             k = float("nan")
         return k if math.isfinite(k) and k > 0 else 1.0
 
+    def _scan_chi2_limit(self) -> float:
+        """2.4.0 step 7a (#91): the "or at (χ²ν × normal)" box; 0 or blank switches the own-errors test off (Fable
+        N2). Anything else unreadable raises ValueError, which the scan's settings check reports."""
+        try:
+            text = str(self.scan_excess_chi2._tk.globalgetvar(self.scan_excess_chi2._name)).strip()
+        except Exception:
+            text = ""
+        if not text:
+            return 0.0
+        v = float(text)
+        if not math.isfinite(v) or v < 0:
+            raise ValueError("the χ²ν level must be 0 or more")
+        return v
+
+    @staticmethod
+    def _scan_jds(result) -> list:
+        jd = result.get("jd")
+        return ([float(j) for j in np.ravel(np.asarray(jd, dtype=float)) if math.isfinite(float(j))]
+                if jd is not None else [])
+
     def _suspects_file_path(self, result) -> str:
-        """2.4.0 step 7a (#92): <field>_<filter>_<date>_SHOBS-P_suspects.json in the Input page's Output folder (the
-        night's results), '' with no Output folder. One file per night and filter: a new scan of the night replaces
-        it."""
-        folder = self.output_dir.get().strip()
+        """2.4.0 step 7a (#92): <field>_<filter>_<date>_SHOBS-P_suspects.json in the Output folder the scan started
+        with (the night's results; Fable S6: kept in result["suspects_where"]), '' with no Output folder. One file
+        per night and filter: a new scan of the night replaces it."""
+        where = result.get("suspects_where") or {"folder": self.output_dir.get().strip(),
+                                                 "field": (self.star_id.get() or "").strip(),
+                                                 "filter": self._filter_code()}
+        folder = str(where.get("folder") or "").strip()
         if not folder:
             return ""
-        field = (self.star_id.get() or "").strip() or "field"
-        jd = result.get("jd")
-        jds = ([float(j) for j in np.ravel(np.asarray(jd, dtype=float)) if math.isfinite(float(j))]
-               if jd is not None else [])
+        field = str(where.get("field") or "").strip() or "field"
+        jds = self._scan_jds(result)
         date = ""
         if jds:
             a, b = (core.jd_to_datetime_utc(min(jds)).strftime("%d-%b-%Y").upper(),
                     core.jd_to_datetime_utc(max(jds)).strftime("%d-%b-%Y").upper())
             date = "_" + (a if a == b else f"{a}_to_{b}")
-        stem = f"{field.replace(' ', '_')}_{self._filter_code()}{date}"
+        stem = f"{field.replace(' ', '_')}_{where.get('filter') or ''}{date}"
         stem = "".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in stem)
         return os.path.join(folder, stem + core.SUSPECTS_SUFFIX)
 
-    def _save_suspects(self, result) -> str:
+    def _carry_hand_suspects(self, result, path) -> int:
+        """Fable S7: a new scan of the night replaces its suspects file, but the stars added BY HAND to it before are
+        kept: each is found among tonight's scan stars (same Gaia DR3 ID, or within 3") and added back "by hand".
+        Returns how many came back; the ones not found are said in the log."""
+        old = core.read_suspects_file(path) if os.path.isfile(path) else None
+        hand = [e for e in (old or {}).get("suspects", []) if e.get("suspect_by") == "by hand"]
+        if not hand:
+            return 0
+        radec = result.get("radec")
+        gaia = result.get("gaia") or []
+        by = result.setdefault("suspect_by", {})
+        back, lost = [], []
+        for e in hand:
+            hit = None
+            for i in range(len(result["labels"])):
+                star = {"gaia_dr3": gaia[i] if i < len(gaia) else "",
+                        "ra_deg": radec[i][0] if radec else None, "dec_deg": radec[i][1] if radec else None}
+                if core.same_suspect(e, star):
+                    hit = i
+                    break
+            if hit is None:
+                lost.append(str(e.get("label") or e.get("gaia_dr3") or "?"))
+            elif hit not in result["candidates"]:
+                result["candidates"].append(hit)
+                by[hit] = "by hand"
+                back.append(result["labels"][hit])
+        if back:
+            self.log(f"  Kept from this night's earlier suspects file, added by hand: {', '.join(back)}.")
+        if lost:
+            self.log(f"  Added by hand before but not found in this scan (not kept): {', '.join(lost)}.")
+        return len(back)
+
+    def _save_suspects(self, result, carry_hand: bool = False) -> str:
         """2.4.0 step 7a (#92): keep the night's Suspects beside its results, and mark the ones that were Suspects on
         other nights of the same field (result["suspect_nights"]: star -> those nights). Written whenever the
-        Suspects change (scan end, Add as suspect). A failure never stops anything: it is said in the log and the
-        status line. Returns the path written, or ''."""
+        Suspects change (scan end, Add as suspect, a period refit). carry_hand (scan end): stars added by hand to the
+        night's earlier file come back (Fable S7). A failure never stops anything: it is said in the log (the caller
+        says it on the status line). Returns the path written, or ''."""
         path = self._suspects_file_path(result)
+        result["suspects_saved"] = ""
         if not path:
             result["suspect_nights"] = {}
             self.log("  Suspects not kept for later nights: no Output folder on the Input page, so \"Suspect again\" "
                      "cannot be checked on another night of this field.")
             return ""
         folder = os.path.dirname(path)
+        if carry_hand:
+            try:
+                self._carry_hand_suspects(result, path)
+            except Exception as exc:   # never stops the scan
+                self.log(f"  (earlier suspects added by hand not read: {type(exc).__name__}: {exc})")
+        jds = self._scan_jds(result)
+        night = self.night_label(f"JD{math.floor(min(jds))}", with_target=False, jd=min(jds)) if jds else ""
+        others = []
         try:
             os.makedirs(folder, exist_ok=True)
-            others = [core.read_suspects_file(p) for p in core.other_suspect_files(folder)]
+            for p in core.other_suspect_files(folder):
+                try:   # Fable S4: one odd file never stops tonight's
+                    others.append(core.read_suspects_file(p))
+                except Exception:
+                    pass
         except OSError:
             others = []
         entries = core.suspect_entries(result)
-        repeats = core.suspect_repeats(entries, others)
+        try:
+            repeats = core.suspect_repeats(entries, others, night=night,
+                                           jd_range=(min(jds), max(jds)) if jds else None)   # Fable S2
+        except Exception as exc:
+            self.log(f"  (other nights' suspects not compared: {type(exc).__name__}: {exc})")
+            repeats = [[] for _ in entries]
         result["suspect_nights"] = {i: r for i, r in zip(result.get("candidates") or [], repeats) if r}
         for e, r in zip(entries, repeats):
             e["also_on"] = list(r)
-        jd = result.get("jd")
-        jds = ([float(j) for j in np.ravel(np.asarray(jd, dtype=float)) if math.isfinite(float(j))]
-               if jd is not None else [])
-        night = self.night_label(f"JD{math.floor(min(jds))}", with_target=False, jd=min(jds)) if jds else ""
-        doc = core.suspects_document(result, (self.star_id.get() or "").strip(), night, self._filter_code(),
-                                     APP_VERSION)
+        where = result.get("suspects_where") or {}
+        doc = core.suspects_document(result, str(where.get("field") or (self.star_id.get() or "")).strip(), night,
+                                     str(where.get("filter") or self._filter_code()), APP_VERSION)
+        doc["points"] = str(where.get("points") or "frames")   # Fable S6: a scan of the frames or of the stacks
         doc["suspects"] = entries
         tmp = path + ".tmp"
         try:
@@ -17289,10 +17359,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except OSError:
                 pass
             why = exc.strerror or str(exc)
+            result["suspects_error"] = why
             self.log(f"  {os.path.basename(path)} not written ({why}): \"Suspect again\" will not see tonight's "
                      "suspects on another night.")
-            self.status.set(f"Suspects file not written ({why}).")
             return ""
+        result["suspects_error"] = ""
+        result["suspects_saved"] = path
         again = len(result["suspect_nights"])
         self.log(f"  {len(entries)} suspect(s) kept in {os.path.basename(path)}"
                  + (f"; {again} were suspects on other nights of this field too." if again else "."))
@@ -17397,7 +17469,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             nsigma = float(self.scan_sigma.get()) if discovery else 5.0
             excess_limit = float(self.scan_excess.get()) if discovery else core.SUSPECT_FACTOR
             # 2.4.0 step 7a (#91): 0 or blank switches the own-errors test off
-            chi2_limit = (float(self.scan_excess_chi2.get() or 0.0) if discovery and hasattr(self, "scan_excess_chi2")
+            chi2_limit = (self._scan_chi2_limit() if discovery and hasattr(self, "scan_excess_chi2")
                           else core.SUSPECT_EXCESS_CHI2)
             mag_limit = float(self.scan_mag_limit.get()) if discovery and self.scan_mag_limit.get().strip() else None
         except Exception:
@@ -17561,6 +17633,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     gaia_name[k] = next((n for n in core.star_names(star) if n.startswith("Gaia DR3 ")), "")
         catalog_used = f"catalog {core.band_label(self._band())} (best of AAVSO, APASS, Gaia, Tycho per star)"
         scan_electrons = self._scan_electrons(lights, binning, pattern, mode, masters, precal)   # 2.4.0 step 7a (#91)
+        # Fable S6: where the night's suspects file goes is fixed when the scan starts (a Star ID, filter or Output
+        # folder changed afterwards does not move it); "points" says whether the scan was on frames or stacks
+        suspects_where = {"folder": self.output_dir.get().strip(), "field": (self.star_id.get() or "").strip(),
+                          "filter": self._filter_code(), "points": "stacks" if stack_run else "frames"}
         if not self._start_job(f"Scanning {len(xy)} stars in {len(lights)} frames…"):
             return
         self.photo_bring_back()   # 2.2.16 (item 16)
@@ -17741,7 +17817,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                     "excess": stats["excess"], "usable": stats["usable"], "n_good": stats["n_good"],
                     "chi2nu": stats.get("chi2nu"), "excess_chi2": ex2,   # 2.4.0 step 7a (#91)
                     "calibrated": offset != 0.0, "frames": len(rows), "zp": zp, "zp_catalog": catalog_used,
-                    "watched": watched, "names": cat_name, "gaia": gaia_name,
+                    "watched": watched, "names": cat_name, "gaia": gaia_name, "suspects_where": suspects_where,
                     "blended": list(blended), "clipped_some": clipped_some,   # 2.2.19 (#25, #26)
                     "ref_path": ref_path,   # 2.2.19 (#14): the frame the positions belong to
                     "stack_frames": frame_recs,   # 2.3.0 (#54)
@@ -17769,7 +17845,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 for i in range(len(labels)):
                     if (stats["usable"][i] and stats["scatter"][i] >= 0.005 and i not in saturated
                             and i not in too_faint):
-                        reason = core.suspect_reason(float(stats["excess"][i]), float(ex2[i]), excess_limit, chi2_limit)
+                        level = core.chi2_level(chi2_limit, stats["n_good"][i])   # Fable M1: short runs
+                        reason = core.suspect_reason(float(stats["excess"][i]), float(ex2[i]), excess_limit, level)
                         if reason:
                             why[i] = reason
                 cand = list(why)
@@ -17777,7 +17854,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 result["chi2_limit"] = chi2_limit
 
                 def score(i):
-                    return core.suspect_score(float(stats["excess"][i]), float(ex2[i]), excess_limit, chi2_limit)
+                    return core.suspect_score(float(stats["excess"][i]), float(ex2[i]), excess_limit,
+                                              core.chi2_level(chi2_limit, stats["n_good"][i]))
                 result["saturated"] = sorted(saturated)
                 if saturated:
                     how = ("a flat-topped (clipped) core" if precal else
@@ -17934,12 +18012,16 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                  + (f" ({n_err} by their own error bars only)" if n_err else "")
                  + (f", {known} already known ({src})" if result.get("vsx") is not None
                     else ", no sky positions (run Solve for the VSX/SIMBAD check)"))
+        saved_err = ""
         if self.mode_key == "discovery":
             try:   # 2.4.0 step 7a (#92): the night's Suspects kept beside its results
-                self._save_suspects(result)
+                self._save_suspects(result, carry_hand=True)
+                saved_err = result.get("suspects_error") or ""
             except Exception as exc:
                 self.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
-        self.status.set(f"Field scan: {n} suspect(s).")
+            n = len(result["candidates"])   # stars added by hand before may have come back
+        self.status.set(f"Field scan: {n} suspect(s)."
+                        + (f" Suspects file not written ({saved_err})." if saved_err else ""))   # Fable N1
         if self.mode_key == "discovery":
             self._show_scan_on_output(result)
             self.show_step(STEP_OUTPUT)
@@ -25273,6 +25355,11 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             return   # a newer range or another scan since
         r["periods"] = periods
         r["period_range"] = rng
+        if self.mode_key == "discovery" and r.get("suspects_saved"):   # Fable N4: the file keeps the new periods
+            try:
+                self._save_suspects(r)
+            except Exception as exc:
+                self.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
         view = getattr(self, "scan_view", None)
         if view is not None and getattr(view, "r", None) is r:
             try:
@@ -28075,26 +28162,20 @@ class ScanView:
         }.get(method, "")
         if fit and fit.get("problem") and method != "field":
             color_note += f" The field color fit was not used: {fit['problem']}."
-        ttk.Label(
-            top,
-            text=f"{len(result['labels'])} stars, {result['frames']} frames. Magnitudes are {cal}. "
-                 f"{n} suspect(s): stars that scatter at least {result.get('excess_limit', 3.0):g}x more than stars "
-                 "of the same brightness"
-                 + (f", or whose scatter against their own error bars (χ²ν) is at least "
-                    f"{result['chi2_limit']:g}x that of stars as bright" if result.get("chi2_limit") else "")
-                 + (f"; the {len(result.get('near') or [])} nearest misses are listed as ~1, ~2 …"
-                    if not n and result.get("near") else "") + ". "
-                 + (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
+        self._cal_text = cal
+        self.header_text = StringVar(value="")   # Fable S5: refreshed when a star is added by hand
+        self._header_tail = (
+                 (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
                     "move(s) first. " if result.get("segments", 1) > 1 else "")
-                 + 
-                 "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
+                 + "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
                  "on the scatter plot to pick several stars, then Mark on image. A suspect is a lead, not a "
                  "discovery: check it on another night and look for a nearby bright star or a bad pixel first. "
                  "\"No period\" means the best peak sat at the end of the search range: a drift, or a period "
                  "outside the range."
-                 + color_note,
-            style="Hint.TLabel", wraplength=1300, justify=LEFT,
-        ).pack(anchor=W, pady=(2, 6))
+                 + color_note)
+        self._update_header()
+        ttk.Label(top, textvariable=self.header_text, style="Hint.TLabel", wraplength=1300, justify=LEFT).pack(
+            anchor=W, pady=(2, 6))
         # 2.2.9: a "Results" save row at the bottom, as on the Variables Output page; the actions sit above it.
         results = ttk.Frame(top, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(4, 0))
@@ -28187,6 +28268,26 @@ class ScanView:
         self.canvas.get_tk_widget().bind("<Escape>", lambda _e: self.clear_selection())
         self.draw()
 
+    def _scan_suspects(self) -> list:
+        """The suspects the scan itself found (Fable S5: the near misses stay listed while every suspect is one you
+        added by hand)."""
+        by = self.r.get("suspect_by") or {}
+        return [i for i in self.r["candidates"] if by.get(i) != "by hand"]
+
+    def _update_header(self):
+        r = self.r
+        n = len(r["candidates"])
+        n_hand = n - len(self._scan_suspects())
+        level = r.get("chi2_limit")
+        self.header_text.set(
+            f"{len(r['labels'])} stars, {r['frames']} frames. Magnitudes are {self._cal_text}. "
+            f"{n} suspect(s)" + (f" ({n_hand} added by hand)" if n_hand else "")
+            + f": stars that scatter at least {r.get('excess_limit', 3.0):g}x more than stars of the same brightness"
+            + (f", or whose scatter against their own error bars (χ²ν) is at least {level:g}x that of stars as bright"
+               " (more on short runs)" if level else "")
+            + (f"; the {len(r.get('near') or [])} nearest misses are listed as ~1, ~2 …"
+               if not self._scan_suspects() and r.get("near") else "") + ". " + self._header_tail)
+
     def _is_known(self, i) -> bool:
         if i is None:
             return False
@@ -28255,9 +28356,10 @@ class ScanView:
         self.rows = {}
         hidden = self._hidden()   # 2.2.19 (#14): candidates and near misses alike
         listed = [(rank, i) for rank, i in enumerate(result["candidates"], 1) if i not in hidden]
-        if not result["candidates"]:
+        if not self._scan_suspects():   # Fable S5: also when every suspect was added by hand
             # Nothing reached the candidate level: show the closest misses, marked as such (2.2.1).
-            listed += [(f"~{k}", i) for k, i in enumerate(result.get("near") or [], 1) if i not in hidden]
+            listed += [(f"~{k}", i) for k, i in enumerate(result.get("near") or [], 1)
+                       if i not in hidden and i not in result["candidates"]]
         listed += [("W", i) for i in result.get("watched", []) if i not in result["candidates"]]
         for rank, i in listed:
             per = result["periods"].get(i, {})
@@ -28699,10 +28801,20 @@ class ScanView:
             except Exception as exc:
                 self.app.log(f"  (suspects file skipped: {type(exc).__name__}: {exc})")
         self.selected = new[-1]
+        self.picked = [i for i in self.picked if i not in new]
+        self.n_known = sum(1 for i in r["candidates"] if self._is_known(i))   # Fable S5
+        self._update_header()
         self._fill_table()
         if getattr(self, "fig", None) is not None:
             self.draw()
-        self.app.status.set(f"Added as suspect: {names}.")
+        if self.app.scan_marks and self.app.last_scan is r and getattr(self.app, "_scan_marks_source", None) != "selection":
+            try:   # the marks of every suspect on the image follow
+                self.app.mark_scan_candidates(r, skip=self._hidden(), show=False)
+                self._update_mark_button()
+            except Exception:
+                traceback.print_exc()
+        err = r.get("suspects_error") if self.app.mode_key == "discovery" else ""
+        self.app.status.set(f"Added as suspect: {names}." + (f" Suspects file not written ({err})." if err else ""))
 
     def _scan_stem(self) -> str:
         """<field>_<filter>_<date>_SHOBS-P_scan, the 2.2.5 file-name pattern (2.2.9)."""

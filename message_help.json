@@ -2017,6 +2017,27 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "Kept from this night's earlier suspects file, added by hand: …"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Added by hand before but not found in this scan (not kept): …"
+   ],
+   "todo": "Find it on the plot and Add as suspect again if you still want it."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… Suspects file not written (…)."
+   ],
+   "todo": "Fix the Output folder, then Add as suspect or scan again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "Already a suspect.",
     "Select a star first (a point on the plot or a row in the table), then Add as suspect."
    ],

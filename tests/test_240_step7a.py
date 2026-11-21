@@ -227,6 +227,76 @@ class TestSuspectsFile(unittest.TestCase):
             self.assertNotIn("candidate_rank", head2)
 
 
+class TestReviewFixes(unittest.TestCase):
+    """Fable review of step 7a."""
+
+    def test_short_runs_raise_the_level(self):   # M1
+        self.assertEqual(core.chi2_level(2.5, 97), 2.5)
+        self.assertAlmostEqual(core.chi2_level(2.5, 10), 1 + 5 * math.sqrt(2 / 9))
+        self.assertEqual(core.chi2_level(0, 10), 0.0)          # the test switched off stays off
+        self.assertEqual(core.chi2_level(2.5, 2), float("inf"))
+
+    def test_pure_noise_short_run_lists_no_suspects(self):   # M1
+        for n_frames in (10, 12, 15):
+            hits = 0
+            for seed in range(5):
+                inst, merr, _ = make_field(n_stars=700, n_frames=n_frames, seed=100 + seed)
+                st = core.field_variability(inst, merr=merr)
+                for k in np.where(st["usable"])[0]:
+                    lv = core.chi2_level(core.SUSPECT_EXCESS_CHI2, st["n_good"][k])
+                    if core.suspect_reason(np.nan, st["excess_chi2"][k], chi2_limit=lv):
+                        hits += 1
+            self.assertLessEqual(hits / 5, 1.0, n_frames)       # was 7.8 per scan at 10 frames (now 0.8 of 700)
+
+    def test_tonight_is_never_another_night(self):   # S2
+        r = scan_result()
+        e = core.suspect_entries(r)
+        same = core.suspects_document(r, "f", "night of 13-14 Nov 2026", "R", "2.4.0")
+        overlap = core.suspects_document(r, "f", "13-14 Nov (other label)", "V", "2.4.0")
+        overlap.update({"jd_first": 2461358.6, "jd_last": 2461358.9})
+        other = core.suspects_document(r, "f", "night of 8-9 Nov 2026", "V", "2.4.0")
+        other.update({"jd_first": 2461353.6, "jd_last": 2461353.9})
+        reps = core.suspect_repeats(e, [same, overlap, other], night="night of 13-14 Nov 2026",
+                                    jd_range=(2461358.5, 2461358.7))
+        self.assertEqual(reps[0], ["night of 8-9 Nov 2026"])
+
+    def test_brackets_and_drive_root(self):   # S3, S6
+        with tempfile.TemporaryDirectory() as tmp:
+            field = os.path.join(tmp, "Field [A]")
+            for night in ("n1", "n2"):
+                os.makedirs(os.path.join(field, night, "Output"))
+            with open(os.path.join(field, "n1", "Output", "x" + core.SUSPECTS_SUFFIX), "w") as fh:
+                fh.write("{}")
+            self.assertEqual(len(core.other_suspect_files(os.path.join(field, "n2", "Output"))), 1)
+        root = os.path.abspath(os.sep)
+        self.assertEqual(core.other_suspect_files(os.path.join(root, "X", "Output")), [])
+
+    def test_odd_files(self):   # S4
+        with tempfile.TemporaryDirectory() as tmp:
+            def put(doc):
+                p = os.path.join(tmp, "a.json")
+                with open(p, "w") as fh:
+                    json.dump(doc, fh)
+                return core.read_suspects_file(p)
+            base = {"kind": "SHOBS-P Discovery suspects", "version": 1, "suspects": ["junk", {"label": "S1"}],
+                    "jd_first": "x", "night": None}
+            d = put(base)
+            self.assertEqual(d["suspects"], [{"label": "S1"}])
+            self.assertIsNone(d["jd_first"])
+            self.assertEqual(d["night"], "")
+            self.assertIsNone(put(dict(base, version=2)))       # a later version's file
+            e = core.suspect_entries(scan_result())
+            core.suspect_repeats(e, [d, put(dict(base, jd_first=2461353.5))])   # mixed jd_first: no TypeError
+
+    def test_empty_gaia_name(self):   # N8
+        a = {"gaia_dr3": "Gaia DR3 ", "ra_deg": 1.0, "dec_deg": 1.0}
+        self.assertFalse(core.same_suspect(a, {"gaia_dr3": "Gaia DR3", "ra_deg": 9.0, "dec_deg": 9.0}))
+        self.assertTrue(core.same_suspect(a, {"gaia_dr3": "Gaia DR3 5", "ra_deg": 1.0, "dec_deg": 1.0}))
+
+    def test_nan_sky_noise(self):   # N6
+        self.assertTrue(np.isnan(core.scan_mag_errors(np.array([1000.0]), np.array([np.nan]), 1.0)[0]))
+
+
 class TestWording(unittest.TestCase):
     def test_discovery_says_suspect(self):
         src = _src()
@@ -271,6 +341,7 @@ class TestInTheApp(unittest.TestCase):
             os.makedirs(old_out)
             r = scan_result()
             old = core.suspects_document(r, "Field X", "night of 8-9 Nov 2026", "TG", "2.4.0")
+            old.update({"jd_first": 2461353.6, "jd_last": 2461353.9})   # another night (Fable S2)
             with open(os.path.join(old_out, "Field_X_TG_09-NOV-2026" + core.SUSPECTS_SUFFIX), "w") as fh:
                 json.dump(old, fh)
             self.app.star_id.set("Field X")
@@ -295,9 +366,63 @@ class TestInTheApp(unittest.TestCase):
         self.assertEqual(r["suspect_nights"], {})
         self.assertTrue(any("no Output folder" in t for t in self.lines))
 
+    def test_near_misses_stay_while_all_suspects_are_by_hand(self):   # Fable S5
+        import tkinter as tk
+        r = scan_result()
+        r.update({"candidates": [], "suspect_by": {}, "light_curves": np.zeros((40, 5)),
+                  "jd": np.linspace(2461358.5, 2461358.8, 40), "period_range": (0.02, 2.0), "saturated": [],
+                  "near": [2, 3, 4], "watched": [], "near_sat": [], "names": [""] * 5, "calibrated": False})
+        top = tk.Toplevel(self.app)
+        try:
+            view = self.ca.ScanView(top, self.app, r, on_close=top.destroy)
+            self.assertIn("0 suspect(s)", view.header_text.get())
+            view.selected, view.picked = 3, []
+            view.add_suspect()
+            listed = sorted(view.rows.values())
+            self.assertEqual(listed, [2, 3, 4])                # 3 as a suspect, 2 and 4 still near misses
+            self.assertIn("1 suspect(s) (1 added by hand)", view.header_text.get())
+            self.assertIn("nearest misses", view.header_text.get())
+        finally:
+            top.destroy()
+
     def test_electrons(self):
         k = self.app._scan_electrons([], 1, core.MONO, "green", None, False)
         self.assertEqual(k, 1.0)                        # no header: 1 e-/unit, never a crash
+
+    def test_blank_level_switches_off(self):   # Fable N2
+        self.app.scan_excess_chi2.set(2.5)
+        self.assertEqual(self.app._scan_chi2_limit(), 2.5)
+        self.app.tk.globalsetvar(self.app.scan_excess_chi2._name, "")
+        try:
+            self.assertEqual(self.app._scan_chi2_limit(), 0.0)
+            self.app.tk.globalsetvar(self.app.scan_excess_chi2._name, "abc")
+            with self.assertRaises(ValueError):
+                self.app._scan_chi2_limit()
+        finally:
+            self.app.scan_excess_chi2.set(2.5)
+
+    def test_where_is_fixed_at_scan_start_and_hand_suspects_kept(self):   # Fable S6, S7
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "F", "n1", "Output")
+            r = scan_result()
+            r["suspects_where"] = {"folder": out, "field": "Field Y", "filter": "TG", "points": "stacks"}
+            r["suspect_by"][3] = "by hand"
+            r["candidates"].append(3)
+            self.app.output_dir.set(os.path.join(tmp, "elsewhere"))
+            self.app.star_id.set("Something else")
+            try:
+                path = self.app._save_suspects(r)
+            finally:
+                self.app.output_dir.set("")
+            self.assertEqual(os.path.dirname(path), out)
+            self.assertTrue(os.path.basename(path).startswith("Field_Y_TG_"))
+            self.assertEqual(core.read_suspects_file(path)["points"], "stacks")
+            # a new scan of the night: the star added by hand comes back
+            r2 = scan_result()
+            r2["suspects_where"] = dict(r["suspects_where"])
+            self.app._save_suspects(r2, carry_hand=True)
+            self.assertIn(3, r2["candidates"])
+            self.assertEqual(r2["suspect_by"][3], "by hand")
 
     def test_add_as_suspect(self):
         import tkinter as tk
@@ -320,6 +445,7 @@ class TestInTheApp(unittest.TestCase):
             view.add_suspect()                          # again: nothing changes
             self.assertEqual(len(r["candidates"]), n)
             self.assertIn("Already a suspect", self.app.status.get())
+            self.assertIn("1 added by hand", view.header_text.get())
             vals = [view.tree.item(iid, "values") for iid, i in view.rows.items() if i == 1][0]
             cols = list(view.tree["columns"])
             self.assertEqual(vals[cols.index("why")], "own errors")

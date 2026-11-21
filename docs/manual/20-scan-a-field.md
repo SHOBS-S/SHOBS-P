@@ -85,7 +85,7 @@ The **Scan settings** box on the right holds:
 | **Faintest magnitude** | blank | The faintest catalog magnitude that can be a suspect. Blank: SHOBS-P stops where the field's typical scatter reaches 0.25 mag, and says where in the log. |
 | **Detection threshold (σ)** | 5.0 | How far above the sky noise a star must be to be measured. Lower finds fainter stars, and more noise. |
 | **Suspect at (× normal)** | 3.0 | How many times more than normal a star must scatter to be a suspect. |
-| **or at (χ²ν × normal)** | 2.5 | The second test: how many times more than normal a star's scatter against its own error bars (χ²ν) must be. 0 switches this test off. |
+| **or at (χ²ν × normal)** | 2.5 | The second test: how many times more than normal a star's scatter against its own error bars (χ²ν) must be. 0 or blank switches this test off. |
 | **Most stars to measure** | 800 | The brightest stars first, up to this number. The log says when the limit is reached; raise it to go fainter. |
 | **Period search (days)** | 0.02 to 20 | The period range of the suspects' periodograms. Remembered between sessions. (A range left at the old default, 0.05, moves to 0.02 once.) |
 | **Leave out crowded stars (neighbor in the aperture or sky ring)** | on | Skip stars where a neighbor's light reaching the aperture is 1 % or more of the star's own. |
@@ -111,6 +111,14 @@ scatters 2.78 times as much as stars as bright, so the second test makes it a su
 against stars as bright on the same night, a night whose error bars read a little low (a camera gain that is somewhat
 off, haze) lifts every star alike and does not flood the list. One wild point (a cosmic ray, a satellite) counts at
 most as a 5 σ point, so it cannot make a star a suspect by itself.
+
+On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
+star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks
+often has 10 to 30); from 24 points up the level stays 2.5. The header under the page title says *(more on short
+runs)*.
+
+One limit to know: the error bars have no scintillation or flat-field floor in them, so on the brightest stars they
+read low, and a bright star of low amplitude can read under the level there. The **× normal** test still sees it.
 
 **Saturated** means the star's raw core reached **raw sat ADU** on 2 or more frames (or it was near saturation on the
 reference frame). A star clipped on one frame only (a cosmic ray or a hot pixel can do that) is still a suspect,
@@ -250,14 +258,18 @@ Tick **Suspects only** in the **View** box to hide everything else on the image.
 When the scan ends, SHOBS-P keeps the night's suspects beside its results, in the Input page's **Output** folder:
 `<field>_<filter>_<date>_SHOBS-P_suspects.json`. It holds each suspect's label, its **Gaia DR3 ID** (its lasting
 name, when the field was solved with Gaia), position, magnitude, scatter, both test values, why it is a suspect and its
-best period. **Add as suspect** writes the file again. A new scan of the same night replaces it. The log says, for
+best period, and whether the scan was on the frames or on stacks. **Add as suspect** writes the file again, and so
+does a new period search (Enter in the period boxes). A new scan of the same night replaces it, but the stars you
+added by hand to the night's file come back as **by hand** suspects (the log names them, and any not found in the new
+scan). The file always goes to the Output folder the scan started with, under the Star ID and filter it started with. The log says, for
 example, *"10 suspect(s) kept in GSC_03308-00462_TG_14-NOV-2026_SHOBS-P_suspects.json; 1 were suspects on other
 nights of this field too."*
 
 For **Suspect again**, SHOBS-P reads the suspects files of the field's other nights: the night's Output folder sits in
 its night folder, which sits in the field's folder (for example `W:\Variables\GSC 03308-00462\13Nov26\Output`), so the
 other night folders of `GSC 03308-00462` are searched. The same star is matched by its Gaia DR3 ID, or within 3″ when
-one of the nights has no Gaia ID. Discovery still judges each night on its own: a repeat is a flag, never a test.
+one of the nights has no Gaia ID. A file of the same night (another filter's Output folder, or a copy) is never
+counted as another night. Discovery still judges each night on its own: a repeat is a flag, never a test.
 
 With no Output folder on the Input page, no file is written; the log says that **Suspect again** cannot be checked on
 another night.

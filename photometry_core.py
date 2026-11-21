@@ -8776,7 +8776,8 @@ def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
     if not (math.isfinite(k) and k > 0):
         k = 1.0
     with np.errstate(divide="ignore", invalid="ignore"):
-        var = np.where(np.isfinite(noise), noise, 0.0) ** 2 + np.clip(flux, 0.0, None) / k
+        # Fable N6: a point whose sky noise is unknown has no error (a photon-only error would be too small)
+        var = noise ** 2 + np.clip(flux, 0.0, None) / k
         err = 1.0857362 * np.sqrt(var) / flux
     return np.where((flux > 0) & np.isfinite(err) & (err > 0), err, np.nan)
 
@@ -8809,10 +8810,27 @@ def chi2nu_against_errors(corrected: np.ndarray, med: np.ndarray, sigma: np.ndar
     return np.where(n >= 3, chi2, np.nan)
 
 
+def chi2_level(chi2_limit: float, n_points) -> float:
+    """2.4.0 step 7a (Fable M1): the excess chi2nu level for a star measured on n_points frames. chi2nu scatters by
+    about sqrt(2 / (n - 1)) from noise alone, so on a short run (a scan of 10-30 stacks) the fixed level would list
+    noise stars; the level is never under 1 + 5 x that spread (3.36 at 10 points, 2.89 at 15; from 24 points up
+    2.5 stays). 0 (the test off) stays 0."""
+    if not chi2_limit or chi2_limit <= 0:
+        return 0.0
+    try:
+        n = float(n_points)
+    except (TypeError, ValueError):
+        return float(chi2_limit)
+    if not math.isfinite(n) or n < 3:
+        return float("inf")
+    return max(float(chi2_limit), 1.0 + 5.0 * math.sqrt(2.0 / (n - 1.0)))
+
+
 def suspect_reason(excess: float, excess_chi2: float, factor_limit: float = SUSPECT_FACTOR,
                    chi2_limit: float = SUSPECT_EXCESS_CHI2) -> str:
     """2.4.0 step 7a (#91): why a star is a Suspect: "scatter" (x normal at or over factor_limit), "own errors"
-    (excess chi2nu at or over chi2_limit), "both", or "" (not a Suspect)."""
+    (excess chi2nu at or over chi2_limit, which the caller sets per star with chi2_level), "both", or "" (not a
+    Suspect)."""
     by_scatter = math.isfinite(excess) and excess >= factor_limit
     by_errors = math.isfinite(excess_chi2) and chi2_limit > 0 and excess_chi2 >= chi2_limit
     if by_scatter and by_errors:
@@ -8875,6 +8893,10 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
             raise ValueError("the error table does not match the magnitudes")
         zp_err = frame_zero_point_errors(inst, ref, star_med, zp)
         sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2)
+        # Known limit (Fable S1, left for later, John's tuning kept): the 5-sigma cap bites on the absolute points, so
+        # where the error model reads far low (bright stars with no scintillation or flat-field floor in it) the
+        # ratio is compressed and a bright low-amplitude variable can read under the level. A widen-then-cap pass
+        # moved S033 to 2.49 on the tuning night, so the single pass John tuned on stays.
         chi2 = chi2nu_against_errors(corrected, med, sigma)
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
@@ -9589,6 +9611,7 @@ def write_scan_stars(path: str, result: dict) -> None:
 # again when a star is added by hand; another night of the same field reads them to flag "Suspect again (N nights)".
 SUSPECTS_SUFFIX = "_SHOBS-P_suspects.json"
 SUSPECT_MATCH_ARCSEC = 3.0   # the same star on another night: within this, when no Gaia DR3 ID decides it
+SUSPECTS_VERSION = 1
 
 
 def suspect_entries(result: dict) -> list[dict]:
@@ -9628,7 +9651,7 @@ def suspects_document(result: dict, field: str, night: str, filt: str, app_versi
     jd = [float(j) for j in np.ravel(np.asarray(result.get("jd") if result.get("jd") is not None else [], float))
           if math.isfinite(float(j))]
     return {
-        "kind": "SHOBS-P Discovery suspects", "version": 1, "app": f"SHOBS-P {app_version}", "created": dtg(),
+        "kind": "SHOBS-P Discovery suspects", "version": SUSPECTS_VERSION, "app": f"SHOBS-P {app_version}", "created": dtg(),
         "field": field, "night": night, "filter": filt,
         "jd_first": round(min(jd), 6) if jd else None, "jd_last": round(max(jd), 6) if jd else None,
         "levels": {"factor": result.get("excess_limit", SUSPECT_FACTOR),
@@ -9649,6 +9672,19 @@ def read_suspects_file(path: str) -> dict | None:
         return None
     if not isinstance(doc.get("suspects"), list):
         return None
+    try:   # Fable S4: a later version's file is not read by this one
+        if int(doc.get("version", 1)) > SUSPECTS_VERSION:
+            return None
+    except (TypeError, ValueError):
+        return None
+    doc["suspects"] = [e for e in doc["suspects"] if isinstance(e, dict)]
+    for key in ("jd_first", "jd_last"):
+        try:
+            v = float(doc.get(key))
+            doc[key] = v if math.isfinite(v) else None
+        except (TypeError, ValueError):
+            doc[key] = None
+    doc["night"] = str(doc.get("night") or "")
     return doc
 
 
@@ -9662,12 +9698,14 @@ def other_suspect_files(out_folder: str) -> list[str]:
     here = os.path.normcase(os.path.abspath(out_folder))
     night_dir = os.path.dirname(os.path.abspath(out_folder))
     field_dir = os.path.dirname(night_dir)
-    if not field_dir or field_dir == night_dir:
+    # Fable S6: never search a whole drive (an Output folder one level under the root: W:\\X\\Output)
+    if not field_dir or field_dir == night_dir or os.path.dirname(field_dir) == field_dir:
         return []
     found = []
+    base = glob.escape(field_dir)   # Fable S3: a field folder named "Field [A]" is not a character class
     for pattern in ("*" + SUSPECTS_SUFFIX, os.path.join("*", "*" + SUSPECTS_SUFFIX),
                     os.path.join("*", "*", "*" + SUSPECTS_SUFFIX)):
-        for path in glob.glob(os.path.join(field_dir, pattern)):
+        for path in glob.glob(os.path.join(base, pattern)):
             if os.path.normcase(os.path.dirname(os.path.abspath(path))) != here:
                 found.append(path)
     return sorted(set(found))
@@ -9676,7 +9714,11 @@ def other_suspect_files(out_folder: str) -> list[str]:
 def same_suspect(a: dict, b: dict, tol_arcsec: float = SUSPECT_MATCH_ARCSEC) -> bool:
     """Whether two suspect records are the same star: the same Gaia DR3 ID when both have one, else within
     tol_arcsec on the sky. Records with neither are never matched (pixel positions move between nights)."""
-    ga, gb = str(a.get("gaia_dr3") or ""), str(b.get("gaia_dr3") or "")
+    ga, gb = str(a.get("gaia_dr3") or "").strip(), str(b.get("gaia_dr3") or "").strip()
+    if ga == "Gaia DR3":   # Fable N8: a name with no source ID is no ID
+        ga = ""
+    if gb == "Gaia DR3":
+        gb = ""
     if ga and gb:
         return ga == gb
     try:
@@ -9688,10 +9730,25 @@ def same_suspect(a: dict, b: dict, tol_arcsec: float = SUSPECT_MATCH_ARCSEC) -> 
     return sky_separation_arcsec(ra1, de1, ra2, de2) <= tol_arcsec
 
 
-def suspect_repeats(entries: list[dict], others: list[dict]) -> list[list[str]]:
+def _same_night(doc: dict, night: str, jd_range) -> bool:
+    """Fable S2: a document of TONIGHT (another filter's or a copy's Output folder in the same night folder): the
+    same night label, or a JD range that overlaps tonight's."""
+    if night and str(doc.get("night") or "") == night:
+        return True
+    try:
+        a, b = float(doc.get("jd_first")), float(doc.get("jd_last"))
+        lo, hi = float(jd_range[0]), float(jd_range[1])
+    except (TypeError, ValueError, IndexError):
+        return False
+    return all(math.isfinite(v) for v in (a, b, lo, hi)) and a <= hi and lo <= b
+
+
+def suspect_repeats(entries: list[dict], others: list[dict], night: str = "", jd_range=None) -> list[list[str]]:
     """2.4.0 step 7a: for each of tonight's suspect entries, the other nights (their "night" labels, oldest first by
-    jd_first) where the same star was a Suspect too. others = the other nights' suspects documents."""
-    docs = sorted((d for d in others if d), key=lambda d: (d.get("jd_first") is None, d.get("jd_first") or 0.0))
+    jd_first) where the same star was a Suspect too. others = the other nights' suspects documents; documents of
+    tonight itself (night label, or jd_range overlapping) are left out (Fable S2)."""
+    docs = [d for d in others if d and not _same_night(d, night, jd_range)]
+    docs.sort(key=lambda d: (d.get("jd_first") is None, d.get("jd_first") or 0.0))
     out = []
     for e in entries:
         seen = []
