@@ -2270,10 +2270,23 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         style.configure("Side.TLabel", background="#16324a", foreground="#f4f7f8")
         style.configure("SideHint.TLabel", background="#16324a", foreground="#b7c7d1")
         style.configure("Step.TButton", anchor=W, padding=(12, 8), background="#1f4464", foreground="#f4f7f8")
-        style.map("Step.TButton", background=[("active", "#2a5a80")], foreground=[("active", "#ffffff")])
+        style.map("Step.TButton", background=[("pressed", "#0f2a40"), ("active", "#2a5a80")],
+                  foreground=[("active", "#ffffff")], relief=[("pressed", "sunken"), ("!pressed", "raised")])
         style.configure("Accent.TButton", padding=(12, 6), background="#c47a2c", foreground="#ffffff")
         style.configure("Compact.TButton", padding=(6, 0))   # 2.3.2 (item 10): Hide/Show tips, a thin status row
-        style.map("Accent.TButton", background=[("active", "#a86622")], foreground=[("active", "#ffffff")])
+        # 7b regression (John 21 Nov): a disabled orange button must look disabled (it looked live), and every
+        # button shows the press itself: darker and pushed in while the mouse is down, so the user sees the click
+        # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
+        style.map("Accent.TButton",
+                  background=[("disabled", "#d9cbbd"), ("pressed", "#7f4c17"), ("active", "#a86622")],
+                  foreground=[("disabled", "#8a7a6a"), ("pressed", "#ffffff"), ("active", "#ffffff")],
+                  relief=[("pressed", "sunken"), ("!pressed", "raised")],
+                  bordercolor=[("pressed", "#5a360f")])
+        style.map("TButton", background=[("disabled", "#e3e8eb"), ("pressed", "#b9c6ce"), ("active", "#f0f4f6")],
+                  relief=[("pressed", "sunken"), ("!pressed", "raised")])
+        style.map("Compact.TButton", background=[("disabled", "#e3e8eb"), ("pressed", "#b9c6ce"),
+                                                 ("active", "#f0f4f6")],
+                  relief=[("pressed", "sunken"), ("!pressed", "raised")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
@@ -2292,7 +2305,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for key, m in MODES.items():
             style.configure(f"Mode{key}.TButton", anchor=W, padding=(12, 7), background=m["step"], foreground="#ffffff",
                             bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
-            style.map(f"Mode{key}.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")])
+            style.map(f"Mode{key}.TButton", background=[("active", m["active"])], foreground=[("active", "#ffffff")],
+                      relief=[("pressed", "sunken"), ("!pressed", "raised")])
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
@@ -24828,11 +24842,14 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         edge margin, the look-elsewhere M (the series' Watch stars), comps, check, spares and aliases."""
         def num(var, default):
             try:
-                v = float(var.get())
+                v = float(str(var.get()).strip().replace(",", ""))
                 return v if math.isfinite(v) and v > 0 else default
             except Exception:
                 return default
-        lin = self._linear_limit()
+        # 7b regression (John 21 Nov): the gate judges against the linear ADU (SHOBS-FLUX's number when it came
+        # from FLUX) even when it sits above the raw saturation setting; _linear_limit() drops it then, which
+        # left the gate on the saturation level. The saturation level is only the fallback when no linear ADU is set.
+        lin = num(self.linear_limit, None) if hasattr(self, "linear_limit") else None
         if lin is None:
             lin = num(self.sat_limit, None) if hasattr(self, "sat_limit") else None
         shape = None

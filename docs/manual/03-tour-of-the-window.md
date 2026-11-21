@@ -87,6 +87,10 @@ calibration goes straight to Photometry, and a finished photometry run goes stra
 
 Most pages also have **Back** and **Next: …** buttons at the bottom.
 
+Every button shows your click: while the mouse button is down it darkens and looks pushed in, so you can see
+the click landed before the job starts. A button that can't be used right now is greyed out (the colored ones turn a
+pale tan); clicking it does nothing.
+
 ## Page titles and hints
 
 Each page starts with its title in large type (for example **Calibrate**) and a short gray hint under it saying what

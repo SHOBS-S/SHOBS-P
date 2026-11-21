@@ -145,7 +145,9 @@ The **Campaign** switch lights when every gate passes, these and the rest: 5 nig
 cycle on 70 % of them); the period and amplitude stay within 10 % with the two flip sides fitted separately; the
 look-elsewhere FAP under 1e-4; every other star of the frames (comps, check, spares, other watch stars) quiet at the
 period (**null tests**); no correlation of |r| 0.3 or more with airmass, FWHM, sky or the star's x/y position, and
-none of those with strong, significant power at the period; every frame under the linear limit; the star clear of
+none of those with strong, significant power at the period; every frame under the linear limit (the **linear ADU**
+on the Photometry page, SHOBS-FLUX's number when it came from there; the raw saturation level only when no linear
+ADU is set); the star clear of
 the frame edges on 95 % of frames. Nights whose check star scatters more than 1.5 times its typical night are left out
 before any gate runs (the quiet-nights strip shows them as *skipped*).
 
