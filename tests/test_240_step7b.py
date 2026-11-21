@@ -144,6 +144,29 @@ class TestGates(unittest.TestCase):
         self.assertFalse(self.gate(rep, "nulls")["pass"])
         self.assertFalse(rep["campaign"])
 
+    def test_one_third_day_alias_fails(self):
+        """Fable M1: 0.36 d nights cap the search, so a night as long as P is always there; the exemption needs a
+        night that finds the period itself."""
+        t, n, s = night_times([2461353.6, 2461354.6, 2461355.6, 2461356.6, 2461357.6], hours=8.6)
+        star = curve("S", t, n, s, amp=0.01, period=0.3334, seed=21)
+        rep = pr.gate_report(star, [], None, min_period=0.02, max_period=20)
+        g = self.gate(rep, "alias_1d")
+        if pr.alias_1d_text(rep["period_days"]):
+            exempt = any(r.get("found") and r.get("span", 0) >= 1.25 * rep["period_days"] for r in rep["single_nights"])
+            self.assertEqual(g["pass"], exempt)
+
+    def test_thin_run_does_not_replace_evidence(self):
+        doc = reg.empty()
+        t, n, s = night_times(SIX)
+        good = pr.gate_report(curve("S", t, n, s, amp=0.0104, noise=0.0076, seed=1), [], None, min_period=0.02,
+                              max_period=20)
+        rec, _ = reg.upsert_from_report(doc, good, "S", "", 1.0, 2.0)
+        t2, n2, s2 = night_times([2461400.6], hours=0.5)
+        thin = pr.gate_report(curve("S", t2, n2, s2, seed=2), [], None)
+        rec2, ev = reg.upsert_from_report(doc, thin, "S", "", 1.0, 2.0)
+        self.assertEqual(ev, "")
+        self.assertEqual(rec2["evidence"]["n_points"], good["n_points"])
+
     def test_bonferroni(self):
         self.assertEqual(pr.bonferroni_fap(1e-4, 20), 2e-3)
         self.assertEqual(pr.bonferroni_fap(0.2, 10), 1.0)
@@ -232,10 +255,14 @@ class TestRegistry(unittest.TestCase):
             if g["key"] == "nulls":
                 g["pass"] = False
         reg.set_status(rec, "candidate")
+        bad["n_points"] += 10   # a new night
         rec2, ev = reg.upsert_from_report(doc, bad, "S", "", 1.0, 2.0)
         self.assertEqual(ev, "campaign_fail")
         self.assertFalse(rec2["campaign"])
         self.assertEqual(rec2["status"], "candidate")
+        rec_same, ev = reg.upsert_from_report(doc, bad, "S", "", 1.0, 2.0)   # Fable M2: same data, no count
+        self.assertEqual(rec_same["status"], "candidate")
+        bad["n_points"] += 10
         rec3, ev = reg.upsert_from_report(doc, bad, "S", "", 1.0, 2.0)
         self.assertEqual(ev, "rejected")
         self.assertEqual(rec3["status"], "rejected")

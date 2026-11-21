@@ -93,6 +93,8 @@ def load(path: str | None = None) -> dict:
         raise ValueError(f"The Registry file {path} could not be read ({exc}).") from exc
     if not isinstance(doc, dict) or doc.get("kind") != REGISTRY_KIND or not isinstance(doc.get("stars"), dict):
         raise ValueError(f"{path} is not a SHOBS campaign registry.")
+    if not all(isinstance(r, dict) for r in doc["stars"].values()):
+        raise ValueError(f"{path} holds a damaged star record; this version does not change it.")
     try:
         if int(doc.get("version", 1)) > REGISTRY_VERSION:
             raise ValueError(f"{path} was written by a newer version; this one does not change it.")
@@ -115,10 +117,33 @@ def save(doc: dict, path: str | None = None) -> str:
         except OSError:
             pass
     fd, tmp = tempfile.mkstemp(prefix=".registry_", suffix=".tmp", dir=folder)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(clean_json(doc), fh, indent=2, ensure_ascii=False, allow_nan=False)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return path
+
+
+def clean_json(v):
+    """NaN / inf -> None, numpy numbers -> Python (Fable nit: strict JSON readers such as SHOBS-SCHED)."""
+    if isinstance(v, dict):
+        return {k: clean_json(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [clean_json(x) for x in v]
+    if hasattr(v, "item") and not isinstance(v, (str, bytes)):
+        try:
+            v = v.item()
+        except Exception:
+            pass
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
 
 
 def find(doc: dict, gaia="", ra=None, dec=None, tol_arcsec: float = 3.0):
@@ -219,32 +244,41 @@ def upsert_from_report(doc: dict, report: dict, name: str, gaia="", ra=None, dec
                 rec["aliases"].append(a)
         if gaia_source_id(gaia) and not rec.get("gaia_dr3"):
             rec["gaia_dr3"] = f"Gaia DR3 {gaia_source_id(gaia)}"
-    old_files = list((rec.get("evidence") or {}).get("series_files") or [])
-    old_gates = (rec.get("evidence") or {}).get("gates") or []
+    old_ev = rec.get("evidence") or {}
+    if event != "new" and not report.get("period_days"):
+        return rec, ""   # Fable S3: a run too thin to judge never replaces the record's evidence
+    old_files = list(old_ev.get("series_files") or [])
+    old_gates = old_ev.get("gates") or []
+    old_p = old_ev.get("period_days")
+    # Fable M2: a failure counts toward demotion only on NEW data (other nights or points than last time)
+    new_data = (list(report.get("nights") or []) != list(old_ev.get("nights") or [])
+                or int(report.get("n_points") or 0) != int(old_ev.get("n_points") or 0))
     rec["evidence"] = evidence_from(report, series_file, parent_target)
     rec["evidence"]["series_files"] = list(dict.fromkeys(old_files + rec["evidence"]["series_files"]))
     # keep a gate cleared by outside data (decision 10) when our own run still fails it
+    same_p = bool(old_p and report.get("period_days")
+                  and abs(float(report["period_days"]) - float(old_p)) / float(old_p) <= 0.01)   # Fable S6
     cleared = {g["key"]: g.get("cleared_by") for g in old_gates
-               if g.get("cleared_by") and g.get("cleared_by") != "ours" and g.get("pass")}
+               if same_p and g.get("cleared_by") and g.get("cleared_by") != "ours" and g.get("pass")}
     for g in rec["evidence"]["gates"]:
         if g["key"] in cleared and g["key"] in ("alias_pm1", "span", "volume") and not g["pass"]:
             g["pass"] = True
             g["cleared_by"] = cleared[g["key"]]
     rec["quiet_nights"] = list(report.get("quiet_nights") or [])
     hard = hard_failures(rec["evidence"]["gates"])
-    if rec.get("campaign") and hard:
+    if rec.get("campaign") and hard and (new_data or event == "new"):
         rec["fails"]["count"] = int(rec["fails"].get("count") or 0) + 1
         rec["fails"]["last_utc"] = utc_now()
         set_campaign(rec, False, by="auto", note="failed " + ", ".join(hard) + " on new data")
         event = "campaign_fail"
-    elif rec.get("status") == "candidate" and hard and int(rec["fails"].get("count") or 0) >= 1:
+    elif rec.get("status") == "candidate" and hard and new_data and int(rec["fails"].get("count") or 0) >= 1:
         rec["fails"]["count"] = int(rec["fails"]["count"]) + 1
         rec["fails"]["last_utc"] = utc_now()
         if rec["fails"]["count"] >= HARD_FAILS_TO_REJECT:
             set_status(rec, "rejected", by="auto", code=rejection_from(rec["evidence"]["gates"]),
                        note="failed " + ", ".join(hard) + " twice in a row")
             event = "rejected"
-    elif not hard:
+    elif not hard and new_data:
         rec["fails"]["count"] = 0
     rec["sched"]["next_step"] = next_step(rec)
     return rec, event

@@ -137,7 +137,7 @@ slower changes need a longer track (Time of max/min, the nightly means). The gat
 | Single-star FAP | under 1e-3 | |
 | Look-elsewhere | the FAP times the number of watch stars, under 1e-2 | searching many stars is many tries |
 | Amplitude S/N | 4 or more, after the red-noise factor β | real nights have correlated noise |
-| Daily aliases | not within 5 % of 1, 1/2 or 1/3 day, unless one night shows a whole cycle | |
+| Daily aliases | not within 5 % of 1, 1/2 or 1/3 day, unless one night (1.25 cycles long or more) finds the period by itself | |
 
 The **Campaign** switch lights when every gate passes, these and the rest: 5 nights over 14 days and 20 cycles
 (longer periods: 5 periods); at least two nights find the period alone; the best peak at least 1.5 times its
@@ -163,7 +163,7 @@ watch stars are never in it. A watch star the catalogs already list as variable 
 - **Outcome…** sets Confirmed new, Known, Rejected (with a reason: `alias_1d`, `single_night`, `comp_signal`, `flip`,
   `saturation`, `edge`, `cloud_corr`, `airmass_corr`, `duplicate_of`, or a note), or back to Candidate.
 - A Campaign star that fails a hard gate (null tests, flip sides, linear limit, edges, correlations, daily aliases,
-  leave-one-night-out) on new data has its campaign switched off and stays a Candidate; a second failure in a row
+  leave-one-night-out) on new data (other nights or points than the last gate run) has its campaign switched off and stays a Candidate; a second failure in a row
   makes it Rejected. SHOBS-P tells you in a message box.
 - **Export for SHOBS-SCHED…** writes the Campaign stars (campaign on, not Rejected) as SHOBS-SCHED target rows
   (kind campaign, mode V, with the period) to a file you choose. SHOBS-P never writes SHOBS-SCHED's own files.
@@ -172,7 +172,8 @@ Worked example: S033 (APASS J024812.2+505255), measured from its saved series of
 nights): P 0.10279 d, A 10.4 mmag, A/σA 23.3 (10.7 after β 2.2), 13 cycles over 6.2 days with two runs of nights in a
 row, 4 of 6 single-night detections, phase coherence 5 of 5, all 14 null stars quiet, peak 27 % of the 40,000 ADU
 linear limit. It is a **Candidate**, short of a campaign on the data volume (6.2 days, 13 cycles) and the ±1 cycle/day
-alias (1.15 times, needs 1.5), which outside survey data cleared (the outside-data check comes in a later 2.4.0 step).
+alias (1.15 times, needs 1.5). ZTF and TESS data settled the alias by hand on 15 Nov; SHOBS-P's own outside-data
+check (ZTF, TESS, ATLAS), which may clear that gate and the data volume, comes in a later 2.4.0 step.
 
 ## Export the light curves
 

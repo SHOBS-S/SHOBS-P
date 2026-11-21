@@ -465,9 +465,9 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
     gates.append(_gate("span", "Nights and span", "data", "candidate",
                        f"{len(nights)} nights, {cycles:.0f} cycles, {span:.1f} d, {pairs} consecutive pair(s)",
                        f"≥ 3 nights, ≥ 10 cycles, ≥ {need_span:.1f} d, a consecutive pair", ok, "; ".join(why)))
-    spacing = float(np.median(np.concatenate([np.diff(np.sort(c.jd[ix])) for ix in night_groups(c).values()
-                                              if ix.size > 1]))) if c.jd.size > 1 else float("nan")
-    ok = cycles >= 5 and spacing < SAMPLING_FRAC * P
+    diffs = [np.diff(np.sort(c.jd[ix])) for ix in night_groups(c).values() if ix.size > 1]
+    spacing = float(np.median(np.concatenate(diffs))) if diffs else float("nan")
+    ok = cycles >= 5 and math.isfinite(spacing) and spacing < SAMPLING_FRAC * P
     gates.append(_gate("sampling", "Cycles and sampling", "data", "candidate",
                        f"{cycles:.0f} cycles; spacing {spacing * 1440:.1f} min vs P/4 {P / 4 * 1440:.0f} min",
                        "≥ 5 cycles; spacing < P/4", ok))
@@ -480,10 +480,12 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
                        f"A {amp * 1000:.1f} mmag, A/σA {snr:.1f} (β {beta:.1f}; {rep['amp_snr_white']:.1f} white)",
                        "≥ 4 after β", math.isfinite(snr) and snr >= CAND_AMP_SNR))
     a1 = alias_1d_text(P)
-    one_night_cycle = any(float(c.jd[ix].max() - c.jd[ix].min()) >= P for ix in night_groups(c).values())
+    # Fable M1: the exemption needs a night that FINDS the period by itself over 1.25 cycles or more (set below,
+    # once the single-night searches have run); a night merely as long as P is always there (the search is capped
+    # at the longest night)
     gates.append(_gate("alias_1d", "Daily aliases (1, 1/2, 1/3 d)", "period", "candidate",
-                       a1 or f"{P:.5f} d is clear", "not within 5%, unless one night shows a full cycle",
-                       (not a1) or one_night_cycle))
+                       a1 or f"{P:.5f} d is clear", "not within 5%, unless one night finds a whole cycle itself",
+                       not a1))
 
     # -- Candidate -> Campaign: data volume --
     if P < CAMP_LONG_P:
@@ -517,7 +519,13 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
             hit, snr_n, pg_n = False, 0.0, None
         singles += int(hit)
         single_rows.append({"night": n, "found": hit, "period": pg_n.period if pg_n else None,
-                            "snr": round(snr_n, 1)})
+                            "snr": round(snr_n, 1), "span": span_n})
+    if a1:
+        exempt = any(r.get("found") is True and r.get("span", 0.0) >= 1.25 * P for r in single_rows)
+        g1 = next(g for g in gates if g["key"] == "alias_1d")
+        g1["pass"], g1["cleared_by"] = bool(exempt), ("ours" if exempt else None)
+        if exempt:
+            g1["value"] = a1 + "; one night finds it alone"
     long_p = all(r["found"] is None for r in single_rows) if single_rows else True
     if long_p:
         gates.append(_gate("single", "Single-night detections", "period", "campaign", "P longer than a night",

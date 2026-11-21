@@ -24871,7 +24871,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if tgt is not None:
             try:
                 in_reg = registry.find(registry.load(), "", tgt["ra"], tgt["dec"]) is not None
-            except ValueError:
+            except Exception:
                 in_reg = False
             if with_target or in_reg or tgt["name"] in self.gate_reports:
                 out.insert(0, tgt)
@@ -24894,8 +24894,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._gates_running = True
         tok = self.busy_begin(f"Promotion gates: {len(stars)} star(s)…")
 
+        gen = getattr(self, "_series_gen", 0)   # Fable S4: a run in flight never lands in another series
+
         def work():
-            reports, events, error = {}, [], ""
+            reports, error = {}, ""
             try:
                 for k, st in enumerate(stars, 1):
                     self.call_ui(self.busy_words, tok, f"Promotion gates: {st['name']} ({k} of {len(stars)})…")
@@ -24912,9 +24914,27 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                                "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": []}
                     rep["is_target"] = st["is_target"]
                     reports[st["name"]] = rep
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+            self.call_ui(self._gates_done, tok, reports, stars, cfg, error, nights, why, on_done, gen)
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _gates_done(self, tok, reports, stars, cfg, error, nights, why, on_done, gen=None):
+        self._gates_running = False
+        self.busy_end(tok)
+        if gen is not None and gen != getattr(self, "_series_gen", 0):
+            self.log("Promotion gates: the series changed while they ran; their results were dropped.")
+            return
+        events = []
+        if not error:
+            # Fable S5: the Registry is read, changed and written here on the Tk thread, so a Promote / End campaign /
+            # Outcome made while the gates ran is never written over by an older copy
+            try:
                 doc = registry.load()
                 for st in stars:
-                    rep = reports[st["name"]]
+                    rep = reports.get(st["name"]) or {}
                     if not rep.get("gates"):
                         continue
                     rec, ev = registry.upsert_from_report(
@@ -24928,20 +24948,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                         rep["registry_key"] = rec["key"]
                     if ev:
                         events.append((st["name"], ev, rep))
-                if any(ev for _n, ev, _r in events):
+                if events:
                     registry.save(doc)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            self.call_ui(self._gates_done, tok, reports, events, error, nights, why, on_done)
-
-        threading.Thread(target=work, daemon=True).start()
-        return True
-
-    def _gates_done(self, tok, reports, events, error, nights, why, on_done):
-        self._gates_running = False
-        self.busy_end(tok)
         self.gate_reports.update(reports)
-        self._gate_nights = list(nights)
+        if not error:
+            self._gate_nights = list(nights)   # Fable nit: a failed Registry update runs again after the next save
         new = [n for n, ev, _r in events if ev in ("new", "new_known")]
         for name, ev, rep in events:
             if ev == "new":
@@ -25002,9 +25015,10 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         self._candidates_win = CandidatesWindow(self)
         nights = sorted({o.night for o in self.observations})
         stale = nights != list(self._gate_nights or [])
-        if (not self.gate_reports or stale) and (self.watch_list or self._target_gate_entry()):
-            self.run_gates(why="window opened", with_target=not self.watch_list
-                           or any(r.get("is_target") for r in self.gate_reports.values()))
+        if (not self.gate_reports or stale) and self.gate_stars():
+            # Fable S7: the target only with "Check the target too" (or when it is tracked already)
+            self.run_gates(why="window opened",
+                           with_target=any(r.get("is_target") for r in self.gate_reports.values()))
 
     def choose_comps(self):
         if not self.observations:
@@ -28115,7 +28129,7 @@ class CandidatesWindow:
     def _registry(self):
         try:
             return registry.load(), ""
-        except ValueError as exc:
+        except Exception as exc:
             return None, str(exc)
 
     def _record(self, doc, name, rep):
@@ -28221,11 +28235,14 @@ class CandidatesWindow:
             messagebox.showinfo(APP_TITLE, f"{name} is not in the Registry: only a Candidate (its Candidate gates "
                                            "passed) is.", parent=self.win)
             return
+        if getattr(self.app, "_gates_running", False):
+            messagebox.showinfo(APP_TITLE, "The gates are running; try again when they finish.", parent=self.win)
+            return
         if func(rec, name) is False:
             return
         try:
             registry.save(doc)
-        except OSError as exc:
+        except Exception as exc:
             messagebox.showerror(APP_TITLE, f"The Registry could not be saved: {exc}", parent=self.win)
             return
         if rep is not None:
