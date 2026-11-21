@@ -8810,6 +8810,21 @@ def chi2nu_against_errors(corrected: np.ndarray, med: np.ndarray, sigma: np.ndar
     return np.where(n >= 3, chi2, np.nan)
 
 
+CHI2_MEDIAN_1DOF = 0.4549364   # the median of a chi-square with one degree of freedom
+
+
+def chi2_widening(corrected: np.ndarray, med: np.ndarray, sigma: np.ndarray, usable, exclude=None) -> np.ndarray:
+    """2.4.0 step 7b (#115): per star, the factor its errors are widened by before the per-point cap: sqrt of the
+    robust chi2nu that stars as bright show (median z^2 / 0.4549, the same running median over brightness as the
+    scatter's), never below 1. 1 where it cannot be worked out."""
+    with np.errstate(all="ignore"):
+        z2 = ((corrected - med[None, :]) / sigma) ** 2
+        robust = np.nanmedian(np.where(np.isfinite(z2), z2, np.nan), axis=0) / CHI2_MEDIAN_1DOF
+    typical = typical_scatter(med, robust, usable, exclude=exclude)
+    w = np.sqrt(np.clip(np.where(np.isfinite(typical), typical, 1.0), 1.0, None))
+    return w
+
+
 def chi2_level(chi2_limit: float, n_points) -> float:
     """2.4.0 step 7a (Fable M1): the excess chi2nu level for a star measured on n_points frames. chi2nu scatters by
     about sqrt(2 / (n - 1)) from noise alone, so on a short run (a scan of 10-30 stacks) the fixed level would list
@@ -8893,10 +8908,14 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
             raise ValueError("the error table does not match the magnitudes")
         zp_err = frame_zero_point_errors(inst, ref, star_med, zp)
         sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2)
-        # Known limit (Fable S1, left for later, John's tuning kept): the 5-sigma cap bites on the absolute points, so
-        # where the error model reads far low (bright stars with no scintillation or flat-field floor in it) the
-        # ratio is compressed and a bright low-amplitude variable can read under the level. A widen-then-cap pass
-        # moved S033 to 2.49 on the tuning night, so the single pass John tuned on stays.
+        # 2.4.0 step 7b (#115, John 21 Nov: retune in 7b): normalise, then cap. The error model has no flat-field or
+        # other floor, so on the brightest stars it reads low (typical chi2nu 5-10 there); capping each point at 5
+        # sigma of THAT error compressed a bright low-amplitude variable under the level (Fable S1). Each star's
+        # errors are first widened by the chi2nu stars as bright show that night (a robust first pass: the median
+        # point's z^2 / 0.4549, the median of chi2 with one degree of freedom; never narrowed), so the cap is 5 sigma
+        # of the field's real noise at that brightness. Retuned on the 13-14 Nov (97 frames) and quiet 8-9 Nov
+        # GSC 03308-00462 nights: S033 2.89 -> 2.69 (still a Suspect at 2.5), 8 Nov unchanged (S033 0.91).
+        sigma = sigma * chi2_widening(corrected, med, sigma, usable, exclude)[None, :]
         chi2 = chi2nu_against_errors(corrected, med, sigma)
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
@@ -9686,6 +9705,22 @@ def read_suspects_file(path: str) -> dict | None:
             doc[key] = None
     doc["night"] = str(doc.get("night") or "")
     return doc
+
+
+def suspects_field_name(out_folder: str, star_id: str = "") -> str:
+    """2.4.0 step 7b (7a nit a, John 21 Nov): the name a night's suspects file carries: the FIELD FOLDER's name (the
+    Output folder sits in the night folder, which sits in the field's folder: W:\\Variables\\<field>\\<night>\\Output),
+    else the Star ID, else "field". A field folder at a drive's root level is not used (W:\\13Nov26\\Output)."""
+    try:
+        night_dir = os.path.dirname(os.path.abspath(out_folder)) if out_folder else ""
+        field_dir = os.path.dirname(night_dir) if night_dir else ""
+        if field_dir and field_dir != night_dir and os.path.dirname(field_dir) != field_dir:
+            name = os.path.basename(field_dir.rstrip("\\/")).strip()
+            if name and not name.endswith(":"):
+                return name
+    except (TypeError, ValueError):
+        pass
+    return str(star_id or "").strip() or "field"
 
 
 def other_suspect_files(out_folder: str) -> list[str]:

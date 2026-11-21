@@ -1643,6 +1643,34 @@
    "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
   },
   {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "…: campaign switched off: it failed a hard gate on the new data (…). It stays a Candidate."
+   ],
+   "todo": "Open Candidates… and read the failed gate. A second failure in a row makes it Rejected. See 21. Follow a suspect."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "…: Rejected after failing a hard gate twice in a row."
+   ],
+   "todo": "Check the reason in Candidates…; Outcome… → Back to Candidate reopens it."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Promotion gates: the Registry was not updated (…)."
+   ],
+   "todo": "Fix or move the file named in the message, then Run gates now in Candidates…"
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "New Candidate: … — entered in the Registry."
+   ],
+   "todo": "Look at it in Candidates…"
+  },
+  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"

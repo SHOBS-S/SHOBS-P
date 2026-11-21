@@ -124,7 +124,7 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | **Corrections** | **Line up segments (nights, meridian flip)**, **Line up flip only (keep nights)**, **Pier side as segments**, **Check-star correction (fold and period)** (chapters 12 and 13) |
 | **Fit** | **Period search (days)**, **Period from**, and the colored **Refit period** button (chapter 13) |
 | **Comps** | **Comp health…**, **Use comps…** (chapter 11) |
-| **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
+| **Analysis** | **Watch stars…**, **Candidates…** (from 2.4.0), **Time of max/min…** (chapters 21 and 14) |
 | **View** | **Time axis**, **Bin**, **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
 
 Hover over a row's label to read what the row is for. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**, so you can see that it did. On a narrow window a row wraps onto a second line.

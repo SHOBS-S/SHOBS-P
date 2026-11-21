@@ -46,6 +46,14 @@ or **average** them; SHOBS-P tells which from the sky's noise, because it change
 of mass of the solar system, on a uniform time scale. The standard for exoplanet timing. It differs from JD by up to
 about ±8 minutes, depending on the star's position and the time of year.
 
+**Campaign** — A switch on a Registry star (from 2.4.0), not a stage: on, the star gets its own nights in SHOBS-SCHED;
+off, it rides along on its field's frames. **Promote to campaign** lights when every gate passes, or once the star is
+Confirmed new or Known.
+
+**Candidate** — A watch star whose light curve passed the Candidate gates (from 2.4.0): at least 3 nights with two in a
+row, 10 cycles, a significant period with amplitude S/N 4 or more, not a daily alias. It is entered in the Registry
+automatically. See [21. Follow a suspect](21-follow-a-candidate.md).
+
 **Check star** — A steady star measured like the target, to show whether the comparison stars are behaving. The
 AAVSO requires one for **ensemble** reports.
 
@@ -182,6 +190,9 @@ uncertainties by β.
 
 **Rp/R\*, depth** — The planet's radius divided by the star's. The depth SHOBS-P reports is (Rp/R\*)²; the actual dip
 at mid-transit is somewhat deeper because of **limb darkening**.
+
+**Registry** — `campaign_registry.json` (from 2.4.0), one per observatory: every Candidate and every star with an
+outcome (Confirmed new, Known, Rejected), keyed on its Gaia DR3 source ID.
 
 **Scintillation** — Twinkling: fast brightness changes caused by the atmosphere. It adds noise that grows with
 airmass and is larger for small telescopes. SHOBS-P includes it in the error bars when **Include scintillation

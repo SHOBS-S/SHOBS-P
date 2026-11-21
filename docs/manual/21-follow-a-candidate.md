@@ -112,6 +112,68 @@ check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night
 
 ![The Watch stars window](img/21-watch-stars-window.png)
 
+## From Watch to Candidate to Campaign
+
+A watch star moves up one gate at a time. **Suspect** (one night, automatic or by hand) → **Watch** (your click) →
+**Candidate** (automatic, once its light curve passes the Candidate gates) → an outcome: **Confirmed new**, **Known**
+or **Rejected**. **Campaign** is not a stage but a switch: on, the star gets its own nights in SHOBS-SCHED; off, it
+rides along on the field's frames again. A star's outcome and its Campaign switch are independent.
+
+On the Variables Output page, click **Candidates…**. After each night you add with **Save series**, SHOBS-P runs the
+promotion gates on every watch star of the series (and on the target when you have asked for it with **Check the
+target too**). The window lists each star with its **Registry** status, best period, amplitude S/N, how many
+Candidate gates and how many of all the gates pass, and its quiet nights. Select a star to see each gate, what was
+measured and what it needs.
+
+![The Candidates and campaigns window](img/21-candidates-window.png)
+
+Every period test runs after each night's median is taken out, so a period up to about one night can be judged;
+slower changes need a longer track (Time of max/min, the nightly means). The gates:
+
+| Gate | Candidate needs | Why |
+|---|---|---|
+| Nights and span | 3 nights or more, 10 cycles observed, a span of 3 days or 3 periods (whichever is longer), and two nights in a row | cycles and sampling prove a period, not the calendar; two nights in a row break the one-day aliases |
+| Cycles and sampling | 5 cycles; frames closer than a quarter period | |
+| Single-star FAP | under 1e-3 | |
+| Look-elsewhere | the FAP times the number of watch stars, under 1e-2 | searching many stars is many tries |
+| Amplitude S/N | 4 or more, after the red-noise factor β | real nights have correlated noise |
+| Daily aliases | not within 5 % of 1, 1/2 or 1/3 day, unless one night shows a whole cycle | |
+
+The **Campaign** switch lights when every gate passes, these and the rest: 5 nights over 14 days and 20 cycles
+(longer periods: 5 periods); at least two nights find the period alone; the best peak at least 1.5 times its
+±1 cycle/day alias; no single night carries the period (leave-one-night-out); the nights agree in phase (±0.15
+cycle on 70 % of them); the period and amplitude stay within 10 % with the two flip sides fitted separately; the
+look-elsewhere FAP under 1e-4; every other star of the frames (comps, check, spares, other watch stars) quiet at the
+period (**null tests**); no correlation of |r| 0.3 or more with airmass, FWHM, sky or the star's x/y position, and
+none of those with strong, significant power at the period; every frame under the linear limit; the star clear of
+the frame edges on 95 % of frames. Nights whose check star scatters more than 1.5 times its typical night are left out
+before any gate runs (the quiet-nights strip shows them as *skipped*).
+
+**Quiet nights** (the chips above the gate list) give each night's χ²ν: against the star's own errors for a target,
+against its point-to-point scatter for a watch star. *quiet* (2 or less), *active* (3 or more). A quiet night shows the
+star's noise is understood, so its active nights are real; one active night among quiet ones can be an eclipse a
+period search misses. The strip is evidence only, not a gate.
+
+**The Registry** (`campaign_registry.json` in the SHOBS data folder, one per observatory) holds every Candidate and
+every star with an outcome, keyed on its Gaia DR3 source ID (or its position until it has one). Suspects and plain
+watch stars are never in it. A watch star the catalogs already list as variable enters it as **Known**.
+
+- **Promote to campaign** (lit when every gate passes, or any time once the star is Confirmed new or Known) switches
+  the campaign on. **End campaign** switches it off; the record and outcome stay.
+- **Outcome…** sets Confirmed new, Known, Rejected (with a reason: `alias_1d`, `single_night`, `comp_signal`, `flip`,
+  `saturation`, `edge`, `cloud_corr`, `airmass_corr`, `duplicate_of`, or a note), or back to Candidate.
+- A Campaign star that fails a hard gate (null tests, flip sides, linear limit, edges, correlations, daily aliases,
+  leave-one-night-out) on new data has its campaign switched off and stays a Candidate; a second failure in a row
+  makes it Rejected. SHOBS-P tells you in a message box.
+- **Export for SHOBS-SCHED…** writes the Campaign stars (campaign on, not Rejected) as SHOBS-SCHED target rows
+  (kind campaign, mode V, with the period) to a file you choose. SHOBS-P never writes SHOBS-SCHED's own files.
+
+Worked example: S033 (APASS J024812.2+505255), measured from its saved series of 8–14 Nov 2026 (583 points, 6
+nights): P 0.10279 d, A 10.4 mmag, A/σA 23.3 (10.7 after β 2.2), 13 cycles over 6.2 days with two runs of nights in a
+row, 4 of 6 single-night detections, phase coherence 5 of 5, all 14 null stars quiet, peak 27 % of the 40,000 ADU
+linear limit. It is a **Candidate**, short of a campaign on the data volume (6.2 days, 13 cycles) and the ±1 cycle/day
+alias (1.15 times, needs 1.5), which outside survey data cleared (the outside-data check comes in a later 2.4.0 step).
+
 ## Export the light curves
 
 | What you want | Where | File |
@@ -122,6 +184,7 @@ check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night
 | Every star's light curve from one scan (label, JD, magnitude) | **Export all light curves CSV…** | `field_scan_lightcurves.csv` |
 | Watch stars' light curves across a series | **Export watch light curves CSV…** in the Watch stars window | `watch_stars.csv` |
 | The target's full light curve | **Save light-curve CSV** or **Export…** on the Variables Output page | see chapter 22 |
+| The Campaign stars, for SHOBS-SCHED to import | **Export for SHOBS-SCHED…** in the Candidates window | `SHOBS-P_campaigns_for_SHOBS-SCHED.json` |
 
 Scan magnitudes are on the catalog's scale (untransformed) when the field was solved, and instrumental otherwise.
 Every CSV starts with a `# Created …` line.
