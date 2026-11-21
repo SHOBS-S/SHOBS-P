@@ -333,6 +333,12 @@ class TestCandidatesWindow(unittest.TestCase):
         os.environ["SHOBS_DATA_HOME"] = cls.tmp.name
         ca.LOG_FILE = os.path.join(cls.tmp.name, "test.log")
         cls.ca = ca
+        cls.boxes = []
+        for nm in ("showinfo", "showwarning", "showerror"):
+            setattr(ca.messagebox, nm, lambda *a, _n=nm, **k: cls.boxes.append((_n, a)))
+        for nm in ("askyesno", "askokcancel"):
+            setattr(ca.messagebox, nm, lambda *a, **k: False)
+        ca.messagebox.askyesnocancel = lambda *a, **k: False
         cls.app = ca.App()
         cls.app.set_mode("variables")
         cls.app.update()

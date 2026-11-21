@@ -166,7 +166,7 @@ class TestOutputPages(unittest.TestCase):
         fit = [t for t in g.texts("fit") if not t.startswith("PY_VAR")]
         self.assertEqual(fit, ["Period search (days)", "to", "Period from", "Refit period"])
         self.assertEqual(g.texts("comps"), ["Comp health…", "Use comps…"])
-        self.assertEqual(g.texts("analysis"), ["Watch stars…", "Time of max/min…"])
+        self.assertEqual(g.texts("analysis"), ["Watch stars…", "Candidates…", "Time of max/min…"])   # 7b
         view = [t for t in g.texts("view") if not t.startswith("PY_VAR")]
         self.assertEqual(view, ["Time axis", "Bin", "Mark periods (days)", "Show", "Airmass-corrected night means"])
         # the save area: Save series stays under the plot; the report's Notes sit beside Save AAVSO report
