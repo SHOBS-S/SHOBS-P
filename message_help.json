@@ -1989,6 +1989,70 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "Field scan done: … N suspect(s) (K by their own error bars only) …"
+   ],
+   "todo": "Look at them like any suspect; Suspect by says own errors."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "N suspect(s) kept in …_SHOBS-P_suspects.json; K were suspects on other nights of this field too."
+   ],
+   "todo": "Nothing; follow the repeats first."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Suspects not kept for later nights: no Output folder on the Input page, so \"Suspect again\" cannot be checked on another night of this field."
+   ],
+   "todo": "Choose an Output folder on the Input page and scan again, if you want later nights to see tonight's suspects."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… _SHOBS-P_suspects.json not written (…): \"Suspect again\" will not see tonight's suspects on another night."
+   ],
+   "todo": "Fix the folder, then Add as suspect or scan again to write it."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Kept from this night's earlier suspects file, added by hand: …"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Added by hand before but not found in this scan (not kept): …"
+   ],
+   "todo": "Find it on the plot and Add as suspect again if you still want it."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Only a suspect you added by hand can be removed (select its row first)."
+   ],
+   "todo": "Select a by hand row."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… Suspects file not written (…)."
+   ],
+   "todo": "Fix the Output folder, then Add as suspect or scan again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Already a suspect.",
+    "Select a star first (a point on the plot or a row in the table), then Add as suspect."
+   ],
+   "todo": "Click a star that is not a suspect yet."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "VSX and SIMBAD could not be reached during the scan. Scan again when online."
    ],
    "todo": "Scan again when online."

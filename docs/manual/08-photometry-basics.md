@@ -156,7 +156,7 @@ The **View** box has four switches:
 - **Show catalog stars**: the catalog circles.
 - **Show labels**: the labels next to circles, and the compass.
 
-(Discovery adds **Candidates only**; see chapter 20.)
+(Discovery adds **Suspects only**; see chapter 20.)
 
 Under the switches are the same **Stretch**, **black**, **white** and **Reset** controls as on the Blink page
 (chapter 6). They change only the display.

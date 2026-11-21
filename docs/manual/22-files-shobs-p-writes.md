@@ -83,8 +83,9 @@ See [19. Reports](19-transit-reports.md).
 |---|---|
 | **Save plot PNG…** | `<field>_<filter>_<date>_SHOBS-P_scan.png` (`<field>` is the Star ID, or `field`) |
 | **Save CSV…** | `<field>_<filter>_<date>_SHOBS-P_scan.csv`: one row per measured star. |
-| **Export candidates CSV…** | `field_scan_candidates.csv` |
+| **Export suspects CSV…** | `field_scan_suspects.csv` |
 | **Export all light curves CSV…** | `field_scan_lightcurves.csv` |
+| (written by the scan itself, and again by **Add as suspect**) | `<field>_<filter>_<date>_SHOBS-P_suspects.json` in the Output folder: the night's suspects, read by later nights of the field for **Suspect again**. A new scan of the night replaces it. Not written without an Output folder. |
 
 The two fixed names get `_2`, `_3` … like any other file, so give them a folder of their own per field if you scan
 many fields.
@@ -181,4 +182,4 @@ start.
 
 ---
 
-Previous: [21. Follow a candidate](21-follow-a-candidate.md) · Next: [23. Messages explained](23-messages-explained.md)
+Previous: [21. Follow a suspect](21-follow-a-candidate.md) · Next: [23. Messages explained](23-messages-explained.md)

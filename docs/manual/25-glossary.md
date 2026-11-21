@@ -197,6 +197,11 @@ later with **Use comps…** without reducing again.
 Stacking lowers the photon noise of weak comps by about √N but hides any change faster than the stack. SHOBS-P
 suggests N from the comps' noise and a time cap (chapter 8). A stack never spans a meridian flip or a gap.
 
+**Suspect** — In Discovery mode, a star the field scan points out on one night: it scatters at least 3 × normal, or its
+χ²ν against its own error bars is at least 2.5 × that of stars as bright that night (**χ²ν × normal**), or you added it by
+hand. The first stage of Suspect → Watch → Candidate → Campaign; it lives on that night's results only. See
+[20. Scan a field](20-scan-a-field.md).
+
 **Superpixel** — A way of turning a color camera's mosaic into an image: each 2×2 group of pixels becomes one pixel of
 the chosen color channel. The image has half the width and height of the sensor, and no colors are mixed.
 
@@ -207,13 +212,13 @@ optics or high haze. SHOBS-P tells it apart from patchy cloud and asks whether t
 system. SHOBS-P's magnitudes are untransformed; reports say so.
 
 **VSX, SIMBAD** — The AAVSO's Variable Star Index and the CDS astronomical database. SHOBS-P uses them to look up
-targets and to warn when a comp, check or candidate star is a known variable.
+targets and to warn when a comp, check or suspect star is a known variable.
 
 **Watch star** — A star you ask SHOBS-P to measure on every run, with its own light curve, without it being the
-target. See [21. Follow a candidate](21-follow-a-candidate.md).
+target. See [21. Follow a suspect](21-follow-a-candidate.md).
 
 **× normal** — In a field scan: a star's scatter divided by the typical scatter of stars of the same brightness. 3 or
-more makes a candidate by default.
+more makes a suspect by default.
 
 **Zenith keyhole** — The small patch of sky around the zenith (above 85° in SHOBS-P) where an **alt-az mount** must
 turn very fast in azimuth and the field rotation gets extreme, so frames there can trail or smear. When you scan the

@@ -3,16 +3,21 @@
 Discovery mode measures every star in the field on every frame, and points out the ones that vary more than stars
 of the same brightness. You need no target: any series of frames of one patch of sky, with calibration frames, will do.
 
+A star the scan points out is a **Suspect**: the first stage of the path from an odd star to a confirmed new
+variable (Suspect → Watch → Candidate → Campaign). A Suspect belongs to its one night: it lives on that night's
+results only.
+
 This chapter covers:
 
 - setting up a field scan,
-- the scan settings (faintest magnitude, detection threshold, candidate level),
+- the scan settings (faintest magnitude, detection threshold, the two Suspect levels),
 - reading the scan table and plots,
-- the kinds of candidate and the "check first" warnings.
+- the kinds of suspect and the "check first" warnings,
+- the night's suspects file and **Suspect again**.
 
-[21. Follow a candidate](21-follow-a-candidate.md) covers what to do with a candidate next.
+[21. Follow a suspect](21-follow-a-candidate.md) covers what to do with a suspect next.
 
-> **Tip:** A candidate is a lead, not a discovery. Most are explained by something ordinary: a bright neighbor, a
+> **Tip:** A suspect is a lead, not a discovery. Most are explained by something ordinary: a bright neighbor, a
 > bad pixel, saturation, a meridian flip. The scan tells you which to check first.
 
 ## Set up the scan
@@ -40,7 +45,7 @@ variables.
 The **Field** box on the right sums up the solve: the plate scale and center, how many catalog stars were placed,
 how many stars were detected, how many are saturated, and how many known or suspected variables lie in the frame.
 Saturation is judged on the frame's raw pixels, where binning and calibration cannot hide a clipped core; the line
-reads, for example, "3 saturated on this frame (raw pixels; measured, not candidates)." (It shows "…" for a moment
+reads, for example, "3 saturated on this frame (raw pixels; measured, not suspects)." (It shows "…" for a moment
 while the raw frame is read.)
 
 ![The Photometry page in Discovery mode after the solve](img/20-discovery-photometry.jpg)
@@ -49,7 +54,8 @@ If the solve fails, the step strip says **1 Not solved**. Check the field center
 box, then press **Solve again** (top right). You can scan an unsolved field, but then:
 
 - magnitudes are instrumental, not on a catalog scale,
-- there is no check against VSX and SIMBAD, so every candidate is "unchecked",
+- there is no check against VSX and SIMBAD, so every suspect is "unchecked",
+- a suspect has no Gaia DR3 ID, so **Suspect again** cannot match it on another night,
 - a typed **Faintest magnitude** is ignored.
 
 ### Apertures
@@ -57,7 +63,7 @@ box, then press **Solve again** (top right). You can scan an unsolved field, but
 The scan uses the **Aperture r**, **sky in** and **sky out** boxes, like photometry. Press **Suggest…** and then
 **Use these aperture sizes** to set them from the field's seeing (see [8. Photometry page basics](08-photometry-basics.md)).
 **Suggest…** works in Discovery too: its aperture test uses bright, isolated, unsaturated field stars, since there
-are no comps. Also check **raw sat ADU**: saturated stars are measured but never listed as candidates.
+are no comps. Also check **raw sat ADU**: saturated stars are measured but never listed as suspects.
 
 ### Watch or leave out stars
 
@@ -76,19 +82,46 @@ The **Scan settings** box on the right holds:
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Faintest magnitude** | blank | The faintest catalog magnitude that can be a candidate. Blank: SHOBS-P stops where the field's typical scatter reaches 0.25 mag, and says where in the log. |
+| **Faintest magnitude** | blank | The faintest catalog magnitude that can be a suspect. Blank: SHOBS-P stops where the field's typical scatter reaches 0.25 mag, and says where in the log. |
 | **Detection threshold (σ)** | 5.0 | How far above the sky noise a star must be to be measured. Lower finds fainter stars, and more noise. |
-| **Candidate at (× normal)** | 3.0 | How many times more than normal a star must scatter to be a candidate. |
+| **Suspect at (× normal)** | 3.0 | How many times more than normal a star must scatter to be a suspect. |
+| **or at (χ²ν × normal)** | 2.5 | The second test: how many times more than normal a star's scatter against its own error bars (χ²ν) must be. 0 or blank switches this test off. |
 | **Most stars to measure** | 800 | The brightest stars first, up to this number. The log says when the limit is reached; raise it to go fainter. |
-| **Period search (days)** | 0.02 to 20 | The period range of the candidates' periodograms. Remembered between sessions. (A range left at the old default, 0.05, moves to 0.02 once.) |
+| **Period search (days)** | 0.02 to 20 | The period range of the suspects' periodograms. Remembered between sessions. (A range left at the old default, 0.05, moves to 0.02 once.) |
 | **Leave out crowded stars (neighbor in the aperture or sky ring)** | on | Skip stars where a neighbor's light reaching the aperture is 1 % or more of the star's own. |
 
 "Normal" means the typical scatter of stars of the same brightness in this field. A star at **× normal** 3 scatters
 three times as much as its neighbors in magnitude. Saturated stars and stars at the edge of the frame are measured
-but never listed as candidates.
+but never listed as suspects.
+
+### The two Suspect tests
+
+A star is a suspect when it passes **either** test:
+
+1. **× normal**: its scatter is at least 3 times the typical scatter of stars as bright. This is the scan's first test,
+   and needs no error model.
+2. **χ²ν × normal**: SHOBS-P predicts each star's error bar on each frame (photon noise from the camera gain, the sky
+   noise in the aperture, and that frame's zero-point error) and works out the star's χ²ν: how much it scatters
+   against its own error bars (1 = exactly as much as the error bars say). The star is then compared with stars as
+   bright that night. At 2.5 or more, it is a suspect.
+
+The second test catches low-amplitude variables the first one misses. Its motivating case is S033 (APASS
+J024812.2+505255), a δ Scuti star found by eye on 13–14 Nov 2026 at only 2.06 × normal. Against its own error bars it
+scatters 2.78 times as much as stars as bright, so the second test makes it a suspect. Because each star is judged
+against stars as bright on the same night, a night whose error bars read a little low (a camera gain that is somewhat
+off, haze) lifts every star alike and does not flood the list. One wild point (a cosmic ray, a satellite) counts at
+most as a 5 σ point, so it cannot make a star a suspect by itself.
+
+On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
+star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks
+often has 10 to 30); from 24 points up the level stays 2.5. The header under the page title says *(more on short
+runs)*.
+
+One limit to know: the error bars have no scintillation or flat-field floor in them, so on the brightest stars they
+read low, and a bright star of low amplitude can read under the level there. The **× normal** test still sees it.
 
 **Saturated** means the star's raw core reached **raw sat ADU** on 2 or more frames (or it was near saturation on the
-reference frame). A star clipped on one frame only (a cosmic ray or a hot pixel can do that) is still a candidate,
+reference frame). A star clipped on one frame only (a cosmic ray or a hot pixel can do that) is still a suspect,
 with a caution. The log counts both.
 
 **Crowded** is worked out from how much of each neighbor's light falls inside the star's aperture, using every
@@ -97,8 +130,8 @@ the box is ticked). At 0.2 % or more, a star that is kept (box unticked, or a wa
 check** caution.
 
 The **Period search (days)** range is Discovery's own; it does not change the Variables Output page's range. After a
-scan, change a box and press **Enter** (or click into another box): the candidates' periods are searched again over
-the new range, without scanning again. The busy bar says **Searching the candidates' periods over 0.02–20 d…**
+scan, change a box and press **Enter** (or click into another box): the suspects' periods are searched again over
+the new range, without scanning again. The busy bar says **Searching the suspects' periods over 0.02–20 d…**
 meanwhile, and the status bar then says **✔ Period search 0.02–20 d done.** Before a scan, the range is kept for the
 next one.
 
@@ -109,7 +142,7 @@ next one.
    counts the frames, for example **Field scan… 12 of 38, about 1:20 left**. Each frame is calibrated, aligned and
    every star measured, so a scan takes about as long as a photometry run with many stars. **Cancel run** stops it.
 3. When the scan ends, SHOBS-P opens the Output step, now the **Output – Field scan** page, and the status bar says
-   *"Field scan: N candidate variable(s)."*
+   *"Field scan: N suspect(s)."* The log says how many of them are suspects by their own error bars only.
 
 Before measuring each star's scatter, SHOBS-P lines its light curve up across any meridian flip or rotator move,
 so a flip cannot pass for a variable star. On an alt-az mount there are no flips: the frames are aligned following
@@ -134,17 +167,17 @@ a field scan needs at least 10. Use a smaller N."* The per-frame scan is kept: t
 
 The hint under the title sums up the scan: the number of stars and frames, how the magnitudes were calibrated (for
 example *"on the catalog V … scale (zero point from n field stars, ± 0.012; untransformed)"*), and how many stars
-reached the candidate level. If none did, the ten nearest misses are listed as **~1**, **~2** and so on.
+are suspects, by either test. If none are, the ten nearest misses are listed as **~1**, **~2** and so on.
 
 ![The Field scan page after a scan](img/20-field-scan-output.png)
 
 ### The plots
 
 - **Scatter vs brightness** (left): every star, scatter against magnitude, on a log scale. The blue line is the
-  typical scatter. Candidates are red circles with their rank number; known variables are orange squares; saturated
+  typical scatter. Suspects are red circles with their rank number; known variables are orange squares; saturated
   stars are gray ×. Click a point to see that star; click it again to clear the selection. You can also pick several
   stars on the plot (chapter 21).
-- **The selected star's light curve** (top right): red for a candidate, blue otherwise. Dashed purple lines mark a
+- **The selected star's light curve** (top right): red for a suspect, blue otherwise. Dashed purple lines mark a
   flip, rotator move or gap.
 - **Lomb-Scargle periodogram** (bottom right): the red line is the best period. Periods longer than about half the
   data span are grayed (*"longer than the data can test"*).
@@ -153,14 +186,17 @@ reached the candidate level. If none did, the ten nearest misses are listed as *
 
 | Column | Meaning |
 |---|---|
-| **#** | Rank by how much the star exceeds normal. **~1, ~2** are near misses; **W** are watch stars. |
+| **#** | Rank by how far the star stands over the nearer of the two Suspect levels. **~1, ~2** are near misses; **W** are watch stars. Stars you add by hand come last. |
 | **Star / position** | SHOBS-P's label (`S012`), the catalog name if any, and RA/Dec when solved. |
 | **Mag** | Magnitude on the catalog scale (or instrumental if unsolved). |
 | **Scatter** | The star's scatter in magnitudes, robust against outliers. |
 | **× normal** | Scatter divided by the typical scatter at that magnitude. |
+| **χ²ν × normal** | The star's χ²ν against its own error bars, divided by the typical χ²ν at that magnitude that night. |
+| **Suspect by** | Which test made it a suspect: **scatter**, **own errors**, **both**, or **by hand** (Add as suspect). |
+| **Nights** | **Suspect again (N nights)** when the same star was a suspect on other nights of this field (N counts tonight). Empty the first time. |
 | **Best period (d)** | The best Lomb-Scargle period. **no period (drift)** means the best peak sat at the long end of the search: a slow drift, not a period. **at the short end: search shorter** means it sat at the short end. |
 | **B−V** | Color, when measured. |
-| **Check first** | Reasons to doubt the candidate (below). |
+| **Check first** | Reasons to doubt the suspect (below). |
 | **VSX** | **KNOWN (VSX): name type**, or **not in VSX or SIMBAD — possible new variable**. When VSX could not be reached it reads **VSX not reached — possible new variable** (only SIMBAD was checked; solve and scan again later). |
 
 Click a row to draw that star. You can select several rows. Click the selected row again, or press **Esc**, to clear
@@ -173,7 +209,7 @@ the selection.
 
 ### Check first
 
-The **Check first** column lists warnings that often explain a candidate away:
+The **Check first** column lists warnings that often explain a suspect away:
 
 - **near saturation: check linearity**: the star's peak came close to saturation in some frames.
 - **clipped on 1 frame: check linearity**: the star's raw core reached saturation on one frame (or a few, for a star
@@ -184,25 +220,34 @@ The **Check first** column lists warnings that often explain a candidate away:
   rotator move or gap, which points at the instrument rather than the star.
 - **noise begins at flip: check** / **noise begins after a gap: check**: the same for a jump in noise.
 
-### The candidate kinds
+### Add a suspect by hand
 
-**Mark candidates on image** switches to the Photometry page and draws numbered squares on the candidates. With rows
+You may judge a star suspect by eye that neither test flagged (S033 itself was found that way). Click it on the
+scatter plot (or pick several), then press **Add as suspect**. It joins tonight's suspects at the end of the list,
+**Suspect by** reads **by hand**, its period is searched like the others', and it is kept in the night's suspects file
+(below). A star that is already a suspect says *"Already a suspect."* To take a star you added by mistake off the
+list, select its row and press **Remove added suspect**; the scan's own suspects cannot be removed (a new scan would
+find them again).
+
+### The suspect kinds
+
+**Mark suspects on image** switches to the Photometry page and draws numbered squares on the suspects. With rows
 selected in the table, it marks only those (**Mark N selected on image**). The style of each square says its kind;
 hover over it for the reason:
 
 - **Possible new variable** (bright magenta): not in VSX or SIMBAD, and nothing to check first.
 - **Known variable (VSX/SIMBAD)** (pale purple).
-- **Candidate to check first** (tan): it has a **Check first** warning.
+- **Suspect to check first** (tan): it has a **Check first** warning.
 - **Unchecked (no sky positions)** (gray): the field was not solved.
 
-Tick **Candidates only** in the **View** box to hide everything else on the image. Press the button again (now
-**Clear candidate marks**) to remove the marks.
+Tick **Suspects only** in the **View** box to hide everything else on the image. Press the button again (now
+**Clear suspect marks**) to remove the marks.
 
 
 ### Known variables
 
 - **Known variables measured…** lists every VSX and SIMBAD variable in the frame and what the scan saw for each, in
-  the column **In this scan**: **VARIED: a scan candidate**, **steady tonight, within the noise**, **somewhat more
+  the column **In this scan**: **VARIED: a scan suspect**, **steady tonight, within the noise**, **somewhat more
   scatter than normal**, **measured on too few frames**, **saturated: clipped, so not usable tonight**, or **not
   measured (faint, saturated, blended, or not detected)**. It is a quick way to see whether your setup catches the
   variables you know are there.
@@ -210,21 +255,43 @@ Tick **Candidates only** in the **View** box to hide everything else on the imag
   ones stand out. Their rank numbers are kept, so the table may jump from #1 to #3, matching the marks on the image.
   It also works when the field's variable-star check finishes after the scan.
 
+## The night's suspects file and Suspect again
+
+When the scan ends, SHOBS-P keeps the night's suspects beside its results, in the Input page's **Output** folder:
+`<field>_<filter>_<date>_SHOBS-P_suspects.json`. It holds each suspect's label, its **Gaia DR3 ID** (its lasting
+name, when the field was solved with Gaia), position, magnitude, scatter, both test values, why it is a suspect and its
+best period, and whether the scan was on the frames or on stacks. **Add as suspect** writes the file again, and so
+does a new period search (Enter in the period boxes). A new scan of the same night replaces it, but the stars you
+added by hand to the night's file come back as **by hand** suspects (the log names them, and any not found in the new
+scan). The file always goes to the Output folder the scan started with, under the Star ID and filter it started with. The log says, for
+example, *"10 suspect(s) kept in GSC_03308-00462_TG_14-NOV-2026_SHOBS-P_suspects.json; 1 were suspects on other
+nights of this field too."*
+
+For **Suspect again**, SHOBS-P reads the suspects files of the field's other nights: the night's Output folder sits in
+its night folder, which sits in the field's folder (for example `W:\Variables\GSC 03308-00462\13Nov26\Output`), so the
+other night folders of `GSC 03308-00462` are searched. The same star is matched by its Gaia DR3 ID, or within 3″ when
+one of the nights has no Gaia ID. A file of the same night (another filter's Output folder, or a copy) is never
+counted as another night. Discovery still judges each night on its own: a repeat is a flag, never a test.
+
+With no Output folder on the Input page, no file is written; the log says that **Suspect again** cannot be checked on
+another night.
+
 ## Save the results
 
 The **Results** row holds:
 
 - **Save plot PNG…**: the three plots with a one-line summary, `<field>_<filter>_<date>_SHOBS-P_scan.png`
   (`<field>` is the Input page's Star ID if one is left from another mode, otherwise `field`).
-- **Save CSV…**: one row per measured star (position, magnitude, scatter, expected scatter, excess, candidate rank
-  and kind, period, VSX name).
-- **Export candidates CSV…**: one row per candidate, with color and VSX period, `field_scan_candidates.csv`.
+- **Save CSV…**: one row per measured star (position, magnitude, scatter, expected scatter, excess, excess χ²ν,
+  suspect rank and kind, period, VSX name).
+- **Export suspects CSV…**: one row per suspect, with both test values, why it is a suspect, its Gaia DR3 ID, how many
+  nights it was a suspect, color and VSX period, `field_scan_suspects.csv`.
 - **Export all light curves CSV…**: every star's light curve, one row per star per frame,
   `field_scan_lightcurves.csv`.
 - **Back** returns to the Photometry page.
 
-See [21. Follow a candidate](21-follow-a-candidate.md) for what to do with them.
+See [21. Follow a suspect](21-follow-a-candidate.md) for what to do with them.
 
 ---
 
-Previous: [19. Reports](19-transit-reports.md) · Next: [21. Follow a candidate](21-follow-a-candidate.md)
+Previous: [19. Reports](19-transit-reports.md) · Next: [21. Follow a suspect](21-follow-a-candidate.md)
