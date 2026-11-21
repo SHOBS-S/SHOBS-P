@@ -252,10 +252,12 @@ def upsert_from_report(doc: dict, report: dict, name: str, gaia="", ra=None, dec
     old_gates = old_ev.get("gates") or []
     old_p = old_ev.get("period_days")
     # Fable M2: a failure counts toward demotion only on NEW data (other nights or points than last time)
-    new_data = (list(report.get("nights") or []) != list(old_ev.get("nights") or [])
-                or int(report.get("n_points") or 0) != int(old_ev.get("n_points") or 0)
-                # a newer gate rule set judging the same data counts too (21 Nov 2026: saturation rule)
-                or int(report.get("version") or 1) != int(old_ev.get("gates_version") or 1))
+    data_changed = (list(report.get("nights") or []) != list(old_ev.get("nights") or [])
+                    or int(report.get("n_points") or 0) != int(old_ev.get("n_points") or 0))
+    # a NEWER gate rule set judging the same data (21 Nov 2026: saturation rule) may switch a campaign off or clear
+    # a failure count, but never counts toward auto-Rejection (that needs new data: Fable review)
+    rule_changed = int(report.get("version") or 1) > int(old_ev.get("gates_version") or 1)
+    new_data = data_changed or rule_changed
     rec["evidence"] = evidence_from(report, series_file, parent_target)
     rec["evidence"]["series_files"] = list(dict.fromkeys(old_files + rec["evidence"]["series_files"]))
     # keep a gate cleared by outside data (decision 10) when our own run still fails it
@@ -274,7 +276,7 @@ def upsert_from_report(doc: dict, report: dict, name: str, gaia="", ra=None, dec
         rec["fails"]["last_utc"] = utc_now()
         set_campaign(rec, False, by="auto", note="failed " + ", ".join(hard) + " on new data")
         event = "campaign_fail"
-    elif rec.get("status") == "candidate" and hard and new_data and int(rec["fails"].get("count") or 0) >= 1:
+    elif rec.get("status") == "candidate" and hard and data_changed and int(rec["fails"].get("count") or 0) >= 1:
         rec["fails"]["count"] = int(rec["fails"]["count"]) + 1
         rec["fails"]["last_utc"] = utc_now()
         if rec["fails"]["count"] >= HARD_FAILS_TO_REJECT:

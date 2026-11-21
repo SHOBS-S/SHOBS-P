@@ -131,6 +131,12 @@ class TestGates(unittest.TestCase):
         self.assertFalse(g["pass"])
         self.assertIn("flagged by SHOBS-P", g["value"])
 
+    def test_partial_peaks_say_so(self):
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        star.peak[:20] = np.nan
+        g = self.gate(self.report(star, linear_limit=60931, sat_level=60000), "linear")
+        self.assertIn(f"judged on {star.jd.size - 20} of {star.jd.size} frames", g["value"])
+
     def test_odd_limits_are_not_limits(self):
         star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
         for lin, sat in ((float("nan"), 60000), (None, 60000), (60931, "abc"), (60931, True), (60931, 0)):

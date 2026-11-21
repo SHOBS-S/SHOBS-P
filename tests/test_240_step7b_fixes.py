@@ -107,10 +107,15 @@ class TestStep7bFixes(unittest.TestCase):
                             lum(style.lookup(name, "background", ["active"])) - 10, name)
 
     def test_old_gate_reports_are_outdated(self):
+        keep = list(self.app.watch_list)
+        self.app.watch_list = keep + [{"name": "S"}]
         self.app.gate_reports = {"S": {"version": 1}}
         self.assertTrue(self.app._gate_reports_outdated())
+        self.app.watch_list = keep
+        self.app.watch_list = keep + [{"name": "S"}]
         self.app.gate_reports = {"S": {"version": self.ca.promotion.GATES_VERSION}}
         self.assertFalse(self.app._gate_reports_outdated())
+        self.app.watch_list = keep
         self.app.gate_reports = {}
 
     def test_registry_counts_a_rule_change_as_new_data(self):
@@ -132,6 +137,34 @@ class TestStep7bFixes(unittest.TestCase):
         # and the same report again is not new data
         rec3, event3 = registry.upsert_from_report(doc, dict(rep, version=2, gates=[lin_bad]), "S", ra=10.0, dec=20.0)
         self.assertNotEqual(event3, "campaign_fail")
+
+    def test_rule_change_alone_never_rejects(self):
+        # Fable M1 sequence: Campaign star fails on new data under v1 (campaign off, fails 1); same data again;
+        # same data judged by v2 still failing -> must NOT be Rejected
+        import registry
+        doc = registry.empty()
+        corr_bad = {"key": "corr", "label": "Airmass", "set": "campaign", "value": "", "need": "", "pass": False,
+                    "cleared_by": None, "why": "airmass_corr"}
+        ok = dict(corr_bad, **{"pass": True, "cleared_by": "ours", "why": ""})
+        base = {"star": "S", "period_days": 0.1, "nights": ["JD1"], "n_points": 50, "candidate": True,
+                "campaign": True, "gates": [ok], "summary": "", "version": 1}
+        rec, _ = registry.upsert_from_report(doc, base, "S", ra=10.0, dec=20.0)
+        registry.set_campaign(rec, True, by="John")
+        bad = dict(base, nights=["JD1", "JD2"], n_points=90, gates=[corr_bad])
+        rec, ev = registry.upsert_from_report(doc, bad, "S", ra=10.0, dec=20.0)
+        self.assertEqual(ev, "campaign_fail")
+        registry.upsert_from_report(doc, bad, "S", ra=10.0, dec=20.0)
+        rec, ev = registry.upsert_from_report(doc, dict(bad, version=2), "S", ra=10.0, dec=20.0)
+        self.assertNotEqual(ev, "rejected")
+        self.assertNotEqual(rec["status"], "rejected")
+        # an older build's v1 report after v2 is not new data either
+        rec, ev = registry.upsert_from_report(doc, dict(bad, version=1), "S", ra=10.0, dec=20.0)
+        self.assertNotEqual(rec["status"], "rejected")
+
+    def test_orphan_old_report_is_not_outdated(self):
+        self.app.gate_reports = {"Gone star": {"version": 1}}
+        self.assertFalse(self.app._gate_reports_outdated())
+        self.app.gate_reports = {}
 
     def test_button_state_map_order(self):
         m = self.ca.button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd", disabled_fg="#6e5e4e")

@@ -2305,6 +2305,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         for name in ("TButton", "Compact.TButton", "TMenubutton"):
             style.map(name, **button_state_map("#e7eef2", "#f0f4f6", "#1c2b33", disabled_bg="#d5dce0",
                                                disabled_fg="#8a949a"))
+        style.map("TMenubutton", arrowcolor=[("disabled", "#8a949a")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
@@ -2325,7 +2326,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             bordercolor=m["active"], font=(core.UI_FONT, 10, "bold"))
             style.map(f"Mode{key}.TButton", **button_state_map(m["step"], m["active"], "#ffffff",
                                                               disabled_bg=mix_color(m["step"], m["side"], 0.5),
-                                                              disabled_fg=m["hint"]))
+                                                              disabled_fg=mix_color(m["hint"], m["side"], 0.4)))
         style.configure("Warn.TLabel", background="#ffffff", foreground="#b35c00")
         style.configure("Good.TLabel", background="#ffffff", foreground="#2e7d32")
         style.configure("Bad.TLabel", background="#ffffff", foreground="#b00020")
@@ -24959,7 +24960,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             edge_margin_px=cfg["edge_margin_px"])
                     except Exception as exc:
                         rep = {"star": st["name"], "gates": [], "candidate": False, "campaign": False,
-                               "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": []}
+                               "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": [],
+                               "version": promotion.GATES_VERSION}   # Fable S1: not re-run on every open
                     rep["is_target"] = st["is_target"]
                     reports[st["name"]] = rep
             except Exception as exc:
@@ -25049,8 +25051,13 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
 
     def _gate_reports_outdated(self) -> bool:
         """A stored gate report made under an older rule set (promotion.GATES_VERSION) is stale like a new night."""
-        return any(int(r.get("version") or 1) < promotion.GATES_VERSION for r in (self.gate_reports or {}).values()
-                   if isinstance(r, dict))
+        try:
+            current = {st["name"] for st in self.gate_stars()}
+        except Exception:
+            current = set(self.gate_reports or {})
+        # only the stars the gates still run on (a removed Watch star's old report never updates: Fable S1)
+        return any(int(r.get("version") or 1) < promotion.GATES_VERSION
+                   for n, r in (self.gate_reports or {}).items() if isinstance(r, dict) and n in current)
 
     def show_candidates(self):
         if not self.observations:

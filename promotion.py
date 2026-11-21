@@ -131,7 +131,7 @@ def make_curve(name, jd, mag, night, segment, **extra) -> Curve:
 # ---- small pieces ------------------------------------------------------------------------------------------------
 def _positive(v) -> float | None:
     """A limit as a positive finite float, else None (bools, text, 0, NaN are not limits)."""
-    if isinstance(v, bool) or v is None:
+    if isinstance(v, (bool, np.bool_)) or v is None:
         return None
     try:
         f = float(v)
@@ -706,18 +706,24 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
             need += f" and the saturation level {sat:,.0f}"
         if saturated:
             n = max(n_sat, n_flag)
-            value = (f"saturated in {n} frame(s)" + (f" (peak {mx:,.0f} ADU)" if have_pk else " (flagged by SHOBS-P)"))
+            value = f"saturated in {n} frame(s)" + (f" (peak {mx:,.0f} ADU)" if n_sat else " (flagged by SHOBS-P)")
         elif over:
             value = f"peak {mx:,.0f} ADU: at or above the linear limit {lin:,.0f}"
         else:
             value = f"peak {mx:,.0f} ADU = {mx / lin * 100:.0f}% of {lin:,.0f}"
+        n_pk = int(np.isfinite(pk).sum()) if have_pk else 0
+        if have_pk and n_pk < c.jd.size:
+            # Fable S2: older nights without peaks are not judged; say so rather than pass them silently
+            value += f" (judged on {n_pk} of {c.jd.size} frames; the rest have no recorded peak)"
         gates.append(_gate("linear", "Linear limit", "systematics", "campaign", value, need, ok,
                            "" if ok else "saturation"))
         if have_pk:
             rep["peak_max"] = mx
     else:
-        gates.append(_gate("linear", "Linear limit", "systematics", "campaign",
-                           "not recorded (run the nights again to record this star's peaks)",
+        why_none = ("no linear ADU or saturation level set" if not lin and pk.size == c.jd.size and np.isfinite(pk).any()
+                    else "no raw peaks recorded for this star (pre-calibrated lights, or nights run before 2.4.0: "
+                         "run those again)")
+        gates.append(_gate("linear", "Linear limit", "systematics", "campaign", f"not recorded: {why_none}",
                            "every frame under the linear limit", None))
     xs, ys_ = np.asarray(c.x, float), np.asarray(c.y, float)
     if frame_shape and xs.size == c.jd.size and np.isfinite(xs).any():
