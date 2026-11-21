@@ -111,6 +111,29 @@ class TestGates(unittest.TestCase):
         rep = self.report(star)
         self.assertFalse(self.gate(rep, "linear")["pass"])
 
+    def test_saturated_frames_fail_even_under_a_higher_linear_limit(self):
+        # John 21 Nov 2026: sat 60,000 below FLUX's linear 60,931; a star peaking in between fails, and says so
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        star.peak[:5] = 60500.0
+        g = self.gate(self.report(star, linear_limit=60931, sat_level=60000), "linear")
+        self.assertFalse(g["pass"])
+        self.assertIn("saturated", g["value"])
+        self.assertIn("5 frame", g["value"])
+        self.assertEqual(g["why"] or "saturation", "saturation")
+
+    def test_under_both_limits_passes_and_reads_the_flux_number(self):
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        g = self.gate(self.report(star, linear_limit=60931, sat_level=60000), "linear")
+        self.assertTrue(g["pass"])
+        self.assertIn("of 60,931", g["value"])
+        self.assertIn("saturation level 60,000", g["need"])
+
+    def test_saturation_above_linear_changes_nothing(self):
+        star = curve("S", self.t, self.n, self.s, amp=0.01, seed=7)
+        g = self.gate(self.report(star, linear_limit=40000, sat_level=60000), "linear")
+        self.assertTrue(g["pass"])
+        self.assertEqual(g["need"], "every frame under the linear limit")
+
     def test_edge_guard(self):
         star = curve("S", self.t, self.n, self.s, amp=0.01, seed=8)
         star.x[:] = 20.0

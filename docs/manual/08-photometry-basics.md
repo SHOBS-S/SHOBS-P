@@ -617,7 +617,8 @@ empty if you don't know the limit and have no profile; nothing changes then. Wit
 near it (see "Comparison stars and the check star" above), counts after each run the frames where each star went over
 it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"), and Comp health shows an **Over linear limit**
 column (chapter 11). The promotion gates in **Candidates…** (chapter 21) are the one place that uses the linear ADU
-even when it is at or above **raw sat ADU**, because SHOBS-FLUX measured it.
+even when it is at or above **raw sat ADU**, because SHOBS-FLUX measured it; a star whose peak reaches raw sat ADU
+on any frame still fails that gate.
 
 ### Color
 

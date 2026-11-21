@@ -398,10 +398,11 @@ def check_bad_nights(check: Curve | None, factor: float = CHECK_NIGHT_FACTOR) ->
 def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | None = None, *,
                 min_period: float = 0.02, max_period: float = 20.0, m_trials: int = 1,
                 linear_limit: float | None = None, frame_shape=None, edge_margin_px: float | None = None,
-                outside: dict | None = None) -> dict:
+                outside: dict | None = None, sat_level: float | None = None) -> dict:
     """Run every promotion gate on one star. nulls: the other stars of the same frames (check, comps, spares, other
     Watch stars) as Curves; check: the check star (also used to drop bad nights). m_trials: watch stars in the series
-    or stars searched in the field scan (look-elsewhere). linear_limit: raw ADU. frame_shape: (height, width) for the
+    or stars searched in the field scan (look-elsewhere). linear_limit: raw ADU; sat_level: the raw saturation
+    setting (a star whose raw peak reaches it fails the Linear limit gate too, even when linear_limit is higher). frame_shape: (height, width) for the
     edge guard; edge_margin_px: aperture + sky ring outer radius (EDGE_PAD_PX is added). outside: {survey: {"period":
     d}} from the outside-data check; it may clear the +-1 c/d alias and the span gates (decision 10).
 
@@ -677,9 +678,17 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
     pk = np.asarray(c.peak, float)
     if linear_limit and pk.size == c.jd.size and np.isfinite(pk).any():
         mx = float(np.nanmax(pk))
-        gates.append(_gate("linear", "Linear limit", "systematics", "campaign",
-                           f"peak {mx:,.0f} ADU = {mx / linear_limit * 100:.0f}% of {linear_limit:,.0f}",
-                           "every frame under the linear limit", mx < linear_limit, "" if mx < linear_limit else "saturation"))
+        sat = float(sat_level) if sat_level and math.isfinite(float(sat_level)) and sat_level > 0 else None
+        ok = mx < linear_limit and (sat is None or mx < sat)
+        value = f"peak {mx:,.0f} ADU = {mx / linear_limit * 100:.0f}% of {linear_limit:,.0f}"
+        need = "every frame under the linear limit"
+        if sat is not None and sat <= linear_limit:
+            need += f" and the saturation level {sat:,.0f}"
+            if mx >= sat:
+                n_sat = int(np.sum(pk[np.isfinite(pk)] >= sat))
+                value = f"peak {mx:,.0f} ADU: saturated (at or above {sat:,.0f}) in {n_sat} frame(s)"
+        gates.append(_gate("linear", "Linear limit", "systematics", "campaign", value, need, ok,
+                           "" if ok else "saturation"))
         rep["peak_max"] = mx
     else:
         gates.append(_gate("linear", "Linear limit", "systematics", "campaign", "not recorded",

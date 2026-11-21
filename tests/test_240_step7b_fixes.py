@@ -50,6 +50,11 @@ class TestStep7bFixes(unittest.TestCase):
         self.app.linear_limit.set("60931")
         self.assertEqual(self.app._gate_settings()["linear_limit"], 60931.0)
 
+    def test_saturation_level_is_passed_too(self):
+        self.app.sat_limit.set("60000.0")
+        self.app.linear_limit.set("60931")
+        self.assertEqual(self.app._gate_settings()["sat_level"], 60000.0)
+
     def test_linear_with_commas(self):
         self.app.sat_limit.set("60000.0")
         self.app.linear_limit.set("40,000")

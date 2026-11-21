@@ -24863,9 +24863,12 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         # 7b regression (John 21 Nov): the gate judges against the linear ADU (SHOBS-FLUX's number when it came
         # from FLUX) even when it sits above the raw saturation setting; _linear_limit() drops it then, which
         # left the gate on the saturation level. The saturation level is only the fallback when no linear ADU is set.
+        # John 21 Nov (13:30): a star whose own raw peak reaches the raw saturation level fails the gate too, even
+        # when the linear ADU sits above it (a frame SHOBS-P flags saturated never passes).
         lin = num(self.linear_limit, None) if hasattr(self, "linear_limit") else None
+        sat = num(self.sat_limit, None) if hasattr(self, "sat_limit") else None
         if lin is None:
-            lin = num(self.sat_limit, None) if hasattr(self, "sat_limit") else None
+            lin = sat
         shape = None
         for o in self.observations[:20]:
             try:
@@ -24876,7 +24879,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
             except Exception:
                 continue
         return {"min_period": num(self.min_period, 0.02), "max_period": num(self.max_period, 20.0),
-                "linear_limit": lin, "frame_shape": shape, "edge_margin_px": num(self.sky_out, 0.0),
+                "linear_limit": lin, "sat_level": sat, "frame_shape": shape, "edge_margin_px": num(self.sky_out, 0.0),
                 "m_trials": max(1, len(self.watch_list)),
                 "comp_names": list(self.comps_used), "check_name": self.check_used or self.check_name.get().strip(),
                 "watch_names": [w["name"] for w in self.watch_list], "spare_names": self._spares_in_series(),
@@ -24938,7 +24941,8 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             comp_names=cfg["comp_names"], check_name=cfg["check_name"],
                             watch_names=cfg["watch_names"], spare_names=cfg["spare_names"], aliases=cfg["aliases"],
                             min_period=cfg["min_period"], max_period=cfg["max_period"], m_trials=cfg["m_trials"],
-                            linear_limit=cfg["linear_limit"], frame_shape=cfg["frame_shape"],
+                            linear_limit=cfg["linear_limit"], sat_level=cfg.get("sat_level"),
+                            frame_shape=cfg["frame_shape"],
                             edge_margin_px=cfg["edge_margin_px"])
                     except Exception as exc:
                         rep = {"star": st["name"], "gates": [], "candidate": False, "campaign": False,

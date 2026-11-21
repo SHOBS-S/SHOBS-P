@@ -147,7 +147,8 @@ look-elsewhere FAP under 1e-4; every other star of the frames (comps, check, spa
 period (**null tests**); no correlation of |r| 0.3 or more with airmass, FWHM, sky or the star's x/y position, and
 none of those with strong, significant power at the period; every frame under the linear limit (the **linear ADU**
 on the Photometry page, SHOBS-FLUX's number when it came from there; the raw saturation level only when no linear
-ADU is set); the star clear of
+ADU is set), and never at or above **raw sat ADU** (a star that saturates on any frame fails even when the linear
+ADU is higher); the star clear of
 the frame edges on 95 % of frames. Nights whose check star scatters more than 1.5 times its typical night are left out
 before any gate runs (the quiet-nights strip shows them as *skipped*).
 
