@@ -31,6 +31,10 @@ SIDECAR_VERSION = 1
 SIDECAR_SUFFIX = "_neighbors.json"
 MIN_ANCHORS = 3          # stars with a sky and a pixel position needed for a frame's sky -> pixel map
 MIN_TIE = 2              # anchors measured to tie a star to the frame's instrumental scale
+MIN_MAP_STARS = 4        # a value is written only when the frame's map rests on this many stars (3 fit exactly)
+MAP_RMS_MAX = 2.0        # ... and fits them within this (px)
+TIE_SPREAD_MAX = 0.05    # ... and its anchors agree on the tie within this (mag, robust spread)
+CLOSE_DMAG_MAX = 3.0     # a close companion fainter than the star by more than this (6 % of its light) is no blend
 FIT_CLIP_PX = 2.0        # an anchor further than this (and 3 sigma) from the fit is left out once
 LOOKALIKE_MAG = 0.5      # John, 15 Nov: look-alikes within +-0.5 mag until real use says otherwise
 LOOKALIKE_MAX = 6
@@ -155,8 +159,7 @@ class FrameMap:
                        if n not in set(exclude or ())}
         names = [n for n in self.points if n in sky and sky[n] is not None]
         self.names = names
-        self.center = center or (float(np.mean([sky[n][0] for n in names])) if names else 0.0,
-                                 float(np.mean([sky[n][1] for n in names])) if names else 0.0)
+        self.center = center or (tuple(sky[names[0]]) if names else (0.0, 0.0))
         self.M, self.rms, self.used = None, float("nan"), []
         if len(names) >= MIN_ANCHORS:
             xi, eta = tangent([sky[n][0] for n in names], [sky[n][1] for n in names], *self.center)
@@ -223,10 +226,20 @@ def measure_frame(core, img, raw, o, fmap: FrameMap, stars: list[dict], *, comp_
         d = np.asarray(diffs)
         out["offset"] = float(np.median(d))
         out["spread"] = float(1.4826 * np.median(np.abs(d - np.median(d)))) if d.size > 2 else float(np.std(d))
+    poor = ""
+    if not fmap.ok:
+        poor = "frame could not be mapped"
+    elif len(fmap.used) < MIN_MAP_STARS:
+        poor = f"only {len(fmap.used)} stars to map the frame"
+    elif fmap.rms > MAP_RMS_MAX:
+        poor = f"the frame's stars do not fit one map ({fmap.rms:.1f} px)"
+    elif math.isfinite(out["spread"]) and out["spread"] > TIE_SPREAD_MAX:
+        poor = f"the comps disagree on the tie ({out['spread']:.3f} mag)"
+    out["poor"] = poor
     for st in stars:
         key = st["key"]
-        if not fmap.ok:
-            out["values"][key] = {"inst": float("nan"), "why": "frame could not be mapped"}
+        if poor:
+            out["values"][key] = {"inst": float("nan"), "why": poor}
             continue
         x, y = fmap.xy(st["ra"], st["dec"])
         m, x, y, why = _measure(core, img, x, y, radius, sky_in, sky_out, exptime)
@@ -279,7 +292,7 @@ def measure_series(core, observations, stars: list[dict], *, sky: dict, comp_nam
     res = {"values": {st["key"]: {} for st in stars}, "frames": 0, "failed": [], "ties": {}, "map_rms": []}
     center = None
     if sky:
-        center = (float(np.mean([v[0] for v in sky.values()])), float(np.mean([v[1] for v in sky.values()])))
+        center = tuple(next(iter(sky.values())))   # any star of the field (a mean RA breaks at 0/360 deg)
     order = sorted(want)
     for n_done, i in enumerate(order, 1):
         if cancel is not None and cancel.is_set():
@@ -306,9 +319,12 @@ def measure_series(core, observations, stars: list[dict], *, sky: dict, comp_nam
             exptime = float(core.header_exptime(header)) if header is not None else float(o.exptime)
             fr = measure_frame(core, img, raw, o, fmap, want[i], comp_names=comp_names, target_name=target_name,
                                check_name=check_name, radius=r, sky_in=si, sky_out=so, exptime=exptime,
-                               total_bin=total_bin)
+                               total_bin=total_bin(o) if callable(total_bin) else total_bin)
         except Exception as exc:
             res["failed"].append((o.path, f"{type(exc).__name__}: {exc}"))
+            continue
+        if fr.get("poor"):
+            res["failed"].append((o.path, fr["poor"]))
             continue
         res["frames"] += 1
         res["ties"][i] = (fr["offset"], fr["spread"], fr["n_tie"])
@@ -405,10 +421,11 @@ def curve_from_values(promotion, observations, name: str, values: dict, role: st
 # ---- picking the neighbors ----------------------------------------------------------------------------------------
 def pick_neighbors(star_ra: float, star_dec: float, star_mag, catalog: list[dict], known: dict, *,
                    window: float = LOOKALIKE_MAG, n_max: int = LOOKALIKE_MAX, close_arcsec: float = 0.0,
-                   field_arcsec: float | None = None) -> dict:
+                   field_arcsec: float | None = None, keep=None) -> dict:
     """Look-alikes (catalog stars within +-window mag of the star, nearest first, at most n_max) and close
     companions (any catalog star within close_arcsec: the aperture plus sky ring), leaving out the star itself and
-    the stars the series already measures (known = {name: (ra, dec)}). Each pick: {"name", "ra", "dec", "mag",
+    the stars the series already measures (known = {name: (ra, dec)}). A close companion more than CLOSE_DMAG_MAX
+    fainter is left out; keep(pick) -> False leaves a star out (before the n_max cut). Each pick: {"name", "ra", "dec", "mag",
     "sep", "dmag"}."""
     looks, close = [], []
     for st in catalog or []:
@@ -427,8 +444,11 @@ def pick_neighbors(star_ra: float, star_dec: float, star_mag, catalog: list[dict
         name = str(st.get("auid") or st.get("name") or (aka[0] if aka else "") or f"{float(ra):.5f} {float(dec):+.5f}")
         pick = {"name": name, "ra": float(ra), "dec": float(dec), "mag": mag, "sep": sep,
                 "dmag": (float(mag) - float(star_mag)) if mag is not None and star_mag is not None else None}
+        if keep is not None and not keep(pick):   # e.g. not on the series' frames
+            continue
         if close_arcsec and sep <= close_arcsec:
-            close.append(pick)
+            if pick["dmag"] is None or pick["dmag"] <= CLOSE_DMAG_MAX:
+                close.append(pick)
         elif pick["dmag"] is not None and abs(pick["dmag"]) <= window:
             looks.append(pick)
     looks.sort(key=lambda p: p["sep"])

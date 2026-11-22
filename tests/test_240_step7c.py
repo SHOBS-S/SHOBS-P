@@ -340,7 +340,9 @@ class TestOutside(unittest.TestCase):
         bands = od.parse_ztf_csv(ztf_csv(n=100))
         self.assertEqual(set(bands), {"zg", "zr"})
         self.assertEqual(sum(v[0].size for v in bands.values()), 90)
-        self.assertEqual(od.parse_ztf_csv("no data"), {})
+        self.assertEqual(od.parse_ztf_csv(""), {})
+        with self.assertRaises(od.BadAnswer):
+            od.parse_ztf_csv("no data")
 
     def test_outside_clears_only_alias_and_span_on_a_record(self):
         from neighbors_ui import apply_outside_to_record
@@ -354,6 +356,89 @@ class TestOutside(unittest.TestCase):
         self.assertTrue(g["volume"]["pass"])
         self.assertFalse(g["nulls"]["pass"])
         self.assertEqual(rec["outside"]["agree"], ["ZTF", "TESS"])
+
+
+class TestReviewFixes(unittest.TestCase):
+    """Fable review of e7429f6 and John's calls of 22 Nov 2026."""
+
+    def test_span_is_its_own_gate_and_only_it_is_cleared(self):
+        t = np.concatenate([2461353.6 + np.arange(90) * 0.0021 + d for d in (0, 1)])
+        night = [f"JD{2461353 + int(x - 2461353.1)}" for x in t]
+        c = pr.make_curve("S", t, 13 + 0.01 * np.sin(2 * np.pi * t / 0.1027), night, [""] * t.size)
+        rep = pr.gate_report(c, [], None, outside={"ZTF": {"period": 0.1027}})
+        g = {x["key"]: x for x in rep["gates"]}
+        self.assertFalse(g["span"]["pass"])               # 2 nights: our own data must show 3
+        self.assertEqual(g["span"]["label"], "Nights and cycles")
+        self.assertTrue(g["span_days"]["pass"])           # the time span alone may be cleared
+        self.assertEqual(g["span_days"]["cleared_by"], "ZTF")
+        self.assertFalse(rep["candidate"])
+        self.assertEqual(pr.GATES_VERSION, 3)
+
+    def test_dubious_atlas_and_weak_peaks_do_not_count(self):
+        dub = od.atlas(42.05, 50.88, 0.249402, query=lambda *a: [{"ATOID": "J1", "fp-LSper": "0.249402",
+                                                                   "fp-period": "", "fp-lngfitper": "",
+                                                                   "Class": "dubious"}])
+        self.assertEqual(dub["relation"], "same")
+        self.assertFalse(od.counts(dub))
+        weak = {"status": "ok", "period": 0.1, "relation": "same", "fap": 0.2}
+        self.assertFalse(od.counts(weak))
+        self.assertTrue(od.counts(dict(weak, fap=1e-6)))
+        self.assertEqual(od.for_gates({"surveys": {"ATLAS": dub, "ZTF": weak}}), {})
+
+    def test_unreadable_irsa_answer_is_an_error_not_none(self):
+        r = od.ztf(42.05, 50.88, 0.1, 0.02, 20, get=lambda *a, **k: b"<html>Service unavailable</html>")
+        self.assertEqual(r["status"], "error")
+
+    def test_a_down_survey_keeps_the_earlier_good_answer_and_clears_can_be_undone(self):
+        from neighbors_ui import merge_outside, unclear_outside
+        good = {"utc": "U1", "surveys": {"ZTF": {"status": "ok", "period": 0.1, "relation": "same", "fap": 1e-9}}}
+        down = {"utc": "U2", "surveys": {"ZTF": {"status": "down", "detail": "HTTP 503"}}}
+        m = merge_outside(good, down)
+        self.assertEqual(m["surveys"]["ZTF"]["status"], "ok")
+        self.assertEqual(m["agree"], ["ZTF"])
+        alias = {"utc": "U3", "surveys": {"ZTF": {"status": "ok", "period": 0.11, "relation": "alias", "fap": 1e-9}}}
+        gates = [{"key": "alias_pm1", "pass": True, "cleared_by": "ZTF"}, {"key": "nulls", "pass": True}]
+        unclear_outside(gates, merge_outside(good, alias))
+        self.assertFalse(gates[0]["pass"])
+        self.assertIsNone(gates[0]["cleared_by"])
+        self.assertTrue(gates[1]["pass"])
+
+    def test_three_anchors_are_not_enough_to_write(self):
+        sky = sky_table()
+        o = frame_obs(0, STARS, w_measured=False)
+        o.pos = {"t": o.pos["t"], "c": o.pos["c"][:2]}   # target + 2 comps: an exact 3-star fit
+        img = star_image(STARS)
+        res = nb.measure_series(core, [o], [{"key": "W", "ra": sky["W"][0], "dec": sky["W"][1]}], sky=sky,
+                                comp_names=["C1", "C2"], target_name="T", check_name="", aperture_for=lambda o:
+                                (6.0, 12.0, 18.0), load=lambda p: (None, {"EXPTIME": 1.0}, img))
+        self.assertEqual(res["frames"], 0)
+        self.assertIn("only 3 stars", res["failed"][0][1])
+
+    def test_values_follow_the_frames_not_their_positions(self):
+        """Fable M1: the job carries the frames; a list rebuilt meanwhile never shifts a value onto another frame."""
+        sky = sky_table()
+        obs = [frame_obs(i, STARS, w_measured=False) for i in range(3)]
+        img = star_image(STARS)
+        res = nb.measure_series(core, obs, [{"key": "W", "name": "W", "ra": sky["W"][0], "dec": sky["W"][1]}],
+                                sky=sky, comp_names=["C1", "C2", "C3"], target_name="T", check_name="K",
+                                aperture_for=lambda o: (6.0, 12.0, 18.0), load=lambda p: (None, {"EXPTIME": 1.0}, img))
+        shorter = obs[1:]   # a night removed while it ran
+        live = {id(o) for o in shorter}
+        good = {i: v for i, v in res["values"]["W"].items() if id(obs[i]) in live}
+        nb.fill_watch(obs, "W", good)
+        self.assertNotIn("W", obs[0].watch_insts)
+        self.assertIn("W", obs[1].watch_insts)
+
+    def test_saved_master_nearest_exposure(self):
+        from neighbors_ui import NeighborsMixin
+        with tempfile.TemporaryDirectory() as d:
+            m = os.path.join(d, core.MASTER_DIR)
+            os.makedirs(m)
+            for e in (20, 120, 180):
+                open(os.path.join(m, f"SHOBS-P_master_dark_bin1_{e}s.fits"), "w").close()
+            self.assertTrue(NeighborsMixin._saved_master(d, "dark", 1, 170.0).endswith("_180s.fits"))
+            self.assertTrue(NeighborsMixin._saved_master(d, "dark", 1, 30.0).endswith("_20s.fits"))
+            self.assertIsNone(NeighborsMixin._saved_master(d, "flat", 1))
 
 
 # ---- the App ------------------------------------------------------------------------------------------------------
@@ -440,7 +525,7 @@ class TestApp(unittest.TestCase):
         xy = [(200, 200), (205, 210), (260, 200), (120, 150), (330, 330), (60, 340)]
         result = {"labels": ["S033", "S040", "S051", "Comp 1", "Check", "S077"], "jd": jd, "light_curves": lc,
                   "mag": np.array([13.43, 15.9, 13.6, 12.6, 12.7, 13.2]), "xy": xy,
-                  "usable": [True] * n_st, "saturated": []}
+                  "usable": [True] * n_st, "saturated": [], "candidates": [0]}
         self.app.sky_out.set(20.0)
         win = self.app.check_neighbors_suspect(result, 0)
         self.app.update()

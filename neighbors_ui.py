@@ -30,7 +30,7 @@ SECONDS_PER_FRAME = 1.2   # reach-back / measuring on John's PC (6248 x 4176 fra
 ROLE_WORDS = {"comp": "comp", "check": "check", "spare": "spare comp", "watch": "Watch star",
               "target": "series target"}
 GROUP_WORDS = {"target": "Target", "close": "Close companions (inside the aperture + sky ring)",
-               "look": "Look-alikes", "comps": "Comps and check"}
+               "look": "Look-alikes", "comps": "Comps and check", "others": "Other stars of the frames"}
 
 
 def _ca():
@@ -83,16 +83,18 @@ class NeighborsMixin:
         return mags
 
     def _measure_cfg(self) -> dict:
-        """What measuring on the series' frames needs, read on the Tk thread."""
+        """What measuring on the series' frames needs, read on the Tk thread. Each night keeps its own binning and
+        aperture (night_bin); the Bayer pattern and debayer mode are the series'."""
+        ca = _ca()
         pattern = self.pattern.get()
         binning = int(self.binning.get() or 1)
-        total_bin = binning * (1 if pattern == core.MONO else 2)
         nights = {}
         for n, nb_ in (self.night_bin or {}).items():
             if isinstance(nb_, dict):
-                nights[n] = (_f(nb_.get("radius")), _f(nb_.get("sky_in")), _f(nb_.get("sky_out")),
-                             int(nb_.get("binning") or binning))
-        return {"pattern": pattern, "mode": self.debayer_mode.get(), "binning": binning, "total_bin": total_bin,
+                nights[n] = {"radius": _f(nb_.get("radius")), "sky_in": _f(nb_.get("sky_in")),
+                             "sky_out": _f(nb_.get("sky_out")), "binning": int(nb_.get("binning") or binning),
+                             "precalibrated": nb_.get("precalibrated")}
+        return {"pattern": pattern, "mode": self.debayer_mode.get(), "binning": binning,
                 "precalibrated": bool(getattr(self, "precalibrated", False)),
                 "bias": self.bias_dir.get().strip(), "dark": self.dark_dir.get().strip(),
                 "darkflat": self.darkflat_dir.get().strip(), "flat": self.flat_dir.get().strip(),
@@ -100,7 +102,7 @@ class NeighborsMixin:
                 "sky_out": float(self.sky_out.get()), "nights": nights,
                 "comps": list(self.comps_used), "check": self.check_used or self.check_name.get().strip(),
                 "target": self.star_id.get().strip(), "sky": self.neighbor_sky(),
-                "series": self.series_path or ""}
+                "series": self.series_path or "", "version": ca.APP_VERSION}
 
     @staticmethod
     def night_flat_folder(light_path: str, fallback: str) -> str:
@@ -116,63 +118,115 @@ class NeighborsMixin:
         return fallback or ""
 
     @staticmethod
-    def make_frame_loader(cfg: dict, used: dict, log=None):
-        """load(path) -> (raw, header, calibrated debayered image) for measuring on the series' frames, with each
-        night's own saved masters (prepare_masters reuses them; built and saved when missing). used[night folder] =
-        the calibration in words, for the result."""
-        cache = {}
+    def _saved_master(d: str, kind: str, binning: int, exptime: float | None = None):
+        """A saved SHOBS-P master in d/SHOBS-P masters (raw frames deleted after it was built): for a dark, the one
+        whose exposure is nearest the lights'."""
+        folder = os.path.join(d, core.MASTER_DIR)
+        stem = f"{core.MASTER_PREFIX}{kind}_bin{int(binning)}"
+        try:
+            hits = sorted(f for f in os.listdir(folder) if f.endswith(".fits")
+                          and (f == stem + ".fits" or f.startswith(stem + "_")))
+        except OSError:
+            return None
+        if not hits:
+            return None
+        if kind in ("dark", "darkflat") and exptime:
+            def exp_of(f):
+                try:
+                    return float(f[len(stem) + 1:].rsplit("s.fits", 1)[0])
+                except ValueError:
+                    return float("inf")
+            hits.sort(key=lambda f: abs(exp_of(f) - float(exptime)))
+        return os.path.join(folder, hits[0])
 
-        def masters_for(path):
+    @staticmethod
+    def make_frame_loader(cfg: dict, used: dict, log=None, night_of=None):
+        """load(path) -> (raw, header, calibrated debayered image) for measuring on the series' frames, with each
+        night's own saved masters (reused, never written: save=False) and that night's binning. used[night folder]
+        = the calibration in words. A master that cannot be built fails every frame that needs it at once (the
+        error is kept, not retried per frame)."""
+        import stack_ui
+        cache = {}
+        night_of = night_of or {}
+
+        def masters_for(path, header, night):
+            ncfg = cfg["nights"].get(night) or {}
+            binning = int(ncfg.get("binning") or cfg["binning"])
             flat_dir = NeighborsMixin.night_flat_folder(path, cfg["flat"])
-            key = (cfg["bias"], cfg["dark"], cfg["darkflat"], flat_dir)
-            if key in cache:
-                return cache[key]
-            if cfg["precalibrated"]:
-                m = core.Masters()
-                used[os.path.dirname(path)] = "lights pre-calibrated (no masters applied)"
-            else:
-                def src(d, kind):
-                    """The folder's raw frames (their saved master is reused), else a saved SHOBS-P master alone
-                    (raw frames deleted after the master was built)."""
-                    if not d:
-                        return [], None
-                    frames, master = core.calibration_source(d)
-                    if frames or master:
-                        return frames, master
-                    folder = os.path.join(d, core.MASTER_DIR)
-                    stem = core.master_file_name(kind, cfg["binning"], 1.0).split("_1s")[0].replace(".fits", "")
-                    try:
-                        hits = sorted(f for f in os.listdir(folder) if f.startswith(stem) and f.endswith(".fits"))
-                    except OSError:
-                        hits = []
-                    return [], (os.path.join(folder, hits[0]) if hits else None)
-                bias, fb = src(cfg["bias"], "bias")
-                dark, fd = src(cfg["dark"], "dark")
-                dflat, fdf = src(cfg["darkflat"], "darkflat")
-                flat, ff = src(flat_dir, "flat")
-                files = {k: v for k, v in (("bias", fb), ("dark", fd), ("darkflat", fdf), ("flat", ff)) if v}
-                m = core.prepare_masters(bias, dark, flat, cfg["binning"], log, files=files, save=True,
-                                         darkflat_paths=dflat or None)
-                words = [m.used.get(k) for k in ("bias", "dark", "darkflat", "flat") if m.used.get(k)]
-                if m.flat is None:
-                    words.append("NO FLAT")
-                used[os.path.dirname(path)] = "; ".join(words) or "no masters"
-            cache[key] = m
-            return m
+            pre = ncfg.get("precalibrated")
+            pre = cfg["precalibrated"] if pre is None else bool(pre)
+            exptime = core.header_exptime(header)
+            key = (cfg["bias"], cfg["dark"], cfg["darkflat"], flat_dir, binning, pre, round(float(exptime or 0), 1))
+            folder = os.path.dirname(str(path).replace("\\", os.sep) if os.sep != "\\" else str(path))
+            if key not in cache:
+                try:
+                    if pre:
+                        m = core.Masters()
+                        words = "lights pre-calibrated (no masters applied)"
+                    else:
+                        def src(d, kind):
+                            if not d:
+                                return [], None
+                            frames, master = core.calibration_source(d)
+                            if frames or master:
+                                return frames, master
+                            return [], NeighborsMixin._saved_master(d, kind, binning, exptime)
+                        bias, fb = src(cfg["bias"], "bias")
+                        dark, fd = src(cfg["dark"], "dark")
+                        dflat, fdf = src(cfg["darkflat"], "darkflat")
+                        flat, ff = src(flat_dir, "flat")
+                        flats_cal = False
+                        if flat:
+                            try:   # the main run's test: PixInsight-calibrated flats are used as they are
+                                signs = core.precalibration_signs(flat[0], core.read_header(flat[0]))
+                                flats_cal = any(not x.startswith("file name") for x in signs)
+                            except Exception:
+                                flats_cal = False
+                        files = {k: v for k, v in (("bias", fb), ("dark", fd), ("darkflat", fdf), ("flat", ff)) if v}
+                        m = core.prepare_masters(bias, dark, flat, binning, log, flats_calibrated=flats_cal,
+                                                 files=files, save=False, version=cfg.get("version", ""),
+                                                 darkflat_paths=dflat or None)
+                        parts = [m.used.get(k) for k in ("bias", "dark", "darkflat", "flat") if m.used.get(k)]
+                        if m.flat is None:
+                            parts.append("NO FLAT")
+                        elif flat_dir == cfg["flat"]:
+                            parts.append("(the Input page's flat: no Flats folder beside this night's lights)")
+                        words = "; ".join(parts) or "no masters"
+                    cache[key] = (m, words, binning, None)
+                except Exception as exc:
+                    cache[key] = (None, f"✖ {type(exc).__name__}: {exc}", binning, exc)
+            m, words, binning, exc = cache[key]
+            used[folder] = words
+            if exc is not None:
+                raise exc
+            return m, binning
 
         def load(path):
-            masters = masters_for(path)
+            if stack_ui.is_stack_path(path):   # a stacked night: the stack is calibrated and binned already
+                raw, header, img = stack_ui.load_frame(path, 1, None)
+                used[os.path.dirname(str(path))] = "stacks (calibrated when they were made)"
+                return raw, header, core.debayer(img, cfg["pattern"], cfg["mode"])
             raw, header = core.read_fits(path)
-            cal = core.calibrate_frame(core.bin_image(raw, cfg["binning"]), header, masters)
+            masters, binning = masters_for(path, header, night_of.get(path, ""))
+            cal = core.calibrate_frame(core.bin_image(raw, binning), header, masters)
             return raw, header, core.debayer(cal, cfg["pattern"], cfg["mode"])
         return load
 
     @staticmethod
     def aperture_function(cfg: dict):
         def aperture_for(o):
-            r, si, so, _b = cfg["nights"].get(o.night, (None, None, None, None))
-            return (r or cfg["radius"], si or cfg["sky_in"], so or cfg["sky_out"])
+            n = cfg["nights"].get(o.night) or {}
+            return (n.get("radius") or cfg["radius"], n.get("sky_in") or cfg["sky_in"],
+                    n.get("sky_out") or cfg["sky_out"])
         return aperture_for
+
+    @staticmethod
+    def total_bin_function(cfg: dict):
+        def total_bin(o):
+            n = cfg["nights"].get(o.night) or {}
+            b = int(n.get("binning") or cfg["binning"])
+            return b * (1 if cfg["pattern"] == core.MONO else 2)
+        return total_bin
 
     def _bump_watch_revision(self):
         """The series changed in a way the points' fingerprint does not see (Watch values, neighbor checks)."""
@@ -183,9 +237,14 @@ class NeighborsMixin:
             pass
 
     # ---- Watch reach-back --------------------------------------------------------------------------------------
+    @staticmethod
+    def _frame_key(o) -> list:
+        return [round(float(o.jd), 6), os.path.basename(str(o.path).replace("\\", "/"))]
+
     def reach_back(self, name: str, parent=None, on_done=None) -> bool:
         """Measure a Watch star on the series' frames that do not have it yet (frames already on disk), tied to each
-        frame's stored comp values; a few frames that have it are measured too, as a check."""
+        frame's stored comp values; a few frames that have it are measured too, as a check. With nothing missing,
+        offers to measure again the frames an earlier reach-back filled."""
         ca = _ca()
         parent = parent or self
         entry = next((w for w in self.watch_list if w["name"] == name), None)
@@ -196,19 +255,30 @@ class NeighborsMixin:
                                               "unsolved image), so it cannot be placed on other nights' frames. "
                                               "Solve the field and watch it again.", parent=parent)
             return False
-        missing = nb.missing_frames(self.observations, name)
+        obs = list(self.observations)
+        missing = nb.missing_frames(obs, name)
+        redo = False
         if not missing:
-            messagebox.showinfo(ca.APP_TITLE, f"{name} is measured on every frame of the series already: nothing to "
-                                              "reach back for.", parent=parent)
-            return False
-        on_disk = [i for i in missing if os.path.isfile(self.observations[i].path)]
+            filled = {tuple(k) for r in entry.get("reach_back") or [] for k in r.get("filled") or []}
+            again = [i for i, o in enumerate(obs) if tuple(self._frame_key(o)) in filled]
+            if not again:
+                messagebox.showinfo(ca.APP_TITLE, f"{name} is measured on every frame of the series already: nothing "
+                                                  "to reach back for.", parent=parent)
+                return False
+            if not messagebox.askyesno(
+                    ca.APP_TITLE, f"{name} is measured on every frame of the series. {len(again)} of those values came "
+                                  "from an earlier reach-back. Measure those frames again (with the bias, dark and flats "
+                                  "found now)?", parent=parent):
+                return False
+            missing, redo = again, True
+        on_disk = [i for i in missing if os.path.isfile(obs[i].path)]
         gone = len(missing) - len(on_disk)
         if not on_disk:
             messagebox.showinfo(ca.APP_TITLE, f"None of the {len(missing)} frames without {name} is on disk any more "
                                               "(moved or deleted), so there is nothing to measure.", parent=parent)
             return False
-        nights = sorted({self.observations[i].night for i in on_disk})
-        sample = [i for i in nb.sample_measured(self.observations, name) if os.path.isfile(self.observations[i].path)]
+        nights = sorted({obs[i].night for i in on_disk})
+        sample = [] if redo else [i for i in nb.sample_measured(obs, name) if os.path.isfile(obs[i].path)]
         n = len(on_disk) + len(sample)
         mins = max(1, round(n * SECONDS_PER_FRAME / 60))
         cfg = self._measure_cfg()
@@ -217,7 +287,7 @@ class NeighborsMixin:
                          "takes out most of the difference)")
         else:
             cal_words = "the Input page's bias and dark, and each night's own flat (its Flats folder)"
-        if not messagebox.askyesno(
+        if not redo and not messagebox.askyesno(
                 ca.APP_TITLE,
                 f"Reach back: measure {name} on {len(on_disk)} frame(s) of {len(nights)} night(s) that do not have it "
                 f"yet" + (f" ({gone} more are no longer on disk)" if gone else "") + ".\n\n"
@@ -228,10 +298,13 @@ class NeighborsMixin:
         if not self._start_job(f"Reach-back: {name}…"):
             return False
         cancel = self._cancel
-        obs = self.observations
+        # Fable M1: the frames themselves travel with the job (a night removed meanwhile is skipped, never shifted)
+        sub = [obs[i] for i in on_disk] + [obs[i] for i in sample]
+        n_new = len(on_disk)
         used = {}
         star = {"key": name, "name": name, "ra": float(entry["ra"]), "dec": float(entry["dec"])}
         gen = getattr(self, "_series_gen", 0)
+        night_of = {o.path: o.night for o in sub}
 
         def progress(k, total, o):
             if k == 1 or k % 5 == 0 or k == total:
@@ -240,66 +313,98 @@ class NeighborsMixin:
         def work():
             res, error = None, ""
             try:
-                load = self.make_frame_loader(cfg, used, log=lambda t: self.call_ui(self.log, "  " + str(t)))
-                res = nb.measure_series(core, obs, [star], sky=cfg["sky"], comp_names=cfg["comps"],
+                load = self.make_frame_loader(cfg, used, log=lambda t: self.call_ui(self.log, "  " + str(t)),
+                                              night_of=night_of)
+                res = nb.measure_series(core, sub, [star], sky=cfg["sky"], comp_names=cfg["comps"],
                                         target_name=cfg["target"], check_name=cfg["check"], load=load,
-                                        aperture_for=self.aperture_function(cfg), total_bin=cfg["total_bin"],
-                                        indices=sorted(set(on_disk) | set(sample)), progress=progress, cancel=cancel)
+                                        aperture_for=self.aperture_function(cfg),
+                                        total_bin=self.total_bin_function(cfg), progress=progress, cancel=cancel)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            self.call_ui(self._reach_back_done, name, res, error, on_disk, sample, used, gen, on_done)
+            self.call_ui(self._reach_back_done, name, res, error, sub, n_new, used, gen, on_done, redo, parent)
 
         threading.Thread(target=work, daemon=True).start()
         return True
 
-    def _reach_back_done(self, name, res, error, on_disk, sample, used, gen, on_done):
+    def _reach_back_done(self, name, res, error, sub, n_new, used, gen, on_done, redo=False, parent=None):
         ca = _ca()
         self._end_job()
+        parent = parent if parent is not None else self
+        try:
+            if not parent.winfo_exists():
+                parent = self
+        except Exception:
+            parent = self
         if gen != getattr(self, "_series_gen", 0):
             self.log("Reach-back: the series changed while it ran; its values were dropped.")
             return
         if error or res is None:
             self.log(f"✖ Reach-back for {name} stopped: {error}")
-            messagebox.showerror(ca.APP_TITLE, f"Reach-back for {name} stopped:\n\n{error}")
+            messagebox.showerror(ca.APP_TITLE, f"Reach-back for {name} stopped:\n\n{error}", parent=parent)
             return
+        live = {id(o) for o in self.observations}
         vals = res["values"].get(name) or {}
-        check = nb.consistency(self.observations, {i: v for i, v in vals.items() if i in set(sample)}, name)
-        new = {i: v for i, v in vals.items() if i in set(on_disk)}
-        filled = nb.fill_watch(self.observations, name, new)
-        nights = sorted({self.observations[i].night for i, v in new.items() if math.isfinite(v.get("inst", math.nan))})
+        check = nb.consistency(sub, {i: v for i, v in vals.items() if i >= n_new}, name)
+        new = {i: v for i, v in vals.items() if i < n_new and id(sub[i]) in live}
+        dropped = sum(1 for i in range(n_new) if id(sub[i]) not in live)
+        for folder, words in sorted(used.items()):
+            self.log(f"  Reach-back calibration for {folder}: {words}")
+        failed = res["failed"]
+        for path, why in failed[:5]:
+            self.log(f"  not measured: {os.path.basename(str(path))}: {why}")
+        if len(failed) > 5:
+            self.log(f"  … and {len(failed) - 5} more frame(s) not measured")
+        ties = [t[1] for t in res["ties"].values() if t[1] is not None and math.isfinite(t[1])]
+        good = {i: v for i, v in new.items() if math.isfinite(v.get("inst", math.nan))}
+        big = bool(check["n"]) and abs(check["median"] or 0) > 0.01
+        nflat = sum(1 for w in used.values() if "NO FLAT" in w)
+        if big and good:
+            keep = ca.ask_choice(parent, ca.APP_TITLE,
+                                 f"Reach-back measured {name} on {len(good)} frame(s), but on the {check['n']} frame(s) "
+                                 f"that had it already it comes out {check['median'] * 1000:+.1f} mmag off the stored "
+                                 "values: those nights were probably calibrated with other bias, dark or flat frames than "
+                                 "the ones found now (see the log).\n\nKeep the new values anyway?",
+                                 [("discard", "Discard them"), ("keep", "Keep them")], "discard")
+            if keep != "keep":
+                self.log(f"Reach-back for {name}: the new values were not kept (the check frames were "
+                         f"{check['median'] * 1000:+.1f} mmag off).")
+                self.status.set(f"Reach-back for {name}: not kept.")
+                return
+        filled = nb.fill_watch(sub, name, good, overwrite=redo)
+        nights = sorted({sub[i].night for i in good})
         entry = next((w for w in self.watch_list if w["name"] == name), None)
-        rec = {"utc": nb.utc_now(), "frames": filled, "asked": len(on_disk), "nights": nights,
-               "check": check, "calibration": dict(used), "failed": len(res["failed"]),
-               "cancelled": bool(res.get("cancelled"))}
+        rec = {"utc": nb.utc_now(), "frames": filled, "asked": n_new, "nights": nights, "check": check,
+               "calibration": dict(used), "failed": len(failed), "cancelled": bool(res.get("cancelled")),
+               "redo": bool(redo), "tie_spread_median": float(np.median(ties)) if ties else None,
+               "filled": [self._frame_key(sub[i]) for i in good]}
         if entry is not None:
             entry.setdefault("reach_back", []).append(rec)
         if filled:
             self._bump_watch_revision()
-        for folder, words in used.items():
-            self.log(f"  Reach-back calibration for {folder}: {words}")
-        for path, why in res["failed"][:5]:
-            self.log(f"  not measured: {os.path.basename(str(path))}: {why}")
+            self._gate_nights = []   # Fable S10: the gates run again at the next save (new values, same nights)
         chk = (f" Check on {check['n']} frame(s) that had it: {check['median'] * 1000:+.1f} mmag (rms "
                f"{check['rms'] * 1000:.1f})." if check["n"] else "")
-        line = (f"Reach-back: {name} measured on {filled} of {len(on_disk)} frame(s), {len(nights)} night(s)."
-                + chk + (" Stopped early." if res.get("cancelled") else "")
+        tie = f" Tie to the comps: median spread {np.median(ties) * 1000:.1f} mmag." if ties else ""
+        line = (f"Reach-back: {name} measured on {filled} of {n_new} frame(s), {len(nights)} night(s)." + chk + tie
+                + (" Stopped early." if res.get("cancelled") else "")
+                + (f" {dropped} frame(s) left the series while it ran." if dropped else "")
                 + (" Save series to keep them." if filled else ""))
-        big = check["n"] and abs(check["median"] or 0) > 0.01
-        nflat = sum(1 for w in used.values() if "NO FLAT" in w)
-        self.log(line)
+        if not filled or len(failed) > n_new / 2:
+            self.log(f"⚠ {line} Most frames could not be measured: see the lines above.")
+        else:
+            self.log(line)
         if big:
             self.log(f"⚠ Reach-back: the check frames differ from the stored values by {check['median'] * 1000:+.1f} "
                      "mmag; the older nights may have been calibrated differently (see the calibration lines).")
         if nflat:
             self.log(f"⚠ Reach-back: {nflat} night folder(s) had no flat; those values carry the flat-field pattern.")
         self.status.set(line)
-        for win_attr in ("_candidates_win",):
-            win = getattr(self, win_attr, None)
-            if win is not None:
-                try:
-                    win.refresh()
-                except Exception:
-                    pass
+        win = getattr(self, "_candidates_win", None)
+        if win is not None:
+            try:
+                win.refresh()
+            except Exception:
+                pass
         if on_done is not None:
             try:
                 on_done()
@@ -363,20 +468,29 @@ class NeighborsMixin:
             doc = registry.load()
             rec = registry.find(doc, gaia, ra, dec)
             if rec is not None:
-                apply_outside_to_record(rec, res)
+                res = apply_outside_to_record(rec, res)
                 registry.save(doc)
                 saved = rec["key"]
         except Exception as exc:
             self.log(f"⚠ Outside data for {name}: the Registry was not updated ({type(exc).__name__}: {exc}).")
+        entry = next((w for w in self.watch_list if w["name"] == name), None)
+        if entry is not None:
+            # Fable S9b: kept with the Watch star too, so the next gate run uses it even before it is in the Registry
+            entry["outside"] = merge_outside(entry.get("outside"), res)
+            res = entry["outside"]
+            self._bump_watch_revision()
         rep = (self.gate_reports or {}).get(name)
         if rep and rep.get("gates"):
+            unclear_outside(rep.get("gates"), res)
             promotion.clear_with_outside(rep, od.for_gates(res))
             rep["outside"] = res
-        for s, r in res["surveys"].items():
-            self.log(f"  {s}: {r.get('detail') or r.get('status')}" + (f" {r['note']}" if r.get("note") else ""))
-        self.log(f"Outside data for {name}: {res['summary']}" + ("" if saved else " (not in the Registry: kept "
-                                                                              "with tonight's gate report only)"))
+        for s_, r in res["surveys"].items():
+            mark = "✖ " if r.get("status") == "error" else ""
+            self.log(f"  {mark}{s_}: {r.get('detail') or r.get('status')}" + (f" {r['note']}" if r.get("note") else ""))
+        self.log(f"Outside data for {name}: {res['summary']}" + ("" if saved else " (not in the Registry yet: kept "
+                                                                              "with the Watch star)"))
         self.status.set(f"Outside data for {name}: " + res["summary"])
+        self._gate_nights = []   # the next save runs the gates again with it
         win = getattr(self, "_candidates_win", None)
         if win is not None:
             try:
@@ -390,21 +504,57 @@ class NeighborsMixin:
                 pass
 
 
-def apply_outside_to_record(rec: dict, res: dict) -> None:
-    """Keep the outside-data result in a Registry record and clear the gates it may clear on its evidence."""
-    rec["outside"] = {k: res.get(k) for k in ("utc", "period", "surveys", "agree", "alias", "summary")}
+def merge_outside(old: dict | None, new: dict) -> dict:
+    """A new outside-data result, keeping an earlier good answer for a survey that did not answer this time
+    (Fable S9c)."""
+    out = {k: new.get(k) for k in ("utc", "period", "surveys", "agree", "alias", "summary")}
+    out["surveys"] = dict(new.get("surveys") or {})
+    for s, r in ((old or {}).get("surveys") or {}).items():
+        now = out["surveys"].get(s)
+        if r.get("status") == "ok" and (now is None or now.get("status") in ("down", "error")):
+            kept = dict(r)
+            kept["kept_from"] = (old or {}).get("utc")
+            out["surveys"][s] = kept
+    out["agree"] = [s for s, r in out["surveys"].items() if od.counts(r) and r.get("relation") == "same"]
+    out["alias"] = [s for s, r in out["surveys"].items() if od.counts(r) and r.get("relation") == "alias"]
+    out["summary"] = od.summary(out)
+    return out
+
+
+def unclear_outside(gates, res: dict) -> None:
+    """Fable S9d: a gate cleared by a survey that no longer agrees goes back to failing."""
+    agree = set(od.for_gates(res))
+    for g in gates or []:
+        by = g.get("cleared_by")
+        if g.get("key") in promotion.OUTSIDE_CLEARS and by and by != "ours":
+            names = {x.strip() for x in str(by).split(" and ")}
+            if not names & agree:
+                g["pass"] = False
+                g["cleared_by"] = None
+
+
+def apply_outside_to_record(rec: dict, res: dict) -> dict:
+    """Keep the outside-data result in a Registry record (an earlier good answer is kept for a survey that did not
+    answer now) and clear, or un-clear, the gates it may clear on its evidence. Returns the merged result."""
+    merged = merge_outside(rec.get("outside"), res)
+    rec["outside"] = merged
     ev = rec.get("evidence") or {}
+    gates = ev.get("gates") or []
+    unclear_outside(gates, merged)
     P = ev.get("period_days")
-    agree = od.for_gates(res)
-    if not (P and agree):
-        return
-    names = [s for s, v in agree.items() if abs(float(v["period"]) - float(P)) / float(P) <= od.AGREE_TOL]
-    if not names:
-        return
-    for g in ev.get("gates") or []:
-        if g.get("key") in ("alias_pm1", "span", "volume") and not g.get("pass"):
-            g["pass"] = True
-            g["cleared_by"] = " and ".join(names)
+    agree = od.for_gates(merged)
+    if P and agree:
+        names = [s for s, v in agree.items() if abs(float(v["period"]) - float(P)) / float(P) <= od.AGREE_TOL]
+        if names:
+            for g in gates:
+                if g.get("key") in promotion.OUTSIDE_CLEARS and not g.get("pass"):
+                    g["pass"] = True
+                    g["cleared_by"] = " and ".join(names)
+    try:
+        rec.setdefault("sched", {})["next_step"] = registry.next_step(rec)
+    except Exception:
+        pass
+    return merged
 
 
 # ---- the window --------------------------------------------------------------------------------------------------
@@ -461,8 +611,9 @@ class NeighborsWindow:
         ent.bind("<Return>", lambda _e: self.recompute(pick=True))
         ttk.Label(ctl, text="mag", style="Card.TLabel").pack(side=LEFT, padx=(2, 12))
         self.show_comps = BooleanVar(value=True)
-        ttk.Checkbutton(ctl, text="Show comps and check", variable=self.show_comps, command=self.recompute).pack(
-            side=LEFT)
+        if scan is None:   # a Discovery scan marks no comps or check (Fable S12)
+            ttk.Checkbutton(ctl, text="Show comps, check and other stars", variable=self.show_comps,
+                            command=self.draw).pack(side=LEFT)
         self.measure_btn = ttk.Button(ctl, text="Measure look-alikes", command=self.measure)
         self.blend_btn = ttk.Button(ctl, text="Run blend test", command=self.run_blend)
         if self.mode == "series":
@@ -495,6 +646,26 @@ class NeighborsWindow:
             self.find_lookalikes()
 
     # -- data --------------------------------------------------------------------------------------------------
+    def _settings(self) -> dict:
+        """The series' gate settings, read once per window (it reads a FITS header: not on every redraw)."""
+        if getattr(self, "_gs", None) is None:
+            self._gs = self.app._gate_settings()
+        return self._gs
+
+    def _frame_map(self):
+        """The first frame's sky -> pixel map (cached), for placing catalog stars and the field thumbnail."""
+        if getattr(self, "_fm", None) is None:
+            app = self.app
+            sky = app.neighbor_sky()
+            cfg = self._settings()
+            self._fm = False
+            for o in app.observations[:30]:
+                fm = nb.FrameMap(o, sky, cfg["comp_names"], cfg["target"], cfg["check_name"])
+                if fm.ok:
+                    self._fm = fm
+                    break
+        return self._fm or None
+
     def _window_mag(self) -> float:
         v = _f(self.window.get(), nb.LOOKALIKE_MAG)
         return max(0.05, min(3.0, v))
@@ -503,7 +674,7 @@ class NeighborsWindow:
         """(target curve, [(group, curve, info)], sky, mags) from the open series and the sidecar."""
         app = self.app
         obs = app.observations
-        cfg = app._gate_settings()
+        cfg = self._settings()
         tname = cfg["target"]
         target = promotion.star_curve(obs, self.name, is_target=self.is_target, target_name=tname)
         sky = app.neighbor_sky()
@@ -528,7 +699,10 @@ class NeighborsWindow:
                 tc.role = "target"
                 nulls.append(tc)
                 mags.setdefault(tname, float(np.nanmedian(tc.mag)))
+        watch_names = set(cfg["watch_names"])
         for c in nulls:
+            if c.name in watch_names and c.role == "spare":
+                c.role = "watch"   # null_curves calls every non-comp star a spare
             rows.append(("series", c, {"name": c.name, "role": c.role, "mag": mags.get(c.name)}))
         for nm in (self.side.get("stars") or {}):
             vals = nb.sidecar_values(self.side, obs, nm)
@@ -559,7 +733,7 @@ class NeighborsWindow:
         close = [j for j in np.argsort(d) if j != i and d[j] <= so and r["usable"][j]]
         look = [j for j in np.argsort(d) if j != i and d[j] > so and r["usable"][j] and j not in sat
                 and math.isfinite(mags[j]) and abs(mags[j] - mags[i]) <= w][:nb.LOOKALIKE_MAX]
-        roles = {"Check", "Comp"} | {f"Comp {k}" for k in range(1, 11)}
+        roles = {"Check", "Comp"} | {f"Comp {k}" for k in range(1, 11)}   # a Variables-mode scan's marked stars
         comps = [k for k, lab in enumerate(r["labels"]) if str(lab) in roles and k != i and r["usable"][k]]
         for j in close:
             rows.append(("close", curve(j, "neighbor"), {"name": str(r["labels"][j]), "mag": mags[j],
@@ -567,7 +741,7 @@ class NeighborsWindow:
         for j in look:
             rows.append(("look", curve(j, "neighbor"), {"name": str(r["labels"][j]), "mag": mags[j],
                                                       "sep_px": float(d[j])}))
-        if self.show_comps.get():
+        if True:
             for j in comps:
                 if j not in close and j not in look:
                     rows.append(("comps", curve(j, "comp"), {"name": str(r["labels"][j]), "mag": mags[j],
@@ -593,7 +767,7 @@ class NeighborsWindow:
         target, rows, sky, mags = self._series_curves()
         rep = (app.gate_reports or {}).get(self.name) or {}
         P = rep.get("period_days")
-        cfg = app._gate_settings()
+        cfg = self._settings()
         bad, _ = promotion.check_bad_nights(next((c for _g, c, _i in rows if c.role == "check"), None))
         here = sky.get(self.name)
         if here is None and self.is_target:
@@ -601,27 +775,27 @@ class NeighborsWindow:
         mymag = mags.get(self.name)
         w = self._window_mag()
         groups = []
-        show = []
+        close_r = self._close_arcsec()
         for kind, c, info in rows:
             sep = (nb.sep_arcsec(here[0], here[1], *sky[c.name]) if here and c.name in sky
                    else (nb.sep_arcsec(here[0], here[1], info["ra"], info["dec"]) if here and info.get("ra") is not None
                          else None))
             info["sep"] = sep
-            close_r = self._close_arcsec()
             m = info.get("mag")
             dm = (m - mymag) if (m is not None and mymag is not None) else None
             info["dmag"] = dm
+            # Fable S1: every star the gate runner judges is counted here too; the groups only order them
             if sep is not None and close_r and sep <= close_r:
                 groups.append(("close", c, info))
             elif dm is not None and abs(dm) <= w:
                 groups.append(("look", c, info))
-            elif c.role in ("comp", "check") and self.show_comps.get():
-                groups.append(("comps", c, info))
-            elif c.role in ("comp", "check"):
-                continue
             elif kind == "measured":
                 groups.append(("look", c, info))
-        order = {"close": 0, "look": 1, "comps": 2}
+            elif c.role in ("comp", "check"):
+                groups.append(("comps", c, info))
+            else:
+                groups.append(("others", c, info))
+        order = {"close": 0, "look": 1, "comps": 2, "others": 3}
         groups.sort(key=lambda g: (order[g[0]], g[2]["sep"] if g[2].get("sep") is not None else 1e9))
         res = promotion.neighbor_check(target, [c for _g, c, _i in groups], period=P,
                                        min_period=cfg["min_period"], max_period=cfg["max_period"], bad_nights=bad)
@@ -632,6 +806,12 @@ class NeighborsWindow:
         self.result = res
         self.curves = {"target": target, "rows": [(g, c) for g, c, _i in groups]}
         self.pending = pending
+        # Fable S8: a close companion the series measures already counts for the blend test too
+        self.close_targets = list(self.picks.get("close") or [])
+        for g, c, info in groups:
+            if g == "close" and c.name in sky and c.name not in {p["name"] for p in self.close_targets}:
+                self.close_targets.append({"name": c.name, "ra": sky[c.name][0], "dec": sky[c.name][1],
+                                           "sep": info.get("sep")})
         nights = sorted(set(target.night))
         P_txt = f"P {res['period']:.5f} d" if res.get("period") else "no period yet"
         self.sub.set(f"{'Target' if self.is_target else 'Watch star'} · V {mymag:.2f} · {P_txt} · {len(nights)} "
@@ -641,7 +821,7 @@ class NeighborsWindow:
         self.bottom_line.set(("✓ " if res["n_measured"] and res["n_quiet"] == res["n_measured"] else
                               ("⚠ " if res["n_measured"] else "")) + res["bottom"]
                              + (f" · {len(pending)} not measured yet" if pending else ""))
-        close = [p for p in self.picks["close"]]
+        close = self.close_targets
         self.blend_btn.state(["!disabled"] if close and res.get("period") else ["disabled"])
         self.measure_btn.state(["!disabled"] if pending else ["disabled"])
         notes = []
@@ -651,7 +831,7 @@ class NeighborsWindow:
             notes.append(f"No star within the aperture plus sky ring ({self._close_arcsec():.0f}″), so no blend test is "
                          "needed for this star.")
         if self.blend:
-            notes.append(self.blend.get("text", ""))
+            notes.append(self.blend.get("text", "") + (f" ({self.blend['utc'][:10]})" if self.blend.get("utc") else ""))
         notes.append("Power at P is each star's periodogram power at the star's period as a share of its own; a star "
                      "is quiet when that is under 50% and its amplitude under a third of the star's (or 2σ). Same code "
                      "as the gate runner's null tests, so this window and the gates agree.")
@@ -659,7 +839,9 @@ class NeighborsWindow:
 
     def _recompute_scan(self):
         target, rows, close, look = self._scan_curves()
-        res = promotion.neighbor_check(target, [c for _g, c, _i in rows], min_period=0.02,
+        # Fable S12: the suspect's own period from the scan, when it found one
+        P = core.scan_period_value((self.scan.get("periods") or {}).get(self.scan_index))
+        res = promotion.neighbor_check(target, [c for _g, c, _i in rows], period=P, min_period=0.02,
                                        max_period=max(0.05, float(np.ptp(target.jd))), min_points=8)
         for (g, c, info), row in zip(rows, res["rows"]):
             row.update({"group": g, "mag": info.get("mag"), "sep": None, "sep_px": info.get("sep_px")})
@@ -680,17 +862,9 @@ class NeighborsWindow:
         """The aperture plus sky ring in arcsec (the outer sky radius on this series' frames)."""
         app = self.app
         so = _f(app.sky_out.get(), 0.0) or 0.0
-        scale = getattr(self, "_scale", None)
-        if scale is None:
-            scale = float("nan")
-            sky = app.neighbor_sky()
-            cfg = app._gate_settings()
-            for o in app.observations[:30]:
-                fm = nb.FrameMap(o, sky, cfg["comp_names"], cfg["target"], cfg["check_name"])
-                if fm.ok:
-                    scale = fm.scale_arcsec_per_px()
-                    break
-            self._scale = scale
+        fm = self._frame_map()
+        scale = fm.scale_arcsec_per_px() if fm is not None else float("nan")
+        self._scale = scale
         return so * scale if math.isfinite(scale) else 0.0
 
     def find_lookalikes(self):
@@ -715,11 +889,22 @@ class NeighborsWindow:
         fov = 30.0
         scale = getattr(self, "_scale", float("nan"))
         try:
-            shape = app._gate_settings().get("frame_shape")
+            shape = self._settings().get("frame_shape")
             if shape and math.isfinite(scale):
                 fov = max(10.0, min(90.0, max(shape) * scale / 60.0))
         except Exception:
             pass
+
+        fm = self._frame_map()
+        shape = self._settings().get("frame_shape")
+        so = _f(app.sky_out.get(), 0.0) or 0.0
+
+        def on_frame(p):
+            """Only stars the series' frames cover (placed on the first mapped frame, room for the sky ring)."""
+            if fm is None or not shape:
+                return True
+            x, y = fm.xy(p["ra"], p["dec"])
+            return so <= x <= shape[1] - 1 - so and so <= y <= shape[0] - 1 - so
 
         def work():
             stars, note = [], ""
@@ -732,7 +917,7 @@ class NeighborsWindow:
             except Exception as exc:
                 note = f"The catalogs were not reached ({type(exc).__name__}: {exc}); look-alikes come from the series' own stars."
             picks = nb.pick_neighbors(here[0], here[1], mymag, stars, known, window=w, close_arcsec=close_r,
-                                      field_arcsec=fov * 60.0 / 2.0)
+                                      field_arcsec=fov * 60.0 / 2.0, keep=on_frame)
             app.call_ui(self._found, tok, picks, note)
 
         threading.Thread(target=work, daemon=True).start()
@@ -744,24 +929,6 @@ class NeighborsWindow:
                 return
         except Exception:
             return
-        # only stars the series' frames cover: placed on the first mapped frame with room for the sky ring
-        app = self.app
-        sky = app.neighbor_sky()
-        cfg = app._gate_settings()
-        fm = None
-        for o in app.observations[:30]:
-            fm = nb.FrameMap(o, sky, cfg["comp_names"], cfg["target"], cfg["check_name"])
-            if fm.ok:
-                break
-        shape = cfg.get("frame_shape")
-        so = _f(app.sky_out.get(), 0.0) or 0.0
-
-        def on_frame(p):
-            if fm is None or not fm.ok or not shape:
-                return True
-            x, y = fm.xy(p["ra"], p["dec"])
-            return so <= x <= shape[1] - 1 - so and so <= y <= shape[0] - 1 - so
-        picks["lookalikes"] = [p for p in picks["lookalikes"] if on_frame(p)]
         for p in picks["lookalikes"] + picks["close"]:
             p["key"] = p["name"]
         picks["searched"] = True
@@ -776,25 +943,31 @@ class NeighborsWindow:
         todo = stars or list(self.pending)
         if not todo:
             return
-        on_disk = [i for i, o in enumerate(app.observations) if os.path.isfile(o.path)]
-        if not on_disk:
+        if not app.series_path:
+            # Fable S11: the measurements live in a file beside the series
+            messagebox.showinfo(ca.APP_TITLE, "Save the series first: the neighbors' measurements are kept in a file "
+                                              "beside it.", parent=self.win)
+            return
+        sub = [o for o in app.observations if os.path.isfile(o.path)]
+        if not sub:
             messagebox.showinfo(ca.APP_TITLE, "The series' frames are no longer on disk, so its neighbors cannot be "
                                               "measured.", parent=self.win)
             return
-        mins = max(1, round(len(on_disk) * SECONDS_PER_FRAME / 60))
+        mins = max(1, round(len(sub) * SECONDS_PER_FRAME / 60))
         what = "the blend test (three apertures)" if blend else ", ".join(p["name"] for p in todo)
-        if not messagebox.askyesno(ca.APP_TITLE, f"Measure {what} on {len(on_disk)} frame(s) of the series? About "
-                                                 f"{mins} min (one pass over the frames for all of them).",
-                                   parent=self.win):
+        if not messagebox.askyesno(ca.APP_TITLE, f"Measure {what} on {len(sub)} frame(s) of the series? About "
+                                                 f"{mins} min (one pass over the frames for all of them). Closing this "
+                                                 "window stops it.", parent=self.win):
             return
         if not app._start_job("Measuring neighbors…", bar=False):
             return
         tok = self.busy.begin("Measuring on the series' frames…")
+        self._job_running = True
         cfg = app._measure_cfg()
         used = {}
         cancel = app._cancel
-        obs = app.observations
         gen = getattr(app, "_series_gen", 0)
+        night_of = {o.path: o.night for o in sub}
 
         def progress(k, total, o):
             if k == 1 or k % 5 == 0 or k == total:
@@ -803,14 +976,14 @@ class NeighborsWindow:
         def work():
             res, error = None, ""
             try:
-                load = app.make_frame_loader(cfg, used)
-                res = nb.measure_series(core, obs, todo, sky=cfg["sky"], comp_names=cfg["comps"],
+                load = app.make_frame_loader(cfg, used, night_of=night_of)
+                res = nb.measure_series(core, sub, todo, sky=cfg["sky"], comp_names=cfg["comps"],
                                         target_name=cfg["target"], check_name=cfg["check"], load=load,
-                                        aperture_for=app.aperture_function(cfg), total_bin=cfg["total_bin"],
-                                        indices=on_disk, progress=progress, cancel=cancel)
+                                        aperture_for=app.aperture_function(cfg),
+                                        total_bin=app.total_bin_function(cfg), progress=progress, cancel=cancel)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            app.call_ui(self._measured, tok, todo, res, error, used, blend, gen)
+            app.call_ui(self._measured, tok, todo, res, error, used, blend, gen, sub)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -820,47 +993,68 @@ class NeighborsWindow:
         except Exception:
             pass
 
-    def _measured(self, tok, todo, res, error, used, blend, gen):
+    def _alive(self) -> bool:
+        try:
+            return bool(self.win.winfo_exists())
+        except Exception:
+            return False
+
+    def _measured(self, tok, todo, res, error, used, blend, gen, sub):
         ca = _ca()
         app = self.app
         app._end_job()
-        try:
-            self.busy.end(tok)
-        except Exception:
-            pass
+        self._job_running = False
+        alive = self._alive()
+        if alive:
+            try:
+                self.busy.end(tok)
+            except Exception:
+                pass
         if gen != getattr(app, "_series_gen", 0):
             app.log("Check neighbors: the series changed while measuring; the values were dropped.")
             return
         if error or res is None:
             app.log(f"✖ Check neighbors: measuring stopped: {error}")
-            messagebox.showerror(ca.APP_TITLE, f"Measuring stopped:\n\n{error}", parent=self.win)
+            messagebox.showerror(ca.APP_TITLE, f"Measuring stopped:\n\n{error}", parent=self.win if alive else app)
             return
+        if res.get("cancelled"):
+            app.log("Check neighbors: measuring stopped (the window was closed); nothing was kept.")
+            return
+        live = {id(o) for o in app.observations}
+        vals_of = {k: {i: v for i, v in (res["values"].get(k) or {}).items() if id(sub[i]) in live}
+                   for k in res["values"]}
+        for folder, words in sorted(used.items()):
+            app.log(f"  Check neighbors calibration for {folder}: {words}")
         cal = "; ".join(sorted(set(used.values())))
+        side = nb.sidecar_load(app.series_path)   # Fable S7: merged into what is on disk now
         if blend:
-            obs = app.observations
-            curves = {k: nb.curve_from_values(promotion, obs, k, res["values"].get(k) or {}, role="blend")
+            curves = {k: nb.curve_from_values(promotion, sub, k, vals_of.get(k) or {}, role="blend")
                       for k in ("blend:c", "blend:t", "blend:a")}
             P = (self.result or {}).get("period")
             v = nb.blend_verdict(promotion, curves["blend:c"], curves["blend:t"], curves["blend:a"], P)
             v.update({"utc": nb.utc_now(), "companion": todo[1].get("companion"), "period": P})
             self.blend = v
-            self.side.setdefault("checks", {}).setdefault(self.name, {})["blend"] = v
+            side.setdefault("checks", {}).setdefault(self.name, {})["blend"] = v
             app.log(v["text"])
         else:
             for p in todo:
-                nb.sidecar_put(self.side, app.observations, p, res["values"].get(p["key"]) or {}, cal)
-            app.log(f"Check neighbors: measured {', '.join(p['name'] for p in todo)} on {res['frames']} frame(s)"
-                    + (f" ({len(res['failed'])} not measured)" if res["failed"] else "") + ".")
+                nb.sidecar_put(side, sub, p, vals_of.get(p["key"]) or {}, cal)
+            n_bad = len(res["failed"])
+            app.log(("⚠ " if res["frames"] == 0 else "")
+                    + f"Check neighbors: measured {', '.join(p['name'] for p in todo)} on {res['frames']} frame(s)"
+                    + (f" ({n_bad} not measured)" if n_bad else "") + ".")
         try:
-            path = nb.sidecar_save(app.series_path, self.side)
+            path = nb.sidecar_save(app.series_path, side)
             app.log(f"  kept in {os.path.basename(path)}")
         except Exception as exc:
             app.log(f"⚠ Check neighbors: the measurements are not kept on disk ({type(exc).__name__}: {exc}); "
                     "they last until this window closes.")
-        self.recompute()
+        self.side = side
+        if alive:
+            self.recompute()
 
     def run_blend(self):
-        close = self.picks.get("close") or []
+        close = getattr(self, "close_targets", None) or self.picks.get("close") or []
         sky = self.app.neighbor_sky()
         here = sky.get(self.name) if not self.is_target else sky.get(self.app.star_id.get().strip())
         if not close or here is None:
@@ -908,6 +1102,8 @@ class NeighborsWindow:
         order = {"target": 0, "close": 1, "look": 2, "comps": 3}
         rows.sort(key=lambda x: (order.get(x[0], 9), (x[3] or {}).get("sep", 0) if x[3] else
                                  ((x[2] or {}).get("sep") or (x[2] or {}).get("sep_px") or 0)))
+        if not self.show_comps.get():
+            rows = [x for x in rows if x[0] not in ("comps", "others")]
         out, prev = [], None
         for g, c, r, p in rows:
             if g != prev:
@@ -1080,21 +1276,31 @@ class NeighborsWindow:
         where = []
         if self.mode == "scan":
             r = self.scan
+            if self.scan_index not in set(r.get("candidates") or []):
+                # Fable S12: only Suspects are kept in the night's suspects file
+                self.note.set("Not saved: this star is not a Suspect. Add as suspect on the Field scan page first, "
+                              "then save again.")
+                return
             r.setdefault("neighbor_checks", {})[self.scan_index] = s
             path = app._save_suspects(r) if hasattr(app, "_save_suspects") else ""
-            where.append(os.path.basename(path) if path else "this night's results (no suspects file)")
+            where.append(os.path.basename(path) if path else "this night's results only (no suspects file was "
+                                                              "written: see the log)")
         else:
             entry = next((w for w in app.watch_list if w["name"] == self.name), None)
             if entry is not None:
                 entry["neighbors"] = s
                 app._bump_watch_revision()
                 where.append("the series (Save series to keep it)")
-            self.side.setdefault("checks", {})[self.name] = s
-            try:
-                nb.sidecar_save(app.series_path, self.side)
-                where.append(os.path.basename(nb.sidecar_path(app.series_path)))
-            except Exception:
-                pass
+            if app.series_path:
+                side = nb.sidecar_load(app.series_path)   # Fable S7: merged into what is on disk now
+                side.setdefault("checks", {})[self.name] = s
+                try:
+                    nb.sidecar_save(app.series_path, side)
+                    self.side = side
+                    where.append(os.path.basename(nb.sidecar_path(app.series_path)))
+                except Exception as exc:
+                    app.log(f"⚠ Check neighbors: {os.path.basename(nb.sidecar_path(app.series_path))} not written "
+                            f"({type(exc).__name__}: {exc}).")
             try:
                 doc = registry.load()
                 sky = app.neighbor_sky()
@@ -1106,11 +1312,19 @@ class NeighborsWindow:
                     where.append("its Registry record")
             except Exception as exc:
                 app.log(f"⚠ Check neighbors: the Registry was not updated ({type(exc).__name__}: {exc}).")
+        if not where:
+            where.append("nowhere (no Watch entry, series file or Registry record to keep it in)")
         app.log(f"Check neighbors for {self.name}: {s['bottom']}. Saved to " + ", ".join(where) + ".")
         app.status.set(f"Check neighbors for {self.name} saved: {s['bottom']}.")
         self.note.set(f"Saved to {', '.join(where)}.")
 
     def close(self):
+        if getattr(self, "_job_running", False):
+            # Fable S11: closing stops the measuring (no hidden job holding the run lock)
+            try:
+                self.app._cancel.set()
+            except Exception:
+                pass
         try:
             self.win.destroy()
         except Exception:

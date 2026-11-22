@@ -9,15 +9,15 @@ the same frames (check, comps, spare comps, other Watch stars) as null stars. Ev
 night's median is taken out, so a claim stays below about one night; longer periods need a separate trend track.
 
 Two gate sets:
-- Candidate (automatic, after each night merges): nights and span (>= 3 nights, >= 10 cycles, span >= 3 d or 3P,
-  one consecutive-night pair; John, 15 Nov), cycles and sampling, single-star FAP < 1e-3, look-elsewhere FAP_eff
+- Candidate (automatic, after each night merges): nights and cycles (>= 3 nights, >= 10 cycles, one
+  consecutive-night pair; John, 15 Nov), time span (>= 3 d or 3P), cycles and sampling, single-star FAP < 1e-3, look-elsewhere FAP_eff
   < 1e-2, amplitude S/N >= 4 (red-noise beta applied; John, 20 Oct), not within 5% of 1, 1/2, 1/3 d.
 - Campaign (the switch lights when these all pass on our data): the Candidate set plus data volume, single-night
   detections, +-1 c/d aliases, leave-one-night-out, phase coherence, flip-side offsets, FAP_eff < 1e-4, null tests,
   correlations (John's 15 Nov wording), and the systematics guards (linear limit, frame edges, check-star nights).
 
-Outside survey data (ZTF, TESS, ATLAS) may clear the +-1 c/d alias and the time-span gates, never a null test or a
-systematics guard (decision 10); clear_with_outside() records that.
+Outside survey data (ZTF, TESS, ATLAS) may clear the +-1 c/d alias, the time span and the Campaign data volume
+(OUTSIDE_CLEARS), never a null test or a systematics guard (decision 10); clear_with_outside() records that.
 
 Every gate is a dict {"key", "label", "group", "set", "value", "need", "pass", "cleared_by", "why"}; pass is True,
 False or None (not measurable: too few nights, no data). report["candidate"] / report["campaign"] are True only when
@@ -35,7 +35,9 @@ try:
 except Exception:   # pragma: no cover - astropy is a requirement
     LombScargle = None
 
-GATES_VERSION = 2   # 2 (21 Nov 2026): Linear limit also fails on saturation (raw sat level or the frame's sat flag)
+GATES_VERSION = 3   # 2 (21 Nov 2026): Linear limit also fails on saturation (raw sat level or the frame's sat flag)
+# 3 (22 Nov 2026, step 7c): the time span its own gate (span_days); a Watch star in the comp layout is a null star
+OUTSIDE_CLEARS = ("alias_pm1", "span_days", "volume")   # decision 10 (John 15 and 22 Nov 2026)
 SIDEREAL_DAY = 0.99726958
 
 # ---- thresholds (the design doc's numbers; John's decisions 12 and 13) -------------------------------------------
@@ -532,19 +534,22 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
 
     # -- Watch -> Candidate --
     need_span = max(CAND_MIN_SPAN_DAYS, CAND_SPAN_PERIODS * P)
-    ok = len(nights) >= CAND_MIN_NIGHTS and cycles >= CAND_MIN_CYCLES and span >= need_span and pairs >= 1
+    # 22 Nov 2026 (John, step 7c review): the time span is its own gate, so outside data may clear the span alone;
+    # the nights, cycles and the consecutive pair must pass on our own data
+    ok = len(nights) >= CAND_MIN_NIGHTS and cycles >= CAND_MIN_CYCLES and pairs >= 1
     why = []
     if len(nights) < CAND_MIN_NIGHTS:
         why.append(f"{len(nights)} nights")
     if cycles < CAND_MIN_CYCLES:
         why.append(f"{cycles:.1f} cycles")
-    if span < need_span:
-        why.append(f"span {span:.1f} d")
     if pairs < 1:
         why.append("no consecutive-night pair")
-    gates.append(_gate("span", "Nights and span", "data", "candidate",
-                       f"{len(nights)} nights, {cycles:.0f} cycles, {span:.1f} d, {pairs} consecutive pair(s)",
-                       f"≥ 3 nights, ≥ 10 cycles, ≥ {need_span:.1f} d, a consecutive pair", ok, "; ".join(why)))
+    gates.append(_gate("span", "Nights and cycles", "data", "candidate",
+                       f"{len(nights)} nights, {cycles:.0f} cycles, {pairs} consecutive pair(s)",
+                       "≥ 3 nights, ≥ 10 cycles, a consecutive pair", ok, "; ".join(why)))
+    gates.append(_gate("span_days", "Time span", "data", "candidate", f"{span:.1f} d",
+                       f"≥ {need_span:.1f} d (3 d or 3 P)", span >= need_span,
+                       "" if span >= need_span else f"span {span:.1f} d"))
     diffs = [np.diff(np.sort(c.jd[ix])) for ix in night_groups(c).values() if ix.size > 1]
     spacing = float(np.median(np.concatenate(diffs))) if diffs else float("nan")
     ok = cycles >= 5 and math.isfinite(spacing) and spacing < SAMPLING_FRAC * P
@@ -815,7 +820,7 @@ def clear_with_outside(rep: dict, outside: dict) -> None:
     if not agree:
         return
     for g in rep["gates"]:
-        if g["key"] in ("alias_pm1", "span", "volume") and not g["pass"]:
+        if g["key"] in OUTSIDE_CLEARS and not g["pass"]:
             g["pass"] = True
             g["cleared_by"] = " and ".join(agree)
     finish(rep)

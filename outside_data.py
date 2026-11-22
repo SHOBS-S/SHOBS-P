@@ -23,6 +23,7 @@ promotion.gate_report(outside=...).
 """
 from __future__ import annotations
 
+import http.client
 import io
 import math
 import urllib.error
@@ -38,6 +39,7 @@ except Exception:   # pragma: no cover - astropy is a requirement
     LombScargle = None
 
 AGREE_TOL = 0.01          # promotion.clear_with_outside's rule: the same period within 1%
+AGREE_FAP = 1e-3          # a ZTF / TESS peak must be significant to count (step 7c review)
 ZTF_RADIUS_ARCSEC = 2.0
 TESS_MATCH_ARCSEC = 5.0
 ATLAS_RADIUS_ARCSEC = 5.0
@@ -54,7 +56,12 @@ SURVEYS = ("ZTF", "TESS", "ATLAS")
 
 
 class ServiceDown(Exception):
-    """The service did not answer (network, timeout, HTTP 5xx): a soft failure."""
+    """The service did not answer (network, timeout, HTTP 5xx, a cut-off reply): a soft failure."""
+
+
+class BadAnswer(Exception):
+    """The service answered with something SHOBS-P cannot read (an HTML error page, changed columns): not a soft
+    failure, the survey is reported as an error so a changed service never passes as "nothing there"."""
 
 
 def utc_now() -> str:
@@ -75,6 +82,8 @@ def http_get(url: str, timeout: float = TIMEOUT_S, data: bytes | None = None) ->
         raise
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
         raise ServiceDown(str(getattr(exc, "reason", exc))) from exc
+    except http.client.HTTPException as exc:   # IncompleteRead and the like: the reply was cut off
+        raise ServiceDown(f"{type(exc).__name__}") from exc
 
 
 # ---- the period search -----------------------------------------------------------------------------------------
@@ -133,12 +142,12 @@ def relation(found: float | None, ours: float | None) -> str | None:
 def parse_ztf_csv(text: str) -> dict:
     """{filtercode: (hjd, mag, magerr)} from the IRSA light-curve CSV, catflags == 0 only."""
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    if not lines or "," not in lines[0]:
+    if not lines:
         return {}
     head = [h.strip() for h in lines[0].split(",")]
     need = ("hjd", "mag", "magerr", "catflags", "filtercode")
     if not all(n in head for n in need):
-        return {}
+        raise BadAnswer("IRSA's reply is not a ZTF light-curve table: " + lines[0][:80])
     ix = {n: head.index(n) for n in need}
     out: dict = {}
     for ln in lines[1:]:
@@ -169,7 +178,10 @@ def ztf(ra: float, dec: float, period: float | None, min_period: float, max_peri
         text = get(f"{ZTF_URL}?{q}").decode("utf-8", "replace")
     except ServiceDown as exc:
         return {"status": "down", "detail": f"IRSA did not answer ({exc})"}
-    bands = parse_ztf_csv(text)
+    try:
+        bands = parse_ztf_csv(text)
+    except BadAnswer as exc:
+        return {"status": "error", "detail": str(exc)}
     if not bands:
         return {"status": "none", "detail": "no ZTF light curve at the position"}
     best, rows = None, []
@@ -304,7 +316,9 @@ def atlas(ra: float, dec: float, period: float | None, query=None) -> dict:
     try:
         rows = query("J/AJ/156/241/table4", ra, dec, ATLAS_RADIUS_ARCSEC / 3600.0,
                      ["ATOID", "RAJ2000", "DEJ2000", "fp-LSper", "fp-period", "fp-lngfitper", "Class"], "_r", 5)
-    except Exception as exc:   # every VizieR mirror failed: the catalog is out of reach tonight
+    except (OSError, ConnectionError, TimeoutError, ServiceDown, http.client.HTTPException) as exc:
+        return {"status": "down", "detail": f"VizieR did not answer ({exc})"}
+    except ValueError as exc:   # _vizier_query: every mirror failed or answered damaged
         return {"status": "down", "detail": f"VizieR did not answer ({exc})"}
     if not rows:
         return {"status": "none", "detail": "not in the ATLAS variable catalog"}
@@ -328,9 +342,10 @@ def atlas(ra: float, dec: float, period: float | None, query=None) -> dict:
     if rel is None and best:
         rel = relation(best, period)
     listed = ", ".join(f"{p:.6g} d" for p in periods) or "no period"
-    return {"status": "ok" if best else "none", "period": best, "relation": rel,
-            "detail": f"ATO {name.replace('J', 'J', 1)}: class {cls or '—'}, periods {listed}",
-            "note": ("ATLAS classes it dubious" if cls.lower() == "dubious" else "")}
+    dubious = cls.lower() == "dubious"
+    return {"status": "ok" if best else "none", "period": best, "relation": rel, "counts": not dubious,
+            "detail": f"ATO {name}: class {cls or '—'}, periods {listed}",
+            "note": ("ATLAS classes it dubious, so it does not count (John, 22 Nov 2026)" if dubious else "")}
 
 
 # ---- the whole check -------------------------------------------------------------------------------------------
@@ -338,21 +353,37 @@ def check(ra: float, dec: float, period: float | None, *, min_period: float = 0.
           surveys=SURVEYS, get=http_get, vizier=None) -> dict:
     out = {"utc": utc_now(), "period": period, "ra": ra, "dec": dec, "surveys": {}, "agree": [], "alias": []}
     for s in surveys:
-        if s == "ZTF":
-            r = ztf(ra, dec, period, min_period, max_period, get)
-        elif s == "TESS":
-            r = tess(ra, dec, period, min_period, max_period, get)
-        elif s == "ATLAS":
-            r = atlas(ra, dec, period, vizier)
-        else:
-            continue
+        try:
+            if s == "ZTF":
+                r = ztf(ra, dec, period, min_period, max_period, get)
+            elif s == "TESS":
+                r = tess(ra, dec, period, min_period, max_period, get)
+            elif s == "ATLAS":
+                r = atlas(ra, dec, period, vizier)
+            else:
+                continue
+        except (BadAnswer, ValueError, KeyError) as exc:   # an answer we cannot read: said, never passed as "none"
+            r = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
         out["surveys"][s] = r
-        if r.get("status") == "ok" and r.get("relation") == "same":
+        if counts(r) and r.get("relation") == "same":
             out["agree"].append(s)
-        elif r.get("status") == "ok" and r.get("relation") == "alias":
+        elif counts(r) and r.get("relation") == "alias":
             out["alias"].append(s)
     out["summary"] = summary(out)
     return out
+
+
+def counts(r: dict) -> bool:
+    """A survey's answer counts as evidence: it answered, its peak is significant (ZTF, TESS: FAP < AGREE_FAP), and
+    ATLAS does not class the star dubious."""
+    if not r or r.get("status") != "ok" or not r.get("period"):
+        return False
+    if r.get("counts") is False:
+        return False
+    fap = r.get("fap")
+    if "fap" in r and (fap is None or not (fap < AGREE_FAP)):
+        return False
+    return True
 
 
 def summary(res: dict) -> str:
@@ -361,6 +392,11 @@ def summary(res: dict) -> str:
         st = r.get("status")
         if st == "down":
             parts.append(f"{s} did not answer")
+        elif st == "error":
+            parts.append(f"{s}: unreadable answer ({r.get('detail')})")
+        elif not counts(r) and r.get("period"):
+            why = "dubious in ATLAS" if r.get("counts") is False else "peak not significant"
+            parts.append(f"{s} finds {r['period']:.6g} d, not counted ({why})")
         elif st == "none":
             parts.append(f"{s}: nothing usable")
         elif r.get("relation") == "same":
@@ -379,4 +415,4 @@ def for_gates(res: dict | None) -> dict:
     if not res:
         return {}
     return {s: {"period": r["period"]} for s, r in (res.get("surveys") or {}).items()
-            if r.get("status") == "ok" and r.get("relation") == "same" and r.get("period")}
+            if counts(r) and r.get("relation") == "same"}

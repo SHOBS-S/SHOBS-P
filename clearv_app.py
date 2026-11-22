@@ -24951,6 +24951,9 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     outside[st["name"]] = outside_data.for_gates(rec["outside"])
         except Exception:
             outside = {}
+        for w in self.watch_list:   # a Watch star not in the Registry yet keeps its own (Fable S9b)
+            if w["name"] not in outside and w.get("outside"):
+                outside[w["name"]] = outside_data.for_gates(w["outside"])
         obs = list(self.observations)
         nights = sorted({o.night for o in obs})
         self._gates_running = True
@@ -28120,9 +28123,11 @@ class WatchWindow:
 
     def _reopen(self):
         try:
+            if not self.win.winfo_exists():
+                return   # closed meanwhile: not opened again (Fable nit)
             self.win.destroy()
         except Exception:
-            pass
+            return
         if self.app.watch_list:
             WatchWindow(self.app)
 
@@ -28197,8 +28202,7 @@ class CandidatesWindow:
         ttk.Button(nav, text="Export for SHOBS-SCHED…", command=self.export_sched).pack(side=LEFT, padx=(14, 0))
         # 2.4.0 step 7c (#92): the neighbors and the outside data for the selected star
         ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=(14, 0))
-        self.outside_btn = ttk.Button(nav, text="Outside data…", command=self.outside)
-        self.outside_btn.pack(side=LEFT, padx=6)
+        ttk.Button(nav, text="Outside data…", command=self.outside).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Close", command=self.close).pack(side=RIGHT)
         self.note = StringVar(value="")
         ttk.Label(top, textvariable=self.note, style="Card.TLabel", justify=LEFT,
