@@ -504,7 +504,7 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
     rep["n_points"] = int(c.jd.size)
     if c.jd.size < 3 * MIN_NIGHT_POINTS or len(nights) < 1 or LombScargle is None:
         rep["summary"] = "Too few points to judge a period yet."
-        gates.append(_gate("nights", "Nights and span", "data", "candidate", f"{len(nights)} nights",
+        gates.append(_gate("nights", "Nights and cycles", "data", "candidate", f"{len(nights)} nights",
                            "≥ 3 nights", False, "too few points"))
         rep["failed"] = ["nights"]
         return rep

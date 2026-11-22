@@ -389,7 +389,10 @@ def fill_watch(observations, name: str, values: dict, overwrite: bool = False) -
         o.pos = pos
         pk = v.get("peak")
         if pk is not None and math.isfinite(float(pk)) and getattr(o, "raw_peaks", None) is not None:
-            o.raw_peaks.setdefault(name, float(pk))
+            if overwrite:
+                o.raw_peaks[name] = float(pk)
+            else:
+                o.raw_peaks.setdefault(name, float(pk))
         n += 1
     return n
 
@@ -421,13 +424,19 @@ def curve_from_values(promotion, observations, name: str, values: dict, role: st
 # ---- picking the neighbors ----------------------------------------------------------------------------------------
 def pick_neighbors(star_ra: float, star_dec: float, star_mag, catalog: list[dict], known: dict, *,
                    window: float = LOOKALIKE_MAG, n_max: int = LOOKALIKE_MAX, close_arcsec: float = 0.0,
-                   field_arcsec: float | None = None, keep=None) -> dict:
+                   field_arcsec: float | None = None, keep=None, star_amp: float | None = None) -> dict:
     """Look-alikes (catalog stars within +-window mag of the star, nearest first, at most n_max) and close
     companions (any catalog star within close_arcsec: the aperture plus sky ring), leaving out the star itself and
-    the stars the series already measures (known = {name: (ra, dec)}). A close companion more than CLOSE_DMAG_MAX
-    fainter is left out; keep(pick) -> False leaves a star out (before the n_max cut). Each pick: {"name", "ra", "dec", "mag",
+    the stars the series already measures (known = {name: (ra, dec)}). A close companion is kept when it is bright
+    enough to carry the star's amplitude (star_amp, mag): no more than max(CLOSE_DMAG_MAX, -2.5 log10(star_amp))
+    fainter (Fable N3: a 4 mag fainter star with deep eclipses can put 10 mmag on the star); the ones left out are
+    counted in "close_faint"; keep(pick) -> False leaves a star out (before the n_max cut). Each pick: {"name", "ra", "dec", "mag",
     "sep", "dmag"}."""
     looks, close = [], []
+    dmax = CLOSE_DMAG_MAX
+    if star_amp and star_amp > 0:
+        dmax = max(CLOSE_DMAG_MAX, -2.5 * math.log10(float(star_amp)))
+    faint = 0
     for st in catalog or []:
         ra, dec = st.get("ra"), st.get("dec")
         if ra is None or dec is None:
@@ -447,13 +456,15 @@ def pick_neighbors(star_ra: float, star_dec: float, star_mag, catalog: list[dict
         if keep is not None and not keep(pick):   # e.g. not on the series' frames
             continue
         if close_arcsec and sep <= close_arcsec:
-            if pick["dmag"] is None or pick["dmag"] <= CLOSE_DMAG_MAX:
+            if pick["dmag"] is None or pick["dmag"] <= dmax:
                 close.append(pick)
+            else:
+                faint += 1
         elif pick["dmag"] is not None and abs(pick["dmag"]) <= window:
             looks.append(pick)
     looks.sort(key=lambda p: p["sep"])
     close.sort(key=lambda p: p["sep"])
-    return {"lookalikes": looks[:n_max], "close": close}
+    return {"lookalikes": looks[:n_max], "close": close, "close_faint": faint, "close_dmag_max": dmax}
 
 
 # ---- the blend test -----------------------------------------------------------------------------------------------

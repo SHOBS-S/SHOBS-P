@@ -130,7 +130,7 @@ series' frames that do not have it yet:
    other watch stars, mapped from their sky positions), so flips and drift are followed without solving each frame.
 4. Each value is **tied to the frame's stored comp values**: the comps are measured the same way on the same image,
    and the star takes the frame's own instrumental scale. A different calibration or centering cancels out.
-   A frame is skipped (and counted) when fewer than 4 stars place it, they do not fit one map within 2 px, or the
+   A frame is skipped (and counted) when fewer than 4 of the series' other stars with sky positions place it, they do not fit one map within 2 px, or the
    comps disagree on the tie by more than 0.05 mag.
 5. A few frames per night that already have the star are measured again as a check. The log line gives the
    difference, for example *Check on 24 frame(s) that had it: +0.0 mmag (rms 0.4)*. When it is more than 10 mmag,
@@ -248,8 +248,9 @@ the comps). They are kept in a file beside the series, `<series>_neighbors.json`
 series itself and **Use comps…** are untouched, and the next time the window opens they are there. Closing the
 window stops the measuring.
 
-**Run blend test** (when a star no more than 3 mag fainter sits inside the aperture plus sky ring, a catalog
-star or one the series measures): the star is measured three times on every
+**Run blend test** (when a star inside the aperture plus sky ring, a catalog star or one the series measures, is
+bright enough to carry the star's amplitude: up to 3 mag fainter, more for a small amplitude, 5 mag for 10 mmag): the
+star is measured three times on every
 frame, with the aperture centered, moved toward the companion and moved away from it (by half the aperture radius,
 or half the separation). The true variable's amplitude grows as the aperture moves onto it: *the amplitude does not
 grow toward the companion … the signal sits on the star*, or *… grows toward the companion: the signal may belong to

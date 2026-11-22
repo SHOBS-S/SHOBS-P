@@ -278,7 +278,12 @@ class NeighborsMixin:
                                               "(moved or deleted), so there is nothing to measure.", parent=parent)
             return False
         nights = sorted({obs[i].night for i in on_disk})
-        sample = [] if redo else [i for i in nb.sample_measured(obs, name) if os.path.isfile(obs[i].path)]
+        if redo:   # Fable N4: the check uses frames the star was measured on by a run, not by an earlier reach-back
+            again_keys = {tuple(self._frame_key(obs[i])) for i in missing}
+            sample = [i for i in nb.sample_measured(obs, name) if os.path.isfile(obs[i].path)
+                      and tuple(self._frame_key(obs[i])) not in again_keys]
+        else:
+            sample = [i for i in nb.sample_measured(obs, name) if os.path.isfile(obs[i].path)]
         n = len(on_disk) + len(sample)
         mins = max(1, round(n * SECONDS_PER_FRAME / 60))
         cfg = self._measure_cfg()
@@ -482,6 +487,7 @@ class NeighborsMixin:
         rep = (self.gate_reports or {}).get(name)
         if rep and rep.get("gates"):
             unclear_outside(rep.get("gates"), res)
+            promotion.finish(rep)   # Fable N1: candidate / campaign / failed follow an un-cleared gate
             promotion.clear_with_outside(rep, od.for_gates(res))
             rep["outside"] = res
         for s_, r in res["surveys"].items():
@@ -514,6 +520,8 @@ def merge_outside(old: dict | None, new: dict) -> dict:
         if r.get("status") == "ok" and (now is None or now.get("status") in ("down", "error")):
             kept = dict(r)
             kept["kept_from"] = (old or {}).get("utc")
+            if new.get("period"):   # Fable N2: judged against today's period
+                kept["relation"] = od.relation(kept.get("period"), new.get("period"))
             out["surveys"][s] = kept
     out["agree"] = [s for s, r in out["surveys"].items() if od.counts(r) and r.get("relation") == "same"]
     out["alias"] = [s for s, r in out["surveys"].items() if od.counts(r) and r.get("relation") == "alias"]
@@ -741,11 +749,10 @@ class NeighborsWindow:
         for j in look:
             rows.append(("look", curve(j, "neighbor"), {"name": str(r["labels"][j]), "mag": mags[j],
                                                       "sep_px": float(d[j])}))
-        if True:
-            for j in comps:
-                if j not in close and j not in look:
-                    rows.append(("comps", curve(j, "comp"), {"name": str(r["labels"][j]), "mag": mags[j],
-                                                           "sep_px": float(d[j])}))
+        for j in comps:
+            if j not in close and j not in look:
+                rows.append(("comps", curve(j, "comp"), {"name": str(r["labels"][j]), "mag": mags[j],
+                                                       "sep_px": float(d[j])}))
         return target, rows, close, look
 
     def recompute(self, pick: bool = False):
@@ -827,9 +834,13 @@ class NeighborsWindow:
         notes = []
         if self.catalog_note:
             notes.append(self.catalog_note)
+        faint = self.picks.get("close_faint") or 0
         if not close and self.picks.get("searched"):
-            notes.append(f"No star within the aperture plus sky ring ({self._close_arcsec():.0f}″), so no blend test is "
-                         "needed for this star.")
+            notes.append(f"No star within the aperture plus sky ring ({self._close_arcsec():.0f}″) bright enough to "
+                         "carry the star's amplitude, so no blend test is needed for this star"
+                         + (f" ({faint} fainter one(s) left out: more than "
+                            f"{self.picks.get('close_dmag_max', nb.CLOSE_DMAG_MAX):.1f} mag fainter)." if faint
+                            else "."))
         if self.blend:
             notes.append(self.blend.get("text", "") + (f" ({self.blend['utc'][:10]})" if self.blend.get("utc") else ""))
         notes.append("Power at P is each star's periodogram power at the star's period as a share of its own; a star "
@@ -898,6 +909,7 @@ class NeighborsWindow:
         fm = self._frame_map()
         shape = self._settings().get("frame_shape")
         so = _f(app.sky_out.get(), 0.0) or 0.0
+        amp = (self.result or {}).get("amp")
 
         def on_frame(p):
             """Only stars the series' frames cover (placed on the first mapped frame, room for the sky ring)."""
@@ -917,7 +929,7 @@ class NeighborsWindow:
             except Exception as exc:
                 note = f"The catalogs were not reached ({type(exc).__name__}: {exc}); look-alikes come from the series' own stars."
             picks = nb.pick_neighbors(here[0], here[1], mymag, stars, known, window=w, close_arcsec=close_r,
-                                      field_arcsec=fov * 60.0 / 2.0, keep=on_frame)
+                                      field_arcsec=fov * 60.0 / 2.0, keep=on_frame, star_amp=amp)
             app.call_ui(self._found, tok, picks, note)
 
         threading.Thread(target=work, daemon=True).start()
@@ -1018,7 +1030,9 @@ class NeighborsWindow:
             messagebox.showerror(ca.APP_TITLE, f"Measuring stopped:\n\n{error}", parent=self.win if alive else app)
             return
         if res.get("cancelled"):
-            app.log("Check neighbors: measuring stopped (the window was closed); nothing was kept.")
+            app.log("Check neighbors: measuring stopped; nothing was kept.")
+            if alive:
+                self.note.set("Measuring stopped; nothing was kept.")
             return
         live = {id(o) for o in app.observations}
         vals_of = {k: {i: v for i, v in (res["values"].get(k) or {}).items() if id(sub[i]) in live}
@@ -1049,6 +1063,8 @@ class NeighborsWindow:
         except Exception as exc:
             app.log(f"⚠ Check neighbors: the measurements are not kept on disk ({type(exc).__name__}: {exc}); "
                     "they last until this window closes.")
+        for k, v in (self.side.get("stars") or {}).items():   # values from a measure whose save failed stay
+            side.setdefault("stars", {}).setdefault(k, v)
         self.side = side
         if alive:
             self.recompute()
@@ -1242,7 +1258,8 @@ class NeighborsWindow:
         ax.set_yticks([])
         pts = np.asarray([v for v in pos.values() if v and all(map(math.isfinite, v))], float)
         ax.plot(pts[:, 0], pts[:, 1], ".", color="#9fb3cf", ms=2)
-        style = {"close": ("#e8710a", "o"), "look": ("#2fa84f", "o"), "comps": ("#7a8aa3", "s")}
+        style = {"close": ("#e8710a", "o"), "look": ("#2fa84f", "o"), "comps": ("#7a8aa3", "s"),
+                 "others": ("#b8860b", "D")}
         for _k, g, c, r, p in rows:
             nm = c.name if c is not None else p["name"]
             v = pos.get(nm)
@@ -1255,7 +1272,7 @@ class NeighborsWindow:
         ax.set_xlim(me[0] - half, me[0] + half)
         ax.set_ylim(me[1] + half, me[1] - half)
         ax.set_title("Field around the star", fontsize=8, color="#14294a")
-        fig.text(0.02, 0.02, "blue: the star · green: look-alikes\norange: close companions · grey: comps, check",
+        fig.text(0.02, 0.02, "blue: the star · green: look-alikes · orange: close\ngrey: comps, check · gold: other stars",
                  fontsize=6.5, color="#4a5568")
         self.thumb_canvas.draw_idle()
 

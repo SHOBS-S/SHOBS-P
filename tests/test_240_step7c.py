@@ -429,6 +429,21 @@ class TestReviewFixes(unittest.TestCase):
         self.assertNotIn("W", obs[0].watch_insts)
         self.assertIn("W", obs[1].watch_insts)
 
+    def test_kept_answer_is_judged_against_todays_period(self):
+        from neighbors_ui import merge_outside
+        good = {"utc": "U1", "surveys": {"ZTF": {"status": "ok", "period": 0.2, "relation": "same", "fap": 1e-9}}}
+        m = merge_outside(good, {"utc": "U2", "period": 0.31, "surveys": {"ZTF": {"status": "down"}}})
+        self.assertEqual(m["agree"], [])
+        self.assertEqual(m["surveys"]["ZTF"]["relation"], "other")
+
+    def test_close_companion_cut_follows_the_amplitude(self):
+        cat = [{"auid": "F", "ra": RA0, "dec": DEC0 + 10 / 3600.0, "mag": 17.4}]   # 4 mag fainter
+        self.assertEqual(nb.pick_neighbors(RA0, DEC0, 13.4, cat, {}, close_arcsec=19.0, star_amp=0.05)["close"], [])
+        self.assertEqual(nb.pick_neighbors(RA0, DEC0, 13.4, cat, {}, close_arcsec=19.0,
+                                           star_amp=0.05)["close_faint"], 1)
+        self.assertEqual(len(nb.pick_neighbors(RA0, DEC0, 13.4, cat, {}, close_arcsec=19.0,
+                                               star_amp=0.01)["close"]), 1)
+
     def test_saved_master_nearest_exposure(self):
         from neighbors_ui import NeighborsMixin
         with tempfile.TemporaryDirectory() as d:

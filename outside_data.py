@@ -362,8 +362,8 @@ def check(ra: float, dec: float, period: float | None, *, min_period: float = 0.
                 r = atlas(ra, dec, period, vizier)
             else:
                 continue
-        except (BadAnswer, ValueError, KeyError) as exc:   # an answer we cannot read: said, never passed as "none"
-            r = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}
+        except Exception as exc:   # an answer we cannot read (or a bug): said as ✖, never passed as "none", and
+            r = {"status": "error", "detail": f"{type(exc).__name__}: {exc}"}   # the other surveys still run
         out["surveys"][s] = r
         if counts(r) and r.get("relation") == "same":
             out["agree"].append(s)
