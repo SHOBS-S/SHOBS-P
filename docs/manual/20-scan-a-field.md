@@ -3,9 +3,8 @@
 Discovery mode measures every star in the field on every frame, and points out the ones that vary more than stars
 of the same brightness. You need no target: any series of frames of one patch of sky, with calibration frames, will do.
 
-A star the scan points out is a **Suspect**: the first stage of the path from an odd star to a confirmed new
-variable (Suspect → Watch → Candidate → Campaign). A Suspect belongs to its one night: it lives on that night's
-results only.
+A star the scan points out is a **Suspect**: a lead, not a discovery. A Suspect belongs to its one night: it lives
+on that night's results only. Confirming it is up to you (chapter 21).
 
 This chapter covers:
 
@@ -15,7 +14,7 @@ This chapter covers:
 - the kinds of suspect and the "check first" warnings,
 - the night's suspects file and **Suspect again**.
 
-[21. Follow a suspect](21-follow-a-candidate.md) covers what to do with a suspect next.
+[21. Check a suspect](21-follow-a-candidate.md) covers what to do with a suspect next.
 
 > **Tip:** A suspect is a lead, not a discovery. Most are explained by something ordinary: a bright neighbor, a
 > bad pixel, saturation, a meridian flip. The scan tells you which to check first.
@@ -175,6 +174,17 @@ are suspects, by either test. If none are, the ten nearest misses are listed as 
 
 ![The Field scan page after a scan](img/20-field-scan-output.png)
 
+Under the table the buttons sit in labelled groups, as on the other Output pages:
+
+| Group | Buttons |
+|---|---|
+| **Marks** | **Mark suspects on image**, **Mark on image**, **Hide known variables** |
+| **Suspects** | **Watch selected star**, **Add as suspect**, **Remove added suspect**, **Known variables measured…** |
+| **Checks** | **Check neighbors…**, **Outside data…** (from 2.4.0) |
+| **Results** | the save and export buttons, and **Back** |
+
+**Suspects** and **Checks** share one row; on a narrow window a group wraps onto a second line.
+
 ### The plots
 
 - **Scatter vs brightness** (left): every star, scatter against magnitude, on a log scale. The blue line is the
@@ -233,13 +243,20 @@ scatter plot (or pick several), then press **Add as suspect**. It joins tonight'
 list, select its row and press **Remove added suspect**; the scan's own suspects cannot be removed (a new scan would
 find them again).
 
-### Check a suspect's neighbors
+### The Checks group: neighbors and outside data
 
-Select a star and press **Check neighbors…** (from 2.4.0) to see its light curve beside its close companions (inside
+The **Checks** group holds two tools for the selected star (from 2.4.0). Both report; neither changes a number.
+
+Select a star and press **Check neighbors…** to see its light curve beside its close companions (inside
 the aperture plus sky ring) and its look-alikes (stars within ±0.5 mag, nearest first), all from this night's scan,
 with each one's power and amplitude at the suspect's period (the scan's own period when it found one). **Save to
-star record** keeps the result in the night's suspects file (a suspect only). A suspect whose neighbors share its
-signal is most likely instrumental. See [21. Follow a suspect](21-follow-a-candidate.md#check-the-neighbors).
+suspects file** keeps the result in the night's suspects file (a suspect only). A suspect whose neighbors share its
+signal is most likely instrumental. See [21. Check a suspect](21-follow-a-candidate.md#check-the-neighbors).
+
+Press **Outside data…** to ask ZTF, TESS and ATLAS what they hold at the star's sky position. The answer says what
+each survey found and whether it agrees with the star's scan period (the same period within 1 %). The star needs a
+sky position (a solved field) and a period from the scan. See
+[21. Check a suspect](21-follow-a-candidate.md#outside-data-ztf-tess-atlas).
 
 ### The suspect kinds
 
@@ -303,8 +320,8 @@ The **Results** row holds:
   `field_scan_lightcurves.csv`.
 - **Back** returns to the Photometry page.
 
-See [21. Follow a suspect](21-follow-a-candidate.md) for what to do with them.
+See [21. Check a suspect](21-follow-a-candidate.md) for what to do with them.
 
 ---
 
-Previous: [19. Reports](19-transit-reports.md) · Next: [21. Follow a suspect](21-follow-a-candidate.md)
+Previous: [19. Reports](19-transit-reports.md) · Next: [21. Check a suspect](21-follow-a-candidate.md)

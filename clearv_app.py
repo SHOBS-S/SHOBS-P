@@ -33,9 +33,7 @@ from tkinter import (
     Canvas,
     DoubleVar,
     IntVar,
-    Label,
     Listbox,
-    Menu,
     PhotoImage,
     StringVar,
     Text,
@@ -54,16 +52,13 @@ import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 import star_record   # 2.4.0 step 4 (#72): the per-star record of a series' comps and check (same star within 1")
-from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows   # 2.4.0 (#98)
+from group_rows import LABEL_WIDTH as GROUP_LABEL_WIDTH, FlowBox, GroupRows, GroupView   # 2.4.0 (#98)
 import photometry_core as core
 import transit_core as tcore
 import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
-import promotion   # 2.4.0 step 7b (#92): the Watch -> Candidate -> Campaign gates
-import registry   # 2.4.0 step 7b (#92): campaign_registry.json, one per observatory
-import outside_data   # 2.4.0 step 7c (#92): ZTF, TESS and ATLAS at a Candidate's position
-from neighbors_ui import NeighborsMixin, NeighborsWindow   # 2.4.0 step 7c (#92): reach-back, Check neighbors
+from neighbors_ui import NeighborsMixin   # 2.4.0 step 7d: the Field scan page's Check neighbors and Outside data
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1612,7 +1607,7 @@ class NewVersionWindow:
 SKIP_FINDING_SHARE = 0.10
 
 
-class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7c: NeighborsMixin
+class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7d: NeighborsMixin = the Field scan checks
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
     def _keep_on_screen(self):
@@ -1868,8 +1863,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.spare_catalog = {}
         self.watch_list = []
         self.watch_xy = {}
-        self.gate_reports = {}           # 2.4.0 step 7b (#92): last promotion-gate report per star of the series
-        self._gate_nights = []           # the nights the last gate run saw (a new night saved runs them again)
         self.field_variables = []
         self.field_check_sources = []
         self.variable_marks = []
@@ -2303,7 +2296,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
         style.map("Accent.TButton", **button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd",
                                                        disabled_fg="#6e5e4e", disabled_border="#bfae9c"))
-        # plain buttons sit on the page color (#e7eef2); the Outcome… menu button (TMenubutton) follows them
+        # plain buttons sit on the page color (#e7eef2); a menu button (TMenubutton) follows them
         for name in ("TButton", "Compact.TButton", "TMenubutton"):
             style.map(name, **button_state_map("#e7eef2", "#f0f4f6", "#1c2b33", disabled_bg="#d5dce0",
                                                disabled_fg="#8a949a"))
@@ -19041,12 +19034,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                         obs.watch_insts = {wst.name: float(v) for wst, v in zip(watch, wvals) if math.isfinite(v)}
                         obs.pos["w"] = {wst.name: [round(float(fw.x), 1), round(float(fw.y), 1)]
                                         for wst, fw in zip(watch, f_watch)}
-                        if not precalibrated and getattr(obs, "raw_peaks", None) is not None:
-                            # 7b regression (Fable M1): the Watch stars' raw peaks too, so the promotion gates'
-                            # Linear limit check can judge them (it read "not recorded" for every Watch star)
-                            for wst, fw in zip(watch, f_watch):
-                                if wst.name not in obs.raw_peaks:
-                                    obs.raw_peaks[wst.name] = core.raw_peak_near(raw, fw, radius, total_bin)
                     if spares:
                         f_spares = [core.move_star(sp, reg, data.shape) for sp in spares]
                         spare_vals = core.channel_inst_mags(data, f_spares, radius, sky_in, sky_out,
@@ -21038,9 +21025,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         meta["color_cal"] = self.color_cal
         meta["mode"] = self.series_mode or self.mode_key
         meta["watch_list"] = self.watch_list
-        # 2.4.0 step 7b (#92): the last gate report per star (design doc: meta["candidates"]), compact
-        meta["candidates"] = {n: promotion.compact_report(r) for n, r in (self.gate_reports or {}).items()}
-        meta["gate_nights"] = list(self._gate_nights or [])
         meta["spare_catalog"] = self.spare_catalog
         meta["comp_catalog_mags"] = self.comp_catalog_mags
         meta["active_comps"] = list(self.active_comps)
@@ -21232,10 +21216,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.color_cal = dict(meta.get("color_cal") or {})
         self.series_mode = meta.get("mode") if meta.get("mode") in MODES else "variables"
         self.series_mode_unknown = meta.get("mode") not in MODES   # 2.2.14 (item 19): an old file: no mode check
-        # 2.4.0 step 7b (#92): the series' last gate reports (the window shows them until the gates run again)
-        if isinstance(meta.get("candidates"), dict):
-            self.gate_reports = {str(n): r for n, r in meta["candidates"].items() if isinstance(r, dict)}
-            self._gate_nights = [str(n) for n in meta.get("gate_nights") or []]
+        # 2.4.0 step 7d: a series saved by step 7b/7c may carry meta["candidates"] / meta["gate_nights"] (the removed
+        # promotion gates); they are not read, and the next save leaves them out
         if isinstance(meta.get("watch_list"), list):
             self._drop_session_watch_aliases([w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name")])
             known = {w["name"] for w in self.watch_list}
@@ -21459,9 +21441,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         pts = tuple((o.night, round(o.jd, 6) if o.jd is not None and math.isfinite(o.jd) else None, o.flag or "",
                      round(o.mag, 6) if o.mag is not None and math.isfinite(o.mag) else None)
                     for o in self.observations)
-        # 2.4.0 step 7c: Watch values filled by reach-back and neighbor checks (not in the points' own fields)
-        return hash((pts, tuple(self.active_comps or ()), repr(sorted(self.night_bin.items(), key=lambda kv: kv[0])),
-                     int(getattr(self, "_watch_revision", 0))))
+        return hash((pts, tuple(self.active_comps or ()), repr(sorted(self.night_bin.items(), key=lambda kv: kv[0]))))
 
     def series_unsaved(self) -> bool:
         """True when the open series has points that are not in its file (never saved, or changed since)."""
@@ -21638,7 +21618,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                             if keep_night and isinstance(k, tuple) and k and k[0] == keep_night}
         self._series_check = ("", "")
         self.star_records, self._v_disagree, self._user_cleared = [], {}, set()   # 2.4.0 step 4 (#72)
-        self.gate_reports, self._gate_nights = {}, []   # 2.4.0 step 7b (#92)
         self._series_names = set()   # 2.2.16 (item 11, review)
         self._series_site = {}   # 2.2.21 (nit j)
         self._zp_caution_cache = None
@@ -21758,7 +21737,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.update_series_status()   # 2.3.5 (#81): the series line drops the held night
         self.status.set(f"Series saved" + (f" (the version before is kept as {kept})" if kept else "")
                         + f". Next night, load this file before reducing: {path}")
-        self._gates_after_save()   # 2.4.0 step 7b (#92): a gate run after each night is saved
 
     def load_series(self):
         # 2.2.15 (review): an open series with unsaved points is offered a save first, as Close series does.
@@ -22031,8 +22009,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # ---- 6. More analysis
         g = groups.parent("analysis")
         groups.add("analysis", ttk.Button(g, text="Watch stars…", command=self.show_watch))
-        # 2.4.0 step 7b (#92): the promotion gates, the Registry and the Campaign switch
-        groups.add("analysis", ttk.Button(g, text="Candidates…", command=self.show_candidates))
         # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
         groups.add("analysis", ttk.Button(g, text="Time of max/min…", command=self.show_extremum))
 
@@ -24867,244 +24843,6 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                                            "or use Watch in Comp health or the field scan.")
             return
         WatchWindow(self)
-
-    # ---- 2.4.0 step 7b (#92): the promotion gates, the Registry and the Campaign switch -------------------------
-    def _gate_settings(self) -> dict:
-        """What the gate runner needs from the open series (Tk thread): period range, linear limit, frame size and
-        edge margin, the look-elsewhere M (the series' Watch stars), comps, check, spares and aliases."""
-        def num(var, default):
-            try:
-                v = float(str(var.get()).strip().replace(",", ""))
-                return v if math.isfinite(v) and v > 0 else default
-            except Exception:
-                return default
-        # 7b regression (John 21 Nov): the gate judges against the linear ADU (SHOBS-FLUX's number when it came
-        # from FLUX) even when it sits above the raw saturation setting; _linear_limit() drops it then, which
-        # left the gate on the saturation level. The saturation level is only the fallback when no linear ADU is set.
-        # John 21 Nov (13:30): a star whose own raw peak reaches the raw saturation level fails the gate too, even
-        # when the linear ADU sits above it (a frame SHOBS-P flags saturated never passes).
-        lin = num(self.linear_limit, None) if hasattr(self, "linear_limit") else None
-        sat = num(self.sat_limit, None) if hasattr(self, "sat_limit") else None
-        if lin is None:
-            lin = sat
-        shape = None
-        for o in self.observations[:20]:
-            try:
-                if o.path and os.path.isfile(o.path):
-                    shape = promotion.frame_shape_from_header(core.read_header(o.path), int(self.binning.get() or 1))
-                    if shape:
-                        break
-            except Exception:
-                continue
-        return {"min_period": num(self.min_period, 0.02), "max_period": num(self.max_period, 20.0),
-                "linear_limit": lin, "sat_level": sat, "frame_shape": shape, "edge_margin_px": num(self.sky_out, 0.0),
-                "m_trials": max(1, len(self.watch_list)),
-                "comp_names": list(self.comps_used), "check_name": self.check_used or self.check_name.get().strip(),
-                "watch_names": [w["name"] for w in self.watch_list], "spare_names": self._spares_in_series(),
-                "aliases": self._star_aliases(), "target": self.star_id.get().strip(),
-                "series": self.series_path or ""}
-
-    def _target_gate_entry(self) -> dict | None:
-        name = self.star_id.get().strip()
-        if not name or self.mode_key != "variables":
-            return None
-        try:
-            ra, dec = self.target_radec_deg()
-        except ValueError:
-            ra = dec = None
-        return {"name": name, "is_target": True, "ra": ra, "dec": dec, "gaia": "", "variable": ""}
-
-    def gate_stars(self, with_target: bool = False) -> list[dict]:
-        """The stars the gates run on: every Watch star of the series, plus the target when it is in the Registry
-        already or with_target (the Candidates window's "Check the target too")."""
-        out = [{"name": w["name"], "is_target": False, "ra": w.get("ra"), "dec": w.get("dec"),
-                "gaia": w.get("gaia_dr3") or "", "variable": w.get("variable") or ""} for w in self.watch_list]
-        tgt = self._target_gate_entry()
-        if tgt is not None:
-            try:
-                in_reg = registry.find(registry.load(), "", tgt["ra"], tgt["dec"]) is not None
-            except Exception:
-                in_reg = False
-            if with_target or in_reg or tgt["name"] in self.gate_reports:
-                out.insert(0, tgt)
-        return out
-
-    def run_gates(self, why: str = "", with_target: bool = False, on_done=None) -> bool:
-        """Run the promotion gates on the series' Watch stars (and the target, see gate_stars) in the background, then
-        update the Registry: a star whose Candidate gates pass becomes a Candidate (automatic, decision 3), a Campaign
-        star that fails a hard gate on new data has its campaign switched off (two failures in a row: Rejected)."""
-        if not self.observations:
-            return False
-        if getattr(self, "_gates_running", False):
-            return False
-        stars = self.gate_stars(with_target=with_target)
-        if not stars:
-            return False
-        cfg = self._gate_settings()
-        # 2.4.0 step 7c (#92): a Registry star's outside data (ZTF, TESS, ATLAS) clears the gates it may clear
-        outside = {}
-        try:
-            doc = registry.load()
-            for st in stars:
-                rec = registry.find(doc, st["gaia"], st["ra"], st["dec"])
-                if rec is not None and rec.get("outside"):
-                    outside[st["name"]] = outside_data.for_gates(rec["outside"])
-        except Exception:
-            outside = {}
-        for w in self.watch_list:   # a Watch star not in the Registry yet keeps its own (Fable S9b)
-            if w["name"] not in outside and w.get("outside"):
-                outside[w["name"]] = outside_data.for_gates(w["outside"])
-        obs = list(self.observations)
-        nights = sorted({o.night for o in obs})
-        self._gates_running = True
-        tok = self.busy_begin(f"Promotion gates: {len(stars)} star(s)…")
-
-        gen = getattr(self, "_series_gen", 0)   # Fable S4: a run in flight never lands in another series
-
-        def work():
-            reports, error = {}, ""
-            try:
-                for k, st in enumerate(stars, 1):
-                    self.call_ui(self.busy_words, tok, f"Promotion gates: {st['name']} ({k} of {len(stars)})…")
-                    try:
-                        rep = promotion.series_gate_report(
-                            obs, st["name"], is_target=st["is_target"], target_name=cfg["target"],
-                            comp_names=cfg["comp_names"], check_name=cfg["check_name"],
-                            watch_names=cfg["watch_names"], spare_names=cfg["spare_names"], aliases=cfg["aliases"],
-                            min_period=cfg["min_period"], max_period=cfg["max_period"], m_trials=cfg["m_trials"],
-                            linear_limit=cfg["linear_limit"], sat_level=cfg.get("sat_level"),
-                            frame_shape=cfg["frame_shape"],
-                            edge_margin_px=cfg["edge_margin_px"], outside=outside.get(st["name"]) or None)
-                    except Exception as exc:
-                        rep = {"star": st["name"], "gates": [], "candidate": False, "campaign": False,
-                               "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": [],
-                               "version": promotion.GATES_VERSION}   # Fable S1: not re-run on every open
-                    rep["is_target"] = st["is_target"]
-                    reports[st["name"]] = rep
-            except Exception as exc:
-                error = f"{type(exc).__name__}: {exc}"
-            self.call_ui(self._gates_done, tok, reports, stars, cfg, error, nights, why, on_done, gen)
-
-        threading.Thread(target=work, daemon=True).start()
-        return True
-
-    def _gates_done(self, tok, reports, stars, cfg, error, nights, why, on_done, gen=None):
-        self._gates_running = False
-        self.busy_end(tok)
-        if gen is not None and gen != getattr(self, "_series_gen", 0):
-            self.log("Promotion gates: the series changed while they ran; their results were dropped.")
-            return
-        events = []
-        if not error:
-            # Fable S5: the Registry is read, changed and written here on the Tk thread, so a Promote / End campaign /
-            # Outcome made while the gates ran is never written over by an older copy
-            try:
-                doc = registry.load()
-                for st in stars:
-                    rep = reports.get(st["name"]) or {}
-                    if not rep.get("gates"):
-                        continue
-                    rec, ev = registry.upsert_from_report(
-                        doc, rep, st["name"], st["gaia"], st["ra"], st["dec"], series_file=cfg["series"],
-                        parent_target=cfg["target"] if not st["is_target"] else "")
-                    if rec is not None and ev == "new" and st.get("variable"):
-                        registry.set_status(rec, "known", by="auto", note=f"already listed: {st['variable']}")
-                        ev = "new_known"
-                    if rec is not None:
-                        rep["registry"] = registry.status_text(rec)
-                        rep["registry_key"] = rec["key"]
-                    if ev:
-                        events.append((st["name"], ev, rep))
-                if events:
-                    registry.save(doc)
-            except Exception as exc:
-                error = f"{type(exc).__name__}: {exc}"
-        self.gate_reports.update(reports)
-        if not error:
-            self._gate_nights = list(nights)   # Fable nit: a failed Registry update runs again after the next save
-        new = [n for n, ev, _r in events if ev in ("new", "new_known")]
-        for name, ev, rep in events:
-            if ev == "new":
-                self.log(f"New Candidate: {name} ({rep.get('summary', '')}) — entered in the Registry.")
-            elif ev == "new_known":
-                self.log(f"{name} entered in the Registry as Known (already listed as a variable).")
-            elif ev == "campaign_fail":
-                self.log(f"⚠ {name}: campaign switched off: it failed a hard gate on the new data "
-                         f"({', '.join(registry.hard_failures(rep.get('gates')))}). It stays a Candidate.")
-            elif ev == "rejected":
-                self.log(f"⚠ {name}: Rejected after failing a hard gate twice in a row.")
-        bad = [(n, ev) for n, ev, _r in events if ev in ("campaign_fail", "rejected")]
-        if error:
-            self.log(f"⚠ Promotion gates: the Registry was not updated ({error}).")
-            messagebox.showwarning(APP_TITLE, f"The promotion gates ran, but the Registry file could not be updated:"
-                                              f"\n\n{error}")
-        elif bad:
-            messagebox.showwarning(APP_TITLE, "\n".join(
-                f"{n}: " + ("its campaign was switched off (a hard gate failed on the new data); it stays a Candidate."
-                            if ev == "campaign_fail" else "Rejected (a hard gate failed twice in a row).")
-                for n, ev in bad) + "\n\nSee Candidates… for the gates.")
-        # 2.4.0 step 7c (#92): the outside-data check runs once, by itself, when a star becomes a Candidate
-        if not error:
-            for name, ev, rep in events:
-                if ev in ("new", "new_known") and rep.get("period_days"):
-                    st = next((x for x in stars if x["name"] == name), None)
-                    if st and st.get("ra") is not None and st.get("dec") is not None:
-                        self.after(500, lambda st=st, rep=rep: self.outside_check(
-                            st["name"], st["ra"], st["dec"], rep["period_days"], gaia=st.get("gaia") or "",
-                            quiet=True))
-        n_c = sum(1 for r in reports.values() if r.get("candidate"))
-        self.status.set(f"Promotion gates: {len(reports)} star(s) checked, {n_c} pass the Candidate gates"
-                        + (f"; new Candidate: {', '.join(new)}" if new else "") + ". Candidates… shows them.")
-        if on_done is not None:
-            try:
-                on_done()
-            except Exception:
-                pass
-        win = getattr(self, "_candidates_win", None)
-        if win is not None:
-            try:
-                win.refresh()
-            except Exception:
-                self._candidates_win = None
-
-    def _gates_after_save(self):
-        """After Save series: run the gates when the series holds a night the last gate run did not see."""
-        if not self.observations or not (self.watch_list or self.gate_reports):
-            return
-        nights = sorted({o.night for o in self.observations})
-        if nights != list(getattr(self, "_gate_nights", [])) or self._gate_reports_outdated():
-            self.after(300, lambda: self.run_gates(why="after save"))
-
-    def _gate_reports_outdated(self) -> bool:
-        """A stored gate report made under an older rule set (promotion.GATES_VERSION) is stale like a new night."""
-        try:
-            current = {st["name"] for st in self.gate_stars()}
-        except Exception:
-            current = set(self.gate_reports or {})
-        # only the stars the gates still run on (a removed Watch star's old report never updates: Fable S1)
-        return any(int(r.get("version") or 1) < promotion.GATES_VERSION
-                   for n, r in (self.gate_reports or {}).items() if isinstance(r, dict) and n in current)
-
-    def show_candidates(self):
-        if not self.observations:
-            messagebox.showinfo(APP_TITLE, "Load or run a series first: the gates judge a star's light curve over "
-                                           "several nights.")
-            return
-        win = getattr(self, "_candidates_win", None)
-        if win is not None:
-            try:
-                win.win.lift()
-                win.refresh()
-                return
-            except Exception:
-                self._candidates_win = None
-        self._candidates_win = CandidatesWindow(self)
-        nights = sorted({o.night for o in self.observations})
-        stale = nights != list(self._gate_nights or []) or self._gate_reports_outdated()
-        if (not self.gate_reports or stale) and self.gate_stars():
-            # Fable S7: the target only with "Check the target too" (or when it is tracked already)
-            self.run_gates(why="window opened",
-                           with_target=any(r.get("is_target") for r in self.gate_reports.values()))
 
     def choose_comps(self):
         if not self.observations:
@@ -28036,9 +27774,6 @@ class WatchWindow:
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         ttk.Button(nav, text="Export watch light curves CSV…", command=self.export).pack(side=LEFT)
         ttk.Button(nav, text="Stop watching selected", command=self.remove).pack(side=LEFT, padx=6)
-        # 2.4.0 step 7c (#92): measure the selected star on the series' older frames, and its neighbors
-        ttk.Button(nav, text="Reach back…", command=self.reach_back).pack(side=LEFT, padx=(14, 0))
-        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
         cols = ("star", "catalog", "points", "nights", "spread", "trend", "info")
         self.tree = ttk.Treeview(top, columns=cols, show="headings", height=min(max(len(app.watch_list), 3), 8))
@@ -28116,26 +27851,6 @@ class WatchWindow:
             if self.app.watch_list:
                 WatchWindow(self.app)
 
-    def reach_back(self):
-        name = self._selected()
-        if name:
-            self.app.reach_back(name, parent=self.win, on_done=self._reopen)
-
-    def _reopen(self):
-        try:
-            if not self.win.winfo_exists():
-                return   # closed meanwhile: not opened again (Fable nit)
-            self.win.destroy()
-        except Exception:
-            return
-        if self.app.watch_list:
-            WatchWindow(self.app)
-
-    def check_neighbors(self):
-        name = self._selected()
-        if name:
-            self.app.check_neighbors(name, parent=self.win)
-
     def export(self):
         path = self.app.output_path("watch_stars.csv", title="Save CSV", defaultextension=".csv",
                                             filetypes=[("CSV", "*.csv")], parent=self.win)
@@ -28157,326 +27872,6 @@ class WatchWindow:
                         rows[0] += 1
         if self.app.guarded_write(path, write, self.win):
             self.app.status.set(f"Wrote {rows[0]} rows to {path}")
-
-
-class CandidatesWindow:
-    """2.4.0 step 7b (#92): the promotion path for the open series' Watch stars (and its target when it is tracked):
-    each star's gates (Watch -> Candidate, then the full Campaign set), its quiet-nights strip (evidence only), its
-    Registry status, and the Campaign switch. Design: "SHOBS-P: Suspect -> Watch -> Candidate -> Campaign"."""
-
-    CHIP = {"quiet": ("#d8f0dc", "quiet"), "active": ("#fde2c4", "active"), "between": ("#eceff1", "between"),
-            "skipped": ("#ffffff", "skipped")}
-
-    def __init__(self, app):
-        self.app = app
-        win = Toplevel(app)
-        self.win = win
-        win.title(f"{APP_TITLE} — candidates and campaigns")
-        win.protocol("WM_DELETE_WINDOW", self.close)
-        top = ttk.Frame(win, style="Card.TFrame", padding=10)
-        top.pack(fill=BOTH, expand=True)
-        ttk.Label(top, text="Candidates and campaigns", font=(core.UI_FONT, 15, "bold"),
-                  style="Card.TLabel").pack(anchor=W)
-        ttk.Label(top, text="Each Watch star is tested against the promotion gates after each night is saved. A star "
-                            "that passes the Candidate gates goes into the Registry, one file for your observatory "
-                            "that SHOBS-SCHED can read. Campaign is a switch: on, the star gets its own nights.",
-                  style="Hint.TLabel", wraplength=text_wrap_px(win, chars=120), justify=LEFT).pack(anchor=W,
-                                                                                                    pady=(2, 6))
-        nav = ttk.Frame(top, style="Card.TFrame")
-        nav.pack(fill=X, side="bottom", pady=(8, 0))
-        self.run_btn = ttk.Button(nav, text="Run gates now", command=self.run)
-        self.run_btn.pack(side=LEFT)
-        self.target_btn = ttk.Button(nav, text="Check the target too", command=lambda: self.run(with_target=True))
-        self.target_btn.pack(side=LEFT, padx=6)
-        self.promote_btn = ttk.Button(nav, text="Promote to campaign", style="Accent.TButton", command=self.promote)
-        self.promote_btn.pack(side=LEFT, padx=(14, 0))
-        self.end_btn = ttk.Button(nav, text="End campaign", command=self.end_campaign)
-        self.end_btn.pack(side=LEFT, padx=6)
-        self.outcome_btn = ttk.Menubutton(nav, text="Outcome…")
-        menu = Menu(self.outcome_btn, tearoff=False)
-        for label, status in (("Confirmed new", "confirmed_new"), ("Known (already catalogued)", "known"),
-                              ("Rejected…", "rejected"), ("Back to Candidate", "candidate")):
-            menu.add_command(label=label, command=lambda s=status: self.set_outcome(s))
-        self.outcome_btn["menu"] = menu
-        self.outcome_btn.pack(side=LEFT, padx=6)
-        ttk.Button(nav, text="Export for SHOBS-SCHED…", command=self.export_sched).pack(side=LEFT, padx=(14, 0))
-        # 2.4.0 step 7c (#92): the neighbors and the outside data for the selected star
-        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=(14, 0))
-        ttk.Button(nav, text="Outside data…", command=self.outside).pack(side=LEFT, padx=6)
-        ttk.Button(nav, text="Close", command=self.close).pack(side=RIGHT)
-        self.note = StringVar(value="")
-        ttk.Label(top, textvariable=self.note, style="Card.TLabel", justify=LEFT,
-                  wraplength=text_wrap_px(win, chars=120)).pack(fill=X, side="bottom", pady=(6, 0))
-        cols = ("star", "status", "period", "snr", "cand", "camp", "quiet")
-        self.tree = ttk.Treeview(top, columns=cols, show="headings", height=6, selectmode="browse")
-        for col, label, width, stretch in (("star", "Star", 250, True), ("status", "Registry", 170, False),
-                                           ("period", "Period (d)", 100, False), ("snr", "A/σA", 70, False),
-                                           ("cand", "Candidate gates", 130, False),
-                                           ("camp", "All gates", 100, False), ("quiet", "Quiet nights", 120, False)):
-            self.tree.heading(col, text=label, anchor=W)
-            cw = col_width(self.tree, label, width)
-            self.tree.column(col, width=cw, minwidth=cw, anchor=W, stretch=stretch)
-        self.tree.pack(fill=X)
-        self.tree.bind("<<TreeviewSelect>>", lambda _e: self.show_star())
-        self.summary = StringVar(value="")
-        ttk.Label(top, textvariable=self.summary, style="Card.TLabel", font=(core.UI_FONT, 10, "bold"),
-                  wraplength=text_wrap_px(win, chars=120), justify=LEFT).pack(anchor=W, pady=(8, 2))
-        self.strip = ttk.Frame(top, style="Card.TFrame")
-        self.strip.pack(fill=X, pady=(0, 6))
-        gcols = ("result", "gate", "value", "need", "set")
-        self.gates = ttk.Treeview(top, columns=gcols, show="headings", height=14)
-        for col, label, width, stretch in (("result", "", 150, False), ("gate", "Gate", 230, False),
-                                           ("value", "Measured", 420, True), ("need", "Needs", 300, True),
-                                           ("set", "For", 90, False)):
-            self.gates.heading(col, text=label, anchor=W)
-            self.gates.column(col, width=col_width(self.gates, label, width), anchor=W, stretch=stretch)
-        self.gates.tag_configure("fail", foreground="#b23b2b")
-        self.gates.tag_configure("unknown", foreground="#6b7780")
-        # 2.4.0 step 7c (7b nit): a long Measured / Needs is cut off in its column; the gate under the mouse (or the
-        # selected one) is shown in full below the table
-        self.gate_full = StringVar(value="Point at a gate to read its Measured and Needs in full.")
-        ttk.Label(top, textvariable=self.gate_full, style="Hint.TLabel", justify=LEFT,
-                  wraplength=text_wrap_px(win, chars=150)).pack(fill=X, side="bottom", pady=(4, 0))
-        self.gates.bind("<Motion>", self._gate_hover)
-        self.gates.bind("<<TreeviewSelect>>", lambda _e: self._gate_hover(None))
-        self.gates.pack(fill=BOTH, expand=True)
-        self.rows = {}
-        win.after_idle(lambda: fit_to_content(win))
-        self.refresh()
-
-    def _gate_hover(self, event):
-        item = self.gates.identify_row(event.y) if event is not None else ""
-        if not item:
-            sel = self.gates.selection()
-            item = sel[0] if sel else ""
-        if not item:
-            return
-        vals = self.gates.item(item, "values")
-        if len(vals) >= 4:
-            self.gate_full.set(f"{vals[1]}: measured {vals[2]}. Needs {vals[3]}.")
-
-    # -- data --
-    def _registry(self):
-        try:
-            return registry.load(), ""
-        except Exception as exc:
-            return None, str(exc)
-
-    def _record(self, doc, name, rep):
-        if doc is None:
-            return None
-        key = (rep or {}).get("registry_key")
-        if key and key in doc.get("stars", {}):
-            return doc["stars"][key]
-        entry = next((w for w in self.app.watch_list if w["name"] == name), None)
-        if entry is None and (rep or {}).get("is_target"):
-            t = self.app._target_gate_entry()
-            entry = {"ra": t["ra"], "dec": t["dec"]} if t else None
-        if entry is None:
-            return None
-        return registry.find(doc, entry.get("gaia_dr3") or "", entry.get("ra"), entry.get("dec"))
-
-    def refresh(self):
-        doc, err = self._registry()
-        sel = self.selected()
-        self.tree.delete(*self.tree.get_children())
-        self.rows = {}
-        names = [s["name"] for s in self.app.gate_stars()]
-        names += [n for n in self.app.gate_reports if n not in names]
-        for name in names:
-            rep = self.app.gate_reports.get(name) or {}
-            rec = self._record(doc, name, rep)
-            gates = rep.get("gates") or []
-            cand = [g for g in gates if g.get("set") == "candidate"]
-            chips = rep.get("quiet_nights") or []
-            quiet = (f"{sum(1 for c in chips if c.get('state') == 'quiet')} of "
-                     f"{sum(1 for c in chips if c.get('state') != 'skipped')}") if chips else "—"
-            p = rep.get("period_days")
-            snr = rep.get("amp_snr")
-            vals = (name + ("  (target)" if rep.get("is_target") else ""),
-                    registry.status_text(rec) if rec else ("Watch" if gates else "not run yet"),
-                    f"{p:.5f}" if isinstance(p, (int, float)) and p else "—",
-                    f"{snr:.1f}" if isinstance(snr, (int, float)) and math.isfinite(snr) else "—",
-                    f"{sum(1 for g in cand if g.get('pass') is True)} of {len(cand)}" if cand else "—",
-                    f"{sum(1 for g in gates if g.get('pass') is True)} of {len(gates)}" if gates else "—", quiet)
-            item = self.tree.insert("", END, values=vals)
-            self.rows[item] = name
-            if name == sel:
-                self.tree.selection_set(item)
-        if not self.tree.selection() and self.tree.get_children():
-            self.tree.selection_set(self.tree.get_children()[0])
-        self.target_btn.state(["disabled"] if self.app._target_gate_entry() is None
-                              or any(r.get("is_target") for r in self.app.gate_reports.values()) else ["!disabled"])
-        self.note.set(("⚠ " + err) if err else f"Registry: {registry.registry_path()}")
-        self.show_star()
-
-    def selected(self):
-        sel = self.tree.selection()
-        return self.rows.get(sel[0]) if sel else None
-
-    def show_star(self):
-        name = self.selected()
-        self.gates.delete(*self.gates.get_children())
-        for w in self.strip.winfo_children():
-            w.destroy()
-        rep = self.app.gate_reports.get(name) if name else None
-        doc, _err = self._registry()
-        rec = self._record(doc, name, rep) if name else None
-        self.summary.set((rep or {}).get("summary") or ("" if not name else "Gates not run yet: Run gates now."))
-        if rep:
-            ttk.Label(self.strip, text="Quiet nights (evidence only, not a gate):", style="Card.TLabel").pack(
-                side=LEFT, padx=(0, 6))
-            for chip in rep.get("quiet_nights") or []:
-                bg, word = self.CHIP.get(chip.get("state"), ("#ffffff", chip.get("state") or ""))
-                chi = chip.get("chi2nu")
-                text = f"{self.app.night_label(chip.get('night'), short=True)}  {word}" + (
-                    f" {chi:.1f}" if isinstance(chi, (int, float)) else "")
-                Label(self.strip, text=text, bg=bg, fg="#1d2b33", relief="solid", bd=1, padx=6, pady=2,
-                      font=(core.UI_FONT, 9)).pack(side=LEFT, padx=2)
-            for g in rep.get("gates") or []:
-                ok = g.get("pass")
-                res = "✓ pass" if ok is True else ("✗ fail" if ok is False else "– not known")
-                if ok is True and g.get("cleared_by") not in (None, "", "ours"):
-                    res = f"✓ {g['cleared_by']}"
-                self.gates.insert("", END, values=(res, g.get("label"), g.get("value"), g.get("need"),
-                                                   "Candidate" if g.get("set") == "candidate" else "Campaign"),
-                                  tags=(() if ok is True else (("fail",) if ok is False else ("unknown",))))
-        can_promote = bool(rec) and registry.campaign_ready(rec) and not rec.get("campaign") \
-            and rec.get("status") != "rejected"
-        self.promote_btn.state(["!disabled"] if can_promote else ["disabled"])
-        self.end_btn.state(["!disabled"] if rec and rec.get("campaign") else ["disabled"])
-        self.outcome_btn.state(["!disabled"] if rec else ["disabled"])
-
-    # -- actions --
-    def run(self, with_target: bool = False):
-        if not self.app.run_gates(why="by hand", with_target=with_target):
-            messagebox.showinfo(APP_TITLE, "The gates are already running, or there is no Watch star to test.",
-                                parent=self.win)
-
-    def _change(self, func):
-        name = self.selected()
-        rep = self.app.gate_reports.get(name) if name else None
-        doc, err = self._registry()
-        if doc is None:
-            messagebox.showerror(APP_TITLE, err, parent=self.win)
-            return
-        rec = self._record(doc, name, rep)
-        if rec is None:
-            messagebox.showinfo(APP_TITLE, f"{name} is not in the Registry: only a Candidate (its Candidate gates "
-                                           "passed) is.", parent=self.win)
-            return
-        if getattr(self.app, "_gates_running", False):
-            messagebox.showinfo(APP_TITLE, "The gates are running; try again when they finish.", parent=self.win)
-            return
-        if func(rec, name) is False:
-            return
-        try:
-            registry.save(doc)
-        except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"The Registry could not be saved: {exc}", parent=self.win)
-            return
-        if rep is not None:
-            rep["registry"] = registry.status_text(rec)
-            rep["registry_key"] = rec["key"]
-        self.refresh()
-
-    def promote(self):
-        def do(rec, name):
-            registry.set_campaign(rec, True, by="John")
-            self.app.log(f"{name}: campaign switched on (Registry). Export for SHOBS-SCHED gives it its own nights.")
-            self.app.status.set(f"{name}: campaign on.")
-        self._change(do)
-
-    def end_campaign(self):
-        def do(rec, name):
-            registry.set_campaign(rec, False, by="John")
-            self.app.log(f"{name}: campaign ended (it keeps its Registry record and outcome).")
-            self.app.status.set(f"{name}: campaign off.")
-        self._change(do)
-
-    def set_outcome(self, status):
-        def do(rec, name):
-            code, note = "", ""
-            if status == "rejected":
-                code = simpledialog.askstring(
-                    APP_TITLE, "Why is it rejected? One of: " + ", ".join(registry.REJECTION_CODES)
-                    + "\n(or leave blank and write a note next)", parent=self.win)
-                if code is None:
-                    return False
-                code = code.strip()
-                if code and code not in registry.REJECTION_CODES:
-                    note, code = code, ""
-                if not note:
-                    note = simpledialog.askstring(APP_TITLE, "A note (optional):", parent=self.win) or ""
-            registry.set_status(rec, status, by="John", code=code, note=note)
-            self.app.log(f"{name}: outcome set to {registry.STATUS_WORDS.get(status, status)} (Registry).")
-        self._change(do)
-
-    def check_neighbors(self):
-        name = self.selected()
-        if name:
-            rep = self.app.gate_reports.get(name) or {}
-            self.app.check_neighbors(name, is_target=bool(rep.get("is_target")), parent=self.win)
-
-    def outside(self):
-        """2.4.0 step 7c (#92): ZTF, TESS and ATLAS at the selected star's position (it runs by itself once, when a
-        star becomes a Candidate; this runs it again or for a Watch star)."""
-        name = self.selected()
-        rep = self.app.gate_reports.get(name) if name else None
-        if not rep or not rep.get("period_days"):
-            messagebox.showinfo(APP_TITLE, "Run the gates first: the outside data is compared with the star's period.",
-                                parent=self.win)
-            return
-        entry = next((w for w in self.app.watch_list if w["name"] == name), None)
-        if entry is None and rep.get("is_target"):
-            entry = self.app._target_gate_entry()
-        if not entry or entry.get("ra") is None or entry.get("dec") is None:
-            messagebox.showinfo(APP_TITLE, f"{name} has no sky position, so the surveys cannot be asked about it.",
-                                parent=self.win)
-            return
-        if not self.app.outside_check(name, entry["ra"], entry["dec"], rep["period_days"],
-                                      gaia=entry.get("gaia_dr3") or entry.get("gaia") or "",
-                                      on_done=lambda res: self._outside_shown(name, res)):
-            messagebox.showinfo(APP_TITLE, "The outside-data check is running already.", parent=self.win)
-
-    def _outside_shown(self, name, res):
-        lines = [res["summary"], ""]
-        for s, r in res["surveys"].items():
-            lines.append(f"{s}: {r.get('detail') or r.get('status')}")
-            if r.get("note"):
-                lines.append(f"    {r['note']}")
-        lines += ["", "Outside data may clear the ±1 c/d alias, the time-span and the Campaign data-volume gates "
-                      "(labeled with the survey), "
-                      "never a null test or a systematics guard."]
-        try:
-            messagebox.showinfo(APP_TITLE, f"Outside data for {name}\n\n" + "\n".join(lines), parent=self.win)
-        except Exception:
-            pass
-
-    def export_sched(self):
-        doc, err = self._registry()
-        if doc is None:
-            messagebox.showerror(APP_TITLE, err, parent=self.win)
-            return
-        if not registry.sched_targets(doc):
-            messagebox.showinfo(APP_TITLE, "No star has its campaign switched on, so there is nothing for "
-                                           "SHOBS-SCHED yet.", parent=self.win)
-            return
-        path = self.app.output_path("SHOBS-P_campaigns_for_SHOBS-SCHED.json", title="Export for SHOBS-SCHED",
-                                    defaultextension=".json", filetypes=[("JSON", "*.json")], parent=self.win)
-        if not path:
-            return
-        try:
-            n = registry.write_sched_export(doc, path, APP_VERSION)
-        except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}", parent=self.win)
-            return
-        self.app.status.set(f"Wrote {n} campaign star(s) for SHOBS-SCHED to {path}")
-        self.note.set(f"Wrote {n} campaign star(s) for SHOBS-SCHED: {path}")
-
-    def close(self):
-        self.app._candidates_win = None
-        self.win.destroy()
 
 
 EXPORT_SETUPS_FILE = os.path.join(os.path.expanduser("~"), ".shiloh_photometry_exports.json")
@@ -28850,44 +28245,86 @@ class ScanView:
         # 2.2.9: a "Results" save row at the bottom, as on the Variables Output page; the actions sit above it.
         results = ttk.Frame(top, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(4, 0))
-        ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
+        ttk.Label(results, text="Results", style="Hint.TLabel", width=GROUP_LABEL_WIDTH).pack(side=LEFT)
         ttk.Button(results, text="Save plot PNG…", style="Accent.TButton", command=self.save_png).pack(side=LEFT)
         ttk.Button(results, text="Save CSV…", command=self.save_csv).pack(side=LEFT, padx=6)
         ttk.Button(results, text="Export suspects CSV…", command=self.export_candidates).pack(side=LEFT)
         ttk.Button(results, text="Export all light curves CSV…", command=self.export_curves).pack(side=LEFT, padx=6)
         if on_close is None:   # on the Output page: Back to Photometry, as on the Variables Output page
             ttk.Button(results, text="Back", command=lambda: app.show_step(STEP_PHOTO)).pack(side=RIGHT)
+        else:
+            ttk.Button(results, text="Close", command=on_close).pack(side=RIGHT)
+        # 2.4.0 step 7d (John, 22 Nov): the actions in labelled groups, as on the Output pages (group_rows): a small
+        # grey label in the fixed-width left column, the group's controls beside it, wrapping on a narrow page.
+        # Marks has its own row; Suspects and Checks share the second (as Comps and Analysis do), to keep the plot's
+        # height. self.groups[key] is the group's box (texts: scan_group_texts).
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
-        self.mark_button = ttk.Button(nav, text="Clear suspect marks" if app.scan_marks else "Mark suspects on image",
-                                      command=self.toggle_marks)
-        self.mark_button.pack(side=LEFT)
+        self.groups, self.group_labels = {}, {}
+
+        def group_row(key, label):
+            row = ttk.Frame(nav, style="Card.TFrame")
+            row.pack(fill=X)
+            lab = ttk.Label(row, text=label, style="Hint.TLabel", width=GROUP_LABEL_WIDTH)
+            lab.pack(side=LEFT, anchor="n", pady=(3, 0))
+            box = FlowBox(row)
+            box.frame.pack(side=LEFT, fill=X, expand=True)
+            self.group_labels[key] = lab
+            return box
+
+        # ---- Marks: what is drawn on the image and listed here
+        marks = self.groups["marks"] = group_row("marks", "Marks")
+        g = marks.frame
+        self.mark_button = marks.add(ttk.Button(
+            g, text="Clear suspect marks" if app.scan_marks else "Mark suspects on image", command=self.toggle_marks))
         # 2.2.19 (#12): the stars picked on the scatter plot (click, Ctrl+click, drag), or the selected star.
-        ttk.Button(nav, text="Mark on image", command=self.mark_picked).pack(side=LEFT, padx=(6, 0))
-        ttk.Button(nav, text="Watch selected star", command=self.watch_selected).pack(side=LEFT, padx=6)
-        # 2.4.0 step 7a (#92): a star you judge suspect by eye joins tonight's Suspects (kept in the suspects file)
-        self.add_suspect_button = ttk.Button(nav, text="Add as suspect", command=self.add_suspect)
-        self.add_suspect_button.pack(side=LEFT, padx=(0, 6))
-        # Fable re-review: a star added by hand by mistake can be taken off again (the scan's own suspects cannot)
-        ttk.Button(nav, text="Remove added suspect", command=self.remove_added_suspect).pack(side=LEFT, padx=(0, 6))
-        # 2.4.0 step 7c (#92): the selected star against its neighbors on this night
-        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=(0, 6))
-        ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
+        marks.add(ttk.Button(g, text="Mark on image", command=self.mark_picked), pad=12)
         # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
         # they still match the marks on the image).
         self.hide_known = BooleanVar(value=False)
         self.n_known = sum(1 for i in result["candidates"] if result.get("vsx") and result["vsx"][i])
-        hide_box = ttk.Checkbutton(nav, text="Hide known variables", variable=self.hide_known, command=self._hide_changed)
-        hide_box.pack(side=LEFT, padx=(12, 0))
+        hide_box = marks.add(ttk.Checkbutton(g, text="Hide known variables", variable=self.hide_known,
+                                             command=self._hide_changed))
         self.hide_box = hide_box
         self.picked = []   # 2.2.19 (#12): stars picked on the scatter plot
         self._drag = None
         if result.get("vsx") is None:
             hide_box.state(["disabled"])
         self.hidden_text = StringVar(value="")
-        ttk.Label(nav, textvariable=self.hidden_text, style="Hint.TLabel").pack(side=LEFT, padx=6)
-        if on_close is not None:
-            ttk.Button(nav, text="Close", command=on_close).pack(side=RIGHT)
+        marks.add(ttk.Label(g, textvariable=self.hidden_text, style="Hint.TLabel"))
+        ttk.Separator(nav, orient="horizontal").pack(fill=X)
+
+        # ---- Suspects: the selected star's place in tonight's list
+        shared = group_row("suspects", "Suspects")
+        suspects = self.groups["suspects"] = GroupView(shared)
+        g = shared.frame
+        suspects.add(ttk.Button(g, text="Watch selected star", command=self.watch_selected))
+        # 2.4.0 step 7a (#92): a star you judge suspect by eye joins tonight's Suspects (kept in the suspects file)
+        self.add_suspect_button = suspects.add(ttk.Button(g, text="Add as suspect", command=self.add_suspect))
+        # Fable re-review: a star added by hand by mistake can be taken off again (the scan's own suspects cannot)
+        suspects.add(ttk.Button(g, text="Remove added suspect", command=self.remove_added_suspect))
+        suspects.add(ttk.Button(g, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)))
+
+        # ---- Checks: two plain tools on the selected star (2.4.0 step 7d). They report; you decide.
+        lab = ttk.Label(g, text="Checks", style="Hint.TLabel", padding=(12, 3, 0, 0))
+        self.group_labels["checks"] = lab
+        checks = self.groups["checks"] = GroupView(shared, lead_label=lab)
+        # the selected star against its neighbors on this night
+        self.neighbors_button = checks.add(ttk.Button(g, text="Check neighbors…", command=self.check_neighbors))
+        # ZTF, TESS and ATLAS at the selected star's sky position, against its scan period
+        self.outside_button = checks.add(ttk.Button(g, text="Outside data…", command=self.outside_data))
+        if not result.get("radec"):   # an unsolved field: no sky positions to ask the surveys about
+            self.outside_button.state(["disabled"])
+        try:
+            app._add_tooltip(lab, "Checks: two tools for the selected star. Nothing here changes a number.")
+            app._add_tooltip(self.neighbors_button, "The selected star beside its close companions, look-alikes and "
+                                                    "the comps on this night: does a neighbor carry its period too?")
+            app._add_tooltip(self.outside_button, lambda: (
+                "What ZTF, TESS and ATLAS hold at the selected star's position, and whether they agree with its "
+                "period." if result.get("radec") else
+                "Not available: this scan has no sky positions (the field was not solved)."))
+        except Exception:
+            pass
 
         # 2.2.19 (#19): known variables whose VSX period lies outside the period search, with a one-click fix.
         self.range_frame = ttk.Frame(top, style="Card.TFrame")
@@ -29442,15 +28879,57 @@ class ScanView:
                 if w["name"] == name:
                     w.setdefault("variable", f"{vsx.get('source', 'VSX')}: {vsx['name']} {vsx['type']}")
 
+    def scan_group_texts(self, key: str) -> list:
+        """The words on a group's controls, left to right ("marks", "suspects" or "checks")."""
+        out = []
+        for w in self.groups[key].shown_widgets():
+            try:
+                t = str(w.cget("text"))
+            except Exception:
+                t = ""
+            if t:
+                out.append(t)
+        return out
+
     def check_neighbors(self):
-        """2.4.0 step 7c (#92): the selected star against its look-alikes, close companions and the comps, on this
-        night (the field scan already measured them all)."""
+        """The selected star against its look-alikes, close companions and the comps, on this night (the field scan
+        already measured them all)."""
         i = self.selected
         r = self.r
         if i is None or not (0 <= i < len(r["labels"])):
             self.app.status.set("Select a star first (a row in the table or a point on the plot).")
             return
         self.app.check_neighbors_suspect(r, i, parent=self.win)
+
+    def outside_data(self):
+        """2.4.0 step 7d: what ZTF, TESS and ATLAS hold at the selected star's sky position, and whether they agree
+        with its scan period. A plain report (Log and a message box); nothing is stored or changed."""
+        i = self.selected
+        r = self.r
+        if i is None or not (0 <= i < len(r["labels"])):
+            self.app.status.set("Select a star first (a row in the table or a point on the plot).")
+            return
+        label = str(r["labels"][i])
+        radec = r.get("radec")
+        try:
+            ra, dec = float(radec[i][0]), float(radec[i][1])
+            ok = math.isfinite(ra) and math.isfinite(dec)
+        except (TypeError, ValueError, IndexError):
+            ok = False
+        if not ok:
+            messagebox.showinfo(APP_TITLE, f"{label} has no sky position (the field was not solved), so the surveys "
+                                           "cannot be asked about it. Solve the field on the Photometry page and scan "
+                                           "again.", parent=self.win)
+            return
+        period = core.scan_period_value((r.get("periods") or {}).get(i))
+        if not period:
+            messagebox.showinfo(APP_TITLE, f"The scan found no period for {label}, so there is nothing to compare the "
+                                           "surveys with. Outside data needs the star's period.", parent=self.win)
+            return
+        # the surveys' light curves are searched over the scan's own period range
+        if not self.app.outside_check(label, ra, dec, float(period), period_range=r.get("period_range"),
+                                      parent=self.win):
+            messagebox.showinfo(APP_TITLE, f"The outside-data check for {label} is running already.", parent=self.win)
 
     def add_suspect(self):
         """2.4.0 step 7a (#92): the stars picked on the plot (or the selected star) join tonight's Suspects "by hand",

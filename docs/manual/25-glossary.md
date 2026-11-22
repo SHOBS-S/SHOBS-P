@@ -46,14 +46,6 @@ or **average** them; SHOBS-P tells which from the sky's noise, because it change
 of mass of the solar system, on a uniform time scale. The standard for exoplanet timing. It differs from JD by up to
 about ±8 minutes, depending on the star's position and the time of year.
 
-**Campaign** — A switch on a Registry star (from 2.4.0), not a stage: on, the star gets its own nights in SHOBS-SCHED;
-off, it rides along on its field's frames. **Promote to campaign** lights when every gate passes, or once the star is
-Confirmed new or Known.
-
-**Candidate** — A watch star whose light curve passed the Candidate gates (from 2.4.0): at least 3 nights with two in a
-row, 10 cycles, a significant period with amplitude S/N 4 or more, not a daily alias. It is entered in the Registry
-automatically. See [21. Follow a suspect](21-follow-a-candidate.md).
-
 **Check star** — A steady star measured like the target, to show whether the comparison stars are behaving. The
 AAVSO requires one for **ensemble** reports.
 
@@ -191,9 +183,6 @@ uncertainties by β.
 **Rp/R\*, depth** — The planet's radius divided by the star's. The depth SHOBS-P reports is (Rp/R\*)²; the actual dip
 at mid-transit is somewhat deeper because of **limb darkening**.
 
-**Registry** — `campaign_registry.json` (from 2.4.0), one per observatory: every Candidate and every star with an
-outcome (Confirmed new, Known, Rejected), keyed on its Gaia DR3 source ID.
-
 **Scintillation** — Twinkling: fast brightness changes caused by the atmosphere. It adds noise that grows with
 airmass and is larger for small telescopes. SHOBS-P includes it in the error bars when **Include scintillation
 (atmospheric twinkling) in the error bars** is ticked and the telescope aperture is entered.
@@ -210,8 +199,8 @@ suggests N from the comps' noise and a time cap (chapter 8). A stack never spans
 
 **Suspect** — In Discovery mode, a star the field scan points out on one night: it scatters at least 3 × normal, or its
 χ²ν against its own error bars is at least 2.5 × that of stars as bright that night (**χ²ν × normal**), or you added it by
-hand. The first stage of Suspect → Watch → Candidate → Campaign; it lives on that night's results only. See
-[20. Scan a field](20-scan-a-field.md).
+hand. A lead, not a discovery; it lives on that night's results only. See
+[20. Scan a field](20-scan-a-field.md) and [21. Check a suspect](21-follow-a-candidate.md).
 
 **Superpixel** — A way of turning a color camera's mosaic into an image: each 2×2 group of pixels becomes one pixel of
 the chosen color channel. The image has half the width and height of the sensor, and no colors are mixed.
@@ -226,7 +215,7 @@ system. SHOBS-P's magnitudes are untransformed; reports say so.
 targets and to warn when a comp, check or suspect star is a known variable.
 
 **Watch star** — A star you ask SHOBS-P to measure on every run, with its own light curve, without it being the
-target. See [21. Follow a suspect](21-follow-a-candidate.md).
+target. See [21. Check a suspect](21-follow-a-candidate.md).
 
 **× normal** — In a field scan: a star's scatter divided by the typical scatter of stars of the same brightness. 3 or
 more makes a suspect by default.

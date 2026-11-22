@@ -9625,7 +9625,7 @@ def write_scan_stars(path: str, result: dict) -> None:
 
 
 # ---- 2.4.0 step 7a (#92): the Suspect stage --------------------------------------------------------------------
-# A Suspect lives only on its night's Discovery results (no Registry entry; John, 15 Nov). Each night's Suspects are
+# A Suspect lives only on its night's Discovery results (John, 15 Nov). Each night's Suspects are
 # kept in <field>_<filter>_<date>_SHOBS-P_suspects.json in that night's Output folder, written when the scan ends and
 # again when a star is added by hand; another night of the same field reads them to flag "Suspect again (N nights)".
 SUSPECTS_SUFFIX = "_SHOBS-P_suspects.json"
@@ -9662,7 +9662,7 @@ def suspect_entries(result: dict) -> list[dict]:
             "excess_chi2": num(ex2[i], 2) if ex2 is not None and i < len(ex2) else None,
             "suspect_by": by.get(i, "scatter"), "period_days": num(scan_period_value(per), 6),
         })
-        chk = (result.get("neighbor_checks") or {}).get(i)   # 2.4.0 step 7c (#92): Check neighbors, saved
+        chk = (result.get("neighbor_checks") or {}).get(i)   # Check neighbors (Field scan page), saved
         if chk:
             out[-1]["neighbors"] = chk
     return out

@@ -1,25 +1,26 @@
-"""2.4.0 step 7c (#92): the outside-data check, once a star becomes a Candidate: ZTF, TESS and ATLAS at its position.
+"""Outside data: what ZTF, TESS and ATLAS hold at a star's position, and whether they agree with our period.
 
-Decision 10 (John, 15 Nov 2026): survey data that finds the same period may clear the +-1 c/d alias gate and the
-time-span gates, recorded as cleared by that survey; it never clears a null test or a systematics guard, which must
-pass on our own data. Why: from one site a short-period star's best peak and its 1 c/d alias can be nearly equal
-(S033: 0.497 vs 0.443), and no number of our own nights settles that quickly.
+A plain tool (2.4.0 step 7d; John, 22 Nov 2026): it reports, and the observer decides. From one site a short-period
+star's best peak and its 1 c/d alias can be nearly equal (S033: 0.497 vs 0.443); a survey with other sampling that
+finds the same period is good evidence for it.
 
 - ZTF: the IRSA light-curve service (DR light curves at the position, 2"), each filter searched with Lomb-Scargle
-  over the same period range as our gates; the filter with the strongest peak gives the survey's period.
+  over the same period range as ours; the filter with the strongest peak gives the survey's period.
 - TESS: the TIC star at the position (MAST), the sectors that covered it (TESScut), and the MIT Quick-Look Pipeline
   (QLP) light curves of those sectors (MAST HLSP); one search over every sector. TESS pixels are 21", so a
   neighbor's light shares the pixel: TESS can confirm a period, not which star carries it (Check neighbors does).
 - ATLAS: the ATLAS variable-star catalog (Heinze et al. 2018, VizieR J/AJ/156/241): its periods and class.
+
+A survey agrees when it answered, its peak is significant (ZTF, TESS) and it finds the same period within 1%. A star
+ATLAS classes "dubious" never counts as agreement.
 
 Fail softly only when a service is down or has nothing at the position (status "down" / "none"), never to hide a bug:
 a parsing or programming error raises.
 
 result = check(ra, dec, period) -> {"utc", "period": ours, "surveys": {"ZTF": {...}, "TESS": {...}, "ATLAS": {...}},
 "agree": [surveys that find our period within 1%], "alias": [surveys that find our +-1 c/d alias instead],
-"summary": text}. Each survey: {"status": "ok" | "none" | "down", "period", "power", "fap", "n", "detail", "note",
-"relation": "same" | "alias" | "harmonic" | "other" | None}. for_gates(result) -> {survey: {"period": P}} for
-promotion.gate_report(outside=...).
+"summary": text}. Each survey: {"status": "ok" | "none" | "down" | "error", "period", "power", "fap", "n", "detail",
+"note", "relation": "same" | "alias" | "harmonic" | "other" | None}.
 """
 from __future__ import annotations
 
@@ -40,8 +41,8 @@ try:
 except Exception:   # pragma: no cover - astropy is a requirement
     LombScargle = None
 
-AGREE_TOL = 0.01          # promotion.clear_with_outside's rule: the same period within 1%
-AGREE_FAP = 1e-3          # a ZTF / TESS peak must be significant to count (step 7c review)
+AGREE_TOL = 0.01          # a survey agrees when it finds the same period within 1%
+AGREE_FAP = 1e-3          # a ZTF / TESS peak must be significant to count
 ZTF_RADIUS_ARCSEC = 2.0
 TESS_MATCH_ARCSEC = 5.0
 ATLAS_RADIUS_ARCSEC = 5.0
@@ -73,7 +74,7 @@ def utc_now() -> str:
 def _bundled_context():
     """An SSL context on a bundled list of root certificates (certifi, else the copy pip carries), or None.
 
-    7c regression (22 Nov 2026): on John's PC Python's check against the Windows certificate store failed for IRSA
+    22 Nov 2026: on John's PC Python's check against the Windows certificate store failed for IRSA
     (ZTF) and MAST (TESS) with CERTIFICATE_VERIFY_FAILED, while VizieR worked. The certificate is still checked; only
     the list of trusted roots changes."""
     for name in ("certifi", "pip._vendor.certifi"):
@@ -441,10 +442,3 @@ def summary(res: dict) -> str:
             else "No outside survey confirms the period.")
     return head + (" " + "; ".join(parts) + "." if parts else "")
 
-
-def for_gates(res: dict | None) -> dict:
-    """{survey: {"period": P}} for the surveys that found our period (promotion.gate_report(outside=...))."""
-    if not res:
-        return {}
-    return {s: {"period": r["period"]} for s, r in (res.get("surveys") or {}).items()
-            if counts(r) and r.get("relation") == "same"}
