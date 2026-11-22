@@ -742,17 +742,33 @@ class NeighborsWindow:
         look = [j for j in np.argsort(d) if j != i and d[j] > so and r["usable"][j] and j not in sat
                 and math.isfinite(mags[j]) and abs(mags[j] - mags[i]) <= w][:nb.LOOKALIKE_MAX]
         roles = {"Check", "Comp"} | {f"Comp {k}" for k in range(1, 11)}   # a Variables-mode scan's marked stars
+        names = r.get("names") or []
+        radec = r.get("radec")
+
+        def info(j):
+            """7c regression nit (22 Nov): the catalog name, ΔV and the separation in arcsec when the scan has sky
+            positions (as Check neighbors on a series shows them); pixels only without them."""
+            out = {"name": str(r["labels"][j]), "mag": mags[j], "sep_px": float(d[j])}
+            if j < len(names) and names[j]:
+                out["display"] = f"{names[j]} ({r['labels'][j]})"
+            if math.isfinite(mags[j]) and math.isfinite(mags[i]):
+                out["dmag"] = float(mags[j] - mags[i])
+            if radec:
+                try:
+                    sep = nb.sep_arcsec(radec[i][0], radec[i][1], radec[j][0], radec[j][1])
+                    if math.isfinite(sep):
+                        out["sep"] = float(sep)
+                except (TypeError, ValueError, IndexError):
+                    pass
+            return out
         comps = [k for k, lab in enumerate(r["labels"]) if str(lab) in roles and k != i and r["usable"][k]]
         for j in close:
-            rows.append(("close", curve(j, "neighbor"), {"name": str(r["labels"][j]), "mag": mags[j],
-                                                       "sep_px": float(d[j])}))
+            rows.append(("close", curve(j, "neighbor"), info(j)))
         for j in look:
-            rows.append(("look", curve(j, "neighbor"), {"name": str(r["labels"][j]), "mag": mags[j],
-                                                      "sep_px": float(d[j])}))
+            rows.append(("look", curve(j, "neighbor"), info(j)))
         for j in comps:
             if j not in close and j not in look:
-                rows.append(("comps", curve(j, "comp"), {"name": str(r["labels"][j]), "mag": mags[j],
-                                                       "sep_px": float(d[j])}))
+                rows.append(("comps", curve(j, "comp"), info(j)))
         return target, rows, close, look
 
     def recompute(self, pick: bool = False):
@@ -855,7 +871,8 @@ class NeighborsWindow:
         res = promotion.neighbor_check(target, [c for _g, c, _i in rows], period=P, min_period=0.02,
                                        max_period=max(0.05, float(np.ptp(target.jd))), min_points=8)
         for (g, c, info), row in zip(rows, res["rows"]):
-            row.update({"group": g, "mag": info.get("mag"), "sep": None, "sep_px": info.get("sep_px")})
+            row.update({"group": g, "mag": info.get("mag"), "sep": info.get("sep"), "sep_px": info.get("sep_px"),
+                        "dmag": info.get("dmag"), "display": info.get("display")})
         self.result = res
         self.curves = {"target": target, "rows": [(g, c) for g, c, _i in rows]}
         self.pending = []
@@ -1145,8 +1162,9 @@ class NeighborsWindow:
         tx, ty = self._binned(self.curves["target"], P, view)
         span = float(np.nanmax(np.abs(ty))) if ty.size and np.isfinite(ty).any() else 10.0
         lim = max(10.0, 1.25 * span)
-        units = sum(0.45 if ln[0] == "head" else 1.0 for ln in lines) + 0.6
-        top = 1.0 - 0.6 / units
+        units = sum(0.6 if ln[0] == "head" else 1.0 for ln in lines) + 0.6
+        h_px = max(1.0, float(fig.get_size_inches()[1] * fig.dpi))
+        top = 1.0 - max(0.6 / units, 30.0 / h_px)   # room for the two-line header (7c regression nit)
         y = top
         x0, x1 = 0.25, 0.70
         # the field thumbnail: where each star sits on the first frame
@@ -1156,7 +1174,7 @@ class NeighborsWindow:
             pass
         for ln in lines:
             if ln[0] == "head":
-                y -= 0.45 / units
+                y -= 0.6 / units   # 7c regression nit: a little air between the row above and the title
                 fig.text(0.005, y + 0.12 / units, ln[1].upper(), fontsize=7.5, fontweight="bold",
                          color="#14294a", va="bottom")
                 fig.lines.append(__import__("matplotlib").lines.Line2D([0.005, 0.99], [y + 0.1 / units] * 2,
@@ -1197,7 +1215,8 @@ class NeighborsWindow:
                     bits.append(ROLE_WORDS[role])
                 if p is not None:
                     bits.append("not in the series yet")
-            fig.text(0.005, yc + 0.18 * h, name[:34], fontsize=8.5, fontweight="bold", va="center")
+            shown = ((r or {}).get("display") or (p or {}).get("display") or name) if g != "target" else name
+            fig.text(0.005, yc + 0.18 * h, shown[:34], fontsize=8.5, fontweight="bold", va="center")
             fig.text(0.005, yc - 0.22 * h, " · ".join(bits), fontsize=7.5, color="#4a5568", va="center")
             if g == "target":
                 amp = res.get("amp")
@@ -1215,10 +1234,11 @@ class NeighborsWindow:
                          color="#146c2e" if q else ("#b23b2b" if q is False else "#6b7780"))
         fig.text(0.73, 0.995, "Power at P", fontsize=8, color="#4a5568", va="top")
         fig.text(0.815, 0.995, "Amp at P", fontsize=8, color="#4a5568", va="top")
-        fig.text(x0, 0.995, (f"One shared scale: ±{lim:.0f} mmag, fainter is down. "
+        # 7c regression nit (22 Nov): two lines, so the text stays left of the Power at P / Amp at P titles
+        fig.text(x0, 0.995, (f"One shared scale: ±{lim:.0f} mmag, fainter is down.\n"
                              + (f"Folded at {P:.5f} d, {self.PHASE_BINS} phase bins." if view == "fold" else
                                 f"Time: the last night, {self.TIME_BIN_MIN:.0f}-min bins.")),
-                 fontsize=8, color="#4a5568", va="top")
+                 fontsize=8, color="#4a5568", va="top", linespacing=1.3)
         self.canvas.draw_idle()
 
     def _thumb(self, rows):
@@ -1268,9 +1288,14 @@ class NeighborsWindow:
             col, mk = style.get(g, ("#1f6fd1", "o"))
             ax.plot([v[0]], [v[1]], mk, mfc="none", mec=col if g != "target" else "#1f6fd1", ms=9 if g == "target"
                     else 7, mew=2 if g == "target" else 1.3, ls="none")
-        half = max(np.nanmax(np.abs(pts - np.asarray(me)), axis=0)) * 1.05 if pts.size else 100
-        ax.set_xlim(me[0] - half, me[0] + half)
-        ax.set_ylim(me[1] + half, me[1] - half)
+        # 7c regression nit (22 Nov): frame the field itself (square, the star included) instead of a square centered
+        # on the star, which left half the box empty when the star sat near the frame's edge
+        allp = np.vstack([pts, np.asarray([me], float)]) if pts.size else np.asarray([me], float)
+        lo, hi = np.nanmin(allp, axis=0), np.nanmax(allp, axis=0)
+        mid = (lo + hi) / 2.0
+        half = max(float(np.max(hi - lo)) / 2.0 * 1.06, 50.0)
+        ax.set_xlim(mid[0] - half, mid[0] + half)
+        ax.set_ylim(mid[1] + half, mid[1] - half)
         ax.set_title("Field around the star", fontsize=8, color="#14294a")
         fig.text(0.02, 0.02, "blue: the star · green: look-alikes · orange: close\ngrey: comps, check · gold: other stars",
                  fontsize=6.5, color="#4a5568")

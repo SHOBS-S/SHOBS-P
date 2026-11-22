@@ -556,6 +556,27 @@ class TestApp(unittest.TestCase):
         win.close()
 
 
+    def test_scan_rows_get_names_dmag_and_arcsec(self):
+        """7c regression nit (22 Nov): scan mode shows the catalog name, ΔV and arcsec like series mode."""
+        rng = np.random.default_rng(3)
+        n_fr, n_st = 100, 3
+        jd = 2461358.6 + np.arange(n_fr) * 0.0021
+        lc = 13 + rng.normal(0, 0.003, (n_fr, n_st))
+        result = {"labels": ["W APASS J1", "S041", "S042"], "jd": jd, "light_curves": lc,
+                  "mag": np.array([13.43, 13.60, 13.30]), "xy": [(200, 200), (260, 200), (300, 120)],
+                  "names": ["APASS J1", "APASS J024811.4+505612", ""],
+                  "radec": [(42.05, 50.88), (42.05, 50.89), (42.06, 50.88)],
+                  "usable": [True] * n_st, "saturated": [], "candidates": [0]}
+        self.app.sky_out.set(20.0)
+        win = self.app.check_neighbors_suspect(result, 0)
+        self.app.update()
+        rows = {r["name"]: r for r in win.result["rows"]}
+        self.assertEqual(rows["S041"]["display"], "APASS J024811.4+505612 (S041)")
+        self.assertAlmostEqual(rows["S041"]["dmag"], 0.17, places=6)
+        self.assertAlmostEqual(rows["S041"]["sep"], 36.0, delta=0.5)
+        self.assertIsNone(rows["S042"]["display"])   # no catalog name: the scan label alone
+        win.close()
+
 @unittest.skipUnless(S033_SERIES and os.path.isfile(S033_SERIES), "S033 series not available (SHOBS_S033_SERIES)")
 class TestS033Series(unittest.TestCase):
     def test_neighbors_of_s033_are_quiet(self):

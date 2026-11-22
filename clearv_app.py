@@ -28225,7 +28225,7 @@ class CandidatesWindow:
         self.strip.pack(fill=X, pady=(0, 6))
         gcols = ("result", "gate", "value", "need", "set")
         self.gates = ttk.Treeview(top, columns=gcols, show="headings", height=14)
-        for col, label, width, stretch in (("result", "", 90, False), ("gate", "Gate", 230, False),
+        for col, label, width, stretch in (("result", "", 150, False), ("gate", "Gate", 230, False),
                                            ("value", "Measured", 420, True), ("need", "Needs", 300, True),
                                            ("set", "For", 90, False)):
             self.gates.heading(col, text=label, anchor=W)
@@ -28445,7 +28445,8 @@ class CandidatesWindow:
             lines.append(f"{s}: {r.get('detail') or r.get('status')}")
             if r.get("note"):
                 lines.append(f"    {r['note']}")
-        lines += ["", "Outside data may clear the ±1 c/d alias and the time-span gates (labeled with the survey), "
+        lines += ["", "Outside data may clear the ±1 c/d alias, the time-span and the Campaign data-volume gates "
+                      "(labeled with the survey), "
                       "never a null test or a systematics guard."]
         try:
             messagebox.showinfo(APP_TITLE, f"Outside data for {name}\n\n" + "\n".join(lines), parent=self.win)
