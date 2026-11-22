@@ -1751,6 +1751,14 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
+    "ZTF: IRSA did not answer (certificate problem: this computer could not check the site's security certificate …)",
+    "Outside data…"
+   ],
+   "todo": "Check the PC's date and time, and whether a company or antivirus program inspects secure web traffic. Then press Outside data… again. Usually the second list fixes it on its own: SHOBS-P tries it whenever Windows' check fails."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
     "Outside data for …"
    ],
    "todo": "Try again later; if it stays, tell the SHOBS-P author (the service may have changed)."

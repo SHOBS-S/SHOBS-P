@@ -571,3 +571,48 @@ class TestS033Series(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCertificateRetry(unittest.TestCase):
+    """7c regression (22 Nov 2026): IRSA/MAST failed the Windows certificate check on John's PC."""
+
+    def _err(self):
+        import ssl, urllib.error
+        return urllib.error.URLError(ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] x"))
+
+    def test_retries_with_bundled_roots(self):
+        import io as _io
+        from unittest import mock
+        import outside_data as od
+        calls = []
+
+        class R(_io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake(req, timeout=None, context=None):
+            calls.append(context)
+            if context is None:
+                raise self._err()
+            return R(b"ok")
+        with mock.patch("urllib.request.urlopen", fake), mock.patch.object(od, "_bundled_context", lambda: object()):
+            self.assertEqual(od.http_get("https://x"), b"ok")
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(calls[0])
+        self.assertIsNotNone(calls[1])
+
+    def test_plain_words_when_both_fail(self):
+        from unittest import mock
+        import outside_data as od
+
+        def fake(req, timeout=None, context=None):
+            raise self._err()
+        with mock.patch("urllib.request.urlopen", fake), mock.patch.object(od, "_bundled_context", lambda: object()):
+            with self.assertRaises(od.ServiceDown) as cm:
+                od.http_get("https://x")
+        self.assertIn("certificate problem", str(cm.exception))
+        self.assertNotIn("_ssl.c", str(cm.exception))
+
+    def test_bundled_context_exists(self):
+        import outside_data as od
+        self.assertIsNotNone(od._bundled_context())

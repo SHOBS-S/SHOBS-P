@@ -24,8 +24,10 @@ promotion.gate_report(outside=...).
 from __future__ import annotations
 
 import http.client
+import importlib
 import io
 import math
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -68,22 +70,52 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _bundled_context():
+    """An SSL context on a bundled list of root certificates (certifi, else the copy pip carries), or None.
+
+    7c regression (22 Nov 2026): on John's PC Python's check against the Windows certificate store failed for IRSA
+    (ZTF) and MAST (TESS) with CERTIFICATE_VERIFY_FAILED, while VizieR worked. The certificate is still checked; only
+    the list of trusted roots changes."""
+    for name in ("certifi", "pip._vendor.certifi"):
+        try:
+            return ssl.create_default_context(cafile=importlib.import_module(name).where())
+        except Exception:
+            continue
+    return None
+
+
+def _cert_failed(exc) -> bool:
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(reason)
+
+
 def http_get(url: str, timeout: float = TIMEOUT_S, data: bytes | None = None) -> bytes:
-    """GET (or POST with data); a network failure, timeout or 5xx is ServiceDown; 404 returns b"" (nothing there)."""
+    """GET (or POST with data); a network failure, timeout or 5xx is ServiceDown; 404 returns b"" (nothing there).
+    A certificate the computer's own store cannot check is tried once more against the bundled roots."""
     req = urllib.request.Request(url, data=data, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return b""
-        if exc.code >= 500 or exc.code in (408, 429):
-            raise ServiceDown(f"HTTP {exc.code}") from exc
-        raise
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
-        raise ServiceDown(str(getattr(exc, "reason", exc))) from exc
-    except http.client.HTTPException as exc:   # IncompleteRead and the like: the reply was cut off
-        raise ServiceDown(f"{type(exc).__name__}") from exc
+    context = None
+    for attempt in (0, 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return b""
+            if exc.code >= 500 or exc.code in (408, 429):
+                raise ServiceDown(f"HTTP {exc.code}") from exc
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            if _cert_failed(exc):
+                if attempt == 0:
+                    context = _bundled_context()
+                    if context is not None:
+                        continue
+                raise ServiceDown("certificate problem: this computer could not check the site's security "
+                                  "certificate" + (" (with Windows' list and SHOBS-P's own)" if attempt else "")) from exc
+            raise ServiceDown(str(getattr(exc, "reason", exc))) from exc
+        except http.client.HTTPException as exc:   # IncompleteRead and the like: the reply was cut off
+            raise ServiceDown(f"{type(exc).__name__}") from exc
+    raise ServiceDown("no answer")   # pragma: no cover - the loop always returns or raises
 
 
 # ---- the period search -----------------------------------------------------------------------------------------

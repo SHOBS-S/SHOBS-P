@@ -7,3 +7,5 @@ ccdproc>=2.4
 scipy>=1.10
 # 2.2.21 (#22): the time zone database for zoneinfo (Windows has none of its own)
 tzdata
+# 2.4.0 step 7c: root certificates for the outside-data check (ZTF, TESS) when Windows' store cannot check them
+certifi
