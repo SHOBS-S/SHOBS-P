@@ -9,15 +9,15 @@ the same frames (check, comps, spare comps, other Watch stars) as null stars. Ev
 night's median is taken out, so a claim stays below about one night; longer periods need a separate trend track.
 
 Two gate sets:
-- Candidate (automatic, after each night merges): nights and span (>= 3 nights, >= 10 cycles, span >= 3 d or 3P,
-  one consecutive-night pair; John, 15 Nov), cycles and sampling, single-star FAP < 1e-3, look-elsewhere FAP_eff
+- Candidate (automatic, after each night merges): nights and cycles (>= 3 nights, >= 10 cycles, one
+  consecutive-night pair; John, 15 Nov), time span (>= 3 d or 3P), cycles and sampling, single-star FAP < 1e-3, look-elsewhere FAP_eff
   < 1e-2, amplitude S/N >= 4 (red-noise beta applied; John, 20 Oct), not within 5% of 1, 1/2, 1/3 d.
 - Campaign (the switch lights when these all pass on our data): the Candidate set plus data volume, single-night
   detections, +-1 c/d aliases, leave-one-night-out, phase coherence, flip-side offsets, FAP_eff < 1e-4, null tests,
   correlations (John's 15 Nov wording), and the systematics guards (linear limit, frame edges, check-star nights).
 
-Outside survey data (ZTF, TESS, ATLAS) may clear the +-1 c/d alias and the time-span gates, never a null test or a
-systematics guard (decision 10); clear_with_outside() records that.
+Outside survey data (ZTF, TESS, ATLAS) may clear the +-1 c/d alias, the time span and the Campaign data volume
+(OUTSIDE_CLEARS), never a null test or a systematics guard (decision 10); clear_with_outside() records that.
 
 Every gate is a dict {"key", "label", "group", "set", "value", "need", "pass", "cleared_by", "why"}; pass is True,
 False or None (not measurable: too few nights, no data). report["candidate"] / report["campaign"] are True only when
@@ -35,7 +35,9 @@ try:
 except Exception:   # pragma: no cover - astropy is a requirement
     LombScargle = None
 
-GATES_VERSION = 2   # 2 (21 Nov 2026): Linear limit also fails on saturation (raw sat level or the frame's sat flag)
+GATES_VERSION = 3   # 2 (21 Nov 2026): Linear limit also fails on saturation (raw sat level or the frame's sat flag)
+# 3 (22 Nov 2026, step 7c): the time span its own gate (span_days); a Watch star in the comp layout is a null star
+OUTSIDE_CLEARS = ("alias_pm1", "span_days", "volume")   # decision 10 (John 15 and 22 Nov 2026)
 SIDEREAL_DAY = 0.99726958
 
 # ---- thresholds (the design doc's numbers; John's decisions 12 and 13) -------------------------------------------
@@ -407,6 +409,72 @@ def check_bad_nights(check: Curve | None, factor: float = CHECK_NIGHT_FACTOR) ->
     return sorted(bad), rms
 
 
+# ---- 2.4.0 step 7c (#92): one null test, shared by the gate runner and the Check neighbors window -------------
+def null_test_row(nc: Curve, period: float, target_power: float, target_amp: float, bad_nights=(),
+                  min_points: int | None = None) -> dict | None:
+    """One other star at the target's period P: its power at P as a share of the target's best power, and its
+    amplitude at P against max(2 sigma_A, a third of the target's amplitude). quiet = both small. None when the star
+    has too few points (min_points, default 3 x MIN_NIGHT_POINTS) once bad nights are left out. The gate runner's
+    null tests and the Check neighbors window both call this, so the two always agree (design, 15 Nov)."""
+    need = 3 * MIN_NIGHT_POINTS if min_points is None else int(min_points)
+    if nc.jd.size < need or not period or period <= 0:
+        return None
+    bad = set(bad_nights or ())
+    nc2 = nc.take(np.array([n not in bad for n in nc.night], bool)) if bad else nc
+    if nc2.jd.size < need:
+        return None
+    f = 1.0 / period
+    yn = remove_medians(nc2.mag, nc2.night)
+    pw = lookup_power(nc2.jd, yn, f)
+    an, _, rn, _ = sine_fit(nc2.jd, yn, period)
+    san = float(np.std(rn, ddof=3)) * math.sqrt(2.0 / nc2.jd.size) if nc2.jd.size > 3 else float("nan")
+    share = pw / target_power if target_power and target_power > 0 else float("nan")
+    lim_a = max(NULL_AMP_SIGMA * san, target_amp * NULL_AMP_FRAC) if math.isfinite(san) else target_amp * NULL_AMP_FRAC
+    quiet = bool(math.isfinite(share) and share < NULL_POWER_FRAC and math.isfinite(an) and an < lim_a)
+    return {"name": nc.name, "role": nc.role, "power_share": round(share, 3) if math.isfinite(share) else None,
+            "amp": round(an, 5) if math.isfinite(an) else None, "amp_limit": round(lim_a, 5),
+            "sigma_amp": round(san, 6) if math.isfinite(san) else None, "quiet": quiet, "n_points": int(nc2.jd.size)}
+
+
+def neighbor_check(target: Curve, others: list[Curve], *, period: float | None = None, min_period: float = 0.02,
+                   max_period: float = 20.0, bad_nights=(), min_points: int | None = None) -> dict:
+    """2.4.0 step 7c (#92): the Check neighbors window's numbers. The target's period (given, e.g. from its gate
+    report, or found here), power and amplitude, then null_test_row for every other star. Returns {"period", "power",
+    "amp", "rows": [...], "n_quiet", "n_measured", "bottom": "Neighbors quiet at P: N of M measured"}. A row that
+    could not be judged (too few points) comes back with "quiet": None."""
+    bad = set(bad_nights or ())
+    c = target.take(np.array([n not in bad for n in target.night], bool)) if bad else target
+    out = {"period": None, "power": None, "amp": None, "rows": [], "n_quiet": 0, "n_measured": 0, "bottom": ""}
+    need = 3 * MIN_NIGHT_POINTS if min_points is None else int(min_points)
+    if c.jd.size < need or LombScargle is None:
+        out["bottom"] = "The star has too few points to judge its neighbors yet."
+        return out
+    y = remove_medians(c.mag, c.night)
+    pmax = max_search_period(c, max_period)
+    pmin = float(min(min_period, pmax / 2.0))
+    if period and period > 0:
+        P = float(period)
+        power = lookup_power(c.jd, y, 1.0 / P)
+    else:
+        pg = Periodogram(c.jd, y, pmin, pmax)
+        P, power = pg.period, pg.best_power
+    amp, *_ = sine_fit(c.jd, y, P)
+    out.update({"period": P, "power": power, "amp": amp})
+    for nc in others:
+        row = null_test_row(nc, P, power, amp, bad, min_points=need)
+        if row is None:
+            out["rows"].append({"name": nc.name, "role": nc.role, "quiet": None, "power_share": None, "amp": None,
+                                "n_points": int(nc.jd.size)})
+            continue
+        out["rows"].append(row)
+        out["n_measured"] += 1
+        out["n_quiet"] += int(row["quiet"])
+    n_wait = sum(1 for r in out["rows"] if r["quiet"] is None)
+    out["bottom"] = (f"Neighbors quiet at P: {out['n_quiet']} of {out['n_measured']} measured"
+                     + (f" ({n_wait} not judged: too few points)" if n_wait else ""))
+    return out
+
+
 # ---- the gate runner ------------------------------------------------------------------------------------------
 def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | None = None, *,
                 min_period: float = 0.02, max_period: float = 20.0, m_trials: int = 1,
@@ -436,7 +504,7 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
     rep["n_points"] = int(c.jd.size)
     if c.jd.size < 3 * MIN_NIGHT_POINTS or len(nights) < 1 or LombScargle is None:
         rep["summary"] = "Too few points to judge a period yet."
-        gates.append(_gate("nights", "Nights and span", "data", "candidate", f"{len(nights)} nights",
+        gates.append(_gate("nights", "Nights and cycles", "data", "candidate", f"{len(nights)} nights",
                            "≥ 3 nights", False, "too few points"))
         rep["failed"] = ["nights"]
         return rep
@@ -466,19 +534,22 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
 
     # -- Watch -> Candidate --
     need_span = max(CAND_MIN_SPAN_DAYS, CAND_SPAN_PERIODS * P)
-    ok = len(nights) >= CAND_MIN_NIGHTS and cycles >= CAND_MIN_CYCLES and span >= need_span and pairs >= 1
+    # 22 Nov 2026 (John, step 7c review): the time span is its own gate, so outside data may clear the span alone;
+    # the nights, cycles and the consecutive pair must pass on our own data
+    ok = len(nights) >= CAND_MIN_NIGHTS and cycles >= CAND_MIN_CYCLES and pairs >= 1
     why = []
     if len(nights) < CAND_MIN_NIGHTS:
         why.append(f"{len(nights)} nights")
     if cycles < CAND_MIN_CYCLES:
         why.append(f"{cycles:.1f} cycles")
-    if span < need_span:
-        why.append(f"span {span:.1f} d")
     if pairs < 1:
         why.append("no consecutive-night pair")
-    gates.append(_gate("span", "Nights and span", "data", "candidate",
-                       f"{len(nights)} nights, {cycles:.0f} cycles, {span:.1f} d, {pairs} consecutive pair(s)",
-                       f"≥ 3 nights, ≥ 10 cycles, ≥ {need_span:.1f} d, a consecutive pair", ok, "; ".join(why)))
+    gates.append(_gate("span", "Nights and cycles", "data", "candidate",
+                       f"{len(nights)} nights, {cycles:.0f} cycles, {pairs} consecutive pair(s)",
+                       "≥ 3 nights, ≥ 10 cycles, a consecutive pair", ok, "; ".join(why)))
+    gates.append(_gate("span_days", "Time span", "data", "candidate", f"{span:.1f} d",
+                       f"≥ {need_span:.1f} d (3 d or 3 P)", span >= need_span,
+                       "" if span >= need_span else f"span {span:.1f} d"))
     diffs = [np.diff(np.sort(c.jd[ix])) for ix in night_groups(c).values() if ix.size > 1]
     spacing = float(np.median(np.concatenate(diffs))) if diffs else float("nan")
     ok = cycles >= 5 and math.isfinite(spacing) and spacing < SAMPLING_FRAC * P
@@ -633,28 +704,17 @@ def gate_report(target: Curve, nulls: list[Curve] | None = None, check: Curve | 
     # null tests at P
     n_quiet, worst = 0, None
     for nc in nulls:
-        if nc.jd.size < 3 * MIN_NIGHT_POINTS:
+        row = null_test_row(nc, P, pg.best_power, amp, bad)
+        if row is None:
             continue
-        keep = np.array([n not in bad for n in nc.night], bool)
-        nc2 = nc.take(keep) if bad else nc
-        if nc2.jd.size < 3 * MIN_NIGHT_POINTS:
-            continue
-        yn = remove_medians(nc2.mag, nc2.night)
-        pw = lookup_power(nc2.jd, yn, f)
-        an, _, rn, _ = sine_fit(nc2.jd, yn, P)
-        san = float(np.std(rn, ddof=3)) * math.sqrt(2.0 / nc2.jd.size)
-        share = pw / pg.best_power if pg.best_power > 0 else float("nan")
-        lim_a = max(NULL_AMP_SIGMA * san, amp * NULL_AMP_FRAC)
-        quiet = bool(share < NULL_POWER_FRAC and an < lim_a)
-        n_quiet += int(quiet)
-        row = {"name": nc.name, "role": nc.role, "power_share": round(share, 3), "amp": round(an, 5),
-               "amp_limit": round(lim_a, 5), "quiet": quiet}
+        n_quiet += int(row["quiet"])
         rep["nulls"].append(row)
-        if worst is None or share > worst["power_share"]:
+        share = row["power_share"] if row["power_share"] is not None else -1.0
+        if worst is None or share > (worst["power_share"] if worst["power_share"] is not None else -1.0):
             worst = row
     n_null = len(rep["nulls"])
     gates.append(_gate("nulls", "Null tests (other stars at P)", "systematics", "campaign",
-                       (f"{n_quiet} of {n_null} quiet; largest power {worst['power_share'] * pg.best_power:.3f} vs "
+                       (f"{n_quiet} of {n_null} quiet; largest power {(worst['power_share'] or 0.0) * pg.best_power:.3f} vs "
                         f"{pg.best_power:.3f}" if n_null else "no other star measured"),
                        "power < ½ target's, amplitude small", (n_quiet == n_null) if n_null else None,
                        "" if n_quiet == n_null else "comp_signal"))
@@ -760,7 +820,7 @@ def clear_with_outside(rep: dict, outside: dict) -> None:
     if not agree:
         return
     for g in rep["gates"]:
-        if g["key"] in ("alias_pm1", "span", "volume") and not g["pass"]:
+        if g["key"] in OUTSIDE_CLEARS and not g["pass"]:
             g["pass"] = True
             g["cleared_by"] = " and ".join(agree)
     finish(rep)
@@ -894,6 +954,15 @@ def series_gate_report(observations, star: str, *, is_target: bool, target_name:
     tc = star_curve(observations, star, is_target=is_target, target_name=target_name)
     others = [n for n in list(watch_names) + list(spare_names) if n != star and n not in (comp_names or [])]
     nulls, chk = null_curves(observations, comp_names, check_name, others, aliases)
+    # 2.4.0 step 7c: a Watch star also listed in the series' comp layout but never measured as a comp (S033's
+    # 26" neighbor) had an empty comp curve and so was no null star at all; its Watch values stand in
+    present = {c.name for c in nulls}
+    for n in watch_names or ():
+        if n != star and n not in present:
+            wc = star_curve(observations, n)
+            if wc.jd.size:
+                wc.role = "watch"
+                nulls.append(wc)
     if not is_target:
         # a Watch star's null stars include the series' target (a field star like any other, at the Watch star's P)
         tgt = star_curve(observations, target_name or "target", is_target=True, target_name=target_name)

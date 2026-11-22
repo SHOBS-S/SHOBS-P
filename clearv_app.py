@@ -62,6 +62,8 @@ from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
 import promotion   # 2.4.0 step 7b (#92): the Watch -> Candidate -> Campaign gates
 import registry   # 2.4.0 step 7b (#92): campaign_registry.json, one per observatory
+import outside_data   # 2.4.0 step 7c (#92): ZTF, TESS and ATLAS at a Candidate's position
+from neighbors_ui import NeighborsMixin, NeighborsWindow   # 2.4.0 step 7c (#92): reach-back, Check neighbors
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1610,7 +1612,7 @@ class NewVersionWindow:
 SKIP_FINDING_SHARE = 0.10
 
 
-class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py)
+class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7c: NeighborsMixin
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
     def _keep_on_screen(self):
@@ -21457,7 +21459,9 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         pts = tuple((o.night, round(o.jd, 6) if o.jd is not None and math.isfinite(o.jd) else None, o.flag or "",
                      round(o.mag, 6) if o.mag is not None and math.isfinite(o.mag) else None)
                     for o in self.observations)
-        return hash((pts, tuple(self.active_comps or ()), repr(sorted(self.night_bin.items(), key=lambda kv: kv[0]))))
+        # 2.4.0 step 7c: Watch values filled by reach-back and neighbor checks (not in the points' own fields)
+        return hash((pts, tuple(self.active_comps or ()), repr(sorted(self.night_bin.items(), key=lambda kv: kv[0])),
+                     int(getattr(self, "_watch_revision", 0))))
 
     def series_unsaved(self) -> bool:
         """True when the open series has points that are not in its file (never saved, or changed since)."""
@@ -24937,6 +24941,19 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
         if not stars:
             return False
         cfg = self._gate_settings()
+        # 2.4.0 step 7c (#92): a Registry star's outside data (ZTF, TESS, ATLAS) clears the gates it may clear
+        outside = {}
+        try:
+            doc = registry.load()
+            for st in stars:
+                rec = registry.find(doc, st["gaia"], st["ra"], st["dec"])
+                if rec is not None and rec.get("outside"):
+                    outside[st["name"]] = outside_data.for_gates(rec["outside"])
+        except Exception:
+            outside = {}
+        for w in self.watch_list:   # a Watch star not in the Registry yet keeps its own (Fable S9b)
+            if w["name"] not in outside and w.get("outside"):
+                outside[w["name"]] = outside_data.for_gates(w["outside"])
         obs = list(self.observations)
         nights = sorted({o.night for o in obs})
         self._gates_running = True
@@ -24957,7 +24974,7 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                             min_period=cfg["min_period"], max_period=cfg["max_period"], m_trials=cfg["m_trials"],
                             linear_limit=cfg["linear_limit"], sat_level=cfg.get("sat_level"),
                             frame_shape=cfg["frame_shape"],
-                            edge_margin_px=cfg["edge_margin_px"])
+                            edge_margin_px=cfg["edge_margin_px"], outside=outside.get(st["name"]) or None)
                     except Exception as exc:
                         rep = {"star": st["name"], "gates": [], "candidate": False, "campaign": False,
                                "summary": f"Gates not run: {type(exc).__name__}: {exc}", "quiet_nights": [],
@@ -25026,6 +25043,15 @@ class App(StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_u
                 f"{n}: " + ("its campaign was switched off (a hard gate failed on the new data); it stays a Candidate."
                             if ev == "campaign_fail" else "Rejected (a hard gate failed twice in a row).")
                 for n, ev in bad) + "\n\nSee Candidates… for the gates.")
+        # 2.4.0 step 7c (#92): the outside-data check runs once, by itself, when a star becomes a Candidate
+        if not error:
+            for name, ev, rep in events:
+                if ev in ("new", "new_known") and rep.get("period_days"):
+                    st = next((x for x in stars if x["name"] == name), None)
+                    if st and st.get("ra") is not None and st.get("dec") is not None:
+                        self.after(500, lambda st=st, rep=rep: self.outside_check(
+                            st["name"], st["ra"], st["dec"], rep["period_days"], gaia=st.get("gaia") or "",
+                            quiet=True))
         n_c = sum(1 for r in reports.values() if r.get("candidate"))
         self.status.set(f"Promotion gates: {len(reports)} star(s) checked, {n_c} pass the Candidate gates"
                         + (f"; new Candidate: {', '.join(new)}" if new else "") + ". Candidates… shows them.")
@@ -28010,6 +28036,9 @@ class WatchWindow:
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         ttk.Button(nav, text="Export watch light curves CSV…", command=self.export).pack(side=LEFT)
         ttk.Button(nav, text="Stop watching selected", command=self.remove).pack(side=LEFT, padx=6)
+        # 2.4.0 step 7c (#92): measure the selected star on the series' older frames, and its neighbors
+        ttk.Button(nav, text="Reach back…", command=self.reach_back).pack(side=LEFT, padx=(14, 0))
+        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
         cols = ("star", "catalog", "points", "nights", "spread", "trend", "info")
         self.tree = ttk.Treeview(top, columns=cols, show="headings", height=min(max(len(app.watch_list), 3), 8))
@@ -28087,6 +28116,26 @@ class WatchWindow:
             if self.app.watch_list:
                 WatchWindow(self.app)
 
+    def reach_back(self):
+        name = self._selected()
+        if name:
+            self.app.reach_back(name, parent=self.win, on_done=self._reopen)
+
+    def _reopen(self):
+        try:
+            if not self.win.winfo_exists():
+                return   # closed meanwhile: not opened again (Fable nit)
+            self.win.destroy()
+        except Exception:
+            return
+        if self.app.watch_list:
+            WatchWindow(self.app)
+
+    def check_neighbors(self):
+        name = self._selected()
+        if name:
+            self.app.check_neighbors(name, parent=self.win)
+
     def export(self):
         path = self.app.output_path("watch_stars.csv", title="Save CSV", defaultextension=".csv",
                                             filetypes=[("CSV", "*.csv")], parent=self.win)
@@ -28151,6 +28200,9 @@ class CandidatesWindow:
         self.outcome_btn["menu"] = menu
         self.outcome_btn.pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Export for SHOBS-SCHED…", command=self.export_sched).pack(side=LEFT, padx=(14, 0))
+        # 2.4.0 step 7c (#92): the neighbors and the outside data for the selected star
+        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=(14, 0))
+        ttk.Button(nav, text="Outside data…", command=self.outside).pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Close", command=self.close).pack(side=RIGHT)
         self.note = StringVar(value="")
         ttk.Label(top, textvariable=self.note, style="Card.TLabel", justify=LEFT,
@@ -28173,17 +28225,35 @@ class CandidatesWindow:
         self.strip.pack(fill=X, pady=(0, 6))
         gcols = ("result", "gate", "value", "need", "set")
         self.gates = ttk.Treeview(top, columns=gcols, show="headings", height=14)
-        for col, label, width, stretch in (("result", "", 90, False), ("gate", "Gate", 230, False),
+        for col, label, width, stretch in (("result", "", 150, False), ("gate", "Gate", 230, False),
                                            ("value", "Measured", 420, True), ("need", "Needs", 300, True),
                                            ("set", "For", 90, False)):
             self.gates.heading(col, text=label, anchor=W)
             self.gates.column(col, width=col_width(self.gates, label, width), anchor=W, stretch=stretch)
         self.gates.tag_configure("fail", foreground="#b23b2b")
         self.gates.tag_configure("unknown", foreground="#6b7780")
+        # 2.4.0 step 7c (7b nit): a long Measured / Needs is cut off in its column; the gate under the mouse (or the
+        # selected one) is shown in full below the table
+        self.gate_full = StringVar(value="Point at a gate to read its Measured and Needs in full.")
+        ttk.Label(top, textvariable=self.gate_full, style="Hint.TLabel", justify=LEFT,
+                  wraplength=text_wrap_px(win, chars=150)).pack(fill=X, side="bottom", pady=(4, 0))
+        self.gates.bind("<Motion>", self._gate_hover)
+        self.gates.bind("<<TreeviewSelect>>", lambda _e: self._gate_hover(None))
         self.gates.pack(fill=BOTH, expand=True)
         self.rows = {}
         win.after_idle(lambda: fit_to_content(win))
         self.refresh()
+
+    def _gate_hover(self, event):
+        item = self.gates.identify_row(event.y) if event is not None else ""
+        if not item:
+            sel = self.gates.selection()
+            item = sel[0] if sel else ""
+        if not item:
+            return
+        vals = self.gates.item(item, "values")
+        if len(vals) >= 4:
+            self.gate_full.set(f"{vals[1]}: measured {vals[2]}. Needs {vals[3]}.")
 
     # -- data --
     def _registry(self):
@@ -28341,6 +28411,47 @@ class CandidatesWindow:
             registry.set_status(rec, status, by="John", code=code, note=note)
             self.app.log(f"{name}: outcome set to {registry.STATUS_WORDS.get(status, status)} (Registry).")
         self._change(do)
+
+    def check_neighbors(self):
+        name = self.selected()
+        if name:
+            rep = self.app.gate_reports.get(name) or {}
+            self.app.check_neighbors(name, is_target=bool(rep.get("is_target")), parent=self.win)
+
+    def outside(self):
+        """2.4.0 step 7c (#92): ZTF, TESS and ATLAS at the selected star's position (it runs by itself once, when a
+        star becomes a Candidate; this runs it again or for a Watch star)."""
+        name = self.selected()
+        rep = self.app.gate_reports.get(name) if name else None
+        if not rep or not rep.get("period_days"):
+            messagebox.showinfo(APP_TITLE, "Run the gates first: the outside data is compared with the star's period.",
+                                parent=self.win)
+            return
+        entry = next((w for w in self.app.watch_list if w["name"] == name), None)
+        if entry is None and rep.get("is_target"):
+            entry = self.app._target_gate_entry()
+        if not entry or entry.get("ra") is None or entry.get("dec") is None:
+            messagebox.showinfo(APP_TITLE, f"{name} has no sky position, so the surveys cannot be asked about it.",
+                                parent=self.win)
+            return
+        if not self.app.outside_check(name, entry["ra"], entry["dec"], rep["period_days"],
+                                      gaia=entry.get("gaia_dr3") or entry.get("gaia") or "",
+                                      on_done=lambda res: self._outside_shown(name, res)):
+            messagebox.showinfo(APP_TITLE, "The outside-data check is running already.", parent=self.win)
+
+    def _outside_shown(self, name, res):
+        lines = [res["summary"], ""]
+        for s, r in res["surveys"].items():
+            lines.append(f"{s}: {r.get('detail') or r.get('status')}")
+            if r.get("note"):
+                lines.append(f"    {r['note']}")
+        lines += ["", "Outside data may clear the ±1 c/d alias, the time-span and the Campaign data-volume gates "
+                      "(labeled with the survey), "
+                      "never a null test or a systematics guard."]
+        try:
+            messagebox.showinfo(APP_TITLE, f"Outside data for {name}\n\n" + "\n".join(lines), parent=self.win)
+        except Exception:
+            pass
 
     def export_sched(self):
         doc, err = self._registry()
@@ -28759,6 +28870,8 @@ class ScanView:
         self.add_suspect_button.pack(side=LEFT, padx=(0, 6))
         # Fable re-review: a star added by hand by mistake can be taken off again (the scan's own suspects cannot)
         ttk.Button(nav, text="Remove added suspect", command=self.remove_added_suspect).pack(side=LEFT, padx=(0, 6))
+        # 2.4.0 step 7c (#92): the selected star against its neighbors on this night
+        ttk.Button(nav, text="Check neighbors…", command=self.check_neighbors).pack(side=LEFT, padx=(0, 6))
         ttk.Button(nav, text="Known variables measured…", command=lambda: KnownVariablesWindow(self)).pack(side=LEFT)
         # 2.2.5: leave the candidates already in VSX/SIMBAD out of the plot and the table (their numbers are kept, so
         # they still match the marks on the image).
@@ -29328,6 +29441,16 @@ class ScanView:
             for w in self.app.watch_list:
                 if w["name"] == name:
                     w.setdefault("variable", f"{vsx.get('source', 'VSX')}: {vsx['name']} {vsx['type']}")
+
+    def check_neighbors(self):
+        """2.4.0 step 7c (#92): the selected star against its look-alikes, close companions and the comps, on this
+        night (the field scan already measured them all)."""
+        i = self.selected
+        r = self.r
+        if i is None or not (0 <= i < len(r["labels"])):
+            self.app.status.set("Select a star first (a row in the table or a point on the plot).")
+            return
+        self.app.check_neighbors_suspect(r, i, parent=self.win)
 
     def add_suspect(self):
         """2.4.0 step 7a (#92): the stars picked on the plot (or the selected star) join tonight's Suspects "by hand",

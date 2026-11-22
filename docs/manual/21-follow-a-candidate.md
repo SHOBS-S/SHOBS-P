@@ -112,6 +112,39 @@ check, Time of max/min and an AAVSO report. See [9. Reduce a variable-star night
 
 ![The Watch stars window](img/21-watch-stars-window.png)
 
+### Reach back over frames already on disk
+
+A star you start watching tonight has no values on the series' earlier nights, although its light is on every one
+of those frames. **Reach back…** in the Watch stars window (from 2.4.0) measures the selected watch star on the
+series' frames that do not have it yet:
+
+1. Select the star and press **Reach back…**. SHOBS-P says how many frames on how many nights it will measure, and
+   about how long it takes (a little over a second a frame for full-size frames).
+2. Each frame is calibrated with **that night's own flat** (the *Flats* folder beside the night's *Lights* folder)
+   and the **bias and dark on the Input page** (for a dark, the saved master nearest the lights' exposure), at that
+   night's own binning; saved SHOBS-P masters are reused, and nothing is written into your calibration folders. A
+   night with no *Flats* folder uses the Input page's Flat; with neither, it is measured without a flat, and the log
+   says so with a ⚠: those values carry the flat-field pattern (a few percent, different on each side of a flip).
+   The log lists the calibration used for each night folder. A stacked night is read from its stacks.
+3. The star is placed on each frame from the frame's own recorded star positions (target, comps, check, spares and
+   other watch stars, mapped from their sky positions), so flips and drift are followed without solving each frame.
+4. Each value is **tied to the frame's stored comp values**: the comps are measured the same way on the same image,
+   and the star takes the frame's own instrumental scale. A different calibration or centering cancels out.
+   A frame is skipped (and counted) when fewer than 4 of the series' other stars with sky positions place it, they do not fit one map within 2 px, or the
+   comps disagree on the tie by more than 0.05 mag.
+5. A few frames per night that already have the star are measured again as a check. The log line gives the
+   difference, for example *Check on 24 frame(s) that had it: +0.0 mmag (rms 0.4)*. When it is more than 10 mmag,
+   SHOBS-P asks whether to keep the new values (**Discard them** is the default): the older nights were probably
+   reduced with other calibration frames.
+6. **Save series** keeps the new values (the series line shows unsaved changes until you do). The promotion gates
+   run again at that save.
+
+**Reach back…** on a star that is measured on every frame offers to measure again the frames an earlier reach-back
+filled (for example after you pointed the Input page at the right bias and dark).
+
+The star needs a sky position (watched on a solved image); a star watched by its pixel position cannot be placed on
+other nights. Frames no longer on disk are skipped and counted.
+
 ## From Watch to Candidate to Campaign
 
 A watch star moves up one gate at a time. **Suspect** (one night, automatic or by hand) → **Watch** (your click) →
@@ -132,7 +165,8 @@ slower changes need a longer track (Time of max/min, the nightly means). The gat
 
 | Gate | Candidate needs | Why |
 |---|---|---|
-| Nights and span | 3 nights or more, 10 cycles observed, a span of 3 days or 3 periods (whichever is longer), and two nights in a row | cycles and sampling prove a period, not the calendar; two nights in a row break the one-day aliases |
+| Nights and cycles | 3 nights or more, 10 cycles observed, and two nights in a row | cycles and sampling prove a period, not the calendar; two nights in a row break the one-day aliases |
+| Time span | 3 days or 3 periods, whichever is longer | (outside data may clear this one, below) |
 | Cycles and sampling | 5 cycles; frames closer than a quarter period | |
 | Single-star FAP | under 1e-3 | |
 | Look-elsewhere | the FAP times the number of watch stars, under 1e-2 | searching many stars is many tries |
@@ -176,12 +210,97 @@ watch stars are never in it. A watch star the catalogs already list as variable 
 - **Export for SHOBS-SCHED…** writes the Campaign stars (campaign on, not Rejected) as SHOBS-SCHED target rows
   (kind campaign, mode V, with the period) to a file you choose. SHOBS-P never writes SHOBS-SCHED's own files.
 
-Worked example: S033 (APASS J024812.2+505255), measured from its saved series of 8–14 Nov 2026 (583 points, 6
-nights): P 0.10279 d, A 10.4 mmag, A/σA 23.3 (10.7 after β 2.2), 13 cycles over 6.2 days with two runs of nights in a
-row, 4 of 6 single-night detections, phase coherence 5 of 5, all 14 null stars quiet, peak 27 % of the 40,000 ADU
-linear limit. It is a **Candidate**, short of a campaign on the data volume (6.2 days, 13 cycles) and the ±1 cycle/day
-alias (1.15 times, needs 1.5). ZTF and TESS data settled the alias by hand on 15 Nov; SHOBS-P's own outside-data
-check (ZTF, TESS, ATLAS), which may clear that gate and the data volume, comes in a later 2.4.0 step.
+## Check the neighbors
+
+A star that varies may be borrowing its signal: from a neighbor whose light falls in its aperture, from a variable
+comparison star, or from something every star of that brightness shows (the sky, the detector). **Check neighbors…**
+(from 2.4.0) puts the star's light curve beside its neighbors' on one shared scale. Open it from:
+
+- the **Watch stars** window or the **Candidates** window (a watch star, or the target): every night of the series;
+- the **Field scan** page (a suspect): that one night, with every star the scan measured.
+
+![The Check neighbors window](img/21-check-neighbors.png)
+
+The rows, in groups:
+
+- **Target**: the star itself, with its amplitude at its period P.
+- **Close companions**: any star inside the aperture plus the sky ring. Its light is in the star's measurement.
+- **Look-alikes (±0.5 mag)**: stars of about the same brightness, nearest first: the series' own stars (comps,
+  spares, other watch stars) and up to six from the catalogs (Gaia DR3, APASS) that sit on the frames. A star that
+  shares the star's brightness shares its noise and its systematics.
+- **Comps and check**, then **Other stars of the frames** (spares, other watch stars, the series' target): every
+  star the gate runner uses as a null star is here, so the count matches the **Null tests** gate. Untick **Show
+  comps, check and other stars** to hide those rows; they still count.
+
+Each row ends with **Power at P** (the star's periodogram power at P as a share of the target's own) and **Amp at
+P**, then **✓ Quiet** or **⚠ Signal at P**. A row is quiet when its power is under half the target's and its
+amplitude under a third of the target's (or 2σ). These are the gate runner's own null tests, the same code, so the
+window and the **Null tests** gate always agree. The bottom line sums it up: *Neighbors quiet at P: 15 of 15
+measured*. There is no correlation column: every star of the frames correlates a little with the target (r about
+0.15–0.3) through the shared comps and airmass, which would mislead.
+
+**View**: **Folded at P** (all nights, 40 phase bins) or **Time (last night)** (6-minute bins). Type another
+look-alike range in **Look-alikes ±** and press Enter to search again.
+
+**Measure look-alikes**: catalog look-alikes are not in the series, so they show *not measured yet*. The button
+measures them on every frame of the series still on disk, the same way as reach-back (each night's flat, tied to
+the comps). They are kept in a file beside the series, `<series>_neighbors.json` (so save the series first), so the
+series itself and **Use comps…** are untouched, and the next time the window opens they are there. Closing the
+window stops the measuring.
+
+**Run blend test** (when a star inside the aperture plus sky ring, a catalog star or one the series measures, is
+bright enough to carry the star's amplitude: up to 3 mag fainter, more for a small amplitude, 5 mag for 10 mmag): the
+star is measured three times on every
+frame, with the aperture centered, moved toward the companion and moved away from it (by half the aperture radius,
+or half the separation). The true variable's amplitude grows as the aperture moves onto it: *the amplitude does not
+grow toward the companion … the signal sits on the star*, or *… grows toward the companion: the signal may belong to
+the companion*. With no star that close, the window says no blend test is needed.
+
+**Save to star record** keeps the result with the watch star (in the series), in the neighbors file, and in the
+star's Registry record when it has one; for a suspect, in the night's suspects file.
+
+## Outside data (ZTF, TESS, ATLAS)
+
+From one site a short-period star's best peak and its ±1 cycle/day alias can be nearly equal, and no number of your
+own nights settles that quickly. When a star becomes a **Candidate**, SHOBS-P asks three surveys about its position,
+once, in the background (from 2.4.0):
+
+- **ZTF** (IRSA light curves, within 2″): each filter searched over the same period range as the gates;
+- **TESS** (the TIC star within 5″, the sectors that covered it, the Quick-Look Pipeline light curves): one search
+  over all sectors. TESS pixels are 21″, so TESS confirms the period, not which star has it (Check neighbors does);
+- **ATLAS** (the ATLAS variable-star catalog): its periods and class.
+
+A survey counts when it finds the star's period within 1 % with a significant peak (ZTF, TESS: FAP under 1e-3);
+an ATLAS entry the catalog classes *dubious* never counts. Then it **clears the ±1 c/d alias gate, the Time span
+gate and the Campaign data volume**: the gate list shows *✓ ZTF and TESS* instead of *✓ pass*. The nights, cycles
+and the two nights in a row (**Nights and cycles**) must still pass on your own data, and outside data never clears
+a null test or a systematics guard. A survey that finds the ±1 c/d alias instead is named in the summary: that is a
+reason to doubt your period. **Outside data…** in the Candidates window runs the check again (or for a watch star
+that is not a Candidate yet: the answer is kept with the watch star and used at the next gate run) and shows each
+survey's answer. A survey that does not answer keeps its earlier answer (*did not answer* when it never has); one
+that answers with something SHOBS-P cannot read is marked ✖. If a later answer no longer agrees, the gates it
+cleared fail again.
+
+## Worked example: S033
+
+S033 (APASS J024812.2+505255, Gaia DR3 440531844915790208) went the whole way in November 2026.
+
+1. **Suspect** (13–14 Nov, GSC 03308-00462 field scan): 2.2× normal scatter, under the 3× flag, but χ²ν 2.7 times
+   that of stars of its brightness: a suspect by its own errors.
+2. **Watch**: watched from the scan page; the series reached back to 8 Nov over the field's frames on disk
+   (6 nights, 583 usable points of 624).
+3. **Candidate**: **Candidates…** → **Check the target too**: P 0.10279 d, A 10.4 mmag, A/σA 23.3 (10.7 after β
+   2.2), 13 cycles over 6.2 days with two runs of nights in a row, 4 of 6 single-night detections, phase coherence 5
+   of 5, all its null stars quiet, peak 18 % of the 60,931 ADU linear limit. Short of a campaign on the data volume
+   (6.2 days, 13 cycles) and the ±1 c/d alias (1.15 times, needs 1.5).
+4. **Check neighbors**: the nearest neighbor (APASS J024814.5+505307, 26″ away, ΔV +0.30, also a watch star)
+   0.3 % of the power at P and 0.4 mmag; the two look-alike comps, the other comps, the check and the eight spare
+   comps all quiet: *Neighbors quiet at P: 15 of 15 measured*. No star inside the aperture plus sky ring (19″), so
+   no blend test.
+5. **Outside data**: ZTF finds 0.102970 d (g and r) and TESS 0.102970 d (sectors 18, 58, 85): the ±1 c/d alias gate
+   and the Campaign data volume read *✓ ZTF and TESS*. ATLAS lists the star as *dubious* at 0.249 d (not counted).
+6. **Outcome**: Confirmed new (submitted to VSX on 15 Nov 2026 as a δ Scuti star, P 0.1029705 d). **Promote to
+   campaign** is then lit any time, to build data under its new name.
 
 ## Export the light curves
 
@@ -194,6 +313,7 @@ check (ZTF, TESS, ATLAS), which may clear that gate and the data volume, comes i
 | Watch stars' light curves across a series | **Export watch light curves CSV…** in the Watch stars window | `watch_stars.csv` |
 | The target's full light curve | **Save light-curve CSV** or **Export…** on the Variables Output page | see chapter 22 |
 | The Campaign stars, for SHOBS-SCHED to import | **Export for SHOBS-SCHED…** in the Candidates window | `SHOBS-P_campaigns_for_SHOBS-SCHED.json` |
+| Look-alikes measured by Check neighbors, its saved results and blend tests | **Measure look-alikes**, **Run blend test**, **Save to star record** | `<series>_neighbors.json` beside the series |
 
 Scan magnitudes are on the catalog's scale (untransformed) when the field was solved, and instrumental otherwise.
 Every CSV starts with a `# Created …` line.
@@ -201,7 +321,8 @@ Every CSV starts with a `# Created …` line.
 ## Before you report a new variable
 
 - See it vary on at least two nights, ideally with the same period or the same kind of change.
-- Rule out a neighbor: look at the image at full zoom, and try a smaller aperture.
+- Rule out a neighbor: **Check neighbors…** (and its blend test when a star is close), and look at the image at
+  full zoom.
 - Check the comparison stars: a variable comp makes every other star look variable in the opposite sense.
 - Check that the star is not already cataloged under another name (SIMBAD, VSX search by position).
 - Follow the VSX submission guidelines. The suspects CSV gives position, magnitude, scatter, period and color as a

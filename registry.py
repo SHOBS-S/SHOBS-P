@@ -266,7 +266,7 @@ def upsert_from_report(doc: dict, report: dict, name: str, gaia="", ra=None, dec
     cleared = {g["key"]: g.get("cleared_by") for g in old_gates
                if same_p and g.get("cleared_by") and g.get("cleared_by") != "ours" and g.get("pass")}
     for g in rec["evidence"]["gates"]:
-        if g["key"] in cleared and g["key"] in ("alias_pm1", "span", "volume") and not g["pass"]:
+        if g["key"] in cleared and g["key"] in ("alias_pm1", "span_days", "volume") and not g["pass"]:
             g["pass"] = True
             g["cleared_by"] = cleared[g["key"]]
     rec["quiet_nights"] = list(report.get("quiet_nights") or [])
@@ -353,7 +353,7 @@ def next_step(rec: dict) -> str:
     gates = (rec.get("evidence") or {}).get("gates") or []
     if rec.get("campaign"):
         return "confirm_dedicated"
-    if any(g.get("key") in ("volume", "span", "single") and g.get("pass") is not True for g in gates):
+    if any(g.get("key") in ("volume", "span", "span_days", "single") and g.get("pass") is not True for g in gates):
         return "more_nights"
     return "confirm_dedicated" if gates and all(g.get("pass") is True for g in gates) else "more_nights"
 
