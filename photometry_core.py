@@ -9662,6 +9662,9 @@ def suspect_entries(result: dict) -> list[dict]:
             "excess_chi2": num(ex2[i], 2) if ex2 is not None and i < len(ex2) else None,
             "suspect_by": by.get(i, "scatter"), "period_days": num(scan_period_value(per), 6),
         })
+        chk = (result.get("neighbor_checks") or {}).get(i)   # 2.4.0 step 7c (#92): Check neighbors, saved
+        if chk:
+            out[-1]["neighbors"] = chk
     return out
 
 

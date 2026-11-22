@@ -1671,6 +1671,70 @@
    "todo": "Look at it in Candidates…"
   },
   {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Reach-back: … measured on N of M frame(s), K night(s). Check on … frame(s) that had it: +0.0 mmag (rms 0.4). Save series to keep them."
+   ],
+   "todo": "Save series to keep the values. See 21. Follow a suspect."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Reach-back: the check frames differ from the stored values by … mmag; the older nights may have been calibrated differently …"
+   ],
+   "todo": "Read the Reach-back calibration for … lines in the log. Point the Input page's Bias and Dark at the ones those nights used and reach back again (the values only fill frames that had none; to redo them, take the star off the watch list and watch it again)."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Reach-back: N night folder(s) had no flat; those values carry the flat-field pattern."
+   ],
+   "todo": "Put that night's flats in a Flats folder beside its Lights folder (or point the Input page's Flat at them) and reach back again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Reach-back for … stopped: …"
+   ],
+   "todo": "Read the reason; fix the calibration folders on the Input page and try again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Check neighbors: the measurements are not kept on disk (…); they last until this window closes."
+   ],
+   "todo": "Save series first, then measure again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Check neighbors: measuring stopped: …"
+   ],
+   "todo": "Read the reason, fix it and press the button again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Outside data for …: Outside data agrees: ZTF and TESS. …"
+   ],
+   "todo": "Nothing; the gates they cleared show ✓ ZTF (and so on) in Candidates… A survey that finds the ±1 c/d alias instead is a reason to doubt the period."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Outside data for …: …"
+   ],
+   "todo": "Press Outside data… again later."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Outside data for …: the Registry was not updated (…).",
+    "Check neighbors: the Registry was not updated (…)."
+   ],
+   "todo": "Fix or move the Registry file, then run the check again."
+  },
+  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"

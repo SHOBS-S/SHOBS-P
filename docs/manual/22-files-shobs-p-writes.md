@@ -114,6 +114,12 @@ night notes, the watch list and the settings of each night. It is a text file (J
 - **Star records.** From 2.4.0 the file holds one record per comp and check star (`"stars"`): its sky position,
   every name it goes by, every catalog magnitude with its source and the one the series uses. The older entries
   (comp names, catalog magnitudes, positions) are still written, so an older SHOBS-P can read the file.
+- **`<name>_neighbors.json`** (from 2.4.0): beside the series, written by **Check neighbors…** (chapter 21): the
+  look-alikes it measured on the series' frames (each frame's value, matched to the series by time and file name),
+  its saved results and blend tests. The series file itself is not changed by it; delete it and the window measures
+  again.
+- **Watch-star reach-back** (from 2.4.0, chapter 21) writes its values into the series like any watch-star value; the
+  watch star's entry also notes each reach-back (when, how many frames, the check, the calibration used).
 - Star positions on the image are **not** stored. You mark the target and comparison stars again on each new night.
 - **Stacked nights.** A night whose points are stacks (the Photometry page's **Points: Stacked**, chapter 8) stores
   only the stacked points, and its settings carry a `"stack"` entry: the stack size N, the number of stacks and

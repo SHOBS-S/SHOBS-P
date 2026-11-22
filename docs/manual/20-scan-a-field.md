@@ -233,6 +233,13 @@ scatter plot (or pick several), then press **Add as suspect**. It joins tonight'
 list, select its row and press **Remove added suspect**; the scan's own suspects cannot be removed (a new scan would
 find them again).
 
+### Check a suspect's neighbors
+
+Select a star and press **Check neighbors…** (from 2.4.0) to see its light curve beside its close companions (inside
+the aperture plus sky ring), its look-alikes (stars within ±0.5 mag, nearest first) and the comps and check, all from
+this night's scan, with each one's power and amplitude at the suspect's period. A suspect whose neighbors share its
+signal is most likely instrumental. See [21. Follow a suspect](21-follow-a-candidate.md#check-the-neighbors).
+
 ### The suspect kinds
 
 **Mark suspects on image** switches to the Photometry page and draws numbered squares on the suspects. With rows
