@@ -254,8 +254,8 @@ suspects file** keeps the result in the night's suspects file (a suspect only). 
 signal is most likely instrumental. See [21. Check a suspect](21-follow-a-candidate.md#check-the-neighbors).
 
 Press **Outside data…** to ask ZTF, TESS and ATLAS what they hold at the star's sky position. The answer says what
-each survey found and whether it agrees with the star's scan period (the same period within 1 %). The star needs a
-sky position (a solved field) and a period from the scan. See
+each survey found and whether it agrees with the star's period (the same period within 1 %). The star needs a
+sky position (a solved field). Both buttons are grey until a star is selected. See
 [21. Check a suspect](21-follow-a-candidate.md#outside-data-ztf-tess-atlas).
 
 ### The suspect kinds

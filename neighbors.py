@@ -152,18 +152,15 @@ def lookup_power(t, y, f: float) -> float:
 
 
 # ---- the quiet test ----------------------------------------------------------------------------------------------
-def null_test_row(nc: Curve, period: float, target_power: float, target_amp: float, bad_nights=(),
+def null_test_row(nc: Curve, period: float, target_power: float, target_amp: float,
                   min_points: int | None = None) -> dict | None:
     """One other star at the target's period P: its power at P as a share of the target's best power, and its
     amplitude at P against max(2 sigma_A, a third of the target's amplitude). quiet = both small. None when the star
-    has too few points (min_points, default 3 x MIN_NIGHT_POINTS) once bad nights are left out."""
+    has too few points (min_points, default 3 x MIN_NIGHT_POINTS)."""
     need = 3 * MIN_NIGHT_POINTS if min_points is None else int(min_points)
     if nc.jd.size < need or not period or period <= 0:
         return None
-    bad = set(bad_nights or ())
-    nc2 = nc.take(np.array([n not in bad for n in nc.night], bool)) if bad else nc
-    if nc2.jd.size < need:
-        return None
+    nc2 = nc
     f = 1.0 / period
     yn = remove_medians(nc2.mag, nc2.night)
     pw = lookup_power(nc2.jd, yn, f)
@@ -178,13 +175,12 @@ def null_test_row(nc: Curve, period: float, target_power: float, target_amp: flo
 
 
 def neighbor_check(target: Curve, others: list[Curve], *, period: float | None = None, min_period: float = 0.02,
-                   max_period: float = 20.0, bad_nights=(), min_points: int | None = None) -> dict:
+                   max_period: float = 20.0, min_points: int | None = None) -> dict:
     """The Check neighbors window's numbers. The target's period (given, e.g. the field scan's, or found here),
     power and amplitude, then null_test_row for every other star. Returns {"period", "power",
     "amp", "rows": [...], "n_quiet", "n_measured", "bottom": "Neighbors quiet at P: N of M measured"}. A row that
     could not be judged (too few points) comes back with "quiet": None."""
-    bad = set(bad_nights or ())
-    c = target.take(np.array([n not in bad for n in target.night], bool)) if bad else target
+    c = target
     out = {"period": None, "power": None, "amp": None, "rows": [], "n_quiet": 0, "n_measured": 0, "bottom": ""}
     need = 3 * MIN_NIGHT_POINTS if min_points is None else int(min_points)
     if c.jd.size < need or LombScargle is None:
@@ -202,7 +198,7 @@ def neighbor_check(target: Curve, others: list[Curve], *, period: float | None =
     amp, *_ = sine_fit(c.jd, y, P)
     out.update({"period": P, "power": power, "amp": amp})
     for nc in others:
-        row = null_test_row(nc, P, power, amp, bad, min_points=need)
+        row = null_test_row(nc, P, power, amp, min_points=need)
         if row is None:
             out["rows"].append({"name": nc.name, "role": nc.role, "quiet": None, "power_share": None, "amp": None,
                                 "n_points": int(nc.jd.size)})

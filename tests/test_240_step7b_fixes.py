@@ -74,7 +74,7 @@ class TestStep7bFixes(unittest.TestCase):
         def lum(c):
             r, g, b = (int(str(c)[i:i + 2], 16) for i in (1, 3, 5))
             return 0.2126 * r + 0.7152 * g + 0.0722 * b
-        for name in self.styles() + ["TMenubutton"]:
+        for name in self.styles():
             self.assertLess(lum(style.lookup(name, "background", ["pressed", "active"])),
                             lum(style.lookup(name, "background", ["active"])) - 10, name)
 

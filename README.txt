@@ -268,6 +268,16 @@ mode, T = Transits, V = Variables)
      warnings; the fold and periodogram say it too. A longer night that is still short of two cycles of its best
      peak keeps "No reliable period yet", without the day-alias and search-edge marks.
 - T  The transit settings file also says the scintillation setting and the telescope aperture the night used.
+- D  Suspects: a star the field scan points out is a Suspect, by either of two tests: it scatters at least 3x
+     more than stars of the same brightness, or its scatter against its own error bars (chi2nu) is at least 2.5x
+     that of stars as bright (this catches a bright, low-amplitude variable). Add as suspect adds one by hand.
+- D  Suspect again: each night's suspects are kept in a file beside the night's results; a star that was a suspect
+     on other nights of the same field says "Suspect again (N nights)".
+- D  Field scan page: the buttons sit in labelled groups (Marks, Suspects, Checks, Results). Checks holds two
+     tools for the selected star; both report and change nothing. Check neighbors: the star beside its close
+     companions and look-alikes on that night, each one quiet or not at the star's period. Outside data: what
+     ZTF, TESS and ATLAS hold at the star's position, and whether they find the same period (within 1 %).
+     Confirming a variable and reporting it to VSX stays the observer's job.
 
 New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
 - S  Stacking when comps are weak [#54]: after a run, the Photometry page's Stack row compares the comp ensemble's

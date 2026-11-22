@@ -2090,9 +2090,30 @@
   {
    "section": "Discovery mode",
    "patterns": [
-    "The scan found no period for …, so there is nothing to compare the surveys with. Outside data needs the star's period."
+    "… has too few measured points on this night for a period, so there is nothing to compare the surveys with."
    ],
-   "todo": "Nothing; or widen the scan's period range and scan again."
+   "todo": "Nothing; pick a star the scan measured on more frames."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Outside data for …: the scan lists no period for it; using the best period of its light curve this night, … d (as Check neighbors does)."
+   ],
+   "todo": "Nothing; treat an agreement with a period the scan did not list with more care."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Check neighbors for …: Neighbors quiet at P: … of … measured. Saved to …_SHOBS-P_suspects.json."
+   ],
+   "todo": "Nothing has to be done."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… has no measured points on this night, so its neighbors cannot be checked."
+   ],
+   "todo": "Close the window and pick another star."
   },
   {
    "section": "Discovery mode",

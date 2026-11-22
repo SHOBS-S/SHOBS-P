@@ -58,7 +58,7 @@ import transit_core as tcore
 import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
-from neighbors_ui import NeighborsMixin   # 2.4.0 step 7d: the Field scan page's Check neighbors and Outside data
+from neighbors_ui import NeighborsMixin, scan_star_period   # 2.4.0 step 7d: the Field scan page's Check neighbors and Outside data
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -2296,11 +2296,10 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # landed before the job starts. Order matters: disabled wins over pressed, pressed over hover.
         style.map("Accent.TButton", **button_state_map("#c47a2c", "#a86622", "#ffffff", disabled_bg="#d9cbbd",
                                                        disabled_fg="#6e5e4e", disabled_border="#bfae9c"))
-        # plain buttons sit on the page color (#e7eef2); a menu button (TMenubutton) follows them
-        for name in ("TButton", "Compact.TButton", "TMenubutton"):
+        # plain buttons sit on the page color (#e7eef2)
+        for name in ("TButton", "Compact.TButton"):
             style.map(name, **button_state_map("#e7eef2", "#f0f4f6", "#1c2b33", disabled_bg="#d5dce0",
                                                disabled_fg="#8a949a"))
-        style.map("TMenubutton", arrowcolor=[("disabled", "#8a949a")])
         style.configure("TNotebook", background="#e7eef2")
         style.configure("Group.TLabelframe", background="#ffffff", bordercolor="#c9d6de")
         style.configure("Group.TLabelframe.Label", background="#ffffff", foreground="#16324a", font=(core.UI_FONT, 10, "bold"))
@@ -21221,7 +21220,9 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         if isinstance(meta.get("watch_list"), list):
             self._drop_session_watch_aliases([w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name")])
             known = {w["name"] for w in self.watch_list}
-            self.watch_list += [w for w in meta["watch_list"] if isinstance(w, dict) and w.get("name") not in known]
+            # ... nor a Watch star's "outside", "reach_back" and "neighbors" notes of those steps
+            self.watch_list += [{k: v for k, v in w.items() if k not in ("outside", "reach_back", "neighbors")}
+                                for w in meta["watch_list"] if isinstance(w, dict) and w.get("name") not in known]
             # 2.2.14 (item 15): show them at once (14 Oct: the box stayed empty after Load series): found on an
             # image that is solved already, else listed as not found on this frame until Solve.
             if self.chart_placed and self.preview is not None:
@@ -25421,6 +25422,12 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             return   # a newer range or another scan since
         r["periods"] = periods
         r["period_range"] = rng
+        checks = r.get("neighbor_checks") or {}
+        for i in list(checks):   # a saved Check neighbors was made at the star's old period
+            new_p = core.scan_period_value(periods.get(i))
+            old_p = (checks[i] or {}).get("period")
+            if not new_p or not old_p or abs(new_p - old_p) > 1e-6 * old_p:
+                checks.pop(i)
         if self.mode_key == "discovery" and r.get("suspects_saved"):   # Fable N4: the file keeps the new periods
             try:
                 self._save_suspects(r)
@@ -28240,8 +28247,17 @@ class ScanView:
                  "outside the range."
                  + color_note)
         self._update_header()
-        ttk.Label(top, textvariable=self.header_text, style="Hint.TLabel", wraplength=1300, justify=LEFT).pack(
-            anchor=W, pady=(2, 6))
+        header = ttk.Label(top, textvariable=self.header_text, style="Hint.TLabel", wraplength=1300, justify=LEFT)
+        header.pack(anchor=W, pady=(2, 6))
+        self.header_label = header
+
+        def rewrap(event):   # step 7d review (S4): the words follow the page's width (they were cut off under 1300 px)
+            if event.widget is top and event.width > 40:
+                want = max(300, int(event.width) - 24)
+                if getattr(self, "_header_wrap", None) != want:
+                    self._header_wrap = want
+                    header.configure(wraplength=want)
+        top.bind("<Configure>", rewrap, add="+")
         # 2.2.9: a "Results" save row at the bottom, as on the Variables Output page; the actions sit above it.
         results = ttk.Frame(top, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(4, 0))
@@ -28313,16 +28329,15 @@ class ScanView:
         self.neighbors_button = checks.add(ttk.Button(g, text="Check neighbors…", command=self.check_neighbors))
         # ZTF, TESS and ATLAS at the selected star's sky position, against its scan period
         self.outside_button = checks.add(ttk.Button(g, text="Outside data…", command=self.outside_data))
-        if not result.get("radec"):   # an unsolved field: no sky positions to ask the surveys about
-            self.outside_button.state(["disabled"])
+        self._update_check_buttons()
         try:
             app._add_tooltip(lab, "Checks: two tools for the selected star. Nothing here changes a number.")
             app._add_tooltip(self.neighbors_button, "The selected star beside its close companions, look-alikes and "
                                                     "the comps on this night: does a neighbor carry its period too?")
             app._add_tooltip(self.outside_button, lambda: (
-                "What ZTF, TESS and ATLAS hold at the selected star's position, and whether they agree with its "
-                "period." if result.get("radec") else
-                "Not available: this scan has no sky positions (the field was not solved)."))
+                "Not available: this scan has no sky positions (the field was not solved)." if not result.get("radec")
+                else "What ZTF, TESS and ATLAS hold at the selected star's position, and whether they agree with its "
+                     "period." + ("" if self.selected is not None else " Select a star first.")))
         except Exception:
             pass
 
@@ -28552,6 +28567,7 @@ class ScanView:
         return core.scan_cautions(self.r, i)
 
     def draw(self):
+        self._update_check_buttons()
         r = self.r
         mag, sc, exp = np.asarray(r["mag"]), np.asarray(r["scatter"]), np.asarray(r["expected"])
         ok = np.asarray(r["usable"]) & np.isfinite(sc) & (sc > 0)
@@ -28839,7 +28855,18 @@ class ScanView:
                                           source="selection" if chosen else "all")
             self.mark_button.configure(text="Clear suspect marks")
 
+    def _update_check_buttons(self):
+        """The Checks group acts on the selected star: grey with none selected; Outside data… also on a scan with no
+        sky positions (an unsolved field)."""
+        if getattr(self, "outside_button", None) is None:
+            return
+        i = self.selected
+        on = i is not None and 0 <= i < len(self.r["labels"])
+        self.neighbors_button.state(["!disabled"] if on else ["disabled"])
+        self.outside_button.state(["!disabled"] if on and self.r.get("radec") else ["disabled"])
+
     def _update_mark_button(self, _event=None):
+        self._update_check_buttons()
         if self.app.scan_marks:
             self.mark_button.configure(text="Clear suspect marks")
             return
@@ -28899,7 +28926,7 @@ class ScanView:
         if i is None or not (0 <= i < len(r["labels"])):
             self.app.status.set("Select a star first (a row in the table or a point on the plot).")
             return
-        self.app.check_neighbors_suspect(r, i, parent=self.win)
+        self.app.check_neighbors_suspect(r, i)
 
     def outside_data(self):
         """2.4.0 step 7d: what ZTF, TESS and ATLAS hold at the selected star's sky position, and whether they agree
@@ -28921,11 +28948,15 @@ class ScanView:
                                            "cannot be asked about it. Solve the field on the Photometry page and scan "
                                            "again.", parent=self.win)
             return
-        period = core.scan_period_value((r.get("periods") or {}).get(i))
+        # the period Check neighbors uses: the scan's own, else the best period of the star's light curve that night
+        period, source = scan_star_period(r, i)
         if not period:
-            messagebox.showinfo(APP_TITLE, f"The scan found no period for {label}, so there is nothing to compare the "
-                                           "surveys with. Outside data needs the star's period.", parent=self.win)
+            messagebox.showinfo(APP_TITLE, f"{label} has too few measured points on this night for a period, so there "
+                                           "is nothing to compare the surveys with.", parent=self.win)
             return
+        if source != "scan":
+            self.app.log(f"Outside data for {label}: the scan lists no period for it; using the best period of its "
+                         f"light curve this night, {period:.5f} d (as Check neighbors does).")
         # the surveys' light curves are searched over the scan's own period range
         if not self.app.outside_check(label, ra, dec, float(period), period_range=r.get("period_range"),
                                       parent=self.win):
@@ -28985,6 +29016,7 @@ class ScanView:
         for i in gone:
             r["candidates"].remove(i)
             by.pop(i, None)
+            (r.get("neighbor_checks") or {}).pop(i, None)   # its saved Check neighbors goes with it
             (r.get("suspect_nights") or {}).pop(i, None)
         names = ", ".join(r["labels"][i] for i in gone)
         self.app.log(f"Removed from the suspects (added by hand): {names}.")

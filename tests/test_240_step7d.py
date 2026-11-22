@@ -66,6 +66,9 @@ class TestQuietTest(unittest.TestCase):
     def test_null_test_row_is_the_same_test(self):
         nc = nb.neighbor_check(self.tgt, [self.loud], period=self.P)
         row = nb.null_test_row(self.loud, self.P, nc["power"], nc["amp"])
+        import inspect
+        for fn in (nb.null_test_row, nb.neighbor_check):
+            self.assertNotIn("bad_nights", inspect.signature(fn).parameters)
         self.assertEqual(row, nc["rows"][0])
         self.assertIsNone(nb.null_test_row(self.loud, 0.0, nc["power"], nc["amp"]))
 
@@ -288,7 +291,7 @@ class TestPromotionIsGone(unittest.TestCase):
     def test_no_promotion_code_in_the_app(self):
         src = _src()
         for word in ("CandidatesWindow", "run_gates", "gate_reports", "_gate_nights", "gate_stars", "show_candidates",
-                     "_gates_after_save", "_gate_settings", "reach_back", "campaign_registry", "write_sched_export",
+                     "_gates_after_save", "_gate_settings", "def reach_back", ".reach_back(", "campaign_registry", "write_sched_export",
                      '"Candidates…"', '"Reach back…"', "_watch_revision", 'meta["candidates"] =',
                      'meta["gate_nights"] ='):
             self.assertNotIn(word, src, word)
@@ -296,7 +299,8 @@ class TestPromotionIsGone(unittest.TestCase):
     def test_no_series_measuring_left_in_the_neighbors_modules(self):
         src = _src("neighbors.py") + _src("neighbors_ui.py")
         for word in ("sidecar", "_neighbors.json", "measure_series", "FrameMap", "fit_affine", "fill_watch",
-                     "blend_verdict", "run_blend", "find_lookalikes", "Measure look-alikes", "gate_report"):
+                     "blend_verdict", "run_blend", "find_lookalikes", "Measure look-alikes", "gate_report",
+                     "self.mode", "on_done", "hasattr(app"):
             self.assertNotIn(word, src, word)
         for name in ("Curve", "make_curve", "remove_medians", "sine_fit", "Periodogram", "lookup_power",
                      "null_test_row", "neighbor_check", "sep_arcsec"):
@@ -385,8 +389,13 @@ class TestFieldScanChecks(m4.AppCase):
         self.assertEqual(list(v.groups), ["marks", "suspects", "checks"])
         self.assertEqual({k: str(lab.cget("text")) for k, lab in v.group_labels.items()},
                          {"marks": "Marks", "suspects": "Suspects", "checks": "Checks"})
+        for b in (v.neighbors_button, v.outside_button):   # a star is selected when the page opens
+            self.assertIn(str(b.cget("style")), ("", "TButton"))   # existing ttk styles only
+            self.assertFalse(b.instate(["disabled"]))
         v.clear_selection()
         self.app.update()
+        for b in (v.neighbors_button, v.outside_button):   # nothing selected: both grey (review S2)
+            self.assertTrue(b.instate(["disabled"]))
         self.assertEqual(v.scan_group_texts("marks"), ["Mark suspects on image", "Mark on image",
                                                        "Hide known variables"])
         self.assertEqual(v.scan_group_texts("suspects"), ["Watch selected star", "Add as suspect",
@@ -399,10 +408,24 @@ class TestFieldScanChecks(m4.AppCase):
         for lab in v.group_labels.values():
             self.assertEqual(str(lab.cget("style")), "Hint.TLabel")
         self.assertEqual(int(v.group_labels["marks"].cget("width")), self.ca.GROUP_LABEL_WIDTH)
-        # existing ttk styles only: plain buttons (they darken when pressed and grey when disabled)
+        v.selected = 2   # a click on the plot draws the star: the buttons come back
+        v.draw()
         for b in (v.neighbors_button, v.outside_button):
-            self.assertIn(str(b.cget("style")), ("", "TButton"))
             self.assertFalse(b.instate(["disabled"]))
+        iid = next(k for k, i in v.rows.items() if i == 0)   # and a row click
+        v.clear_selection()
+        v.tree.selection_set(iid)
+        self.app.update()
+        self.assertEqual(v.selected, 0)
+        self.assertFalse(v.outside_button.instate(["disabled"]))
+
+    def test_the_header_wraps_to_the_page(self):   # review S4
+        self.top.geometry("1100x800")
+        self.app.update()
+        self.app.update()
+        wrap = int(str(self.view.header_label.cget("wraplength")))
+        self.assertLess(wrap, 1100)
+        self.assertGreater(wrap, 800)
 
     def test_the_rows_are_few(self):
         """Marks has a row; Suspects and Checks share one (with Results: three short rows under the plot)."""
@@ -415,8 +438,8 @@ class TestFieldScanChecks(m4.AppCase):
         made = []
         real = self.app.check_neighbors_suspect
 
-        def spy(result, i, parent=None):
-            win = real(result, i, parent=parent)
+        def spy(result, i):
+            win = real(result, i)
             made.append((i, win))
             return win
         with mock.patch.object(self.app, "check_neighbors_suspect", spy):
@@ -447,15 +470,56 @@ class TestFieldScanChecks(m4.AppCase):
             with mock.patch.object(self.app, "_save_suspects", lambda r: ""):
                 win.save()
             self.assertEqual(self.r["neighbor_checks"][0]["n_quiet"], win.result["n_quiet"])
+            self.assertEqual({r["name"]: r["role"] for r in win.result["rows"]}["Check"], "check")   # review N1
+            self.assertEqual(rows["Comp 1"]["role"], "comp")
+            self.assertTrue(self.said("Check neighbors for S033: Neighbors quiet at P"))
+            self.assertFalse(hasattr(win, "mode"))
         finally:
             win.close()
 
     def test_check_neighbors_needs_a_selected_star(self):
-        self.view.selected = None
+        self.view.clear_selection()
         with mock.patch.object(self.app, "check_neighbors_suspect") as spy:
-            self.view.neighbors_button.invoke()
+            self.view.neighbors_button.invoke()   # grey: the click does nothing
+            self.view.check_neighbors()
         spy.assert_not_called()
         self.assertIn("Select a star first", self.app.status.get())
+
+    def test_a_star_with_no_points_says_so_and_cannot_be_saved(self):   # review S1
+        self.r["light_curves"][:, 1] = np.nan
+        win = self.app.check_neighbors_suspect(self.r, 1)
+        try:
+            self.app.update()
+            self.assertIsNone(win.result)
+            self.assertIn("S040 has no measured points on this night", win.note.get())
+            self.assertNotIn("ValueError", win.note.get() + win.sub.get())
+            self.assertTrue(win.save_btn.instate(["disabled"]))
+            self.r["candidates"].append(1)
+            with mock.patch.object(self.app, "_save_suspects") as save:
+                win.save()
+            save.assert_not_called()
+            self.assertNotIn("neighbor_checks", self.r)
+        finally:
+            win.close()
+
+    def test_a_saved_check_goes_with_a_removed_or_refit_star(self):   # review N4
+        r = self.r
+        r["candidates"].append(2)
+        r["suspect_by"][2] = "by hand"
+        r["neighbor_checks"] = {0: {"period": 0.1027}, 2: {"period": 0.2}}
+        self.view.selected, self.view.picked = 2, []
+        self.view.tree.selection_remove(self.view.tree.selection())
+        with mock.patch.object(self.app, "_save_suspects", lambda *a, **k: ""):
+            self.view.remove_added_suspect()
+        self.assertEqual(sorted(r["neighbor_checks"]), [0])
+        self.app.last_scan, self.app._disc_refit_gen = r, 7
+        same = dict(r["periods"][0])
+        with mock.patch.object(self.app, "_save_suspects", lambda *a, **k: ""):
+            self.app._disc_periods_done(r, 7, (0.02, 2.0), {0: same})
+            self.assertEqual(sorted(r["neighbor_checks"]), [0])            # the same period: kept
+            self.app._disc_periods_done(r, 7, (0.02, 2.0), {0: dict(same, period=0.0931)})
+        self.assertEqual(r["neighbor_checks"], {})                          # another period: dropped
+        self.app.last_scan = None
 
     def test_outside_data_acts_on_the_selected_star(self):
         calls = []
@@ -484,6 +548,49 @@ class TestFieldScanChecks(m4.AppCase):
         self.assertNotIn("outside", self.r)
         self.assertFalse(self.app._outside_running)
 
+    def test_outside_data_for_a_star_the_scan_lists_no_period_for(self):   # review S3
+        from neighbors_ui import scan_star_period
+        self.assertEqual(scan_star_period(self.r, 0), (0.1027, "scan"))
+        P, source = scan_star_period(self.r, 2)        # not a suspect: no period entry in the scan
+        self.assertEqual(source, "search")
+        self.assertGreater(P, 0)
+        win = self.app.check_neighbors_suspect(self.r, 2)
+        try:
+            self.assertAlmostEqual(win.result["period"], P)   # the same period Check neighbors uses
+        finally:
+            win.close()
+        calls = []
+        answer = s033_result()
+        self.view.selected = 2
+        self.view.draw()
+        with mock.patch("neighbors_ui.od.check", lambda ra, dec, period, **kw: calls.append(period) or answer):
+            self.view.outside_data()
+            self.wait_for_box()
+        self.assertEqual(calls, [P])
+        self.assertEqual(self.boxes[-1][0], "showinfo")
+        self.assertIn("Outside data for S051", self.boxes[-1][1][1])
+        self.assertTrue(self.said("the scan lists no period for it; using the best period of its light curve"))
+
+    def test_running_is_keyed_by_the_star_not_only_its_label(self):   # review N3
+        import threading
+        gate = threading.Event()
+
+        def slow(ra, dec, period, **kw):
+            gate.wait(10)
+            return s033_result()
+        app = self.app
+        with mock.patch("neighbors_ui.od.check", slow):
+            self.assertTrue(app.outside_check("S033", 42.05, 50.88, 0.1027))
+            self.assertFalse(app.outside_check("S033", 42.05, 50.88, 0.1027))    # the same star: running already
+            self.assertTrue(app.outside_check("S033", 10.0, -5.0, 0.2))          # another field's S033
+            self.assertEqual(len(app._outside_running), 2)
+            gate.set()
+            end = time.monotonic() + 10
+            while app._outside_running and time.monotonic() < end:
+                app.update()
+                time.sleep(0.01)
+        self.assertFalse(app._outside_running)
+
     def test_outside_data_failure_is_said(self):
         def boom(*a, **k):
             raise RuntimeError("no network")
@@ -497,13 +604,12 @@ class TestFieldScanChecks(m4.AppCase):
         self.assertTrue(self.said("✖ Outside data for S033"))
 
     def test_outside_data_says_when_there_is_no_period(self):
+        self.r["light_curves"][5:, 1] = np.nan   # 5 points: too few for any period
         with mock.patch("neighbors_ui.od.check") as chk:
-            for i in (1, 5):   # no period entry; a best peak at the edge of the search (a drift)
-                self.boxes.clear()
-                self.view.selected = i
-                self.view.outside_data()
-                self.assertEqual(self.boxes[-1][0], "showinfo")
-                self.assertIn("found no period", self.boxes[-1][1][1])
+            self.view.selected = 1
+            self.view.outside_data()
+            self.assertEqual(self.boxes[-1][0], "showinfo")
+            self.assertIn("S040 has too few measured points on this night for a period", self.boxes[-1][1][1])
             chk.assert_not_called()
 
     def test_outside_data_says_when_there_is_no_position(self):
@@ -571,7 +677,8 @@ class TestOldSeriesWithGateReports(m4.AppCase):
                                        "registry_key": "gaia:1", "outside": {"agree": ["ZTF"]}},
                                 "broken": "not a report"},
                  "watch_list": [{"name": "W1", "ra": 348.31, "dec": 57.18, "mag": 11.2,
-                                 "outside": {"agree": ["ZTF"]}, "reach_back": [{"frames": 3}]}]}
+                                 "outside": {"agree": ["ZTF"]}, "reach_back": [{"frames": 3}],
+                                 "neighbors": {"bottom": "x"}, "neighbors_kept_key": 1}]}
         pts = m4._points([A], cat)
         path = self.write("HD_219134.cvseries", m4._old_meta([A], cat, extra=extra), pts)
         want = m4._numbers(core.load_series(path)[1])
@@ -579,6 +686,7 @@ class TestOldSeriesWithGateReports(m4.AppCase):
         app = self.app
         self.assertEqual(m4._numbers(app.observations), want)
         self.assertEqual([w["name"] for w in app.watch_list], ["W1"])
+        self.assertEqual(sorted(app.watch_list[0]), ["dec", "mag", "name", "neighbors_kept_key", "ra"])   # review S5
         self.assertFalse(hasattr(app, "gate_reports"))
         self.assertFalse([ln for ln in self.lines if "gate" in ln.lower() or "Candidate" in ln or "Registry" in ln],
                          self.lines)
@@ -590,6 +698,9 @@ class TestOldSeriesWithGateReports(m4.AppCase):
         self.assertNotIn("candidates", saved)
         self.assertNotIn("gate_nights", saved)
         self.assertEqual([w["name"] for w in saved["watch_list"]], ["W1"])
+        for key in ("outside", "reach_back", "neighbors"):
+            self.assertNotIn(key, saved["watch_list"][0])
+        self.assertEqual(saved["watch_list"][0]["mag"], 11.2)
         self.assertEqual(m4._numbers(core.load_series(path)[1]), want)
         self.assertFalse(os.path.exists(os.path.join(self.dir, "campaign_registry.json")))
 

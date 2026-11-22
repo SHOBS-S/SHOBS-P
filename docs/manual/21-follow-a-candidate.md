@@ -127,8 +127,10 @@ one line per survey.
 
 Outside data is a report. It changes nothing in SHOBS-P and nothing is stored: run it again whenever you like.
 
-The star needs a sky position (the field must be solved) and a period from the scan. Without either, SHOBS-P says
-so. On a scan with no sky positions at all the button is grey.
+The star needs a sky position (the field must be solved). The period is the scan's **Best period**; when the scan
+lists none for the star, SHOBS-P uses the best period of its light curve that night, as Check neighbors does, and
+says so in the log. Both **Checks** buttons are grey until a star is selected, and **Outside data…** is grey on a
+scan with no sky positions at all.
 
 ## Put a suspect on the watch list
 

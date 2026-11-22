@@ -58,26 +58,49 @@ def outside_text(name: str, res: dict) -> str:
     return "\n".join(lines)
 
 
+def scan_curve(scan, j: int, role: str = ""):
+    """A field-scan star's light curve of that night (points without a measurement left out)."""
+    jd = np.asarray(scan["jd"], float)
+    lc = np.asarray(scan["light_curves"], float)
+    return nb.make_curve(str(scan["labels"][j]), jd, lc[:, j], ["scan"] * jd.size, role=role)
+
+
+def scan_star_period(scan, i: int):
+    """The period Check neighbors and Outside data use for a field-scan star: (period in days, "scan") when the scan
+    lists one for it; else (the best period of its own light curve that night, "search"), found as the Check
+    neighbors window finds it; (None, "") when the star has too few points for a search."""
+    P = core.scan_period_value((scan.get("periods") or {}).get(i))
+    if P:
+        return float(P), "scan"
+    c = scan_curve(scan, i, "target")
+    if c.jd.size < nb.MIN_NIGHT_POINTS:
+        return None, ""
+    res = nb.neighbor_check(c, [], min_period=0.02, max_period=max(0.05, float(np.ptp(c.jd))),
+                            min_points=nb.MIN_NIGHT_POINTS)
+    return (float(res["period"]), "search") if res.get("period") else (None, "")
+
+
 class NeighborsMixin:
     """Methods of the App (clearv_app.App) for the Field scan page's Checks group."""
 
     # ---- Check neighbors ---------------------------------------------------------------------------------------
-    def check_neighbors_suspect(self, result, i: int, parent=None):
+    def check_neighbors_suspect(self, result, i: int):
         """Open the Check neighbors window for a star of one night's field scan."""
         return NeighborsWindow(self, name=str(result["labels"][i]), scan=result, scan_index=i)
 
     # ---- Outside data ------------------------------------------------------------------------------------------
-    def outside_check(self, name: str, ra: float, dec: float, period: float, *, period_range=None, parent=None,
-                      on_done=None) -> bool:
+    def outside_check(self, name: str, ra: float, dec: float, period: float, *, period_range=None,
+                      parent=None) -> bool:
         """ZTF, TESS and ATLAS at the star's position, in the background. The result is written to the Log and shown
         in a message box: what each survey found, and whether it agrees with our period. Nothing is stored.
         period_range: (min, max) days the surveys' light curves are searched over (the field scan's own range)."""
         running = getattr(self, "_outside_running", None)
         if not isinstance(running, set):
             running = self._outside_running = set()
-        if name in running:
+        key = (name, round(float(ra), 5), round(float(dec), 5))   # the star, not only its scan label
+        if key in running:
             return False
-        running.add(name)
+        running.add(key)
         tok = self.busy_begin(f"Outside data: ZTF, TESS and ATLAS for {name}…")
         try:
             pmin, pmax = (float(v) for v in period_range)
@@ -92,14 +115,15 @@ class NeighborsMixin:
                 res = od.check(float(ra), float(dec), float(period), min_period=pmin, max_period=pmax)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            self.call_ui(self._outside_done, tok, name, res, error, parent, on_done)
+            self.call_ui(self._outside_done, tok, key, res, error, parent)
 
         threading.Thread(target=work, daemon=True).start()
         return True
 
-    def _outside_done(self, tok, name, res, error, parent=None, on_done=None):
+    def _outside_done(self, tok, key, res, error, parent=None):
         ca = _ca()
-        self._outside_running.discard(name)
+        name = key[0]
+        self._outside_running.discard(key)
         self.busy_end(tok)
         try:
             if parent is None or not parent.winfo_exists():
@@ -115,11 +139,6 @@ class NeighborsMixin:
             self.log(f"  {mark}{s_}: {r.get('detail') or r.get('status')}" + (f" {r['note']}" if r.get("note") else ""))
         self.log(f"Outside data for {name}: {res['summary']}")
         self.status.set(f"Outside data for {name}: " + res["summary"])
-        if on_done is not None:
-            try:
-                on_done(res)
-            except Exception:
-                pass
         messagebox.showinfo(ca.APP_TITLE, outside_text(name, res), parent=parent)
 
 
@@ -135,7 +154,6 @@ class NeighborsWindow:
         ca = _ca()
         self.app, self.name = app, name
         self.scan, self.scan_index = scan, scan_index
-        self.mode = "scan"
         self.result = None
         win = Toplevel(app)
         self.win = win
@@ -197,12 +215,9 @@ class NeighborsWindow:
 
     def _scan_curves(self):
         r, i = self.scan, self.scan_index
-        jd = np.asarray(r["jd"], float)
-        lc = np.asarray(r["light_curves"], float)
-        night = "scan"
 
         def curve(j, role):
-            return nb.make_curve(str(r["labels"][j]), jd, lc[:, j], [night] * jd.size, role=role)
+            return scan_curve(r, j, role)
         target = curve(i, "target")
         rows = []
         mags = np.asarray(r["mag"], float)
@@ -241,21 +256,40 @@ class NeighborsWindow:
             rows.append(("look", curve(j, "neighbor"), info(j)))
         for j in comps:
             if j not in close and j not in look:
-                rows.append(("comps", curve(j, "comp"), info(j)))
+                rows.append(("comps", curve(j, "check" if str(r["labels"][j]) == "Check" else "comp"), info(j)))
         return target, rows, close, look
 
     def recompute(self):
+        self.result = None
         try:
             self._recompute_scan()
         except Exception as exc:
-            self.note.set(f"✖ {type(exc).__name__}: {exc}")
+            self.result = None
+            self.note.set(f"✖ Check neighbors could not be worked out ({type(exc).__name__}: {exc}).")
+        # nothing to keep without a result at a period: the button looks it
+        self.save_btn.state(["!disabled"] if self.result and self.result.get("period") else ["disabled"])
+        if self.result is None:
+            self._blank()
             return
         self.draw()
 
+    def _blank(self):
+        for fig, canvas in ((self.fig, getattr(self, "canvas", None)),
+                            (self.thumb_fig, getattr(self, "thumb_canvas", None))):
+            if fig is not None and canvas is not None:
+                fig.clear()
+                canvas.draw_idle()
+
     def _recompute_scan(self):
         target, rows, close, look = self._scan_curves()
-        # the star's own period from the scan, when it found one
-        P = core.scan_period_value((self.scan.get("periods") or {}).get(self.scan_index))
+        if target.jd.size == 0:
+            words = f"{self.name} has no measured points on this night, so its neighbors cannot be checked."
+            self.sub.set(words)
+            self.bottom_line.set("")
+            self.note.set(words)
+            return
+        # the star's own period from the scan, when it found one; else the best period of its light curve
+        P, _source = scan_star_period(self.scan, self.scan_index)
         res = nb.neighbor_check(target, [c for _g, c, _i in rows], period=P, min_period=0.02,
                                        max_period=max(0.05, float(np.ptp(target.jd))), min_points=8)
         for (g, c, info), row in zip(rows, res["rows"]):
@@ -445,7 +479,7 @@ class NeighborsWindow:
     # -- saving ------------------------------------------------------------------------------------------------
     def summary(self) -> dict:
         res = self.result or {}
-        return {"utc": nb.utc_now(), "mode": self.mode, "period": res.get("period"), "bottom": res.get("bottom"),
+        return {"utc": nb.utc_now(), "mode": "scan", "period": res.get("period"), "bottom": res.get("bottom"),
                 "n_quiet": res.get("n_quiet"), "n_measured": res.get("n_measured"), "window_mag": self._window_mag(),
                 "rows": [{k: r.get(k) for k in ("name", "role", "group", "power_share", "amp", "quiet", "sep",
                                                  "dmag")} for r in res.get("rows") or []]}
@@ -453,6 +487,8 @@ class NeighborsWindow:
     def save(self):
         """Keep the check with the star in the night's suspects file (only Suspects are kept there)."""
         app = self.app
+        if not self.result or not self.result.get("period"):
+            return   # nothing was worked out (no points, or too few for a period): nothing to keep
         s = self.summary()
         r = self.scan
         if self.scan_index not in set(r.get("candidates") or []):
@@ -460,7 +496,7 @@ class NeighborsWindow:
                           "then save again.")
             return
         r.setdefault("neighbor_checks", {})[self.scan_index] = s
-        path = app._save_suspects(r) if hasattr(app, "_save_suspects") else ""
+        path = app._save_suspects(r)
         where = os.path.basename(path) if path else ("this night's results only (no suspects file was written: see "
                                                      "the log)")
         app.log(f"Check neighbors for {self.name}: {s['bottom']}. Saved to {where}.")
