@@ -54,11 +54,29 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
 | **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. The field image comes with the report: after the report is saved the button reads **Field image saved ✓** (no second `…_2_field.png`), or **Fetch AAVSO chart** when only the chart is missing; that saves just the chart beside the image (from 2.4.0). |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
-| **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. |
+| **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. Columns: below. |
 | **Watch stars…** → **Export watch light curves CSV…** | `watch_stars.csv` |
 
 When a night is highlighted in the night table, **Save AAVSO report** and **Save light-curve CSV** first ask whether
 to save that night only or the whole series. See [15. Submit to AAVSO](15-submit-to-aavso.md).
+
+**The times CSV's columns** (`<star>_times_of_extremum.csv`, one row per time of maximum or minimum):
+
+| Columns | What they hold |
+|---|---|
+| `star`, `type`, `night` | The star, `max` or `min`, and the night. |
+| `hjd`, `bjd_tdb`, `jd_utc` | The adopted time in HJD (UTC), BJD_TDB and JD (UTC). `hjd` and `bjd_tdb` are blank without RA/Dec. |
+| `error_d`, `error_min`, `method` | The adopted error in days and minutes, and the method (polynomial and bootstrap). |
+| `cycle`, `o_c_d`, `o_c_min`, `period_d`, `epoch`, `elements` | The O − C and the elements it was worked out against, with their source (`VSX HJD`, `saved HJD`, `typed HJD`). Blank when no elements were given. |
+| `n_points`, `window_min` | Points in the fit window, and its half-width in minutes. |
+| `kvw_jd`, `kvw_err`, `poly_jd`, `poly_err`, `fourier_jd`, `fourier_err` | Each method's own time (JD) and error (days). |
+| `time_note`, `note` | Notes on the time conversion, and the result's ⚠ warnings. |
+| `noise_period_d`, `noise_period_source` | **New in 2.4.0.** The period the error's noise model used, and where it came from: `series` (the Output page's period), `times CSV`, `VSX`, `Period box`, or `none` when the time was measured without a period (its error may be 2–3 times too small). |
+
+The two new columns are added at the end, so the older columns keep their places. A CSV from 2.3 still reads; the
+first time 2.4.0 saves into it, the header gains the two columns and the older rows have them blank. A blank is not
+`none`: for a row from before 2.4.0 the error used the elements' period, so it was measured without a period exactly
+when its `period_d` is blank too. Columns you added yourself are kept. See [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md).
 
 ### Transits mode (Transit fit page)
 

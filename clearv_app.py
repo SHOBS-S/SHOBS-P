@@ -27377,13 +27377,16 @@ class ExtremumWindow:
                   style="Card.TLabel").pack(anchor=W)
         self.hint = ttk.Label(
             top, style="Hint.TLabel", justify=LEFT,
+            # 2.4.0 step 8 (#90): the two jobs of a period are told apart here.
             text="The extremum is timed with a local polynomial. Its error comes from 500 bootstrap refits with "
-                 "stretches of the night's own noise (residuals about a Fourier series at the period, so noise that "
-                 "lasts minutes counts), times the residuals' red-noise factor β, and is never less than half the "
-                 "difference from the Fourier series (and, for a minimum, from Kwee & van Woerden 1956, which is also "
-                 "shown). O−C is against the elements below "
-                 "(VSX epochs are HJD). Saved times go into one CSV per star next to the series file; it grows "
-                 "night by night into an O−C diagram.")
+                 "stretches of the night's own noise (residuals about a Fourier series at the star's period, so noise "
+                 "that lasts minutes counts), times the residuals' red-noise factor β, and is never less than half "
+                 "the difference from the Fourier series (and, for a minimum, from Kwee & van Woerden 1956, which is "
+                 "also shown). The error finds its period itself: the series' own period from the Output page when "
+                 "it is a reliable one, else the period in the times CSV, else VSX's, else the Period box; the result "
+                 "says which. The elements below are optional and do a different job: Period and Epoch together "
+                 "predict where the extremum falls and give the O−C (VSX epochs are HJD). Saved times go into one "
+                 "CSV per star next to the series file; it grows night by night into an O−C diagram.")
         self.hint.pack(anchor=W, fill=X, pady=(2, 6))
         self.hint.bind("<Configure>", lambda e: self.hint.configure(wraplength=max(200, e.width - 8)))
         form = ttk.Frame(top, style="Card.TFrame")
@@ -27399,7 +27402,9 @@ class ExtremumWindow:
         self.period = StringVar(value=f"{period:.8f}" if period else "")
         self.epoch = StringVar(value=f"{epoch:.5f}" if epoch else "")
         self.system = StringVar(value="HJD")
-        self.source = StringVar(value="VSX" if period and epoch else ("typed" if period or epoch else ""))
+        # 2.4.0 step 8 (#90, AA LMi 16 Nov): VSX with a period but no epoch says so (it said "typed").
+        self.source = StringVar(value="VSX" if period and epoch else (
+            "VSX gives a period but no epoch" if period else ("typed" if epoch else "")))
         ttk.Label(form, text="Night", style="Card.TLabel").grid(row=0, column=0, sticky=W, padx=(0, 6), pady=2)
         ttk.Combobox(form, textvariable=self.night, values=list(self.night_names), state="readonly",
                      width=max([len(k) for k in self.night_names] + [12]) + 2).grid(row=0, column=1, sticky=W, pady=2)
@@ -27409,18 +27414,22 @@ class ExtremumWindow:
         ttk.Label(form, text="Half-window (min)", style="Card.TLabel").grid(row=0, column=4, sticky=W, padx=(14, 6))
         ttk.Entry(form, textvariable=self.window_min, width=7).grid(row=0, column=5, sticky=W)
         ttk.Label(form, text="blank = automatic", style="Hint.TLabel").grid(row=0, column=6, sticky=W, padx=(6, 0))
-        ttk.Label(form, text="Period (d)", style="Card.TLabel").grid(row=1, column=0, sticky=W, padx=(0, 6), pady=2)
-        ttk.Entry(form, textvariable=self.period, width=14).grid(row=1, column=1, sticky=W, pady=2)
-        ttk.Label(form, text="Epoch", style="Card.TLabel").grid(row=1, column=2, sticky=W, padx=(14, 6))
-        ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=1, column=3, columnspan=2, sticky=W)
+        # 2.4.0 step 8 (#90): the boxes below only predict the time and give the O−C; the error has its own period
+        # (see _noise_period), so the row is headed as what it is for.
+        ttk.Label(form, text="Elements for the predicted time and O−C (optional)", font=(core.UI_FONT, 10, "bold"),
+                  style="Card.TLabel").grid(row=1, column=0, columnspan=9, sticky=W, pady=(8, 0))
+        ttk.Label(form, text="Period (d)", style="Card.TLabel").grid(row=2, column=0, sticky=W, padx=(0, 6), pady=2)
+        ttk.Entry(form, textvariable=self.period, width=14).grid(row=2, column=1, sticky=W, pady=2)
+        ttk.Label(form, text="Epoch", style="Card.TLabel").grid(row=2, column=2, sticky=W, padx=(14, 6))
+        ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=2, column=3, columnspan=2, sticky=W)
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
-                     width=5).grid(row=1, column=5, sticky=W)
-        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
+                     width=5).grid(row=2, column=5, sticky=W)
+        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=2, column=6, sticky=W, padx=(6, 0))
         # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click. 2.4.0 (#65): the window now also opens
         # with them (see below), so this button puts them back after other values were typed or looked up.
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
-        self.saved_button.grid(row=1, column=7, sticky=W, padx=(6, 0))
-        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=8, sticky=W, padx=(6, 0))
+        self.saved_button.grid(row=2, column=7, sticky=W, padx=(6, 0))
+        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=2, column=8, sticky=W, padx=(6, 0))
         self.result_text = StringVar(value="Choose the night and press Measure.")
         ttk.Label(top, textvariable=self.result_text, font=(core.MONO_FONT, 10), style="Card.TLabel",
                   justify=LEFT).pack(anchor=W, pady=(6, 4))
@@ -27492,6 +27501,60 @@ class ExtremumWindow:
             return None, None
         return p, e
 
+    def _typed_period(self):
+        """2.4.0 step 8 (#90): the Period box alone (no epoch needed), or None."""
+        try:
+            p = float(self.period.get())
+        except ValueError:
+            return None
+        return p if math.isfinite(p) and p > 0 else None
+
+    def _series_period(self):
+        """2.4.0 step 8 (#90): (period, why_not). The series' own period from the Output page's period search (or
+        Refit period), when the Output page calls it significant: the same rule as its "Folded P = …" title (FAP 1%
+        or less, not carried by one night, not one short night under two cycles, the FAP counting nights agrees, not
+        demoted by the airmass check). A best peak that fails it (a one-day alias of night offsets, the 20 d edge of
+        a short night) would be worse than no period: the Fourier series at it cannot follow the star, and the
+        error comes out several times too large. Then (None, the peak in words) so the result can say so."""
+        app = self.app
+        best = app.period if isinstance(getattr(app, "period", None), dict) else None
+        try:
+            p = float(best["period_days"]) if best else None
+        except (KeyError, TypeError, ValueError):
+            p = None
+        if not (p and math.isfinite(p) and p > 0):
+            return None, ""
+        try:
+            usable = app._usable()
+            span = max(o.jd for o in usable) - min(o.jd for o in usable)
+            too_short = len({o.night for o in usable}) == 1 and span < 2.0 * p
+        except Exception:
+            too_short = False
+        fap = best.get("fap", float("nan"))
+        try:
+            night_fap = float((best.get("night_fap") or {}).get("fap", float("nan")))
+        except (TypeError, ValueError):
+            night_fap = float("nan")
+        ok = (isinstance(fap, (int, float)) and math.isfinite(fap) and fap <= 0.01 and not best.get("carried_by")
+              and not too_short and not (math.isfinite(night_fap) and night_fap > 0.01)
+              and not (best.get("airmass_check") or {}).get("demoted"))
+        if ok:
+            return p, ""
+        return None, (f"the Output page's best peak, {p:.5g} d, is not a reliable period"
+                      + (": one short night" if too_short else ""))
+
+    def _noise_period(self):
+        """2.4.0 step 8 (#90): (period, source, why_not) for the error's noise model: the best period SHOBS-P has,
+        whatever is in the Period and Epoch boxes. Order: the series' own period, the times CSV's, VSX's, and last
+        the Period box (a period typed there with nothing better anywhere still beats none). See
+        core.extremum_noise_period."""
+        series, why_not = self._series_period()
+        period, source = core.extremum_noise_period(series=series, csv_rows=self._csv_rows(),
+                                                    vsx=self.app.catalog_period, typed=self._typed_period())
+        return period, source, why_not
+
+    NOISE_WORDS = {"series": "series period", "times CSV": "times CSV", "VSX": "VSX", "Period box": "Period box"}
+
     def _star(self) -> str:
         return self.app.star_id.get().strip() or "target"
 
@@ -27554,7 +27617,13 @@ class ExtremumWindow:
             self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
         finally:
             self._kind_quiet = False
-        self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
+        # 2.4.0 step 8 (#90, AA LMi 16 Nov): VSX had the period (0.054306 d) but no epoch, and this said "no
+        # period/epoch there; type them" with the period already in the box. Each case now says what VSX gave.
+        missing = ("" if p and e else
+                   ": VSX gives a period but no epoch (type an epoch for the O−C; the error uses the period)" if p else
+                   ": VSX gives an epoch but no period (type the period for the O−C)" if e else
+                   ": VSX gives no period or epoch (type them for the O−C)")
+        self.source.set(("VSX " + (found.get("var_type") or "")).strip() + missing)
 
     # -- measuring ------------------------------------------------------------------------
     def _night_points(self):
@@ -27583,10 +27652,14 @@ class ExtremumWindow:
             # Every extremum the elements predict in this night (the night may hold two maxima of a short-period star).
             guesses = core.predicted_extrema(float(t.min()), float(t.max()), period, epoch,
                                              margin=0.1 * period) or [None]
+        # 2.4.0 step 8 (#90): the error's period is found apart from the boxes; the elements' period (with its epoch)
+        # only says where to look, as before.
+        noise_p, noise_source, noise_why_not = self._noise_period()
         results, problems = [], []
         for g in guesses:
             try:
-                r = core.measure_extremum(t, vals, kind, period=period, t_guess=g, half_width=hw)
+                r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=g, half_width=hw,
+                                          window_period=period if period and epoch else None, tune_period=True)
             except ValueError as exc:
                 problems.append(str(exc))
                 continue
@@ -27598,7 +27671,8 @@ class ExtremumWindow:
             # other branch (P 0.15151 d put it on the night's minimum), so "no extremum inside the window" was all
             # the window said. The night's own extremum is measured instead, and the text says why.
             try:
-                r = core.measure_extremum(t, vals, kind, period=period, t_guess=None, half_width=hw)
+                r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=None, half_width=hw,
+                                          window_period=period, tune_period=True)
                 r.setdefault("warnings", []).append(
                     "found away from the time the elements predict (" + "; ".join(sorted(set(problems))) + "): "
                     "the elements may be off by part of a cycle")
@@ -27608,6 +27682,8 @@ class ExtremumWindow:
                 problems.append(str(exc))
         ra, dec, lat, lon = self._coords()
         for r in results:
+            # The period the error really used (None when there was none, or the noise model could not be fitted).
+            r["noise_asked"], r["noise_source"], r["noise_why_not"] = noise_p, noise_source, noise_why_not
             try:
                 r["times"] = core.extremum_times(r["t"], ra, dec, lat, lon)
             except Exception as exc:
@@ -27656,6 +27732,7 @@ class ExtremumWindow:
                 sys_word = self.system.get() if math.isfinite(tm["hjd"]) else "JD"
                 lines.append(f"       O−C {oc['oc_d']:+.5f} d = {oc['oc_min']:+.1f} ± {err_min:.1f} min   cycle "
                              f"{oc['cycle']:g}   (C = {sys_word} {oc['calc']:.5f}; P {period:.8f}, E {epoch:.5f})")
+            lines += ["       " + ln for ln in self._noise_lines(r)]
             for n in r.get("notes", []):
                 lines.append(f"       note: {n}")
             for w in r.get("warnings", []):
@@ -27663,8 +27740,33 @@ class ExtremumWindow:
         for p in problems if not results else []:
             lines.append(f"⚠ {p}")
         if results and not (period and epoch):
-            lines.append("No elements: type the period and epoch (or Elements from VSX) for the O−C.")
+            # 2.4.0 step 8 (#90): plain that this is only about the O−C (the error has its period, said above).
+            if self._typed_period():
+                lines.append("Period without an epoch: no predicted time or O−C. Type an epoch for them (optional); "
+                             "the error does not need one.")
+            else:
+                lines.append("No elements: type the period and epoch (or Elements from VSX) for the O−C (optional); "
+                             "the error does not need them.")
         return "\n".join(lines)
+
+    def _noise_lines(self, r) -> list:
+        """2.4.0 step 8 (#90): which period the error used, said with the result; or, plainly, that there was none."""
+        asked, used = r.get("noise_asked"), r.get("noise_period")
+        if used:
+            # An approximate period is enough: on a night of more than one cycle it is fitted to the night
+            # (core.tune_noise_period), and the result says so when that moved it by more than 1%.
+            tuned = r.get("noise_period_tuned") or used
+            return [f"error: noise model at P {used:.5f} d ({self.NOISE_WORDS.get(r.get('noise_source'), 'period')}"
+                    + (f"; fitted to this night at {tuned:.5f} d" if abs(tuned - used) > 0.01 * used else "") + ")"]
+        if asked:
+            return [f"⚠ error: the noise model at P {asked:.5f} d "
+                    f"({self.NOISE_WORDS.get(r.get('noise_source'), 'period')}) could not be fitted to this night, so",
+                    "  this ± may be 2-3 times too small. Check that period."]
+        why = r.get("noise_why_not") or ""
+        return ["⚠ error: SHOBS-P has no period for this star, so noise lasting minutes is not counted and this ±",
+                "  may be 2-3 times too small" + (f" ({why})." if why else "."),
+                "  Run the period search on the Output page first (more nights help), or type the star's period in",
+                "  the Period box, then press Measure again."]
 
     # -- the times CSV --------------------------------------------------------------------
     def _default_csv(self) -> str:
@@ -27774,7 +27876,10 @@ class ExtremumWindow:
                    "kvw_jd": kvw.get("t", float("nan")), "kvw_err": kvw.get("err", float("nan")),
                    "poly_jd": poly["t"], "poly_err": poly["err"], "fourier_jd": fo.get("t", float("nan")),
                    "fourier_err": fo.get("err", float("nan")), "time_note": tm.get("note", ""),
-                   "note": "; ".join(r.get("warnings", []))}
+                   "note": "; ".join(r.get("warnings", [])),
+                   # 2.4.0 step 8 (#90): the period the error used and where it came from ('none': timed without).
+                   "noise_period_d": r.get("noise_period") or float("nan"),
+                   "noise_period_source": (r.get("noise_source") or "none") if r.get("noise_period") else "none"}
             try:
                 done.append(core.save_extremum_row(path, row))
             except OSError as exc:
