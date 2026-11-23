@@ -77,7 +77,7 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 The three new columns are added at the end, so the older columns keep their places. A CSV from 2.3 still reads; the
 first time 2.4.0 saves into it, the header gains the new columns and the older rows have them blank. A blank is not
 `none`: for a row from before 2.4.0 the error used the elements' period, so it was measured without a period exactly
-when its `period_d` is blank too. Columns you added yourself are kept. See [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md).
+when its `period_d` is blank too. Columns you added yourself are kept, and so are notes you edited by hand: a note in quotes with commas in it stays whole, any `#` line you added stays at the top, and the rows already in the file keep their full text (only a new row's note is shortened, to 160 characters). SHOBS-P writes commas inside text as `;`, so the file stays readable by older versions and by a plain comma split. See [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md).
 
 ### Transits mode (Transit fit page)
 

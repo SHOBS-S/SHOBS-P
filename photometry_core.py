@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import re as _re
 import math
@@ -11078,13 +11079,16 @@ def read_extremum_csv(path: str) -> list[dict]:
     rows = []
     if not path or not os.path.exists(path):
         return rows
-    with open(path, encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
         lines = [ln.rstrip("\r\n") for ln in fh if ln.strip() and not ln.startswith("#")]
     if not lines:
         return rows
-    head = [h.strip() for h in lines[0].split(",")]
-    for ln in lines[1:]:
-        parts = ln.split(",")
+    # 2.4.0 step 8 (regression, 23 Nov): read as real CSV, so a quoted field with commas in it (a note typed or
+    # edited by hand, or written by another program) stays one field. A plain split cut such notes at the first
+    # comma and shifted the columns after it, and the next save wrote the cut note back.
+    parsed = list(csv.reader(lines))
+    head = [h.strip() for h in parsed[0]]
+    for parts in parsed[1:]:
         row = {}
         for k, v in zip(head, parts):
             v = v.strip()
@@ -11181,24 +11185,30 @@ def extremum_times_lines(rows: list[dict], limit: int = 8, elements=None) -> lis
 def _extremum_header(path: str) -> list[str]:
     if not path or not os.path.exists(path):
         return []
-    with open(path, encoding="utf-8", errors="replace") as fh:
+    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
         for ln in fh:
             if ln.strip() and not ln.startswith("#"):
-                return [h.strip() for h in ln.rstrip("\r\n").split(",")]
+                return [h.strip() for h in next(csv.reader([ln.rstrip("\r\n")]))]   # step 8 regression: quotes
     return []
 
 
 def save_extremum_row(path: str, row: dict) -> str:
     """Add one time of extremum to the CSV (created if missing). A row for the same star and type within 0.01 d is
     replaced (a re-measurement). The first '# Created' line is kept and an '# Updated' line follows.
+    2.4.0 step 8 (regression, 23 Nov): every other '#' line (e.g. a '# Corrected …' note added by hand) is kept after
+    the '# Updated' line, and the rows already in the file keep their text in full: only the new row's text is
+    shortened (to 160 characters). Commas in text are still written as ';' (no quoting), so 2.3.x reads the file too.
     Returns 'added' or 'replaced'."""
     old = read_extremum_csv(path)
     created = None
+    notes = []
     if os.path.exists(path):
         with open(path, encoding="utf-8", errors="replace") as fh:
-            first = fh.readline().strip()
-        if first.startswith("# Created"):
-            created = first
+            heads = [ln.rstrip("\r\n").strip() for ln in fh if ln.startswith("#")]
+        if heads and heads[0].startswith("# Created"):
+            created = heads[0]
+            heads = heads[1:]
+        notes = [h for h in heads if not h.startswith("# Updated")]
 
     def key_t(r):
         for k in ("hjd", "jd_utc"):
@@ -11215,7 +11225,7 @@ def save_extremum_row(path: str, row: dict) -> str:
     status = "replaced" if len(kept) < len(old) else "added"
     rows = sorted(kept + [row], key=lambda r: (key_t(r) if math.isfinite(key_t(r)) else 0.0))
 
-    def cell(k, v):
+    def cell(k, v, cap=None):
         if isinstance(v, float):
             if not math.isfinite(v):
                 return ""
@@ -11230,15 +11240,19 @@ def save_extremum_row(path: str, row: dict) -> str:
             return f"{v:.2f}"
         if isinstance(v, int):
             return str(v)
-        return str(v if v is not None else "").replace(",", ";").replace("\n", " ").strip()[:160]
+        text = str(v if v is not None else "").replace(",", ";").replace("\r", " ").replace("\n", " ").strip()
+        return text[:cap] if cap else text
 
     with AsciiWriter(path) as fh:
         fh.write((created or created_line()) + "\n")
         if created:
             fh.write(f"# Updated {dtg()} by SHOBS-P\n")
+        for ln in notes:
+            fh.write(ln + "\n")
         fh.write(",".join(columns) + "\n")
         for r in rows:
-            fh.write(",".join(cell(k, r.get(k, "")) for k in columns) + "\n")
+            cap = 160 if r is row else None   # step 8 regression: rows already saved keep their text in full
+            fh.write(",".join(cell(k, r.get(k, ""), cap) for k in columns) + "\n")
     return status
 
 
