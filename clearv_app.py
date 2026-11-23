@@ -2667,7 +2667,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
         here = os.path.dirname(os.path.abspath(sys.argv[0])) or None
         log_to_file("Restarting SHOBS-P for the new text size.")
-        self.destroy()
+        # re-review S1: the new SHOBS-P is started BEFORE this one goes, so a failure can still say so and stay open
         try:
             if sys.platform == "win32":
                 import subprocess
@@ -2675,14 +2675,24 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 # it (the desktop shortcut's pythonw has no console, and this changes nothing there)
                 flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
                 subprocess.Popen(args, cwd=here, creationflags=flags, close_fds=True)
+                self.destroy()
             else:
                 # Mac and Linux run SHOBS-P in the foreground of a Terminal (shobs_setup.sh, SHOBS-P.app): the same
-                # process becomes the new SHOBS-P, so the launcher keeps waiting on it
+                # process becomes the new SHOBS-P, so the launcher keeps waiting on it (no Tk teardown needed: the
+                # process image is replaced; execv skips normal exit, so the streams are flushed first)
+                for stream in (sys.stdout, sys.stderr):
+                    try:
+                        stream.flush()
+                    except Exception:
+                        pass
                 if here:
                     os.chdir(here)
                 os.execv(sys.executable, args)
         except Exception as exc:
-            log_to_file(f"Restart failed ({type(exc).__name__}: {exc}); start SHOBS-P again by hand.")
+            self._closing = False
+            log_to_file(f"Restart failed ({type(exc).__name__}: {exc}).")
+            messagebox.showinfo(APP_TITLE, f"SHOBS-P could not restart itself ({exc}). Close it and start it again "
+                                           "to see the new text size.")
 
     def show_credits(self):
         self._leave_blink_page()   # 2.4.0 (#112)

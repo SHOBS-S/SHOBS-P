@@ -104,13 +104,14 @@ class TestUIWatch(unittest.TestCase):
         w.check()
         now[0] += 3600.0
         w.check()
-        self.assertEqual(lines, [])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("UI watch was held 3600 s itself", lines[0])   # one plain line, not a stall
         now[0] += 0.5
         w.check()
-        self.assertEqual(lines, [])
+        self.assertEqual(len(lines), 1)
         now[0] += 3.5
         w.check()                    # a real stall after the wake is still seen
-        self.assertEqual(len(lines), 1)
+        self.assertIn("UI thread busy", lines[1])
 
     def test_thread_runs(self):
         lines = []
@@ -208,7 +209,24 @@ class TestTextSize(AppCase):
                 mock.patch.object(self.ca.os, "chdir", lambda *_a: None), \
                 mock.patch.object(app, "series_path", "x.cvseries"):
             app._restart_app()
-        self.assertEqual(order, ["offer", "saves", "destroy", "execv"])
+        self.assertEqual(order, ["offer", "saves", "execv"])   # POSIX: the process image is replaced, no teardown
+        app._closing = False
+        order.clear()
+
+        def fail(*_a):
+            raise OSError("no exec")
+        shown = []
+        with mock.patch.object(app, "_offer_series_save", lambda *_a: True), \
+                mock.patch.object(app, "_finish_saves_on_close", lambda: None), \
+                mock.patch.object(app, "destroy", lambda: order.append("destroy")), \
+                mock.patch.object(self.ca.os, "execv", fail), \
+                mock.patch.object(self.ca.os, "chdir", lambda *_a: None), \
+                mock.patch.object(self.ca.messagebox, "showinfo", lambda _t, m, **k: shown.append(m)), \
+                mock.patch.object(app, "series_path", ""):
+            app._restart_app()   # re-review S1: a failed restart says so and SHOBS-P stays open
+        self.assertEqual(order, [])
+        self.assertIn("could not restart itself (no exec)", shown[0])
+        self.assertFalse(app._closing)
         app._closing = False
         order.clear()
         with mock.patch.object(app, "_offer_series_save", lambda *_a: order.append("offer") or False), \

@@ -65,6 +65,8 @@ class UIWatch:
         prev, self._last_check = self._last_check, now
         if prev is not None and now - prev > SLEEP_S:
             self.last = now
+            self.log(f"UI watch was held {now - prev:.0f} s itself (the computer slept, or the interpreter was held); "
+                     "counting again.")
             return
         gap = now - self.last
         if gap >= self.stall_s and self._said == 0:

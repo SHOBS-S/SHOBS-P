@@ -4,7 +4,7 @@ On Windows and Linux, multiplying `tk scaling` makes every point-sized font, dis
 follow. On a Mac (Aqua Tk) point-sized fonts are drawn at their point size whatever the scaling says, and matplotlib
 reads the scaling only on Windows and Linux. apply() therefore MEASURES whether fonts grew; when they did not, the
 fonts are scaled where they are given: every font tuple or size handed to Tk (widget options, ttk styles, Font
-objects), Tk's named fonts, and matplotlib's font size and figure dpi.
+objects), Tk's named fonts, and matplotlib's figure dpi (text, lines and markers together).
 """
 import tkinter
 import tkinter.font as tkfont
@@ -41,6 +41,9 @@ def _scale_kw(kw: dict) -> dict:
 
 
 def _install():
+    """The Mac path only. Covers what SHOBS-P uses: font TUPLES in widget options (create, configure, canvas items,
+    tags), ttk Style.configure, and Font(font=tuple) / Font(size=N). Not covered (unused by SHOBS-P today; re-review
+    N2): string specs ("Helvetica 10"), Style.map(font=...), Font.configure(size=...), and Font.copy() (scales twice)."""
     global _installed
     if _installed:
         return
@@ -95,9 +98,12 @@ def apply(widget, pct: int) -> str:
     try:
         before = _linespace(widget)
         widget.tk.call("tk", "scaling", float(widget.tk.call("tk", "scaling")) * factor)
-        after = _linespace(widget)
     except Exception:
         return ""
+    try:
+        after = _linespace(widget)
+    except Exception:
+        return "tk scaling"   # re-review N3: the scaling is in place; whether fonts followed cannot be told
     if before > 0 and abs(after / before - 1.0) >= 0.5 * abs(factor - 1.0):
         return "tk scaling"   # point fonts followed (Windows, Linux)
     # Fonts did not follow the scaling (Aqua): scale them where they are given.
