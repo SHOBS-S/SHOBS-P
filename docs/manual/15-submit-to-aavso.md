@@ -143,7 +143,7 @@ The marks are saved in the series file. The same marks and warning apply to the 
 
 ## Which points go in
 
-- Only **used** points: flagged points are left out while **Leave flagged points out (sat, drift, cloud)** is ticked (chapter 12).
+- Only **used** points: flagged points are left out while **Leave flagged points out (sat, drift, cloud)** is ticked (chapter 12). Points you trimmed are always left out, and the NOTES of that night's rows record the trimmed spans (from 2.4.0).
 - Frames flagged during a planet transit are **always** left out. The log says how many.
 - The magnitudes are as measured against your comps. The line-up checkboxes, the check-star correction and the airmass-corrected night means do not change the report.
 

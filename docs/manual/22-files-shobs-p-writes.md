@@ -106,7 +106,7 @@ saved by earlier versions have no such field and load as before (every point rea
 
 - **Save series** always asks where to save it, suggesting `<star>.cvseries`.
 - After that, many actions save it again by themselves: adding or removing a night, night notes, **Use comps…**,
-  planet-transit flags, catalog magnitudes typed in **Use comps…**, and report bookkeeping (saved reports and the
+  **Trim** and **Clear trim**, planet-transit flags, catalog magnitudes typed in **Use comps…**, and report bookkeeping (saved reports and the
   nights marked sent). The status bar says so (*"Auto-saved to …"*).
 - **The backup copy.** The first time SHOBS-P writes to a series file in a session, it keeps the previous version as
   `<name>_prev.cvseries`. Later writes in that session leave the `_prev` file alone, so it always holds the series
@@ -114,6 +114,10 @@ saved by earlier versions have no such field and load as before (every point rea
 - **`<name>_backup.cvseries`.** Written beside the series, and never overwritten (the next ones are `_backup2`,
   `_backup3`…): the original of a series made before 2.4.0, copied when Load series updates it to the star
   records; and the series as it was each time you press **Use new value** under **Series magnitudes…**.
+- **Trims.** From 2.4.0 a night's trimmed spans (**Trim** on the Variables Output page, chapter 12) are kept in
+  that night's settings (`"night_binning"` → the night → `"trims"`: a list of `[JD from, JD to]`), and each trimmed
+  point carries the word `trim` in its `flag`. The points themselves stay in the file. A series without the field
+  loads as before; an older SHOBS-P ignores the field but treats the points as flagged.
 - **Star records.** From 2.4.0 the file holds one record per comp and check star (`"stars"`): its sky position,
   every name it goes by, every catalog magnitude with its source and the one the series uses. The older entries
   (comp names, catalog magnitudes, positions) are still written, so an older SHOBS-P can read the file.

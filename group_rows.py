@@ -22,7 +22,7 @@ GROUPS = (
     ("points", "Points",
      {"transits": "Points: which frames go into the fit (trim, flagged frames)." + FEEDS,
       "variables": "Points: which points go into the period and the report (flagged points, cloud, transmission "
-                   "loss, planet transits)." + FEEDS.replace("has to be made again", "is made again by itself")}),
+                   "loss, planet transits, trim)." + FEEDS.replace("has to be made again", "is made again by itself")}),
     ("corrections", "Corrections",
      {"transits": "Corrections: trends taken out of the light curve (detrend, meridian flip)." + FEEDS,
       "variables": "Corrections: how nights and segments are lined up before the period search."
@@ -69,6 +69,8 @@ class FlowBox:
 
     def __init__(self, parent, style="Card.TFrame"):
         self.frame = ttk.Frame(parent, style=style)
+        self._style = style
+        self._lines = []         # 2.4.0 step 8 (#89): one frame per line of the wrapped row
         self.items = []          # [widget, pad, wrapping label?]
         self.hidden = set()
         self._key = None
@@ -128,9 +130,19 @@ class FlowBox:
             for w, _p, _wr in self.items:
                 w.pack_forget()
                 w.grid_forget()
+            # 2.4.0 step 8 (#89): each line is laid out on its own (a frame per line), as text wraps. One grid for
+            # every line lined the second line's controls up under the first line's columns, which pushed a line
+            # with more controls than the one above it past the page's edge (Trim on a 1366-px screen).
+            for line in self._lines:
+                line.destroy()
+            self._lines = []
             for r, row in enumerate(rows):
-                for c, i in enumerate(row):
-                    shown[i][0].grid(row=r, column=c, sticky=W, padx=(0, shown[i][1]), pady=(0, 1))
+                line = ttk.Frame(self.frame, style=self._style)
+                line.grid(row=r, column=0, sticky=W)
+                self._lines.append(line)
+                for i in row:
+                    shown[i][0].pack(in_=line, side=LEFT, padx=(0, shown[i][1]), pady=(0, 1))
+                    shown[i][0].lift()
         except Exception:
             pass
 

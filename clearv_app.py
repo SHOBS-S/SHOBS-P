@@ -59,6 +59,7 @@ import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
 from neighbors_ui import NeighborsMixin, scan_star_period   # 2.4.0 step 7d: the Field scan page's Check neighbors and Outside data
+from trim_ui import TrimMixin   # 2.4.0 step 8 (#89): Trim on the Variables Output page
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1607,7 +1608,7 @@ class NewVersionWindow:
 SKIP_FINDING_SHARE = 0.10
 
 
-class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7d: NeighborsMixin = the Field scan checks
+class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7d: NeighborsMixin = the Field scan checks
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
     def _keep_on_screen(self):
@@ -19512,7 +19513,10 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.series_mode_unknown = False   # 2.2.14 (item 19): the file records the mode from now on
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self._take_series_snapshot()   # 2.2.14 (item 11): the series (added to or new) as it now is
+        old_trims = self._night_info(night).get("trims")   # 2.4.0 step 8 (#89): a night's trims stay with the night
         self.night_bin[night] = self._night_setup()
+        if old_trims:
+            self._carry_trims(night, old_trims, night_points)
         if tonight_comps is not None:
             self.night_bin[night]["comps"] = tonight_comps   # review: the comps this night's magnitudes came from
         # 2.2.18 (item 8): the night's mount goes with it; an alt-az night has no pier sides ("—").
@@ -20699,7 +20703,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
     def _usable(self) -> list:
         """Observations that go into the period search and the AAVSO report."""
         if not self.skip_flagged.get():
-            return [obs for obs in self.observations if math.isfinite(obs.mag)]
+            # 2.4.0 step 8 (#89): a trimmed point stays out either way (a trim is the user's own choice)
+            return [obs for obs in self.observations if math.isfinite(obs.mag) and not core.is_trimmed(obs)]
         return [obs for obs in self.observations if not obs.flag and math.isfinite(obs.mag)]
 
     def _cloud_fraction(self) -> float:
@@ -20713,6 +20718,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # nights where the user chose to keep them stay unflagged. The episodes are kept for the night table.
         keep = {n for n, info in self.night_bin.items() if isinstance(info, dict) and info.get("keep_transmission")}
         self._loss_report = {}
+        self._apply_trims()   # 2.4.0 step 8 (#89): the 'trim' word follows each night's saved spans, every time
         n = core.apply_cloud_flags(self.observations, self._cloud_fraction(), keep_nights=keep,
                                    report=self._loss_report)
         for night, eps in self._loss_report.items():
@@ -22021,7 +22027,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             g, text="Leave flagged points out (sat, drift, cloud)",
             variable=self.skip_flagged, command=self.refit_period), pad=14)
         self._add_tooltip(skip_box, "Leaves the flagged points (saturated, drifted, cloud) out of the period and the "
-                                    "report. Frames taken during a planet's transit never go in a report.")
+                                    "report. Frames taken during a planet's transit never go in a report, and "
+                                    "trimmed points stay out either way.")
         cloud_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(cloud_box, text="Cloud flag: more than", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         ttk.Entry(cloud_box, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
@@ -22032,6 +22039,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         groups.add("points", ttk.Button(g, text="Transmission loss…", command=self.edit_transmission))
         # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
         groups.add("points", ttk.Button(g, text="Planet transits…", command=self.edit_planet_transits))
+        # 2.4.0 step 8 (#89): Trim, one night at a time (trim_ui.TrimMixin); greyed until a night is chosen.
+        self._trim_build_ui(groups, g)
 
         # ---- 3. Corrections: how nights and segments are lined up
         g = groups.parent("corrections")
@@ -22486,8 +22495,11 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
     def draw_output(self):
         self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
         self.update_field_buttons()   # 2.4.0 (#101): a new night, reduction or series makes Save field image live
+        self.update_trim_state()      # 2.4.0 step 8 (#89): Trim is live only with one night chosen
         if self.out_canvas is None:
             return
+        self._trim_axis = None
+        self._drop_trim_selector()    # the old drag selector goes with the cleared axes; a drawn series makes a new one
         for ax in (self.out_ax1, self.out_ax2, self.out_ax3, self.out_ax4):
             ax.clear()
         self._hover_sets = []
@@ -22522,7 +22534,9 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         flagged = np.array([bool(o.flag) for o in obs_list])
         tx = self._time_values(jd)
         not_finite = ~np.isfinite(mag)
-        excluded = (flagged | not_finite) if self.skip_flagged.get() else not_finite
+        # 2.4.0 step 8 (#89): trimmed points are left out whatever the box says, and drawn apart (_draw_trim).
+        trimmed = np.array([core.is_trimmed(o) for o in obs_list], dtype=bool)
+        excluded = (flagged | not_finite) if self.skip_flagged.get() else (not_finite | trimmed)
         # Each night's meridian-flip step, measured on the plotted magnitudes (always reported).
         # 2.4.0 step 8 (#66): and each re-center's step (every step inside a night).
         flip_steps = core.night_steps(obs_list, list(mag), use=list(~excluded))
@@ -22569,7 +22583,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 lc_x[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
                 color=colors[i % len(colors)], ecolor="#b0b0b0", lw=0.8,
             )   # 2.2.14 (item 16): no legend; the time axis and the night table name the nights
-            drop = mask & excluded
+            drop = mask & excluded & ~trimmed
             if drop.any():
                 ax.plot(lc_x[drop], mag[drop], "x", ms=6, color="#888888", alpha=alpha_for(night, 1.0))
         ax.invert_yaxis()
@@ -22596,7 +22610,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     ax.plot(lc_x[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
         # 2.2.14 (item 16): a symbol key in the title, only for the symbols drawn (8 nights overflowed a legend).
         # 2.2.14 review: only drawn × count (a NaN point is left out but not plotted).
-        key = ((["× flagged, left out"] if (excluded & np.isfinite(mag) & in_zoom).any() else [])
+        key = ((["× flagged, left out"] if (excluded & ~trimmed & np.isfinite(mag) & in_zoom).any() else [])
                + (["○ after flip"] if (flip_mask & in_zoom).any() else []))
         # 2.4.0 step 8 (#66): a dashed line where the mount re-centered (between the two frames), so the segment
         # boundary shows on the light curve as the rings show a flip
@@ -22643,6 +22657,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             off_scale += self._pin_off_scale(ax, lc_x, mag, excluded & nm & in_zoom, alpha_for(night, 1.0))
         if off_scale:
             key.append(f"{off_scale} flagged off scale")
+        # 2.4.0 step 8 (#89): trimmed points as faint gray × in a band labelled 'trimmed'
+        key += self._draw_trim(ax, obs_list, lc_x, jd, mag, trimmed, in_zoom, nights, zoom, alpha_for)
         self._title_with_key(ax, (self.star_id.get() or "Target")
                              + (f" · {self.night_label(zoom, short=True)}" if zoom is not None else ""), key)
 
@@ -22977,6 +22993,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         ax.grid(True, alpha=0.3)
         self.out_fig.tight_layout()
         self._refit_lc_title()   # 2.2.14 (item 16): re-measure the title key on the laid-out axes
+        self._make_trim_selector()   # 2.4.0 step 8 (#89): drag across the light curve to fill the Trim boxes
         self.out_canvas.draw_idle()
 
     # ---- Output summary (boxes + per-night table) ------------------------------------
@@ -23227,6 +23244,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 flags[core.HAZE_SHORT] = flags.pop(core.HAZE_FLAG)
             if "cloudedge" in flags:   # 2.2.14 (item 10): in words too
                 flags[core.CLOUD_EDGE_LABEL] = flags.pop("cloudedge")
+            if core.TRIM_FLAG in flags:   # 2.4.0 step 8 (#89): the night's trimmed count
+                flags["trimmed"] = flags.pop(core.TRIM_FLAG)
             kept_haze = self._transmission_summary(night)[0] \
                 if self._night_info(night).get("keep_transmission") else 0
             if kept_haze:
@@ -24920,7 +24939,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 inst = o.spare_insts.get(name)
             if inst is None or not math.isfinite(inst) or not math.isfinite(o.cmag) or not math.isfinite(o.comp_cat):
                 continue
-            if set(o.flag.split()) & {"cloud", "cloudedge", core.HAZE_FLAG, "drift", "noflux", "nocomp"}:   # 2.2.14
+            if set(o.flag.split()) & {"cloud", "cloudedge", core.HAZE_FLAG, "drift", "noflux", "nocomp",
+                                      core.TRIM_FLAG}:   # 2.2.14; 2.4.0 step 8 (#89): trimmed frames too
                 continue
             out_obs.append(o)
             out_mag.append(o.comp_cat + inst - o.cmag)
@@ -25624,8 +25644,16 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points))),
             filt=self._filter_code(),
             scint=self._scint_setup(),
-            night_notes=self._findings_night_notes(points),   # 2.3.6 run-through item 6: only the run night's rows
+            night_notes=self._report_night_notes(points),   # 2.3.6 run-through item 6: only the run night's rows
         )
+
+    def _report_night_notes(self, points) -> dict:
+        """2.4.0 step 8 (#89): the per-night NOTES of a report: the run's findings (2.3.6) and each night's trimmed
+        spans, each only on its own night's rows."""
+        notes = dict(self._findings_night_notes(points))
+        for night, words in self._trim_night_notes(points).items():
+            notes[night] = (notes[night] + "; " if notes.get(night) else "") + words
+        return notes
 
     def save_aavso(self):
         if not self.observations:
@@ -25805,6 +25833,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     out_by.setdefault(why, []).append(nums[id(o)])
             lines.append("Frames left out (flag: frame numbers): "
                          + ("; ".join(f"{why} {tu.frame_ranges(v)}" for why, v in sorted(out_by.items())) or "none"))
+            if self._trim_settings_line(night):   # 2.4.0 step 8 (#89)
+                lines.append(self._trim_settings_line(night))
             masters = setup.get("masters") or []
             lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
             lines.append(tu.gain_note(setup.get("photon_noise")))

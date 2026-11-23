@@ -7,6 +7,7 @@ SHOBS-P times an extremum from one night of your series and keeps the results in
 ## Before you start
 
 - The night must cover the maximum or minimum, with points well before and after it. SHOBS-P needs at least 12 usable points.
+- Only untrimmed points are used (from 2.4.0): a stretch left out with **Trim** on the Output page (chapter 12) is left out of the time of maximum or minimum too, whether **Leave flagged points out** is ticked or not. Never trim around the maximum itself to tidy it.
 - For the O − C, you need the star's elements. SHOBS-P can fetch them from VSX.
 - For heliocentric or barycentric times (HJD, BJD_TDB), the target's RA/Dec must be on the Input page. They are filled in when the Star ID is looked up. Without them, times stay in JD, and the O−C is taken in JD (up to 8 minutes off).
 
