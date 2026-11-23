@@ -44,11 +44,17 @@ def _f(v, default=None):
         return default
 
 
+# 7d nit: where "Our period" came from, said in the box itself (not only in the Log)
+PERIOD_SOURCE_WORDS = {"scan": "the field scan's period for this star",
+                       "search": "this night's best period: the scan lists none for this star"}
+
+
 def outside_text(name: str, res: dict) -> str:
     """The outside-data result in words, for the message box: the summary, then one line per survey."""
     lines = [f"Outside data for {name}", "", res.get("summary") or "", ""]
     if res.get("period"):
-        lines[1:1] = ["", f"Our period: {float(res['period']):.6f} d"]
+        src = PERIOD_SOURCE_WORDS.get(res.get("period_source") or "", "")
+        lines[1:1] = ["", f"Our period: {float(res['period']):.6f} d" + (f" ({src})" if src else "")]
     for s, r in (res.get("surveys") or {}).items():
         lines.append(f"{s}: {r.get('detail') or r.get('status')}")
         if r.get("note"):
@@ -90,7 +96,7 @@ class NeighborsMixin:
 
     # ---- Outside data ------------------------------------------------------------------------------------------
     def outside_check(self, name: str, ra: float, dec: float, period: float, *, period_range=None,
-                      parent=None) -> bool:
+                      parent=None, period_source: str = "") -> bool:
         """ZTF, TESS and ATLAS at the star's position, in the background. The result is written to the Log and shown
         in a message box: what each survey found, and whether it agrees with our period. Nothing is stored.
         period_range: (min, max) days the surveys' light curves are searched over (the field scan's own range)."""
@@ -113,6 +119,8 @@ class NeighborsMixin:
             res, error = None, ""
             try:
                 res = od.check(float(ra), float(dec), float(period), min_period=pmin, max_period=pmax)
+                if period_source:
+                    res["period_source"] = period_source   # "scan" or "search", shown beside Our period
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             self.call_ui(self._outside_done, tok, key, res, error, parent)

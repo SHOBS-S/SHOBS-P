@@ -199,7 +199,8 @@ turned to another angle corrects the wrong pattern, often by about 1%: enough to
 So **take flats with the camera in the same rotation as the lights**. If your capture program writes the rotator angle
 into the header (`ROTATOR` or a similar keyword), SHOBS-P checks this for you:
 
-- If the flats and lights were taken at angles more than 2° apart, it asks before calibrating.
+- If the flats and lights were taken at angles more than 10° apart (5° on an alt-az mount), it asks before
+  calibrating. Smaller differences are usually plate-solve wobble, not a turned camera.
 - If the Flat folder mixes flats from different angles, it asks too, because one master flat built from all of them
   matches none of them exactly.
 

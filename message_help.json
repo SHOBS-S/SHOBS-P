@@ -390,6 +390,13 @@
   {
    "section": "Calibrate",
    "patterns": [
+    "The master flat was taken at rotator angle …° and the lights at …°: the camera turned about …°"
+   ],
+   "todo": "Use flats taken at the lights' angle, or retake flats. If the camera was not turned, the two readings are plate-solve wobble: nothing to do."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
     "Flats taken with the derotator at sky angle …, lights at …°. That is fine: …"
    ],
    "todo": "Nothing."

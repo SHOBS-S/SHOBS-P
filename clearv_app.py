@@ -28959,7 +28959,7 @@ class ScanView:
                          f"light curve this night, {period:.5f} d (as Check neighbors does).")
         # the surveys' light curves are searched over the scan's own period range
         if not self.app.outside_check(label, ra, dec, float(period), period_range=r.get("period_range"),
-                                      parent=self.win):
+                                      parent=self.win, period_source=source):
             messagebox.showinfo(APP_TITLE, f"The outside-data check for {label} is running already.", parent=self.win)
 
     def add_suspect(self):

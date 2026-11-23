@@ -542,7 +542,9 @@ class TestFieldScanChecks(m4.AppCase):
         self.assertIn("Outside data agrees: ZTF and TESS.", args[1])
         self.assertIn("ATLAS classes it dubious", args[1])
         self.assertTrue(self.said("Outside data for S033: Outside data agrees: ZTF and TESS."))
-        self.assertTrue(self.said("  ZTF: ZTF "))
+        self.assertTrue(self.said("  ZTF: z"))                 # 7d nit: no "ZTF: ZTF"
+        self.assertFalse(self.said("ZTF: ZTF"))
+        self.assertIn("Our period: 0.102790 d (the field scan's period for this star)", args[1])
         self.assertFalse(self.said("Registry"))
         self.assertEqual(self.app.watch_list, [])            # nothing is stored anywhere
         self.assertNotIn("outside", self.r)
@@ -569,6 +571,7 @@ class TestFieldScanChecks(m4.AppCase):
         self.assertEqual(calls, [P])
         self.assertEqual(self.boxes[-1][0], "showinfo")
         self.assertIn("Outside data for S051", self.boxes[-1][1][1])
+        self.assertIn("(this night's best period: the scan lists none for this star)", self.boxes[-1][1][1])
         self.assertTrue(self.said("the scan lists no period for it; using the best period of its light curve"))
 
     def test_running_is_keyed_by_the_star_not_only_its_label(self):   # review N3
@@ -707,3 +710,51 @@ class TestOldSeriesWithGateReports(m4.AppCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Step7dNits(unittest.TestCase):
+    """7d regression nits (23 Nov): ZTF named once; a ~1 d survey period called the daily alias."""
+
+    def test_daily_alias_relation(self):
+        self.assertEqual(od.relation(0.997816, 0.206273), "daily")
+        self.assertEqual(od.relation(0.999318, 0.206273), "daily")
+        self.assertEqual(od.relation(1.02, 0.206273), "other")
+        self.assertEqual(od.relation(0.998, 0.9985), "same")       # our own period near 1 d still agrees
+
+    def test_daily_alias_words(self):
+        res = {"surveys": {"ZTF": {"status": "ok", "period": 0.997816, "fap": 0.5, "relation": "daily"},
+                           "TESS": {"status": "none"}, "ATLAS": {"status": "none"}}}
+        text = od.summary(res)
+        self.assertIn("No outside survey confirms the period.", text)
+        self.assertIn("ZTF finds 0.997816 d, not counted", text)   # an insignificant peak says so first
+        res["surveys"]["ZTF"]["fap"] = 0.0
+        self.assertIn("ZTF finds 0.997816 d (about 1 day: the daily sampling alias, not a period)", od.summary(res))
+        self.assertNotIn("(other)", od.summary(res))
+
+    def test_ztf_detail_names_the_band_not_the_survey(self):
+        src = _src("outside_data.py")
+        self.assertNotIn('"detail": "ZTF ', src)
+        self.assertNotIn('"detail": "ZTF: ', src)
+
+
+class Step7dFlatAngleNits(unittest.TestCase):
+    """7d regression (23 Nov): flats 209° vs lights 35° on 13 Nov 26 is plate-solve wobble (6° after the flip)."""
+
+    def test_german_mount_tolerance_is_the_pier_side_one(self):
+        self.assertEqual(core.flat_angle_tolerance(None), core.PIER_ANGLE_TOL)
+        self.assertEqual(core.flat_angle_tolerance(core.MOUNT_ALTAZ), core.ALTAZ_FLAT_PA_TOL)
+
+    def _warns(self, fr, lr, mount=None):
+        _e, w = core.master_mismatches({"ROTATOR": fr}, "flat", {"ROTATOR": lr}, (10, 10), (10, 10), 1, mount=mount)
+        return [t for t in w if "rotator" in t]
+
+    def test_six_degrees_after_the_flip_is_quiet(self):
+        self.assertEqual(self._warns(209, 35), [])
+
+    def test_a_real_turn_is_a_capitalized_sentence_with_a_what_to_do(self):
+        import findings
+        w = self._warns(250, 35)
+        self.assertEqual(len(w), 1)
+        self.assertTrue(w[0].startswith("The master flat was taken at rotator angle 250° and the lights at 35°: "
+                                        "the camera turned about 35°"), w[0])
+        self.assertIn("Use flats taken at the lights' angle", findings.match_hint(w[0], findings.load_hints()))

@@ -153,9 +153,14 @@ def search(t, y, dy=None, min_period: float = 0.02, max_period: float = 20.0) ->
     return {"period": 1.0 / f, "power": pk, "fap": fap, "n": int(t.size)}
 
 
+DAILY_TOL = 0.01          # days: a survey period this close to 1 d (or 1 sidereal day) is the daily alias
+SIDEREAL_DAY = 0.99727
+
+
 def relation(found: float | None, ours: float | None) -> str | None:
     """How a survey's period stands to ours: "same" (within 1%), "alias" (our +-1 or +-2 c/d alias), "harmonic"
-    (2x or 1/2), "other"."""
+    (2x or 1/2), "daily" (about one day: the daily sampling alias of a ground survey, not a period; 7d nit),
+    "other"."""
     if not found or not ours:
         return None
     if abs(found - ours) / ours <= AGREE_TOL:
@@ -168,6 +173,8 @@ def relation(found: float | None, ours: float | None) -> str | None:
     for m in (2.0, 0.5):
         if abs(found - m * ours) / (m * ours) <= AGREE_TOL:
             return "harmonic"
+    if abs(found - 1.0) <= DAILY_TOL or abs(found - SIDEREAL_DAY) <= DAILY_TOL:
+        return "daily"
     return "other"
 
 
@@ -231,9 +238,9 @@ def ztf(ra: float, dec: float, period: float | None, min_period: float, max_peri
             if best is None or r["power"] > best["power"]:
                 best = r
     if best is None:
-        return {"status": "none", "detail": "ZTF: " + "; ".join(rows) if rows else "no usable ZTF points"}
+        return {"status": "none", "detail": "; ".join(rows) if rows else "no usable ZTF points"}
     return {"status": "ok", "period": best["period"], "power": best["power"], "fap": best["fap"], "n": best["n"],
-            "band": best["band"], "detail": "ZTF " + "; ".join(rows), "relation": relation(best["period"], period)}
+            "band": best["band"], "detail": "; ".join(rows), "relation": relation(best["period"], period)}
 
 
 # ---- TESS (QLP) ------------------------------------------------------------------------------------------------
@@ -436,6 +443,8 @@ def summary(res: dict) -> str:
             parts.append(f"{s} finds the same period ({r['period']:.6f} d)")
         elif r.get("relation") == "alias":
             parts.append(f"{s} finds our ±1 c/d alias ({r['period']:.6f} d)")
+        elif r.get("relation") == "daily":
+            parts.append(f"{s} finds {r['period']:.6g} d (about 1 day: the daily sampling alias, not a period)")
         elif r.get("period"):
             parts.append(f"{s} finds {r['period']:.6g} d ({r.get('relation') or 'other'})")
     head = ("Outside data agrees: " + " and ".join(res.get("agree") or []) + "." if res.get("agree")
