@@ -75,6 +75,8 @@ def frame_record(obs, reg=None) -> dict:
         why = "not aligned"
     rec = {"path": str(getattr(obs, "path", "")), "jd": float(obs.jd), "exp": float(getattr(obs, "exptime", 0) or 0),
            "segment": str(getattr(obs, "segment", "") or ""), "keep": not why, "why": why,
+           "jump": int(getattr(obs, "jump", 0) or 0),   # 2.4.0 step 8 (#66): re-centers before this frame
+
            "dx": float(reg["dx"]) if reg else 0.0, "dy": float(reg["dy"]) if reg else 0.0,
            "angle": float(reg.get("angle", 0.0)) if reg else 0.0, "flipped": bool(reg.get("flipped")) if reg else False,
            "raw_peak": float(getattr(obs, "raw_peak", float("nan"))),
@@ -366,7 +368,9 @@ def plan_groups(records, n: int, cadence_s: float | None = None) -> list[dict]:
     for r in kept:
         if cur:
             prev = cur[-1]
-            side_change = (r["segment"], r["flipped"]) != (prev["segment"], prev["flipped"])
+            # 2.4.0 step 8 (#66): a re-center ends a stack too (the stars sit on other pixels after it)
+            side_change = (r["segment"], r["flipped"], r.get("jump", 0)) != (
+                prev["segment"], prev["flipped"], prev.get("jump", 0))
             gap = (r["jd"] - prev["jd"]) * 86400.0 > max_gap
             if side_change or gap:
                 close()
@@ -713,6 +717,9 @@ def apply_member_peaks(obs, members) -> None:
     segs = {m["segment"] for m in members}
     if len(segs) == 1:
         obs.segment = next(iter(segs))
+    jumps = {int(m.get("jump", 0) or 0) for m in members}   # 2.4.0 step 8 (#66): no stack spans a re-center
+    if len(jumps) == 1:
+        obs.jump = next(iter(jumps))
 
 
 def summary(groups, n: int) -> dict:

@@ -1968,6 +1968,9 @@ class Obs:
     check_std: float | None = None
     flag: str = ""
     segment: str = ""   # "flip" for frames after a meridian flip
+    # 2.4.0 step 8 (#66): how many re-centers (pointing jumps on the same pier side) came before this frame in its
+    # night; each one starts a new segment, as a flip does. Saved with the series; 0 in series saved before 2.4.0.
+    jump: int = 0
     raw_peak: float = float("nan")
     # Each comparison star's instrumental magnitude, in the order the comps were given.
     comp_insts: list = field(default_factory=list)
@@ -6317,8 +6320,9 @@ def place_stars(stars: list[dict], solution: dict, target_xy: tuple[float, float
     return out
 
 
-def _segment_key(obs: Obs) -> tuple[str, str]:
-    return (obs.night, obs.segment)
+def _segment_key(obs: Obs) -> tuple:
+    # 2.4.0 step 8 (#66): a re-center (obs.jump) splits a night as a flip does
+    return (obs.night, obs.segment, int(getattr(obs, "jump", 0) or 0))
 
 
 def apply_night_zero_point(observations: list[Obs]) -> list[float]:
@@ -6329,7 +6333,7 @@ def apply_night_zero_point(observations: list[Obs]) -> list[float]:
     minus the median over the whole series, is that segment's offset. Segments without a
     check star are left as they are.
     """
-    by_seg: dict[tuple[str, str], list[float]] = {}
+    by_seg: dict[tuple, list[float]] = {}
     for obs in observations:
         if obs.check_std is None or not math.isfinite(obs.check_std):
             continue
@@ -6353,7 +6357,7 @@ def normalize_segments(observations: list[Obs], values: list[float] | None = Non
     vals = list(values) if values is not None else [obs.mag for obs in observations]
     if not vals:
         return []
-    groups: dict[tuple[str, str], list[float]] = {}
+    groups: dict[tuple, list[float]] = {}
     for obs, v in zip(observations, vals):
         if math.isfinite(v):
             groups.setdefault(_segment_key(obs), []).append(v)
@@ -6770,18 +6774,14 @@ def flip_offsets(observations: list[Obs], values: list[float], use: list[bool] |
 
     Only nights with at least min_points usable points on both sides get an offset.
     Returns {night: {"offset": mag, "n_before": n, "n_after": n}}.
-    """
-    before: dict[str, list[float]] = {}
-    after: dict[str, list[float]] = {}
-    for i, (obs, v) in enumerate(zip(observations, values)):
-        if not math.isfinite(v) or (use is not None and not use[i]):
-            continue
-        (after if obs.segment == "flip" else before).setdefault(obs.night, []).append(v)
+    2.4.0 step 8 (#66): on a night that also has a re-center, the step is taken right at the flip (the segment
+    after it minus the segment before it), from night_steps."""
     out = {}
-    for night, post in after.items():
-        pre = before.get(night, [])
-        if len(pre) >= min_points and len(post) >= min_points:
-            out[night] = {"offset": float(np.median(post) - np.median(pre)), "n_before": len(pre), "n_after": len(post)}
+    for night, steps in night_steps(observations, values, use=use, min_points=min_points).items():
+        for st in steps:
+            if st["kind"] == "flip":
+                out[night] = {"offset": st["offset"], "n_before": st["n_before"], "n_after": st["n_after"]}
+                break
     return out
 
 
@@ -6791,6 +6791,130 @@ def align_flips(observations: list[Obs], values: list[float], offsets: dict[str,
     normalize_segments, which lines up every night as well)."""
     return [v - offsets[obs.night]["offset"] if obs.segment == "flip" and obs.night in offsets else v
             for obs, v in zip(observations, values)]
+
+
+# ---- 2.4.0 step 8 (#66): re-centers (a pointing jump without a flip) as segments ---------------------------------
+RECENTER_ARCSEC = 20.0   # a jump between two consecutive frames of at least this much on the sky ...
+RECENTER_PX = 10.0       # ... AND at least this many pixels of the stored frame starts a new segment (John, 23 Nov)
+STEP_FLIP, STEP_RECENTER = "flip", "re-center"
+
+
+def pointing_jumps(regs: list, scale_arcsec: float | None = None, px_factor: float = 1.0) -> list[dict]:
+    """Where the pointing jumped between two consecutive frames. regs: each measured frame's registration against
+    the reference frame ({"dx", "dy", "flipped"}; None for a frame that was not aligned), in time order.
+    scale_arcsec: arcseconds per pixel of the registered image; px_factor: stored-frame pixels per pixel of the
+    registered image (software binning x the color camera's 2x2 superpixel).
+
+    A jump is a move of the field of at least RECENTER_ARCSEC and at least RECENTER_PX stored pixels from one frame
+    to the next (both must be passed; small dithers and drift pass neither). Without a plate scale only the pixel
+    limit can be tested ("arcsec" is then None). A meridian flip (the two frames differ in "flipped") is not a jump.
+    Returns [{"index": k (the first frame after the jump), "px", "arcsec", "dx", "dy" (stored pixels)}]."""
+    try:
+        scale = float(scale_arcsec) if scale_arcsec is not None else None
+        scale = scale if scale and math.isfinite(scale) and scale > 0 else None
+    except (TypeError, ValueError):
+        scale = None
+    factor = float(px_factor) if px_factor and math.isfinite(float(px_factor)) and float(px_factor) > 0 else 1.0
+    out = []
+    prev = None
+    for k, reg in enumerate(regs):
+        if not reg:
+            continue
+        try:
+            cur = (float(reg["dx"]), float(reg["dy"]), bool(reg.get("flipped")))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (math.isfinite(cur[0]) and math.isfinite(cur[1])):
+            continue
+        if prev is not None and prev[2] == cur[2]:
+            ddx, ddy = cur[0] - prev[0], cur[1] - prev[1]
+            d = math.hypot(ddx, ddy)
+            arcsec = d * scale if scale else None
+            if d * factor >= RECENTER_PX and (arcsec is None or arcsec >= RECENTER_ARCSEC):
+                out.append({"index": k, "px": d * factor, "arcsec": arcsec, "dx": ddx * factor, "dy": ddy * factor})
+        prev = cur
+    return out
+
+
+def mark_recenters(observations: list[Obs], regs: list, scale_arcsec: float | None = None,
+                   px_factor: float = 1.0) -> list[dict]:
+    """Set each point's `jump` (re-centers before it in the night) from the frames' registrations and return the
+    re-centers found: pointing_jumps' records plus "before" / "after" (the Obs on each side). observations: one
+    night's measured points; regs: their registrations, in the same order. A jump at the meridian flip itself (the
+    points' segment changes there, also a flip found from the rotator readings) is the flip, not a re-center."""
+    order = sorted(range(len(observations)), key=lambda k: observations[k].jd)
+    pts = [observations[k] for k in order]
+    found = []
+    for j in pointing_jumps([regs[k] for k in order], scale_arcsec, px_factor):
+        k = j["index"]
+        before = next((m for m in range(k - 1, -1, -1) if regs[order[m]]), k - 1)
+        if (pts[k].segment or "") != (pts[before].segment or ""):
+            continue
+        found.append(dict(j, before=pts[before], after=pts[k]))
+    starts = sorted(j["index"] for j in found)
+    for k, o in enumerate(pts):
+        o.jump = sum(1 for b in starts if b <= k)
+    return found
+
+
+def recenter_text(jump: dict) -> str:
+    """'64″ (237 px)' for a re-center record; pixels only when the plate scale is not known."""
+    px = f"{jump['px']:.0f} px"
+    return f"{jump['arcsec']:.0f}″ ({px})" if jump.get("arcsec") is not None else px
+
+
+def _night_part(obs: Obs) -> tuple:
+    return (obs.segment or "", int(getattr(obs, "jump", 0) or 0))
+
+
+def night_steps(observations: list[Obs], values: list[float], use: list[bool] | None = None,
+                min_points: int = 5) -> dict[str, list[dict]]:
+    """2.4.0 step 8 (#66): every step inside a night, at its meridian flip and at each re-center.
+
+    A night's points fall into parts (before / after the flip, and between re-centers), in time order. Each part
+    with at least min_points usable points, after the first such part, gives one step:
+    {"kind": "flip" or "re-center", "part": (segment, jump), "offset": its median minus the median of the usable
+    part before it, "shift": its median minus the night's first usable part's, "n_before", "n_after"}.
+    Returns {night: [steps in time order]}; nights without a measurable step are left out."""
+    parts: dict[str, dict[tuple, list[float]]] = {}
+    for i, (obs, v) in enumerate(zip(observations, values)):
+        if not math.isfinite(v) or (use is not None and not use[i]):
+            continue
+        parts.setdefault(obs.night, {}).setdefault(_night_part(obs), []).append(v)
+    out = {}
+    for night, by_part in parts.items():
+        # the flip segment is the later one, and the re-center count only grows through the night
+        usable = [(key, by_part[key]) for key in sorted(by_part, key=lambda k: (k[0] == "flip", k[0], k[1]))
+                  if len(by_part[key]) >= min_points]
+        if len(usable) < 2:
+            continue
+        first = float(np.median(usable[0][1]))
+        steps = []
+        for (pkey, pvals), (key, vals) in zip(usable, usable[1:]):
+            med = float(np.median(vals))
+            steps.append({"kind": STEP_FLIP if key[0] != pkey[0] else STEP_RECENTER, "part": key,
+                          "offset": med - float(np.median(pvals)), "shift": med - first,
+                          "n_before": len(pvals), "n_after": len(vals)})
+        out[night] = steps
+    return out
+
+
+def align_steps(observations: list[Obs], values: list[float], steps: dict[str, list[dict]]) -> list[float]:
+    """Move every later part of a night (after the flip, after each re-center) onto the level of the night's first
+    part. Nights are not moved against each other ('Line up flip/re-center only (keep nights)')."""
+    shift = {(night, st["part"]): st["shift"] for night, sts in steps.items() for st in sts}
+    return [v - shift.get((obs.night, _night_part(obs)), 0.0) for obs, v in zip(observations, values)]
+
+
+def night_steps_text(steps: list[dict] | None, mark: float | None = None) -> str:
+    """A night's steps for the night table: '+0.012' for a flip alone (as before 2.4.0); with a re-center each step
+    says what it is ('flip +0.012, re-center +0.050'). A step over `mark` (FLIP_STEP_MARK) gets ' ⚠'. '—' = none."""
+    if not steps:
+        return "—"
+    mark = FLIP_STEP_MARK if mark is None else mark
+    plain = len(steps) == 1 and steps[0]["kind"] == STEP_FLIP
+    return ", ".join(("" if plain else st["kind"] + " ") + f"{st['offset']:+.3f}"
+                     + (" ⚠" if abs(st["offset"]) > mark else "") for st in steps)
 
 
 # ---- Choosing comparison stars after the fact (1.8) -------------------------------------
@@ -7934,10 +8058,19 @@ def _extra_comp_pos_fields(obs: Obs, n_comps: int) -> list[str]:
 
 def segment_words(observations: list[Obs]) -> list[str]:
     """2.2.2: the segment column in words: "before flip" / "after flip" on a night with a meridian flip,
-    "no flip" on a night without one (the stored value stays "" or "flip")."""
+    "no flip" on a night without one (the stored value stays "" or "flip").
+    2.4.0 step 8 (#66): on a night with a re-center the words go on with " / before re-center", " / after
+    re-center" or " / after re-center 2" (the second one); other nights read as before."""
     flipped = {o.night for o in observations if o.segment == "flip"}
-    return ["after flip" if o.segment == "flip" else ("before flip" if o.night in flipped else "no flip")
-            for o in observations]
+    jumped = {o.night for o in observations if getattr(o, "jump", 0)}
+    out = []
+    for o in observations:
+        words = "after flip" if o.segment == "flip" else ("before flip" if o.night in flipped else "no flip")
+        if o.night in jumped:
+            n = int(getattr(o, "jump", 0) or 0)
+            words += " / " + ("before re-center" if n == 0 else "after re-center" + (f" {n}" if n > 1 else ""))
+        out.append(words)
+    return out
 
 
 def write_curve_csv(path: str, observations: list[Obs], notes: dict | None = None, scint: dict | None = None) -> None:
@@ -8046,6 +8179,7 @@ def _obs_to_dict(obs: Obs) -> dict:
         "check_std": obs.check_std,
         "flag": obs.flag,
         "segment": obs.segment,
+        "jump": int(getattr(obs, "jump", 0) or 0),   # 2.4.0 step 8 (#66)
         "raw_peak": obs.raw_peak,
         "bv": obs.bv,
         "vr": obs.vr,
@@ -8065,6 +8199,13 @@ def _obs_to_dict(obs: Obs) -> dict:
         "raw_peaks": {str(k): (float(v) if v is not None and math.isfinite(float(v)) else None)
                       for k, v in (obs.raw_peaks or {}).items()},   # 2.2.19 (#16)
     }
+
+
+def _int_or_zero(v) -> int:
+    try:
+        return max(int(v), 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def obs_from_dict(raw: dict) -> Obs:
@@ -8091,6 +8232,7 @@ def obs_from_dict(raw: dict) -> Obs:
         check_std=None if raw.get("check_std") is None else float(raw["check_std"]),
         flag=str(raw.get("flag", "")),
         segment=str(raw.get("segment", "")),
+        jump=_int_or_zero(raw.get("jump")),   # 2.4.0 step 8 (#66): missing = saved before 2.4.0 (no re-centers)
         raw_peak=float(raw.get("raw_peak", float("nan")) if raw.get("raw_peak") is not None else float("nan")),
         bv=_float_or_nan(raw.get("bv")),
         vr=_float_or_nan(raw.get("vr")),
@@ -9524,11 +9666,15 @@ def scan_cautions(result: dict, i: int) -> list[str]:
     kind = (result.get("at_boundary") or {}).get(i)
     if kind == "flip":
         out.append("change begins at flip: check")
+    elif kind == "recenter":   # 2.4.0 step 8 (#66)
+        out.append("change begins at re-center: check")
     elif kind == "gap":
         out.append("change begins after a gap: check")
     noise = (result.get("noise_at_boundary") or {}).get(i)   # 2.2.7
     if noise == "flip" and kind != "flip":
         out.append("noise begins at flip: check")
+    elif noise == "recenter" and kind != "recenter":   # 2.4.0 step 8 (#66)
+        out.append("noise begins at re-center: check")
     elif noise == "gap" and kind != "gap":
         out.append("noise begins after a gap: check")
     return out
@@ -12055,10 +12201,13 @@ def peak_values(img: np.ndarray, pos: np.ndarray, radius: float) -> np.ndarray:
     return out
 
 
-def scan_boundaries(seg, jd) -> list[tuple[int, str]]:
+def scan_boundaries(seg, jd, recenters=()) -> list[tuple[int, str]]:
     """Frames that start something new: a meridian flip or rotator move (a new segment), or the first frame
-    after a long gap in time (more than 5x the usual cadence and at least 15 minutes)."""
+    after a long gap in time (more than 5x the usual cadence and at least 15 minutes).
+    2.4.0 step 8 (#66): recenters = the frames (indexes) that start a segment because the mount re-centered; they
+    are called "recenter" instead of "flip"."""
     seg = np.asarray(seg)
+    recenters = set(int(k) for k in recenters)
     jd = np.asarray(jd, dtype=float)
     out = []
     dt = np.diff(jd) if len(jd) > 1 else np.array([])
@@ -12066,7 +12215,7 @@ def scan_boundaries(seg, jd) -> list[tuple[int, str]]:
     gap = max(5.0 * usual, 15.0 / 1440.0)
     for k in range(1, len(jd)):
         if seg[k] != seg[k - 1]:
-            out.append((k, "flip"))
+            out.append((k, "recenter" if k in recenters else "flip"))
         elif jd[k] - jd[k - 1] > gap:
             out.append((k, "gap"))
     return out

@@ -50,7 +50,7 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | Button | File |
 |---|---|
 | **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. Beside it, `AAVSO_<star>_<filter>_<date>_SHOBS-P_settings.txt`: what the reported points were measured with, night by night (aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain (from 2.4.0 with how it was measured from the night's sky, or the night's sky check of EGAIN, and the SHOBS-FLUX camera profile check when there is a profile), telescope aperture, stacking, the SHOBS-P version), and the report's comps, check, scintillation and line-up choices. |
-| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. |
+| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. The `segment` column says `no flip`, `before flip` or `after flip`; on a night with a re-center (from 2.4.0, chapter 12) it goes on with ` / before re-center`, ` / after re-center` or ` / after re-center 2`. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
 | **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. The field image comes with the report: after the report is saved the button reads **Field image saved ✓** (no second `…_2_field.png`), or **Fetch AAVSO chart** when only the chart is missing; that saves just the chart beside the image (from 2.4.0). |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
@@ -100,6 +100,9 @@ many fields.
 
 A series (`.cvseries`) holds every night of one star in one mode: all points, flags, the comparison and check stars,
 night notes, the watch list and the settings of each night. It is a text file (JSON).
+
+From 2.4.0 each point also carries `jump`: how many re-centers came before it in its night (chapter 12). Series
+saved by earlier versions have no such field and load as before (every point reads 0, no re-center).
 
 - **Save series** always asks where to save it, suggesting `<star>.cvseries`.
 - After that, many actions save it again by themselves: adding or removing a night, night notes, **Use comps…**,
