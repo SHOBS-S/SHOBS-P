@@ -10116,7 +10116,11 @@ def convert_times(jd_utc: np.ndarray, system: str, ra_deg: float | None, dec_deg
 
 EXTREMUM_COLUMNS = ("star", "type", "hjd", "bjd_tdb", "jd_utc", "error_d", "error_min", "method", "cycle", "o_c_d",
                     "o_c_min", "period_d", "epoch", "elements", "night", "n_points", "window_min", "kvw_jd",
-                    "kvw_err", "poly_jd", "poly_err", "fourier_jd", "fourier_err", "time_note", "note")
+                    "kvw_err", "poly_jd", "poly_err", "fourier_jd", "fourier_err", "time_note", "note",
+                    # 2.4.0 step 8 (#90): the period the error's noise model used, and where it came from ('series',
+                    # 'times CSV', 'VSX', 'Period box', or 'none' = timed without one: the error may be low). Added at
+                    # the end, so the older columns keep their places; rows saved before 2.4.0 have them blank.
+                    "noise_period_d", "noise_period_source")
 
 ECLIPSING_TYPES = ("EA", "EB", "EW", "E", "ELL")
 
@@ -10415,14 +10419,67 @@ def fourier_extremum(t, m, period: float, t_guess: float, kind: str = "max", n_h
             "rms": float(np.sqrt(np.mean(resid ** 2))), "n": int(n)}
 
 
+def _five_minute_means(t, m):
+    edges = np.arange(t[0], t[-1] + 5.0 / 1440.0, 5.0 / 1440.0)
+    which = np.digitize(t, edges)
+    keys = np.unique(which)
+    return (np.array([t[which == k].mean() for k in keys]), np.array([m[which == k].mean() for k in keys]))
+
+
+def tune_noise_period(t, m, period: float, reach: float = 0.20, n_harm: int = 3) -> float:
+    """2.4.0 step 8 (#90): the period near `period` (within +-reach) whose Fourier series fits this night best, for
+    the Time of max/min noise model. The error should need only an approximate period, but a Fourier series held at
+    a period that is a little off cannot follow a night of more than one cycle: the star's own variation is left in
+    the residuals and counted as noise (simulated HADS nights of 6-8 h: a period 2% off doubled the error, 5% off
+    made it 4-5 times too large, a one-day alias 10 times). So the period is tuned on the night's 5-minute means
+    (n_harm harmonics; steps of 1% of a cycle's slip across the night) wherever the night covers more than one cycle;
+    a shorter night cannot tell periods apart, and there a period that is off does no such harm. Returns the tuned
+    period, or `period` itself when the night is too short or too sparse to tune it."""
+    t, m = _clean_sorted(t, m)
+    if not (period and period > 0) or t.size < 12:
+        return period
+    span = float(t[-1] - t[0])
+    if span < 1.05 * period:
+        return period
+    tb, mb = _five_minute_means(t, m)
+    if tb.size < 2 * n_harm + 8:
+        return period
+    step = 0.01 * period / span
+    n = int(reach / step)
+    best = None
+    for k in range(-n, n + 1):
+        p = period * (1.0 + k * step)
+        if span < 1.05 * p:
+            continue
+        a = _fourier_design(tb, p, n_harm, tb[0])
+        coef, *_ = np.linalg.lstsq(a, mb, rcond=None)
+        rss = float(np.sum((a @ coef - mb) ** 2))
+        if best is None or rss < best[0]:
+            best = (rss, p)
+    return float(best[1]) if best else period
+
+
 def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_guess: float | None = None,
-                     half_width: float | None = None, n_boot: int = 500, seed: int = 1) -> dict:
+                     half_width: float | None = None, n_boot: int = 500, seed: int = 1,
+                     window_period="same", tune_period: bool = False) -> dict:
     """One night's time of maximum or minimum (JD of the input times): the local polynomial with its bootstrap error
     is adopted; Kwee-van Woerden and (with a period) a Fourier series are measured alongside as checks.
-    Returns {"t", "err", "method", "kind", "half_width", "window", "kvw", "poly", "fourier", "warnings", "notes"};
-    raises ValueError when the extremum cannot be timed."""
+    2.4.0 step 8 (#90): `period` is the period of the error's noise model and of the Fourier check (approximate is
+    enough with tune_period=True, see tune_noise_period and extremum_noise_period); `window_period` is the elements'
+    period, which only sets where the extremum is looked for around t_guess (default: the same as `period`, as before
+    2.4.0). The two are separate so the error has its period whether or not elements were given, and so a noise
+    period cannot move the window.
+    Returns {"t", "err", "method", "kind", "half_width", "window", "kvw", "poly", "fourier", "warnings", "notes",
+    "noise_period" (the period asked for, None when the noise model was not fitted), "noise_period_tuned" (the
+    period the model was fitted at)}; raises ValueError when the extremum cannot be timed."""
     t, m = _clean_sorted(t, m)
-    win = extremum_window(t, m, kind, t_guess, period)
+    period = float(period) if period and math.isfinite(float(period)) and float(period) > 0 else None
+    if isinstance(window_period, str):
+        window_period = period
+    win = extremum_window(t, m, kind, t_guess, window_period or None)
+    asked = period
+    if period and tune_period:
+        period = tune_noise_period(t, m, period)
     hw = float(half_width) if half_width else win["half_width"]
     warnings = []
     if win["short_side"]:
@@ -10441,10 +10498,7 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
         # (chosen on every frame, BIC took 7-8 harmonics and hid half of it).
         try:
             n_harm = None
-            edges = np.arange(t[0], t[-1] + 5.0 / 1440.0, 5.0 / 1440.0)
-            which = np.digitize(t, edges)
-            tb = np.array([t[which == k].mean() for k in np.unique(which)])
-            mb = np.array([m[which == k].mean() for k in np.unique(which)])
+            tb, mb = _five_minute_means(t, m)
             if tb.size >= 12:
                 n_harm = fourier_extremum(tb, mb, period, win["t0"], kind, n_boot=0)["n_harm"]
             noise = fourier_extremum(t, m, period, win["t0"], kind, n_harm=n_harm, n_boot=0)["resid"]
@@ -10491,14 +10545,59 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
             warnings.append(f"the Fourier series at the period reads {abs(diff) * 1440:.1f} min "
                             f"{'later' if diff > 0 else 'earlier'} (more than 3 sigma): a second period, a short "
                             "branch, or the wrong period")
-    if not period:
-        # 2.2.14 review 2: without a period the bootstrap only sees the window's own residuals, which hide noise
-        # lasting minutes (tests: error low by about 2-3x on red noise).
-        notes.append("no period given: noise lasting minutes cannot be measured, so this error may be low by a factor "
-                     "of 2-3; give the elements for an honest error")
+    # 2.2.14 review 2: without a period the bootstrap only sees the window's own residuals, which hide noise lasting
+    # minutes (tests: error low by about 2-3x on red noise). 2.4.0 step 8 (#90): the "no period given" note that said
+    # so is gone from here; the caller finds a period for every measurement (extremum_noise_period) and, when there is
+    # none anywhere, says so itself next to the result ("noise_period" None tells it).
     return {"t": poly["t"], "err": err, "method": f"polynomial deg {poly['degree']} + bootstrap",
             "kind": kind, "half_width": hw, "window": win, "kvw": kvw, "poly": poly, "fourier": fourier,
-            "warnings": warnings, "notes": notes}
+            "warnings": warnings, "notes": notes, "noise_period": asked if noise is not None else None,
+            "noise_period_tuned": period if noise is not None else None}
+
+
+EXTREMUM_NOISE_SOURCES = ("series", "times CSV", "VSX", "Period box")
+
+
+def extremum_noise_period(series=None, csv_rows=None, vsx=None, typed=None) -> tuple:
+    """2.4.0 step 8 (#90): the period the Time of max/min error uses for its noise model, the best SHOBS-P has, in
+    this order: the series' own period (the Output page's period search, when it is a reliable one), the period last
+    used in the star's times CSV (the latest saved time that has one, of either type), VSX's, and last a period typed
+    in the window's Period box. No epoch is needed. Returns (period, source) with source one of
+    EXTREMUM_NOISE_SOURCES, or (None, 'none') when there is no period anywhere."""
+    def good(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if math.isfinite(v) and v > 0 else None
+
+    def when(r):
+        for k in ("hjd", "jd_utc", "bjd_tdb"):
+            v = r.get(k)
+            if isinstance(v, float) and math.isfinite(v):
+                return v
+        return float("-inf")
+    from_csv = None
+    for r in sorted(csv_rows or [], key=when):
+        if isinstance(r.get("period_d"), float) and good(r.get("period_d")):
+            from_csv = r["period_d"]
+    for value, source in zip((series, from_csv, vsx, typed), EXTREMUM_NOISE_SOURCES):
+        if good(value):
+            return good(value), source
+    return None, "none"
+
+
+def extremum_row_no_period(row: dict) -> bool:
+    """2.4.0 step 8 (#90): was this saved time measured without a period, so that its error may be 2-3 times too
+    small? Rows saved from 2.4.0 say so (noise_period_source 'none'); an older row was timed without one exactly
+    when it has no period_d (before 2.4.0 the error's period was the elements' period)."""
+    def blank(k):
+        v = row.get(k)
+        return v is None or (isinstance(v, float) and not math.isfinite(v)) or not str(v).strip()
+    source = "" if blank("noise_period_source") else str(row.get("noise_period_source")).strip().lower()
+    if source:
+        return source == "none"
+    return blank("noise_period_d") and blank("period_d")
 
 
 def predicted_extrema(t_start: float, t_end: float, period: float, epoch: float, margin: float = 0.0) -> list:
@@ -10543,7 +10642,7 @@ def extremum_csv_name(star: str) -> str:
 
 _EXTREMUM_NUMBERS = ("hjd", "bjd_tdb", "jd_utc", "error_d", "error_min", "cycle", "o_c_d", "o_c_min", "period_d",
                      "epoch", "n_points", "window_min", "kvw_jd", "kvw_err", "poly_jd", "poly_err", "fourier_jd",
-                     "fourier_err")
+                     "fourier_err", "noise_period_d")
 
 
 def same_star_text(a, b) -> bool:
@@ -10652,6 +10751,9 @@ def extremum_times_lines(rows: list[dict], limit: int = 8, elements=None) -> lis
             line += f"   O−C {stored:+.1f} min"
         if str(r.get("night") or "").strip():
             line += f"   night {str(r.get('night')).strip()}"
+        if extremum_row_no_period(r):
+            # 2.4.0 step 8 (#90): a time measured without a period can be spotted here and measured again.
+            line += "   (timed without a period: ± may be 2-3× too small; measure again)"
         out.append(line)
     return out
 
@@ -10701,7 +10803,7 @@ def save_extremum_row(path: str, row: dict) -> str:
                 return f"{v:.5f}"
             if k in ("error_d", "o_c_d", "kvw_err", "poly_err", "fourier_err"):
                 return f"{v:.5f}"
-            if k == "period_d":
+            if k in ("period_d", "noise_period_d"):
                 return f"{v:.8f}"
             if k == "cycle":
                 return f"{v:g}"
