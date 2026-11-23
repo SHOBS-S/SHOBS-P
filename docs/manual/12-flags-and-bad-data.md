@@ -2,13 +2,13 @@
 
 Not every frame deserves to be in your light curve. A passing cloud, a saturated star or a dewed-up corrector can each make points that are not the star. SHOBS-P *flags* such points rather than deleting them. Flagged points stay in the series, are drawn as gray **×** on the plots, and are left out of the period search and the AAVSO report. You can always change your mind.
 
-This chapter explains each flag, how to change the cloud limit, the dew/haze question, frames taken during a planet transit, and pier-side steps.
+This chapter explains each flag, how to change the cloud limit, the dew/haze question, frames taken during a planet transit, how to trim a bad stretch by hand, and pier-side steps.
 
 ## Leaving flagged points out
 
 On the Output page, the box **Leave flagged points out (sat, drift, cloud)**, in the **Points** row, is ticked by default. (Before 2.4.0 its label spelled out the rest, which is now its tooltip: flagged points are left out of the period and the report, and planet-transit frames never go in a report.) Leave it ticked.
 
-If you untick it, flagged points go into the period search and the AAVSO report too, each with its flag word in the report's notes. Planet-transit frames stay out of reports either way.
+If you untick it, flagged points go into the period search and the AAVSO report too, each with its flag word in the report's notes. Planet-transit frames stay out of reports either way, and points you trimmed ("Trim a bad stretch" below) stay out of everything either way.
 
 The light-curve CSV (**Save light-curve CSV**) always contains every point, flagged or not, with its flag word, so you can study the flagged points elsewhere.
 
@@ -26,6 +26,7 @@ The night table's **Flags** column counts them per night, for example `12 cloud,
 | `cloud edge` | A point just next to a cloud run, far off the night's level | Left out with the cloud frames. |
 | `dew/haze?` | All stars faded together, smoothly, with a flat sky | See "Dew and haze" below. |
 | `in planet b transit` | The frame falls in a known planet's predicted transit | See "Planet transits" below. |
+| `trimmed` | You left the point out with **Trim** (from 2.4.0) | See "Trim a bad stretch" below. **Clear trim** puts the night's trimmed points back. |
 | `nocomp` | None of the comps chosen with **Use comps…** was measured on this frame (a frame missing only some of them is kept, from the comps present) | See chapter 11. |
 
 ## Cloud
@@ -98,6 +99,49 @@ To check or change it later:
 2. Press **Planet transits…**.
 
 If no night has been checked yet, the button runs the check on every night. Your answer is saved in the series file at once.
+
+## Trim a bad stretch
+
+*New in 2.4.0.* Use Trim when part of a night is clearly bad and no flag caught it: trailed frames, a short burst
+of cirrus, a tracking jump. Before 2.4.0 the only way was to reject those frames one by one in Blink and run
+photometry again.
+
+Trim works on **one night at a time**, and a night must be chosen first. Until then the Trim boxes and buttons in
+the **Points** row are gray, dragging on the plot does nothing, and their tooltip says *Choose a night in the night
+table first: Trim works on one night at a time.* (A series with only one night needs no click: that night is the
+one.)
+
+To trim a stretch:
+
+1. On the Output page, click the night in the night table. The light curve zooms to it and the Trim controls wake
+   up.
+2. Drag across the light curve from the start to the end of the bad stretch. The **from** and **to** boxes fill with
+   the site's local times, and the status bar says how many points are inside.
+   Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
+   on the Input page) or a JD. Leave **from** empty to trim from the night's start, or **to** empty to trim to its
+   end.
+3. Click **Trim** (or press Enter in either box).
+
+The trimmed points show as faint gray **×** in a gray band labeled *trimmed*, and the night table's **Flags** column
+counts them (`12 trimmed`). Nothing is deleted: the points stay in the series with the flag word `trim`. They are
+left out of the period search, the fold, **Time of max/min…**, the AAVSO report, the watch-star light curves and the
+comp check, whether **Leave flagged points out** is ticked or not. The light-curve CSV still holds every point,
+with `trim` in its flag column. The AAVSO report's NOTES on that night's rows record each trimmed span (JD, the
+site's local times and their UTC offset, and the number of points), and so does the report's settings file.
+
+Each **Trim** adds another span to the night. A span only ever trims the chosen night's points, even if the times
+you typed run past the night. **Clear trim** puts the chosen night's trimmed points back; other nights keep theirs.
+There is no trim across a whole series: choose each night in turn.
+
+A trim belongs to its night and is **saved with the series**. When the series has a file, Trim and Clear trim
+write it at once; reopen the series and the trims are still there. If you measure the night again (Run photometry
+and add it to the series in place of the old one), the night keeps its trims as long as their points are still
+there.
+
+A trim must leave at least 20 usable points in the night. To drop a whole night, use **Remove night…** instead.
+
+> **Caution:** Trim bad data, not inconvenient data. Trim a stretch because you know what went wrong in those
+> frames (look at them in Blink), never because the points disagree with the period or the shape you expect.
 
 ## Pier side and meridian flips
 

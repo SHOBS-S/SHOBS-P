@@ -8508,6 +8508,50 @@ def apply_cloud_flags(observations: list[Obs], limit: float = 0.20, keep_nights=
     return flagged
 
 
+# 2.4.0 step 8 (#89): Trim on the Variables Output page. A trimmed point carries the flag word "trim" and stays in the
+# series; the spans the user trimmed are kept with their night (the night's setup, key "trims": [[JD from, JD to],
+# ...]) and the flag is re-derived from them, so nothing that rewrites flags can lose a trim.
+TRIM_FLAG = "trim"
+TRIM_MIN_POINTS = 20   # a trim must leave this many usable points in its night (the Transit page's minimum)
+
+
+def is_trimmed(obs) -> bool:
+    """2.4.0 step 8 (#89): True for a point the user trimmed (left out whatever 'Leave flagged points out' says)."""
+    return TRIM_FLAG in (obs.flag or "").split()
+
+
+def clean_trim_spans(spans) -> list:
+    """2.4.0 step 8 (#89): a night's stored trim spans as [(lo, hi), ...] in JD, lo <= hi; anything unreadable (a
+    hand-edited file) is dropped, never raised."""
+    out = []
+    for sp in (spans if isinstance(spans, (list, tuple)) else []):
+        try:
+            lo, hi = float(sp[0]), float(sp[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if math.isfinite(lo) and math.isfinite(hi) and lo <= hi:
+            out.append((lo, hi))
+    return out
+
+
+def apply_trim_flags(observations: list[Obs], trims_by_night: dict | None) -> int:
+    """2.4.0 step 8 (#89): set the flag word 'trim' on exactly the points inside their own night's trim spans
+    ({night: [[lo, hi], ...]}, JD) and take it off every other point. A span never reaches another night's points.
+    Other flag words are left alone. Returns how many points are trimmed."""
+    spans = {night: clean_trim_spans(v) for night, v in (trims_by_night or {}).items()}
+    n = 0
+    for o in observations:
+        words = [w for w in (o.flag or "").split() if w != TRIM_FLAG]
+        mine = spans.get(o.night) or ()
+        if mine and o.jd is not None and math.isfinite(o.jd) and any(lo <= o.jd <= hi for lo, hi in mine):
+            words.append(TRIM_FLAG)
+            n += 1
+        text = " ".join(words)
+        if text != (o.flag or ""):
+            o.flag = text
+    return n
+
+
 TRANSIT_FLAG = "transit"   # 2.2.15 (item 1): a frame taken while a planet of the target transits (campaign rule)
 
 

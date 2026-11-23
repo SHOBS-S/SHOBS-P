@@ -120,7 +120,7 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | Row | What it holds |
 |---|---|
 | **Data** | **Load series**, **Close series**, **Add series file…**, **Remove night…**, **Night notes…** (chapter 10) |
-| **Points** | **Leave flagged points out (sat, drift, cloud)**, **Cloud flag: more than … % below the night's median** with **Apply**, **Transmission loss…**, **Planet transits…** (chapter 12) |
+| **Points** | **Leave flagged points out (sat, drift, cloud)**, **Cloud flag: more than … % below the night's median** with **Apply**, **Transmission loss…**, **Planet transits…**, **Trim** from/to with **Trim** and **Clear trim** (one night at a time; gray until a night is chosen in the night table) (chapter 12) |
 | **Corrections** | **Line up segments (nights, meridian flip)**, **Line up flip only (keep nights)**, **Pier side as segments**, **Check-star correction (fold and period)** (chapters 12 and 13) |
 | **Fit** | **Period search (days)**, **Period from**, and the colored **Refit period** button (chapter 13) |
 | **Comps** | **Comp health…**, **Use comps…** (chapter 11) |
