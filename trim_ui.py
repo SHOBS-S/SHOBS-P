@@ -3,8 +3,8 @@
 A bad stretch that trips no flag (trailed frames, a short burst of cirrus) is left out by dragging across the light
 curve, or typing From / To, and pressing Trim, as on the Transit fit page. What is different here:
 
-- Trim works on ONE night at a time (John, 23 Nov 2026). A night must be chosen in the night table (a one-night series
-  is that night); with no night chosen every Trim control is greyed and the drag does nothing. A span trims only that
+- Trim works on ONE night at a time (John, 23 Nov 2026). A night must be chosen in the night table, even in a
+  one-night series; with no night chosen every Trim control is greyed and the drag does nothing. A span trims only that
   night's points, even when it runs past the night. There is no whole-series trim.
 - A trim belongs to its night inside the series and is saved with it: the night's setup holds
   "trims": [[JD from, JD to], ...] and each trimmed point carries the flag word "trim" (core.TRIM_FLAG). The flag is
@@ -107,8 +107,8 @@ class TrimMixin:
 
     # ---- which night, and its spans ---------------------------------------------------------------------------
     def _trim_night(self):
-        """The one night Trim works on: the night chosen in the night table, or the only night of a one-night
-        series; None otherwise (Trim is then not available)."""
+        """The one night Trim works on: the night chosen in the night table; None otherwise (Trim is then not
+        available). John, 23 Nov: a night must be selected, even in a one-night series."""
         nights = []
         for o in getattr(self, "observations", None) or []:
             if o.night not in nights:
@@ -116,7 +116,7 @@ class TrimMixin:
         chosen = getattr(self, "highlight_night", None)
         if chosen in nights:
             return chosen
-        return nights[0] if len(nights) == 1 else None
+        return None
 
     def _night_trims(self, night) -> list:
         return core.clean_trim_spans(self._night_info(night).get("trims"))

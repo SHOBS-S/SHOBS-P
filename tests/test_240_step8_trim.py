@@ -1,3 +1,4 @@
+import numpy as np
 """2.4.0 step 8 (#89): Trim on the Variables Output page, one night at a time (trim_ui.TrimMixin).
 
 core   the flag word 'trim' follows each night's spans and nothing else; other flag words are untouched.
@@ -137,8 +138,12 @@ class TestState(TrimCase):
         app.draw_output()
         self.assertTrue(all(self.disabled(w) for w in controls))
 
-    def test_one_night_series_is_its_night(self):
+    def test_one_night_series_still_needs_its_night_chosen(self):
+        # John, 23 Nov: Trim is not available until a night is selected, even in a one-night series.
         self.open(nights=(N1,))
+        self.assertIsNone(self.app._trim_night())
+        self.assertTrue(self.disabled(self.app.trim_button))
+        self.pick(N1)
         self.assertEqual(self.app._trim_night(), N1)
         self.assertFalse(self.disabled(self.app.trim_button))
 
@@ -276,14 +281,19 @@ class TestTrim(TrimCase):
                 p.stop()
         self.assertEqual(messages, {"info": [], "error": []})
         self.assertEqual([i for i, o in enumerate(second) if core.is_trimmed(o)], [10, 11, 12, 13, 14])
-        # another time axis, not zoomed (a one-night series): the drag still lands on the same frames
+        # a one-night series must have its night chosen too (John, 23 Nov); on any time axis the chosen night's
+        # plot is zoomed to it, and the drag still lands on the same frames
         for axis in ("JD", "UTC", "Local time"):
             self.open(nights=(N1,))
             app.time_axis.set(axis)
+            self.pick(N1)
             app.draw_output()
             first = self.night(N1)
-            xs = app._time_values([first[20].jd, first[22].jd])
-            app._trim_span_dragged(float(xs[0]) - 1e-4, float(xs[1]) + 1e-4)
+            amap = app._trim_axis
+            self.assertEqual(amap["night"], N1, axis)
+            xs = [float(amap["x"][int(np.argmin(np.abs(amap["jd"] - first[k].jd)))]) for k in (20, 22)]
+            gap = (first[1].jd - first[0].jd) / amap["scale"] / 4.0
+            app._trim_span_dragged(xs[0] - gap, xs[1] + gap)
             app.trim_points()
             self.assertEqual([i for i, o in enumerate(first) if core.is_trimmed(o)], [20, 21, 22], axis)
         app.time_axis.set("JD")

@@ -108,8 +108,8 @@ photometry again.
 
 Trim works on **one night at a time**, and a night must be chosen first. Until then the Trim boxes and buttons in
 the **Points** row are gray, dragging on the plot does nothing, and their tooltip says *Choose a night in the night
-table first: Trim works on one night at a time.* (A series with only one night needs no click: that night is the
-one.)
+table first: Trim works on one night at a time.* This holds even when the series has only one night: click it
+first.
 
 To trim a stretch:
 
