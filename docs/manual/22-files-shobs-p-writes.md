@@ -114,12 +114,6 @@ night notes, the watch list and the settings of each night. It is a text file (J
 - **Star records.** From 2.4.0 the file holds one record per comp and check star (`"stars"`): its sky position,
   every name it goes by, every catalog magnitude with its source and the one the series uses. The older entries
   (comp names, catalog magnitudes, positions) are still written, so an older SHOBS-P can read the file.
-- **`<name>_neighbors.json`** (from 2.4.0): beside the series, written by **Check neighbors…** (chapter 21): the
-  look-alikes it measured on the series' frames (each frame's value, matched to the series by time and file name),
-  its saved results and blend tests. The series file itself is not changed by it; delete it and the window measures
-  again.
-- **Watch-star reach-back** (from 2.4.0, chapter 21) writes its values into the series like any watch-star value; the
-  watch star's entry also notes each reach-back (when, how many frames, the check, the calibration used).
 - Star positions on the image are **not** stored. You mark the target and comparison stars again on each new night.
 - **Stacked nights.** A night whose points are stacks (the Photometry page's **Points: Stacked**, chapter 8) stores
   only the stacked points, and its settings carry a `"stack"` entry: the stack size N, the number of stacks and
@@ -158,7 +152,6 @@ on hidden items (on a Mac, Cmd+Shift+period in Finder).
 | `.shobs_p_cache\stacks\` | The stacks of the last **Stack** run (chapter 8): one 32-bit FITS file per stack, `stack_0001.fits` and on. Only the newest set is kept, because each stack is a full frame. Your Lights folder is never written to. |
 | `.shobs_p_cache\lookups\` | The last good answer from each online lookup: `simbad.json` and `vsx.json` (Star ID lookups), `vsx_cone.json` (the variable-star check), `vsp.json` (AAVSO charts and sequences), `nea.json` (planet lookups), and more from other services. Used only when the service does not answer; a live answer always replaces it. Only public catalog values are kept, never your site, observer code or data. **Clear cached catalogs** (Credits page) empties this folder and `catalogs`. |
 | `.shobs\onsky\` | One small JSON file per finished reduction, `<night>__<target>__<run id>.json`, for the SHOBS-FLUX app: the setup, the aperture and each frame's star fluxes, sky, seeing and airmass. Your site is never written to it. Since 2.3.0 it is format version 2: each star in each frame also has `e_per_unit` (electrons per SHOBS-P image unit, with the gain, binning, superpixel and flat included), and the measurement part has `e_per_unit_median`, `e_per_unit_source`, `e_per_unit_note`, `flat_applied` and `camera_bin_mode`. With no gain known, or on pre-calibrated frames, `e_per_unit` is empty (null) and the note says why. From 2.4.0, when `e_per_unit_source` is `sky`, `e_per_unit_note` says whether the gain was measured from the night's sky or is the one-frame lower limit. Nothing on screen changes. |
-| `.shobs\campaign_registry.json` | From 2.4.0: the Registry, one per observatory. Every Candidate and every star with an outcome (Confirmed new, Known, Rejected), keyed on its Gaia DR3 source ID: its status, the Campaign switch and its history, the last gate run's numbers and each gate, the quiet nights, the series files it came from. Written by the promotion gates after a night is saved and by the **Candidates…** window; the version before each write is kept as `campaign_registry_prev.json`. SHOBS-SCHED can read it. A file SHOBS-P cannot read is never replaced. |
 | `.shiloh_photometry_exports.json` | Named setups from the **Export…** window. |
 | `.shiloh_photometry_colorcal.json` | The color term saved from a field color calibration, reused on later nights. |
 
@@ -189,4 +182,4 @@ start.
 
 ---
 
-Previous: [21. Follow a suspect](21-follow-a-candidate.md) · Next: [23. Messages explained](23-messages-explained.md)
+Previous: [21. Check a suspect](21-follow-a-candidate.md) · Next: [23. Messages explained](23-messages-explained.md)

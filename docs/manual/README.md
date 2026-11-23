@@ -64,7 +64,7 @@ Create shortcut.command) and for 2.3.3 (damaged catalog answers turned away; the
 ## Part 5 — Discovery mode
 
 20. **[Scan a field](20-scan-a-field.md)** — solving, known variables, Faintest magnitude, the threshold, the two Suspect tests, the scan table and suspect kinds, the night's suspects file.
-21. **[Follow a suspect](21-follow-a-candidate.md)** — the watch list (remembered between sessions), adding nights, exporting light curves.
+21. **[Check a suspect](21-follow-a-candidate.md)** — what a suspect is, Check neighbors, Outside data, the watch list (remembered between sessions), adding nights, exporting light curves.
 
 ## Part 6 — Reference
 

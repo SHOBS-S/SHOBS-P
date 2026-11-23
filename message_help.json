@@ -390,6 +390,13 @@
   {
    "section": "Calibrate",
    "patterns": [
+    "The master flat was taken at rotator angle …° and the lights at …°: the camera turned about …°"
+   ],
+   "todo": "Use flats taken at the lights' angle, or retake flats. If the camera was not turned, the two readings are plate-solve wobble: nothing to do."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
     "Flats taken with the derotator at sky angle …, lights at …°. That is fine: …"
    ],
    "todo": "Nothing."
@@ -1643,135 +1650,6 @@
    "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
   },
   {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "…: campaign switched off: it failed a hard gate on the new data (…). It stays a Candidate."
-   ],
-   "todo": "Open Candidates… and read the failed gate. A second failure in a row makes it Rejected. See 21. Follow a suspect."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "…: Rejected after failing a hard gate twice in a row."
-   ],
-   "todo": "Check the reason in Candidates…; Outcome… → Back to Candidate reopens it."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Promotion gates: the Registry was not updated (…)."
-   ],
-   "todo": "Fix or move the file named in the message, then Run gates now in Candidates…"
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "New Candidate: … — entered in the Registry."
-   ],
-   "todo": "Look at it in Candidates…"
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back: … measured on N of M frame(s), K night(s). Check on … frame(s) that had it: +0.0 mmag (rms 0.4). Save series to keep them."
-   ],
-   "todo": "Save series to keep the values. See 21. Follow a suspect."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back measured … on N frame(s), but on the M frame(s) that had it already it comes out … mmag off the stored values … Keep the new values anyway?",
-    "Discard them"
-   ],
-   "todo": "Discard them (the default). Read the Reach-back calibration for … lines in the log, point the Input page's Bias and Dark at the ones those nights used, and reach back again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back: the check frames differ from the stored values by … mmag …"
-   ],
-   "todo": "Treat those nights with care; Reach back… again later offers to measure them again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back: … measured on N of M frame(s) … Most frames could not be measured: see the lines above."
-   ],
-   "todo": "Read the not measured lines; usually the calibration folders or a moved Lights folder."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back: N night folder(s) had no flat; those values carry the flat-field pattern."
-   ],
-   "todo": "Put that night's flats in a Flats folder beside its Lights folder (or point the Input page's Flat at them) and reach back again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Reach-back for … stopped: …"
-   ],
-   "todo": "Read the reason; fix the calibration folders on the Input page and try again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Check neighbors: the measurements are not kept on disk (…); they last until this window closes."
-   ],
-   "todo": "Fix the folder's permissions, then measure again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Check neighbors: measured … on 0 frame(s) (N not measured)."
-   ],
-   "todo": "Read the log lines above it."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Check neighbors: measuring stopped: …"
-   ],
-   "todo": "Read the reason, fix it and press the button again."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Outside data for …: Outside data agrees: ZTF and TESS. …"
-   ],
-   "todo": "Nothing; the gates they cleared show ✓ ZTF (and so on) in Candidates… A survey that finds the ±1 c/d alias instead is a reason to doubt the period."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Outside data for …: …"
-   ],
-   "todo": "Press Outside data… again later."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "ZTF: IRSA did not answer (certificate problem: this computer could not check the site's security certificate …)",
-    "Outside data…"
-   ],
-   "todo": "Check the PC's date and time, and whether a company or antivirus program inspects secure web traffic. Then press Outside data… again. Usually the second list fixes it on its own: SHOBS-P tries it whenever Windows' check fails."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Outside data for …"
-   ],
-   "todo": "Try again later; if it stays, tell the SHOBS-P author (the service may have changed)."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Outside data for …: the Registry was not updated (…).",
-    "Check neighbors: the Registry was not updated (…)."
-   ],
-   "todo": "Fix or move the Registry file, then run the check again."
-  },
-  {
    "section": "Output, Transits mode",
    "patterns": [
     "Enter your site's latitude and longitude on the Input page first …"
@@ -2178,6 +2056,85 @@
     "Select a star first (a point on the plot or a row in the table), then Add as suspect."
    ],
    "todo": "Click a star that is not a suspect yet."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Outside data for …: Outside data agrees: ZTF and TESS. …"
+   ],
+   "todo": "Nothing has to be done. A survey that agrees supports your period; one that finds the ±1 c/d alias instead is a reason to doubt it. See 21. Check a suspect."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Outside data for …: …",
+    "The outside-data check for … failed: …"
+   ],
+   "todo": "Press Outside data… again later."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "ZTF: IRSA did not answer (certificate problem: this computer could not check the site's security certificate …)",
+    "Outside data…"
+   ],
+   "todo": "Check the PC's date and time, and whether a company or antivirus program inspects secure web traffic. Then press Outside data… again. Usually the second list fixes it on its own: SHOBS-P tries it whenever Windows' check fails."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Outside data for …"
+   ],
+   "todo": "Try again later; if it stays, tell the SHOBS-P author (the service may have changed)."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… has no sky position (the field was not solved), so the surveys cannot be asked about it. …"
+   ],
+   "todo": "Solve the field on the Photometry page and scan again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… has too few measured points on this night for a period, so there is nothing to compare the surveys with."
+   ],
+   "todo": "Nothing; pick a star the scan measured on more frames."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Outside data for …: the scan lists no period for it; using the best period of its light curve this night, … d (as Check neighbors does)."
+   ],
+   "todo": "Nothing; treat an agreement with a period the scan did not list with more care."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Check neighbors for …: Neighbors quiet at P: … of … measured. Saved to …_SHOBS-P_suspects.json."
+   ],
+   "todo": "Nothing has to be done."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "… has no measured points on this night, so its neighbors cannot be checked."
+   ],
+   "todo": "Close the window and pick another star."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "The outside-data check for … is running already."
+   ],
+   "todo": "Wait for the busy bar to finish; the answer comes in a message box."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Not saved: this star is not a Suspect. Add as suspect on the Field scan page first, then save again."
+   ],
+   "todo": "Add as suspect, then save again."
   },
   {
    "section": "Discovery mode",

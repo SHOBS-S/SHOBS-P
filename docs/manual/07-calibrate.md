@@ -202,7 +202,7 @@ SHOBS-P asks (the Input page already warned you, chapter 5):
 - **Cancel**: stop, so you can choose darks closer to the lights' exposure.
 
 **The flats were taken at another camera angle.** If your headers record the rotator angle and the flats differ from
-the lights by more than 2°, SHOBS-P asks whether to calibrate with them anyway. **No** stops, so you can pick flats
+the lights by more than 10° (5° on an alt-az mount), SHOBS-P asks whether to calibrate with them anyway. **No** stops, so you can pick flats
 taken at the lights' angle or clear the **Flat** row. On a German equatorial mount a meridian flip does not count as a
 different angle (chapter 4).
 

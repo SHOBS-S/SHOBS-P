@@ -58,7 +58,7 @@ the same, in the same order, on both pages:
 | **Corrections** | **Detrend** (Auto (BIC), none, airmass, time slope, time curve (quadratic), or airmass with either), **meridian flip at the largest gap** | **Line up segments**, **Line up flip only**, **Pier side as segments**, **Check-star correction** |
 | **Fit** | **MCMC**, **Fit transit**, **Cancel** | **Period search (days)**, **Period from**, **Refit period** |
 | **Comps** | **Comp health…**, **Use comps…** | **Comp health…**, **Use comps…** |
-| **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Candidates…**, **Time of max/min…** |
+| **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Time of max/min…** |
 | **View** | **credible bands**, **Plot bins** | **Time axis**, **Bin**, **Mark periods** and **Show**, **Airmass-corrected night means** |
 
 - **Points** and **Corrections** hold the settings that feed the result. Hover over a row's label to read what the

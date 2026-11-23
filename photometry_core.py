@@ -1297,7 +1297,11 @@ def master_mismatches(master_header: dict, kind: str, light_header: dict, light_
             # 2.2.18 (item 8): alt-az: the derotator's position angle, compared without the flip (flat_angle_difference)
             if (fr is not None and lr is not None and not derotator   # derotator: see flat_angle_difference
                     and flat_angle_difference(float(fr), float(lr), mount) > flat_angle_tolerance(mount)):
-                warns.append(f"master flat taken at rotator {float(fr):g}°, lights at {float(lr):g}°")
+                # 7d nit (23 Nov): a full sentence, capitalized, giving the real turn, worded as chapter 23's row
+                turn = flat_angle_difference(float(fr), float(lr), mount)
+                warns.append(f"The master flat was taken at rotator angle {float(fr):g}° and the lights at "
+                             f"{float(lr):g}°: the camera turned about {turn:.0f}°"
+                             + ("" if mount == MOUNT_ALTAZ else " (readings 180° apart count as the same position)"))
         except (TypeError, ValueError):
             pass
         d0 = str(master_header.get("DATE-END") or master_header.get("DATE-BEG") or "")[:10]
@@ -9625,7 +9629,7 @@ def write_scan_stars(path: str, result: dict) -> None:
 
 
 # ---- 2.4.0 step 7a (#92): the Suspect stage --------------------------------------------------------------------
-# A Suspect lives only on its night's Discovery results (no Registry entry; John, 15 Nov). Each night's Suspects are
+# A Suspect lives only on its night's Discovery results (John, 15 Nov). Each night's Suspects are
 # kept in <field>_<filter>_<date>_SHOBS-P_suspects.json in that night's Output folder, written when the scan ends and
 # again when a star is added by hand; another night of the same field reads them to flag "Suspect again (N nights)".
 SUSPECTS_SUFFIX = "_SHOBS-P_suspects.json"
@@ -9662,7 +9666,7 @@ def suspect_entries(result: dict) -> list[dict]:
             "excess_chi2": num(ex2[i], 2) if ex2 is not None and i < len(ex2) else None,
             "suspect_by": by.get(i, "scatter"), "period_days": num(scan_period_value(per), 6),
         })
-        chk = (result.get("neighbor_checks") or {}).get(i)   # 2.4.0 step 7c (#92): Check neighbors, saved
+        chk = (result.get("neighbor_checks") or {}).get(i)   # Check neighbors (Field scan page), saved
         if chk:
             out[-1]["neighbors"] = chk
     return out
@@ -11400,8 +11404,11 @@ DEROTATOR_FLAT_NOTE = (
 
 
 def flat_angle_tolerance(mount: str | None = None) -> float:
-    """2.2.18 (item 8): degrees between flats and lights before the flats-angle caution (2° on a German mount)."""
-    return ALTAZ_FLAT_PA_TOL if mount == MOUNT_ALTAZ else 2.0
+    """2.2.18 (item 8): degrees between flats and lights before the flats-angle caution. German mount: PIER_ANGLE_TOL
+    (10°; 7d nit, John 23 Nov 2026, was 2°): the plate-solve/ASIAIR reading wobbles by several degrees with the camera
+    not turned (HD 219134 6-7 Nov: 37-38° vs 30°; GSC 03308-00462 13 Nov: flats 209° = 29°, lights 35°), the same
+    wobble that set the pier-side tolerance in 2.3.2."""
+    return ALTAZ_FLAT_PA_TOL if mount == MOUNT_ALTAZ else PIER_ANGLE_TOL
 
 
 # ---- Pier side across a campaign (2.2.14 item 20) ---------------------------------------
