@@ -1,4 +1,3 @@
-import numpy as np
 """2.4.0 step 8 (#89): Trim on the Variables Output page, one night at a time (trim_ui.TrimMixin).
 
 core   the flag word 'trim' follows each night's spans and nothing else; other flag words are untouched.
@@ -12,6 +11,7 @@ saved  the spans are saved with the night and come back on Load; an old series (
 clear  Clear trim puts back the chosen night's points only.
 notes  the AAVSO report leaves the trimmed points out and its NOTES name the span on that night's rows only; the
        light-curve CSV keeps every point with its flag word."""
+import numpy as np
 import math
 import os
 import sys
