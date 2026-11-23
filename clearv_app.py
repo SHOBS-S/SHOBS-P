@@ -17968,6 +17968,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 result["segments"] = n_segments
                 result["recenters"] = len(recenters)   # 2.4.0 step 8 (#66)
                 result["recenter_note"] = recenter_note   # review M1 / S3: shown in the scan's header
+                # re-review N2: the header counts what the Log counts (a re-center that came back is still one)
+                result["boundaries"] = int(n_fl) + len(recenters)
                 near = [i for i in range(len(labels))
                         if i not in cand and i not in saturated and i not in too_faint and stats["usable"][i]
                         and math.isfinite(stats["excess"][i])]
@@ -28542,8 +28544,9 @@ class ScanView:
         self._cal_text = cal
         self.header_text = StringVar(value="")   # Fable S5: refreshed when a star is added by hand
         self._header_tail = (
-                 (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s), rotator "
-                    "move(s) or re-center(s) first. " if result.get("recenters") else   # 2.4.0 step 8 (#66)
+                 (f"Each star's light curve was lined up across {result.get('boundaries', result['segments'] - 1)} "
+                  "meridian flip(s), rotator move(s) or re-center(s) first. " if result.get("recenters") else
+                  # 2.4.0 step 8 (#66; re-review N2: counted as the Log counts them)
                   f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
                     "move(s) first. " if result.get("segments", 1) > 1 else "")
                  + (result["recenter_note"] + " " if result.get("recenter_note") else "")   # review M1 / S3

@@ -7066,25 +7066,36 @@ def night_steps(observations: list[Obs], values: list[float], use: list[bool] | 
     {"kind": "flip" or "re-center", "part": (segment, jump), "offset": its median minus the median of the usable
     part before it, "shift": its median minus the night's first usable part's, "n_before", "n_after"}.
     Returns {night: [steps in time order]}; nights without a measurable step are left out."""
-    parts: dict[str, dict[tuple, list[float]]] = {}
+    parts: dict[str, dict[tuple, list[tuple[float, float]]]] = {}
     for i, (obs, v) in enumerate(zip(observations, values)):
         if not math.isfinite(v) or (use is not None and not use[i]):
             continue
-        parts.setdefault(obs.night, {}).setdefault(_night_part(obs), []).append(v)
+        jd = obs.jd if obs.jd is not None and math.isfinite(obs.jd) else float(i)
+        parts.setdefault(obs.night, {}).setdefault(_night_part(obs), []).append((float(jd), float(v)))
     out = {}
     for night, by_part in parts.items():
-        # the flip segment is the later one, and the re-center count only grows through the night
-        usable = [(key, by_part[key]) for key in sorted(by_part, key=lambda k: (k[0] == "flip", k[0], k[1]))
-                  if len(by_part[key]) >= min_points]
+        # Review S1 (step 8 re-review): a re-center that comes back rejoins its earlier part, so a part is not one
+        # stretch of time. Parts are taken in order of their first point, and each later part is compared with the
+        # part whose points come latest before it begins (for A -> B -> back to A -> flip, the flip's 'before' is A).
+        usable = sorted(((key, pts) for key, pts in by_part.items() if len(pts) >= min_points),
+                        key=lambda kp: (min(p[0] for p in kp[1]), kp[0][0] == "flip", kp[0]))
         if len(usable) < 2:
             continue
-        first = float(np.median(usable[0][1]))
+        first = float(np.median([p[1] for p in usable[0][1]]))
         steps = []
-        for (pkey, pvals), (key, vals) in zip(usable, usable[1:]):
-            med = float(np.median(vals))
+        for k in range(1, len(usable)):
+            key, pts = usable[k]
+            start = min(p[0] for p in pts)
+            prev, prev_t = usable[k - 1], -math.inf
+            for cand in usable[:k]:
+                before = [p[0] for p in cand[1] if p[0] < start]
+                if before and max(before) > prev_t:
+                    prev, prev_t = cand, max(before)
+            pkey, ppts = prev
+            med = float(np.median([p[1] for p in pts]))
             steps.append({"kind": STEP_FLIP if key[0] != pkey[0] else STEP_RECENTER, "part": key,
-                          "offset": med - float(np.median(pvals)), "shift": med - first,
-                          "n_before": len(pvals), "n_after": len(vals)})
+                          "offset": med - float(np.median([p[1] for p in ppts])), "shift": med - first,
+                          "n_before": len(ppts), "n_after": len(pts)})
         out[night] = steps
     return out
 

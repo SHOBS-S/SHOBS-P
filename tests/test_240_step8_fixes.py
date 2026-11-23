@@ -536,3 +536,25 @@ class TestTrimFixes(TT.TrimCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOutAndBackThenFlip(unittest.TestCase):
+    """Step 8 re-review S1: A -> B -> back to A -> flip: the flip is measured against A (the part just before it),
+    not against B, and nothing false is marked."""
+
+    def test_flip_after_a_return_uses_the_part_before_it(self):
+        def ob(k, mag, segment="", jump=0):
+            return core.Obs(jd=2461000.6 + k * 0.002, mag=mag, merr=0.01, cmag=9.0, kmag=10.5, airmass=1.1,
+                            path=f"Light_{k:04d}.fit", exptime=60.0, flux_var=1.0, flux_comp=1.0,
+                            night="JD2461000", segment=segment, jump=jump)
+        pts = ([ob(k, 10.00) for k in range(10)] + [ob(10 + k, 10.05, jump=1) for k in range(10)]
+               + [ob(20 + k, 10.00) for k in range(10)] + [ob(30 + k, 10.01, segment="flip") for k in range(10)])
+        vals = [o.mag for o in pts]
+        steps = core.night_steps(pts, vals)["JD2461000"]
+        self.assertEqual([st["kind"] for st in steps], ["re-center", "flip"])
+        self.assertAlmostEqual(steps[0]["offset"], 0.05, places=6)
+        self.assertAlmostEqual(steps[1]["offset"], 0.01, places=6)
+        self.assertAlmostEqual(core.flip_offsets(pts, vals)["JD2461000"]["offset"], 0.01, places=6)
+        self.assertEqual(core.night_steps_text(steps), "re-center +0.050 ⚠, flip +0.010")
+        lined = core.align_steps(pts, vals, core.night_steps(pts, vals))
+        self.assertLess(max(abs(v - 10.0) for v in lined), 1e-9)
