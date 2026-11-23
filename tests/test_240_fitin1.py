@@ -68,7 +68,9 @@ class TestReportText(unittest.TestCase):
         src = inspect.getsource(transit_core)
         self.assertNotIn("a neighbor's light cannot make a transit deeper", src)
         self.assertIn("a neighbor's light in the sky ring", src)
-        self.assertIn("a neighbor's light in the aperture \"\n                   \"cannot make a transit deeper", src)
+        flat = "".join(src.split())   # the words whatever the line breaks and indentation
+        self.assertIn("aneighbor'slightintheaperture\"\"cannotmakeatransitdeeper", flat)
+        self.assertIn("canmaketheskyestimatetoobright", flat.replace('\"\"', ""))
 
 
 class TestUIWatch(unittest.TestCase):
@@ -93,6 +95,22 @@ class TestUIWatch(unittest.TestCase):
         self.assertIn("responding again after 11.5 s", lines[2])
         w.check()
         self.assertEqual(len(lines), 3)
+
+    def test_sleep_is_not_a_stall(self):
+        """Fable S4: the computer slept an hour; the watch thread wakes before the Tk thread beats."""
+        now = [100.0]
+        lines = []
+        w = ui_watch.UIWatch(lines.append, main_thread_id=threading.get_ident(), clock=lambda: now[0])
+        w.check()
+        now[0] += 3600.0
+        w.check()
+        self.assertEqual(lines, [])
+        now[0] += 0.5
+        w.check()
+        self.assertEqual(lines, [])
+        now[0] += 3.5
+        w.check()                    # a real stall after the wake is still seen
+        self.assertEqual(len(lines), 1)
 
     def test_thread_runs(self):
         lines = []
@@ -173,7 +191,69 @@ class TestTextSize(AppCase):
             app.text_size_var.set("90 %")
             app._text_size_chosen()
             restart.assert_called_once()
+            app.text_size_var.set("100 %")   # Fable N2: back to the size on screen: no restart offered
+            app._text_size_chosen()
+            restart.assert_called_once()
+            self.assertIn("the size SHOBS-P is showing now", app.status.get())
         app.settings["text_size"] = 100
+
+    def test_restart_saves_first_then_replaces_the_process(self):
+        """Fable M2: the close button's series offer and the pending saves come before the new SHOBS-P."""
+        app = self.app
+        order = []
+        with mock.patch.object(app, "_offer_series_save", lambda *_a: order.append("offer") or True), \
+                mock.patch.object(app, "_finish_saves_on_close", lambda: order.append("saves")), \
+                mock.patch.object(app, "destroy", lambda: order.append("destroy")), \
+                mock.patch.object(self.ca.os, "execv", lambda *a: order.append("execv")), \
+                mock.patch.object(self.ca.os, "chdir", lambda *_a: None), \
+                mock.patch.object(app, "series_path", "x.cvseries"):
+            app._restart_app()
+        self.assertEqual(order, ["offer", "saves", "destroy", "execv"])
+        app._closing = False
+        order.clear()
+        with mock.patch.object(app, "_offer_series_save", lambda *_a: order.append("offer") or False), \
+                mock.patch.object(app, "_finish_saves_on_close", lambda: order.append("saves")), \
+                mock.patch.object(app, "destroy", lambda: order.append("destroy")), \
+                mock.patch.object(app, "series_path", "x.cvseries"):
+            app._restart_app()   # Cancel on the save offer: SHOBS-P stays
+        self.assertEqual(order, ["offer"])
+
+
+class TestTextScaleFonts(unittest.TestCase):
+    def test_scaled_font(self):
+        import text_scale
+        f = text_scale.scaled_font
+        self.assertEqual(f(("Segoe UI", 9, "bold"), 1.5), ("Segoe UI", 14, "bold"))
+        self.assertEqual(f(["Menlo", -12], 1.5), ["Menlo", -18])
+        self.assertEqual(f("TkDefaultFont", 1.5), "TkDefaultFont")
+        self.assertEqual(f(("Segoe UI",), 1.5), ("Segoe UI",))
+        self.assertEqual(f(("Segoe UI", 9), 1.0), ("Segoe UI", 9))
+
+    @unittest.skipUnless(HAVE_TK, "needs a display")
+    def test_mac_path_scales_fonts_where_given(self):
+        """Fable M1: on Aqua tk scaling does not move point fonts; forced here (fresh interpreter, so the patches stay
+        out of the other tests): widget fonts, ttk styles, Font objects, named fonts and Figure dpi all follow."""
+        import subprocess
+        code = (
+            "import sys, tkinter as tk, tkinter.ttk as ttk, tkinter.font as tkf\n"
+            f"sys.path.insert(0, {ROOT!r})\n"
+            "import text_scale\n"
+            "text_scale._linespace = lambda w, size=12: 15\n"   # fonts 'did not grow': the Mac path
+            "r = tk.Tk(); r.withdraw()\n"
+            "base = int(tkf.nametofont('TkDefaultFont').cget('size'))\n"
+            "how = text_scale.apply(r, 150)\n"
+            "assert how == 'fonts', how\n"
+            "assert abs(int(tkf.nametofont('TkDefaultFont').cget('size'))) == round(abs(base) * 1.5), base\n"
+            "l = tk.Label(r, font=('Helvetica', 10, 'bold'))\n"
+            "assert tkf.Font(font=l.cget('font')).actual('size') == 15, l.cget('font')\n"
+            "assert tkf.Font(root=r, family='Helvetica', size=10).cget('size') == 15\n"
+            "s = ttk.Style(r); s.configure('X.TLabel', font=('Helvetica', 8))\n"
+            "assert '12' in str(s.lookup('X.TLabel', 'font')), s.lookup('X.TLabel', 'font')\n"
+            "from matplotlib.figure import Figure\n"
+            "assert abs(Figure(dpi=100).dpi - 150) < 1e-6\n"
+            "print('OK')\n")
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertIn("OK", out.stdout, out.stderr)
 
 
 class TestLabel(AppCase):
@@ -215,49 +295,89 @@ class TestSkyDominatedHook(AppCase):
 
 
 class TestMeasureThreaded(AppCase):
-    def test_measure_runs_off_the_tk_thread(self):
-        """#116: Measure greys itself, the work runs on another thread, the result arrives through the UI queue."""
-        ca = self.ca
-        app = self.app
-        seen = {}
-
-        def fake_work(job):
-            seen["thread"] = threading.current_thread() is not threading.main_thread()
-            time.sleep(0.3)
-            return [], ["no extremum inside the window"]
-
-        win = SimpleNamespace()
+    def window(self):
+        ca, app = self.ca, self.app
         w = ca.ExtremumWindow.__new__(ca.ExtremumWindow)
         w.app = app
-        w.win = app
+        w.win = ca.Toplevel(app)
+        w.win.withdraw()
         w.SYNC = False
         w.kind = ca.StringVar(value="maximum")
         w.window_min = ca.StringVar(value="")
         w.system = ca.StringVar(value="HJD")
         w.result_text = ca.StringVar(value="")
-        w.measure_button = ca.ttk.Button(app)
-        w.save_button = ca.ttk.Button(app)
+        w.measure_button = ca.ttk.Button(w.win)
+        w.save_button = ca.ttk.Button(w.win)
         t = np.linspace(2461358.6, 2461358.9, 40)
         w._night_points = lambda: ("JD2461358", [SimpleNamespace(jd=x) for x in t], list(np.sin(t * 40)))
         w._elements = lambda: (None, None)
         w._noise_period = lambda: (None, "none", "")
         w._coords = lambda: (None, None, None, None)
         w.draw = lambda: None
+        return w
+
+    def wait(self, w):
+        end = time.time() + 5
+        while getattr(w, "_measuring", False) and time.time() < end:
+            self.app.update()
+            time.sleep(0.02)
+
+    def test_measure_runs_off_the_tk_thread(self):
+        """#116: Measure greys itself, the work runs on another thread, the result arrives through the UI queue."""
+        ca = self.ca
+        seen = {"calls": 0}
+
+        def fake_work(job):
+            seen["calls"] += 1
+            seen["thread"] = threading.current_thread() is not threading.main_thread()
+            time.sleep(0.3)
+            return [], ["no extremum inside the window"]
+
+        w = self.window()
         with mock.patch.object(ca.ExtremumWindow, "_measure_work", staticmethod(fake_work)), \
                 mock.patch.object(ca, "grow_to_content", lambda *_a: None):
             w.measure()
             self.assertIn("disabled", w.measure_button.state())
             self.assertIn("Measuring the time of maximum", w.result_text.get())
             w.measure()   # a second press while measuring does nothing
-            end = time.time() + 5
-            while getattr(w, "_measuring", False) and time.time() < end:
-                app.update()
-                time.sleep(0.02)
+            self.wait(w)
+        self.assertEqual(seen["calls"], 1)
         self.assertTrue(seen.get("thread"))
         self.assertFalse(w._measuring)
         self.assertNotIn("disabled", w.measure_button.state())
         self.assertIn("no extremum inside the window", w.result_text.get())
-        del win
+        w.win.destroy()
+
+    def test_worker_error_is_shown_and_frees_measure(self):
+        ca = self.ca
+
+        def boom(job):
+            raise RuntimeError("bad fit")
+
+        w = self.window()
+        with mock.patch.object(ca.ExtremumWindow, "_measure_work", staticmethod(boom)), \
+                mock.patch.object(ca, "grow_to_content", lambda *_a: None), \
+                mock.patch.object(ca.traceback, "print_exc", lambda: None):
+            w.measure()
+            self.wait(w)
+        self.assertIn("the measurement stopped: RuntimeError: bad fit", w.result_text.get())
+        self.assertNotIn("disabled", w.measure_button.state())
+        w.win.destroy()
+
+    def test_window_closed_while_measuring(self):
+        ca = self.ca
+
+        def slow(job):
+            time.sleep(0.3)
+            return [], ["none"]
+
+        w = self.window()
+        with mock.patch.object(ca.ExtremumWindow, "_measure_work", staticmethod(slow)), \
+                mock.patch.object(ca, "grow_to_content", lambda *_a: None):
+            w.measure()
+            w.win.destroy()
+            self.wait(w)
+        self.assertFalse(w._measuring)   # no error, nothing shown on a closed window
 
 
 if __name__ == "__main__":

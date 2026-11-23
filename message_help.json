@@ -71,6 +71,28 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "Text size N % applies the next time SHOBS-P starts. Restart SHOBS-P now? …"
+   ],
+   "todo": "Yes restarts now (an unsaved series is offered a save first); No (the default) keeps working, and the size applies next time."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "SHOBS-P could not restart itself (…). Close it and start it again to see the new text size."
+   ],
+   "todo": "Close SHOBS-P and start it again; the size is already saved."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "UI thread busy for N s (window not responding); it is in: …",
+    "UI thread responding again after N s."
+   ],
+   "todo": "Nothing to do. If it happens often, send that part of the log file with the report (chapter 24)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Another step is still running. Wait for it to finish."
    ],
    "todo": "Wait, or press Cancel / Cancel run."

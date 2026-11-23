@@ -60,6 +60,9 @@ SHOBS-P starts (Linux, Mac); see chapter 2. From 2.3.5 the three systems say the
 
 | Message | What it means | What to do |
 |---|---|---|
+| *Text size N % applies the next time SHOBS-P starts. Restart SHOBS-P now? …* (2.4.0) | You picked another **Text size** at the bottom of the sidebar. It is saved; the new size needs a fresh start. | **Yes** restarts now (an unsaved series is offered a save first); **No** (the default) keeps working, and the size applies next time. |
+| *SHOBS-P could not restart itself (…). Close it and start it again to see the new text size.* (2.4.0) | The restart after a **Text size** change could not start a new SHOBS-P. | Close SHOBS-P and start it again; the size is already saved. |
+| Log file: *UI thread busy for N s (window not responding); it is in: …* and *UI thread responding again after N s.* (2.4.0) | The window stopped answering for that long. The lines name the code SHOBS-P was in, for a bug report. A long file dialog or question box can show here too. | Nothing to do. If it happens often, send that part of the log file with the report (chapter 24). |
 | *Another step is still running. Wait for it to finish.* | Only one job runs at a time. | Wait, or press **Cancel** / **Cancel run**. |
 | *Wait for the current run to finish (or cancel it) before switching modes.* | Same, for the mode buttons. | Wait or cancel. |
 | *Something went wrong: … Details were written to ….shobs_p.log.* | An unexpected error. | Note what you were doing and see [24. Troubleshooting](24-troubleshooting.md). |

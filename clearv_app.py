@@ -49,6 +49,7 @@ import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
 import ui_watch   # 2.4.0 fit-in F1 (#116)
+import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
@@ -1028,27 +1029,13 @@ def text_size_setting(settings) -> int:
     return pct if pct in TEXT_SIZES else 100
 
 
-def apply_text_size(widget, pct: int) -> None:
+def apply_text_size(widget, pct: int) -> str:
     """2.4.0 fit-in F1 (#109, Art Trail's large Mac screen): scale all text and layout by pct % at start, on top of
-    what the system's display scaling gives. tk scaling carries every font given in points (the app's own and Tk's
-    named fonts), point/inch distances and ui_scale(); named fonts given in pixels (negative sizes) are scaled
-    here too. Called once, before any widget is built; a change is applied at the next start."""
-    if pct == 100:
-        return
-    factor = pct / 100.0
-    try:
-        widget.tk.call("tk", "scaling", float(widget.tk.call("tk", "scaling")) * factor)
-    except Exception:
-        return
-    try:
-        from tkinter import font as tkfont
-        for name in tkfont.names(widget):
-            f = tkfont.nametofont(name, root=widget)
-            size = int(f.cget("size"))
-            if size < 0:
-                f.configure(size=min(-1, int(round(size * factor))))
-    except Exception:
-        pass
+    what the system's display scaling gives. Called once, before any widget is built; a change is applied at the
+    next start. Windows/Linux: tk scaling carries every point-sized font, distance, ui_scale() and matplotlib's Tk
+    canvas. Mac (Fable M1): Aqua draws point fonts at their point size whatever tk scaling says, so text_scale
+    measures that and scales the fonts themselves (and matplotlib's dpi). Returns how ("" at 100 %)."""
+    return text_scale.apply(widget, pct)
 
 
 def _pad_total(pad) -> int:
@@ -1672,7 +1659,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.configure(bg="#e7eef2")
         self.settings = self._load_settings()
         self.text_size = text_size_setting(self.settings)   # 2.4.0 fit-in F1 (#109)
-        apply_text_size(self, self.text_size)
+        self._text_size_how = apply_text_size(self, self.text_size)
         self.mode_key = self.settings.get("mode") if self.settings.get("mode") in MODES else "variables"
         self.series_mode = ""
         self._set_window_icon()
@@ -2012,7 +1999,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if sys.platform == "win32" and display_scaling_text(self):
             log_to_file(display_scaling_text(self))   # 2.2.19 (#10): in the log file, for screen reports
         if self.text_size != 100:   # 2.4.0 fit-in F1 (#109): every platform, for "everything is tiny/huge" reports
-            log_to_file(f"Text size {self.text_size} % (SHOBS-P setting, on top of the display scaling).")
+            log_to_file(f"Text size {self.text_size} % (SHOBS-P setting, on top of the display scaling; "
+                        f"by {self._text_size_how or 'nothing: it could not be applied'}).")
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -2646,12 +2634,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             pct = int(self.text_size_var.get().split()[0])
         except (ValueError, IndexError):
             return
-        if pct not in TEXT_SIZES or pct == int(self.settings.get("text_size", 100) or 100):
+        if pct not in TEXT_SIZES or pct == text_size_setting(self.settings):
             return
         self.settings["text_size"] = pct
         self._save_settings()
         log_to_file(f"Text size set to {pct} % (applies at the next start).")
-        if getattr(self, "_job_findings", None) is not None:
+        if pct == self.text_size:   # Fable N2: back to the size on screen: nothing to restart for
+            self.status.set(f"Text size {pct} %: the size SHOBS-P is showing now.")
+            return
+        if self.busy or getattr(self, "_job_findings", None) is not None:   # Fable S3
             self.status.set(f"Text size {pct} %: it applies the next time SHOBS-P starts.")
             return
         if messagebox.askyesno(APP_TITLE, f"Text size {pct} % applies the next time SHOBS-P starts.\n\nRestart "
@@ -2663,15 +2654,35 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _restart_app(self):
         """2.4.0 fit-in F1 (#109): start a new SHOBS-P the way this one was started, then close this one."""
-        try:
-            import subprocess
-            subprocess.Popen([sys.executable] + [os.path.abspath(sys.argv[0])] + sys.argv[1:],
-                             cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
-        except Exception as exc:
-            messagebox.showinfo(APP_TITLE, f"SHOBS-P could not restart itself ({exc}). Close it and start it again "
-                                           "to see the new text size.")
-            return
+        try:   # the close button's offer to save an unsaved series comes first (Cancel keeps SHOBS-P open)
+            nights = {o.night for o in self.observations}
+            if (bool(self.series_path) or len(nights) >= 2) and not self._offer_series_save("restart SHOBS-P"):
+                self.log("Restart canceled: SHOBS-P stays open with the series. The new text size applies at the next "
+                         "start.")
+                return
+        except Exception:
+            traceback.print_exc()
+        self._closing = True
+        self._finish_saves_on_close()   # Fable M2 (a): every save written before the new SHOBS-P starts
+        args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+        here = os.path.dirname(os.path.abspath(sys.argv[0])) or None
+        log_to_file("Restarting SHOBS-P for the new text size.")
         self.destroy()
+        try:
+            if sys.platform == "win32":
+                import subprocess
+                # Fable M2 (b): started from run_windows.bat's console, a child would die with that console: detach
+                # it (the desktop shortcut's pythonw has no console, and this changes nothing there)
+                flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                subprocess.Popen(args, cwd=here, creationflags=flags, close_fds=True)
+            else:
+                # Mac and Linux run SHOBS-P in the foreground of a Terminal (shobs_setup.sh, SHOBS-P.app): the same
+                # process becomes the new SHOBS-P, so the launcher keeps waiting on it
+                if here:
+                    os.chdir(here)
+                os.execv(sys.executable, args)
+        except Exception as exc:
+            log_to_file(f"Restart failed ({type(exc).__name__}: {exc}); start SHOBS-P again by hand.")
 
     def show_credits(self):
         self._leave_blink_page()   # 2.4.0 (#112)
@@ -18831,6 +18842,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             "binning": binning, "pattern": pattern, "debayer": mode, "precalibrated": bool(precalibrated),
             "mode_key": self.mode_key, "filt": self._filter_code(), "band": self._band(),
             "header": dict(self.preview_header or {}),
+            # 2.4.0 fit-in F1 (#60, Fable S2): what the run calibrated with, for the sky-dominance check at the end
+            "sky_masters": masters,
         }
         if watch:
             self.log(f"Watch stars measured every frame ({len(watch)}): " + ", ".join(w.name for w in watch))
@@ -19473,16 +19486,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.run_findings = list(getattr(self, "last_job_findings", None) or [])
                 self.run_findings_night = f"JD{math.floor(night_points[0].jd)}" if night_points else None
 
-    def _say_sky_dominated(self, night_points):
+    def _say_sky_dominated(self, night_points, ctx=None):
         """2.4.0 fit-in F1 (#60): the ⚠ for a night with no flat whose target is swamped by the sky in its aperture
-        (a Findings entry, so it travels with the result). Never stops the run."""
+        (a Findings entry, so it travels with the result). Never stops the run. Fable S2: the run's own aperture and
+        masters (captured when it started, in ctx), not the boxes as they are now."""
         try:
-            masters = self.masters
-            if self.precalibrated or masters is None:
+            ctx = ctx or {}
+            masters = ctx.get("sky_masters", self.masters)
+            precal = ctx.get("precalibrated", self.precalibrated)
+            if precal or masters is None:
                 return
             have_flat = masters.flat is not None
             sky_calibrated = masters.bias is not None or masters.dark is not None
-            frac = core.target_light_fraction(night_points, float(self.radius.get()))
+            radius = ctx.get("radius")
+            if radius is None:
+                radius = float(self.radius.get())
+            frac = core.target_light_fraction(night_points, float(radius))
             if math.isfinite(frac):
                 log_to_file(f"Target's share of its aperture's light: {frac * 100:.1f} % (median of the night)")
             note = core.sky_dominated_note(frac, have_flat, sky_calibrated)
@@ -19532,7 +19551,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
         self._mark_recenters(night_points)   # 2.4.0 step 8 (#66): after the flip is known (a flip is not a re-center)
-        self._say_sky_dominated(night_points)   # 2.4.0 fit-in F1 (#60)
+        self._say_sky_dominated(night_points, ctx)   # 2.4.0 fit-in F1 (#60); Fable S2: the run's own settings
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
@@ -27846,7 +27865,8 @@ class ExtremumWindow:
         source_words = self._noise_source_words({"noise_source": noise_source, "noise_half": noise_half})
         ra, dec, lat, lon = self._coords()
         use_bjd = self.system.get() == "BJD"
-        job = dict(night=night, kind=kind, period=period, epoch=epoch, hw=hw, t=t, vals=vals, guesses=guesses,
+        job = dict(night=night, kind=kind, kind_word=self.kind.get(), period=period, epoch=epoch, hw=hw, t=t,
+                   vals=vals, guesses=guesses,
                    noise=(noise_p, noise_source, noise_why_not, noise_half), source_words=source_words,
                    coords=(ra, dec, lat, lon), use_bjd=use_bjd)
         self._measuring = True
@@ -27868,7 +27888,10 @@ class ExtremumWindow:
         if self.SYNC:   # tests: the same steps, in line
             self._measure_done(job, work(), tok)
             return
-        threading.Thread(target=lambda: self.app.call_ui(self._measure_done, job, work(), tok), daemon=True).start()
+        try:
+            threading.Thread(target=lambda: self.app.call_ui(self._measure_done, job, work(), tok), daemon=True).start()
+        except Exception as exc:   # Fable N7: never left greyed with the bar running
+            self._measure_done(job, ([], [f"the measurement could not start: {exc}"]), tok)
 
     SYNC = False   # tests set True: Measure runs in line (the threaded path has its own test)
 
@@ -27937,14 +27960,16 @@ class ExtremumWindow:
         self.results = results
         self.night_key = night
         self.save_button.configure(state="normal" if results else "disabled")
-        self.result_text.set(self._result_lines(results, problems, kind, period, epoch) if results or problems
+        # Fable S1: the words are the job's (Type and system as they were when Measure was pressed)
+        self.result_text.set(self._result_lines(results, problems, kind, period, epoch,
+                                                system="BJD" if job["use_bjd"] else "HJD") if results or problems
                              else "No extremum found.")
         if not results:
-            self.app.log("Time of " + self.kind.get() + f" ({night}): " + "; ".join(problems or ["none found"]))
+            self.app.log("Time of " + job["kind_word"] + f" ({night}): " + "; ".join(problems or ["none found"]))
         self.draw()
         grow_to_content(self.win)
 
-    def _result_lines(self, results, problems, kind, period, epoch) -> str:
+    def _result_lines(self, results, problems, kind, period, epoch, system: str | None = None) -> str:
         word = "max" if kind == "max" else "min"
         lines = []
         for r in results:
@@ -27967,7 +27992,7 @@ class ExtremumWindow:
                              f"± {fo['err'] * 1440:.2f} min")
             if r.get("oc"):
                 oc = r["oc"]
-                sys_word = self.system.get() if math.isfinite(tm["hjd"]) else "JD"
+                sys_word = (system or self.system.get()) if math.isfinite(tm["hjd"]) else "JD"
                 lines.append(f"       O−C {oc['oc_d']:+.5f} d = {oc['oc_min']:+.1f} ± {err_min:.1f} min   cycle "
                              f"{oc['cycle']:g}   (C = {sys_word} {oc['calc']:.5f}; P {period:.8f}, E {epoch:.5f})")
             lines += ["       " + ln for ln in self._noise_lines(r)]

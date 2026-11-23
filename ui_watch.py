@@ -13,6 +13,7 @@ import traceback
 STALL_S = 3.0
 LONG_S = 10.0
 CHECK_S = 0.5
+SLEEP_S = 60.0   # the watch thread itself held up this long: the computer slept (a lock held that long is not seen)
 STACK_FRAMES = 14
 
 
@@ -26,6 +27,7 @@ class UIWatch:
         self._said = 0          # 0 = no stall reported; 1 = reported at stall_s; 2 = reported at long_s
         self._stall_start = None
         self._stop = threading.Event()
+        self._last_check = None
 
     def beat(self):
         """Tk thread: called every 50 ms by the UI-queue drain."""
@@ -57,8 +59,14 @@ class UIWatch:
         return "\n".join(out)
 
     def check(self):
-        """Watch thread (and tests): one look at the beat."""
-        gap = self.clock() - self.last
+        """Watch thread (and tests): one look at the beat. Fable S4: when this thread itself was held up far longer
+        than any stall it reports (SLEEP_S: the computer slept), the gap is the sleep, not a stall: start counting again."""
+        now = self.clock()
+        prev, self._last_check = self._last_check, now
+        if prev is not None and now - prev > SLEEP_S:
+            self.last = now
+            return
+        gap = now - self.last
         if gap >= self.stall_s and self._said == 0:
             self._stall_start = self.last
             self._said = 1
