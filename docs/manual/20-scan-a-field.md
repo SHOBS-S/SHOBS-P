@@ -148,7 +148,10 @@ next one.
    *"Field scan: N suspect(s)."* The log says how many of them are suspects by their own error bars only.
 
 Before measuring each star's scatter, SHOBS-P lines its light curve up across any meridian flip or rotator move,
-so a flip cannot pass for a variable star. On an alt-az mount there are no flips: the frames are aligned following
+so a flip cannot pass for a variable star. From 2.4.0 it does the same across a re-center: the field moved by at
+least 20″ and 10 pixels between two frames with no flip, and stayed there for at least 5 frames (chapter 12; the
+same test as a photometry run). The Log says how many and how far. Without a plate scale (no solve, empty Optics
+boxes) re-centers are not looked for, and the text above the scan's table says so. On an alt-az mount there are no flips: the frames are aligned following
 the field rotation.
 
 ### Scan stacks of frames (optional)
@@ -192,7 +195,7 @@ Under the table the buttons sit in labelled groups, as on the other Output pages
   stars are gray ×. Click a point to see that star; click it again to clear the selection. You can also pick several
   stars on the plot (chapter 21).
 - **The selected star's light curve** (top right): red for a suspect, blue otherwise. Dashed purple lines mark a
-  flip, rotator move or gap.
+  flip, rotator move, re-center or gap.
 - **Lomb-Scargle periodogram** (bottom right): the red line is the best period. Periods longer than about half the
   data span are grayed (*"longer than the data can test"*).
 
@@ -230,9 +233,11 @@ The **Check first** column lists warnings that often explain a suspect away:
   not counted as saturated).
 - **blended neighbor: check**: a neighbor's light reaches the aperture (see "The scan settings").
 - **VSX period … d outside the search**: a known variable whose period the search could not find.
-- **change begins at flip: check** / **change begins after a gap: check**: the light curve changes level at a flip,
-  rotator move or gap, which points at the instrument rather than the star.
-- **noise begins at flip: check** / **noise begins after a gap: check**: the same for a jump in noise.
+- **change begins at flip: check** / **change begins at re-center: check** / **change begins after a gap: check**:
+  the light curve changes level at a flip, rotator move, re-center or gap, which points at the instrument rather
+  than the star.
+- **noise begins at flip: check** / **noise begins at re-center: check** / **noise begins after a gap: check**: the
+  same for a jump in noise.
 
 ### Add a suspect by hand
 

@@ -120,8 +120,8 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | Row | What it holds |
 |---|---|
 | **Data** | **Load series**, **Close series**, **Add series file…**, **Remove night…**, **Night notes…** (chapter 10) |
-| **Points** | **Leave flagged points out (sat, drift, cloud)**, **Cloud flag: more than … % below the night's median** with **Apply**, **Transmission loss…**, **Planet transits…** (chapter 12) |
-| **Corrections** | **Line up segments (nights, meridian flip)**, **Line up flip only (keep nights)**, **Pier side as segments**, **Check-star correction (fold and period)** (chapters 12 and 13) |
+| **Points** | **Leave flagged points out (sat, drift, cloud)**, **Cloud flag: more than … % below the night's median** with **Apply**, **Transmission loss…**, **Planet transits…**, **Trim** from/to with **Trim** and **Clear trim** (one night at a time; gray until a night is chosen in the night table) (chapter 12) |
+| **Corrections** | **Line up segments (nights, meridian flip)**, **Line up flip/re-center only (keep nights)**, **Pier side as segments**, **Check-star correction (fold and period)** (chapters 12 and 13) |
 | **Fit** | **Period search (days)**, **Period from**, and the colored **Refit period** button (chapter 13) |
 | **Comps** | **Comp health…**, **Use comps…** (chapter 11) |
 | **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
@@ -149,7 +149,7 @@ Hover over a row's label to read what the row is for. A setting in **Points**, *
 | **Target σ** | The target's scatter that night |
 | **Check σ** | The check star's scatter that night |
 | **Side** | Pier side(s), when known; **—** when unknown, and always on an alt-az mount |
-| **Flip step** | The jump at a meridian flip; ⚠ when it is large |
+| **Flip/re-center step** | The jump at a meridian flip, e.g. `+0.012`; ⚠ when it is large. On a night where the mount re-centered without flipping (from 2.4.0), each step says what it is, e.g. `re-center +0.050 ⚠` or `re-center +0.004, flip +0.012` (chapter 12) |
 | **B−V** | The night's color, if you measured it |
 | **Flags** | Counts of flagged points, e.g. `12 cloud, 3 sat` |
 | **Sent** | Where and when the night's report was sent, e.g. `✓ WebObs 2026-10-18`, or **—** (chapter 15) |

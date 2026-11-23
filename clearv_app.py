@@ -59,6 +59,7 @@ import stack_core   # 2.3.0 (#54)
 from stack_ui import StackMixin, load_frame as stack_load_frame   # 2.3.0 (#54)
 import comp_survey as cs   # 2.4.0 step 5 (#76, #61): the pre-run comp survey
 from neighbors_ui import NeighborsMixin, scan_star_period   # 2.4.0 step 7d: the Field scan page's Check neighbors and Outside data
+from trim_ui import TrimMixin   # 2.4.0 step 8 (#89): Trim on the Variables Output page
 
 try:   # 2.2.19.1: the on-sky log for SHOBS-FLUX; SHOBS-P runs the same without it
     import onsky_log
@@ -1607,7 +1608,7 @@ class NewVersionWindow:
 SKIP_FINDING_SHARE = 0.10
 
 
-class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7d: NeighborsMixin = the Field scan checks
+class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Stack step (stack_ui.py); 2.4.0 step 7d: NeighborsMixin = the Field scan checks
     STACK_STEP_OUTPUT = STEP_OUTPUT   # 2.3.0 (#54)
 
     def _keep_on_screen(self):
@@ -17709,6 +17710,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                  + (f"; {excluded} excluded by you" if excluded else ""))
         xy0 = np.asarray(xy, dtype=float)
         altaz = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ   # 2.2.18 (item 8)
+        jump_scale = self._jump_scale()   # 2.4.0 step 8 (#66): for the re-center test (read on the main thread)
 
         cancel = self._cancel
 
@@ -17837,10 +17839,41 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     (f0, r0), (f1, r1) = frame_side[k - 1], frame_side[k]
                     moved = f0 != f1 or (r0 is not None and r1 is not None and core.angle_difference(r0, r1) > 2.0)
                     seg[k] = seg[k - 1] + (1 if moved else 0)
-                n_segments = int(seg.max()) + 1 if len(seg) else 1
+                # 2.4.0 step 8 (#66): a re-center (the pointing jumped with no flip) is a segment too: every star
+                # sits on other pixels from there on. Not counted where a flip or rotator move already starts one.
+                # Review M1: the same test as a photometry run (core.recenter_segments): the new pointing must hold
+                # for 5 frames, frames back at an earlier pointing rejoin its segment, and nothing is looked for
+                # without a plate scale. Review S3: a check that was not made is said on the scan's page.
+                recenters, recenter_at, recenter_note = [], [], ""
+                n_fl = int(seg.max()) if len(seg) else 0
+                try:
+                    regs = [{"dx": fr["dx"], "dy": fr["dy"], "flipped": fr["flipped"]} if fr.get("keep", True)
+                            else None for fr in frame_recs]
+                    found = core.recenter_segments(regs, jump_scale[0], jump_scale[1], sides=[int(v) for v in seg])
+                    if not found["checked"]:
+                        recenter_note = self.NO_SCALE_NOTE
+                    recenters = found["recenters"]
+                    if recenters:
+                        ids, both = {}, np.zeros(len(seg), dtype=int)
+                        for k, key in enumerate(zip(seg.tolist(), found["labels"])):
+                            both[k] = ids.setdefault(key, len(ids))
+                        recenter_at = [k for k in range(1, len(seg))
+                                       if seg[k] == seg[k - 1] and both[k] != both[k - 1]]
+                        seg = both
+                except Exception as exc:
+                    recenters, recenter_at = [], []
+                    recenter_note = f"The re-center check could not be made on this scan ({type(exc).__name__})."
+                    self.call_ui(self._log_only, f"  (re-center check skipped: {type(exc).__name__}: {exc})")
+                if recenter_note:
+                    self.call_ui(self._log_only, "  " + recenter_note)
+                n_segments = len(set(seg.tolist())) if len(seg) else 1
                 if n_segments > 1:
                     inst = core.align_segments(inst, seg, min_frames=5)
-                    self.call_ui(self.log, f"  {n_segments - 1} meridian flip(s) or rotator move(s): each star's light "
+                    n_rc = len(recenters)
+                    what = " and ".join(([f"{n_fl} meridian flip(s) or rotator move(s)"] if n_fl else [])
+                                        + ([f"{n_rc} re-center(s) ("
+                                            + ", ".join(core.recenter_text(j) for j in recenters) + ")"] if n_rc else []))
+                    self.call_ui(self.log, f"  {what}: each star's light "
                                            "curve lined up across them before measuring its scatter.")
                 # 2.2.19 (#25): saturated = raw core clipped on 2 or more frames (or saturated on the reference, as
                 # before); clipped on one frame only (cosmic ray, hot pixel) = a caution on the candidate.
@@ -17933,6 +17966,10 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 result["candidates"] = cand
                 result["excess_limit"] = excess_limit
                 result["segments"] = n_segments
+                result["recenters"] = len(recenters)   # 2.4.0 step 8 (#66)
+                result["recenter_note"] = recenter_note   # review M1 / S3: shown in the scan's header
+                # re-review N2: the header counts what the Log counts (a re-center that came back is still one)
+                result["boundaries"] = int(n_fl) + len(recenters)
                 near = [i for i in range(len(labels))
                         if i not in cand and i not in saturated and i not in too_faint and stats["usable"][i]
                         and math.isfinite(stats["excess"][i])]
@@ -17948,7 +17985,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                                                  or (not precal and math.isfinite(raw_top[i])
                                                      and raw_top[i] >= 0.80 * raw_limit)))
                 # Flip boundary: the biggest change starts at a meridian flip, rotator move or long gap.
-                result["boundaries"] = core.scan_boundaries(seg, jd)
+                result["boundaries"] = core.scan_boundaries(seg, jd, recenter_at)
                 at_flip = {}
                 for i in set(cand) | set(result["near"]) | set(watched):
                     kind = core.change_at_boundary(result["light_curves"][:, i], result["boundaries"])
@@ -17966,7 +18003,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 n_fb = len([i for i in cand if i in at_flip or i in noisy])
                 if n_ns or n_fb:
                     self.call_ui(self.log, f"  Cautions on suspects: {n_ns} near saturation, {n_fb} with a change or "
-                                           "a jump in noise starting at a flip, rotator move or gap.")
+                                           "a jump in noise starting at a flip, rotator move, re-center or gap.")
                 periods = {}
                 for i in list(cand[:40]) + [k for k in watched if k not in cand[:40]]:
                     good = np.isfinite(result["light_curves"][:, i])
@@ -18692,6 +18729,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                      "and the error bars leave out scintillation. Type your site once (it is remembered).")
         if only is not None:
             self._remeasure = {"night": night or self._latest_night()}   # 2.3.0 (#50): _photometry_done adds them
+        self._run_jump_scale = self._jump_scale()   # 2.4.0 step 8 (#66): for the re-center test in the done-step
         try:
             self._remember_aperture_scope()   # 2.3.1 (nit)
         except Exception:
@@ -19248,6 +19286,80 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                  f"unflipped): {len(moved)} frames from {os.path.basename(paths[start])} on are treated as after "
                  "the flip.")
 
+    def _jump_scale(self):
+        """2.4.0 step 8 (#66): (arcsec per Photometry-image pixel or None, stored-frame pixels per image pixel) for the
+        re-center test: the scale from the image's solution, else from the Optics boxes; None when neither is known
+        (review M1: re-centers are then not looked for at all, and the run says so)."""
+        try:
+            scale = self._field_scale_arcsec()[0]
+        except Exception:
+            scale = None
+        try:
+            factor = max(int(self._image_binning()), 1) * (1 if self.pattern.get() == core.MONO else 2)
+        except Exception:
+            factor = 1
+        return scale, factor
+
+    NO_SCALE_NOTE = ("Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics "
+                     "boxes on the Input page).")
+
+    def _run_note(self, words: str):
+        """Review M1 / S3: a plain note of this run that the user must be able to see: in the Log, and at the end of
+        the run on the status line (after the run's own closing line, see _photometry_done)."""
+        notes = getattr(self, "_run_notes", None)
+        if notes is None:
+            notes = self._run_notes = []
+        if words not in notes:
+            notes.append(words)
+        self._log_only(words)
+
+    def _show_run_notes(self):
+        notes, self._run_notes = getattr(self, "_run_notes", None) or [], []
+        for words in notes:
+            if words not in self.status.get():
+                self.status.set((self.status.get().rstrip() + "  " + words).strip())
+
+    def _mark_recenters(self, night_points):
+        """2.4.0 step 8 (#66): a pointing jump between two consecutive frames without a flip (the mount re-centered
+        at the meridian and stayed on its pier side: HD 219134, 10-11 Nov) puts every star on new pixels, so the
+        target can step there (flat field). Each one starts a new segment (Obs.jump), reported and lined up like a
+        flip step. The frames' registrations give the jump. A stack run does not come here (it ends in
+        _stack_done): its points take their frames' segment (stack_core.apply_member_peaks).
+        Review M1: the new pointing must hold for 5 frames, frames back at an earlier pointing rejoin its segment,
+        and without a plate scale nothing is looked for (said with the run's result, not only in the Log)."""
+        if not night_points or not any(getattr(o, "_stack_reg", None) for o in night_points):
+            return []
+        scale, factor = getattr(self, "_run_jump_scale", None) or (None, 1)
+        if not scale:
+            for o in night_points:
+                o.jump = 0
+            self._run_note(self.NO_SCALE_NOTE)
+            return []
+        try:
+            found = core.mark_recenters(night_points, [getattr(o, "_stack_reg", None) for o in night_points],
+                                        scale, factor)
+        except Exception as exc:
+            for o in night_points:
+                o.jump = 0
+            self._log_only(f"  (re-center check skipped: {type(exc).__name__}: {exc})")
+            self._run_note(f"The re-center check could not be made on this run ({type(exc).__name__}); the night is "
+                           "kept as one segment apart from a flip.")
+            return []
+        for j in found:
+            a, b = j["before"], j["after"]
+            la = core.frame_label(a.path) or os.path.basename(a.path)
+            lb = core.frame_label(b.path) or os.path.basename(b.path)
+            if j.get("returned"):
+                self.log(f"Re-center: the pointing moved by {core.recenter_text(j)} between {la} and {lb} with no "
+                         "meridian flip, back to where it was earlier in the night. The frames from there on rejoin "
+                         "that earlier segment.")
+                continue
+            self.log(f"Re-center: the pointing moved by {core.recenter_text(j)} between {la} and {lb} with no meridian "
+                     "flip, so the stars sit on other pixels from there on. The frames after it are a new segment, "
+                     "like the frames after a flip: the night table shows the step there (Flip/re-center step), and "
+                     "'Line up segments' or 'Line up flip/re-center only (keep nights)' takes it out.")
+        return found
+
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
         """2.3.6 (#79 items 1, 2; review MF2): the job's findings close here, after every end-of-run check, not at
         the next idle moment (a dialog in the done-step would close them early)."""
@@ -19267,6 +19379,10 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             if cancelled or error:
                 self._discard_job_findings()   # (review S1) a stopped run sums up nothing; its stop line stands
             self._close_job_findings(force=True)
+            try:
+                self._show_run_notes()   # review M1 / S3: the run's plain notes, after its closing line
+            except Exception:
+                pass
             if ok:   # this run's ⚠ lines travel with its result (settings files, report notes)
                 self.run_findings = list(getattr(self, "last_job_findings", None) or [])
                 self.run_findings_night = f"JD{math.floor(night_points[0].jd)}" if night_points else None
@@ -19311,6 +19427,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         if onsky_log and ctx:
             onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
+        self._mark_recenters(night_points)   # 2.4.0 step 8 (#66): after the flip is known (a flip is not a re-center)
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
@@ -19448,7 +19565,10 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.series_mode_unknown = False   # 2.2.14 (item 19): the file records the mode from now on
         self._series_check = (self.check_used, self.check_mag.get())   # 2.2.8
         self._take_series_snapshot()   # 2.2.14 (item 11): the series (added to or new) as it now is
+        old_trims = self._night_info(night).get("trims")   # 2.4.0 step 8 (#89): a night's trims stay with the night
         self.night_bin[night] = self._night_setup()
+        if old_trims:
+            self._carry_trims(night, old_trims, night_points)
         if tonight_comps is not None:
             self.night_bin[night]["comps"] = tonight_comps   # review: the comps this night's magnitudes came from
         # 2.2.18 (item 8): the night's mount goes with it; an alt-az night has no pier sides ("—").
@@ -20096,6 +20216,26 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.comps_used = layout
         for o in new_points:
             o.night, o.filt = night, filt
+        # 2.4.0 step 8 (#66; review S4): a frame added later joins the re-center segment its own registration puts
+        # it in: the nearest segment within the limits on its side of the flip, among the night's points measured in
+        # this session. Where that cannot be told (the night came from a saved series, no plate scale, or the frame
+        # sits at none of the night's pointings) it joins the segment of the night's point just before it (else
+        # just after it) on the same side of the flip. A jump inside the added frames is not looked for.
+        old_pts = sorted((o for o in self.observations if o.night == night), key=lambda o: o.jd)
+        scale, factor = getattr(self, "_run_jump_scale", None) or (None, 1)
+        known = [(getattr(p, "_stack_reg", None), p.segment, getattr(p, "jump", 0)) for p in old_pts
+                 if getattr(p, "_stack_reg", None)]
+        for o in new_points:
+            jump = None
+            try:
+                jump = core.frame_jump(getattr(o, "_stack_reg", None), o.segment, known, scale, factor)
+            except Exception:
+                jump = None
+            if jump is None:
+                same = [p for p in old_pts if (p.segment or "") == (o.segment or "")]
+                near = [p for p in same if p.jd <= o.jd][-1:] or same[:1]
+                jump = int(getattr(near[0], "jump", 0) or 0) if near else 0
+            o.jump = int(jump)
         self.observations = core.merge_nights(self.observations, new_points)
         night_pts = [o for o in self.observations if o.night == night]
         try:
@@ -20628,7 +20768,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
     def _usable(self) -> list:
         """Observations that go into the period search and the AAVSO report."""
         if not self.skip_flagged.get():
-            return [obs for obs in self.observations if math.isfinite(obs.mag)]
+            # 2.4.0 step 8 (#89): a trimmed point stays out either way (a trim is the user's own choice)
+            return [obs for obs in self.observations if math.isfinite(obs.mag) and not core.is_trimmed(obs)]
         return [obs for obs in self.observations if not obs.flag and math.isfinite(obs.mag)]
 
     def _cloud_fraction(self) -> float:
@@ -20642,6 +20783,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # nights where the user chose to keep them stay unflagged. The episodes are kept for the night table.
         keep = {n for n, info in self.night_bin.items() if isinstance(info, dict) and info.get("keep_transmission")}
         self._loss_report = {}
+        self._apply_trims()   # 2.4.0 step 8 (#89): the 'trim' word follows each night's saved spans, every time
         n = core.apply_cloud_flags(self.observations, self._cloud_fraction(), keep_nights=keep,
                                    report=self._loss_report)
         for night, eps in self._loss_report.items():
@@ -21950,7 +22092,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             g, text="Leave flagged points out (sat, drift, cloud)",
             variable=self.skip_flagged, command=self.refit_period), pad=14)
         self._add_tooltip(skip_box, "Leaves the flagged points (saturated, drifted, cloud) out of the period and the "
-                                    "report. Frames taken during a planet's transit never go in a report.")
+                                    "report. Frames taken during a planet's transit never go in a report, and "
+                                    "trimmed points stay out either way.")
         cloud_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(cloud_box, text="Cloud flag: more than", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         ttk.Entry(cloud_box, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
@@ -21961,6 +22104,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         groups.add("points", ttk.Button(g, text="Transmission loss…", command=self.edit_transmission))
         # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
         groups.add("points", ttk.Button(g, text="Planet transits…", command=self.edit_planet_transits))
+        # 2.4.0 step 8 (#89): Trim, one night at a time (trim_ui.TrimMixin); greyed until a night is chosen.
+        self._trim_build_ui(groups, g)
 
         # ---- 3. Corrections: how nights and segments are lined up
         g = groups.parent("corrections")
@@ -21968,7 +22113,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             g, text="Line up segments (nights, meridian flip)",
             variable=self.norm_segments, command=self.refit_period), pad=14)
         groups.add("corrections", ttk.Checkbutton(
-            g, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period), pad=14)
+            g, text="Line up flip/re-center only (keep nights)", variable=self.align_flip,
+            command=self.refit_period), pad=14)   # 2.4.0 step 8 (#66): every step inside a night
         # 2.2.14 (item 20): each pier side (camera angle) normalized on its own across the campaign.
         groups.add("corrections", ttk.Checkbutton(
             g, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period), pad=14)
@@ -22414,8 +22560,11 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
     def draw_output(self):
         self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
         self.update_field_buttons()   # 2.4.0 (#101): a new night, reduction or series makes Save field image live
+        self.update_trim_state()      # 2.4.0 step 8 (#89): Trim is live only with one night chosen
         if self.out_canvas is None:
             return
+        self._trim_axis = None
+        self._drop_trim_selector()    # the old drag selector goes with the cleared axes; a drawn series makes a new one
         for ax in (self.out_ax1, self.out_ax2, self.out_ax3, self.out_ax4):
             ax.clear()
         self._hover_sets = []
@@ -22450,9 +22599,12 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         flagged = np.array([bool(o.flag) for o in obs_list])
         tx = self._time_values(jd)
         not_finite = ~np.isfinite(mag)
-        excluded = (flagged | not_finite) if self.skip_flagged.get() else not_finite
+        # 2.4.0 step 8 (#89): trimmed points are left out whatever the box says, and drawn apart (_draw_trim).
+        trimmed = np.array([core.is_trimmed(o) for o in obs_list], dtype=bool)
+        excluded = (flagged | not_finite) if self.skip_flagged.get() else (not_finite | trimmed)
         # Each night's meridian-flip step, measured on the plotted magnitudes (always reported).
-        flip_steps = core.flip_offsets(obs_list, list(mag), use=list(~excluded))
+        # 2.4.0 step 8 (#66): and each re-center's step (every step inside a night).
+        flip_steps = core.night_steps(obs_list, list(mag), use=list(~excluded))
         # 2.2.14 (item 20): pier side of every point, and how the sides compare across the campaign.
         pier_by_night = self._pier_by_night()
         sides = core.point_sides(obs_list, pier_by_night)
@@ -22462,7 +22614,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         elif self.pier_segments.get():
             mag = np.array(core.apply_side_offsets(sides, list(mag), side_offs["offsets"]))
         elif self.align_flip.get():
-            mag = np.array(core.align_flips(obs_list, list(mag), flip_steps))
+            mag = np.array(core.align_steps(obs_list, list(mag), flip_steps))
         nights = []
         for obs in obs_list:
             if obs.night not in nights:
@@ -22496,7 +22648,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 lc_x[keep], mag[keep], yerr=err[keep], fmt="o", ms=4, alpha=alpha_for(night, raw_alpha),
                 color=colors[i % len(colors)], ecolor="#b0b0b0", lw=0.8,
             )   # 2.2.14 (item 16): no legend; the time axis and the night table name the nights
-            drop = mask & excluded
+            drop = mask & excluded & ~trimmed
             if drop.any():
                 ax.plot(lc_x[drop], mag[drop], "x", ms=6, color="#888888", alpha=alpha_for(night, 1.0))
         ax.invert_yaxis()
@@ -22508,6 +22660,9 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                               for f in filt.split("/"))   # 2.2.17 (item 1): "Sloan i′ magnitude", not "SI"
         ax.set_ylabel(f"{filt_label} magnitude" + (" (segments lined up)" if self.norm_segments.get()
                                                    else " (pier sides lined up)" if self.pier_segments.get()   # 2.2.14
+                                                   else " (flip and re-center lined up)" if self.align_flip.get()
+                                                   and any(st["kind"] == core.STEP_RECENTER for sts in
+                                                           flip_steps.values() for st in sts)   # 2.4.0 step 8 (#66)
                                                    else " (flip lined up)" if self.align_flip.get() and flip_steps
                                                    else ""))
         labels_raw = [self._point_label(o, float(m)) for o, m in zip(obs_list, mag)]
@@ -22520,8 +22675,20 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     ax.plot(lc_x[fm], mag[fm], "o", ms=6, mfc="none", mec="#333333", mew=0.6, alpha=alpha_for(night, 1.0))
         # 2.2.14 (item 16): a symbol key in the title, only for the symbols drawn (8 nights overflowed a legend).
         # 2.2.14 review: only drawn × count (a NaN point is left out but not plotted).
-        key = ((["× flagged, left out"] if (excluded & np.isfinite(mag) & in_zoom).any() else [])
+        key = ((["× flagged, left out"] if (excluded & ~trimmed & np.isfinite(mag) & in_zoom).any() else [])
                + (["○ after flip"] if (flip_mask & in_zoom).any() else []))
+        # 2.4.0 step 8 (#66): a dashed line where the mount re-centered (between the two frames), so the segment
+        # boundary shows on the light curve as the rings show a flip
+        recentered = False
+        for k in range(1, len(obs_list)):
+            a, b = obs_list[k - 1], obs_list[k]
+            if a.night == b.night and getattr(b, "jump", 0) != getattr(a, "jump", 0) \
+                    and math.isfinite(lc_x[k - 1]) and math.isfinite(lc_x[k]):
+                ax.axvline(0.5 * (lc_x[k - 1] + lc_x[k]), color="#7a5c99", ls="--", lw=0.9,
+                           alpha=alpha_for(b.night, 0.9))
+                recentered = recentered or bool(in_zoom[k])
+        if recentered:
+            key.append("┆ re-center")
         ax.grid(True, alpha=0.3)
         bin_text = ""
         if interval is not False:
@@ -22552,9 +22719,12 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         off_scale = 0
         for night in nights:
             nm = np.array([o.night == night for o in obs_list], dtype=bool)
-            off_scale += self._pin_off_scale(ax, lc_x, mag, excluded & nm & in_zoom, alpha_for(night, 1.0))
+            # review N1: a trimmed point is not a flagged one (it has its own gray × and key)
+            off_scale += self._pin_off_scale(ax, lc_x, mag, excluded & ~trimmed & nm & in_zoom, alpha_for(night, 1.0))
         if off_scale:
             key.append(f"{off_scale} flagged off scale")
+        # 2.4.0 step 8 (#89): trimmed points as faint gray × in a band labelled 'trimmed'
+        key += self._draw_trim(ax, obs_list, lc_x, jd, mag, trimmed, in_zoom, nights, zoom, alpha_for)
         self._title_with_key(ax, (self.star_id.get() or "Target")
                              + (f" · {self.night_label(zoom, short=True)}" if zoom is not None else ""), key)
 
@@ -22889,12 +23059,14 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         ax.grid(True, alpha=0.3)
         self.out_fig.tight_layout()
         self._refit_lc_title()   # 2.2.14 (item 16): re-measure the title key on the laid-out axes
+        self._make_trim_selector()   # 2.4.0 step 8 (#89): drag across the light curve to fill the Trim boxes
         self.out_canvas.draw_idle()
 
     # ---- Output summary (boxes + per-night table) ------------------------------------
     SUMMARY_COLUMNS = (("night_text", "Night", 120), ("night", "JD", 90), ("pts", "Pts", 60), ("used", "used", 60),
                        ("mean", "Mean mag ± err", 145), ("tsig", "Target σ", 85), ("csig", "Check σ", 85),
-                       ("side", "Side", 80), ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170),
+                       ("side", "Side", 80), ("flip", "Flip/re-center step", 130), ("bv", "B−V", 70),
+                       ("flags", "Flags", 170),
                        ("sent", "Sent", 70), ("note", "Note", 260))   # 2.2.18 (item 10): Sent
 
     def _build_summary(self, card):
@@ -23138,6 +23310,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 flags[core.HAZE_SHORT] = flags.pop(core.HAZE_FLAG)
             if "cloudedge" in flags:   # 2.2.14 (item 10): in words too
                 flags[core.CLOUD_EDGE_LABEL] = flags.pop("cloudedge")
+            if core.TRIM_FLAG in flags:   # 2.4.0 step 8 (#89): the night's trimmed count
+                flags["trimmed"] = flags.pop(core.TRIM_FLAG)
             kept_haze = self._transmission_summary(night)[0] \
                 if self._night_info(night).get("keep_transmission") else 0
             if kept_haze:
@@ -23164,9 +23338,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 "csig": f"{csig:.3f}" if math.isfinite(csig) else "—",
                 # 2.2.14 (item 20): pier side(s), and a flip step over 0.02 mag marked.
                 "side": core.side_text((pier_by_night or {}).get(night)),
-                "flip": (f"{flip_steps[night]['offset']:+.3f}"
-                         + (" ⚠" if abs(flip_steps[night]["offset"]) > core.FLIP_STEP_MARK else "")
-                         if night in flip_steps else "—"),
+                # 2.4.0 step 8 (#66): and each re-center's step ('re-center +0.050'; a flip alone reads as before)
+                "flip": core.night_steps_text(flip_steps.get(night)),
                 "bv": f"{float(np.median(bv)):.3f}" if bv else "—",
                 "flags": ", ".join(f"{n} {w}" for w, n in flags.most_common()) or "—",
                 "sent": self._sent_text(night),   # 2.2.18 (item 10)
@@ -23333,7 +23506,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         if self.pier_segments.get():   # 2.2.14 (item 20)
             return self._pier_values(points, list(vals))[0]
         if self.align_flip.get():
-            return core.align_flips(points, vals, core.flip_offsets(points, vals))
+            return core.align_steps(points, vals, core.night_steps(points, vals))   # 2.4.0 step 8 (#66)
         return list(vals)
 
     def _time_text(self, jd: float) -> str:
@@ -24832,7 +25005,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 inst = o.spare_insts.get(name)
             if inst is None or not math.isfinite(inst) or not math.isfinite(o.cmag) or not math.isfinite(o.comp_cat):
                 continue
-            if set(o.flag.split()) & {"cloud", "cloudedge", core.HAZE_FLAG, "drift", "noflux", "nocomp"}:   # 2.2.14
+            if set(o.flag.split()) & {"cloud", "cloudedge", core.HAZE_FLAG, "drift", "noflux", "nocomp",
+                                      core.TRIM_FLAG}:   # 2.2.14; 2.4.0 step 8 (#89): trimmed frames too
                 continue
             out_obs.append(o)
             out_mag.append(o.comp_cat + inst - o.cmag)
@@ -25536,8 +25710,16 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             + self.stack_report_note(points, lead=bool(self.notes.get().strip() or self._sloan_report_note(points))),
             filt=self._filter_code(),
             scint=self._scint_setup(),
-            night_notes=self._findings_night_notes(points),   # 2.3.6 run-through item 6: only the run night's rows
+            night_notes=self._report_night_notes(points),   # 2.3.6 run-through item 6: only the run night's rows
         )
+
+    def _report_night_notes(self, points) -> dict:
+        """2.4.0 step 8 (#89): the per-night NOTES of a report: the run's findings (2.3.6) and each night's trimmed
+        spans, each only on its own night's rows."""
+        notes = dict(self._findings_night_notes(points))
+        for night, words in self._trim_night_notes(points).items():
+            notes[night] = (notes[night] + "; " if notes.get(night) else "") + words
+        return notes
 
     def save_aavso(self):
         if not self.observations:
@@ -25666,7 +25848,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         lines.append("Scintillation (this report's error bars): " + self._scint_note())
         lines.append("Flagged points: " + ("left out" if self.skip_flagged.get() else "kept"))
         for name, var in (("Check-star zero point", "use_check_zp"), ("Segments lined up", "norm_segments"),
-                          ("Pier sides lined up", "pier_segments"), ("Flip lined up", "align_flip")):
+                          ("Pier sides lined up", "pier_segments"),
+                          ("Flip/re-center lined up", "align_flip")):   # 2.4.0 step 8 (#66)
             v = getattr(self, var, None)
             try:
                 if v is not None and v.get():
@@ -25716,6 +25899,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     out_by.setdefault(why, []).append(nums[id(o)])
             lines.append("Frames left out (flag: frame numbers): "
                          + ("; ".join(f"{why} {tu.frame_ranges(v)}" for why, v in sorted(out_by.items())) or "none"))
+            if self._trim_settings_line(night):   # 2.4.0 step 8 (#89)
+                lines.append(self._trim_settings_line(night))
             masters = setup.get("masters") or []
             lines.append("Calibration: " + ("; ".join(str(m) for m in masters) if masters else "none recorded"))
             lines.append(tu.gain_note(setup.get("photon_noise")))
@@ -27258,13 +27443,16 @@ class ExtremumWindow:
                   style="Card.TLabel").pack(anchor=W)
         self.hint = ttk.Label(
             top, style="Hint.TLabel", justify=LEFT,
+            # 2.4.0 step 8 (#90): the two jobs of a period are told apart here.
             text="The extremum is timed with a local polynomial. Its error comes from 500 bootstrap refits with "
-                 "stretches of the night's own noise (residuals about a Fourier series at the period, so noise that "
-                 "lasts minutes counts), times the residuals' red-noise factor β, and is never less than half the "
-                 "difference from the Fourier series (and, for a minimum, from Kwee & van Woerden 1956, which is also "
-                 "shown). O−C is against the elements below "
-                 "(VSX epochs are HJD). Saved times go into one CSV per star next to the series file; it grows "
-                 "night by night into an O−C diagram.")
+                 "stretches of the night's own noise (residuals about a Fourier series at the star's period, so noise "
+                 "that lasts minutes counts), times the residuals' red-noise factor β, and is never less than half "
+                 "the difference from the Fourier series (and, for a minimum, from Kwee & van Woerden 1956, which is "
+                 "also shown). The error finds its period itself: the series' own period from the Output page when "
+                 "it is a reliable one, else the period in the times CSV, else VSX's, else the Period box; the result "
+                 "says which. The elements below are optional and do a different job: Period and Epoch together "
+                 "predict where the extremum falls and give the O−C (VSX epochs are HJD). Saved times go into one "
+                 "CSV per star next to the series file; it grows night by night into an O−C diagram.")
         self.hint.pack(anchor=W, fill=X, pady=(2, 6))
         self.hint.bind("<Configure>", lambda e: self.hint.configure(wraplength=max(200, e.width - 8)))
         form = ttk.Frame(top, style="Card.TFrame")
@@ -27280,7 +27468,9 @@ class ExtremumWindow:
         self.period = StringVar(value=f"{period:.8f}" if period else "")
         self.epoch = StringVar(value=f"{epoch:.5f}" if epoch else "")
         self.system = StringVar(value="HJD")
-        self.source = StringVar(value="VSX" if period and epoch else ("typed" if period or epoch else ""))
+        # 2.4.0 step 8 (#90, AA LMi 16 Nov): VSX with a period but no epoch says so (it said "typed").
+        self.source = StringVar(value="VSX" if period and epoch else (
+            "VSX gives a period but no epoch" if period else ("typed" if epoch else "")))
         ttk.Label(form, text="Night", style="Card.TLabel").grid(row=0, column=0, sticky=W, padx=(0, 6), pady=2)
         ttk.Combobox(form, textvariable=self.night, values=list(self.night_names), state="readonly",
                      width=max([len(k) for k in self.night_names] + [12]) + 2).grid(row=0, column=1, sticky=W, pady=2)
@@ -27290,18 +27480,22 @@ class ExtremumWindow:
         ttk.Label(form, text="Half-window (min)", style="Card.TLabel").grid(row=0, column=4, sticky=W, padx=(14, 6))
         ttk.Entry(form, textvariable=self.window_min, width=7).grid(row=0, column=5, sticky=W)
         ttk.Label(form, text="blank = automatic", style="Hint.TLabel").grid(row=0, column=6, sticky=W, padx=(6, 0))
-        ttk.Label(form, text="Period (d)", style="Card.TLabel").grid(row=1, column=0, sticky=W, padx=(0, 6), pady=2)
-        ttk.Entry(form, textvariable=self.period, width=14).grid(row=1, column=1, sticky=W, pady=2)
-        ttk.Label(form, text="Epoch", style="Card.TLabel").grid(row=1, column=2, sticky=W, padx=(14, 6))
-        ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=1, column=3, columnspan=2, sticky=W)
+        # 2.4.0 step 8 (#90): the boxes below only predict the time and give the O−C; the error has its own period
+        # (see _noise_period), so the row is headed as what it is for.
+        ttk.Label(form, text="Elements for the predicted time and O−C (optional)", font=(core.UI_FONT, 10, "bold"),
+                  style="Card.TLabel").grid(row=1, column=0, columnspan=9, sticky=W, pady=(8, 0))
+        ttk.Label(form, text="Period (d)", style="Card.TLabel").grid(row=2, column=0, sticky=W, padx=(0, 6), pady=2)
+        ttk.Entry(form, textvariable=self.period, width=14).grid(row=2, column=1, sticky=W, pady=2)
+        ttk.Label(form, text="Epoch", style="Card.TLabel").grid(row=2, column=2, sticky=W, padx=(14, 6))
+        ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=2, column=3, columnspan=2, sticky=W)
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
-                     width=5).grid(row=1, column=5, sticky=W)
-        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=1, column=6, sticky=W, padx=(6, 0))
+                     width=5).grid(row=2, column=5, sticky=W)
+        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=2, column=6, sticky=W, padx=(6, 0))
         # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click. 2.4.0 (#65): the window now also opens
         # with them (see below), so this button puts them back after other values were typed or looked up.
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
-        self.saved_button.grid(row=1, column=7, sticky=W, padx=(6, 0))
-        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=1, column=8, sticky=W, padx=(6, 0))
+        self.saved_button.grid(row=2, column=7, sticky=W, padx=(6, 0))
+        ttk.Label(form, textvariable=self.source, style="Hint.TLabel").grid(row=2, column=8, sticky=W, padx=(6, 0))
         self.result_text = StringVar(value="Choose the night and press Measure.")
         ttk.Label(top, textvariable=self.result_text, font=(core.MONO_FONT, 10), style="Card.TLabel",
                   justify=LEFT).pack(anchor=W, pady=(6, 4))
@@ -27373,6 +27567,69 @@ class ExtremumWindow:
             return None, None
         return p, e
 
+    def _typed_period(self):
+        """2.4.0 step 8 (#90): the Period box alone (no epoch needed), or None."""
+        try:
+            p = float(self.period.get())
+        except ValueError:
+            return None
+        return p if math.isfinite(p) and p > 0 else None
+
+    def _series_period(self):
+        """2.4.0 step 8 (#90): (period, why_not). The series' own period from the Output page's period search (or
+        Refit period), when the Output page calls it significant: the same rule as its "Folded P = …" title (FAP 1%
+        or less, not carried by one night, not one short night under two cycles, the FAP counting nights agrees, not
+        demoted by the airmass check). A best peak that fails it (a one-day alias of night offsets, the 20 d edge of
+        a short night) would be worse than no period: the Fourier series at it cannot follow the star, and the
+        error comes out several times too large. Then (None, the peak in words) so the result can say so."""
+        app = self.app
+        best = app.period if isinstance(getattr(app, "period", None), dict) else None
+        try:
+            p = float(best["period_days"]) if best else None
+        except (KeyError, TypeError, ValueError):
+            p = None
+        if not (p and math.isfinite(p) and p > 0):
+            return None, ""
+        try:
+            usable = app._usable()
+            span = max(o.jd for o in usable) - min(o.jd for o in usable)
+            too_short = len({o.night for o in usable}) == 1 and span < 2.0 * p
+        except Exception:
+            too_short = False
+        fap = best.get("fap", float("nan"))
+        try:
+            night_fap = float((best.get("night_fap") or {}).get("fap", float("nan")))
+        except (TypeError, ValueError):
+            night_fap = float("nan")
+        ok = (isinstance(fap, (int, float)) and math.isfinite(fap) and fap <= 0.01 and not best.get("carried_by")
+              and not too_short and not (math.isfinite(night_fap) and night_fap > 0.01)
+              and not (best.get("airmass_check") or {}).get("demoted"))
+        if ok:
+            return p, ""
+        return None, (f"the Output page's best peak, {p:.5g} d, is not a reliable period"
+                      + (": one short night" if too_short else ""))
+
+    def _noise_period(self):
+        """2.4.0 step 8 (#90): (period, source, why_not) for the error's noise model: the best period SHOBS-P has,
+        whatever is in the Period and Epoch boxes. Order: the series' own period, the times CSV's, VSX's, and last
+        the Period box (a period typed there with nothing better anywhere still beats none). See
+        core.extremum_noise_period."""
+        series, why_not = self._series_period()
+        # review S2: a times-CSV, VSX or typed period that is twice the series period wins (an eclipsing star's
+        # period search returns half the period); the result line says so (_noise_lines).
+        got = core.extremum_noise_choice(series=series, csv_rows=self._csv_rows(),
+                                         vsx=self.app.catalog_period, typed=self._typed_period())
+        self._noise_half = got["half"]
+        return got["period"], got["source"], why_not
+
+    def _noise_source_words(self, r) -> str:
+        """'VSX', or 'VSX; the series period 0.18350 d is half of it' (review S2)."""
+        words = self.NOISE_WORDS.get(r.get("noise_source"), "period")
+        half = r.get("noise_half")
+        return words + (f"; the series period {half:.5f} d is half of it" if half else "")
+
+    NOISE_WORDS = {"series": "series period", "times CSV": "times CSV", "VSX": "VSX", "Period box": "Period box"}
+
     def _star(self) -> str:
         return self.app.star_id.get().strip() or "target"
 
@@ -27435,7 +27692,13 @@ class ExtremumWindow:
             self.kind.set("minimum" if core.extremum_kind_for(found.get("var_type")) == "min" else "maximum")
         finally:
             self._kind_quiet = False
-        self.source.set("VSX " + (found.get("var_type") or "") + ("" if p and e else " (no period/epoch there; type them)"))
+        # 2.4.0 step 8 (#90, AA LMi 16 Nov): VSX had the period (0.054306 d) but no epoch, and this said "no
+        # period/epoch there; type them" with the period already in the box. Each case now says what VSX gave.
+        missing = ("" if p and e else
+                   ": VSX gives a period but no epoch (type an epoch for the O−C; the error uses the period)" if p else
+                   ": VSX gives an epoch but no period (type the period for the O−C)" if e else
+                   ": VSX gives no period or epoch (type them for the O−C)")
+        self.source.set(("VSX " + (found.get("var_type") or "")).strip() + missing)
 
     # -- measuring ------------------------------------------------------------------------
     def _night_points(self):
@@ -27464,10 +27727,17 @@ class ExtremumWindow:
             # Every extremum the elements predict in this night (the night may hold two maxima of a short-period star).
             guesses = core.predicted_extrema(float(t.min()), float(t.max()), period, epoch,
                                              margin=0.1 * period) or [None]
+        # 2.4.0 step 8 (#90): the error's period is found apart from the boxes; the elements' period (with its epoch)
+        # only says where to look, as before.
+        noise_p, noise_source, noise_why_not = self._noise_period()
+        noise_half = getattr(self, "_noise_half", None)
+        source_words = self._noise_source_words({"noise_source": noise_source, "noise_half": noise_half})
         results, problems = [], []
         for g in guesses:
             try:
-                r = core.measure_extremum(t, vals, kind, period=period, t_guess=g, half_width=hw)
+                r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=g, half_width=hw,
+                                          window_period=period if period and epoch else None, tune_period=True,
+                                          period_source=source_words)
             except ValueError as exc:
                 problems.append(str(exc))
                 continue
@@ -27479,7 +27749,8 @@ class ExtremumWindow:
             # other branch (P 0.15151 d put it on the night's minimum), so "no extremum inside the window" was all
             # the window said. The night's own extremum is measured instead, and the text says why.
             try:
-                r = core.measure_extremum(t, vals, kind, period=period, t_guess=None, half_width=hw)
+                r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=None, half_width=hw,
+                                          window_period=period, tune_period=True, period_source=source_words)
                 r.setdefault("warnings", []).append(
                     "found away from the time the elements predict (" + "; ".join(sorted(set(problems))) + "): "
                     "the elements may be off by part of a cycle")
@@ -27489,6 +27760,9 @@ class ExtremumWindow:
                 problems.append(str(exc))
         ra, dec, lat, lon = self._coords()
         for r in results:
+            # The period the error really used (None when there was none, or the noise model could not be fitted).
+            r["noise_asked"], r["noise_source"], r["noise_why_not"] = noise_p, noise_source, noise_why_not
+            r["noise_half"] = noise_half   # review S2
             try:
                 r["times"] = core.extremum_times(r["t"], ra, dec, lat, lon)
             except Exception as exc:
@@ -27537,6 +27811,7 @@ class ExtremumWindow:
                 sys_word = self.system.get() if math.isfinite(tm["hjd"]) else "JD"
                 lines.append(f"       O−C {oc['oc_d']:+.5f} d = {oc['oc_min']:+.1f} ± {err_min:.1f} min   cycle "
                              f"{oc['cycle']:g}   (C = {sys_word} {oc['calc']:.5f}; P {period:.8f}, E {epoch:.5f})")
+            lines += ["       " + ln for ln in self._noise_lines(r)]
             for n in r.get("notes", []):
                 lines.append(f"       note: {n}")
             for w in r.get("warnings", []):
@@ -27544,8 +27819,33 @@ class ExtremumWindow:
         for p in problems if not results else []:
             lines.append(f"⚠ {p}")
         if results and not (period and epoch):
-            lines.append("No elements: type the period and epoch (or Elements from VSX) for the O−C.")
+            # 2.4.0 step 8 (#90): plain that this is only about the O−C (the error has its period, said above).
+            if self._typed_period():
+                lines.append("Period without an epoch: no predicted time or O−C. Type an epoch for them (optional); "
+                             "the error does not need one.")
+            else:
+                lines.append("No elements: type the period and epoch (or Elements from VSX) for the O−C (optional); "
+                             "the error does not need them.")
         return "\n".join(lines)
+
+    def _noise_lines(self, r) -> list:
+        """2.4.0 step 8 (#90): which period the error used, said with the result; or, plainly, that there was none."""
+        asked, used = r.get("noise_asked"), r.get("noise_period")
+        if used:
+            # An approximate period is enough: on a night of at least two cycles it is fitted to the night
+            # (core.tune_noise_period), and the result says so when that moved it by more than 1%.
+            tuned = r.get("noise_period_tuned") or used
+            return [f"error: noise model at P {used:.5f} d ({self._noise_source_words(r)}"
+                    + (f"; fitted to this night at {tuned:.5f} d" if abs(tuned - used) > 0.01 * used else "") + ")"]
+        if asked:
+            return [f"⚠ error: the noise model at P {asked:.5f} d "
+                    f"({self._noise_source_words(r)}) could not be fitted to this night, so",
+                    "  this ± may be 2-3 times too small. Check that period."]
+        why = r.get("noise_why_not") or ""
+        return ["⚠ error: SHOBS-P has no period for this star, so noise lasting minutes is not counted and this ±",
+                "  may be 2-3 times too small" + (f" ({why})." if why else "."),
+                "  Run the period search on the Output page first (more nights help), or type the star's period in",
+                "  the Period box, then press Measure again."]
 
     # -- the times CSV --------------------------------------------------------------------
     def _default_csv(self) -> str:
@@ -27655,7 +27955,13 @@ class ExtremumWindow:
                    "kvw_jd": kvw.get("t", float("nan")), "kvw_err": kvw.get("err", float("nan")),
                    "poly_jd": poly["t"], "poly_err": poly["err"], "fourier_jd": fo.get("t", float("nan")),
                    "fourier_err": fo.get("err", float("nan")), "time_note": tm.get("note", ""),
-                   "note": "; ".join(r.get("warnings", []))}
+                   "note": "; ".join(r.get("warnings", [])),
+                   # 2.4.0 step 8 (#90): the period the error used and where it came from ('none': timed without).
+                   "noise_period_d": r.get("noise_period") or float("nan"),
+                   "noise_period_source": (r.get("noise_source") or "none") if r.get("noise_period") else "none",
+                   # review N3: the period the noise model was fitted at (tuned to the night, or the same)
+                   "noise_period_used_d": (r.get("noise_period_tuned") or r.get("noise_period") or float("nan"))
+                   if r.get("noise_period") else float("nan")}
             try:
                 done.append(core.save_extremum_row(path, row))
             except OSError as exc:
@@ -27882,7 +28188,7 @@ class WatchWindow:
 
 
 EXPORT_SETUPS_FILE = os.path.join(os.path.expanduser("~"), ".shiloh_photometry_exports.json")
-COLUMN_LABELS = (("err", "Error"), ("night", "Night"), ("segment", "Segment (flip)"), ("flag", "QC flag"),
+COLUMN_LABELS = (("err", "Error"), ("night", "Night"), ("segment", "Segment (flip, re-center)"), ("flag", "QC flag"),
                  ("airmass", "Airmass"), ("check", "Check star"), ("comp", "Comp instrumental"),
                  ("fwhm", "FWHM"), ("color", "B-V"), ("note", "Night note"))
 
@@ -28054,7 +28360,7 @@ class ExportWindow:
             "processing": (f"aperture r={app.radius.get()} sky {app.sky_in.get()}-{app.sky_out.get()} px; "
                            f"check-star correction {'on' if app.use_check_zp.get() else 'off'}; "
                            f"segments lined up {'yes' if app.norm_segments.get() else 'no'}; "
-                           f"flip lined up {'yes' if app.align_flip.get() and not app.norm_segments.get() else 'no'}; "
+                           f"flip/re-center lined up {'yes' if app.align_flip.get() and not app.norm_segments.get() else 'no'}; "
                            f"flagged points {'left out' if app.skip_flagged.get() else 'included'}; "
                            f"cloud flag at {app.cloud_limit.get()}%; {app._scint_note()}"),
         }
@@ -28238,8 +28544,12 @@ class ScanView:
         self._cal_text = cal
         self.header_text = StringVar(value="")   # Fable S5: refreshed when a star is added by hand
         self._header_tail = (
-                 (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
+                 (f"Each star's light curve was lined up across {result.get('boundaries', result['segments'] - 1)} "
+                  "meridian flip(s), rotator move(s) or re-center(s) first. " if result.get("recenters") else
+                  # 2.4.0 step 8 (#66; re-review N2: counted as the Log counts them)
+                  f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
                     "move(s) first. " if result.get("segments", 1) > 1 else "")
+                 + (result["recenter_note"] + " " if result.get("recenter_note") else "")   # review M1 / S3
                  + "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
                  "on the scatter plot to pick several stars, then Mark on image. A suspect is a lead, not a "
                  "discovery: check it on another night and look for a nearby bright star or a bad pixel first. "
@@ -28642,7 +28952,8 @@ class ScanView:
         for b, kind in r.get("boundaries") or []:
             if 0 < b < len(r["jd"]):
                 ax.axvline(0.5 * (r["jd"][b - 1] + r["jd"][b]), color="#7a5c99", ls="--", lw=0.9,
-                           label="flip / rotator move" if kind == "flip" else "gap")
+                           label="flip / rotator move" if kind == "flip" else
+                           "re-center" if kind == "recenter" else "gap")   # 2.4.0 step 8 (#66)
         ax.invert_yaxis()
         # 2.2.16 (item 13): y from the curve's measured points with a margin, as on the Variables light curve. A
         # field scan flags no frames (clouds are taken out by each frame's zero point), so nothing is pinned here.

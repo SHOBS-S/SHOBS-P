@@ -50,15 +50,34 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | Button | File |
 |---|---|
 | **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. Beside it, `AAVSO_<star>_<filter>_<date>_SHOBS-P_settings.txt`: what the reported points were measured with, night by night (aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain (from 2.4.0 with how it was measured from the night's sky, or the night's sky check of EGAIN, and the SHOBS-FLUX camera profile check when there is a profile), telescope aperture, stacking, the SHOBS-P version), and the report's comps, check, scintillation and line-up choices. |
-| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. |
+| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. The `segment` column says `no flip`, `before flip` or `after flip`; on a night with a re-center (from 2.4.0, chapter 12) it goes on with ` / before re-center`, ` / after re-center` or ` / after re-center 2`. The words name the segment: frames that came back to the first position read ` / before re-center` again. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
 | **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. The field image comes with the report: after the report is saved the button reads **Field image saved ✓** (no second `…_2_field.png`), or **Fetch AAVSO chart** when only the chart is missing; that saves just the chart beside the image (from 2.4.0). |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
-| **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. |
+| **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. Columns: below. |
 | **Watch stars…** → **Export watch light curves CSV…** | `watch_stars.csv` |
 
 When a night is highlighted in the night table, **Save AAVSO report** and **Save light-curve CSV** first ask whether
 to save that night only or the whole series. See [15. Submit to AAVSO](15-submit-to-aavso.md).
+
+**The times CSV's columns** (`<star>_times_of_extremum.csv`, one row per time of maximum or minimum):
+
+| Columns | What they hold |
+|---|---|
+| `star`, `type`, `night` | The star, `max` or `min`, and the night. |
+| `hjd`, `bjd_tdb`, `jd_utc` | The adopted time in HJD (UTC), BJD_TDB and JD (UTC). `hjd` and `bjd_tdb` are blank without RA/Dec. |
+| `error_d`, `error_min`, `method` | The adopted error in days and minutes, and the method (polynomial and bootstrap). |
+| `cycle`, `o_c_d`, `o_c_min`, `period_d`, `epoch`, `elements` | The O − C and the elements it was worked out against, with their source (`VSX HJD`, `saved HJD`, `typed HJD`). Blank when no elements were given. |
+| `n_points`, `window_min` | Points in the fit window, and its half-width in minutes. |
+| `kvw_jd`, `kvw_err`, `poly_jd`, `poly_err`, `fourier_jd`, `fourier_err` | Each method's own time (JD) and error (days). |
+| `time_note`, `note` | Notes on the time conversion, and the result's ⚠ warnings. |
+| `noise_period_d`, `noise_period_source` | **New in 2.4.0.** The period the error's noise model used, and where it came from: `series` (the Output page's period), `times CSV`, `VSX`, `Period box`, or `none` when the time was measured without a period (its error may be 2–3 times too small). |
+| `noise_period_used_d` | **New in 2.4.0.** The period the noise model was really fitted at: `noise_period_d` after SHOBS-P fitted it to the night (a night of two cycles or more, chapter 14), or the same number when it was not fitted. Blank when there was no period. |
+
+The three new columns are added at the end, so the older columns keep their places. A CSV from 2.3 still reads; the
+first time 2.4.0 saves into it, the header gains the new columns and the older rows have them blank. A blank is not
+`none`: for a row from before 2.4.0 the error used the elements' period, so it was measured without a period exactly
+when its `period_d` is blank too. Columns you added yourself are kept, and so are notes you edited by hand: a note in quotes with commas in it stays whole, any `#` line you added stays at the top, and the rows already in the file keep their full text (only a new row's note is shortened, to 160 characters). SHOBS-P writes commas inside text as `;`, so the file stays readable by older versions and by a plain comma split. See [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md).
 
 ### Transits mode (Transit fit page)
 
@@ -101,9 +120,14 @@ many fields.
 A series (`.cvseries`) holds every night of one star in one mode: all points, flags, the comparison and check stars,
 night notes, the watch list and the settings of each night. It is a text file (JSON).
 
+From 2.4.0 each point also carries `jump`: the number of its re-center segment in its night (chapter 12). 0 is
+the first position of the field, 1 the segment after the first re-center, and so on; frames that came back to an
+earlier position carry that segment's number again. Series saved by earlier versions have no such field and load
+as before (every point reads 0, no re-center).
+
 - **Save series** always asks where to save it, suggesting `<star>.cvseries`.
 - After that, many actions save it again by themselves: adding or removing a night, night notes, **Use comps…**,
-  planet-transit flags, catalog magnitudes typed in **Use comps…**, and report bookkeeping (saved reports and the
+  **Trim** and **Clear trim**, planet-transit flags, catalog magnitudes typed in **Use comps…**, and report bookkeeping (saved reports and the
   nights marked sent). The status bar says so (*"Auto-saved to …"*).
 - **The backup copy.** The first time SHOBS-P writes to a series file in a session, it keeps the previous version as
   `<name>_prev.cvseries`. Later writes in that session leave the `_prev` file alone, so it always holds the series
@@ -111,6 +135,10 @@ night notes, the watch list and the settings of each night. It is a text file (J
 - **`<name>_backup.cvseries`.** Written beside the series, and never overwritten (the next ones are `_backup2`,
   `_backup3`…): the original of a series made before 2.4.0, copied when Load series updates it to the star
   records; and the series as it was each time you press **Use new value** under **Series magnitudes…**.
+- **Trims.** From 2.4.0 a night's trimmed spans (**Trim** on the Variables Output page, chapter 12) are kept in
+  that night's settings (`"night_binning"` → the night → `"trims"`: a list of `[JD from, JD to]`), and each trimmed
+  point carries the word `trim` in its `flag`. The points themselves stay in the file. A series without the field
+  loads as before; an older SHOBS-P ignores the field but treats the points as flagged.
 - **Star records.** From 2.4.0 the file holds one record per comp and check star (`"stars"`): its sky position,
   every name it goes by, every catalog magnitude with its source and the one the series uses. The older entries
   (comp names, catalog magnitudes, positions) are still written, so an older SHOBS-P can read the file.

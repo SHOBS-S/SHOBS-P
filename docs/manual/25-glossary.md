@@ -126,6 +126,10 @@ the flip times (1 + step), in ppt. SHOBS-P keeps it only when it lowers the BIC 
 is fitted together with the transit. In Variables mode, the flip step of a night is the offset in magnitudes that
 lines up the two pier sides (chapter 12).
 
+**Re-center** — The mount moves the field between two frames without a meridian flip (often at the meridian, staying
+on its pier side). SHOBS-P treats a move of at least 20″ and 10 pixels that then holds for at least 5 frames as the
+start of a new segment, like a flip, and shows its step in the night table's **Flip/re-center step** column (chapter 12).
+
 **FWHM** — Full width at half maximum: the size of a star's image, a measure of seeing and focus, in pixels.
 
 **Impact parameter (b)** — How far from the star's center the planet crosses, in units of the star's radius. 0 is

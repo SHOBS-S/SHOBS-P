@@ -1174,6 +1174,43 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Re-center: the pointing moved by 64″ (237 px) between … and … with no meridian flip, so the stars sit on other pixels from there on. The frames after it are a new segment …"
+   ],
+   "todo": "Look at the night's Flip/re-center step on the Output page (a dashed purple line marks the place on the light curve). If the step matters, tick Line up flip/re-center only (keep nights) or Line up segments. See 12. Flags and bad data, \"A re-center without a flip\"."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Re-center: the pointing moved by … between … and … with no meridian flip, back to where it was earlier in the night. The frames from there on rejoin that earlier segment."
+   ],
+   "todo": "Nothing more than for the re-center itself."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics boxes on the Input page)."
+   ],
+   "todo": "Solve the image, or fill in pixel size and focal length in the Optics boxes, and run the night (or the scan) again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Flip/re-center step"
+   ],
+   "todo": "Nothing for a small step. For a ⚠ one, line it up as above, or check the flat. On a star that changes within the night the step is partly the star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The re-center check could not be made on this run (…); the night is kept as one segment apart from a flip.",
+    "The re-center check could not be made on this scan (…).",
+    "(re-center check skipped: …)"
+   ],
+   "todo": "Nothing. If the light curve shows a step where the mount moved, please report it with the Log."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "After the meridian flip the … apertures were off their stars by about (…) px together, while the target's was not …"
    ],
    "todo": "See 12. Flags and bad data. Look at the positions in the light-curve CSV."
@@ -1512,6 +1549,107 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
+    "Choose a night in the night table first: Trim works on one night at a time."
+   ],
+   "todo": "Click the night in the night table; the Trim controls wake up. See 12. Flags and bad data."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full JD), or drag across the light curve, then Trim."
+   ],
+   "todo": "Drag across the bad stretch on the light curve, or type the times."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Trim: '…' is not clear. Type a clock time as HHMM or HH:MM (for example 2300 or 23:00), or a full JD (for example 2461329.699)."
+   ],
+   "todo": "Type a clock time with four digits or a colon (0045, 00:45), or the whole JD (2461329.699 or 61329.699). Or drag across the light curve."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Trim: From (…) is after To (…)."
+   ],
+   "todo": "Swap them."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "No points of … fall between From and To: nothing to trim."
+   ],
+   "todo": "Check the times, and that the right night is chosen."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "The points of … between From and To are trimmed already."
+   ],
+   "todo": "Nothing to do."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night…."
+   ],
+   "todo": "Trim less, or use Remove night… if the whole night is bad."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night….",
+    "… with Points: Per frame …"
+   ],
+   "todo": "Trim less, or use Remove night… if the whole night is bad."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Trim span …–… on … (N points) marked: Trim leaves it out."
+   ],
+   "todo": "Press Trim, or drag again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Trimmed N points on … (…–… local time (UTC−5)). Saved to …."
+   ],
+   "todo": "Nothing. Clear trim puts them back."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Trim cleared on …: N points put back.",
+    "Nothing is trimmed on …."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Wait for the current job to end, then Trim.",
+    "… then Clear trim."
+   ],
+   "todo": "Press it again when the job is done."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "…: the night's trims are kept (N points trimmed); Clear trim puts them back."
+   ],
+   "todo": "Nothing; the night table shows the trimmed count."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "…: the night's trims were dropped: they would leave N usable points of the new measurement, and a night needs 20. Every point of the night is back in; trim it again if it still needs it."
+   ],
+   "todo": "Look at the night's light curve and trim again if a stretch is still bad."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
     "Before you upload: • AAVSO observer code is empty …"
    ],
    "todo": "Fix the listed items and save again."
@@ -1648,6 +1786,49 @@
     "… O−C +0.0 min (saved +9.4 against VSX HJD)"
    ],
    "todo": "Nothing; the CSV keeps its stored values (chapter 14)."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "error: noise model at P 0.14906 d (series period)"
+   ],
+   "todo": "Nothing. See 14. Time a maximum or minimum."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "error: SHOBS-P has no period for this star, so noise lasting minutes is not counted and this ± may be 2-3 times too small (…). Run the period search on the Output page first (more nights help), or type the star's period in the Period box, then press Measure again."
+   ],
+   "todo": "Do not report that error. Add nights and run the period search, or type a period in the Period box (no epoch needed); then Measure again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "error: the noise model at P … d (…) could not be fitted to this night, so this ± may be 2-3 times too small. Check that period."
+   ],
+   "todo": "Check the period named; measure a night with more points."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "(timed without a period: ± may be 2-3× too small; measure again)"
+   ],
+   "todo": "Choose that night, Measure, Save to times CSV: the new row replaces it."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "No elements: type the period and epoch (or Elements from VSX) for the O−C (optional); the error does not need them.",
+    "Period without an epoch: no predicted time or O−C. Type an epoch for them (optional); the error does not need one."
+   ],
+   "todo": "Nothing, or fill in the elements for an O − C."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Elements from VSX"
+   ],
+   "todo": "For an O − C, type the missing value (this night's own Tmax is a good first epoch). The error needs nothing more."
   },
   {
    "section": "Output, Transits mode",
@@ -1985,6 +2166,21 @@
     "Field scan failed: only N frames could be measured; a scan needs at least 10"
    ],
    "todo": "Blink out bad frames; check that the frames are of one field."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "N meridian flip(s) or rotator move(s) and M re-center(s) (64″ (237 px)): each star's light curve lined up across them before measuring its scatter."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "change begins at re-center: check",
+    "noise begins at re-center: check"
+   ],
+   "todo": "Check the star on another night before believing it. See 20. Scan a field."
   },
   {
    "section": "Discovery mode",

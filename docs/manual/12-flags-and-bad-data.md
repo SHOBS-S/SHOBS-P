@@ -2,13 +2,13 @@
 
 Not every frame deserves to be in your light curve. A passing cloud, a saturated star or a dewed-up corrector can each make points that are not the star. SHOBS-P *flags* such points rather than deleting them. Flagged points stay in the series, are drawn as gray **×** on the plots, and are left out of the period search and the AAVSO report. You can always change your mind.
 
-This chapter explains each flag, how to change the cloud limit, the dew/haze question, frames taken during a planet transit, and pier-side steps.
+This chapter explains each flag, how to change the cloud limit, the dew/haze question, frames taken during a planet transit, how to trim a bad stretch by hand, and pier-side steps.
 
 ## Leaving flagged points out
 
 On the Output page, the box **Leave flagged points out (sat, drift, cloud)**, in the **Points** row, is ticked by default. (Before 2.4.0 its label spelled out the rest, which is now its tooltip: flagged points are left out of the period and the report, and planet-transit frames never go in a report.) Leave it ticked.
 
-If you untick it, flagged points go into the period search and the AAVSO report too, each with its flag word in the report's notes. Planet-transit frames stay out of reports either way.
+If you untick it, flagged points go into the period search and the AAVSO report too, each with its flag word in the report's notes. Planet-transit frames stay out of reports either way, and points you trimmed ("Trim a bad stretch" below) stay out of everything either way.
 
 The light-curve CSV (**Save light-curve CSV**) always contains every point, flagged or not, with its flag word, so you can study the flagged points elsewhere.
 
@@ -26,6 +26,7 @@ The night table's **Flags** column counts them per night, for example `12 cloud,
 | `cloud edge` | A point just next to a cloud run, far off the night's level | Left out with the cloud frames. |
 | `dew/haze?` | All stars faded together, smoothly, with a flat sky | See "Dew and haze" below. |
 | `in planet b transit` | The frame falls in a known planet's predicted transit | See "Planet transits" below. |
+| `trimmed` | You left the point out with **Trim** (from 2.4.0) | See "Trim a bad stretch" below. **Clear trim** puts the night's trimmed points back. |
 | `nocomp` | None of the comps chosen with **Use comps…** was measured on this frame (a frame missing only some of them is kept, from the comps present) | See chapter 11. |
 
 ## Cloud
@@ -99,23 +100,98 @@ To check or change it later:
 
 If no night has been checked yet, the button runs the check on every night. Your answer is saved in the series file at once.
 
+## Trim a bad stretch
+
+*New in 2.4.0.* Use Trim when part of a night is clearly bad and no flag caught it: trailed frames, a short burst
+of cirrus, a tracking jump. Before 2.4.0 the only way was to reject those frames one by one in Blink and run
+photometry again.
+
+Trim works on **one night at a time**, and a night must be chosen first. Until then the Trim boxes and buttons in
+the **Points** row are gray, dragging on the plot does nothing, and their tooltip says *Choose a night in the night
+table first: Trim works on one night at a time.* This holds even when the series has only one night: click it
+first.
+
+To trim a stretch:
+
+1. On the Output page, click the night in the night table. The light curve zooms to it and the Trim controls wake
+   up.
+2. Drag across the light curve from the start to the end of the bad stretch. The **from** and **to** boxes fill with
+   the site's local times, and the status bar says how many points are inside.
+   Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
+   on the Input page) or a full JD (`2461329.699`, or `61329.699`). Leave **from** empty to trim from the night's
+   start, or **to** empty to trim to its end. Nothing else is accepted: a bare number such as `0.45` or `23` could be
+   a clock time or part of a JD, so SHOBS-P asks you to type it one of those two ways instead of guessing.
+3. Click **Trim** (or press Enter in either box).
+
+The trimmed points show as faint gray **×** in a gray band labeled *trimmed*, and the night table's **Flags** column
+counts them (`12 trimmed`). Nothing is deleted: the points stay in the series with the flag word `trim`. They are
+left out of the period search, the fold, **Time of max/min…**, the AAVSO report, the watch-star light curves and the
+comp check, whether **Leave flagged points out** is ticked or not. The light-curve CSV still holds every point,
+with `trim` in its flag column. The AAVSO report's NOTES on that night's rows record each trimmed span (JD, the
+site's local times and their UTC offset, and the number of points), and so does the report's settings file.
+
+Each **Trim** adds another span to the night. A span only ever trims the chosen night's points, even if the times
+you typed run past the night. **Clear trim** puts the chosen night's trimmed points back; other nights keep theirs.
+There is no trim across a whole series: choose each night in turn.
+
+A trim belongs to its night and is **saved with the series**. When the series has a file, Trim and Clear trim
+write it at once; reopen the series and the trims are still there. If you measure the night again (Run photometry
+and add it to the series in place of the old one), the night keeps its trims as long as their points are still
+there. If the new measurement has so few good points that the old trims would leave under 20, the trims are
+dropped, every point of the night is back in, and a ⚠ in the Findings list says so: trim the night again if it
+still needs it.
+
+A trim must leave at least 20 usable points in the night. To drop a whole night, use **Remove night…** instead.
+When the night has both per-frame and stacked points (the **Points** switch, chapter 8), the trim must leave 20
+usable points either way, because the trim stays with the night whichever you show: 30 frames left can be only 6
+stacks.
+
+> **Caution:** Trim bad data, not inconvenient data. Trim a stretch because you know what went wrong in those
+> frames (look at them in Blink), never because the points disagree with the period or the shape you expect.
+
 ## Pier side and meridian flips
 
 After a meridian flip, the camera sees the field rotated by 180°. Each star now falls on a different part of the sensor and the flat. Small flat-field errors can then make a step in the light curve at the flip, even though the star did not change.
 
-SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. With ROTATOR readings, camera angles within 10° of each other count as one pier side (30° and 37° are one side, 210° and 217° the other), since the angle a solve or the camera software reports can wander a few degrees from night to night without the camera being turned. The **Flip step** column shows each night's step, with ⚠ when it is large.
+SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. With ROTATOR readings, camera angles within 10° of each other count as one pier side (30° and 37° are one side, 210° and 217° the other), since the angle a solve or the camera software reports can wander a few degrees from night to night without the camera being turned. The **Flip/re-center step** column shows each night's step, with ⚠ when it is large.
 
 You have three ways to take steps out. Each is a checkbox on the Output page. They affect the plots, the period search and **Export…** files. They do not change the stored points or the AAVSO report.
 
-- **Line up flip only (keep nights)** shifts the after-flip part of each night to match its before-flip part. Night-to-night changes are kept. Use it for one night, or when flips happen at different times each night.
+- **Line up flip/re-center only (keep nights)** shifts the after-flip part of each night to match its before-flip part, and the part after each re-center to match the part before it (see "A re-center without a flip" below). Night-to-night changes are kept. Use it for one night, or when flips happen at different times each night.
 - **Pier side as segments** lines up all the frames taken on one pier side with all the frames on the other, across the whole series. Use it for a campaign where every night has a flip. If the pier side is unknown on some nights (no ROTATOR, no PIERSIDE, no flip), those nights are left as they are, and a caution says so.
-- **Line up segments (nights, meridian flip)** sets every night and every flip segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
+- **Line up segments (nights, meridian flip)** sets every night, every flip segment and every re-center segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
 
-If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip only**.
+If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip/re-center only**. (Before 2.4.0 that box read **Line up flip only (keep nights)**.)
 
 An alt-az mount has no meridian flips and no pier sides, so there is nothing to line up: the **Side** column shows **—**, and **Pier side as segments** says **the mount is alt-az (no pier sides).**
 
 When the series has nights on both pier sides and none of these is ticked, a caution tells you how much each side reads against the other and suggests **Pier side as segments**.
+
+### A re-center without a flip
+
+Some mounts stop at the meridian, re-center the target and carry on **on the same pier side** (the ROTATOR reading stays the same all night). No flip happened, but the field has moved, so every star sits on other pixels from there on, and the same small flat-field errors can make a step in the light curve.
+
+From 2.4.0 SHOBS-P finds this in each run. A re-center is a **new position of the field that holds**:
+
+- The field moves by **at least 20″ and at least 10 pixels** between one measured frame and the next, with no flip there. Both limits must be passed, so ordinary drift and small dithers split nothing. (The pixels are those of the stored frame.)
+- The field then **stays at the new position for at least 5 measured frames**. Those frames, and the ones after them, become a new segment, just like the frames after a flip. One frame that registers far off, or a few frames away and back, is not a re-center: those frames stay in the segment around them, and the numbers are the same as if nothing had moved. No re-center segment ever has fewer than 5 frames.
+- If the field later **comes back to where an earlier segment was** (within the same limits, on the same side of a flip), those frames rejoin that earlier segment. They do not start a new one. So a mount that moves away and back gives two segments, not three.
+
+The move at a meridian flip itself is the flip, not a re-center.
+
+**SHOBS-P needs the plate scale for this.** It comes from the solve, or else from the Optics boxes on the Input page. When neither gives a scale, re-centers are not looked for at all (pixels alone cannot tell a dither from a re-center), and the status bar says so at the end of the run: *Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics boxes on the Input page).* Solve the image or fill the boxes, and run the night again.
+
+You see a re-center in three places:
+
+- The Log names the two frames and the size of the move: *Re-center: the pointing moved by 64″ (237 px) between 20 and 21 with no meridian flip …* When the field came back to an earlier position, the line ends *… back to where it was earlier in the night. The frames from there on rejoin that earlier segment.*
+- The light curve has a **dashed purple line** where it happened; the plot's title key says **┆ re-center**.
+- The **Flip/re-center step** column shows its step, for example `re-center +0.050 ⚠`. The ⚠ comes with a step over 0.02 mag, as for a flip.
+
+**Line up flip/re-center only (keep nights)** takes the step out and keeps the nights against each other; **Line up segments** lines the segment up with everything else. A step needs at least 5 used points on each side; with fewer it is not measured (the column shows **—**) and nothing is moved. This can happen when most of a segment's frames are flagged. The same holds for **Line up segments** and the **Check-star correction**: a re-center segment with fewer than 5 points to go by is not lined up by itself; it moves together with the segment before it. In the light-curve CSV the `segment` column of such a night reads, for example, `no flip / before re-center` and `no flip / after re-center` (`after re-center 2` after a second one). The words name the segment: frames that came back to the first position read `before re-center` again.
+
+A re-center is found while the frames are measured. Nights already in a series made before 2.4.0 are not looked at again: run such a night again to get its segment. A frame added later with **Measure skipped frames** joins the segment its own position puts it in (the nearest segment within the limits, on its side of the flip). When that cannot be told (the night was loaded from a saved series, or the frame sits at none of the night's positions), it joins the segment of the frame before it. A stack never spans a re-center.
+
+> **Caution:** As with a flip, on a star that changes a lot within a night the "step" read at a re-center is partly the star changing. A mount that dithers by 20″ or more and then holds each position for 5 frames or more makes a segment of every new position: do not tick the line-up boxes on such a night.
 
 ### When the flip step is the apertures, not the star
 
