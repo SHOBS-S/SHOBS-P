@@ -48,6 +48,7 @@ from tkinter import (
 import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
+import ui_watch   # 2.4.0 fit-in F1 (#116)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
@@ -1015,6 +1016,41 @@ def ui_scale(widget) -> float:
         return 1.0
 
 
+TEXT_SIZES = (90, 100, 115, 130, 150)   # 2.4.0 fit-in F1 (#109): the side bar's Text size choices, % of normal
+
+
+def text_size_setting(settings) -> int:
+    """2.4.0 fit-in F1 (#109): the saved Text size (%), 100 when unset or not one of TEXT_SIZES."""
+    try:
+        pct = int((settings or {}).get("text_size", 100))
+    except (TypeError, ValueError):
+        return 100
+    return pct if pct in TEXT_SIZES else 100
+
+
+def apply_text_size(widget, pct: int) -> None:
+    """2.4.0 fit-in F1 (#109, Art Trail's large Mac screen): scale all text and layout by pct % at start, on top of
+    what the system's display scaling gives. tk scaling carries every font given in points (the app's own and Tk's
+    named fonts), point/inch distances and ui_scale(); named fonts given in pixels (negative sizes) are scaled
+    here too. Called once, before any widget is built; a change is applied at the next start."""
+    if pct == 100:
+        return
+    factor = pct / 100.0
+    try:
+        widget.tk.call("tk", "scaling", float(widget.tk.call("tk", "scaling")) * factor)
+    except Exception:
+        return
+    try:
+        from tkinter import font as tkfont
+        for name in tkfont.names(widget):
+            f = tkfont.nametofont(name, root=widget)
+            size = int(f.cget("size"))
+            if size < 0:
+                f.configure(size=min(-1, int(round(size * factor))))
+    except Exception:
+        pass
+
+
 def _pad_total(pad) -> int:
     """2.2.18 (item 23): a pack/grid padx as Tk reports it (14, "14", (6, 2), "6 2") -> both sides in px."""
     import re
@@ -1635,6 +1671,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.title(APP_TITLE)
         self.configure(bg="#e7eef2")
         self.settings = self._load_settings()
+        self.text_size = text_size_setting(self.settings)   # 2.4.0 fit-in F1 (#109)
+        apply_text_size(self, self.text_size)
         self.mode_key = self.settings.get("mode") if self.settings.get("mode") in MODES else "variables"
         self.series_mode = ""
         self._set_window_icon()
@@ -1973,6 +2011,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.after(1500, self.check_for_update)   # 2.3.3 (#57): in the background, once a day at most
         if sys.platform == "win32" and display_scaling_text(self):
             log_to_file(display_scaling_text(self))   # 2.2.19 (#10): in the log file, for screen reports
+        if self.text_size != 100:   # 2.4.0 fit-in F1 (#109): every platform, for "everything is tiny/huge" reports
+            log_to_file(f"Text size {self.text_size} % (SHOBS-P setting, on top of the display scaling).")
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -2003,6 +2043,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         pass
         except queue.Empty:
             pass
+        watch = getattr(self, "_ui_watch", None)   # 2.4.0 fit-in F1 (#116): the Tk thread's heartbeat
+        if watch is not None:
+            watch.beat()
         self.after(50, self._drain_ui_queue)
 
     def _start_job(self, label: str, bar: bool = True) -> bool:
@@ -2394,6 +2437,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ttk.Button(self.side, text="Credits and sources", style="Step.TButton", command=self.show_credits).pack(
             side="bottom", fill=X, padx=10, pady=(0, 4)
         )
+        # 2.4.0 fit-in F1 (#109): Text size, saved with the settings, applied at the next start
+        size_row = ttk.Frame(self.side, style="Side.TFrame")
+        size_row.pack(side="bottom", fill=X, padx=16, pady=(0, 8))
+        ttk.Label(size_row, text="Text size", style="SideHint.TLabel").pack(side=LEFT)
+        self.text_size_var = StringVar(value=f"{self.text_size} %")
+        size_box = ttk.Combobox(size_row, textvariable=self.text_size_var, state="readonly", width=6,
+                                values=[f"{p} %" for p in TEXT_SIZES])
+        size_box.pack(side=LEFT, padx=(8, 0))
+        size_box.bind("<<ComboboxSelected>>", lambda _e: self._text_size_chosen())
 
         right = ttk.Frame(outer)
         right.pack(side=LEFT, fill=BOTH, expand=True)
@@ -2586,6 +2638,40 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not on:
             self.update_var.set("")
             self.update_note = {}
+
+    def _text_size_chosen(self):
+        """2.4.0 fit-in F1 (#109): save the new Text size; it applies at the next start, so offer a restart (Later is
+        the default: a restart drops unsaved work)."""
+        try:
+            pct = int(self.text_size_var.get().split()[0])
+        except (ValueError, IndexError):
+            return
+        if pct not in TEXT_SIZES or pct == int(self.settings.get("text_size", 100) or 100):
+            return
+        self.settings["text_size"] = pct
+        self._save_settings()
+        log_to_file(f"Text size set to {pct} % (applies at the next start).")
+        if getattr(self, "_job_findings", None) is not None:
+            self.status.set(f"Text size {pct} %: it applies the next time SHOBS-P starts.")
+            return
+        if messagebox.askyesno(APP_TITLE, f"Text size {pct} % applies the next time SHOBS-P starts.\n\nRestart "
+                               "SHOBS-P now? Anything not saved (a reduction in progress, an unsaved series) is "
+                               "lost.", default="no"):
+            self._restart_app()
+        else:
+            self.status.set(f"Text size {pct} %: it applies the next time SHOBS-P starts.")
+
+    def _restart_app(self):
+        """2.4.0 fit-in F1 (#109): start a new SHOBS-P the way this one was started, then close this one."""
+        try:
+            import subprocess
+            subprocess.Popen([sys.executable] + [os.path.abspath(sys.argv[0])] + sys.argv[1:],
+                             cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
+        except Exception as exc:
+            messagebox.showinfo(APP_TITLE, f"SHOBS-P could not restart itself ({exc}). Close it and start it again "
+                                           "to see the new text size.")
+            return
+        self.destroy()
 
     def show_credits(self):
         self._leave_blink_page()   # 2.4.0 (#112)
@@ -19387,6 +19473,24 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.run_findings = list(getattr(self, "last_job_findings", None) or [])
                 self.run_findings_night = f"JD{math.floor(night_points[0].jd)}" if night_points else None
 
+    def _say_sky_dominated(self, night_points):
+        """2.4.0 fit-in F1 (#60): the ⚠ for a night with no flat whose target is swamped by the sky in its aperture
+        (a Findings entry, so it travels with the result). Never stops the run."""
+        try:
+            masters = self.masters
+            if self.precalibrated or masters is None:
+                return
+            have_flat = masters.flat is not None
+            sky_calibrated = masters.bias is not None or masters.dark is not None
+            frac = core.target_light_fraction(night_points, float(self.radius.get()))
+            if math.isfinite(frac):
+                log_to_file(f"Target's share of its aperture's light: {frac * 100:.1f} % (median of the night)")
+            note = core.sky_dominated_note(frac, have_flat, sky_calibrated)
+            if note:
+                self.log(note)
+        except Exception as exc:
+            log_to_file(f"Sky-dominance check skipped: {type(exc).__name__}: {exc}")
+
     def _photometry_done_body(self, night_points, mode, color_info=None, cancelled=False, error=None) -> bool:
         """The done-step; True when the run's points went into the series (its findings then go with them)."""
         remeasure, self._remeasure = getattr(self, "_remeasure", None), None   # 2.3.0 (#50)
@@ -19428,6 +19532,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
         self._mark_recenters(night_points)   # 2.4.0 step 8 (#66): after the flip is known (a flip is not a re-center)
+        self._say_sky_dominated(night_points)   # 2.4.0 fit-in F1 (#60)
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
@@ -22110,7 +22215,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # ---- 3. Corrections: how nights and segments are lined up
         g = groups.parent("corrections")
         groups.add("corrections", ttk.Checkbutton(
-            g, text="Line up segments (nights, meridian flip)",
+            g, text="Line up segments (nights, flips, re-centers)",
             variable=self.norm_segments, command=self.refit_period), pad=14)
         groups.add("corrections", ttk.Checkbutton(
             g, text="Line up flip/re-center only (keep nights)", variable=self.align_flip,
@@ -27434,7 +27539,8 @@ class ExtremumWindow:
         top.pack(fill=BOTH, expand=True)
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
-        ttk.Button(nav, text="Measure", style="Accent.TButton", command=self.measure).pack(side=LEFT)
+        self.measure_button = ttk.Button(nav, text="Measure", style="Accent.TButton", command=self.measure)
+        self.measure_button.pack(side=LEFT)
         self.save_button = ttk.Button(nav, text="Save to times CSV", command=self.save, state="disabled")
         self.save_button.pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Choose times CSV…", command=self.choose_csv).pack(side=LEFT)
@@ -27708,6 +27814,11 @@ class ExtremumWindow:
         return night, pts, vals
 
     def measure(self):
+        """2.4.0 fit-in F1 (#116): the boxes are read here (Tk thread); the fits and time conversions, which took ~10 s
+        on GSC 03308-00462 with the window frozen, run on a worker thread under the busy bar, Measure greyed until
+        they are done; _measure_done shows the result."""
+        if getattr(self, "_measuring", False):
+            return
         night, pts, vals = self._night_points()
         if len(pts) < 12:
             messagebox.showinfo(APP_TITLE, "That night has too few usable points (12 or more needed).", parent=self.win)
@@ -27722,6 +27833,7 @@ class ExtremumWindow:
                 messagebox.showerror(APP_TITLE, "Half-window: minutes, or blank for automatic.", parent=self.win)
                 return
         t = np.array([o.jd for o in pts], dtype=float)
+        vals = np.array(vals, dtype=float)
         guesses = [None]
         if period and epoch:
             # Every extremum the elements predict in this night (the night may hold two maxima of a short-period star).
@@ -27732,8 +27844,42 @@ class ExtremumWindow:
         noise_p, noise_source, noise_why_not = self._noise_period()
         noise_half = getattr(self, "_noise_half", None)
         source_words = self._noise_source_words({"noise_source": noise_source, "noise_half": noise_half})
+        ra, dec, lat, lon = self._coords()
+        use_bjd = self.system.get() == "BJD"
+        job = dict(night=night, kind=kind, period=period, epoch=epoch, hw=hw, t=t, vals=vals, guesses=guesses,
+                   noise=(noise_p, noise_source, noise_why_not, noise_half), source_words=source_words,
+                   coords=(ra, dec, lat, lon), use_bjd=use_bjd)
+        self._measuring = True
+        try:
+            self.measure_button.configure(state="disabled")
+            self.save_button.configure(state="disabled")
+        except Exception:
+            pass
+        self.result_text.set(f"Measuring the time of {self.kind.get()}…")
+        tok = self.app.busy_begin(f"Measuring the time of {self.kind.get()}…")
+
+        def work():
+            try:
+                return self._measure_work(job)
+            except Exception as exc:   # never leaves Measure greyed: the error is shown like a failed fit
+                traceback.print_exc()
+                return [], [f"the measurement stopped: {type(exc).__name__}: {exc}"]
+
+        if self.SYNC:   # tests: the same steps, in line
+            self._measure_done(job, work(), tok)
+            return
+        threading.Thread(target=lambda: self.app.call_ui(self._measure_done, job, work(), tok), daemon=True).start()
+
+    SYNC = False   # tests set True: Measure runs in line (the threaded path has its own test)
+
+    @staticmethod
+    def _measure_work(job):
+        """Worker thread: no Tk here, only the numbers read by measure()."""
+        t, vals, kind, period, epoch, hw = job["t"], job["vals"], job["kind"], job["period"], job["epoch"], job["hw"]
+        noise_p, noise_source, noise_why_not, noise_half = job["noise"]
+        source_words = job["source_words"]
         results, problems = [], []
-        for g in guesses:
+        for g in job["guesses"]:
             try:
                 r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=g, half_width=hw,
                                           window_period=period if period and epoch else None, tune_period=True,
@@ -27744,7 +27890,7 @@ class ExtremumWindow:
             if any(abs(r["t"] - q["t"]) < 0.05 * (period or 1.0) for q in results):
                 continue
             results.append(r)
-        if not results and guesses != [None]:
+        if not results and job["guesses"] != [None]:
             # 2.3.5 (John, 14 Nov, GSC 03308-00462): elements that have drifted put every predicted window on the
             # other branch (P 0.15151 d put it on the night's minimum), so "no extremum inside the window" was all
             # the window said. The night's own extremum is measured instead, and the text says why.
@@ -27758,7 +27904,7 @@ class ExtremumWindow:
                 results.append(r)
             except ValueError as exc:
                 problems.append(str(exc))
-        ra, dec, lat, lon = self._coords()
+        ra, dec, lat, lon = job["coords"]
         for r in results:
             # The period the error really used (None when there was none, or the noise model could not be fitted).
             r["noise_asked"], r["noise_source"], r["noise_why_not"] = noise_p, noise_source, noise_why_not
@@ -27770,11 +27916,24 @@ class ExtremumWindow:
                               "note": f"time conversion failed: {exc}"}
             r["oc"] = None
             if period and epoch:
-                t_sys = r["times"]["bjd_tdb" if self.system.get() == "BJD" else "hjd"]
+                t_sys = r["times"]["bjd_tdb" if job["use_bjd"] else "hjd"]
                 if not math.isfinite(t_sys):
                     t_sys = r["t"]   # no RA/Dec: JD against the elements (said in the text)
                 # A minimum may be a secondary eclipse (half a cycle).
                 r["oc"] = core.o_minus_c(t_sys, period, epoch, half_cycles=kind == "min")
+        return results, problems
+
+    def _measure_done(self, job, out, tok):
+        self.app.busy_end(tok)
+        self._measuring = False
+        results, problems = out
+        try:
+            if not self.win.winfo_exists():
+                return
+            self.measure_button.configure(state="normal")
+        except Exception:
+            return   # the window was closed while measuring: nothing to show
+        night, kind, period, epoch = job["night"], job["kind"], job["period"], job["epoch"]
         self.results = results
         self.night_key = night
         self.save_button.configure(state="normal" if results else "disabled")
@@ -29427,6 +29586,7 @@ def main():
     global UPDATE_CHECK
     UPDATE_CHECK = True   # 2.3.3 (#57): the real program asks GitHub (tests and the self-test never do)
     app = App()
+    app._ui_watch = ui_watch.UIWatch(log_to_file).start()   # 2.4.0 fit-in F1 (#116): stalls and where, in the log file
     app.mainloop()
 
 

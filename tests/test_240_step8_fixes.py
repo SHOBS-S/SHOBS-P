@@ -489,9 +489,10 @@ class TestTrimFixes(TT.TrimCase):
             self.assertTrue(app._stack_set_live(N1))
             self.assertEqual(app._trim_other_set(N1)[0], "Stacked")
             m = self.trim("", f"{frames[9].jd + 1e-6:.6f}")   # 10 of 40 frames, 6 of 24 stacks: 18 stacks left
-            self.assertEqual(len(m["error"]), 1, m)
-            self.assertIn("would leave 18 usable points", m["error"][0])
-            self.assertIn("with Points: Stacked; a night needs at least 20 either way", m["error"][0])
+            self.assertEqual((len(m["error"]), len(m["info"])), (0, 1), m)   # fit-in F1: a plain note
+            self.assertIn("would leave 18 usable points", m["info"][0])
+            self.assertTrue(m["info"][0].endswith("use Remove night."), m["info"][0])
+            self.assertIn("with Points: Stacked; a night needs at least 20 either way", m["info"][0])
             self.assertFalse(any(core.is_trimmed(o) for o in app.observations))
             m = self.trim("", f"{frames[4].jd + 1e-6:.6f}")   # 5 frames, 3 stacks: 21 left
             self.assertEqual(m["error"], [])

@@ -515,6 +515,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "No flats, and the sky dominates the target's aperture: the star is only N % of the light in it (under 20 %). …"
+   ],
+   "todo": "Take flats for this setup. For this night, try a smaller aperture (Suggest…) and compare results with care."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Series updated to the new star format; the original is kept as …_backup.cvseries."
    ],
    "todo": "Nothing. The names, magnitudes and points are the same."
@@ -1591,14 +1598,14 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night…."
+    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night."
    ],
    "todo": "Trim less, or use Remove night… if the whole night is bad."
   },
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night….",
+    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night.",
     "… with Points: Per frame …"
    ],
    "todo": "Trim less, or use Remove night… if the whole night is bad."

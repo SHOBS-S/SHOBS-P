@@ -88,7 +88,9 @@ in the **Period** box (no epoch needed), and press **Measure** again.
    epoch**: the error is fine (it uses that period), and for an O − C you type an epoch yourself. A good first epoch
    is this night's own Tmax; it makes this night cycle 0 with O − C 0. **Elements from VSX** and **Elements from saved times** switch between the two at any time. A time
    saved against the saved times' elements is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
-6. Press **Measure**.
+6. Press **Measure**. From 2.4.0 the measurement runs in the background: **Measure** greys out and the busy bar at
+   the lower left says *Measuring the time of maximum…* until the result appears (a few seconds on a long night); the
+   window and SHOBS-P keep responding meanwhile.
 
 With Period and Epoch both filled in, SHOBS-P looks for the extremum near each time those elements predict in the
 night. With either one empty, it takes the night's most marked maximum (or minimum) and gives no O − C.

@@ -13,7 +13,13 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.3.0**).
+4. At the bottom: **Text size**, **Credits and sources**, and the version number (for example **Version 2.3.0**).
+
+**Text size** (from 2.4.0) makes all of SHOBS-P's text and layout smaller or larger: **90 %**, **100 %** (normal),
+**115 %**, **130 %** or **150 %**, on top of what your system's display scaling gives. It is saved with your settings, so
+SHOBS-P starts at that size every day until you change it. A change applies the next time SHOBS-P starts: it asks
+whether to restart now (**No** is the default, since a restart drops anything not saved). Use it when everything looks
+tiny on a large screen run at its full resolution, common on a Mac with a big external display.
 
 ## The three modes and their colors
 

@@ -243,8 +243,11 @@ class TestTrim(TrimCase):
         self.assertIn("nothing to trim", m["info"][0])
         # 40 points, 1 flagged sat (index 3): trimming from index 20 would leave 19 usable, from 21 leaves 20
         m = self.trim(f"{first[20].jd - 1e-6:.6f}", f"{first[39].jd + 1e-6:.6f}")
-        self.assertIn("would leave 19 usable points", m["error"][0])
-        self.assertIn("at least 20", m["error"][0])
+        # fit-in F1: a plain note (no red ✖ box), ending "use Remove night." (not four dots)
+        self.assertEqual(m["error"], [])
+        self.assertIn("would leave 19 usable points", m["info"][0])
+        self.assertIn("at least 20", m["info"][0])
+        self.assertTrue(m["info"][0].endswith("use Remove night."), m["info"][0])
         self.assertFalse(any(core.is_trimmed(o) for o in app.observations))
         m = self.trim(f"{first[21].jd - 1e-6:.6f}", f"{first[39].jd + 1e-6:.6f}")
         self.assertEqual(m["error"], [])

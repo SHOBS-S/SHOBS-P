@@ -10,7 +10,7 @@ Page title label "Output – Variability" (bold 16pt). Top-down order inside the
 1. **Summary panel** (`_build_summary` 11109) — read-only text + night table (see §2).
 2. **Period-search row**
    - "Period search (days)" — two `Entry`s (`min_period`, `max_period`), min "to" max. Range scanned by the periodogram.
-   - "Line up segments (nights, meridian flip)" — `Checkbutton` (`norm_segments`), triggers `refit_period`. Normalises each night/flip segment to a common level before period search.
+   - "Line up segments (nights, flips, re-centers)" — `Checkbutton` (`norm_segments`), triggers `refit_period`. Normalises each night/flip segment to a common level before period search.
    - "Time axis" — read-only `Combobox` (`time_axis`): "JD" | "UTC" | "Local time"; redraws plots.
    - "Notes" — `Entry` (`notes`), free text; goes into the AAVSO report NOTES field (see §AAVSO).
 3. **QC row**
