@@ -27,7 +27,7 @@ TITLE = "SHOBS-P"
 
 NEED_NIGHT_TIP = "Choose a night in the night table first: Trim works on one night at a time."
 TRIM_CAUTION = "Trim bad data (trailed frames, a burst of cloud), not data that is only inconvenient."
-BOX_TIP = ("The site's local clock time (HHMM or HH:MM) or a JD. Leave From empty to trim from the night's start, To "
+BOX_TIP = ("The site's local clock time (HHMM or HH:MM) or a full JD. Leave From empty to trim from the night's start, To "
            "empty to trim to its end. Dragging across the light curve fills both.")
 TRIM_TIP = ("Leaves the points between From and To out of this night: the period, the fold, Time of max/min, the "
             "AAVSO report and the comp check. They stay in the series, marked trimmed. " + TRIM_CAUTION)
@@ -173,7 +173,8 @@ class TrimMixin:
 
     def _carry_trims(self, night, old_trims, night_points) -> None:
         """A night measured again keeps its trims (they belong to the night): the spans that still hold points stay,
-        unless they would leave the new points under the minimum; then the trims are dropped and the log says so."""
+        unless they would leave the new points under the minimum; then the trims are dropped and a ⚠ finding says
+        so (review S3: the user's own trims going is never told in the Log alone)."""
         spans = merge_spans(old_trims)
         spans = [sp for sp in spans if any(o.jd is not None and sp[0] <= o.jd <= sp[1] for o in night_points)]
         if not spans:
@@ -182,8 +183,9 @@ class TrimMixin:
                    and not [w for w in (o.flag or "").split() if w != core.TRIM_FLAG]
                    and not any(lo <= o.jd <= hi for lo, hi in spans))
         if left < core.TRIM_MIN_POINTS:
-            self.log(f"{self.label_nights(night)}: the night's trims were dropped (they would leave {left} usable "
-                     f"points of the new measurement; a night needs {core.TRIM_MIN_POINTS}).")
+            self.log(f"⚠ {self.label_nights(night)}: the night's trims were dropped: they would leave {left} usable "
+                     f"points of the new measurement, and a night needs {core.TRIM_MIN_POINTS}. Every point of the "
+                     "night is back in; trim it again if it still needs it.")
             return
         self._night_info(night, create=True)["trims"] = spans
         n = sum(1 for o in night_points if o.jd is not None and any(lo <= o.jd <= hi for lo, hi in spans))
@@ -200,11 +202,13 @@ class TrimMixin:
 
     @staticmethod
     def _trim_parse(text: str, night_jds) -> float | None:
-        """A Trim box: the site's clock time (as transit_ui.parse_clock reads it) or a JD -> JD; None when empty. A
-        clock time is taken on the date that puts it nearest the middle of the night's points, so 00:42 on a night
-        that started at 20:41 is the next morning's 00:42."""
+        """A Trim box: the site's clock time or a JD -> JD; None when empty. A clock time is taken on the date that
+        puts it nearest the middle of the night's points, so 00:42 on a night that started at 20:41 is the next
+        morning's 00:42.
+        Review N2: only HHMM (2300, 045) and HH:MM (23:00) are clock times here, and only a full JD (2461329.699) or
+        a reduced one (61329.699) is a JD. Anything else is refused, never guessed: with the JD time axis '0.45'
+        read off the plot is a fraction of a day, and it was taken as 00:45 on the clock."""
         import datetime as _dt
-        import transit_ui as tu
         raw = (text or "").strip()
         if not raw:
             return None
@@ -212,10 +216,13 @@ class TrimMixin:
             return float(raw)
         if re.fullmatch(r"[4-9]\d{4}\.\d*", raw):
             return float(raw) + 2400000.0     # a reduced JD (61329.699)
-        try:
-            h, m = tu.parse_clock(raw)
-        except ValueError:
-            raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00), or a JD") from None
+        got = re.fullmatch(r"(\d{1,2}):(\d{2})", raw) or re.fullmatch(r"(\d{1,2})(\d{2})", raw)
+        h, m = (int(got.group(1)), int(got.group(2))) if got else (99, 99)
+        if h == 24 and m == 0:
+            h = 0
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError(f"'{raw}' is not clear. Type a clock time as HHMM or HH:MM (for example 2300 or 23:00), "
+                             "or a full JD (for example 2461329.699).")
         jds = [j for j in night_jds if j is not None and math.isfinite(j)]
         if not jds:
             raise ValueError("the night has no points to trim")
@@ -278,6 +285,22 @@ class TrimMixin:
             messagebox.showwarning(TITLE, f"Could not save the series: {exc}")
             return ""
 
+    def _trim_other_set(self, night):
+        """Review N7: ("Stacked" or "Per frame", its points) for the night's point set that is NOT on screen now, when
+        the night has both (the Stack step's Points switch); None otherwise."""
+        try:
+            sets = getattr(self, "_stack_sets", {}).get(night)
+            if not sets or sets.get("scan") or not self._stack_set_live(night):
+                return None
+            now = {id(o) for o in self.observations if o.night == night}
+            for key, words in (("stack", "Stacked"), ("frame", "Per frame")):
+                pts = list(sets.get(key) or [])
+                if pts and {id(o) for o in pts} != now:
+                    return words, pts
+        except Exception:
+            pass
+        return None
+
     def trim_points(self):
         """Add the From–To span (an empty From = from the night's start, an empty To = to its end) to the chosen
         night's trims, refit the period and save the series."""
@@ -290,8 +313,8 @@ class TrimMixin:
             return
         a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
         if not a and not b:
-            messagebox.showinfo(TITLE, "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a JD), "
-                                       "or drag across the light curve, then Trim.")
+            messagebox.showinfo(TITLE, "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full "
+                                       "JD), or drag across the light curve, then Trim.")
             return
         pts = [o for o in self.observations if o.night == night and o.jd is not None and math.isfinite(o.jd)]
         jds = [o.jd for o in pts]
@@ -320,6 +343,19 @@ class TrimMixin:
             messagebox.showerror(TITLE, f"That trim would leave {left} usable points on {label}; a night needs at "
                                         f"least {core.TRIM_MIN_POINTS}. To drop the whole night, use Remove night….")
             return
+        # Review N7: the minimum holds for the night's other point set too (Points: Per frame / Stacked), since the
+        # trim goes with the night whichever set the results use: 20 frames left can be 4 stacks.
+        other = self._trim_other_set(night)
+        if other is not None:
+            spans = self._night_trims(night) + [(lo, hi)]
+            left = sum(1 for o in other[1] if o.jd is not None and math.isfinite(o.jd) and math.isfinite(o.mag)
+                       and not [w for w in (o.flag or "").split() if w != core.TRIM_FLAG]
+                       and not any(a_ <= o.jd <= b_ for a_, b_ in spans))
+            if left < core.TRIM_MIN_POINTS:
+                messagebox.showerror(TITLE, f"That trim would leave {left} usable points on {label} with Points: "
+                                            f"{other[0]}; a night needs at least {core.TRIM_MIN_POINTS} either way. "
+                                            "To drop the whole night, use Remove night….")
+                return
         # A span is kept inside its own night (1 s beyond the first and last point), so it never needs an open end.
         pad = 1.0 / 86400.0
         span = [max(lo, min(jds) - pad), min(hi, max(jds) + pad)]

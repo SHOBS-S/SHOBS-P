@@ -19,7 +19,7 @@ made the error 2–3 times too small. From 2.4.0 the two jobs are apart.
 
 | Job | What it needs | Where it comes from |
 |---|---|---|
-| **The error bar.** The error counts noise that lasts minutes (thin cloud, seeing, guiding). To see that noise, SHOBS-P takes the star's own variation out of the whole night with a Fourier series at the star's period. | A period only, and only roughly. No epoch. | SHOBS-P finds it itself, every time. You do not type it. |
+| **The error bar.** The error counts noise that lasts minutes (thin cloud, seeing, guiding). To see that noise, SHOBS-P takes the star's own variation out of the whole night with a Fourier series at the star's period. | A period only; roughly right is enough on a night of two cycles or more (see below). No epoch. | SHOBS-P finds it itself, every time. You do not type it. |
 | **The predicted time and the O − C.** The elements say when the extremum should fall, so SHOBS-P looks there, and the difference from the measured time is the O − C. | A period **and** an epoch, both precise. | The **Period (d)** and **Epoch** boxes, under the heading **Elements for the predicted time and O−C (optional)**. |
 
 **The period for the error** is the best one SHOBS-P has, in this order:
@@ -34,15 +34,31 @@ made the error 2–3 times too small. From 2.4.0 the two jobs are apart.
 The result names the one it used, for example *error: noise model at P 0.14906 d (series period)*. The other names
 are *(times CSV)*, *(VSX)* and *(Period box)*.
 
-The period only has to be roughly right. When the night covers more than one cycle, SHOBS-P fits the period to that
-night (within 20% of the one it was given) before it measures the noise, so a series period and a VSX period that
-differ by a percent or two give the same error. When that moved the period by more than 1%, the line adds it:
-*(VSX; fitted to this night at 0.14870 d)*. A night shorter than one cycle cannot tell periods apart, and there a
-period that is a little off does no harm.
+**One exception: a period twice the series period wins.** A period search finds an eclipsing star at half its
+period, because its two minima look alike. So when the times CSV, VSX or the Period box gives a period that is twice
+the series period (within 3%), SHOBS-P uses that longer period, and the result says so: *error: noise model at
+P 0.36700 d (VSX; the series period 0.18350 d is half of it)*.
 
-**The Period and Epoch boxes do not change the error.** Fill them in, clear them, or change them: the time and its
+**How exact must the period be?** That depends on how much of the star the night holds.
+
+- **The night covers two cycles or more.** SHOBS-P fits the period to that night (within 20% of the one it was
+  given) before it measures the noise. A series period and a VSX period that differ by a percent or two then end at
+  the same fitted period and give the same error. When the fit moved the period by more than 1%, the line adds it:
+  *(VSX; fitted to this night at 0.14870 d)*.
+- **The night covers less than two cycles.** The period is used as it is; such a night is too short to fit a period
+  safely (a free period would follow the night's slow noise as well, and the error would come out too small). Here
+  the period matters more. On a night of one to two cycles a period that is a few percent off leaves some of the
+  star's own variation in the noise, and the error comes out too large (about twice for 2% off in our tests). So on
+  such a night two sources that differ by a percent or two can give different errors. Check which period the result
+  line names. If it is a rough one, run the period search on more nights, or type a better period (see below).
+  On a night shorter than one cycle a period that is a little off does little harm.
+
+**The Period and Epoch boxes do not choose the error's period while SHOBS-P has a better one.** With a series
+period, a times-CSV period or a VSX period, you can fill the boxes in, clear them, or change them: the time and its
 error stay the same (the time can move slightly, well inside its error, because the elements choose where the fit
-window is centered). Only the predicted time and the O − C follow the boxes.
+window is centered). Only the predicted time and the O − C follow the boxes. There are two cases where the Period
+box does reach the error, and the result line always shows them: when there is no other period at all (source 4
+above, *(Period box)*), and when the period typed there is twice the series period (the exception above).
 
 **When there is no period anywhere** (a new star, one short night, nothing in VSX, an empty Period box), the result
 says so plainly, next to the time:
@@ -120,7 +136,8 @@ If no elements are given, the result says **No elements: type the period and epo
 The file is called `<Star>_times_of_extremum.csv` (for example `SZ_Lyn_times_of_extremum.csv`). It goes next to the series file, or in the Output folder. The line under the result shows which file is in use and how many times of this star it holds, and, from 2.3.3, lists the saved times themselves (type, HJD and error, O − C, night; the last eight), so you need not open the CSV to find an epoch.
 
 From 2.4.0 each saved row also records the period its error used: `noise_period_d` and `noise_period_source`
-(`series`, `times CSV`, `VSX`, `Period box`, or `none` for a time measured without a period). These are apart from
+(`series`, `times CSV`, `VSX`, `Period box`, or `none` for a time measured without a period), and
+`noise_period_used_d`, the period after it was fitted to the night (the same number when it was not fitted). These are apart from
 `period_d` and `epoch`, which are the elements of the O − C and stay blank when the boxes were empty. The columns are
 listed in [22. Files SHOBS-P writes](22-files-shobs-p-writes.md).
 

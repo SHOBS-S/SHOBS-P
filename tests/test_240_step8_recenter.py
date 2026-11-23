@@ -71,12 +71,10 @@ class TestPointingJumps(unittest.TestCase):
         regs += [_reg(250, -90, flipped=True)] * 5
         self.assertEqual([j["index"] for j in core.pointing_jumps(regs, scale_arcsec=1.0)], [10])
 
-    def test_no_plate_scale_falls_back_on_pixels_only(self):
-        got = core.pointing_jumps([_reg(0, 0), _reg(12, 0)], scale_arcsec=None, px_factor=1)
-        self.assertEqual(len(got), 1)
-        self.assertIsNone(got[0]["arcsec"])
-        self.assertEqual(core.recenter_text(got[0]), "12 px")
-        self.assertEqual(core.pointing_jumps([_reg(0, 0), _reg(9, 0)], scale_arcsec=float("nan")), [])
+    def test_no_plate_scale_finds_nothing(self):
+        # review M1 (c): pixels alone called every dither a re-center, so without a scale nothing is a jump
+        self.assertEqual(core.pointing_jumps([_reg(0, 0), _reg(12, 0)], scale_arcsec=None, px_factor=1), [])
+        self.assertEqual(core.pointing_jumps([_reg(0, 0), _reg(900, 0)], scale_arcsec=float("nan")), [])
 
 
 class TestMarkRecenters(unittest.TestCase):
@@ -226,7 +224,10 @@ class TestApp(unittest.TestCase):
     def test_done_step_marks_and_logs(self):
         import clearv_app
         lines = []
-        fake = types.SimpleNamespace(log=lambda t, *a, **k: lines.append(t), _run_jump_scale=(0.54, 2))
+        notes = []
+        fake = types.SimpleNamespace(log=lambda t, *a, **k: lines.append(t), _run_jump_scale=(0.54, 2),
+                                     _run_note=notes.append, _log_only=lambda t: None,
+                                     NO_SCALE_NOTE=clearv_app.App.NO_SCALE_NOTE)
         pts = [_obs(k) for k in range(40)]
         for k, o in enumerate(pts):
             o._stack_reg = _reg(0.1 * k, 0) if k < 20 else _reg(85 + 0.1 * k, 83)
@@ -237,13 +238,15 @@ class TestApp(unittest.TestCase):
         self.assertTrue(lines[0].startswith("Re-center: the pointing moved by 64″ ("), lines[0])
         self.assertNotIn("⚠", lines[0])   # a plain note
         self.assertIn("Flip/re-center step", lines[0])
-        # no plate scale: pixels only, and said so
+        # no plate scale (review M1 c): nothing is looked for, and the run says so (not as a ⚠)
         lines.clear()
         fake._run_jump_scale = (None, 2)
-        for o in pts:
-            o.jump = 0
-        clearv_app.App._mark_recenters(fake, pts)
-        self.assertIn("only the pixel limit was tested", lines[0])
+        self.assertEqual(clearv_app.App._mark_recenters(fake, pts), [])
+        self.assertEqual({o.jump for o in pts}, {0})
+        self.assertEqual(lines, [])
+        self.assertEqual(notes, [clearv_app.App.NO_SCALE_NOTE])
+        self.assertIn("Re-centers were not looked for", notes[0])
+        self.assertNotIn("⚠", notes[0])
         # no registrations (frames not aligned): nothing found, nothing said
         lines.clear()
         plain = [_obs(k) for k in range(5)]

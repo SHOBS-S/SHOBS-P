@@ -118,8 +118,9 @@ To trim a stretch:
 2. Drag across the light curve from the start to the end of the bad stretch. The **from** and **to** boxes fill with
    the site's local times, and the status bar says how many points are inside.
    Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
-   on the Input page) or a JD. Leave **from** empty to trim from the night's start, or **to** empty to trim to its
-   end.
+   on the Input page) or a full JD (`2461329.699`, or `61329.699`). Leave **from** empty to trim from the night's
+   start, or **to** empty to trim to its end. Nothing else is accepted: a bare number such as `0.45` or `23` could be
+   a clock time or part of a JD, so SHOBS-P asks you to type it one of those two ways instead of guessing.
 3. Click **Trim** (or press Enter in either box).
 
 The trimmed points show as faint gray **×** in a gray band labeled *trimmed*, and the night table's **Flags** column
@@ -136,9 +137,14 @@ There is no trim across a whole series: choose each night in turn.
 A trim belongs to its night and is **saved with the series**. When the series has a file, Trim and Clear trim
 write it at once; reopen the series and the trims are still there. If you measure the night again (Run photometry
 and add it to the series in place of the old one), the night keeps its trims as long as their points are still
-there.
+there. If the new measurement has so few good points that the old trims would leave under 20, the trims are
+dropped, every point of the night is back in, and a ⚠ in the Findings list says so: trim the night again if it
+still needs it.
 
 A trim must leave at least 20 usable points in the night. To drop a whole night, use **Remove night…** instead.
+When the night has both per-frame and stacked points (the **Points** switch, chapter 8), the trim must leave 20
+usable points either way, because the trim stays with the night whichever you show: 30 frames left can be only 6
+stacks.
 
 > **Caution:** Trim bad data, not inconvenient data. Trim a stretch because you know what went wrong in those
 > frames (look at them in Blink), never because the points disagree with the period or the shape you expect.
@@ -165,19 +171,27 @@ When the series has nights on both pier sides and none of these is ticked, a cau
 
 Some mounts stop at the meridian, re-center the target and carry on **on the same pier side** (the ROTATOR reading stays the same all night). No flip happened, but the field has moved, so every star sits on other pixels from there on, and the same small flat-field errors can make a step in the light curve.
 
-From 2.4.0 SHOBS-P finds this in each run. When the field moves by **at least 20″ and at least 10 pixels** between one measured frame and the next, with no flip there, the frames after it become a new segment, just like the frames after a flip. Both limits must be passed, so ordinary drift and small dithers split nothing. (The pixels are those of the stored frame. If SHOBS-P knows no plate scale, from the solve or the Optics boxes, only the 10-pixel limit is tested, and the Log says so.) The move at a meridian flip itself is the flip, not a re-center.
+From 2.4.0 SHOBS-P finds this in each run. A re-center is a **new position of the field that holds**:
+
+- The field moves by **at least 20″ and at least 10 pixels** between one measured frame and the next, with no flip there. Both limits must be passed, so ordinary drift and small dithers split nothing. (The pixels are those of the stored frame.)
+- The field then **stays at the new position for at least 5 measured frames**. Those frames, and the ones after them, become a new segment, just like the frames after a flip. One frame that registers far off, or a few frames away and back, is not a re-center: those frames stay in the segment around them, and the numbers are the same as if nothing had moved. No re-center segment ever has fewer than 5 frames.
+- If the field later **comes back to where an earlier segment was** (within the same limits, on the same side of a flip), those frames rejoin that earlier segment. They do not start a new one. So a mount that moves away and back gives two segments, not three.
+
+The move at a meridian flip itself is the flip, not a re-center.
+
+**SHOBS-P needs the plate scale for this.** It comes from the solve, or else from the Optics boxes on the Input page. When neither gives a scale, re-centers are not looked for at all (pixels alone cannot tell a dither from a re-center), and the status bar says so at the end of the run: *Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics boxes on the Input page).* Solve the image or fill the boxes, and run the night again.
 
 You see a re-center in three places:
 
-- The Log names the two frames and the size of the move: *Re-center: the pointing moved by 64″ (237 px) between 20 and 21 with no meridian flip …*
+- The Log names the two frames and the size of the move: *Re-center: the pointing moved by 64″ (237 px) between 20 and 21 with no meridian flip …* When the field came back to an earlier position, the line ends *… back to where it was earlier in the night. The frames from there on rejoin that earlier segment.*
 - The light curve has a **dashed purple line** where it happened; the plot's title key says **┆ re-center**.
 - The **Flip/re-center step** column shows its step, for example `re-center +0.050 ⚠`. The ⚠ comes with a step over 0.02 mag, as for a flip.
 
-**Line up flip/re-center only (keep nights)** takes the step out and keeps the nights against each other; **Line up segments** lines the segment up with everything else. A step needs at least 5 used points on each side; with fewer it is not measured (the column shows **—**) and nothing is moved. In the light-curve CSV the `segment` column of such a night reads, for example, `no flip / before re-center` and `no flip / after re-center` (`after re-center 2` after a second one).
+**Line up flip/re-center only (keep nights)** takes the step out and keeps the nights against each other; **Line up segments** lines the segment up with everything else. A step needs at least 5 used points on each side; with fewer it is not measured (the column shows **—**) and nothing is moved. This can happen when most of a segment's frames are flagged. The same holds for **Line up segments** and the **Check-star correction**: a re-center segment with fewer than 5 points to go by is not lined up by itself; it moves together with the segment before it. In the light-curve CSV the `segment` column of such a night reads, for example, `no flip / before re-center` and `no flip / after re-center` (`after re-center 2` after a second one). The words name the segment: frames that came back to the first position read `before re-center` again.
 
-A re-center is found while the frames are measured. Nights already in a series made before 2.4.0 are not looked at again: run such a night again to get its segment. Frames added later with **Measure skipped frames** join the segment of the frame before them. A stack never spans a re-center.
+A re-center is found while the frames are measured. Nights already in a series made before 2.4.0 are not looked at again: run such a night again to get its segment. A frame added later with **Measure skipped frames** joins the segment its own position puts it in (the nearest segment within the limits, on its side of the flip). When that cannot be told (the night was loaded from a saved series, or the frame sits at none of the night's positions), it joins the segment of the frame before it. A stack never spans a re-center.
 
-> **Caution:** As with a flip, on a star that changes a lot within a night the "step" read at a re-center is partly the star changing. On a mount that dithers by 20″ or more between frames, every dither is a new segment: do not tick the line-up boxes on such a night.
+> **Caution:** As with a flip, on a star that changes a lot within a night the "step" read at a re-center is partly the star changing. A mount that dithers by 20″ or more and then holds each position for 5 frames or more makes a segment of every new position: do not tick the line-up boxes on such a night.
 
 ### When the flip step is the apertures, not the star
 

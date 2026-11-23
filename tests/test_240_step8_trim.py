@@ -238,7 +238,7 @@ class TestTrim(TrimCase):
         m = self.trim(f"{first[9].jd:.6f}", f"{first[3].jd:.6f}")
         self.assertIn("is after To", m["error"][0])
         m = self.trim("25:99", "")
-        self.assertIn("is not a time", m["error"][0])
+        self.assertIn("is not clear", m["error"][0])
         m = self.trim(f"{first[0].jd - 0.5:.6f}", f"{first[0].jd - 0.4:.6f}")
         self.assertIn("nothing to trim", m["info"][0])
         # 40 points, 1 flagged sat (index 3): trimming from index 20 would leave 19 usable, from 21 leaves 20

@@ -75,8 +75,7 @@ def frame_record(obs, reg=None) -> dict:
         why = "not aligned"
     rec = {"path": str(getattr(obs, "path", "")), "jd": float(obs.jd), "exp": float(getattr(obs, "exptime", 0) or 0),
            "segment": str(getattr(obs, "segment", "") or ""), "keep": not why, "why": why,
-           "jump": int(getattr(obs, "jump", 0) or 0),   # 2.4.0 step 8 (#66): re-centers before this frame
-
+           "jump": int(getattr(obs, "jump", 0) or 0),   # 2.4.0 step 8 (#66): the frame's re-center segment
            "dx": float(reg["dx"]) if reg else 0.0, "dy": float(reg["dy"]) if reg else 0.0,
            "angle": float(reg.get("angle", 0.0)) if reg else 0.0, "flipped": bool(reg.get("flipped")) if reg else False,
            "raw_peak": float(getattr(obs, "raw_peak", float("nan"))),

@@ -149,7 +149,9 @@ next one.
 
 Before measuring each star's scatter, SHOBS-P lines its light curve up across any meridian flip or rotator move,
 so a flip cannot pass for a variable star. From 2.4.0 it does the same across a re-center: the field moved by at
-least 20″ and 10 pixels between two frames with no flip (chapter 12). The Log says how many and how far. On an alt-az mount there are no flips: the frames are aligned following
+least 20″ and 10 pixels between two frames with no flip, and stayed there for at least 5 frames (chapter 12; the
+same test as a photometry run). The Log says how many and how far. Without a plate scale (no solve, empty Optics
+boxes) re-centers are not looked for, and the text above the scan's table says so. On an alt-az mount there are no flips: the frames are aligned following
 the field rotation.
 
 ### Scan stacks of frames (optional)

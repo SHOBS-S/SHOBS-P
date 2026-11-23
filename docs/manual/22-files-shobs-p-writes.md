@@ -50,7 +50,7 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | Button | File |
 |---|---|
 | **Save AAVSO report** | `AAVSO_<star>_<filter>_<date>_SHOBS-P.txt`: AAVSO Extended File Format, ready for WebObs. Beside it, `AAVSO_<star>_<filter>_<date>_SHOBS-P_settings.txt`: what the reported points were measured with, night by night (aperture and sky radii, binning, comps and check measured, frames skipped and left out, calibration, gain (from 2.4.0 with how it was measured from the night's sky, or the night's sky check of EGAIN, and the SHOBS-FLUX camera profile check when there is a profile), telescope aperture, stacking, the SHOBS-P version), and the report's comps, check, scintillation and line-up choices. |
-| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. The `segment` column says `no flip`, `before flip` or `after flip`; on a night with a re-center (from 2.4.0, chapter 12) it goes on with ` / before re-center`, ` / after re-center` or ` / after re-center 2`. |
+| **Save light-curve CSV** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.csv`: every point, flagged ones included with their flag. The `segment` column says `no flip`, `before flip` or `after flip`; on a night with a re-center (from 2.4.0, chapter 12) it goes on with ` / before re-center`, ` / after re-center` or ` / after re-center 2`. The words name the segment: frames that came back to the first position read ` / before re-center` again. |
 | **Save plot PNG** | `<star>_<filter>_<date>_SHOBS-P_lightcurve.png`: the four plots with the summary above them. |
 | **Save field image** (and with every **Save AAVSO report**) | `<star>_<filter>_<date>_SHOBS-P_field.png`: the reference frame as shot, with N and E arrows showing where north and east lie, and the target, comps and check star marked; and, when the AAVSO's chart server answers, `…_aavso_chart.png` (sometimes `.jpg` or `.svg`, as VSP sends it) of the same field. The field image comes with the report: after the report is saved the button reads **Field image saved ✓** (no second `…_2_field.png`), or **Fetch AAVSO chart** when only the chart is missing; that saves just the chart beside the image (from 2.4.0). |
 | **Export…** | `<star>_<time>_<mag or flux>.csv`: the columns you choose; its header records every choice. |
@@ -72,9 +72,10 @@ to save that night only or the whole series. See [15. Submit to AAVSO](15-submit
 | `kvw_jd`, `kvw_err`, `poly_jd`, `poly_err`, `fourier_jd`, `fourier_err` | Each method's own time (JD) and error (days). |
 | `time_note`, `note` | Notes on the time conversion, and the result's ⚠ warnings. |
 | `noise_period_d`, `noise_period_source` | **New in 2.4.0.** The period the error's noise model used, and where it came from: `series` (the Output page's period), `times CSV`, `VSX`, `Period box`, or `none` when the time was measured without a period (its error may be 2–3 times too small). |
+| `noise_period_used_d` | **New in 2.4.0.** The period the noise model was really fitted at: `noise_period_d` after SHOBS-P fitted it to the night (a night of two cycles or more, chapter 14), or the same number when it was not fitted. Blank when there was no period. |
 
-The two new columns are added at the end, so the older columns keep their places. A CSV from 2.3 still reads; the
-first time 2.4.0 saves into it, the header gains the two columns and the older rows have them blank. A blank is not
+The three new columns are added at the end, so the older columns keep their places. A CSV from 2.3 still reads; the
+first time 2.4.0 saves into it, the header gains the new columns and the older rows have them blank. A blank is not
 `none`: for a row from before 2.4.0 the error used the elements' period, so it was measured without a period exactly
 when its `period_d` is blank too. Columns you added yourself are kept. See [14. Time a maximum or minimum](14-time-a-maximum-or-minimum.md).
 
@@ -119,8 +120,10 @@ many fields.
 A series (`.cvseries`) holds every night of one star in one mode: all points, flags, the comparison and check stars,
 night notes, the watch list and the settings of each night. It is a text file (JSON).
 
-From 2.4.0 each point also carries `jump`: how many re-centers came before it in its night (chapter 12). Series
-saved by earlier versions have no such field and load as before (every point reads 0, no re-center).
+From 2.4.0 each point also carries `jump`: the number of its re-center segment in its night (chapter 12). 0 is
+the first position of the field, 1 the segment after the first re-center, and so on; frames that came back to an
+earlier position carry that segment's number again. Series saved by earlier versions have no such field and load
+as before (every point reads 0, no re-center).
 
 - **Save series** always asks where to save it, suggesting `<star>.cvseries`.
 - After that, many actions save it again by themselves: adding or removing a night, night notes, **Use comps…**,

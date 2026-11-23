@@ -1174,10 +1174,23 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Re-center: the pointing moved by 64″ (237 px) between … and … with no meridian flip, so the stars sit on other pixels from there on. The frames after it are a new segment …",
-    "(No plate scale known, so only the pixel limit was tested.)"
+    "Re-center: the pointing moved by 64″ (237 px) between … and … with no meridian flip, so the stars sit on other pixels from there on. The frames after it are a new segment …"
    ],
    "todo": "Look at the night's Flip/re-center step on the Output page (a dashed purple line marks the place on the light curve). If the step matters, tick Line up flip/re-center only (keep nights) or Line up segments. See 12. Flags and bad data, \"A re-center without a flip\"."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Re-center: the pointing moved by … between … and … with no meridian flip, back to where it was earlier in the night. The frames from there on rejoin that earlier segment."
+   ],
+   "todo": "Nothing more than for the re-center itself."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Re-centers were not looked for: no plate scale is known (solve the image, or fill the Optics boxes on the Input page)."
+   ],
+   "todo": "Solve the image, or fill in pixel size and focal length in the Optics boxes, and run the night (or the scan) again."
   },
   {
    "section": "Photometry",
@@ -1189,6 +1202,8 @@
   {
    "section": "Photometry",
    "patterns": [
+    "The re-center check could not be made on this run (…); the night is kept as one segment apart from a flip.",
+    "The re-center check could not be made on this scan (…).",
     "(re-center check skipped: …)"
    ],
    "todo": "Nothing. If the light curve shows a step where the mount moved, please report it with the Log."
@@ -1541,16 +1556,16 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a JD), or drag across the light curve, then Trim."
+    "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full JD), or drag across the light curve, then Trim."
    ],
    "todo": "Drag across the bad stretch on the light curve, or type the times."
   },
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Trim: '…' is not a time; use HHMM or HH:MM (for example 2300 or 23:00), or a JD"
+    "Trim: '…' is not clear. Type a clock time as HHMM or HH:MM (for example 2300 or 23:00), or a full JD (for example 2461329.699)."
    ],
-   "todo": "Type the time again."
+   "todo": "Type a clock time with four digits or a colon (0045, 00:45), or the whole JD (2461329.699 or 61329.699). Or drag across the light curve."
   },
   {
    "section": "Output, Variables mode",
@@ -1577,6 +1592,14 @@
    "section": "Output, Variables mode",
    "patterns": [
     "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night…."
+   ],
+   "todo": "Trim less, or use Remove night… if the whole night is bad."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night….",
+    "… with Points: Per frame …"
    ],
    "todo": "Trim less, or use Remove night… if the whole night is bad."
   },
@@ -1620,7 +1643,7 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "…: the night's trims were dropped (they would leave N usable points of the new measurement; a night needs 20)."
+    "…: the night's trims were dropped: they would leave N usable points of the new measurement, and a night needs 20. Every point of the night is back in; trim it again if it still needs it."
    ],
    "todo": "Look at the night's light curve and trim again if a stretch is still bad."
   },

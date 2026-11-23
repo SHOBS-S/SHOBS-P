@@ -95,7 +95,7 @@ class MeasureWithNoisePeriod(unittest.TestCase):
         tuned to the night it gives about the error of the true period."""
         ratios_raw, ratios_tuned = [], []
         for seed in (1, 2, 3):
-            t, m = night(seed)
+            t, m = night(seed, hours=8.0)   # review S1: tuned only on a night of at least two cycles
             true = core.measure_extremum(t, m, "max", period=P_TRUE, window_period=None, n_boot=120)
             off = core.measure_extremum(t, m, "max", period=0.95 * P_TRUE, window_period=None, n_boot=120)
             tuned = core.measure_extremum(t, m, "max", period=0.95 * P_TRUE, window_period=None, n_boot=120,
@@ -113,7 +113,9 @@ class MeasureWithNoisePeriod(unittest.TestCase):
         t, m = night(hours=3.0)     # under one cycle: the night cannot tell periods apart
         self.assertEqual(core.tune_noise_period(t, m, 0.16), 0.16)
         self.assertEqual(core.tune_noise_period(t[:8], m[:8], 0.01), 0.01)
-        t, m = night(hours=7.0)
+        t, m = night(hours=7.0)     # review S1: 1.96 cycles is still too short to tune on
+        self.assertEqual(core.tune_noise_period(t, m, 1.02 * P_TRUE), 1.02 * P_TRUE)
+        t, m = night(hours=8.0)
         self.assertLess(abs(core.tune_noise_period(t, m, 1.02 * P_TRUE) - P_TRUE), 0.01 * P_TRUE)
         # one-day alias of the true period: still found (within the 20% reach)
         self.assertLess(abs(core.tune_noise_period(t, m, 1 / (1 / P_TRUE + 1)) - P_TRUE), 0.015 * P_TRUE)
@@ -124,8 +126,8 @@ class CsvColumns(unittest.TestCase):
                 "night,n_points,window_min,kvw_jd,kvw_err,poly_jd,poly_err,fourier_jd,fourier_err,time_note,note")
 
     def test_new_columns_are_at_the_end(self):
-        self.assertEqual(core.EXTREMUM_COLUMNS[-2:], ("noise_period_d", "noise_period_source"))
-        self.assertEqual(",".join(core.EXTREMUM_COLUMNS[:-2]), self.OLD_HEAD)
+        self.assertEqual(core.EXTREMUM_COLUMNS[-3:], ("noise_period_d", "noise_period_source", "noise_period_used_d"))
+        self.assertEqual(",".join(core.EXTREMUM_COLUMNS[:-3]), self.OLD_HEAD)
 
     def test_round_trip(self):
         with tempfile.TemporaryDirectory() as d:

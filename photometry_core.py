@@ -1968,8 +1968,9 @@ class Obs:
     check_std: float | None = None
     flag: str = ""
     segment: str = ""   # "flip" for frames after a meridian flip
-    # 2.4.0 step 8 (#66): how many re-centers (pointing jumps on the same pier side) came before this frame in its
-    # night; each one starts a new segment, as a flip does. Saved with the series; 0 in series saved before 2.4.0.
+    # 2.4.0 step 8 (#66): the number of this frame's re-center segment in its night (0 = the first pointing; a
+    # re-center, a pointing jump on the same pier side that holds, starts the next one, as a flip starts a segment;
+    # frames back at an earlier pointing carry its number again). Saved with the series; 0 in series before 2.4.0.
     jump: int = 0
     raw_peak: float = float("nan")
     # Each comparison star's instrumental magnitude, in the order the comps were given.
@@ -6325,6 +6326,39 @@ def _segment_key(obs: Obs) -> tuple:
     return (obs.night, obs.segment, int(getattr(obs, "jump", 0) or 0))
 
 
+SEGMENT_MIN_POINTS = 5   # a re-center segment is lined up on its own only with this many usable points (as a step)
+
+
+def _segment_keys(observations: list[Obs], usable: list[bool], min_points: int = SEGMENT_MIN_POINTS) -> list[tuple]:
+    """Review S5: each point's segment key for lining segments up, with a re-center segment of fewer than min_points
+    usable points folded into the re-center segment before it in time on its side of the flip (else the one after
+    it): too few points give no level of their own, so such a part moves with its neighbor and is never shifted by
+    itself. Nights and flip sides without a re-center keep their own key whatever their size, as before 2.4.0."""
+    keys = [_segment_key(o) for o in observations]
+    count: dict[tuple, int] = {}
+    first: dict[tuple, float] = {}
+    for o, key, ok in zip(observations, keys, usable):
+        count[key] = count.get(key, 0) + (1 if ok else 0)
+        jd = o.jd if o.jd is not None and math.isfinite(o.jd) else float("inf")
+        first[key] = min(first.get(key, float("inf")), jd)
+    sides: dict[tuple, list] = {}
+    for key in count:
+        sides.setdefault(key[:2], []).append(key)
+    fold = {}
+    for parts in sides.values():
+        if len(parts) < 2:
+            continue
+        parts.sort(key=lambda k: (first[k], k[2]))
+        big = [k for k in parts if count[k] >= min_points]
+        last = None
+        for k in parts:
+            if count[k] >= min_points:
+                last = k
+            else:
+                fold[k] = last if last is not None else (big[0] if big else parts[0])
+    return [fold.get(k, k) for k in keys] if fold else keys
+
+
 def apply_night_zero_point(observations: list[Obs]) -> list[float]:
     """Remove zero-point jumps between nights, and between the two sides of a meridian flip,
     using the check star. Stored mags are not changed.
@@ -6334,10 +6368,11 @@ def apply_night_zero_point(observations: list[Obs]) -> list[float]:
     check star are left as they are.
     """
     by_seg: dict[tuple, list[float]] = {}
-    for obs in observations:
-        if obs.check_std is None or not math.isfinite(obs.check_std):
-            continue
-        by_seg.setdefault(_segment_key(obs), []).append(obs.check_std)
+    has = [obs.check_std is not None and math.isfinite(obs.check_std) for obs in observations]
+    keys = _segment_keys(observations, has)   # review S5: no re-center segment of under 5 points on its own
+    for obs, key, ok in zip(observations, keys, has):
+        if ok:
+            by_seg.setdefault(key, []).append(obs.check_std)
     if not by_seg:
         return [obs.mag for obs in observations]
     # Each night / flip segment counts once, however many frames it has, so one long
@@ -6345,7 +6380,7 @@ def apply_night_zero_point(observations: list[Obs]) -> list[float]:
     seg_meds = {key: float(np.median(vals)) for key, vals in by_seg.items()}
     series_med = float(np.median(list(seg_meds.values())))
     offsets = {key: med - series_med for key, med in seg_meds.items()}
-    return [obs.mag - offsets.get(_segment_key(obs), 0.0) for obs in observations]
+    return [obs.mag - offsets.get(key, 0.0) for obs, key in zip(observations, keys)]
 
 
 def normalize_segments(observations: list[Obs], values: list[float] | None = None) -> list[float]:
@@ -6358,13 +6393,14 @@ def normalize_segments(observations: list[Obs], values: list[float] | None = Non
     if not vals:
         return []
     groups: dict[tuple, list[float]] = {}
-    for obs, v in zip(observations, vals):
+    keys = _segment_keys(observations, [math.isfinite(v) for v in vals])   # review S5
+    for key, v in zip(keys, vals):
         if math.isfinite(v):
-            groups.setdefault(_segment_key(obs), []).append(v)
+            groups.setdefault(key, []).append(v)
     seg_meds = {key: float(np.median(v)) for key, v in groups.items()}
     overall = float(np.median(list(seg_meds.values()))) if seg_meds else 0.0
     shift = {key: med - overall for key, med in seg_meds.items()}
-    return [v - shift.get(_segment_key(obs), 0.0) for obs, v in zip(observations, vals)]
+    return [v - shift.get(key, 0.0) for key, v in zip(keys, vals)]
 
 
 SIDEREAL_DAY = 0.99726957
@@ -6796,7 +6832,40 @@ def align_flips(observations: list[Obs], values: list[float], offsets: dict[str,
 # ---- 2.4.0 step 8 (#66): re-centers (a pointing jump without a flip) as segments ---------------------------------
 RECENTER_ARCSEC = 20.0   # a jump between two consecutive frames of at least this much on the sky ...
 RECENTER_PX = 10.0       # ... AND at least this many pixels of the stored frame starts a new segment (John, 23 Nov)
+RECENTER_HOLD = 5        # ... when the new pointing then holds for at least this many measured frames (review M1)
 STEP_FLIP, STEP_RECENTER = "flip", "re-center"
+
+
+def _recenter_scale(scale_arcsec, px_factor) -> tuple:
+    try:
+        scale = float(scale_arcsec) if scale_arcsec is not None else None
+        scale = scale if scale and math.isfinite(scale) and scale > 0 else None
+    except (TypeError, ValueError):
+        scale = None
+    try:
+        factor = float(px_factor)
+        factor = factor if math.isfinite(factor) and factor > 0 else 1.0
+    except (TypeError, ValueError):
+        factor = 1.0
+    return scale, factor
+
+
+def _reg_xy(reg):
+    """(dx, dy, flipped) of a frame's registration, or None when it has none."""
+    if not reg:
+        return None
+    try:
+        cur = (float(reg["dx"]), float(reg["dy"]), bool(reg.get("flipped")))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return cur if math.isfinite(cur[0]) and math.isfinite(cur[1]) else None
+
+
+def pointing_far(a, b, scale: float, factor: float = 1.0) -> bool:
+    """Are two field positions (registered-image pixels) apart by at least RECENTER_ARCSEC and at least RECENTER_PX
+    stored pixels? Both limits must be passed."""
+    d = math.hypot(a[0] - b[0], a[1] - b[1])
+    return d * factor >= RECENTER_PX and d * scale >= RECENTER_ARCSEC
 
 
 def pointing_jumps(regs: list, scale_arcsec: float | None = None, px_factor: float = 1.0) -> list[dict]:
@@ -6806,59 +6875,180 @@ def pointing_jumps(regs: list, scale_arcsec: float | None = None, px_factor: flo
     registered image (software binning x the color camera's 2x2 superpixel).
 
     A jump is a move of the field of at least RECENTER_ARCSEC and at least RECENTER_PX stored pixels from one frame
-    to the next (both must be passed; small dithers and drift pass neither). Without a plate scale only the pixel
-    limit can be tested ("arcsec" is then None). A meridian flip (the two frames differ in "flipped") is not a jump.
+    to the next (both must be passed; small dithers and drift pass neither). A meridian flip (the two frames differ
+    in "flipped") is not a jump. Review M1: without a plate scale nothing is a jump (the sky limit cannot be tested,
+    and pixels alone called every dither one). A jump is not yet a re-center: see recenter_segments.
     Returns [{"index": k (the first frame after the jump), "px", "arcsec", "dx", "dy" (stored pixels)}]."""
-    try:
-        scale = float(scale_arcsec) if scale_arcsec is not None else None
-        scale = scale if scale and math.isfinite(scale) and scale > 0 else None
-    except (TypeError, ValueError):
-        scale = None
-    factor = float(px_factor) if px_factor and math.isfinite(float(px_factor)) and float(px_factor) > 0 else 1.0
+    scale, factor = _recenter_scale(scale_arcsec, px_factor)
     out = []
+    if scale is None:
+        return out
     prev = None
     for k, reg in enumerate(regs):
-        if not reg:
+        cur = _reg_xy(reg)
+        if cur is None:
             continue
-        try:
-            cur = (float(reg["dx"]), float(reg["dy"]), bool(reg.get("flipped")))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if not (math.isfinite(cur[0]) and math.isfinite(cur[1])):
-            continue
-        if prev is not None and prev[2] == cur[2]:
+        if prev is not None and prev[2] == cur[2] and pointing_far(cur, prev, scale, factor):
             ddx, ddy = cur[0] - prev[0], cur[1] - prev[1]
             d = math.hypot(ddx, ddy)
-            arcsec = d * scale if scale else None
-            if d * factor >= RECENTER_PX and (arcsec is None or arcsec >= RECENTER_ARCSEC):
-                out.append({"index": k, "px": d * factor, "arcsec": arcsec, "dx": ddx * factor, "dy": ddy * factor})
+            out.append({"index": k, "px": d * factor, "arcsec": d * scale, "dx": ddx * factor, "dy": ddy * factor})
         prev = cur
     return out
 
 
+def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: float = 1.0, sides: list | None = None,
+                      min_hold: int = RECENTER_HOLD) -> dict:
+    """Review M1: a night's re-center segments, defined by where the field IS, not by counting jumps.
+
+    regs / scale_arcsec / px_factor as in pointing_jumps; sides: optionally one value per frame that already splits
+    the night (the points' flip segment, a field scan's flip / rotator segment); frames are only compared within one
+    side and one "flipped" state. The frames are cut into runs at every jump between consecutive frames. Then:
+      (a) a run opens a segment only when it HOLDS: at least min_hold measured frames, the first min_hold of them
+          within the limits of each other. A shorter excursion (one bad registration, a few frames away and back)
+          is no re-center: its frames stay in the segment they sit beside, so no segment has under min_hold frames;
+      (b) a run that holds within the limits of an EARLIER segment of the same side (where that segment ended, or its
+          middle) rejoins it under the same number instead of opening a new one;
+      (c) with no plate scale nothing is looked for ("checked" False): pixels alone cannot tell a dither from a
+          re-center.
+    Returns {"labels": each frame's segment number (0 = the first pointing; the same number means the same pointing),
+    "recenters": [{"index": the first frame of the run that moved, "from": the last frame of the pointing it left,
+    "px", "arcsec", "dx", "dy" (stored pixels, from where the old segment ended), "returned": True when it rejoined an
+    earlier segment}], "checked": bool}."""
+    n = len(regs)
+    labels = [0] * n
+    scale, factor = _recenter_scale(scale_arcsec, px_factor)
+    if scale is None:
+        return {"labels": labels, "recenters": [], "checked": False}
+    min_hold = max(int(min_hold), 1)
+    xy = [_reg_xy(r) for r in regs]
+    user = [sides[k] if sides is not None else None for k in range(n)]
+    side = [(user[k], xy[k][2]) if xy[k] is not None else None for k in range(n)]
+
+    def far(a, b):
+        return pointing_far(a, b, scale, factor)
+
+    def middle(frames):
+        return (float(np.median([xy[k][0] for k in frames])), float(np.median([xy[k][1] for k in frames])))
+
+    runs = []   # [side, frames, first of its block?]
+    prev = None
+    for k in range(n):
+        if xy[k] is None:
+            continue
+        if prev is None or side[k] != side[prev]:
+            runs.append([side[k], [k], True])
+        elif far(xy[k], xy[prev]):
+            runs.append([side[k], [k], False])
+        else:
+            runs[-1][1].append(k)
+        prev = k
+    segs: dict[tuple, list] = {}   # (side, number) -> the frames of its runs that held
+    found = []
+    done = [False] * n
+    carry, cur, pending = 0, None, []
+
+    def give(frames, label):
+        for k in frames:
+            labels[k] = label
+            done[k] = True
+
+    for run_side, frames, new_block in runs:
+        if new_block:
+            for fr in pending:   # a block without a run that held: no re-center in it
+                give(fr, carry)
+            cur, pending = None, []
+        head = frames[:min_hold]
+        start = middle(head)
+        if len(frames) < min_hold or any(far(xy[k], start) for k in head):
+            if cur is None:
+                pending.append(frames)
+            else:
+                give(frames, cur)   # (a) an excursion stays with the segment it left
+            continue
+        best = None
+        for (seg_side, label), seg_frames in segs.items():
+            if seg_side != run_side:
+                continue
+            ends = (middle(seg_frames[-min_hold:]), middle(seg_frames))
+            if all(far(start, e) for e in ends):
+                continue
+            d = min(math.hypot(start[0] - e[0], start[1] - e[1]) for e in ends)
+            if best is None or d < best[0]:
+                best = (d, label)
+        if best is not None:
+            label = best[1]   # (b) back at an earlier pointing (or still at this one, after an excursion)
+        elif cur is None and (run_side, carry) not in segs:
+            label = carry     # the first pointing of the night, or of the other side of a flip
+        else:
+            label = max(lab for _side, lab in segs) + 1
+        if cur is not None and label != cur:
+            was = middle(segs[(run_side, cur)][-min_hold:])
+            ddx, ddy = start[0] - was[0], start[1] - was[1]
+            d = math.hypot(ddx, ddy)
+            found.append({"index": frames[0], "from": segs[(run_side, cur)][-1], "px": d * factor, "arcsec": d * scale,
+                          "dx": ddx * factor, "dy": ddy * factor, "returned": best is not None})
+        segs.setdefault((run_side, label), []).extend(frames)
+        give(frames, label)
+        for fr in pending:
+            give(fr, label)
+        cur, carry, pending = label, label, []
+    for fr in pending:
+        give(fr, carry)
+    # a frame that was not aligned takes the number of the measured frame before it on its side, else the one after
+    for k in range(n):
+        if done[k]:
+            continue
+        near = next((m for m in range(k - 1, -1, -1) if done[m] and xy[m] is not None and user[m] == user[k]), None)
+        if near is None:
+            near = next((m for m in range(k + 1, n) if done[m] and xy[m] is not None and user[m] == user[k]), None)
+        labels[k] = labels[near] if near is not None else 0
+    return {"labels": labels, "recenters": found, "checked": True}
+
+
 def mark_recenters(observations: list[Obs], regs: list, scale_arcsec: float | None = None,
                    px_factor: float = 1.0) -> list[dict]:
-    """Set each point's `jump` (re-centers before it in the night) from the frames' registrations and return the
-    re-centers found: pointing_jumps' records plus "before" / "after" (the Obs on each side). observations: one
-    night's measured points; regs: their registrations, in the same order. A jump at the meridian flip itself (the
-    points' segment changes there, also a flip found from the rotator readings) is the flip, not a re-center."""
+    """Set each point's `jump` (the number of its re-center segment in the night, 0 = the first pointing) from the
+    frames' registrations and return the re-centers found: recenter_segments' records plus "before" / "after" (the
+    Obs on each side). observations: one night's measured points; regs: their registrations, in the same order. A
+    jump at the meridian flip itself (the points' segment changes there, also a flip found from the rotator
+    readings) is the flip, not a re-center. Review M1: a re-center is a pointing that holds (see recenter_segments),
+    a return to an earlier pointing rejoins that segment, and without a plate scale nothing is looked for (every
+    point's jump is 0)."""
     order = sorted(range(len(observations)), key=lambda k: observations[k].jd)
     pts = [observations[k] for k in order]
-    found = []
-    for j in pointing_jumps([regs[k] for k in order], scale_arcsec, px_factor):
-        k = j["index"]
-        before = next((m for m in range(k - 1, -1, -1) if regs[order[m]]), k - 1)
-        if (pts[k].segment or "") != (pts[before].segment or ""):
+    res = recenter_segments([regs[k] for k in order], scale_arcsec, px_factor, sides=[o.segment or "" for o in pts])
+    for o, label in zip(pts, res["labels"]):
+        o.jump = int(label)
+    return [dict(j, before=pts[j["from"]], after=pts[j["index"]]) for j in res["recenters"]]
+
+
+def frame_jump(reg, segment: str, others: list, scale_arcsec: float | None = None, px_factor: float = 1.0):
+    """Review S4: the re-center segment number for one frame measured later (Measure skipped frames), from its own
+    registration: the number of the nearest segment on its side of the flip whose position (the middle of its frames'
+    registrations) is within the limits. others: [(reg, segment, jump)] for the night's points measured before.
+    None when it cannot be told (no plate scale, no registration, or no segment within the limits)."""
+    scale, factor = _recenter_scale(scale_arcsec, px_factor)
+    cur = _reg_xy(reg)
+    if scale is None or cur is None:
+        return None
+    groups: dict[int, list] = {}
+    for oreg, oseg, ojump in others:
+        o = _reg_xy(oreg)
+        if o is not None and o[2] == cur[2] and (oseg or "") == (segment or ""):
+            groups.setdefault(int(ojump or 0), []).append(o)
+    best = None
+    for jump, pos in groups.items():
+        mid = (float(np.median([p[0] for p in pos])), float(np.median([p[1] for p in pos])))
+        if pointing_far(cur, mid, scale, factor):
             continue
-        found.append(dict(j, before=pts[before], after=pts[k]))
-    starts = sorted(j["index"] for j in found)
-    for k, o in enumerate(pts):
-        o.jump = sum(1 for b in starts if b <= k)
-    return found
+        d = math.hypot(cur[0] - mid[0], cur[1] - mid[1])
+        if best is None or d < best[0]:
+            best = (d, jump)
+    return best[1] if best is not None else None
 
 
 def recenter_text(jump: dict) -> str:
-    """'64″ (237 px)' for a re-center record; pixels only when the plate scale is not known."""
+    """'64″ (237 px)' for a re-center record."""
     px = f"{jump['px']:.0f} px"
     return f"{jump['arcsec']:.0f}″ ({px})" if jump.get("arcsec") is not None else px
 
@@ -8060,7 +8250,8 @@ def segment_words(observations: list[Obs]) -> list[str]:
     """2.2.2: the segment column in words: "before flip" / "after flip" on a night with a meridian flip,
     "no flip" on a night without one (the stored value stays "" or "flip").
     2.4.0 step 8 (#66): on a night with a re-center the words go on with " / before re-center", " / after
-    re-center" or " / after re-center 2" (the second one); other nights read as before."""
+    re-center" or " / after re-center 2" (the second one); other nights read as before. The words name the segment:
+    frames that came back to an earlier pointing rejoin its segment (review M1) and read as that segment does."""
     flipped = {o.night for o in observations if o.segment == "flip"}
     jumped = {o.night for o in observations if getattr(o, "jump", 0)}
     out = []
@@ -10310,7 +10501,10 @@ EXTREMUM_COLUMNS = ("star", "type", "hjd", "bjd_tdb", "jd_utc", "error_d", "erro
                     # 2.4.0 step 8 (#90): the period the error's noise model used, and where it came from ('series',
                     # 'times CSV', 'VSX', 'Period box', or 'none' = timed without one: the error may be low). Added at
                     # the end, so the older columns keep their places; rows saved before 2.4.0 have them blank.
-                    "noise_period_d", "noise_period_source")
+                    "noise_period_d", "noise_period_source",
+                    # review N3: the period the noise model was really fitted at (noise_period_d tuned to the night;
+                    # the same as noise_period_d when it was not tuned). Blank in rows saved before it.
+                    "noise_period_used_d")
 
 ECLIPSING_TYPES = ("EA", "EB", "EW", "E", "ELL")
 
@@ -10616,20 +10810,24 @@ def _five_minute_means(t, m):
     return (np.array([t[which == k].mean() for k in keys]), np.array([m[which == k].mean() for k in keys]))
 
 
+TUNE_MIN_CYCLES = 2.0   # review S1: the noise period is tuned only on a night of at least this many cycles
+
+
 def tune_noise_period(t, m, period: float, reach: float = 0.20, n_harm: int = 3) -> float:
     """2.4.0 step 8 (#90): the period near `period` (within +-reach) whose Fourier series fits this night best, for
     the Time of max/min noise model. The error should need only an approximate period, but a Fourier series held at
     a period that is a little off cannot follow a night of more than one cycle: the star's own variation is left in
     the residuals and counted as noise (simulated HADS nights of 6-8 h: a period 2% off doubled the error, 5% off
     made it 4-5 times too large, a one-day alias 10 times). So the period is tuned on the night's 5-minute means
-    (n_harm harmonics; steps of 1% of a cycle's slip across the night) wherever the night covers more than one cycle;
-    a shorter night cannot tell periods apart, and there a period that is off does no such harm. Returns the tuned
-    period, or `period` itself when the night is too short or too sparse to tune it."""
+    (n_harm harmonics; steps of 1% of a cycle's slip across the night) wherever the night covers at least two cycles
+    (review S1: with less than two, a free period lets the series follow the night's slow noise too, and the error
+    comes out too small); a shorter night uses the given period as it is. Returns the tuned period, or `period`
+    itself when the night is too short or too sparse to tune it."""
     t, m = _clean_sorted(t, m)
     if not (period and period > 0) or t.size < 12:
         return period
     span = float(t[-1] - t[0])
-    if span < 1.05 * period:
+    if span < TUNE_MIN_CYCLES * period:
         return period
     tb, mb = _five_minute_means(t, m)
     if tb.size < 2 * n_harm + 8:
@@ -10651,7 +10849,7 @@ def tune_noise_period(t, m, period: float, reach: float = 0.20, n_harm: int = 3)
 
 def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_guess: float | None = None,
                      half_width: float | None = None, n_boot: int = 500, seed: int = 1,
-                     window_period="same", tune_period: bool = False) -> dict:
+                     window_period="same", tune_period: bool = False, period_source: str = "") -> dict:
     """One night's time of maximum or minimum (JD of the input times): the local polynomial with its bootstrap error
     is adopted; Kwee-van Woerden and (with a period) a Fourier series are measured alongside as checks.
     2.4.0 step 8 (#90): `period` is the period of the error's noise model and of the Fourier check (approximate is
@@ -10732,7 +10930,9 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
     if fourier and math.isfinite(fourier.get("err", float("nan"))):
         diff = fourier["t"] - poly["t"]
         if abs(diff) > 3.0 * math.hypot(poly["err"], fourier["err"]) and abs(diff) > 2.0 * err:
-            warnings.append(f"the Fourier series at the period reads {abs(diff) * 1440:.1f} min "
+            # review N5: the period and where it came from are named, so "the wrong period" can be checked
+            where = f" ({period_source})" if period_source else ""
+            warnings.append(f"the Fourier series at P {period:.5f} d{where} reads {abs(diff) * 1440:.1f} min "
                             f"{'later' if diff > 0 else 'earlier'} (more than 3 sigma): a second period, a short "
                             "branch, or the wrong period")
     # 2.2.14 review 2: without a period the bootstrap only sees the window's own residuals, which hide noise lasting
@@ -10748,12 +10948,19 @@ def measure_extremum(t, m, kind: str = "max", period: float | None = None, t_gue
 EXTREMUM_NOISE_SOURCES = ("series", "times CSV", "VSX", "Period box")
 
 
-def extremum_noise_period(series=None, csv_rows=None, vsx=None, typed=None) -> tuple:
+NOISE_DOUBLE_TOLERANCE = 0.03   # review S2: "twice the series period" = within 3%
+
+
+def extremum_noise_choice(series=None, csv_rows=None, vsx=None, typed=None) -> dict:
     """2.4.0 step 8 (#90): the period the Time of max/min error uses for its noise model, the best SHOBS-P has, in
     this order: the series' own period (the Output page's period search, when it is a reliable one), the period last
     used in the star's times CSV (the latest saved time that has one, of either type), VSX's, and last a period typed
-    in the window's Period box. No epoch is needed. Returns (period, source) with source one of
-    EXTREMUM_NOISE_SOURCES, or (None, 'none') when there is no period anywhere."""
+    in the window's Period box. No epoch is needed.
+    Review S2: a period search finds an eclipsing star at half its period (two like minima per cycle). So when the
+    times CSV's, VSX's or the Period box's period is twice the series period (within NOISE_DOUBLE_TOLERANCE), that
+    longer period is used and "half" holds the series period it doubles.
+    Returns {"period", "source" (one of EXTREMUM_NOISE_SOURCES, or 'none' with period None), "half" (None or the
+    series period that is half of the period used)}."""
     def good(v):
         try:
             v = float(v)
@@ -10771,10 +10978,22 @@ def extremum_noise_period(series=None, csv_rows=None, vsx=None, typed=None) -> t
     for r in sorted(csv_rows or [], key=when):
         if isinstance(r.get("period_d"), float) and good(r.get("period_d")):
             from_csv = r["period_d"]
-    for value, source in zip((series, from_csv, vsx, typed), EXTREMUM_NOISE_SOURCES):
-        if good(value):
-            return good(value), source
-    return None, "none"
+    found = [(good(value), source) for value, source in zip((series, from_csv, vsx, typed), EXTREMUM_NOISE_SOURCES)]
+    mine = found[0][0]
+    if mine:
+        for value, source in found[1:]:
+            if value and abs(value / (2.0 * mine) - 1.0) <= NOISE_DOUBLE_TOLERANCE:
+                return {"period": value, "source": source, "half": mine}
+    for value, source in found:
+        if value:
+            return {"period": value, "source": source, "half": None}
+    return {"period": None, "source": "none", "half": None}
+
+
+def extremum_noise_period(series=None, csv_rows=None, vsx=None, typed=None) -> tuple:
+    """(period, source) of extremum_noise_choice; (None, 'none') when there is no period anywhere."""
+    got = extremum_noise_choice(series=series, csv_rows=csv_rows, vsx=vsx, typed=typed)
+    return got["period"], got["source"]
 
 
 def extremum_row_no_period(row: dict) -> bool:
@@ -10832,7 +11051,7 @@ def extremum_csv_name(star: str) -> str:
 
 _EXTREMUM_NUMBERS = ("hjd", "bjd_tdb", "jd_utc", "error_d", "error_min", "cycle", "o_c_d", "o_c_min", "period_d",
                      "epoch", "n_points", "window_min", "kvw_jd", "kvw_err", "poly_jd", "poly_err", "fourier_jd",
-                     "fourier_err", "noise_period_d")
+                     "fourier_err", "noise_period_d", "noise_period_used_d")
 
 
 def same_star_text(a, b) -> bool:
@@ -10993,7 +11212,7 @@ def save_extremum_row(path: str, row: dict) -> str:
                 return f"{v:.5f}"
             if k in ("error_d", "o_c_d", "kvw_err", "poly_err", "fourier_err"):
                 return f"{v:.5f}"
-            if k in ("period_d", "noise_period_d"):
+            if k in ("period_d", "noise_period_d", "noise_period_used_d"):
                 return f"{v:.8f}"
             if k == "cycle":
                 return f"{v:g}"
