@@ -942,7 +942,7 @@ After a stack run SHOBS-P goes to the Output page, with **Points: Stacked** sele
 - Rejected frames (Blink) are not in the run, so not in a stack.
 - Frames the per-frame run flagged (sat, compsat, drift, cloud and the other flags) are left out before stacking.
 - Saturation is judged per exposure, so a sum of unsaturated frames stays linear.
-- A stack never spans a meridian flip, a rotator move, or a gap of more than 3 frame spacings. Each side of a flip is
+- A stack never spans a meridian flip, a rotator move, a re-center (chapter 12; from 2.4.0), or a gap of more than 3 frame spacings. Each side of a flip is
   stacked on its own, so the last stack before a flip or gap can be short (partial).
 - There is one way to combine: a sigma-clipped **mean** (a plain mean below 5 frames). The clip removes cosmic rays,
   satellite trails and hot pixels, and leaves alone starlight that only changes with the seeing. There is no median,

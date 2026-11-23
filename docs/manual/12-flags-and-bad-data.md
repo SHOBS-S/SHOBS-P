@@ -103,19 +103,37 @@ If no night has been checked yet, the button runs the check on every night. Your
 
 After a meridian flip, the camera sees the field rotated by 180°. Each star now falls on a different part of the sensor and the flat. Small flat-field errors can then make a step in the light curve at the flip, even though the star did not change.
 
-SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. With ROTATOR readings, camera angles within 10° of each other count as one pier side (30° and 37° are one side, 210° and 217° the other), since the angle a solve or the camera software reports can wander a few degrees from night to night without the camera being turned. The **Flip step** column shows each night's step, with ⚠ when it is large.
+SHOBS-P finds the flip in each night (from the frames' ROTATOR or PIERSIDE header, or from the image itself) and rings points after the flip with **○** in the light curve. With ROTATOR readings, camera angles within 10° of each other count as one pier side (30° and 37° are one side, 210° and 217° the other), since the angle a solve or the camera software reports can wander a few degrees from night to night without the camera being turned. The **Flip/re-center step** column shows each night's step, with ⚠ when it is large.
 
 You have three ways to take steps out. Each is a checkbox on the Output page. They affect the plots, the period search and **Export…** files. They do not change the stored points or the AAVSO report.
 
-- **Line up flip only (keep nights)** shifts the after-flip part of each night to match its before-flip part. Night-to-night changes are kept. Use it for one night, or when flips happen at different times each night.
+- **Line up flip/re-center only (keep nights)** shifts the after-flip part of each night to match its before-flip part, and the part after each re-center to match the part before it (see "A re-center without a flip" below). Night-to-night changes are kept. Use it for one night, or when flips happen at different times each night.
 - **Pier side as segments** lines up all the frames taken on one pier side with all the frames on the other, across the whole series. Use it for a campaign where every night has a flip. If the pier side is unknown on some nights (no ROTATOR, no PIERSIDE, no flip), those nights are left as they are, and a caution says so.
-- **Line up segments (nights, meridian flip)** sets every night and every flip segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
+- **Line up segments (nights, meridian flip)** sets every night, every flip segment and every re-center segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
 
-If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip only**.
+If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip/re-center only**. (Before 2.4.0 that box read **Line up flip only (keep nights)**.)
 
 An alt-az mount has no meridian flips and no pier sides, so there is nothing to line up: the **Side** column shows **—**, and **Pier side as segments** says **the mount is alt-az (no pier sides).**
 
 When the series has nights on both pier sides and none of these is ticked, a caution tells you how much each side reads against the other and suggests **Pier side as segments**.
+
+### A re-center without a flip
+
+Some mounts stop at the meridian, re-center the target and carry on **on the same pier side** (the ROTATOR reading stays the same all night). No flip happened, but the field has moved, so every star sits on other pixels from there on, and the same small flat-field errors can make a step in the light curve.
+
+From 2.4.0 SHOBS-P finds this in each run. When the field moves by **at least 20″ and at least 10 pixels** between one measured frame and the next, with no flip there, the frames after it become a new segment, just like the frames after a flip. Both limits must be passed, so ordinary drift and small dithers split nothing. (The pixels are those of the stored frame. If SHOBS-P knows no plate scale, from the solve or the Optics boxes, only the 10-pixel limit is tested, and the Log says so.) The move at a meridian flip itself is the flip, not a re-center.
+
+You see a re-center in three places:
+
+- The Log names the two frames and the size of the move: *Re-center: the pointing moved by 64″ (237 px) between 20 and 21 with no meridian flip …*
+- The light curve has a **dashed purple line** where it happened; the plot's title key says **┆ re-center**.
+- The **Flip/re-center step** column shows its step, for example `re-center +0.050 ⚠`. The ⚠ comes with a step over 0.02 mag, as for a flip.
+
+**Line up flip/re-center only (keep nights)** takes the step out and keeps the nights against each other; **Line up segments** lines the segment up with everything else. A step needs at least 5 used points on each side; with fewer it is not measured (the column shows **—**) and nothing is moved. In the light-curve CSV the `segment` column of such a night reads, for example, `no flip / before re-center` and `no flip / after re-center` (`after re-center 2` after a second one).
+
+A re-center is found while the frames are measured. Nights already in a series made before 2.4.0 are not looked at again: run such a night again to get its segment. Frames added later with **Measure skipped frames** join the segment of the frame before them. A stack never spans a re-center.
+
+> **Caution:** As with a flip, on a star that changes a lot within a night the "step" read at a re-center is partly the star changing. On a mount that dithers by 20″ or more between frames, every dither is a new segment: do not tick the line-up boxes on such a night.
 
 ### When the flip step is the apertures, not the star
 

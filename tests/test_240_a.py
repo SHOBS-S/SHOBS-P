@@ -161,7 +161,8 @@ class TestOutputPages(unittest.TestCase):
         for word in ("Apply", "Transmission loss…", "Planet transits…"):
             self.assertIn(word, pts)
         self.assertEqual(g.texts("corrections"), ["Line up segments (nights, meridian flip)",
-                                                  "Line up flip only (keep nights)", "Pier side as segments",
+                                                  "Line up flip/re-center only (keep nights)",   # step 8 (#66)
+                                                  "Pier side as segments",
                                                   "Check-star correction (fold and period)"])
         fit = [t for t in g.texts("fit") if not t.startswith("PY_VAR")]
         self.assertEqual(fit, ["Period search (days)", "to", "Period from", "Refit period"])

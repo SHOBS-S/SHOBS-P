@@ -55,7 +55,7 @@ the same, in the same order, on both pages:
 |---|---|---|
 | **Data** | **Night**, **Open AAVSO exoplanet report (EXOTIC)…**, **Close report** | **Load series**, **Close series**, **Add series file…**, **Remove night…**, **Night notes…** |
 | **Points** | **Trim** from/to, **Trim and refit**, **Clear trim**, **Refit with flagged frames** | **Leave flagged points out**, **Cloud flag** % and **Apply**, **Transmission loss…**, **Planet transits…** |
-| **Corrections** | **Detrend** (Auto (BIC), none, airmass, time slope, time curve (quadratic), or airmass with either), **meridian flip at the largest gap** | **Line up segments**, **Line up flip only**, **Pier side as segments**, **Check-star correction** |
+| **Corrections** | **Detrend** (Auto (BIC), none, airmass, time slope, time curve (quadratic), or airmass with either), **meridian flip at the largest gap** | **Line up segments**, **Line up flip/re-center only**, **Pier side as segments**, **Check-star correction** |
 | **Fit** | **MCMC**, **Fit transit**, **Cancel** | **Period search (days)**, **Period from**, **Refit period** |
 | **Comps** | **Comp health…**, **Use comps…** | **Comp health…**, **Use comps…** |
 | **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Time of max/min…** |

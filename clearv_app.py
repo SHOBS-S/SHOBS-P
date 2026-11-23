@@ -17709,6 +17709,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                  + (f"; {excluded} excluded by you" if excluded else ""))
         xy0 = np.asarray(xy, dtype=float)
         altaz = self._mount_info(lights)["mount"] == core.MOUNT_ALTAZ   # 2.2.18 (item 8)
+        jump_scale = self._jump_scale()   # 2.4.0 step 8 (#66): for the re-center test (read on the main thread)
 
         cancel = self._cancel
 
@@ -17837,10 +17838,29 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                     (f0, r0), (f1, r1) = frame_side[k - 1], frame_side[k]
                     moved = f0 != f1 or (r0 is not None and r1 is not None and core.angle_difference(r0, r1) > 2.0)
                     seg[k] = seg[k - 1] + (1 if moved else 0)
+                # 2.4.0 step 8 (#66): a re-center (the pointing jumped with no flip) is a segment too: every star
+                # sits on other pixels from there on. Not counted where a flip or rotator move already starts one.
+                recenters = []
+                try:
+                    regs = [{"dx": fr["dx"], "dy": fr["dy"], "flipped": fr["flipped"]} for fr in frame_recs]
+                    recenters = [j for j in core.pointing_jumps(regs, jump_scale[0], jump_scale[1])
+                                 if seg[j["index"]] == seg[j["index"] - 1]]
+                except Exception as exc:
+                    self.call_ui(self.log, f"  (re-center check skipped: {type(exc).__name__}: {exc})")
+                if recenters:
+                    bump = np.zeros(len(seg), dtype=int)
+                    for j in recenters:
+                        bump[j["index"]:] += 1
+                    seg = seg + bump
                 n_segments = int(seg.max()) + 1 if len(seg) else 1
                 if n_segments > 1:
                     inst = core.align_segments(inst, seg, min_frames=5)
-                    self.call_ui(self.log, f"  {n_segments - 1} meridian flip(s) or rotator move(s): each star's light "
+                    n_rc = len(recenters)
+                    n_fl = n_segments - 1 - n_rc
+                    what = " and ".join(([f"{n_fl} meridian flip(s) or rotator move(s)"] if n_fl else [])
+                                        + ([f"{n_rc} re-center(s) ("
+                                            + ", ".join(core.recenter_text(j) for j in recenters) + ")"] if n_rc else []))
+                    self.call_ui(self.log, f"  {what}: each star's light "
                                            "curve lined up across them before measuring its scatter.")
                 # 2.2.19 (#25): saturated = raw core clipped on 2 or more frames (or saturated on the reference, as
                 # before); clipped on one frame only (cosmic ray, hot pixel) = a caution on the candidate.
@@ -17933,6 +17953,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 result["candidates"] = cand
                 result["excess_limit"] = excess_limit
                 result["segments"] = n_segments
+                result["recenters"] = len(recenters)   # 2.4.0 step 8 (#66)
                 near = [i for i in range(len(labels))
                         if i not in cand and i not in saturated and i not in too_faint and stats["usable"][i]
                         and math.isfinite(stats["excess"][i])]
@@ -17948,7 +17969,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                                                  or (not precal and math.isfinite(raw_top[i])
                                                      and raw_top[i] >= 0.80 * raw_limit)))
                 # Flip boundary: the biggest change starts at a meridian flip, rotator move or long gap.
-                result["boundaries"] = core.scan_boundaries(seg, jd)
+                result["boundaries"] = core.scan_boundaries(seg, jd, [j["index"] for j in recenters])
                 at_flip = {}
                 for i in set(cand) | set(result["near"]) | set(watched):
                     kind = core.change_at_boundary(result["light_curves"][:, i], result["boundaries"])
@@ -17966,7 +17987,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 n_fb = len([i for i in cand if i in at_flip or i in noisy])
                 if n_ns or n_fb:
                     self.call_ui(self.log, f"  Cautions on suspects: {n_ns} near saturation, {n_fb} with a change or "
-                                           "a jump in noise starting at a flip, rotator move or gap.")
+                                           "a jump in noise starting at a flip, rotator move, re-center or gap.")
                 periods = {}
                 for i in list(cand[:40]) + [k for k in watched if k not in cand[:40]]:
                     good = np.isfinite(result["light_curves"][:, i])
@@ -18692,6 +18713,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                      "and the error bars leave out scintillation. Type your site once (it is remembered).")
         if only is not None:
             self._remeasure = {"night": night or self._latest_night()}   # 2.3.0 (#50): _photometry_done adds them
+        self._run_jump_scale = self._jump_scale()   # 2.4.0 step 8 (#66): for the re-center test in the done-step
         try:
             self._remember_aperture_scope()   # 2.3.1 (nit)
         except Exception:
@@ -19248,6 +19270,47 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                  f"unflipped): {len(moved)} frames from {os.path.basename(paths[start])} on are treated as after "
                  "the flip.")
 
+    def _jump_scale(self):
+        """2.4.0 step 8 (#66): (arcsec per Photometry-image pixel or None, stored-frame pixels per image pixel) for the
+        re-center test: the scale from the image's solution, else from the Optics boxes; None when neither is known
+        (the test then uses its pixel limit alone)."""
+        try:
+            scale = self._field_scale_arcsec()[0]
+        except Exception:
+            scale = None
+        try:
+            factor = max(int(self._image_binning()), 1) * (1 if self.pattern.get() == core.MONO else 2)
+        except Exception:
+            factor = 1
+        return scale, factor
+
+    def _mark_recenters(self, night_points):
+        """2.4.0 step 8 (#66): a pointing jump between two consecutive frames without a flip (the mount re-centered
+        at the meridian and stayed on its pier side: HD 219134, 10-11 Nov) puts every star on new pixels, so the
+        target can step there (flat field). Each one starts a new segment (Obs.jump), reported and lined up like a
+        flip step. The frames' registrations give the jump. A stack run does not come here (it ends in
+        _stack_done): its points take their frames' segment (stack_core.apply_member_peaks)."""
+        if not night_points or not any(getattr(o, "_stack_reg", None) for o in night_points):
+            return []
+        scale, factor = getattr(self, "_run_jump_scale", None) or (None, 1)
+        try:
+            found = core.mark_recenters(night_points, [getattr(o, "_stack_reg", None) for o in night_points],
+                                        scale, factor)
+        except Exception as exc:
+            self.log(f"  (re-center check skipped: {type(exc).__name__}: {exc})")
+            return []
+        for j in found:
+            a, b = j["before"], j["after"]
+            la = core.frame_label(a.path) or os.path.basename(a.path)
+            lb = core.frame_label(b.path) or os.path.basename(b.path)
+            self.log(f"Re-center: the pointing moved by {core.recenter_text(j)} between {la} and {lb} with no meridian "
+                     "flip, so the stars sit on other pixels from there on. The frames after it are a new segment, "
+                     "like the frames after a flip: the night table shows the step there (Flip/re-center step), and "
+                     "'Line up segments' or 'Line up flip/re-center only (keep nights)' takes it out."
+                     + ("" if j.get("arcsec") is not None else " (No plate scale known, so only the pixel limit was "
+                                                               "tested.)"))
+        return found
+
     def _photometry_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
         """2.3.6 (#79 items 1, 2; review MF2): the job's findings close here, after every end-of-run check, not at
         the next idle moment (a dialog in the done-step would close them early)."""
@@ -19311,6 +19374,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         if onsky_log and ctx:
             onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
+        self._mark_recenters(night_points)   # 2.4.0 step 8 (#66): after the flip is known (a flip is not a re-center)
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
@@ -20096,6 +20160,13 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         self.comps_used = layout
         for o in new_points:
             o.night, o.filt = night, filt
+        # 2.4.0 step 8 (#66): a frame added later joins the re-center segment of the night's point just before it
+        # (else just after it) on the same side of the flip; a jump inside the added frames is not looked for
+        old_pts = sorted((o for o in self.observations if o.night == night), key=lambda o: o.jd)
+        for o in new_points:
+            same = [p for p in old_pts if (p.segment or "") == (o.segment or "")]
+            near = [p for p in same if p.jd <= o.jd][-1:] or same[:1]
+            o.jump = int(getattr(near[0], "jump", 0) or 0) if near else 0
         self.observations = core.merge_nights(self.observations, new_points)
         night_pts = [o for o in self.observations if o.night == night]
         try:
@@ -21968,7 +22039,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
             g, text="Line up segments (nights, meridian flip)",
             variable=self.norm_segments, command=self.refit_period), pad=14)
         groups.add("corrections", ttk.Checkbutton(
-            g, text="Line up flip only (keep nights)", variable=self.align_flip, command=self.refit_period), pad=14)
+            g, text="Line up flip/re-center only (keep nights)", variable=self.align_flip,
+            command=self.refit_period), pad=14)   # 2.4.0 step 8 (#66): every step inside a night
         # 2.2.14 (item 20): each pier side (camera angle) normalized on its own across the campaign.
         groups.add("corrections", ttk.Checkbutton(
             g, text="Pier side as segments", variable=self.pier_segments, command=self.refit_period), pad=14)
@@ -22452,7 +22524,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         not_finite = ~np.isfinite(mag)
         excluded = (flagged | not_finite) if self.skip_flagged.get() else not_finite
         # Each night's meridian-flip step, measured on the plotted magnitudes (always reported).
-        flip_steps = core.flip_offsets(obs_list, list(mag), use=list(~excluded))
+        # 2.4.0 step 8 (#66): and each re-center's step (every step inside a night).
+        flip_steps = core.night_steps(obs_list, list(mag), use=list(~excluded))
         # 2.2.14 (item 20): pier side of every point, and how the sides compare across the campaign.
         pier_by_night = self._pier_by_night()
         sides = core.point_sides(obs_list, pier_by_night)
@@ -22462,7 +22535,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         elif self.pier_segments.get():
             mag = np.array(core.apply_side_offsets(sides, list(mag), side_offs["offsets"]))
         elif self.align_flip.get():
-            mag = np.array(core.align_flips(obs_list, list(mag), flip_steps))
+            mag = np.array(core.align_steps(obs_list, list(mag), flip_steps))
         nights = []
         for obs in obs_list:
             if obs.night not in nights:
@@ -22508,6 +22581,9 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                               for f in filt.split("/"))   # 2.2.17 (item 1): "Sloan i′ magnitude", not "SI"
         ax.set_ylabel(f"{filt_label} magnitude" + (" (segments lined up)" if self.norm_segments.get()
                                                    else " (pier sides lined up)" if self.pier_segments.get()   # 2.2.14
+                                                   else " (flip and re-center lined up)" if self.align_flip.get()
+                                                   and any(st["kind"] == core.STEP_RECENTER for sts in
+                                                           flip_steps.values() for st in sts)   # 2.4.0 step 8 (#66)
                                                    else " (flip lined up)" if self.align_flip.get() and flip_steps
                                                    else ""))
         labels_raw = [self._point_label(o, float(m)) for o, m in zip(obs_list, mag)]
@@ -22522,6 +22598,18 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         # 2.2.14 review: only drawn × count (a NaN point is left out but not plotted).
         key = ((["× flagged, left out"] if (excluded & np.isfinite(mag) & in_zoom).any() else [])
                + (["○ after flip"] if (flip_mask & in_zoom).any() else []))
+        # 2.4.0 step 8 (#66): a dashed line where the mount re-centered (between the two frames), so the segment
+        # boundary shows on the light curve as the rings show a flip
+        recentered = False
+        for k in range(1, len(obs_list)):
+            a, b = obs_list[k - 1], obs_list[k]
+            if a.night == b.night and getattr(b, "jump", 0) != getattr(a, "jump", 0) \
+                    and math.isfinite(lc_x[k - 1]) and math.isfinite(lc_x[k]):
+                ax.axvline(0.5 * (lc_x[k - 1] + lc_x[k]), color="#7a5c99", ls="--", lw=0.9,
+                           alpha=alpha_for(b.night, 0.9))
+                recentered = recentered or bool(in_zoom[k])
+        if recentered:
+            key.append("┆ re-center")
         ax.grid(True, alpha=0.3)
         bin_text = ""
         if interval is not False:
@@ -22894,7 +22982,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
     # ---- Output summary (boxes + per-night table) ------------------------------------
     SUMMARY_COLUMNS = (("night_text", "Night", 120), ("night", "JD", 90), ("pts", "Pts", 60), ("used", "used", 60),
                        ("mean", "Mean mag ± err", 145), ("tsig", "Target σ", 85), ("csig", "Check σ", 85),
-                       ("side", "Side", 80), ("flip", "Flip step", 85), ("bv", "B−V", 70), ("flags", "Flags", 170),
+                       ("side", "Side", 80), ("flip", "Flip/re-center step", 130), ("bv", "B−V", 70),
+                       ("flags", "Flags", 170),
                        ("sent", "Sent", 70), ("note", "Note", 260))   # 2.2.18 (item 10): Sent
 
     def _build_summary(self, card):
@@ -23164,9 +23253,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
                 "csig": f"{csig:.3f}" if math.isfinite(csig) else "—",
                 # 2.2.14 (item 20): pier side(s), and a flip step over 0.02 mag marked.
                 "side": core.side_text((pier_by_night or {}).get(night)),
-                "flip": (f"{flip_steps[night]['offset']:+.3f}"
-                         + (" ⚠" if abs(flip_steps[night]["offset"]) > core.FLIP_STEP_MARK else "")
-                         if night in flip_steps else "—"),
+                # 2.4.0 step 8 (#66): and each re-center's step ('re-center +0.050'; a flip alone reads as before)
+                "flip": core.night_steps_text(flip_steps.get(night)),
                 "bv": f"{float(np.median(bv)):.3f}" if bv else "—",
                 "flags": ", ".join(f"{n} {w}" for w, n in flags.most_common()) or "—",
                 "sent": self._sent_text(night),   # 2.2.18 (item 10)
@@ -23333,7 +23421,7 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         if self.pier_segments.get():   # 2.2.14 (item 20)
             return self._pier_values(points, list(vals))[0]
         if self.align_flip.get():
-            return core.align_flips(points, vals, core.flip_offsets(points, vals))
+            return core.align_steps(points, vals, core.night_steps(points, vals))   # 2.4.0 step 8 (#66)
         return list(vals)
 
     def _time_text(self, jd: float) -> str:
@@ -25666,7 +25754,8 @@ class App(NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixin = the Sta
         lines.append("Scintillation (this report's error bars): " + self._scint_note())
         lines.append("Flagged points: " + ("left out" if self.skip_flagged.get() else "kept"))
         for name, var in (("Check-star zero point", "use_check_zp"), ("Segments lined up", "norm_segments"),
-                          ("Pier sides lined up", "pier_segments"), ("Flip lined up", "align_flip")):
+                          ("Pier sides lined up", "pier_segments"),
+                          ("Flip/re-center lined up", "align_flip")):   # 2.4.0 step 8 (#66)
             v = getattr(self, var, None)
             try:
                 if v is not None and v.get():
@@ -27882,7 +27971,7 @@ class WatchWindow:
 
 
 EXPORT_SETUPS_FILE = os.path.join(os.path.expanduser("~"), ".shiloh_photometry_exports.json")
-COLUMN_LABELS = (("err", "Error"), ("night", "Night"), ("segment", "Segment (flip)"), ("flag", "QC flag"),
+COLUMN_LABELS = (("err", "Error"), ("night", "Night"), ("segment", "Segment (flip, re-center)"), ("flag", "QC flag"),
                  ("airmass", "Airmass"), ("check", "Check star"), ("comp", "Comp instrumental"),
                  ("fwhm", "FWHM"), ("color", "B-V"), ("note", "Night note"))
 
@@ -28054,7 +28143,7 @@ class ExportWindow:
             "processing": (f"aperture r={app.radius.get()} sky {app.sky_in.get()}-{app.sky_out.get()} px; "
                            f"check-star correction {'on' if app.use_check_zp.get() else 'off'}; "
                            f"segments lined up {'yes' if app.norm_segments.get() else 'no'}; "
-                           f"flip lined up {'yes' if app.align_flip.get() and not app.norm_segments.get() else 'no'}; "
+                           f"flip/re-center lined up {'yes' if app.align_flip.get() and not app.norm_segments.get() else 'no'}; "
                            f"flagged points {'left out' if app.skip_flagged.get() else 'included'}; "
                            f"cloud flag at {app.cloud_limit.get()}%; {app._scint_note()}"),
         }
@@ -28238,7 +28327,9 @@ class ScanView:
         self._cal_text = cal
         self.header_text = StringVar(value="")   # Fable S5: refreshed when a star is added by hand
         self._header_tail = (
-                 (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
+                 (f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s), rotator "
+                    "move(s) or re-center(s) first. " if result.get("recenters") else   # 2.4.0 step 8 (#66)
+                  f"Each star's light curve was lined up across {result['segments'] - 1} meridian flip(s) or rotator "
                     "move(s) first. " if result.get("segments", 1) > 1 else "")
                  + "Click a point or a row to see its light curve; click it again (or press Esc) to clear it. Drag "
                  "on the scatter plot to pick several stars, then Mark on image. A suspect is a lead, not a "
@@ -28642,7 +28733,8 @@ class ScanView:
         for b, kind in r.get("boundaries") or []:
             if 0 < b < len(r["jd"]):
                 ax.axvline(0.5 * (r["jd"][b - 1] + r["jd"][b]), color="#7a5c99", ls="--", lw=0.9,
-                           label="flip / rotator move" if kind == "flip" else "gap")
+                           label="flip / rotator move" if kind == "flip" else
+                           "re-center" if kind == "recenter" else "gap")   # 2.4.0 step 8 (#66)
         ax.invert_yaxis()
         # 2.2.16 (item 13): y from the curve's measured points with a margin, as on the Variables light curve. A
         # field scan flags no frames (clouds are taken out by each frame's zero point), so nothing is pinned here.
