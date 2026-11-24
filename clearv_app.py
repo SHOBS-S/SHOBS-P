@@ -22606,7 +22606,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # ---- 1. Data: the series and its nights (Save series stays under the plot, with the other saves)
         g = groups.parent("data")
         load_out = groups.add("data", ttk.Button(g, text="Load series", command=self.load_series))
-        self._add_tooltip(load_out, self.LOAD_SERIES_TIP)   # 2.2.16 (item 12)
+        self.gate(load_out, None, tip=self.LOAD_SERIES_TIP, busy=True)   # 2.2.16 (item 12); 2.4.0 fit-in F2 (m003)
         # 2.2.16 (item 15): Close series here too (same as the Input page's), enabled only with a series open.
         self.close_series_button_out = groups.add("data", ttk.Button(g, text="Close series",
                                                                      command=self.close_series))
