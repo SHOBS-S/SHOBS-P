@@ -171,9 +171,11 @@ class TestInApp(unittest.TestCase):
         app.settings["aperture_scopes"] = [{"telescope": "NexStar 8SE", "camera": "ASI2600MM", "focal_mm": 2098.0,
                                             "aperture_mm": 203.0}]
         app._check_aperture_scope({"TELESCOP": "NexStar 8SE", "INSTRUME": "ASI2600MM", "FOCALLEN": 2100})
-        self.boxes["askyesno"].assert_called_once()
-        self.assertIn("203 mm", self.boxes["askyesno"].call_args[0][1])
+        # 2.4.0 fit-in F2 (m140): a known telescope's aperture is set without a question, with one plain line
+        self.boxes["askyesno"].assert_not_called()
         self.assertEqual(app.aperture_mm.get(), "203")
+        self.assertTrue(any("Telescope aperture set to 203 mm, as last used with" in t and "(the box said 152 mm)" in t
+                            for t in self.logged), self.logged)
         # same value already in the box: no question
         self.boxes["askyesno"].reset_mock()
         app._check_aperture_scope({"TELESCOP": "NexStar 8SE", "INSTRUME": "ASI2600MM", "FOCALLEN": 2100})
@@ -215,12 +217,13 @@ class TestInApp(unittest.TestCase):
         app._check_aperture_scope(head)
         self.assertEqual(self.boxes["askyesno"].call_count, 1)
         self.assertTrue(any(ca.same_scope(r, ca.lights_scope(head)) for r in app.settings["aperture_scopes"]))
+        # 2.4.0 fit-in F2 (m140): a known telescope is no longer asked about at all
         app.settings["aperture_scopes"] = [{"telescope": "", "camera": "X", "focal_mm": 1000.0, "aperture_mm": 254.0}]
         self.boxes["askyesno"].reset_mock()
-        self.boxes["askyesno"].return_value = False
         for _ in range(2):
             app._check_aperture_scope({"INSTRUME": "X", "FOCALLEN": 1000})
-        self.assertEqual(self.boxes["askyesno"].call_count, 1)
+        self.assertEqual(self.boxes["askyesno"].call_count, 0)
+        self.assertEqual(app.aperture_mm.get(), "254")
 
     def test_no_to_one_question_does_not_silence_the_other(self):
         """review r2: No to 'is 203 right for X?' must not hide the later offer 'use 114 mm, as last used with X?'."""
@@ -234,9 +237,9 @@ class TestInApp(unittest.TestCase):
         with mock.patch.object(app, "after_idle"):
             app._check_aperture_scope(head)   # "another telescope … is 203 right?" → No
         app.settings["aperture_scopes"] = [dict(ca.lights_scope(head), aperture_mm=114.0)]
-        app._check_aperture_scope(head)   # now known with 114: offered
-        self.assertEqual(self.boxes["askyesno"].call_count, 2)
-        self.assertIn("114 mm", self.boxes["askyesno"].call_args[0][1])
+        app._check_aperture_scope(head)   # now known with 114: set (2.4.0 fit-in F2, m140: without a question)
+        self.assertEqual(self.boxes["askyesno"].call_count, 1)
+        self.assertEqual(app.aperture_mm.get(), "114")
 
     def test_remember_uses_the_measured_frames(self):
         """review S4: the telescope recorded is the one of the Lights folder's frames, not the last Scan folders."""
