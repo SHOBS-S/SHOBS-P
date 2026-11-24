@@ -121,7 +121,10 @@ To trim a stretch:
    on the Input page) or a full JD (`2461329.699`, or `61329.699`). Leave **from** empty to trim from the night's
    start, or **to** empty to trim to its end. Nothing else is accepted: a bare number such as `0.45` or `23` could be
    a clock time or part of a JD, so SHOBS-P asks you to type it one of those two ways instead of guessing.
-3. Click **Trim** (or press Enter in either box).
+3. Click **Trim** (or press Enter in either box). **Trim** stays gray until the span can be trimmed (from 2.4.0): with
+   both boxes empty, with a box it cannot read, with no points in the span, or when the trim would leave too few
+   points. The words beside the boxes, and the button's tooltip, say which. A **to** time before the **from** time is
+   the same span the other way round, and is trimmed as meant.
 
 The trimmed points show as faint gray **×** in a gray band labeled *trimmed*, and the night table's **Flags** column
 counts them (`12 trimmed`). Nothing is deleted: the points stay in the series with the flag word `trim`. They are
@@ -141,7 +144,8 @@ there. If the new measurement has so few good points that the old trims would le
 dropped, every point of the night is back in, and a ⚠ in the Findings list says so: trim the night again if it
 still needs it.
 
-A trim must leave at least 20 usable points in the night. To drop a whole night, use **Remove night…** instead.
+A trim must leave at least 20 usable points in the night (Trim is gray, and says how many would be left, until
+the span is small enough). To drop a whole night, use **Remove night…** instead.
 When the night has both per-frame and stacked points (the **Points** switch, chapter 8), the trim must leave 20
 usable points either way, because the trim stays with the night whichever you show: 30 frames left can be only 6
 stacks.

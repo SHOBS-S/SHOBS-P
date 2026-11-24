@@ -4541,8 +4541,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         tp = getattr(self, "transit_page", None)
         r = getattr(tp, "result", None) if tp is not None else None
         if not r:
-            messagebox.showinfo(APP_TITLE, "Fit a transit first.")
-            return ""
+            return ""   # 2.4.0 fit-in F2 (m045): Save for ExoClock… is greyed until a fit is shown
         if tp._still_checking("ExoClock file") or not tp._confirm_export():
             return ""
         meta = tp._file_meta()
@@ -22380,8 +22379,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def save_series(self):
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "Run photometry first.")
-            return
+            return   # 2.4.0 fit-in F2 (m505): greyed without a series
         # 2.2.3: always ask where (a series spans many nights, so it does not belong in one night's output folder).
         # The dialog starts where the open series lives, or where a series was last saved or loaded, with the
         # current name filled in, so saving back to the same file is one click.
@@ -22615,8 +22613,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.gate(self.close_series_button_out, self._close_series_why, busy=True)   # 2.4.0 fit-in F2 (m502)
         self.update_series_status()
         groups.add("data", ttk.Button(g, text="Add series file…", command=self.add_series_file))
-        groups.add("data", ttk.Button(g, text="Remove night…", command=self.remove_night))
-        groups.add("data", ttk.Button(g, text="Night notes…", command=self.edit_night_note))
+        # 2.4.0 fit-in F2 (m535, John 24 Nov): both act on the night chosen in the night table (as Trim does); greyed
+        # until one is chosen (no number to type)
+        self.remove_night_button = groups.add("data", ttk.Button(g, text="Remove night…", command=self.remove_night))
+        self.night_notes_button = groups.add("data", ttk.Button(g, text="Night notes…", command=self.edit_night_note))
+        self.gate(self.remove_night_button, self._picked_night_why,
+                  tip="Removes the night chosen in the night table from the series.")
+        self.gate(self.night_notes_button, self._picked_night_why,
+                  tip="A note for the night chosen in the night table (kept with the series, in the CSV and exports).")
 
         # ---- 2. Points: which points go into the period and the report
         g = groups.parent("points")
@@ -22683,14 +22687,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         # ---- 5. Comps
         g = groups.parent("comps")
-        groups.add("comps", ttk.Button(g, text="Comp health…", command=self.show_comp_health))
-        groups.add("comps", ttk.Button(g, text="Use comps…", command=self.choose_comps))
+        # 2.4.0 fit-in F2 (m566, m547): greyed without a series (and during a job)
+        self.gate(groups.add("comps", ttk.Button(g, text="Comp health…", command=self.show_comp_health)),
+                  self._series_why)
+        self.gate(groups.add("comps", ttk.Button(g, text="Use comps…", command=self.choose_comps)),
+                  self._use_comps_why)
 
         # ---- 6. More analysis
         g = groups.parent("analysis")
         groups.add("analysis", ttk.Button(g, text="Watch stars…", command=self.show_watch))
         # 2.2.14 (item 13): time of maximum / minimum with O-C, saved to a CSV that grows into an O-C diagram.
-        groups.add("analysis", ttk.Button(g, text="Time of max/min…", command=self.show_extremum))
+        self.gate(groups.add("analysis", ttk.Button(g, text="Time of max/min…", command=self.show_extremum)),
+                  lambda: "" if self.observations else self.NO_LIGHT_CURVE)   # 2.4.0 fit-in F2 (m565)
 
         # ---- 7. View only: nothing here changes a number
         g = groups.parent("view")
@@ -22757,8 +22765,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         saves.frame.pack(side=LEFT, fill=X, expand=True)
         self.out_saves = saves
         g = saves.frame
-        saves.add(ttk.Button(g, text="Save series", command=self.save_series), pad=14)
-        saves.add(ttk.Button(g, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso))
+        # 2.4.0 fit-in F2 (m505 m582 m608 m569 m615): the saves are greyed until there is a light curve
+        self.gate(saves.add(ttk.Button(g, text="Save series", command=self.save_series), pad=14), self._series_why)
+        self.gate(saves.add(ttk.Button(g, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso)),
+                  self._series_why, busy=False)
         notes_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(notes_box, text="Notes", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         notes_entry = ttk.Entry(notes_box, textvariable=self.notes, width=30)
@@ -22767,14 +22777,43 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         saves.add(notes_box)
         # 2.2.15 (item 8): AAVSO's upload page for the saved report.
         saves.add(ttk.Button(g, text="Open AAVSO WebObs…", command=self.open_webobs))
-        saves.add(ttk.Button(g, text="Save light-curve CSV", command=self.save_csv))
-        saves.add(ttk.Button(g, text="Export…", command=self.open_export))
-        saves.add(ttk.Button(g, text="Save plot PNG", command=self.save_png))
+        self.gate(saves.add(ttk.Button(g, text="Save light-curve CSV", command=self.save_csv)), self._series_why,
+                  busy=False)
+        self.gate(saves.add(ttk.Button(g, text="Export…", command=self.open_export)), self._series_why)
+        self.gate(saves.add(ttk.Button(g, text="Save plot PNG", command=self.save_png)),
+                  lambda: self._series_why() or ("" if getattr(self, "out_canvas", None) is not None
+                                                 else "The plot is not available (matplotlib is missing)."),
+                  busy=False)
         # 2.2.19 (#28). 2.4.0 (#101): once the night's report has saved it, the button reads "Field image saved ✓"
         # (greyed), or "Fetch AAVSO chart" when only the chart is missing (field_image_action).
         self.field_button = saves.add(ttk.Button(g, text="Save field image", command=self.field_image_action))
         self.register_field_button(self.field_button, "Save field image")
         return page_host
+
+    # ---- 2.4.0 fit-in F2 (#79 item 6): why a Variables Output button is greyed ('' = it can work) ----------------
+    NO_SERIES = "Run photometry or load a series first."
+    NO_LIGHT_CURVE = "There is no light curve yet: run photometry or load a series."
+    PICK_NIGHT = "Choose the night in the night table first (click its row)."
+
+    def _series_why(self) -> str:
+        return "" if self.observations else self.NO_SERIES
+
+    def _use_comps_why(self) -> str:
+        if not self.observations:
+            return self.NO_SERIES
+        if not self.comps_used:
+            return "This series does not record which comps it used; run photometry on its nights again."
+        return ""
+
+    def _picked_night(self):
+        """m535: the night chosen in the night table (the one the Output page shows on its own), else None."""
+        night = getattr(self, "highlight_night", None)
+        return night if night is not None and any(o.night == night for o in self.observations) else None
+
+    def _picked_night_why(self) -> str:
+        if not self.observations:
+            return self.NO_SERIES
+        return "" if self._picked_night() is not None else self.PICK_NIGHT
 
     def transit_page_on_screen(self) -> bool:
         """2.2.17 (item 4): the Transit fit page is the page shown (Transits mode, Output step, not Variable View)."""
@@ -24240,23 +24279,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._warn_legacy(legacy, os.path.basename(path))
 
     def edit_night_note(self):
-        nights = []
-        for obs in self.observations:
-            if obs.night not in nights:
-                nights.append(obs.night)
-        if not nights:
-            messagebox.showinfo(APP_TITLE, "There is no series loaded.")
+        # 2.4.0 fit-in F2 (m534, m535, John 24 Nov): the note is for the night chosen in the night table (the
+        # button is greyed until one is); no list of numbers to type from
+        why = self._picked_night_why()
+        if why:
+            self.status.set(why)
             return
-        listing = "\n".join(f"  {i + 1})  {self.night_label(n, short=True)} ({n})" + (f"   note: {self.night_notes[n][:60]}" if self.night_notes.get(n) else "")
-                             for i, n in enumerate(nights))
-        answer = simpledialog.askstring(APP_TITLE, f"Which night is the note for?\n\n{listing}\n\nType its number:", parent=self)
-        if not answer:
-            return
-        try:
-            night = nights[int(answer.strip()) - 1]
-        except (ValueError, IndexError):
-            messagebox.showerror(APP_TITLE, f"'{answer}' is not one of the numbers listed.")
-            return
+        night = self._picked_night()
         text = simpledialog.askstring(
             APP_TITLE,
             f"Note for the night of {self.night_label(night, short=True)} (stays with the series and goes into the CSV and exports; leave empty to remove):",
@@ -25554,11 +25583,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         WatchWindow(self)
 
     def choose_comps(self):
-        if not self.observations:
-            messagebox.showinfo(APP_TITLE, "There is no series loaded.")
-            return
-        if not self.comps_used:
-            messagebox.showinfo(APP_TITLE, "This series does not record which comps it used; run photometry on its nights again.")
+        why = self._use_comps_why()
+        if why:
+            self.status.set(why)   # 2.4.0 fit-in F2 (m547): Use comps… is greyed with these words
             return
         UseCompsWindow(self)
 
@@ -25973,14 +26000,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def show_extremum(self):
         """2.2.14 (item 13): the time of maximum / minimum window for the loaded series."""
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "There is no light curve yet: run photometry or load a series.")
-            return
+            return   # 2.4.0 fit-in F2 (m565): greyed without a light curve
         ExtremumWindow(self)
 
     def show_comp_health(self):
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "There is no series loaded.")
-            return
+            return   # 2.4.0 fit-in F2 (m566): greyed without a series
         names = list(self.comps_used) or ["comp"]
         aliases = self._star_aliases()
         # 2.2.15 (item 1): a planet transit dims the target only, so those frames still count for the comps.
@@ -26052,29 +26077,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def open_export(self):
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "Run photometry or load a series first.")
-            return
+            return   # 2.4.0 fit-in F2 (m569): greyed without a series
         ExportWindow(self)
 
     def remove_night(self):
-        if not self.observations:
-            messagebox.showinfo(APP_TITLE, "There is no series loaded.")
+        # 2.4.0 fit-in F2 (m570, m535, John 24 Nov): the night chosen in the night table (the button is greyed until
+        # one is); the question below names it, so a wrong pick is one No away
+        why = self._picked_night_why()
+        if why:
+            self.status.set(why)
             return
-        nights = []
-        for obs in self.observations:
-            if obs.night not in nights:
-                nights.append(obs.night)
-        counts = {n: sum(1 for o in self.observations if o.night == n) for n in nights}
-        # 2.2.19 (nit): the night as the other night pickers show it, "22–23 Oct 2026 (JD2461336)".
-        listing = "\n".join(f"  {i + 1})  {self.night_label(n, short=True)} ({n})   ({counts[n]} points)"
-                            for i, n in enumerate(nights))
-        answer = simpledialog.askstring(APP_TITLE, f"Which night should be removed from the series?\n\n{listing}\n\nType its number:", parent=self)
-        if not answer:
-            return
-        try:
-            night = nights[int(answer.strip()) - 1]
-        except (ValueError, IndexError):
-            messagebox.showerror(APP_TITLE, f"'{answer}' is not one of the numbers listed.")
+        night = self._picked_night()
+        counts = {night: sum(1 for o in self.observations if o.night == night)}
+        if self.busy:
+            self.status.set(gate.BUSY_REASON)   # the button is greyed during a job; a backstop
             return
         if not ask_no(APP_TITLE, f"Remove the night of {self.night_label(night, short=True)} ({night}, "
                                  f"{counts[night]} points) from the series? This cannot be undone."):
@@ -26318,8 +26334,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def save_aavso(self):
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "Run photometry first.")
-            return
+            return   # 2.4.0 fit-in F2 (m582): greyed without a light curve
         problems = []
         if not self.observer.get().strip():
             problems.append("AAVSO observer code is empty")
@@ -27104,8 +27119,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def save_csv(self):
         if not self.observations:
-            messagebox.showinfo(APP_TITLE, "Run photometry first.")
-            return ""
+            return ""   # 2.4.0 fit-in F2 (m608): greyed without a light curve
         scope = self._save_scope("light-curve CSV")
         if scope is None:
             return ""
@@ -27205,8 +27219,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def save_png(self):
         if self.out_canvas is None or not self.observations:
-            messagebox.showinfo(APP_TITLE, "Run photometry first.")
-            return
+            return   # 2.4.0 fit-in F2 (m615): greyed without a light curve
         # The PNG is the view on screen: with a night highlighted in a series it is that night's picture, and it
         # joins that night's set of files.
         nights = {o.night for o in self.observations}
@@ -27380,7 +27393,8 @@ class CompHealthWindow:
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
-        ttk.Button(nav, text="Watch selected spare", command=self.watch_selected).pack(side=LEFT)
+        self.watch_button = ttk.Button(nav, text="Watch selected spare", command=self.watch_selected)
+        self.watch_button.pack(side=LEFT)
         ttk.Label(top, text="Comparison star health", font=(core.UI_FONT, 15, "bold"), style="Card.TLabel").pack(anchor=W)
         ttk.Label(
             top,
@@ -27433,6 +27447,10 @@ class CompHealthWindow:
         self.artists = {}
         table.bind("<<TreeviewSelect>>", lambda e: self.highlight())
         self.table_rows = {iid: row for iid, row in zip(table.get_children(), rows)}
+        # 2.4.0 fit-in F2 (m623, m622): Watch selected spare is live only with a spare selected; greyed during a job
+        app.gate(self.watch_button, self._watch_why,
+                 tip="Adds the selected spare to the watch stars: measured on every frame, its light curve kept.")
+        table.bind("<<TreeviewSelect>>", lambda e: app.gates.refresh(), add="+")
         zp = result.get("zero_point")
         if zp and zp.get("warn"):
             # 2.2.14 (item 10): the ensemble moves the night's level against the comps nearest the target's brightness.
@@ -27609,16 +27627,26 @@ class CompHealthWindow:
         ax.grid(True, alpha=0.3)
         return artists
 
-    def watch_selected(self):
-        sel = self.table.selection()
-        row = self.table_rows.get(sel[0]) if sel else None
+    def _selected_row(self):
+        try:
+            sel = self.table.selection()
+        except Exception:
+            return None
+        return self.table_rows.get(sel[0]) if sel else None
+
+    def _watch_why(self) -> str:
+        """2.4.0 fit-in F2 (m622, m623): why Watch selected spare is greyed ('' = a spare is selected)."""
+        row = self._selected_row()
         if not row:
-            messagebox.showinfo(APP_TITLE, "Select a spare in the table first.")
-            return
+            return "Select a spare in the table first."
         if row.get("kind") != "spare":
-            messagebox.showinfo(APP_TITLE, "Only spare comps can be added here; comps and the check star are already "
-                                           "measured every run.")
-            return
+            return "Only spare comps can be added here; comps and the check star are already measured every run."
+        return ""
+
+    def watch_selected(self):
+        row = self._selected_row()
+        if self._watch_why() or self.app.busy:
+            return   # 2.4.0 fit-in F2: the button is greyed with the reason
         self.app.add_watch_by_name(row["label"])
 
 
@@ -27634,8 +27662,15 @@ class UseCompsWindow:
         top.pack(fill=BOTH, expand=True)
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(10, 0))
-        ttk.Button(nav, text="Apply", style="Accent.TButton", command=self.apply).pack(side=RIGHT)
-        ttk.Button(nav, text="Back to the original comps", command=self.reset).pack(side=RIGHT, padx=8)
+        self.apply_button = ttk.Button(nav, text="Apply", style="Accent.TButton", command=self.apply)
+        self.apply_button.pack(side=RIGHT)
+        self.reset_button = ttk.Button(nav, text="Back to the original comps", command=self.reset)
+        self.reset_button.pack(side=RIGHT, padx=8)
+        # 2.4.0 fit-in F2 (m625): Apply is live only with a star ticked; both greyed during a job
+        self.vars = {}
+        app.gate(self.apply_button, lambda: "" if any(v.get() for v in self.vars.values())
+                 else "Tick at least one comparison star.")
+        app.gate(self.reset_button)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=LEFT)
         body = ScrollBody(top, horizontal=True)
         body.pack(fill=BOTH, expand=True)
@@ -27679,6 +27714,7 @@ class UseCompsWindow:
         for r, (name, role) in enumerate(names, 1):
             var = BooleanVar(value=name in current or bool(set(aliases.get(name, ())) & current))
             self.vars[name] = var
+            var.trace_add("write", lambda *_a: app.gates.refresh())   # 2.4.0 fit-in F2 (m625): Apply at once
             ttk.Checkbutton(grid, variable=var).grid(row=r, column=0, sticky=W, padx=6)
             measured = sorted({o.night for o in app.observations
                                if math.isfinite(core.star_inst(o, name, app.comps_used, aliases))})
@@ -27781,9 +27817,8 @@ class UseCompsWindow:
 
     def apply(self):
         selection = [name for name, var in self.vars.items() if var.get()]
-        if not selection:
-            messagebox.showinfo(APP_TITLE, "Tick at least one comparison star.", parent=self.win)
-            return
+        if not selection or self.app.busy:
+            return   # 2.4.0 fit-in F2 (m625): Apply is greyed until a star is ticked, and during a job
         typed = self._typed_mags()
         if typed is None:
             return
@@ -28088,7 +28123,13 @@ class ExtremumWindow:
         ttk.Entry(form, textvariable=self.epoch, width=16).grid(row=2, column=3, columnspan=2, sticky=W)
         ttk.Combobox(form, textvariable=self.system, values=("HJD", "BJD"), state="readonly",
                      width=5).grid(row=2, column=5, sticky=W)
-        ttk.Button(form, text="Elements from VSX", command=self.lookup).grid(row=2, column=6, sticky=W, padx=(6, 0))
+        self.vsx_button = ttk.Button(form, text="Elements from VSX", command=self.lookup)
+        self.vsx_button.grid(row=2, column=6, sticky=W, padx=(6, 0))
+        # 2.4.0 fit-in F2 (m628): needs the star's name (Star ID on the Input page); the gate re-checks it while the
+        # window is open. Measure: one gate for its state (greyed while it measures and during a job).
+        app.gate(self.vsx_button, lambda: "" if self._star() != "target"
+                 else "Type the star's name in Star ID on the Input page first.", busy=False)
+        app.gate(self.measure_button, lambda: "Measuring…" if getattr(self, "_measuring", False) else "")
         # 2.3.3 (nit, 10 Nov): the saved times' own elements in one click. 2.4.0 (#65): the window now also opens
         # with them (see below), so this button puts them back after other values were typed or looked up.
         self.saved_button = ttk.Button(form, text="Elements from saved times", command=self._prefill_from_csv)
@@ -28255,8 +28296,7 @@ class ExtremumWindow:
     def lookup(self):
         name = self._star()
         if name == "target":
-            messagebox.showinfo(APP_TITLE, "Type the star's name in Star ID on the Input page first.", parent=self.win)
-            return
+            return   # 2.4.0 fit-in F2 (m628): Elements from VSX is greyed until Star ID holds a name
         self.source.set(f"looking up {name} in VSX…")
 
         def work():
@@ -28344,7 +28384,7 @@ class ExtremumWindow:
                    coords=(ra, dec, lat, lon), use_bjd=use_bjd)
         self._measuring = True
         try:
-            self.measure_button.configure(state="disabled")
+            self._measure_state()
             self.save_button.configure(state="disabled")
         except Exception:
             pass
@@ -28367,6 +28407,14 @@ class ExtremumWindow:
             self._measure_done(job, ([], [f"the measurement could not start: {exc}"]), tok)
 
     SYNC = False   # tests set True: Measure runs in line (the threaded path has its own test)
+
+    def _measure_state(self):
+        """Measure greyed while it measures: through its gate (2.4.0 fit-in F2), or by hand when it has none."""
+        gates = getattr(self.app, "gates", None)
+        if gates is not None and gates.is_gated(self.measure_button):
+            gates.refresh()
+        else:
+            self.measure_button.configure(state="disabled" if getattr(self, "_measuring", False) else "normal")
 
     @staticmethod
     def _measure_work(job):
@@ -28426,7 +28474,7 @@ class ExtremumWindow:
         try:
             if not self.win.winfo_exists():
                 return
-            self.measure_button.configure(state="normal")
+            self._measure_state()
         except Exception:
             return   # the window was closed while measuring: nothing to show
         night, kind, period, epoch = job["night"], job["kind"], job["period"], job["epoch"]

@@ -54,8 +54,8 @@ class TestSeriesActionsSaveTheOpenSeries(M.AppCase):
         n = len(app.observations)
         nights = sorted({o.night for o in app.observations})
         self.assertEqual(len(nights), 2)
-        with mock.patch.object(self.ca.simpledialog, "askstring", lambda *a, **k: "1"), \
-                mock.patch.object(self.ca, "ask_no", lambda *a, **k: True):
+        app.highlight_night = nights[0]   # 2.4.0 fit-in F2 (m535): the night chosen in the night table
+        with mock.patch.object(self.ca, "ask_no", lambda *a, **k: True):
             app.remove_night()
         self.assertEqual(len(app.observations), n // 2)
         self.assertEqual(self._points_on_disk(path), n // 2, "the file is written")

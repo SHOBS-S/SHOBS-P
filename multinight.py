@@ -1476,6 +1476,10 @@ class MultiNightWindow:
         # 2.2.21 (#44): the open Transits series' nights, straight from the series (enabled with 2 or more nights)
         self.series_button = ttk.Button(row, text="Use the series' nights", command=self.load_series_nights)
         self.series_button.pack(side=LEFT, padx=(14, 0))
+        self._series_n = 0
+        # 2.4.0 fit-in F2 (#79 item 6): one gate for its state (it was set by hand in _series_state)
+        tui._gate(app, self.series_button, lambda: "" if self._series_n >= 2 else (
+            "Open a Transits series with at least two nights first (Load series on the Input or Output page)."))
         self.series_note = StringVar(value="")
         self.series_note_label = ttk.Label(top, textvariable=self.series_note, style="Card.TLabel", justify=LEFT,
                                            foreground=LEVEL_COLORS["warn"], wraplength=900)
@@ -1550,7 +1554,13 @@ class MultiNightWindow:
         self.eph_text = StringVar(value="")
         ttk.Label(eph, text="Input ephemeris", style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).pack(side=LEFT)
         ttk.Label(eph, textvariable=self.eph_text, style="Card.TLabel").pack(side=LEFT, padx=(6, 6))
-        ttk.Button(eph, text="Look up (NASA Exoplanet Archive)", command=self.lookup).pack(side=LEFT)
+        self.lookup_button = ttk.Button(eph, text="Look up (NASA Exoplanet Archive)", command=self.lookup)
+        self.lookup_button.pack(side=LEFT)
+        self._lookup_running = 0      # lookups not answered yet (2.4.0 fit-in F2, m681)
+        self._lookup_outcome = None   # m698: "found", "no_t0" (the archive has no T0) or "failed"; None = none made
+        tui._gate(app, self.lookup_button, lambda: "Looking up the planet…" if self._lookup_running else (
+            "" if self.planet_name() else "Add a night first (its report names the planet), or enter the planet on "
+                                          "the Input page."), busy=False)
         alt = ttk.Frame(upper, style="Card.TFrame")
         alt.pack(fill=X, pady=(2, 2))
         ttk.Label(alt, text="Alternative ephemeris", style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).pack(side=LEFT)
@@ -1588,7 +1598,11 @@ class MultiNightWindow:
         self.mcmc = StringVar(value="Quick (1,500 steps)")
         ttk.Combobox(opts, textvariable=self.mcmc, values=list(tui.MCMC_CHOICES), width=22,
                      state="readonly").pack(side=LEFT)
-        ttk.Button(opts, text="Fit nights", style="Accent.TButton", command=self.run_fit).pack(side=LEFT, padx=10)
+        self.fit_button = ttk.Button(opts, text="Fit nights", style="Accent.TButton", command=self.run_fit)
+        self.fit_button.pack(side=LEFT, padx=10)
+        # 2.4.0 fit-in F2 (#79 item 6): greyed while a job runs (this fit or one in the main window). A press while
+        # the planet is being looked up waits for it (m681).
+        tui._gate(app, self.fit_button, lambda: "The nights are being fitted." if self._running else "")
         ttk.Button(opts, text="Cancel", command=self.cancel).pack(side=LEFT)
         # 2.2.20 (busy bar): the result line only (✔ / ✖ / counts); the delay itself shows in the busy bar below
         self.prog_text = StringVar(value="")
@@ -1689,10 +1703,12 @@ class MultiNightWindow:
     def lookup(self):
         name = self.planet_name()
         if not name:
-            messagebox.showinfo("SHOBS-P", "Add a night first (its report names the planet), or enter the planet on "
-                                           "the Input page.", parent=self.win)
+            # 2.4.0 fit-in F2: Look up is greyed with these words until a planet is named
+            self.prog_text.set("Add a night first (its report names the planet), or enter the planet on the Input "
+                               "page.")
             return
         self._lookup_tok = self.busy.begin(f"Looking up {name} at the NASA Exoplanet Archive…")
+        self._lookup_running = getattr(self, "_lookup_running", 0) + 1   # 2.4.0 fit-in F2 (m681): Fit waits for it
         app = self.app
 
         def work():
@@ -1708,6 +1724,13 @@ class MultiNightWindow:
         if getattr(self, "_closed", False):
             return
         self.busy.end(getattr(self, "_lookup_tok", None))
+        self._lookup_running = max(0, int(getattr(self, "_lookup_running", 0)) - 1)
+        queued = getattr(self, "_fit_after_lookup", False) and not self._lookup_running
+        if queued:
+            self._fit_after_lookup = False
+        # m698: what the lookup found, for the summary's ephemeris line
+        self._lookup_outcome = ("found" if got and got.get("period") and got.get("t0") else
+                                "no_t0" if got and got.get("period") else "failed")
         if got and got.get("period"):
             if self.planet and norm_name(self.planet.get("name")) == norm_name(got.get("name")) \
                     and self.planet.get("period"):
@@ -1731,6 +1754,10 @@ class MultiNightWindow:
         self._show_planet()
         self._reload_failed()
         self.refresh_nights()
+        if queued:
+            # 2.4.0 fit-in F2 (m681): Fit nights was pressed during the lookup: it runs now; after a failed lookup
+            # its own message says what is missing
+            self.run_fit()
 
     def _reload_failed(self):
         """Review (#18): files refused for want of the star's RA/Dec (JD_UTC times) load again once it is known."""
@@ -1835,10 +1862,14 @@ class MultiNightWindow:
     def _series_state(self):
         """Enable "Use the series' nights" when a Transits series with 2 or more nights is open."""
         n = len(series_transit_nights(self.app))
-        try:
-            self.series_button.state(["!disabled"] if n >= 2 else ["disabled"])
-        except Exception:
-            pass
+        self._series_n = n
+        tui._refresh_gates(self.app)
+        gates = getattr(self.app, "gates", None)
+        if gates is None or not gates.is_gated(self.series_button):   # a stand-in app (tests): by hand
+            try:
+                self.series_button.state(["!disabled"] if n >= 2 else ["disabled"])
+            except Exception:
+                pass
         return n
 
     def load_series_nights(self):
@@ -2032,6 +2063,11 @@ class MultiNightWindow:
                                            "(see the Status column).", parent=self.win)
             return
         if not self.planet or not self.planet.get("period"):
+            if getattr(self, "_lookup_running", False):
+                # 2.4.0 fit-in F2 (m681): the lookup that runs by itself is not in yet: the fit waits for it
+                self._fit_after_lookup = True
+                self.prog_text.set("Fit nights: waiting for the ephemeris…")
+                return
             messagebox.showinfo("SHOBS-P", "The planet's period is not known yet: press Look up first.",
                                 parent=self.win)
             return
@@ -2149,7 +2185,7 @@ class MultiNightWindow:
         t = self.summary
         t.configure(state="normal")
         t.delete("1.0", END)
-        for lvl, text in summary_lines(fit, a):
+        for lvl, text in summary_lines(fit, a, looked_up=getattr(self, "_lookup_outcome", None)):
             t.insert(END, text + "\n", lvl)
         t.configure(state="disabled")
         t = self.reading
@@ -2515,9 +2551,11 @@ def ephemeris_used_line(a: dict) -> str:
     return out
 
 
-def summary_lines(fit: dict, a: dict) -> list:
+def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
     """(level, text) lines for the window's summary: the shape, the ephemerides (which O − C column uses which), the
-    plain-words reading, and per-night notes."""
+    plain-words reading, and per-night notes. looked_up: what this window's lookup found ("found", "no_t0",
+    "failed", None = none made); 2.4.0 fit-in F2 (m698): a lookup that found the planet with no T0 is a plain note,
+    the ⚠ with "Look up" only when no lookup answered."""
     out = [("head", "Joint shape (MCMC median ± 68 %)")]
     sh = fit["shape"]
     for g in fit["groups"]:
@@ -2533,6 +2571,8 @@ def summary_lines(fit: dict, a: dict) -> list:
     if a.get("input"):
         e = a["input"]["eph"]
         out.append(("info", "O − C input: " + eph_line(e).replace("+/-", "±") + f" — {e.get('source', '')}"))
+    elif looked_up == "no_t0":
+        out.append(("info", "No published ephemeris: epochs counted from the first night."))
     else:
         out.append(("warn", "⚠ No input ephemeris (no T0): epochs are counted from the first night; Look up."))
     if a.get("alt"):

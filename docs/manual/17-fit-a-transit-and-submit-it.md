@@ -30,7 +30,10 @@ This chapter covers:
    in only a frame or two (under 5 % of the night) is not named.
 
 The fit has three stages. The busy bar at the left end of the bottom status strip names each one as it goes: a
-least-squares fit (*"Fitting the transit: least-squares fit…"*), then an MCMC run (*"Fitting the transit: MCMC
+least-squares fit (*"Fitting the transit: least-squares fit…"*; with **Detrend** on **Auto (BIC)** first a
+reference fit and then each choice by name: *"Fitting the transit: choosing the detrend… trying airmass (2 of 6)"*,
+and on a night with a meridian flip which of the choice's two fits runs, *"… (2 of 6, with the flip step)"*, from
+2.4.0), then an MCMC run (*"Fitting the transit: MCMC
 burn-in… 600 of 1,000"*, then *"Fitting the transit: MCMC step… 1,200 of 3,000"*), then a comparison-star check
 (*"Checking the comps… 2 of 5"*). The bar moves back and forth; it never fills, so read the counts in its words. When
 it is all done, the bar goes and the status line says *"✔ Transit fit done; comps checked."* How long it takes
@@ -103,6 +106,11 @@ strip; the page has no progress bar of its own.
 - **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** and
   **Robustness check** (all below). **Fit the series' nights…** is grayed unless a Transits series with two or more
   nights is open; **Robustness check** is grayed until there is a fit on the page.
+- From 2.4.0 a button that cannot work yet is gray, and hovering over it says why. While a fit, the comp check or
+  another step runs (the busy bar), **Fit transit**, **Trim and refit**, **Clear trim**, **Comp health…**, **Use
+  comps…**, **Multi-night…**, **Fit the series' nights…**, **Robustness check** and the report buttons are gray until
+  it ends. **Fit transit** pressed on an opened report while its ephemeris is still being looked up is not lost: the
+  status bar says *"Fit transit: waiting for the ephemeris…"* and the fit starts as soon as the ephemeris is in.
 - **View** row: the **credible bands** box and the **Plot bins** box (see "Read the plot"). Display only.
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
@@ -113,7 +121,10 @@ strip; the page has no progress bar of its own.
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
   PNG…**, **Save corner plot…** and **Save field image…**, with **Variable View  ▶** at the right. After **Save AAVSO
   exoplanet report…** has saved the field image with the report, **Save field image…** reads **Field image saved ✓**
-  and is grayed out (or **Fetch AAVSO chart** when only the chart is missing; chapter 19).
+  and is grayed out (or **Fetch AAVSO chart** when only the chart is missing; chapter 19). The saves are gray until
+  there is a fit to save (**Save light-curve CSV…** also works with this session's photometry and no fit), and the
+  AAVSO report, ExoFOP package, ExoClock file and plot PNG are gray for the few seconds the comp check runs, so their
+  files carry its result (from 2.4.0).
 - Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
   (chapter 16), for example *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* and
   *"ExoClock: LOW priority (24 recent observations)"*. Click the TOI line to open the target's ExoFOP-TESS page, and
@@ -355,7 +366,8 @@ The depth and Tc can move with choices that are all reasonable: the detrend, how
 frames, the comps, the aperture and the sky ring. **Robustness check** (Analysis row) makes that visible. It is
 optional: press it after a fit. It refits the night once per variation, by least squares (no MCMC), with the same
 planet priors and the same meridian-flip decision as the fit on the page, in the background (the busy bar counts
-*Robustness check: refit 7 of 12*; **Cancel** stops it). The variations are:
+*Robustness check: refit 7 of 12*; **Cancel** stops it; with a detrend you picked by hand it first works out Auto's
+BICs, *Robustness check: choosing the detrend… trying airmass (2 of 6)*). The variations are:
 
 - **every other detrend choice** that is a reasonable one. A choice whose BIC is more than 10 above the lowest is
   not reasonable and is not tried (the note lists it: *Not tried (not reasonable choices here): detrend none (ΔBIC
@@ -405,7 +417,10 @@ To trim a stretch:
    Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
    on the Input page), or a BJD_TDB. Leave **from** empty to trim
    from the start, or **to** empty to trim to the end.
-2. Click **Trim and refit** (or press Enter in either box).
+2. Click **Trim and refit** (or press Enter in either box). From 2.4.0 the button stays gray, and the words beside
+   the boxes say why, while the span cannot be trimmed: nothing typed, a box it cannot read, no points in the span,
+   or fewer than 20 points left. A **to** time before the **from** time is the same span the other way round: it is
+   trimmed as meant, and the boxes are put in order.
 
 The trimmed points show as faint × in a gray band labeled *trimmed (not fitted)*. They are left out of the fit, the
 verdict, the rms, the comp check and every saved file, and the report's NOTES record the trimmed span (in BJD_TDB, with the site's local times and their UTC offset). Each **Trim
@@ -413,7 +428,7 @@ and refit** adds another span; **Clear trim** puts every point back and refits.
 
 ![Dragging a trim span across the transit plot](img/17-trim.png)
 
-A trim needs at least 20 points left. It belongs to the night it was made on: choosing another night, opening a
+A trim needs at least 20 points left (the button says how many would be left). It belongs to the night it was made on: choosing another night, opening a
 report or running photometry again clears it.
 
 > **Caution:** Trim to remove bad data, not to make a result look better. Never trim the ingress, egress or the
@@ -609,6 +624,11 @@ A Variables-mode series never offers **Fit the series' nights…**.
    nights loaded, the alternative ephemeris is kept in the series file, so the next **Fit the series' nights…** fills it in
    again and the O − C compares with the same one.
 4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
+   If the window is still looking up the planet, the line under the fit options says *"Fit nights: waiting for the
+   ephemeris…"* and the fit starts when the lookup is in (from 2.4.0); only after a failed lookup does it ask you to
+   press **Look up**. **Fit nights** is gray while it, or any other step, runs. When the archive knows the planet but
+   gives no T0, the Summary says so plainly (*"No published ephemeris: epochs counted from the first night."*); the
+   ⚠ form, ending *"Look up."*, means no lookup answered.
    The window's own busy bar, at the lower left, says what the fit is doing, for example *"Fitting 4 nights… MCMC
    burn-in 300 of 500"*. When it is done, the line under the fit options says *"✔ Done: 4 nights, MCMC acceptance
    0.31."*

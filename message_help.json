@@ -1620,52 +1620,9 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full JD), or drag across the light curve, then Trim."
+    "Remove night…"
    ],
-   "todo": "Drag across the bad stretch on the light curve, or type the times."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Trim: '…' is not clear. Type a clock time as HHMM or HH:MM (for example 2300 or 23:00), or a full JD (for example 2461329.699)."
-   ],
-   "todo": "Type a clock time with four digits or a colon (0045, 00:45), or the whole JD (2461329.699 or 61329.699). Or drag across the light curve."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Trim: From (…) is after To (…)."
-   ],
-   "todo": "Swap them."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "No points of … fall between From and To: nothing to trim."
-   ],
-   "todo": "Check the times, and that the right night is chosen."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "The points of … between From and To are trimmed already."
-   ],
-   "todo": "Nothing to do."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night."
-   ],
-   "todo": "Trim less, or use Remove night… if the whole night is bad."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night.",
-    "… with Points: Per frame …"
-   ],
-   "todo": "Trim less, or use Remove night… if the whole night is bad."
+   "todo": "Click the night's row, then press the button again."
   },
   {
    "section": "Output, Variables mode",
@@ -2092,9 +2049,23 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "The comps are still being checked (a few seconds). Save the … when that is done …"
+    "The comps are being checked (a few seconds)."
    ],
-   "todo": "Wait a moment and save again."
+   "todo": "Wait a moment; the buttons wake up by themselves."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Trim and refit"
+   ],
+   "todo": "Trim less."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit transit: waiting for the ephemeris…"
+   ],
+   "todo": "Nothing: the fit starts by itself as soon as the ephemeris is in."
   },
   {
    "section": "Output, Transits mode",
@@ -2185,7 +2156,7 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "Fit a transit first: the corner plot shows that fit's MCMC samples."
+    "Save corner plot…"
    ],
    "todo": "Press Fit transit first."
   },
@@ -2209,6 +2180,27 @@
     "A joint fit needs at least two usable nights of the same planet (see the Status column)."
    ],
    "todo": "Read each night's Status and add nights."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit nights: waiting for the ephemeris…"
+   ],
+   "todo": "Nothing: the fit starts by itself when the lookup is in."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The planet's period is not known yet: press Look up first."
+   ],
+   "todo": "Press Look up again, or enter the planet on the Input page."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "No published ephemeris: epochs counted from the first night."
+   ],
+   "todo": "Nothing; type an alternative ephemeris to see O − C against it. The ⚠ form (… ; Look up.) means no lookup answered."
   },
   {
    "section": "Discovery mode",
