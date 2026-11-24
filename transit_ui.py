@@ -2287,15 +2287,12 @@ class TransitPage:
             scale = max(float(self.table.tk.call("tk", "scaling")) / 1.3333, 1.0)
             rowh = max(rowh, int(20 * scale))
             height = int(body.winfo_height()) - int(self.frame.overflow())
-            plot_min = int(getattr(self.canvas.get_tk_widget(), "_shobs_min_height", 300 * scale)) \
-                if getattr(self, "canvas", None) is not None else int(300 * scale)
-            room = height - plot_min
-            try:
-                if self.table_xscroll.winfo_ismapped():
-                    room -= int(self.table_xscroll.winfo_reqheight())
-            except Exception:
-                pass
-            rows = max(3, min(8, int(room // rowh) - 1))
+            # Re-review S1: the part that does not change with the row count (the plot at its minimum, the table's
+            # header, padding, a sideways scroll bar) is measured, not assumed to be one row, so the page drops a
+            # row instead of scrolling for a few pixels.
+            cur = int(self.table.cget("height") or 0)
+            fixed = int(body.winfo_reqheight()) - cur * rowh
+            rows = max(3, min(8, int((height - fixed) // rowh)))
             if int(self.table.cget("height") or 0) != rows:
                 self.table.configure(height=rows)
                 self.notes.configure(height=rows)   # 2.2.11: the notes ask no more height than the table

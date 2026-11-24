@@ -222,10 +222,13 @@ class PageScroll(ttk.Frame):
         return "break"
 
     def _show_focus(self, event):
-        """Scroll a box that got the focus into view (review S3)."""
-        if not self.scrollable():
-            return None
+        """Scroll a box that got the focus into view (review S3). Not when the same box gets the focus back because
+        the window became active again (re-review N1): the page stays where the user scrolled it."""
         w = getattr(event, "widget", None)
+        same = w is not None and w is getattr(self, "_last_focus", None)
+        self._last_focus = w
+        if same or not self.scrollable():
+            return None
         try:
             y = int(w.winfo_rooty()) - int(self.body.winfo_rooty())
             h = int(w.winfo_height())
