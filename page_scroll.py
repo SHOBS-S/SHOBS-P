@@ -9,9 +9,14 @@ appears and the mouse wheel or trackpad scrolls the page.
 Plots and images keep a minimum height (min_plot_height), so on a short window the page scrolls instead of squeezing
 them; above that height they still grow with the window as before.
 
-The wheel scrolls the page only over its ordinary parts (labels, frames, buttons, boxes). Over a plot or an image, a
-list, a table, a text box or a drop-down, the wheel keeps its own job there (zoom, list scrolling), and inside a body
-that already scrolls on its own (the Photometry side panel) that body scrolls.
+The wheel scrolls the page over its ordinary parts (labels, frames, buttons, entry boxes, drop-downs). Over a plot or
+an image, a list, a table or a text box the wheel keeps its own job there (zoom, list scrolling), and inside a body
+that already scrolls on its own (the Photometry side panel) that body scrolls. A drop-down (Binning, Mount, Time zone,
+Text size) never changes its value under the wheel: a scroll that passes over one must not change a setting (review
+M1); its list, once opened, still scrolls.
+
+A box that gets the keyboard focus below or above the visible part (Tab, or SHOBS-P pointing at the box to fix) is
+scrolled into view (review S3).
 """
 
 from __future__ import annotations
@@ -19,8 +24,10 @@ from __future__ import annotations
 import sys
 from tkinter import Canvas, ttk
 
-# Widgets that keep the wheel for themselves (plots and images are Tk canvases; Treeview, Text, Listbox, Combobox).
-WHEEL_KEEPERS = ("Canvas", "Text", "Listbox", "Treeview", "TCombobox", "Scrollbar", "TScrollbar")
+# Widgets that keep the wheel for themselves (plots and images are Tk canvases; Text, Listbox, Treeview, scroll bars).
+WHEEL_KEEPERS = ("Canvas", "Text", "Listbox", "Treeview", "Scrollbar", "TScrollbar")
+# Widgets whose own wheel binding changes a value: the page's binding takes the wheel from them, always.
+WHEEL_NO_VALUE = ("TCombobox", "TSpinbox", "Spinbox")
 POLL_MS = 400
 
 
@@ -51,22 +58,30 @@ def needs_scroll(view_height: int, wanted_height: int) -> bool:
     return int(wanted_height) > int(view_height) + 1
 
 
+def scroll_target(top: float, view_h: float, total_h: float, y: float, h: float, margin: float = 8.0):
+    """Where the view's top should go (px) so a widget at y..y+h (in the body) is inside it, or None when it is
+    already in view. A widget taller than the view shows its top."""
+    if total_h <= view_h or h <= 0:
+        return None
+    if y >= top and y + h <= top + view_h:
+        return None
+    if y < top or h >= view_h:
+        new = y - margin
+    else:
+        new = y + h + margin - view_h
+    return max(0.0, min(float(new), float(total_h - view_h)))
+
+
 class PageScroll(ttk.Frame):
     """One main page. Build the page into .body; place this frame where the page goes (as before)."""
 
     def __init__(self, parent, bg: str = "#ffffff", body_style: str | None = None, **kw):
         super().__init__(parent, **kw)
         self.canvas = Canvas(self, highlightthickness=0, borderwidth=0, background=bg)
-        if sys.platform == "darwin":
-            try:   # a trackpad sends many small wheel events (as ScrollBody)
-                self.canvas.configure(yscrollincrement=16)
-            except Exception:
-                pass
-        else:
-            try:
-                self.canvas.configure(yscrollincrement=24)
-            except Exception:
-                pass
+        try:   # a Mac trackpad sends many small wheel events (as ScrollBody)
+            self.canvas.configure(yscrollincrement=16 if sys.platform == "darwin" else 24)
+        except Exception:
+            pass
         self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.body = ttk.Frame(self.canvas, style=body_style) if body_style else ttk.Frame(self.canvas)
         self._item = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
@@ -74,9 +89,10 @@ class PageScroll(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda _e: self.refit(), add="+")
         self._last = None
+        self._hooks = []
         self._tag = f"PageScrollWheel{id(self)}"
-        self._tagged = set()
         self.bind_class(self._tag, "<MouseWheel>", self._wheel)
+        self.bind_class(self._tag, "<FocusIn>", self._show_focus, add="+")
         if sys.platform.startswith("linux"):
             self.bind_class(self._tag, "<Button-4>", lambda e: self._wheel(e, units=-1))
             self.bind_class(self._tag, "<Button-5>", lambda e: self._wheel(e, units=1))
@@ -89,17 +105,32 @@ class PageScroll(ttk.Frame):
         except Exception:
             return 1
 
-    def scrollable(self) -> bool:
+    def view_height(self) -> int:
         try:
-            return needs_scroll(int(self.canvas.winfo_height()), self.wanted_height())
+            return max(1, int(self.canvas.winfo_height()))
         except Exception:
-            return False
+            return 1
+
+    def overflow(self) -> int:
+        """How much taller the page is than the window (0 when it fits): a part of the page that sizes itself from
+        its own height (the Transit table) takes this off, so it never grows just because the page scrolls."""
+        try:
+            return max(0, int(self.body.winfo_height()) - self.view_height())
+        except Exception:
+            return 0
+
+    def scrollable(self) -> bool:
+        return needs_scroll(self.view_height(), self.wanted_height())
+
+    def add_refit_hook(self, fn):
+        """fn() is called after the page's size against the window changed (window resized, contents changed)."""
+        self._hooks.append(fn)
 
     def refit(self):
         """Body as wide as the view, as tall as the view or the page's own need, whichever is more."""
         try:
             w = max(1, int(self.canvas.winfo_width()))
-            vh = max(1, int(self.canvas.winfo_height()))
+            vh = self.view_height()
             want = self.wanted_height()
         except Exception:
             return
@@ -115,6 +146,11 @@ class PageScroll(ttk.Frame):
                 self.canvas.yview_moveto(0)
         except Exception:
             pass
+        for fn in list(self._hooks):
+            try:
+                self.after_idle(fn)
+            except Exception:
+                pass
 
     def _bar(self, first, last):
         try:
@@ -133,12 +169,11 @@ class PageScroll(ttk.Frame):
 
     def _poll(self):
         """The page's own need changes with its contents (a pop-up row, a longer note): check it now and then while the
-        page is on screen. One size read, cheap."""
+        page is on screen. One size read and a walk of the page's widgets (a few ms), only while it is shown."""
         try:
             if self.winfo_ismapped():
                 self.refit()
-                if self.scrollable():
-                    self._tag_children()
+                self._tag_children()
         except Exception:
             pass
         try:
@@ -146,33 +181,25 @@ class PageScroll(ttk.Frame):
         except Exception:
             pass
 
-    # -- wheel -------------------------------------------------------------------------------------------------------
-    def _keeps_wheel(self, widget) -> bool:
-        """A widget that has its own use for the wheel, or one inside a body that scrolls on its own."""
-        try:
-            if str(widget.winfo_class()) in WHEEL_KEEPERS:
-                return True
-        except Exception:
-            return True
-        return False
-
+    # -- wheel and focus ---------------------------------------------------------------------------------------------
     def _tag_children(self):
-        """Give the page's ordinary parts the page's wheel binding (new parts as they appear). Stops at widgets that
-        keep the wheel and does not go into them (a nested scrolling body is a Canvas)."""
+        """Give the page's ordinary parts the page's wheel and focus bindings (new parts as they appear). Stops at
+        widgets that keep the wheel and does not go into them (a nested scrolling body is a Canvas)."""
         stack = [self.body]
         while stack:
             w = stack.pop()
-            if self._keeps_wheel(w):
+            try:
+                cls = str(w.winfo_class())
+            except Exception:
                 continue
-            key = str(w)
-            if key not in self._tagged:
-                try:
-                    tags = list(w.bindtags())
-                    if self._tag not in tags:
-                        w.bindtags((self._tag,) + tuple(tags))
-                    self._tagged.add(key)
-                except Exception:
-                    pass
+            if cls in WHEEL_KEEPERS:
+                continue
+            try:
+                tags = w.bindtags()
+                if self._tag not in tags:
+                    w.bindtags((self._tag,) + tuple(tags))
+            except Exception:
+                pass
             try:
                 stack.extend(w.winfo_children())
             except Exception:
@@ -180,6 +207,11 @@ class PageScroll(ttk.Frame):
 
     def _wheel(self, event, units=None):
         if not self.scrollable():
+            try:   # no scrolling to do; a drop-down still keeps its value (review M1)
+                if str(event.widget.winfo_class()) in WHEEL_NO_VALUE:
+                    return "break"
+            except Exception:
+                pass
             return None
         n = units if units is not None else wheel_units(getattr(event, "delta", 0))
         if n:
@@ -188,6 +220,33 @@ class PageScroll(ttk.Frame):
             except Exception:
                 pass
         return "break"
+
+    def _show_focus(self, event):
+        """Scroll a box that got the focus into view (review S3)."""
+        if not self.scrollable():
+            return None
+        w = getattr(event, "widget", None)
+        try:
+            y = int(w.winfo_rooty()) - int(self.body.winfo_rooty())
+            h = int(w.winfo_height())
+            total = int(self.body.winfo_height())
+            top = float(self.canvas.canvasy(0))
+        except Exception:
+            return None
+        new = scroll_target(top, self.view_height(), total, y, h)
+        if new is not None and total > 0:
+            try:   # the canvas moves in whole scroll steps: round away from the box, so all of it shows
+                inc = int(float(self.canvas.cget("yscrollincrement")) or 0)
+            except Exception:
+                inc = 0
+            if inc > 0:
+                import math
+                new = max(0.0, float((math.ceil(new / inc) if new > top else math.floor(new / inc)) * inc))
+            try:
+                self.canvas.yview_moveto(new / float(total))
+            except Exception:
+                pass
+        return None
 
 
 def min_plot_height(widget, base_px: int, scale: float = 1.0, width_px: int | None = None):

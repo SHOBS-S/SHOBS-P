@@ -466,7 +466,9 @@ class TransitPage:
         self._set_columns()
         self.notes = Text(strip, height=8, width=20, wrap="word", font=(core.UI_FONT, 9), relief="flat", bg="#ffffff")
         # On a short window the table gives up rows (down to 3) before the plot gives up height.
+        self._strip_body = body
         body.bind("<Configure>", self._fit_strip, add="+")
+        self.frame.add_refit_hook(self._fit_strip)   # 2.4.0 F1c (review M2): also when the window's height changes
         self.notes.tag_configure("warn", foreground="#b35c00")
         self.notes.tag_configure("info", foreground="#33424d")
         # 2.2.17 (item 4): the comp-choice caution's link to Comp health.
@@ -2272,16 +2274,22 @@ class TransitPage:
         except Exception:
             pass
 
-    def _fit_strip(self, event):
-        """Rows in the table: 8, fewer (down to 3) when the page is short, so the plot keeps at least ~300 px."""
+    def _fit_strip(self, event=None):
+        """Rows in the table: 8, fewer (down to 3) when the page is short, so the plot keeps its minimum height.
+        2.4.0 fit-in F1c (#109, review M2): the room is what the window gives the plot and table, not the height the
+        scrolling page lends them (that only ever grew, so the table kept 8 rows and the page scrolled for it)."""
         try:
+            body = self._strip_body
             try:
                 rowh = int(ttk.Style(self.table).lookup("Treeview", "rowheight") or 28)
             except Exception:
                 rowh = 28
             scale = max(float(self.table.tk.call("tk", "scaling")) / 1.3333, 1.0)
             rowh = max(rowh, int(20 * scale))
-            room = event.height - 300 * scale
+            height = int(body.winfo_height()) - int(self.frame.overflow())
+            plot_min = int(getattr(self.canvas.get_tk_widget(), "_shobs_min_height", 300 * scale)) \
+                if getattr(self, "canvas", None) is not None else int(300 * scale)
+            room = height - plot_min
             try:
                 if self.table_xscroll.winfo_ismapped():
                     room -= int(self.table_xscroll.winfo_reqheight())

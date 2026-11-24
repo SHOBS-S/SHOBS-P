@@ -1023,8 +1023,8 @@ def ui_scale(widget) -> float:
 # while about this many characters fit beside the entries (at their minimum width), else the box's hints go under
 # their entries; they come back beside them when the room is HINT_BACK_FACTOR times that, so they never flip back
 # and forth.
-HINT_BESIDE_CHARS = 20
-HINT_BACK_FACTOR = 1.4
+HINT_BESIDE_CHARS = 15
+HINT_BACK_FACTOR = 1.25
 
 def side_bar_width(text_size_pct) -> int:
     """2.4.0 fit-in F1c (#109): the side bar's width (px), 230 at 100 % Text size, wider or narrower with it."""
@@ -1050,8 +1050,9 @@ def content_scale(widget) -> float:
 
 
 # 2.4.0 fit-in F1c (#109): the least height (px at normal size, times content_scale) a page gives its plot or image
-# before the page scrolls instead of squeezing it further.
-PLOT_MIN_PX = {"blink": 300, "photo": 320, "discovery": 340, "output": 400, "transit": 380}
+# before the page scrolls instead of squeezing it further. About what the plots asked for before (300 px), so a page
+# that fitted at 100 % still fits (review S1); at 150 % they keep half as much again.
+PLOT_MIN_PX = {"blink": 260, "photo": 280, "discovery": 280, "output": 300, "transit": 300}
 
 
 TEXT_SIZES = (90, 100, 115, 130, 150)   # 2.4.0 fit-in F1 (#109): the side bar's Text size choices, % of normal
@@ -4897,15 +4898,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         kid.grid_configure(row=2 * int(info.get("row", 0)))
                 except Exception:
                     pass
-            hint_rows = {}
+            hint_rows, hint_pad = {}, {}
             for lab in hints:
                 try:
-                    hint_rows[str(lab)] = int(lab.grid_info().get("row", 0))
+                    info = lab.grid_info()
+                    hint_rows[str(lab)] = int(info.get("row", 0))
+                    hint_pad[str(lab)] = (info.get("padx", (8, 0)), info.get("pady", 0))
                 except Exception:
                     hint_rows[str(lab)] = 0
-            try:
+            try:   # measured in the hints' own font (review S2)
                 from tkinter import font as tkfont
-                under_px = int(tkfont.nametofont("TkDefaultFont").measure("0" * HINT_BESIDE_CHARS))
+                hfont = style.lookup("Hint.TLabel", "font") or "TkDefaultFont"
+                try:
+                    f = tkfont.nametofont(str(hfont))
+                except Exception:
+                    f = tkfont.Font(root=self, font=hfont)
+                under_px = int(f.measure("0" * HINT_BESIDE_CHARS))
             except Exception:
                 under_px = int(7 * HINT_BESIDE_CHARS * scale)
             state = {"under": False}
@@ -4924,8 +4932,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                             lab.grid_configure(row=r + 1, column=0, columnspan=hint_col + 1, sticky="ew",
                                                padx=(int(12 * scale), 0), pady=(0, int(4 * scale)))
                         else:
+                            padx, pady = hint_pad.get(str(lab), ((8, 0), 0))
                             lab.grid_configure(row=r, column=hint_col, columnspan=1, sticky="ew",
-                                               padx=(8, 0), pady=(0, 0))
+                                               padx=padx, pady=pady)
                     except Exception:
                         pass
                 state["under"] = under
