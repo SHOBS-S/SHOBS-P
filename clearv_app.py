@@ -53,6 +53,7 @@ import iers_bg    # 2.4.0 fit-in F1 (#116): astropy's IERS table refresh off the
 import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
 import page_scroll   # 2.4.0 fit-in F1c (#109)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
+import gate   # 2.4.0 fit-in F2 (#79 item 6): grey out instead of scold
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 import star_record   # 2.4.0 step 4 (#72): the per-star record of a series' comps and check (same star within 1")
@@ -1976,6 +1977,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._planet_eph_cache = {}     # 2.2.15 (item 1): {star key: (time, transiting planets or None)} per session
         self._zp_caution_cache = None   # 2.2.15 (item 2): (key, caution text) of the last zero-point check
         self.busy = False
+        # 2.4.0 fit-in F2 (#79 item 6): greyed-until-it-can-work buttons, each with a 'why' tooltip
+        self.gates = gate.Gates(busy=lambda: bool(getattr(self, "busy", False)),
+                                log=lambda t: self.log(t, keep_status=True, level="note", finding=False))
         self._ui_queue = queue.Queue()
         self._photo_view = None            # zoomed view of the Photometry image: (xlim, ylim, shape)
         self._photo_press = None           # where a left-button press started (pan or click)
@@ -2032,6 +2036,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.set_mode(self.mode_key, initial=True)
         self.show_step(0)
         self.after(50, self._drain_ui_queue)
+        self.gates.start(self)   # 2.4.0 fit-in F2 (#79 item 6)
         if update_check_wanted():
             self.after(1500, self.check_for_update)   # 2.3.3 (#57): in the background, once a day at most
         if sys.platform == "win32" and display_scaling_text(self):
@@ -2083,6 +2088,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.busy = True
         self._cancel = threading.Event()
         self.config(cursor="watch")
+        self.gates.refresh()   # 2.4.0 fit-in F2 (#79 item 6): job buttons grey at once
         # 2.2.20 (item 3): the job's words go on the busy bar (not the status line, which keeps the last result
         # line); a step or a count changes them (_job_words). The run lock (self.busy) is unchanged.
         self.busy_end(getattr(self, "_job_tok", None))
@@ -2112,6 +2118,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _end_job(self, defer_close: bool = False):
         self.busy = False
         self.config(cursor="")
+        self.gates.refresh()   # 2.4.0 fit-in F2 (#79 item 6)
         self.busy_end(getattr(self, "_job_tok", None))   # 2.2.20 (item 3)
         self._job_tok = None
         # 2.3.6 (#79 items 1, 2): the job ends with one line for what needs a look. The lines its done-step logs
@@ -21886,6 +21893,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     LOAD_SERIES_TIP = ("Load series… replaces what is open: the open series is set aside (you are offered a save "
                        "first if it has unsaved changes), and a series of another star clears this target's comps, "
                        "check and watch stars.")
+
+    def gate(self, widget, why=None, tip=None, busy: bool = True):
+        """2.4.0 fit-in F2 (#79 item 6, John 24 Nov): grey `widget` until it can work, instead of a live button that
+        pops a "do X first" box. why() returns "" when it can work, else the reason in plain words; busy=True also
+        greys it while a job holds the run lock. Hovering shows the reason while greyed, else `tip` (words or a
+        function; None = no tooltip when live). Use this in place of _add_tooltip for a gated widget (one tooltip)."""
+        self.gates.add(widget, why, busy=busy)
+
+        def words():
+            reason = self.gates.reason(widget)
+            if reason:
+                return reason
+            return tip() if callable(tip) else (tip or "")
+        self._add_tooltip(widget, words)
+        return widget
 
     def _add_tooltip(self, widget, text):
         """2.2.16 (item 12): a small hover note on a widget (shown after a short pause, gone when the pointer leaves).
