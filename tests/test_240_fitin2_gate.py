@@ -6,17 +6,32 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gate  # noqa: E402
 
-try:
-    import tkinter as tk
-    from tkinter import ttk
-    _root = tk.Tk()
-    _root.withdraw()
-except Exception:   # no display
-    _root = None
+import tkinter as tk
+from tkinter import ttk
+
+_root = None
 
 
-@unittest.skipIf(_root is None, "no display")
 class GateTest(unittest.TestCase):
+    """The Tk window is made per class and destroyed after it (never at import time: a module-level Tk() becomes
+    tkinter's default root for every later test in the same process, and their variables would land on it)."""
+
+    @classmethod
+    def setUpClass(cls):
+        global _root
+        try:
+            _root = tk.Tk()
+            _root.withdraw()
+        except Exception:   # no display
+            _root = None
+            raise unittest.SkipTest("no display")
+
+    @classmethod
+    def tearDownClass(cls):
+        global _root
+        if _root is not None:
+            _root.destroy()
+            _root = None
     def test_reason_greys_and_clears(self):
         busy = {"on": False}
         g = gate.Gates(busy=lambda: busy["on"])
