@@ -928,6 +928,10 @@ def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress
     gated = t_flip is not None and S.get("flip_gated")
     forced = t_flip is not None and not S.get("flip_gated")
     no_step = [st for st in S["starts"] if "step" not in st]
+    # 2.4.0 fit-in F2 (banked nit 9): the busy bar names each step: progress(j, n, label, sub) — j = 0 for the
+    # reference fit, then each choice by name, and on a flip night which of its two fits runs. Words only.
+    if progress is not None:
+        progress(0, len(choices), "reference fit", None)
     # One error scale for every choice (BICs are only comparable on the same errors): the fullest model's (Fable S3:
     # the next fullest when that one does not converge).
     prob = x = None
@@ -950,10 +954,13 @@ def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress
     for j, (key, label, (da, dt, dq)) in enumerate(choices):
         if cancel is not None and cancel.is_set():
             raise RuntimeError("Canceled")
+        step_words = None
         if progress is not None:
-            progress(j + 1, len(choices))
+            progress(j + 1, len(choices), label, None)
+            if t_flip is not None:
+                step_words = (lambda sub, j_=j + 1, lab=label: progress(j_, len(choices), lab, sub))
         try:
-            row = _choice_row(S, key, label, (da, dt, dq), p_full, e, t_flip, forced, no_step, n)
+            row = _choice_row(S, key, label, (da, dt, dq), p_full, e, t_flip, forced, no_step, n, step_words)
         except ValueError as exc:
             failed.append(label)   # Fable S3: one choice that does not fit is left out, not the whole fit
             if say:
@@ -965,8 +972,9 @@ def choose_detrend(S: dict, allow_airmass: bool, say=None, cancel=None, progress
     return _pick_choice(rows, failed, S, t_flip, gated, scale, allow_airmass, say)
 
 
-def _choice_row(S, key, label, flags, p_full, e, t_flip, forced, no_step, n) -> dict:
-    """One row of choose_detrend: the choice fitted without and (on a flip night) with the step."""
+def _choice_row(S, key, label, flags, p_full, e, t_flip, forced, no_step, n, step_words=None) -> dict:
+    """One row of choose_detrend: the choice fitted without and (on a flip night) with the step. step_words(sub)
+    (2.4.0 fit-in F2): tells the busy bar which of the two fits runs."""
     t, flux, am = S["t"], S["flux"], S["am"]
     da, dt, dq = flags
     st = {nm: v for nm, v in p_full.items() if nm != "step"}
@@ -976,12 +984,16 @@ def _choice_row(S, key, label, flags, p_full, e, t_flip, forced, no_step, n) -> 
     if forced:
         prob_ns = None
     else:
+        if step_words is not None:
+            step_words("without the flip step")
         prob_ns = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st, da, dt, S["ld"], None,
                                  detrend_curve=dq)
         x_ns, chi2_ns = best_fit(prob_ns, no_step[:2])
         bic_ns = chi2_ns + len(prob_ns.free) * math.log(n)
     row = {"key": key, "label": label, "flags": (da, dt, dq)}
     if t_flip is not None:
+        if step_words is not None:
+            step_words("with the flip step")
         st_ws = dict(prob_ns.full(x_ns), step=0.0) if prob_ns is not None else dict(st, step=p_full.get("step", 0.0))
         prob_ws = TransitProblem(t, flux, e, am, S["period"], S["priors"], S["free"], st_ws, da, dt, S["ld"], t_flip,
                                  detrend_curve=dq)
@@ -1229,14 +1241,15 @@ def _setup_and_detrend(t, flux, err, airmass, planet, detrend_airmass, detrend_t
 
 
 def lsq_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detrend_time=False, after_flip=None,
-            flip_step=None, flagged_mask=None, detrend_curve=False, detrend_auto=False) -> dict:
+            flip_step=None, flagged_mask=None, detrend_curve=False, detrend_auto=False, progress=None) -> dict:
     """2.2.13: the fit_transit model by least squares only (no MCMC), with Jacobian errors after the same error
     rescaling (reduced chi-square and red-noise beta). For fast injection-recovery tests of the flip step.
-    2.2.16 (item 6): flagged_mask (flagged frames put back, error bars doubled) as in fit_transit."""
+    2.2.16 (item 6): flagged_mask (flagged frames put back, error bars doubled) as in fit_transit.
+    progress (2.4.0 fit-in F2): Auto's step words, as choose_detrend gives them (j, n, label, sub)."""
     # 2.3.0 (#8): the step only when BIC wants it. 2.4.0 (#103): the detrend given, or Auto.
     S, (detrend_airmass, detrend_time, detrend_curve), flip_test, choice = _setup_and_detrend(
         t, flux, err, airmass, planet, detrend_airmass, detrend_time, detrend_curve, detrend_auto, after_flip,
-        flip_step, flagged_mask)
+        flip_step, flagged_mask, progress=progress)
     t, flux, err, am = S["t"], S["flux"], S["err"], S["am"]
     prob = TransitProblem(t, flux, err, am, S["period"], S["priors"], S["free"], S["start"], detrend_airmass,
                           detrend_time, S["ld"], S["t_flip"], detrend_curve=detrend_curve)
@@ -1296,7 +1309,7 @@ def fit_transit(t, flux, err, airmass, planet: dict, detrend_airmass=True, detre
     S, (detrend_airmass, detrend_time, detrend_curve), flip_test, choice = _setup_and_detrend(
         t, flux, err, airmass, planet, detrend_airmass, detrend_time, detrend_curve, detrend_auto, after_flip,
         flip_step, flagged_mask, say, cancel,
-        (lambda j, m: progress("detrend", j, m)) if progress is not None else None)
+        (lambda j, m, label=None, sub=None: progress("detrend", j, m, label, sub)) if progress is not None else None)
     t, t_abs, t_ref, flux, err, am = S["t"], S["t_abs"], S["t_ref"], S["flux"], S["err"], S["am"]
     period, priors, free, ld, cadence, starts = S["period"], S["priors"], S["free"], S["ld"], S["cadence"], S["starts"]
     t_flip = S["t_flip"]
@@ -1799,7 +1812,8 @@ def _cut(arr, keep):
 def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, detrend_flags=(True, False, False),
                      after_flip=None, flip_step=None, flagged_mask=None, allow_airmass: bool = True,
                      detrend_rows=None, flagged=None, comp_mags=None, comp_names=None, measured=None,
-                     cancel=None, progress=None, log=None, flip_gated: bool = False) -> dict | None:
+                     cancel=None, progress=None, log=None, flip_gated: bool = False,
+                     detrend_progress=None) -> dict | None:
     """2.4.0 step 6b (#35): least-squares refits of one night over reasonable reduction choices.
 
     t, flux, err, airmass, after_flip, flagged_mask: the main fit's data and settings (flagged_mask: flagged frames
@@ -1817,7 +1831,8 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
     not be measured: that point is left out of that refit). Returns {"rows": [{group, label, depth, tc, rms, n}],
     "ref", "spread": {"depth", "tc", "rms_lo", "rms_hi"}, "formal": {"depth", "tc"}, "most": {"depth", "tc"},
     "left_out": [labels], "skipped": [labels], "flags", "note", "groups"} or None without a reference fit.
-    cancel: a threading.Event; set, it raises RuntimeError("Canceled") between refits."""
+    cancel: a threading.Event; set, it raises RuntimeError("Canceled") between refits.
+    detrend_progress (2.4.0 fit-in F2): the hidden Auto pass's step words (j, n, label, sub), for the busy bar."""
     say = log or (lambda _m: None)
     t = np.asarray(t, dtype=float)
     flux = np.asarray(flux, dtype=float)
@@ -1846,7 +1861,8 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
         # which choices are reasonable (none of its results is used otherwise)
         try:
             rows_in = (lsq_fit(t, flux, err, am, planet, after_flip=after_flip, flagged_mask=flagged_mask,
-                               flip_step=flip_step, detrend_auto=True).get("detrend_choice") or {}).get("rows") or []
+                               flip_step=flip_step, detrend_auto=True,
+                               progress=detrend_progress).get("detrend_choice") or {}).get("rows") or []
         except Exception as exc:
             say(f"  robustness check: no BIC table for the detrend choices ({exc}); every choice is tried")
             rows_in = []

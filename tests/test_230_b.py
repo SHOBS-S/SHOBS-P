@@ -250,8 +250,14 @@ class TestUi(unittest.TestCase):
         with mock.patch.object(transit_ui, "CornerWindow") as cw, \
                 mock.patch.object(transit_ui.messagebox, "showinfo") as info:
             tp.result = None
-            tp._results_box.winfo_children()[i].invoke()
-            info.assert_called_once()   # no fit: "Fit a transit first…"
+            self.app.gates.refresh()
+            button = tp._results_box.winfo_children()[i]
+            # 2.4.0 fit-in F2 (#79 item 6): no fit: greyed, the reason on hover, no box
+            self.assertTrue(button.instate(["disabled"]))
+            self.assertEqual(self.app.gates.reason(button), transit_ui.CORNER_NEEDS)
+            button.invoke()
+            tp.open_corner()
+            info.assert_not_called()
             cw.assert_not_called()
 
     def test_star_name_lookup_keeps_the_bar_until_the_boxes_fill(self):
