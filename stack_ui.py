@@ -20,6 +20,7 @@ from tkinter import LEFT, RIGHT, W, X, StringVar, messagebox, ttk
 
 import numpy as np
 
+import gate   # 2.4.0 fit-in F2 review (S1): series_memo
 import photometry_core as core
 import stack_core
 
@@ -184,7 +185,7 @@ class StackMixin:
             return "Run photometry first (Scan field in Discovery): the Stack step uses that run's frames."
         if self.masters is None:
             return "Calibrate first (Calibrate page): the stacks are made of calibrated frames."
-        return ""
+        return self._bin_mismatch_why() if hasattr(self, "_bin_mismatch_why") else ""   # review S5
 
     def _points_stack_why(self) -> str:
         src = self._stack_source_live()
@@ -207,13 +208,18 @@ class StackMixin:
         if src.get("scan"):
             return src if self.mode_key == "discovery" else None
         night = src["night"]
-        now = {id(o) for o in self.observations if o.night == night}
-        if not now:
-            return None
         sets = self._stack_sets.get(night)
-        if now == {id(o) for o in src["points"]} or (sets and now == {id(o) for o in sets["stack"]}):
-            return src
-        return None
+
+        def work():
+            now = {id(o) for o in self.observations if o.night == night}
+            if not now:
+                return False
+            return now == {id(o) for o in src["points"]} or bool(sets and now == {id(o) for o in sets["stack"]})
+        # 2.4.0 fit-in F2 review (S1): kept until the series or the stacks change (the Stack gates ask 4 times a second)
+        live = gate.series_memo(self, "stack_source_live", work,
+                                refs=(src, src.get("points"), sets, (sets or {}).get("stack")),
+                                vals=(night, len(src.get("points") or ()), len((sets or {}).get("stack") or ())))
+        return src if live else None
 
     def _stack_set_live(self, night) -> bool:
         sets = getattr(self, "_stack_sets", {}).get(night)
@@ -221,8 +227,14 @@ class StackMixin:
             return False
         if sets.get("scan"):
             return self.mode_key == "discovery"
-        now = {id(o) for o in self.observations if o.night == night}
-        return bool(now) and (now == {id(o) for o in sets["frame"]} or now == {id(o) for o in sets["stack"]})
+
+        def work():
+            now = {id(o) for o in self.observations if o.night == night}
+            return bool(now) and (now == {id(o) for o in sets["frame"]} or now == {id(o) for o in sets["stack"]})
+        # 2.4.0 fit-in F2 review (S1): kept until the series or the night's stacks change
+        return gate.series_memo(self, ("stack_set_live", night), work,
+                                refs=(sets, sets.get("frame"), sets.get("stack")),
+                                vals=(len(sets.get("frame") or ()), len(sets.get("stack") or ())))
 
     def stack_meta(self, night) -> dict | None:
         """The night's stacking record (series night setup "stack"), or None when its points are per frame."""
@@ -379,7 +391,9 @@ class StackMixin:
         except (TypeError, ValueError):
             binning = 1
         if self.masters_binning is not None and binning != self.masters_binning:
-            messagebox.showerror(TITLE, "Binning changed since the masters were built. Rebuild the masters first.")
+            # 2.4.0 fit-in F2 review (S5, N2): Stack is greyed with the reason; a status-line backstop
+            self.status.set(f"The masters were built at bin {self.masters_binning}: Calibrate again (or set Binning "
+                            f"back to {self.masters_binning}).")
             return
         cadence = stack_core.cadence_seconds(recs)
         cap = self._stack_cap(src["mode"])

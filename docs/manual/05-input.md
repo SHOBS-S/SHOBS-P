@@ -85,8 +85,10 @@ The **Output** row chooses where every Save button writes: reports, light curves
   overwritten: a new copy gets `_2`, `_3` and so on. The status bar says **Save buttons now write into …** when you
   choose it.
 - **Without one**, every Save asks where to put the file.
-- **A folder that cannot be used** (2.4.0): SHOBS-P checks the folder as you type or choose it, without creating
-  anything. When it cannot be written to (a read-only folder, a file of that name, a drive that is not there), the
+- **A folder that cannot be used** (2.4.0): SHOBS-P checks the folder when you choose it, or a moment after you
+  stop typing, without creating anything. A network folder (`\\server\share`, or a mapped network drive) is not
+  checked then (a drive that is offline could keep the window waiting): the row says **checked when you save**. When
+  a folder cannot be written to (a read-only folder, a file of that name, a drive that is not there), the
   row says **cannot be used** instead of **in use**, and each Save opens the save dialog; the status bar says *The
   output folder … cannot be used (…): choose where to save.* (no message box: nothing is lost).
 
@@ -113,8 +115,8 @@ Things to know:
   reports matching the AAVSO's records.
 - **Look up again** repeats the lookup, for example after the internet was down. It is greyed while the Star ID box
   is empty (hover over it: *Type a Star ID or designation first.*).
-- While a job runs (calibration, photometry, a solve), the **Star ID** and **Planet** boxes and their **Look up
-  again** buttons are greyed (2.4.0): a star change in the middle of a run would not apply to it. They come back when
+- While a job runs (calibration, photometry, a solve), the **Star ID** and **Planet** boxes, their **Look up
+  again** buttons and **Clear target** are greyed (2.4.0): a star change in the middle of a run would not apply to it. They come back when
   the job ends.
 - If the lookup fails, the status bar says **Could not look up …** You can type RA and Dec yourself, or leave them
   empty and let the plate solution fill them in later.
@@ -341,10 +343,12 @@ Their site and optics are never saved as yours. Their time zone is set to
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself
 binned the color frames, the log notes it after calibration (chapter 7). Changing **Binning** after calibrating means
-calibrating again; the masters must match. From 2.4.0 a **Binning** change drops the masters built at the other bin
-at once, with a plain line on the status bar, for example *Binning changed from 1 to 2: the masters were built at
-bin 1, so Calibrate rebuilds them at bin 2.* **Run photometry** and **Scan field** are greyed until you calibrate
-again.
+calibrating again; the masters must match. From 2.4.0 a **Binning** change says so at once, with a plain line on the
+status bar, for example *Binning changed from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild
+them at bin 2, or set Binning back to 1.* The masters are kept, marked with the bin they were built at: while
+**Binning** says another bin, **Run photometry**, **Scan field** and **Stack** are greyed (hover: *The masters were
+built at bin 1: Calibrate again (or set Binning back to 1).*), and they are live again as soon as you set **Binning**
+back. **Binning** itself is greyed while a job runs.
 
 ## The series line
 

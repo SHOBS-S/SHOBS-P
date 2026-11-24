@@ -50,7 +50,8 @@ knows a telescope by the header's TELESCOP, INSTRUME and focal length). When you
 
 - from a telescope you measured before with another aperture, it sets that aperture without asking (2.4.0) and the
   log says so: *"Telescope aperture set to 203 mm, as last used with … (the box said 152 mm)."* Type another value in
-  the box if that one is wrong; it is used from the next run. (This sets the scintillation part of the error bars.)
+  the box if that one is wrong; it is used from the next run, and a value you typed for these lights is never
+  replaced when you scan them again. (This sets the scintillation part of the error bars.)
 - from another telescope than the last frames you measured, it asks whether the box's value is right: *"These lights
   come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says
   152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box.

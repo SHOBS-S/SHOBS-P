@@ -14,6 +14,32 @@ INTERVAL_MS = 250
 BUSY_REASON = "Another step is running. This is available again when it finishes."
 
 
+def series_memo(owner, name, fn, refs=(), vals=()):
+    """2.4.0 fit-in F2 review (S1): gates must be cheap (they run four times a second). The value of fn() for the
+    open series, kept on `owner` until the series changes: the cache holds the observations list itself (a new list
+    is a new series state; every change to the points makes a new list), its length, and owner._series_rev (bumped
+    by update_series_status, which every change to the series ends in, and by the trim flags). `refs` are more
+    objects compared by identity (held, so an id is never reused), `vals` more values compared by ==."""
+    obs = getattr(owner, "observations", None)
+    refs = (obs,) + tuple(refs)
+    vals = (len(obs or ()), getattr(owner, "_series_rev", 0)) + tuple(vals)
+    store = owner.__dict__.setdefault("_gate_memo", {})
+    hit = store.get(name)
+    if hit is not None and len(hit[0]) == len(refs) and all(a is b for a, b in zip(hit[0], refs)) and hit[1] == vals:
+        return hit[2]
+    value = fn()
+    store[name] = (refs, vals, value)
+    return value
+
+
+def bump_series(owner):
+    """The series (or its trim flags) changed: every series_memo value is recomputed at its next use."""
+    try:
+        owner._series_rev = getattr(owner, "_series_rev", 0) + 1
+    except Exception:
+        pass
+
+
 class Gates:
     """Keeps the gated widgets of one Tk app. `busy` is a function that says whether a job holds the run lock."""
 
@@ -92,8 +118,15 @@ class Gates:
 
     def start(self, root, interval_ms: int = INTERVAL_MS):
         """Re-check every gate on a timer on root's Tk thread."""
+        self._root = root
+
         def tick():
             self._timer = None
+            try:
+                if not root.winfo_exists():
+                    return
+            except Exception:   # the window is gone (review N1)
+                return
             try:
                 self.refresh()
             finally:
@@ -102,3 +135,13 @@ class Gates:
                 except Exception:
                     self._timer = None
         self._timer = root.after(interval_ms, tick)
+
+    def stop(self):
+        """Review N1: cancel the timer (the App's close), so no tick runs on a destroyed window."""
+        timer, self._timer = self._timer, None
+        root = getattr(self, "_root", None)
+        if timer is not None and root is not None:
+            try:
+                root.after_cancel(timer)
+            except Exception:
+                pass

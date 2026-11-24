@@ -1725,9 +1725,14 @@ class MultiNightWindow:
             return
         self.busy.end(getattr(self, "_lookup_tok", None))
         self._lookup_running = max(0, int(getattr(self, "_lookup_running", 0)) - 1)
-        queued = getattr(self, "_fit_after_lookup", False) and not self._lookup_running
+        queued = getattr(self, "_fit_after_lookup", False) if not self._lookup_running else False
         if queued:
             self._fit_after_lookup = False
+            # 2.4.0 fit-in F2 review (S3): the queue is for the planet named when Fit nights was pressed
+            if isinstance(queued, str) and norm_name(queued) != norm_name(self.planet_name()):
+                queued = False
+                self._queue_note = ("Fit nights called off: the planet changed while it waited for the ephemeris. "
+                                    "Press Fit nights again for this planet.")
         # m698: what the lookup found, for the summary's ephemeris line
         self._lookup_outcome = ("found" if got and got.get("period") and got.get("t0") else
                                 "no_t0" if got and got.get("period") else "failed")
@@ -1754,10 +1759,24 @@ class MultiNightWindow:
         self._show_planet()
         self._reload_failed()
         self.refresh_nights()
+        note, self._queue_note = getattr(self, "_queue_note", ""), ""
+        if note:
+            self.prog_text.set(note)
         if queued:
             # 2.4.0 fit-in F2 (m681): Fit nights was pressed during the lookup: it runs now; after a failed lookup
             # its own message says what is missing
             self.run_fit()
+
+    def drop_queued_fit(self) -> bool:
+        """2.4.0 fit-in F2 review (S3): call off a Fit nights waiting for the lookup (Cancel). True when one was."""
+        if not getattr(self, "_fit_after_lookup", False):
+            return False
+        self._fit_after_lookup = False
+        try:
+            self.prog_text.set("Fit nights called off (it was waiting for the ephemeris).")
+        except Exception:
+            pass
+        return True
 
     def _reload_failed(self):
         """Review (#18): files refused for want of the star's RA/Dec (JD_UTC times) load again once it is known."""
@@ -1877,8 +1896,9 @@ class MultiNightWindow:
         nights_from_series), replacing series rows loaded before. Files added by hand stay. The Transit fit page's
         night is unticked (it is one of these nights)."""
         if self._series_state() < 2:
-            messagebox.showinfo("SHOBS-P", "Open a Transits series with at least two nights first (Load series on "
-                                           "the Input or Output page).", parent=self.win)
+            # 2.4.0 fit-in F2 review (N2): the button is greyed with these words; a silent backstop (a line, no box)
+            self.prog_text.set("Open a Transits series with at least two nights first (Load series on the Input or "
+                               "Output page).")
             return []
         nights, messages = nights_from_series(self.app)
         self.nights = [n for n in self.nights if n.get("kind") != "series" and not n.get("series_night")] + nights
@@ -2065,7 +2085,7 @@ class MultiNightWindow:
         if not self.planet or not self.planet.get("period"):
             if getattr(self, "_lookup_running", False):
                 # 2.4.0 fit-in F2 (m681): the lookup that runs by itself is not in yet: the fit waits for it
-                self._fit_after_lookup = True
+                self._fit_after_lookup = self.planet_name() or True   # review S3: tied to this planet
                 self.prog_text.set("Fit nights: waiting for the ephemeris…")
                 return
             messagebox.showinfo("SHOBS-P", "The planet's period is not known yet: press Look up first.",
@@ -2124,6 +2144,8 @@ class MultiNightWindow:
                                                                         total))
 
     def cancel(self):
+        if self.drop_queued_fit() and not self._running:   # 2.4.0 fit-in F2 review (S3)
+            return
         if self._running:
             self.app.cancel_job()
 

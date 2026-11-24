@@ -19,7 +19,7 @@ In the Output page's **Notes** box, the default note is **OSC reduced; not trans
 
 ## Save the report
 
-1. On the Output page, press **Save AAVSO report** (gray, from 2.4.0, until there is a light curve: run photometry or load a series).
+1. On the Output page, press **Save AAVSO report** (greyed, from 2.4.0, until there is a light curve: run photometry or load a series).
 2. Answer any questions (below).
 3. Choose where to save, unless an **Output** folder is set on the Input page; then the file goes there directly.
 

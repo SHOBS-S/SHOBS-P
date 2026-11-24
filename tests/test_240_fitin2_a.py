@@ -187,13 +187,11 @@ class TestApp(unittest.TestCase):
             self.assertFalse(app.output_folder_usable(f))
             self.assertFalse(app.output_folder_usable(os.path.join(f, "under")))
             app.output_dir.set(f)
-            self.assertEqual(app._counts["Output"].get(), "cannot be used")
             with mock.patch.object(self.ca.messagebox, "showwarning") as box:
                 self.assertEqual(app._out_folder(), "")
                 box.assert_not_called()
+            self.assertEqual(app._counts["Output"].get(), "cannot be used")
             self.assertIn("cannot be used", app.status.get())
-            app.output_dir.set(d)
-            self.assertEqual(app._counts["Output"].get(), "in use")
             app.output_dir.set("")
 
     def test_m133_zone_from_the_frames_site(self):
@@ -271,7 +269,7 @@ class TestApp(unittest.TestCase):
             app.gates.refresh()
             self.assertFalse(self.greyed(app.run_button))
             self.assertEqual(str(app._aperture_entries["sky in"].cget("style")), "TEntry")
-            app._tk_set = app.tk.globalsetvar(app.sky_out._name, "abc")   # not a number
+            app.sky_out._tk.globalsetvar(app.sky_out._name, "abc")   # not a number (set on the variable's own interpreter)
             reason, bad = app._aperture_problems()
             self.assertEqual(bad, {"sky out"})
             self.assertIn("sky out is not a number", reason)
@@ -280,18 +278,39 @@ class TestApp(unittest.TestCase):
             app.masters = None
             app.gates.refresh()
 
-    def test_x064_binning_change_drops_the_masters(self):
+    def test_x064_binning_change_greys_until_set_back(self):
+        # review S5: the masters are kept, marked with their bin; Run / Scan grey while Binning differs, live again
+        # when it is set back
         app = self.app
         app.binning.set(1)
-        app.masters, app.masters_binning, app.calibrated = object(), 1, np.zeros((4, 4))
+        masters = object()
+        app.masters, app.masters_binning, app.calibrated = masters, 1, np.zeros((4, 4))
+        why = "The masters were built at bin 1: Calibrate again (or set Binning back to 1)."
         try:
             app.binning.set(2)
-            self.assertIsNone(app.masters)
+            self.assertIs(app.masters, masters)
             self.assertEqual(app.masters_binning, 1)   # the image on the page is still at bin 1
-            self.assertIn("Calibrate rebuilds them at bin 2", app.status.get())
+            self.assertIn("Calibrate again to rebuild them at bin 2, or set Binning back to 1", app.status.get())
             self.assertTrue(self.greyed(app.run_button))
-            self.assertIn("Build masters", app.gates.reason(app.run_button))
+            self.assertEqual(app.gates.reason(app.run_button), why)
+            self.assertEqual(app._bin_mismatch_why(), why)
+            with mock.patch.object(app, "_stack_source_live", return_value={"night": "JD1"}):
+                self.assertEqual(app._stack_why(), why)   # Stack too
+            app.binning.set(1)
+            self.assertIs(app.masters, masters)
+            self.assertEqual(app._bin_mismatch_why(), "")
+            self.assertIn("Binning is back at 1", app.status.get())
+            self.assertNotEqual(app.gates.reason(app.run_button), why)
+            # the Binning box is on the busy lock (readonly kept)
+            app.busy = True
+            app.gates.refresh()
+            self.assertTrue(app._binning_box.instate(["disabled"]))
+            app.busy = False
+            app.gates.refresh()
+            self.assertFalse(app._binning_box.instate(["disabled"]))
+            self.assertTrue(app._binning_box.instate(["readonly"]))
         finally:
+            app.busy = False
             app.masters, app.masters_binning, app.calibrated = None, None, None
             app.binning.set(1)
 

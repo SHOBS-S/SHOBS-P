@@ -354,7 +354,7 @@
     "Telescope aperture set to … mm, as last used with … (the box said … mm).",
     "… Use … mm for these frames?"
    ],
-   "todo": "Nothing, unless the telescope's aperture has changed: then type it in the Telescope aperture box (Input page, Optics)."
+   "todo": "Nothing, unless the telescope's aperture has changed: then type it in the Telescope aperture box (Input page, Optics). A value you typed there for these lights is never replaced (the log then says Telescope aperture kept at … mm (typed by hand); … mm was last used with …)."
   },
   {
    "section": "Input",
@@ -942,10 +942,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Binning changed from 1 to 2: the masters were built at bin 1, so Calibrate rebuilds them at bin 2.",
+    "Binning changed from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild them at bin 2, or set Binning back to 1.",
     "Binning is 2 but the masters were built at 1. …"
    ],
-   "todo": "Press Build masters and calibrate (Calibrate page), or set Binning back and calibrate."
+   "todo": "Press Build masters and calibrate (Calibrate page), or set Binning back (the buttons are live again at once)."
   },
   {
    "section": "Photometry",
@@ -2065,7 +2065,7 @@
    "patterns": [
     "Fit transit: waiting for the ephemeris…"
    ],
-   "todo": "Nothing: the fit starts by itself as soon as the ephemeris is in."
+   "todo": "Nothing: the fit starts by itself as soon as the ephemeris is in. Cancel calls it off (Fit transit called off (it was waiting for the ephemeris; …)); so do Close report, another report and a change of planet."
   },
   {
    "section": "Output, Transits mode",
@@ -2186,7 +2186,7 @@
    "patterns": [
     "Fit nights: waiting for the ephemeris…"
    ],
-   "todo": "Nothing: the fit starts by itself when the lookup is in."
+   "todo": "Nothing: the fit starts by itself when the lookup is in. The window's Cancel, or a change of planet, calls it off (Fit nights called off …)."
   },
   {
    "section": "Output, Transits mode",

@@ -20,6 +20,7 @@ from tkinter import LEFT, StringVar, messagebox, ttk
 
 import numpy as np
 
+import gate   # 2.4.0 fit-in F2 review (S1): series_memo
 import photometry_core as core
 import site_time
 
@@ -121,14 +122,16 @@ class TrimMixin:
     def _trim_night(self):
         """The one night Trim works on: the night chosen in the night table; None otherwise (Trim is then not
         available). John, 23 Nov: a night must be selected, even in a one-night series."""
-        nights = []
-        for o in getattr(self, "observations", None) or []:
-            if o.night not in nights:
-                nights.append(o.night)
         chosen = getattr(self, "highlight_night", None)
-        if chosen in nights:
+        if chosen is not None and chosen in self._series_nights():
             return chosen
         return None
+
+    def _series_nights(self) -> frozenset:
+        """2.4.0 fit-in F2 review (S1): the series' nights, kept until the series changes (the gates ask four times
+        a second; walking 40,000 points each time made the window sluggish)."""
+        return gate.series_memo(self, "nights", lambda: frozenset(
+            o.night for o in getattr(self, "observations", None) or []))
 
     def _night_trims(self, night) -> list:
         return core.clean_trim_spans(self._night_info(night).get("trims"))
@@ -139,6 +142,7 @@ class TrimMixin:
 
     def _apply_trims(self) -> int:
         """The 'trim' flag word on exactly the points inside their night's saved spans (every refresh calls this)."""
+        gate.bump_series(self)   # review S1: flags may change in place; the gates' kept answers are recomputed
         return core.apply_trim_flags(self.observations, self._trims_by_night())
 
     def _trim_spans_info(self, night, points=None) -> list:
@@ -371,11 +375,25 @@ class TrimMixin:
                     "new": new}
 
     def _trim_why(self) -> str:
-        """Trim's gate (the run lock is the gate's own busy check)."""
-        try:
-            return self._trim_plan()[0]
-        except Exception as exc:
-            return f"Trim: {exc}"
+        """Trim's gate (the run lock is the gate's own busy check). Review S1: the reason is kept until the boxes,
+        the night, a drag or the series change (Trim itself works the plan out afresh)."""
+        night = self._trim_night()
+        if night is None:
+            return NEED_NIGHT_TIP
+        a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
+        if not a and not b:
+            return TYPE_FIRST
+        drag = self._trim_drag or {}
+        sets = getattr(self, "_stack_sets", {}).get(night)
+
+        def work():
+            try:
+                return self._trim_plan()[0]
+            except Exception as exc:
+                return f"Trim: {exc}"
+        return gate.series_memo(self, "trim_why", work, refs=(sets,),
+                                vals=(a, b, night, tuple(sorted((k, repr(v)) for k, v in drag.items())),
+                                      getattr(self, "mode_key", None)))
 
     def _trim_typed(self):
         """2.4.0 fit-in F2: as From / To are typed (or dragged), the hint says why the span cannot be trimmed;

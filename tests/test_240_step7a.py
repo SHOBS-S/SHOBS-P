@@ -393,10 +393,10 @@ class TestInTheApp(unittest.TestCase):
     def test_blank_level_switches_off(self):   # Fable N2
         self.app.scan_excess_chi2.set(2.5)
         self.assertEqual(self.app._scan_chi2_limit(), 2.5)
-        self.app.tk.globalsetvar(self.app.scan_excess_chi2._name, "")
+        self.app.scan_excess_chi2._tk.globalsetvar(self.app.scan_excess_chi2._name, "")
         try:
             self.assertEqual(self.app._scan_chi2_limit(), 0.0)
-            self.app.tk.globalsetvar(self.app.scan_excess_chi2._name, "abc")
+            self.app.scan_excess_chi2._tk.globalsetvar(self.app.scan_excess_chi2._name, "abc")
             with self.assertRaises(ValueError):
                 self.app._scan_chi2_limit()
         finally:

@@ -68,9 +68,10 @@ rebuilt and replaced.
 - **Rebuild masters (ignore saved ones)**: tick this to force a fresh stack, for example if you replaced some frames
   and are not sure SHOBS-P noticed.
 - **Binning**: masters are made for one binning. If you change **Binning** on the Input page, calibrate again; the
-  masters for the other binning stay on disk for later. From 2.4.0 the change drops the masters in use at once (the
-  status bar says *Binning changed from 1 to 2: the masters were built at bin 1, so Calibrate rebuilds them at
-  bin 2.*), and **Run photometry** and **Scan field** are greyed until you do.
+  masters for the other binning stay on disk for later. From 2.4.0 the status bar says so at once (*Binning changed
+  from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild them at bin 2, or set Binning back to
+  1.*), and **Run photometry**, **Scan field** and **Stack** are greyed until you calibrate again or set **Binning**
+  back (the masters in use are kept, marked with their bin).
 - **One master file**: on the Input page, **Master file…** points a row at one master SHOBS-P built earlier, instead
   of a folder of frames.
 

@@ -134,15 +134,15 @@ A star can be a comp or a Watch star, not both. Adding a comp to the Watch stars
 A note travels with a night: in the night table's **Note** column, in the light-curve CSV and in exports. Use it for anything you want to remember: thin cloud after 2 a.m., focuser slipped, moon nearby.
 
 1. On the Output page, click the night's row in the night table.
-2. Press **Night notes…** (gray until a night is chosen; from 2.4.0 there is no list of numbers to type from).
+2. Press **Night notes…** (greyed until a night is chosen; from 2.4.0 there is no list of numbers to type from).
 3. Type the note, or leave it empty to remove one.
 
 ## Other series tools
 
 All of these are in the **Data** row at the top of the Output page's controls (from 2.4.0; **Save series** stays under the plots, in the **Results** row). When the series has a file, each of them saves the file straight away.
 
-- **Add series file…** merges another saved series into the one that is open, for example a night you saved on its own. You see how many points and which nights will be added, with warnings if the comps or reduction differ. Series from Variables and Transits modes cannot be merged.
-- **Remove night…** removes the night chosen in the night table (click its row first; the button is gray until one is chosen, from 2.4.0). The question names the night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`, and its points; confirm. This cannot be undone, except from the backup copy described below.
+- **Add series file…** merges another saved series into the one that is open, for example a night you saved on its own (greyed while a job runs, from 2.4.0). You see how many points and which nights will be added, with warnings if the comps or reduction differ. Series from Variables and Transits modes cannot be merged.
+- **Remove night…** removes the night chosen in the night table (click its row first; the button is greyed until one is chosen, from 2.4.0). The question names the night by its dates and key, for example `22–23 Oct 2026 (JD2461336)`, and its points; confirm. This cannot be undone, except from the backup copy described below.
 - **Close series** sets the series aside. The next run is a single night again. The file on disk is not changed.
 
 In Transits mode, a series of one planet with two or more nights can be fitted together: **Fit the series' nights…** on the

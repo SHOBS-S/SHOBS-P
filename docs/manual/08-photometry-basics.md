@@ -975,7 +975,7 @@ After a stack run SHOBS-P goes to the Output page, with **Points: Stacked** sele
 Once a night has been stacked it has two sets of points. The **Points** box, on the Stack row after the **Stack**
 button, chooses which set is the night's:
 
-- **Per frame** and **Stacked** (grayed until there are stacks). Switching is instant. Both are grayed while a job
+- **Per frame** and **Stacked** (greyed until there are stacks). Switching is instant. Both are greyed while a job
   runs (2.4.0): a switch would change the points under it.
 - Under them, **Results use: Per frame** or **Results use: Stacked (20 frames)**. The Output page shows the same text
   at the end of its **View** row, after the **Airmass-corrected night means** box (empty until the night is stacked).

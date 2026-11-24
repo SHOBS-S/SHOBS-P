@@ -4043,29 +4043,90 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             parent = nxt
         return bool(parent) and os.path.isdir(parent) and os.access(parent, os.W_OK)
 
-    def _output_words(self, folder: str) -> str:
-        """m034: what the Output row says beside the box."""
-        if not folder:
-            return ""
-        return "in use" if self.output_folder_usable(folder) else "cannot be used"
+    OUTPUT_CHECK_MS = 600   # 2.4.0 fit-in F2 review (S9): the Output box is checked this long after typing stops
+    OUTPUT_NETWORK_WORDS = "checked when you save"
+
+    @staticmethod
+    def output_folder_on_network(folder: str) -> bool:
+        """Review S9: a network folder (\\\\server\\share, //server/share, or a mapped network drive on Windows).
+        Its check could wait for a network timeout, so it is left to the save (which says if it cannot be used)."""
+        f = (folder or "").strip()
+        if f.startswith("\\\\") or f.startswith("//"):
+            return True
+        if sys.platform == "win32" and len(f) >= 2 and f[1] == ":":
+            try:
+                import ctypes
+                return ctypes.windll.kernel32.GetDriveTypeW(f[0].upper() + ":\\") == 4   # DRIVE_REMOTE
+            except Exception:
+                return False
+        return False
 
     def _output_typed(self):
-        """Typed (or pasted) into the Output box: used for this session only."""
+        """Typed (or pasted) into the Output box: used for this session only. 2.4.0 fit-in F2 (m034); review S9: the
+        disk is not touched at each keystroke: the row keeps what it said until typing stops, then the folder is
+        checked off the Tk thread."""
+        job, self._output_job = getattr(self, "_output_job", None), None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        if not self.output_dir.get().strip():
+            self._output_token = None
+            self._counts["Output"].set("")
+            return
+        self._output_job = self.after(self.OUTPUT_CHECK_MS, self._output_check)
+
+    def _output_check(self, then=None):
+        """Review S9: check the Output box's folder in the background; then(folder, usable) runs on the Tk thread
+        (default: the row beside the box says in use / cannot be used). A network folder is not checked here."""
+        self._output_job = None
         folder = self.output_dir.get().strip()
-        self._counts["Output"].set(self._output_words(folder))   # 2.4.0 fit-in F2 (m034)
+        if not folder:
+            return
+        if self.output_folder_on_network(folder):
+            self._output_token = None
+            self._counts["Output"].set(self.OUTPUT_NETWORK_WORDS)
+            return
+        token = self._output_token = object()
+
+        def done(ok):
+            if getattr(self, "_output_token", None) is not token or self.output_dir.get().strip() != folder:
+                return   # typed on since: a newer check answers
+            self._output_token = None
+            self._counts["Output"].set("in use" if ok else "cannot be used")
+            if then is not None:
+                then(folder, ok)
+
+        def work():
+            try:
+                ok = self.output_folder_usable(folder)
+            except Exception:
+                ok = False
+            self.call_ui(done, ok)
+        threading.Thread(target=work, daemon=True).start()
 
     def _output_changed(self):
+        """Browse or ✕ on the Output row. Review S9: the check runs off the Tk thread too."""
+        job, self._output_job = getattr(self, "_output_job", None), None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
         folder = self.output_dir.get().strip()
-        if folder and not self.output_folder_usable(folder):   # 2.4.0 fit-in F2 (m034)
-            self._counts["Output"].set("cannot be used")
-            self.status.set(f"The output folder {folder} cannot be used (it cannot be written to): each Save asks "
-                            "where to put the file.")
-        elif folder:
-            self._counts["Output"].set("in use")
-            self.status.set(f"Save buttons now write into {folder} (never over an existing file).")
-        else:
+        if not folder:
+            self._output_token = None
             self._counts["Output"].set("")
             self.status.set("No output folder: each Save asks where to put the file.")
+            return
+        self.status.set(f"Save buttons now write into {folder} (never over an existing file).")
+
+        def then(folder, ok):
+            if not ok:   # 2.4.0 fit-in F2 (m034)
+                self.status.set(f"The output folder {folder} cannot be used (it cannot be written to): each Save "
+                                "asks where to put the file.")
+        self._output_check(then)
 
     # ---- output folder (2.2) --------------------------------------------------------------
     @staticmethod
@@ -5150,7 +5211,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.star_lookup_button.pack(side=LEFT, padx=(6, 0))
         self.gate(self.star_lookup_button,
                   lambda: "" if self.star_id.get().strip() else "Type a Star ID or designation first.", busy=True)
-        ttk.Button(cell, text="Clear target", command=self.clear_target).pack(side=LEFT, padx=(6, 0))
+        clear_target_button = ttk.Button(cell, text="Clear target",
+                                         command=lambda: None if self.busy else self.clear_target())
+        clear_target_button.pack(side=LEFT, padx=(6, 0))
+        # 2.4.0 fit-in F2 review (S6): greyed while a job runs, like the Star ID box beside it (m074)
+        self.gate(clear_target_button, None, busy=True)
         # How AAVSO spells the name, when the typed one differs only in spacing or capitals (2.2).
         self.name_hint = StringVar(value="")
         self.name_row = ttk.Frame(target, style="Card.TFrame")
@@ -5281,11 +5346,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._field(optics, 0, "Telescope", self.telescope_name, width=12, hint="blank = from the header")
         self._aperture_entry = self._field(optics, 1, "Telescope aperture (mm)", self.aperture_mm, width=12,
                                            hint="for the scintillation error")   # 2.3.1: focused by the aperture check
+        # 2.4.0 fit-in F2 review (S4): a value typed (or pasted) by hand is noted with the lights it was typed for, so
+        # the remembered aperture (m140) never overwrites it
+        for seq in ("<KeyRelease>", "<<Paste>>", "<<Cut>>"):
+            self._aperture_entry.bind(seq, lambda _e: self.after_idle(self._aperture_typed), add="+")
         self._field(optics, 2, "Focal length (mm)", self.focal_mm, width=12)
         self._field(optics, 3, "Pixel size (µm)", self.pixel_um, width=12)
         ttk.Label(optics, text="Binning", style="Card.TLabel").grid(row=4, column=0, sticky=W, padx=(0, 10), pady=3)
-        ttk.Combobox(optics, textvariable=self.binning, values=(1, 2, 4), width=6, state="readonly").grid(
-            row=4, column=1, sticky=W, pady=3)
+        self._binning_box = ttk.Combobox(optics, textvariable=self.binning, values=(1, 2, 4), width=6,
+                                         state="readonly")
+        self._binning_box.grid(row=4, column=1, sticky=W, pady=3)
+        # 2.4.0 fit-in F2 review (S5): Binning cannot change under a running job (the masters' bin is checked at Run)
+        self.gate(self._binning_box, None, busy=True)
         ttk.Label(optics, text="same-color pixels only; colors stay separate", style="Hint.TLabel").grid(
             row=4, column=2, sticky=W, padx=(8, 0))
         ttk.Checkbutton(optics, text="Include scintillation (atmospheric twinkling) in the error bars",
@@ -7802,6 +7874,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except (TypeError, ValueError):
             return None
 
+    def _aperture_typed(self):
+        """Review S4: the box's text as typed by hand, and the lights (telescope) it was typed for (None: before any
+        lights were scanned; it holds for the next ones)."""
+        self._aperture_hand = (self.aperture_mm.get().strip(), getattr(self, "_lights_scope", None))
+
+    def _aperture_set_by_hand(self, scope) -> bool:
+        """Review S4: True when the box holds a value typed by hand for these lights (or before any were scanned)."""
+        hand = getattr(self, "_aperture_hand", None)
+        if not hand or hand[0] != self.aperture_mm.get().strip() or self._aperture_box() is None:
+            return False
+        return hand[1] is None or same_scope(hand[1], scope)
+
     def _check_aperture_scope(self, header: dict):
         """2.3.1 (nit, John 5 Nov): the Telescope aperture (it sets the scintillation error) stayed at the last data
         set's value (MicroObservatory's 152 mm on an 8SE's frames). When the lights' header gives no aperture:
@@ -7810,6 +7894,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         - lights from another telescope than the box's value was last used with: ask whether it is right.
         The aperture used is the box's (written in the night's setup and the settings file)."""
         scope = lights_scope(header)
+        hand = self._aperture_set_by_hand(scope)   # review S4: asked before _lights_scope moves to these lights
         self._lights_scope = scope
         if scope is None or "aperture_mm" in core.header_optics(header) or getattr(self, "_loading_meta", False):
             return
@@ -7825,6 +7910,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except (TypeError, ValueError):
                 return
             if cur is not None and abs(ap - cur) < 0.5:
+                return
+            if hand:
+                # review S4: a value typed by hand for these lights is never overwritten (one plain Log line)
+                self.log(f"Telescope aperture kept at {cur:g} mm (typed by hand); {ap:g} mm was last used with "
+                         f"{scope_words(scope)}.")
                 return
             # 2.4.0 fit-in F2 (m140, John 24 Nov; RESULTS-CHANGING: the scintillation part of the error bars): a
             # telescope measured before gets its remembered aperture without a question; one plain line says so (the
@@ -10962,10 +11052,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _masters_why(self) -> str:
         if self.masters is None:
             return "Build masters and calibrate first (Calibrate page)."
-        return ""
+        return self._bin_mismatch_why()
+
+    def _bin_mismatch_why(self) -> str:
+        """2.4.0 fit-in F2 review (S5, x064 / m349): the masters stay, marked with the bin they were built at; while
+        the Binning box says another bin, Run photometry, Scan field and Stack are greyed with these words (live
+        again when Binning is set back)."""
+        old = getattr(self, "masters_binning", None)
+        if self.masters is None or not old:
+            return ""
+        try:
+            new = int(self.binning.get())
+        except Exception:
+            return ""
+        if new == int(old):
+            return ""
+        return f"The masters were built at bin {int(old)}: Calibrate again (or set Binning back to {int(old)})."
 
     def _run_why(self) -> str:
-        """Run photometry: masters built (x064: a Binning change drops them) and the aperture sizes in order."""
+        """Run photometry: masters built at the Binning box's bin (x064) and the aperture sizes in order."""
         return self._masters_why() or self._aperture_problems()[0]
 
     def _scan_why(self) -> str:
@@ -10973,7 +11078,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if self.masters is None or self.preview is None or not self.preview_is_debayered:
             return ("Calibrate first (Calibrate page). The scan uses the same frames, calibration, alignment and "
                     "aperture as photometry.")
-        return self._aperture_problems()[0]
+        return self._bin_mismatch_why() or self._aperture_problems()[0]
 
     def _solve_why(self) -> str:
         """m292: Solve again needs the calibrated image."""
@@ -10998,14 +11103,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             return
         old = getattr(self, "masters_binning", None)
-        if self.masters is None or not old or new == int(old):
+        if self.masters is None or not old:
             return
-        # 2.4.0 fit-in F2 (#79 item 6, x064 and m349, John 24 Nov): masters built at another bin cannot calibrate
-        # these frames, so they are dropped here (Run photometry and Scan field grey until Calibrate rebuilds them),
-        # instead of a ✖ at Run. masters_binning stays: it is the bin of the image now on the Photometry page.
-        self.masters = None
-        text = (f"Binning changed from {old} to {new}: the masters were built at bin {old}, so Calibrate rebuilds "
-                f"them at bin {new}."
+        # 2.4.0 fit-in F2 (#79 item 6, x064 and m349, John 24 Nov; review S5): masters built at another bin cannot
+        # calibrate these frames. They are kept, marked with their bin (masters_binning, also the bin of the image
+        # on the Photometry page): Run photometry, Scan field and Stack grey while Binning says another bin
+        # (_bin_mismatch_why) and are live again when it is set back. One plain line each way; no ✖ at Run.
+        if new == int(old):
+            if getattr(self, "_bin_note", False):
+                self._bin_note = False
+                text = f"Binning is back at {old}, the bin the masters were built at."
+                self.status.set(text)
+                self.log(text, keep_status=True)
+            self.gates.refresh()
+            return
+        self._bin_note = True
+        text = (f"Binning changed from {old} to {new}: the masters were built at bin {old}. Calibrate again to "
+                f"rebuild them at bin {new}, or set Binning back to {old}."
                 + (f" The image on the Photometry page, its solution and the star markers stay at bin {old} until "
                    "then." if self.calibrated is not None else ""))
         self.status.set(text)
@@ -17998,9 +18112,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showerror(APP_TITLE, str(exc))
             return
         if self.masters_binning is not None and binning != self.masters_binning:
-            # 2.4.0 fit-in F2 (m349): a Binning change drops the masters (Scan field greys); a status-line backstop
-            self.status.set(f"Binning is {binning} but the masters were built at {self.masters_binning}: Calibrate "
-                            f"rebuilds them at bin {binning}.")
+            # 2.4.0 fit-in F2 (m349; review S5): Scan field greys while Binning differs from the masters' bin; a
+            # status-line backstop
+            self.status.set(f"The masters were built at bin {self.masters_binning}: Calibrate again (or set Binning "
+                            f"back to {self.masters_binning}).")
             return
         discovery = self.mode_key == "discovery"
         box = "Detection threshold (σ)"
@@ -21427,6 +21542,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.status.set("Run photometry called off; the comp survey goes on and only changes the suggestions.")
             self.log("Run photometry called off (it was waiting for the comp survey).", keep_status=True)
             return
+        # 2.4.0 fit-in F2 review (S3): a Fit transit (m787) or Fit nights (m681) waiting for an ephemeris lookup is
+        # called off the same way (the lookup goes on and only fills in the ephemeris)
+        tp = getattr(self, "transit_page", None)
+        called_off = []
+        if tp is not None and getattr(tp, "_fit_queued", None):
+            tp.drop_queued_fit("")
+            called_off.append("Fit transit")
+        mn = getattr(tp, "_multinight", None) if tp is not None else None
+        if mn is not None and hasattr(mn, "drop_queued_fit") and mn.drop_queued_fit():
+            called_off.append("Fit nights")
+        if called_off:
+            words = (f"{' and '.join(called_off)} called off (it was waiting for the ephemeris; the lookup goes on "
+                     "and only fills it in).")
+            self.status.set(words)
+            self.log(words, keep_status=True)
+            if not self.busy:
+                return
         if not self.busy:
             self.status.set("Nothing is running.")
             return
@@ -22219,6 +22351,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def update_series_status(self):
         """Refresh the Input page's series line (load, close, save, a night added or removed, a new series)."""
+        gate.bump_series(self)   # 2.4.0 fit-in F2 review (S1): the gates' kept series answers are recomputed
         if not hasattr(self, "series_status"):
             return
         self.series_status.set(self.series_status_text())
@@ -22341,6 +22474,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._closing = True   # from here on the window goes; nothing asks again
         self._finish_saves_on_close()   # 2.2.19 (review)
         self.destroy()
+
+    def destroy(self):
+        """2.4.0 fit-in F2 review (N1): the gate timer is cancelled before the window goes (no tick on a dead window)."""
+        gates = getattr(self, "gates", None)
+        if gates is not None:
+            gates.stop()
+        tp = getattr(self, "transit_page", None)
+        if tp is not None:
+            tp._fit_queued = None   # review S3: nothing queued outlives the window
+        super().destroy()
 
     def close_series(self, asked: bool = False):
         """2.2.15 (item 7): set the open series aside (the file on disk is not changed), as a new series starts: the
@@ -22612,7 +22755,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                                                      command=self.close_series))
         self.gate(self.close_series_button_out, self._close_series_why, busy=True)   # 2.4.0 fit-in F2 (m502)
         self.update_series_status()
-        groups.add("data", ttk.Button(g, text="Add series file…", command=self.add_series_file))
+        add_file = groups.add("data", ttk.Button(g, text="Add series file…", command=self.add_series_file))
+        self.gate(add_file, None, busy=True)   # 2.4.0 fit-in F2 review (S6): it merges nights into the series
         # 2.4.0 fit-in F2 (m535, John 24 Nov): both act on the night chosen in the night table (as Trim does); greyed
         # until one is chosen (no number to type)
         self.remove_night_button = groups.add("data", ttk.Button(g, text="Remove night…", command=self.remove_night))
@@ -22808,7 +22952,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _picked_night(self):
         """m535: the night chosen in the night table (the one the Output page shows on its own), else None."""
         night = getattr(self, "highlight_night", None)
-        return night if night is not None and any(o.night == night for o in self.observations) else None
+        return night if night is not None and night in self._series_nights() else None   # review S1: O(1)
 
     def _picked_night_why(self) -> str:
         if not self.observations:
@@ -24178,6 +24322,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return out
 
     def add_series_file(self):
+        if self.busy:
+            return   # 2.4.0 fit-in F2 review (S6): greyed during a job; a silent backstop
         path = filedialog.askopenfilename(
             title="Add a saved series to the one that is open",
             filetypes=[("SHOBS-P series", "*.cvseries"), ("JSON", "*.json"), ("All", "*.*")],

@@ -154,6 +154,8 @@ CORNER_NEEDS = "Fit a transit first: the corner plot shows that fit's MCMC sampl
 TRIM_TYPE_FIRST = ("Type a From and/or To time (the site's local time, HHMM or HH:MM, or BJD_TDB), or drag across "
                    "the plot.")
 EPH_WAIT = "Fit transit: waiting for the ephemeris…"
+# 2.4.0 fit-in F2 review (S2, S3): a queued Fit transit (m787) belongs to the report and planet it was pressed for
+FIT_CALLED_OFF = "Fit transit called off (it was waiting for the ephemeris)."
 
 
 def _gate(app, widget, why=None, tip=None, busy=True):
@@ -750,6 +752,7 @@ class TransitPage:
         """2.2.7: back to the photometry (newest night), dropping a loaded EXOTIC report."""
         if self.report is None:
             return
+        dropped = self.drop_queued_fit("")   # review S3: a fit waiting for this report's ephemeris goes with it
         self._clear_progress()
         self.report = None
         self.night.set("")
@@ -760,6 +763,8 @@ class TransitPage:
         self._fill_table()
         self.draw()
         self.refresh(shown=not quiet)
+        if dropped:
+            self.app.status.set("Fit transit called off: the report was closed.")
         if not self.app.observations:
             self.source_text.set("")
             self._notes_text([("info", "Report closed. Run photometry in Transits mode, or open another report.")])
@@ -1009,16 +1014,28 @@ class TransitPage:
                 text += f", {r['trim']['n']} trimmed"     # 2.2.17 (item 5)
         self.source_text.set(text)
 
-    def _signature(self):
-        """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet."""
+    def _signature(self, cheap: bool = False):
+        """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet.
+        cheap=True (the Trim gate, review S1): the point part is kept until the series changes (gate.series_memo);
+        a fit's own staleness check always works it out afresh."""
         if self.report is not None:
             return ("report", id(self.report), tuple(self._trims))   # 2.2.17 (item 5): the trim too
         night = self.night.get()
-        obs = [o for o in self.app._usable() if o.night == night]
-        if not obs:
+
+        def points():
+            obs = [o for o in self.app._usable() if o.night == night]
+            if not obs:
+                return None
+            mags = [o.mag for o in obs if math.isfinite(o.mag)]
+            return len(obs), round(float(sum(mags)), 6), round(float(sum(o.jd for o in obs)), 6)
+        if cheap and hasattr(self.app, "__dict__"):
+            part = gate.series_memo(self.app, ("transit_sig", night), points,
+                                    vals=(repr(getattr(getattr(self.app, "skip_flagged", None), "get", lambda: None)()),))
+        else:
+            part = points()
+        if part is None:
             return None
-        mags = [o.mag for o in obs if math.isfinite(o.mag)]
-        return (night, len(obs), round(float(sum(mags)), 6), round(float(sum(o.jd for o in obs)), 6),
+        return (night,) + part + (
                 tuple(self.app.active_comps or self.app.comps_used), planet_summary(self.current_planet()),
                 str(self.app._scint_setup() if hasattr(self.app, "_scint_setup") else None),
                 tuple(self._trims))   # 2.2.17 (item 5)
@@ -1108,6 +1125,8 @@ class TransitPage:
             messagebox.showerror("SHOBS-P", f"Could not read {os.path.basename(path)}:\n{exc}")
             return
         self._report_time_system(rep)   # 2.2.17 review: #DATE_TYPE other than BJD_TDB
+        # review S3: a fit queued for the report shown before is not for this one
+        self.drop_queued_fit("Fit transit called off: another report was opened.")
         self._clear_progress()
         self.report = rep
         self._reset_trim()      # 2.2.17 (item 5)
@@ -1166,10 +1185,30 @@ class TransitPage:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def drop_queued_fit(self, words: str = FIT_CALLED_OFF) -> bool:
+        """2.4.0 fit-in F2 review (S3): call off a Fit transit waiting for the ephemeris (Cancel, Close report,
+        another report, New reduction, the window closing). The status line says so; True when one was waiting."""
+        queued, self._fit_queued = getattr(self, "_fit_queued", None), None
+        if not queued:
+            return False
+        try:
+            if words:
+                self.app.status.set(words)
+            if self.report is not None and queued.get("report") is self.report:
+                self.draw(placeholder="Fit transit called off; press it again when you are ready.")
+        except Exception:
+            pass
+        return True
+
     def _ephemeris_found(self, rep, found, why):
         if getattr(self, "_eph_pending", None) is rep:
             self._eph_pending = None
-        queued, self._fit_queued = getattr(self, "_fit_queued", None), None   # 2.4.0 fit-in F2 (m787)
+        # 2.4.0 fit-in F2 (m787); review S2: a lookup for another report leaves a fit queued for this one alone
+        queued = getattr(self, "_fit_queued", None)
+        if queued and queued.get("report") is rep:
+            self._fit_queued = None
+        else:
+            queued = None
         if self.report is not rep:
             return
         planet = rep["planet"]
@@ -1183,7 +1222,12 @@ class TransitPage:
                          + (f" ({why})" if why else "") + "; no O − C will be given.")
         self.planet_text.set(planet_summary(self.current_planet()))
         self._fill_table()
-        if queued and queued.get("report") is rep:
+        if queued and _norm((self.current_planet() or {}).get("name")) != _norm(queued.get("planet")):
+            # review S3: the planet changed while the fit waited: it was for the other planet
+            self.app.status.set("Fit transit called off: the planet changed while it waited for the ephemeris. "
+                                "Press Fit transit again for this planet.")
+            queued = None
+        if queued:
             # 2.4.0 fit-in F2 (m787): Fit transit was pressed during the lookup: it runs now (with no ephemeris
             # found it fits as it would have without one: no O − C)
             if not self.app.busy:
@@ -1591,7 +1635,8 @@ class TransitPage:
         # still never starts without the button (2.3.2 item 2).
         if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
             if not auto:
-                self._fit_queued = {"report": self.report, "with_flagged": with_flagged}
+                self._fit_queued = {"report": self.report, "with_flagged": with_flagged,
+                                    "planet": (self.current_planet() or {}).get("name")}
                 self.app.status.set(EPH_WAIT)
                 self.draw(placeholder=EPH_WAIT)
             return
@@ -3320,15 +3365,22 @@ class TransitPage:
     def _trim_times(self):
         """(t BJD_TDB, time map) of the source the trim applies to, for the live Trim reason: worked out again only
         when the data change (_signature), and never touching what a fit reads (_data_extra is put back)."""
-        key = (self._signature(), self.app.lat.get(), self.app.lon.get(), bool(self.flip_at_gap.get()))
+        # 2.4.0 fit-in F2 review (S1): the key's point part is kept until the series changes (gate.series_memo), so
+        # the gate timer does not walk the series four times a second; a failure is kept too (no night, say).
+        key = (self._signature(cheap=True), self.app.lat.get(), self.app.lon.get(), bool(self.flip_at_gap.get()))
         cache = getattr(self, "_trim_cache", None)
         if cache is not None and cache[0] == key:
+            if isinstance(cache[1], Exception):
+                raise cache[1]
             return cache[1], cache[2]
         keep = self._data_extra
         try:
             self._data_extra = {}
             t = np.asarray(self._data()[0], dtype=float)
             tmap = self._time_map_for(t)
+        except Exception as exc:
+            self._trim_cache = (key, exc, None)
+            raise
         finally:
             self._data_extra = keep
         self._trim_cache = (key, t, tmap)
@@ -3944,8 +3996,10 @@ class TransitPage:
     def _save_why(self) -> str:
         """The AAVSO report, ExoFOP package, ExoClock file and plot PNG: a fit must be shown (m827 m838 m845 m045),
         and not while the comp check runs (m844)."""
-        if not self.result or getattr(self, "fig", None) is None:
+        if not self.result:
             return FIT_FIRST
+        if getattr(self, "fig", None) is None:   # review N4: no plot library, not "no fit"
+            return "Saving needs the plot, and matplotlib is not installed (run the setup again)."
         if getattr(self, "_checking", False):
             return COMP_CHECK_RUNNING
         return ""

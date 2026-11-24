@@ -106,11 +106,14 @@ strip; the page has no progress bar of its own.
 - **Analysis** row: **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** and
   **Robustness check** (all below). **Fit the series' nights…** is grayed unless a Transits series with two or more
   nights is open; **Robustness check** is grayed until there is a fit on the page.
-- From 2.4.0 a button that cannot work yet is gray, and hovering over it says why. While a fit, the comp check or
+- From 2.4.0 a button that cannot work yet is greyed, and hovering over it says why. While a fit, the comp check or
   another step runs (the busy bar), **Fit transit**, **Trim and refit**, **Clear trim**, **Comp health…**, **Use
-  comps…**, **Multi-night…**, **Fit the series' nights…**, **Robustness check** and the report buttons are gray until
+  comps…**, **Multi-night…**, **Fit the series' nights…**, **Robustness check** and the report buttons are greyed until
   it ends. **Fit transit** pressed on an opened report while its ephemeris is still being looked up is not lost: the
   status bar says *"Fit transit: waiting for the ephemeris…"* and the fit starts as soon as the ephemeris is in.
+  Changed your mind? **Cancel** calls it off (*"Fit transit called off (it was waiting for the ephemeris; …)"*), and
+  so do **Close report**, opening another report and a change of planet: a waiting fit only ever runs on the report
+  and planet it was pressed for.
 - **View** row: the **credible bands** box and the **Plot bins** box (see "Read the plot"). Display only.
 - The **verdict**, the **quality line**, the **plot**, the **parameter table** and the **notes**.
 - A **result line** above the Results row, once there is something to say: *"✔ Done: Tc …"* with the main numbers,
@@ -121,9 +124,9 @@ strip; the page has no progress bar of its own.
   package…**, **Open ExoFOP…**, **Save for ExoClock…**, **Go to ExoClock…**, **Save light-curve CSV…**, **Save plot
   PNG…**, **Save corner plot…** and **Save field image…**, with **Variable View  ▶** at the right. After **Save AAVSO
   exoplanet report…** has saved the field image with the report, **Save field image…** reads **Field image saved ✓**
-  and is grayed out (or **Fetch AAVSO chart** when only the chart is missing; chapter 19). The saves are gray until
+  and is greyed out (or **Fetch AAVSO chart** when only the chart is missing; chapter 19). The saves are greyed until
   there is a fit to save (**Save light-curve CSV…** also works with this session's photometry and no fit), and the
-  AAVSO report, ExoFOP package, ExoClock file and plot PNG are gray for the few seconds the comp check runs, so their
+  AAVSO report, ExoFOP package, ExoClock file and plot PNG are greyed for the few seconds the comp check runs, so their
   files carry its result (from 2.4.0).
 - Under the Results row, once the planet is looked up: the planet's **TESS TOI status** and **ExoClock priority**
   (chapter 16), for example *"TOI-2046.01 · CP (confirmed) — AAVSO / Exoplanet Watch is the right home"* and
@@ -417,7 +420,7 @@ To trim a stretch:
    Or type the times yourself: the site's local clock time (`0042` or `00:42`, in the **Time zone** of the Site box
    on the Input page), or a BJD_TDB. Leave **from** empty to trim
    from the start, or **to** empty to trim to the end.
-2. Click **Trim and refit** (or press Enter in either box). From 2.4.0 the button stays gray, and the words beside
+2. Click **Trim and refit** (or press Enter in either box). From 2.4.0 the button stays greyed, and the words beside
    the boxes say why, while the span cannot be trimmed: nothing typed, a box it cannot read, no points in the span,
    or fewer than 20 points left. A **to** time before the **from** time is the same span the other way round: it is
    trimmed as meant, and the boxes are put in order.
@@ -625,8 +628,9 @@ A Variables-mode series never offers **Fit the series' nights…**.
    again and the O − C compares with the same one.
 4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
    If the window is still looking up the planet, the line under the fit options says *"Fit nights: waiting for the
-   ephemeris…"* and the fit starts when the lookup is in (from 2.4.0); only after a failed lookup does it ask you to
-   press **Look up**. **Fit nights** is gray while it, or any other step, runs. When the archive knows the planet but
+   ephemeris…"* and the fit starts when the lookup is in (from 2.4.0; the window's **Cancel**, or a change of
+   planet, calls it off and says so); only after a failed lookup does it ask you to
+   press **Look up**. **Fit nights** is greyed while it, or any other step, runs. When the archive knows the planet but
    gives no T0, the Summary says so plainly (*"No published ephemeris: epochs counted from the first night."*); the
    ⚠ form, ending *"Look up."*, means no lookup answered.
    The window's own busy bar, at the lower left, says what the fit is doing, for example *"Fitting 4 nights… MCMC

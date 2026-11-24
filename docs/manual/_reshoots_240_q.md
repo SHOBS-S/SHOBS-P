@@ -14,9 +14,10 @@ image for a page that changed: reshoot it.
 | img/08-points-stacked.png | 08 | **Stack N** spin box in view | RESHOOT |
 | img/20-discovery-stack-row.png | 20 | **Stack N** spin box | RESHOOT |
 | img/26-credits-page.png | 26 | SOFTWARE list adds **tzfpy** (if that part of the list is in view) | CHECK, reshoot if in view |
-| img/03-busy-bar.png | 03 | mid-run: if any page button is in the shot, the job buttons (Run photometry, Solve again, mode buttons in the sidebar) are now greyed | CHECK, reshoot if buttons are in view |
+| img/03-busy-bar.png | 03 | mid-run: if any page button is in the shot, the job buttons (Run photometry, Solve again, mode buttons in the sidebar) are now greyed; on the Input page also **Binning**, **Clear target** and (Output page) **Add series file…** (review S5, S6) | CHECK, reshoot if buttons are in view |
 | img/03-window-parts.png | 03 | sidebar mode buttons and page buttons: only if the shot was taken during a job, or shows a button that is now greyed (e.g. Close series with no series: unchanged) | CHECK |
 | img/05-input-page.png | 05 | **Look up again** greyed when its box is empty; **Close series** greyed with no series (as before); Output row may say **cannot be used** | CHECK, reshoot if a lookup box is empty in the shot |
+| img/02-first-start.png | 02 | Input page with empty **Star ID** and **Planet**: both **Look up again** buttons are now greyed (review S8) | CHECK, reshoot if the buttons are in view |
 | img/07-calibrate-done.png | 07 | **Apply channel to the preview** greyed before calibration (after: live, unchanged); on color images the **Bayer pattern** box greyed | CHECK |
 | img/08-photometry-solved.jpg | 08 | **Run photometry** greyed if the shot has no masters or aperture boxes out of order; otherwise unchanged | CHECK |
 | img/08-suggest-apertures.png | 08 | the two Test buttons are greyed only during a job (the test itself): unchanged when idle | reuse if taken idle |

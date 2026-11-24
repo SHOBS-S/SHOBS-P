@@ -122,7 +122,7 @@ message above."*
 | Problem | Fix |
 |---|---|
 | A button is greyed and nothing happens when you click it. | From 2.4.0 a button is greyed until it can work (for example **Run photometry** before Calibrate, or anything that starts a job while one runs). Hover over it: a note says why and what to do. |
-| The Output row says **cannot be used**. | The folder cannot be written to (read-only, a file of that name, a drive that is not connected). Choose another folder; until then each Save asks where to put the file. |
+| The Output row says **cannot be used**. | The folder cannot be written to (read-only, a file of that name, a drive that is not connected). Choose another folder; until then each Save asks where to put the file. (**checked when you save**: a network folder; the first Save tells you if it cannot be used.) |
 | Frames from another site show local times in your own time zone. | Pick the site's zone in the **Time zone** box (Input page, Site). SHOBS-P sets it from the site's latitude and longitude (tzfpy); an install set up before 2.4.0 may lack that package (run the setup again), and then the log asks you to check the box. |
 | The folders are empty every time you start. | That is by design: folders are not remembered. Your site, optics and observer code are. |
 | A folder shows *0 files*. | SHOBS-P reads FITS (`.fits`, `.fit`, `.fts`, also compressed) and XISF. Save camera RAW, TIFF or JPEG frames as FITS. |
