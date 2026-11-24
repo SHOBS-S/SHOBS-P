@@ -49,6 +49,7 @@ import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
 import ui_watch   # 2.4.0 fit-in F1 (#116)
+import iers_bg    # 2.4.0 fit-in F1 (#116): astropy's IERS table refresh off the Tk thread
 import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
@@ -29620,10 +29621,14 @@ def main():
     enable_windows_dpi()
     global UPDATE_CHECK
     UPDATE_CHECK = True   # 2.3.3 (#57): the real program asks GitHub (tests and the self-test never do)
+    iers_bg.start(log_to_file)   # 2.4.0 fit-in F1 (#116): the 21.7 s post-solve freeze was astropy downloading IERS-A
     app = App()
     app._ui_watch = ui_watch.UIWatch(log_to_file).start()   # 2.4.0 fit-in F1 (#116): stalls and where, in the log file
     app.mainloop()
 
 
 if __name__ == "__main__":
+    # 2.4.0 fit-in F1 (#116): run as a script this module is __main__, so a later 'import clearv_app' (transit_ui,
+    # neighbors_ui) loaded and compiled a second copy of the whole file (3.2 s stall at start) with its own globals.
+    sys.modules.setdefault("clearv_app", sys.modules[__name__])
     main()

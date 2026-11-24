@@ -5,6 +5,7 @@ thread has not beaten for STALL_S seconds, the log file gets one line saying so,
 thread at that moment (where it is stuck); a stall still going at LONG_S gets the stack again (has it moved?), and
 the end of every reported stall gets its length. Log file only: nothing on screen, nothing in the Findings.
 """
+import os
 import sys
 import threading
 import time
@@ -15,6 +16,15 @@ LONG_S = 10.0
 CHECK_S = 0.5
 SLEEP_S = 60.0   # the watch thread itself held up this long: the computer slept (a lock held that long is not seen)
 STACK_FRAMES = 14
+HERE = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_own(filename: str) -> bool:
+    """A frame in SHOBS-P's own folder (Fable F1 N2: by folder, not by file name)."""
+    try:
+        return os.path.normcase(os.path.dirname(os.path.abspath(filename))) == HERE
+    except Exception:
+        return False
 
 
 class UIWatch:
@@ -43,8 +53,16 @@ class UIWatch:
         frame = sys._current_frames().get(self.main_id)
         if frame is None:
             return "  (no stack)"
-        lines = traceback.format_stack(frame)[-STACK_FRAMES:]
-        return "".join(lines).rstrip()
+        full = traceback.extract_stack(frame)
+        text = "".join(traceback.format_list(full[-STACK_FRAMES:])).rstrip()
+        # F1 regression (23 Nov): a stall deep in a library (astropy's IERS download) pushed every SHOBS-P frame past
+        # the cut; name the innermost SHOBS-P frames above it so the log says which of our code made the call.
+        tail_own = any(_is_own(f.filename) for f in full[-STACK_FRAMES:][-4:])
+        above = [f for f in full[:-STACK_FRAMES] if _is_own(f.filename)]
+        if above and not tail_own:
+            text = ("  (called from SHOBS-P:)\n" + "".join(traceback.format_list(above[-3:])).rstrip()
+                    + "\n  ...\n" + text)
+        return text
 
     def others_text(self) -> str:
         """The other threads' innermost frames: when the Tk thread sits idle in mainloop but did not beat, another

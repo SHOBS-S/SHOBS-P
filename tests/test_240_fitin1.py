@@ -398,5 +398,129 @@ class TestMeasureThreaded(AppCase):
         self.assertFalse(w._measuring)   # no error, nothing shown on a closed window
 
 
+
+
+class TestIersOffTkThread(unittest.TestCase):
+    """F1 regression (23 Nov): the 21.7 s post-solve freeze was astropy downloading IERS-A inside a transform."""
+
+    def setUp(self):
+        from astropy.utils import iers
+        self.iers = iers
+        self._saved = (iers.conf.auto_download, iers.conf.iers_degraded_accuracy, iers.conf.auto_max_age)
+
+    def tearDown(self):
+        (self.iers.conf.auto_download, self.iers.conf.iers_degraded_accuracy,
+         self.iers.conf.auto_max_age) = self._saved
+
+    def test_configure_turns_off_downloads(self):
+        import iers_bg
+        iers_bg.configure()
+        self.assertFalse(self.iers.conf.auto_download)
+        self.assertEqual(self.iers.conf.iers_degraded_accuracy, "warn")
+        self.assertIsNone(self.iers.conf.auto_max_age)
+
+    def test_stale_bundle_does_not_raise(self):
+        """Fable F1 M1: a bundle whose predictions are over 30 days old must not raise on a recent night."""
+        import iers_bg
+        from astropy.time import Time
+        iers_bg.configure()
+        tab = self.iers.IERS_Auto.open()
+        saved = tab.meta.get("predictive_mjd")
+        try:
+            tab.meta["predictive_mjd"] = Time.now().mjd - 60
+            a = core.airmass(23.25, 57.17, 35.36, -81.96, Time.now().jd - 1)
+            b = core.convert_times(np.array([Time.now().jd - 1]), "BJD_TDB", 348.3, 57.17, 35.36, -81.96)
+        finally:
+            tab.meta["predictive_mjd"] = saved
+        self.assertTrue(math.isfinite(a))
+        self.assertTrue(np.isfinite(b).all())
+
+    def test_airmass_never_downloads_after_configure(self):
+        import iers_bg
+        from astropy.utils import data
+        iers_bg.configure()
+        with mock.patch.object(data, "download_file", side_effect=AssertionError("downloaded")), \
+                mock.patch("urllib.request.urlopen", side_effect=AssertionError("network")):
+            a = core.airmass(23.25, 57.17, 35.36, -81.96, 2461355.6)
+            b = core.convert_times(np.array([2461355.6]), "BJD_TDB", 348.3, 57.17, 35.36, -81.96)
+        self.assertTrue(math.isfinite(a) and 1.0 <= a < 8.0)
+        self.assertTrue(np.isfinite(b).all())
+
+    def test_refresh_download_then_failure_paths(self):
+        import iers_bg
+        from astropy.utils.iers import IERS_A_FILE
+        logs = []
+        with mock.patch.object(iers_bg, "_cached_path", return_value=None), \
+                mock.patch.object(self.iers.earth_orientation_table, "set") as put:
+            with mock.patch("astropy.utils.data.import_file_to_cache", side_effect=lambda u, f, **k: f) as imp:
+                p = iers_bg.refresh(logs.append, download=lambda url: IERS_A_FILE)
+            self.assertEqual(p, IERS_A_FILE)
+            self.assertTrue(imp.called)
+            self.assertTrue(put.called)
+            self.assertIn("downloaded", logs[-1])
+
+            def boom(url):
+                raise OSError("offline")
+            self.assertIsNone(iers_bg.refresh(logs.append, download=boom))
+            self.assertIn("bundled", logs[-1])
+
+    def test_refresh_uses_fresh_cache_without_network(self):
+        import iers_bg
+        from astropy.utils.iers import IERS_A_FILE
+        logs = []
+        with mock.patch.object(iers_bg, "_cached_path", return_value=IERS_A_FILE), \
+                mock.patch.object(self.iers.earth_orientation_table, "set"):
+            p = iers_bg.refresh(logs.append, download=lambda url: self.fail("downloaded"),
+                                now=lambda: os.path.getmtime(IERS_A_FILE) + 3600)
+        self.assertEqual(p, IERS_A_FILE)
+        self.assertIn("cached copy", logs[-1])
+
+    def test_main_module_alias_and_start(self):
+        src = open(os.path.join(ROOT, "clearv_app.py"), encoding="utf-8").read()
+        self.assertIn('sys.modules.setdefault("clearv_app", sys.modules[__name__])', src)
+        self.assertIn("iers_bg.start(log_to_file)", src)
+
+    def test_bad_download_never_reaches_the_cache(self):
+        """Fable F1 S1: an error page is read (and fails) before it could replace the cached copy."""
+        import iers_bg
+        bad = os.path.join(tempfile.mkdtemp(), "portal.html")
+        with open(bad, "w") as fh:
+            fh.write("<html>log in to the hotel wifi</html>")
+        logs = []
+        with mock.patch.object(iers_bg, "_cached_path", return_value=None), \
+                mock.patch("astropy.utils.data.import_file_to_cache") as imp, \
+                mock.patch.object(self.iers.earth_orientation_table, "set") as put:
+            self.assertIsNone(iers_bg.refresh(logs.append, download=lambda url: bad))
+        self.assertFalse(imp.called)
+        self.assertFalse(put.called)
+        self.assertIn("bundled", logs[-1])
+
+
+class TestWatchNamesOwnCaller(unittest.TestCase):
+    def test_deep_library_stall_names_shobs_frame(self):
+        import importlib
+        import types
+        # a "library" module outside the SHOBS-P folder, called from this (SHOBS-P-named) test through many frames
+        lib = types.ModuleType("fakelib")
+        code = "def deep(n, ev, go):\n    if n:\n        return deep(n - 1, ev, go)\n    go.set(); ev.wait(5)\n"
+        exec(compile(code, os.path.join(tempfile.gettempdir(), "fakelib.py"), "exec"), lib.__dict__)
+        ev, go = threading.Event(), threading.Event()
+        holder = {}
+
+        def worker_in_own_file():
+            holder["id"] = threading.get_ident()
+            lib.deep(30, ev, go)
+        t = threading.Thread(target=worker_in_own_file)
+        t.start()
+        go.wait(5)
+        w = ui_watch.UIWatch(lambda s: None, main_thread_id=holder["id"])
+        with mock.patch.object(ui_watch, "_is_own", side_effect=lambda fn: os.path.basename(fn) == "test_240_fitin1.py"):
+            text = w.stack_text()
+        ev.set()
+        t.join()
+        self.assertIn("(called from SHOBS-P:)", text)
+        self.assertIn("worker_in_own_file", text)
+
+
 if __name__ == "__main__":
     unittest.main()

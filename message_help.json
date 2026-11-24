@@ -93,6 +93,15 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "Earth orientation table (IERS-A): … loaded in the background.",
+    "… no download and no cached copy; using the one bundled with astropy.",
+    "… not usable (…); using the one bundled with astropy."
+   ],
+   "todo": "Nothing to do."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Another step is still running. Wait for it to finish."
    ],
    "todo": "Wait, or press Cancel / Cancel run."
