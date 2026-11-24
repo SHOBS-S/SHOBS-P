@@ -56,7 +56,7 @@ On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both
 
 ### Watch a spare
 
-If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run. A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
+If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run, so from 2.4.0 the button is gray until a spare's row is selected (its tooltip says why). A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
 
 ## Use comps: change the comps without reducing again
 
@@ -65,7 +65,8 @@ SHOBS-P stores each comp's and spare's measurement in every frame. **Use comps�
 1. On the Output page, press **Use comps…**.
 2. The **Comparison stars in use** window lists every comp and spare with its **Catalog mag**, **Nights measured** (for example `7 of 8`), **Night offset**, **Scatter in night** and **Comp health** verdict (SUSPECT in red).
 3. Tick the stars you want in the comparison. Untick a SUSPECT comp; tick a steady spare measured on every night.
-4. Press **Apply**.
+4. Press **Apply**. It is gray while no star is ticked (from 2.4.0), and, like **Back to the original comps**, while a
+   step is running.
 
 ![The Comparison stars in use window for a ten-night series](img/11-use-comps.png)
 

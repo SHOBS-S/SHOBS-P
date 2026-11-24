@@ -84,11 +84,11 @@ in the **Period** box (no epoch needed), and press **Measure** again.
    decades old. Switching **Type** takes the epoch from that type's first saved time, unless you typed the elements
    yourself (then they stay). With no saved time of the chosen type, the boxes hold VSX's elements from the Star ID
    lookup and the label says, for example, **no saved maxima yet; VSX elements**; if they are empty, press **Elements
-   from VSX**. When VSX has a period but no epoch (AA LMi, for example), the label says **VSX gives a period but no
+   from VSX** (gray, from 2.4.0, until **Star ID** on the Input page holds the star's name). When VSX has a period but no epoch (AA LMi, for example), the label says **VSX gives a period but no
    epoch**: the error is fine (it uses that period), and for an O − C you type an epoch yourself. A good first epoch
    is this night's own Tmax; it makes this night cycle 0 with O − C 0. **Elements from VSX** and **Elements from saved times** switch between the two at any time. A time
    saved against the saved times' elements is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
-6. Press **Measure**. From 2.4.0 the measurement runs in the background: **Measure** greys out and the result box
+6. Press **Measure** (gray while a step runs in the main window). From 2.4.0 the measurement runs in the background: **Measure** greys out and the result box
    says *Measuring the time of maximum…* until the result appears (a few seconds on a long night; the main window's
    busy bar says the same). The window and SHOBS-P keep responding meanwhile.
 

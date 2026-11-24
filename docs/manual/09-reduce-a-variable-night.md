@@ -127,7 +127,7 @@ From 2.4.0 the controls are grouped by what they do, in the same rows and the sa
 | **Analysis** | **Watch stars…**, **Time of max/min…** (chapters 21 and 14) |
 | **View** | **Time axis**, **Bin**, **Mark periods (days)** with **Show**, **Airmass-corrected night means**. These change only how the plots are drawn. |
 
-Hover over a row's label to read what the row is for. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**, so you can see that it did. On a narrow window a row wraps onto a second line.
+Hover over a row's label to read what the row is for. A button that cannot work yet is gray, and hovering over it says why (from 2.4.0): with no light curve, every button that needs one (**Save series**, the saves under the plots, **Export…**, **Comp health…**, **Use comps…**, **Time of max/min…**) is gray; **Night notes…** and **Remove night…** wait for a night chosen in the night table; and while a step runs (the busy bar), the buttons that start or change one are gray until it ends. A setting in **Points**, **Corrections** or **Fit** runs the period search again by itself; when the result changes, the **Period** box is highlighted for a moment and its title reads **Period: updated**, so you can see that it did. On a narrow window a row wraps onto a second line.
 
 ### The Series box
 
