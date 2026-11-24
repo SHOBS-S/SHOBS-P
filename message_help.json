@@ -71,6 +71,37 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "Text size N % applies the next time SHOBS-P starts. Restart SHOBS-P now? …"
+   ],
+   "todo": "Yes restarts now (an unsaved series is offered a save first); No (the default) keeps working, and the size applies next time."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "SHOBS-P could not restart itself (…). Close it and start it again to see the new text size."
+   ],
+   "todo": "Close SHOBS-P and start it again; the size is already saved."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "UI thread busy for N s (window not responding); it is in: …",
+    "UI thread responding again after N s."
+   ],
+   "todo": "Nothing to do. If it happens often, send that part of the log file with the report (chapter 24)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Earth orientation table (IERS-A): … loaded in the background.",
+    "… no download and no cached copy; using the one bundled with astropy.",
+    "… not usable (…); using the one bundled with astropy."
+   ],
+   "todo": "Nothing to do."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Another step is still running. Wait for it to finish."
    ],
    "todo": "Wait, or press Cancel / Cancel run."
@@ -511,6 +542,13 @@
     "… cannot tell whether it summed … or averaged …"
    ],
    "todo": "Nothing. When SHOBS-P cannot tell and the Transit fit's χ²ν is well under 1, the camera averaged. See 7. Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No flats, and the sky dominates the target's aperture: the star is only N % of the light in it (under 20 %). …"
+   ],
+   "todo": "Take flats for this setup. For this night, try a smaller aperture (Suggest…) and compare results with care."
   },
   {
    "section": "Photometry",
@@ -1591,14 +1629,14 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night…."
+    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night."
    ],
    "todo": "Trim less, or use Remove night… if the whole night is bad."
   },
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night….",
+    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night.",
     "… with Points: Per frame …"
    ],
    "todo": "Trim less, or use Remove night… if the whole night is bad."

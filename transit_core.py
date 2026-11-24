@@ -2596,7 +2596,9 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         if abs(dd) > 3 * max(s["depth"][1], 1e-5):
             why = ("a neighbor's light in the aperture dilutes a transit (makes it shallower)" if dd < 0 else
                    "a deeper dip than published usually comes from the light curve itself (a jump, a trend, a comp "
-                   "or calibration problem); a neighbor's light cannot make a transit deeper")
+                   "or calibration problem, or too much sky: a neighbor's light in the sky ring, or uncorrected sky with "
+                   "no flats, can make the sky estimate too bright and the dip deeper); a neighbor's light in the aperture "
+                   "cannot make a transit deeper")
             ldc = ld_center_depth(r["planet"]) if pub_label != "depth" else None
             ld_text = (f" (the fit's depth is its (Rp/R*)², compared with the published one; the limb-darkened dip "
                        f"at mid-transit is deeper, about {ldc * 100:.2f}% for the published shape)" if ldc else "")

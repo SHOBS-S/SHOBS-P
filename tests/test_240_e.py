@@ -40,6 +40,7 @@ class TestWrongPlanet(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import clearv_app as ca
+        ca.ExtremumWindow.SYNC = True   # fit-in F1 (#116): Measure in line for these tests
         cls.ca = ca
         ca.LOG_FILE = os.path.join(tempfile.gettempdir(), "shobs_p_test_240_e.log")
         cls.app = ca.App()

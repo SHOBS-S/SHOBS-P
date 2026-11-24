@@ -13,7 +13,21 @@ From top to bottom:
 2. **MODE**: three buttons, **Variables**, **Transits** and **Discovery**. The active one has a ▶ in front of it.
 3. **STEPS**: five buttons, **1 Input**, **2 Blink**, **3 Calibrate**, **4 Photometry**, **5 Output**. The page you
    are on has a ● in front of it.
-4. At the bottom: **Credits and sources**, and the version number (for example **Version 2.3.0**).
+4. At the bottom: **Text size**, **Credits and sources**, and the version number (for example **Version 2.3.0**).
+
+**Text size** (from 2.4.0) makes all of SHOBS-P's text and layout smaller or larger: **90 %**, **100 %** (normal),
+**115 %**, **130 %** or **150 %**, on top of what your system's display scaling gives. It is saved with your settings, so
+SHOBS-P starts at that size every day until you change it. A change applies the next time SHOBS-P starts: it asks
+whether to restart now (**No** is the default, since a restart drops anything not saved). Use it when everything looks
+tiny on a large screen run at its full resolution, common on a Mac with a big external display.
+
+At a large Text size on a smaller screen a page can be taller than the window. The page then gets a scroll bar at its
+right edge, and the mouse wheel or trackpad scrolls it (over a plot or the image the wheel keeps its own job, such as
+zooming; scroll beside it, or drag the scroll bar). Plots keep a readable height: the page scrolls rather than
+squeezing them. The sidebar scrolls the same way when the window is short, so **Text size** can always be reached to
+set it back, and it widens with the Text size so its words are not cut off. On the Input page, when the **Site**,
+**Optics** and **AAVSO report** boxes are too narrow for their short notes (*west is negative*, *for the scintillation
+error* …) beside the entries, the notes move under their entries, and back beside them when there is room.
 
 ## The three modes and their colors
 

@@ -2022,6 +2022,41 @@ class Obs:
     check_lost: str = ""
 
 
+SKY_DOMINATED_FRACTION = 0.20   # 2.4.0 fit-in F1 (#60): target under this share of the light in its aperture
+
+
+def target_light_fraction(points, radius: float) -> float:
+    """2.4.0 fit-in F1 (#60): the night's median share of the light in the target's aperture that is the star's own,
+    flux / (flux + sky per pixel x aperture area), from each point's sky-subtracted flux and sky median (same image
+    units). NaN when it cannot be told (no usable points, no radius)."""
+    try:
+        area = math.pi * float(radius) ** 2
+    except (TypeError, ValueError):
+        return float("nan")
+    if not (area > 0):
+        return float("nan")
+    fracs = []
+    for obs in points or []:
+        f, sky = getattr(obs, "flux_var", float("nan")), getattr(obs, "sky", float("nan"))
+        if obs.flag or not (math.isfinite(f) and math.isfinite(sky)) or f <= 0:
+            continue
+        fracs.append(f / (f + max(sky, 0.0) * area))
+    return float(np.median(fracs)) if fracs else float("nan")
+
+
+def sky_dominated_note(fraction: float, have_flat: bool, sky_calibrated: bool) -> str:
+    """2.4.0 fit-in F1 (#60, WASP-43 b MOBs: the target ~6 % of its aperture's light, no flats, depth 7.2 % vs a
+    published 2.5 %): a ⚠ line when the night has no flat and the sky dominates the target's aperture, since a 1 ADU
+    sky error then moves the star by several %. "" otherwise (with a flat, or when the sky still holds the bias
+    pedestal, i.e. no bias and no dark, the share cannot be judged)."""
+    if have_flat or not sky_calibrated or not math.isfinite(fraction) or fraction >= SKY_DOMINATED_FRACTION:
+        return ""
+    return (f"⚠ No flats, and the sky dominates the target's aperture: the star is only {fraction * 100:.0f} % of "
+            f"the light in it (under {SKY_DOMINATED_FRACTION * 100:.0f} %). Uncorrected sky and pixel-to-pixel "
+            "differences can then move the result by several %: take flats for this setup, or use a smaller "
+            "aperture (Suggest…).")
+
+
 class CompsLostError(ValueError):
     """2.3.0 (#50): every comp was lost in a frame (off the frame edge, clipped, or no flux), so the frame cannot be
     measured. names: the comps, reasons: {name: reason}."""

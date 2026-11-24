@@ -48,6 +48,10 @@ from tkinter import (
 import numpy as np
 
 import busy_bar   # 2.2.20 (item 3)
+import ui_watch   # 2.4.0 fit-in F1 (#116)
+import iers_bg    # 2.4.0 fit-in F1 (#116): astropy's IERS table refresh off the Tk thread
+import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
+import page_scroll   # 2.4.0 fit-in F1c (#109)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
@@ -1015,6 +1019,63 @@ def ui_scale(widget) -> float:
         return 1.0
 
 
+# 2.4.0 fit-in F1c (#109): an Input-page hint (west is negative, for the scintillation error …) stays beside its entry
+# while about this many characters fit beside the entries (at their minimum width), else the box's hints go under
+# their entries; they come back beside them when the room is HINT_BACK_FACTOR times that, so they never flip back
+# and forth.
+HINT_BESIDE_CHARS = 15
+HINT_BACK_FACTOR = 1.25
+
+def side_bar_width(text_size_pct) -> int:
+    """2.4.0 fit-in F1c (#109): the side bar's width (px), 230 at 100 % Text size, wider or narrower with it."""
+    try:
+        pct = int(text_size_pct)
+    except (TypeError, ValueError):
+        pct = 100
+    return int(round(230 * pct / 100.0))
+
+
+def content_scale(widget) -> float:
+    """2.4.0 fit-in F1c (#109): how much bigger than normal the contents are drawn: the display's scaling (which also
+    carries the Text size where tk scaling does the work: Windows, Linux) times the font factor (a Mac)."""
+    try:
+        factor = float(getattr(text_scale, "FACTOR", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        factor = 1.0
+    if abs(factor - 1.0) > 1e-6:
+        # The Mac path: the fonts carry the Text size; Aqua's own scale is points (1.0), and the tk scaling that
+        # apply() also raised does not draw anything bigger there, so it is not counted twice.
+        return factor
+    return ui_scale(widget)
+
+
+# 2.4.0 fit-in F1c (#109): the least height (px at normal size, times content_scale) a page gives its plot or image
+# before the page scrolls instead of squeezing it further. About what the plots asked for before (300 px), so a page
+# that fitted at 100 % still fits (review S1); at 150 % they keep half as much again.
+PLOT_MIN_PX = {"blink": 260, "photo": 280, "discovery": 280, "output": 300, "transit": 300}
+
+
+TEXT_SIZES = (90, 100, 115, 130, 150)   # 2.4.0 fit-in F1 (#109): the side bar's Text size choices, % of normal
+
+
+def text_size_setting(settings) -> int:
+    """2.4.0 fit-in F1 (#109): the saved Text size (%), 100 when unset or not one of TEXT_SIZES."""
+    try:
+        pct = int((settings or {}).get("text_size", 100))
+    except (TypeError, ValueError):
+        return 100
+    return pct if pct in TEXT_SIZES else 100
+
+
+def apply_text_size(widget, pct: int) -> str:
+    """2.4.0 fit-in F1 (#109, Art Trail's large Mac screen): scale all text and layout by pct % at start, on top of
+    what the system's display scaling gives. Called once, before any widget is built; a change is applied at the
+    next start. Windows/Linux: tk scaling carries every point-sized font, distance, ui_scale() and matplotlib's Tk
+    canvas. Mac (Fable M1): Aqua draws point fonts at their point size whatever tk scaling says, so text_scale
+    measures that and scales the fonts themselves (and matplotlib's dpi). Returns how ("" at 100 %)."""
+    return text_scale.apply(widget, pct)
+
+
 def _pad_total(pad) -> int:
     """2.2.18 (item 23): a pack/grid padx as Tk reports it (14, "14", (6, 2), "6 2") -> both sides in px."""
     import re
@@ -1635,6 +1696,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.title(APP_TITLE)
         self.configure(bg="#e7eef2")
         self.settings = self._load_settings()
+        self.text_size = text_size_setting(self.settings)   # 2.4.0 fit-in F1 (#109)
+        self._text_size_how = apply_text_size(self, self.text_size)
         self.mode_key = self.settings.get("mode") if self.settings.get("mode") in MODES else "variables"
         self.series_mode = ""
         self._set_window_icon()
@@ -1973,6 +2036,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.after(1500, self.check_for_update)   # 2.3.3 (#57): in the background, once a day at most
         if sys.platform == "win32" and display_scaling_text(self):
             log_to_file(display_scaling_text(self))   # 2.2.19 (#10): in the log file, for screen reports
+        if self.text_size != 100:   # 2.4.0 fit-in F1 (#109): every platform, for "everything is tiny/huge" reports
+            log_to_file(f"Text size {self.text_size} % (SHOBS-P setting, on top of the display scaling; "
+                        f"by {self._text_size_how or 'nothing: it could not be applied'}).")
         # 2.2.18 (item 9): closing the main window with an unsaved series asks first, as Close series does.
         self._closing = False
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -2003,6 +2069,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         pass
         except queue.Empty:
             pass
+        watch = getattr(self, "_ui_watch", None)   # 2.4.0 fit-in F1 (#116): the Tk thread's heartbeat
+        if watch is not None:
+            watch.beat()
         self.after(50, self._drain_ui_queue)
 
     def _start_job(self, label: str, bar: bool = True) -> bool:
@@ -2369,9 +2438,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         outer = ttk.Frame(self)
         outer.pack(fill=BOTH, expand=True)
 
-        self.side = ttk.Frame(outer, style="Side.TFrame", width=230)
-        self.side.pack(side=LEFT, fill=Y)
-        self.side.pack_propagate(False)
+        # 2.4.0 fit-in F1c (#109): the side bar widens with the Text size (its words were cut off at 150 %), and
+        # scrolls when the window is shorter than it (so Text size can always be reached to set it back).
+        self.side_host = page_scroll.PageScroll(outer, bg=MODES[self.mode_key]["side"], body_style="Side.TFrame",
+                                                style="Side.TFrame", width=side_bar_width(self.text_size))
+        self.side_host.pack(side=LEFT, fill=Y)
+        self.side_host.pack_propagate(False)
+        self.side = self.side_host.body
         ttk.Label(self.side, text="Shiloh Hill\nObservatory\nPhotometry\n(SHOBS-P)", font=(core.UI_FONT, 13, "bold"), style="Side.TLabel", justify=LEFT).pack(
             anchor=W, padx=16, pady=(18, 4)
         )
@@ -2394,6 +2467,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ttk.Button(self.side, text="Credits and sources", style="Step.TButton", command=self.show_credits).pack(
             side="bottom", fill=X, padx=10, pady=(0, 4)
         )
+        # 2.4.0 fit-in F1 (#109): Text size, saved with the settings, applied at the next start
+        size_row = ttk.Frame(self.side, style="Side.TFrame")
+        size_row.pack(side="bottom", fill=X, padx=16, pady=(0, 8))
+        ttk.Label(size_row, text="Text size", style="SideHint.TLabel").pack(side=LEFT)
+        self.text_size_var = StringVar(value=f"{self.text_size} %")
+        size_box = ttk.Combobox(size_row, textvariable=self.text_size_var, state="readonly", width=6,
+                                values=[f"{p} %" for p in TEXT_SIZES])
+        size_box.pack(side=LEFT, padx=(8, 0))
+        size_box.bind("<<ComboboxSelected>>", lambda _e: self._text_size_chosen())
 
         right = ttk.Frame(outer)
         right.pack(side=LEFT, fill=BOTH, expand=True)
@@ -2468,7 +2550,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ).pack(anchor=W, padx=12, pady=(0, 4))
 
     def _page_credits(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Credits and sources", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -2508,7 +2591,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         box.pack(fill=BOTH, expand=True, before=nav)
         box.insert(END, core.credits_text())
         box.configure(state="disabled")
-        return page
+        return page_host
 
     def copy_citation(self):
         """2.2.18 (item 15): the suggested citation onto the clipboard (Tk's clipboard; it stays after SHOBS-P closes
@@ -2586,6 +2669,73 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not on:
             self.update_var.set("")
             self.update_note = {}
+
+    def _text_size_chosen(self):
+        """2.4.0 fit-in F1 (#109): save the new Text size; it applies at the next start, so offer a restart (Later is
+        the default: a restart drops unsaved work)."""
+        try:
+            pct = int(self.text_size_var.get().split()[0])
+        except (ValueError, IndexError):
+            return
+        if pct not in TEXT_SIZES or pct == text_size_setting(self.settings):
+            return
+        self.settings["text_size"] = pct
+        self._save_settings()
+        log_to_file(f"Text size set to {pct} % (applies at the next start).")
+        if pct == self.text_size:   # Fable N2: back to the size on screen: nothing to restart for
+            self.status.set(f"Text size {pct} %: the size SHOBS-P is showing now.")
+            return
+        if self.busy or getattr(self, "_job_findings", None) is not None:   # Fable S3
+            self.status.set(f"Text size {pct} %: it applies the next time SHOBS-P starts.")
+            return
+        if messagebox.askyesno(APP_TITLE, f"Text size {pct} % applies the next time SHOBS-P starts.\n\nRestart "
+                               "SHOBS-P now? Anything not saved (a reduction in progress, an unsaved series) is "
+                               "lost.", default="no"):
+            self._restart_app()
+        else:
+            self.status.set(f"Text size {pct} %: it applies the next time SHOBS-P starts.")
+
+    def _restart_app(self):
+        """2.4.0 fit-in F1 (#109): start a new SHOBS-P the way this one was started, then close this one."""
+        try:   # the close button's offer to save an unsaved series comes first (Cancel keeps SHOBS-P open)
+            nights = {o.night for o in self.observations}
+            if (bool(self.series_path) or len(nights) >= 2) and not self._offer_series_save("restart SHOBS-P"):
+                self.log("Restart canceled: SHOBS-P stays open with the series. The new text size applies at the next "
+                         "start.")
+                return
+        except Exception:
+            traceback.print_exc()
+        self._closing = True
+        self._finish_saves_on_close()   # Fable M2 (a): every save written before the new SHOBS-P starts
+        args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+        here = os.path.dirname(os.path.abspath(sys.argv[0])) or None
+        log_to_file("Restarting SHOBS-P for the new text size.")
+        # re-review S1: the new SHOBS-P is started BEFORE this one goes, so a failure can still say so and stay open
+        try:
+            if sys.platform == "win32":
+                import subprocess
+                # Fable M2 (b): started from run_windows.bat's console, a child would die with that console: detach
+                # it (the desktop shortcut's pythonw has no console, and this changes nothing there)
+                flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                subprocess.Popen(args, cwd=here, creationflags=flags, close_fds=True)
+                self.destroy()
+            else:
+                # Mac and Linux run SHOBS-P in the foreground of a Terminal (shobs_setup.sh, SHOBS-P.app): the same
+                # process becomes the new SHOBS-P, so the launcher keeps waiting on it (no Tk teardown needed: the
+                # process image is replaced; execv skips normal exit, so the streams are flushed first)
+                for stream in (sys.stdout, sys.stderr):
+                    try:
+                        stream.flush()
+                    except Exception:
+                        pass
+                if here:
+                    os.chdir(here)
+                os.execv(sys.executable, args)
+        except Exception as exc:
+            self._closing = False
+            log_to_file(f"Restart failed ({type(exc).__name__}: {exc}).")
+            messagebox.showinfo(APP_TITLE, f"SHOBS-P could not restart itself ({exc}). Close it and start it again "
+                                           "to see the new text size.")
 
     def show_credits(self):
         self._leave_blink_page()   # 2.4.0 (#112)
@@ -2732,6 +2882,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.mode_key = mode
         m = MODES[mode]
         self._apply_theme(mode)
+        try:   # 2.4.0 fit-in F1c (#109): the side bar's scroll area under its body takes the mode's color too
+            self.side_host.canvas.configure(background=m["side"])
+        except Exception:
+            pass
         self._update_no_auid()   # 2.2.20 (item 4): Variables mode only
         self.subtitle.set(m["subtitle"])
         self.banner_text.set(m["banner"])
@@ -4703,7 +4857,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             px = 8 * min_chars
         # Review: entries take twice the hints' share of spare width, so they stay reasonably wide when maximized.
-        box.columnconfigure(entry_col, weight=2, minsize=int(px + 12 * scale))
+        entry_min = int(px + 12 * scale)
+        box.columnconfigure(entry_col, weight=2, minsize=entry_min)
         box.columnconfigure(hint_col, weight=1)
         hints, spans = [], []
         for kid in list(box.winfo_children()):
@@ -4731,6 +4886,63 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             else:
                 spans[k] = (kid, None)
 
+        # 2.4.0 fit-in F1c (#109, iMac at 150 %): when the room beside the entries is too narrow for a hint (it wrapped
+        # one word to a line and pushed the box's last rows out of sight), the hints move under their entries and
+        # wrap to the box; they move back beside them when the room comes back (with a margin, so no flip-flopping).
+        # Every row number is doubled once here, so each row has a free row under it for its hint.
+        if hints:
+            for kid in list(box.winfo_children()):
+                try:
+                    info = kid.grid_info()
+                    if info:
+                        kid.grid_configure(row=2 * int(info.get("row", 0)))
+                except Exception:
+                    pass
+            hint_rows, hint_pad = {}, {}
+            for lab in hints:
+                try:
+                    info = lab.grid_info()
+                    hint_rows[str(lab)] = int(info.get("row", 0))
+                    hint_pad[str(lab)] = (info.get("padx", (8, 0)), info.get("pady", 0))
+                except Exception:
+                    hint_rows[str(lab)] = 0
+            try:   # measured in the hints' own font (review S2)
+                from tkinter import font as tkfont
+                hfont = style.lookup("Hint.TLabel", "font") or "TkDefaultFont"
+                try:
+                    f = tkfont.nametofont(str(hfont))
+                except Exception:
+                    f = tkfont.Font(root=self, font=hfont)
+                under_px = int(f.measure("0" * HINT_BESIDE_CHARS))
+            except Exception:
+                under_px = int(7 * HINT_BESIDE_CHARS * scale)
+            state = {"under": False}
+
+            def place_hints(under: bool):
+                # Beside: the hint column keeps room for about HINT_BESIDE_CHARS characters (the entries no longer
+                # take it all and leave one word a line). Under: the hint spans the whole box under its row.
+                try:
+                    box.columnconfigure(hint_col, minsize=0 if under else under_px)
+                except Exception:
+                    pass
+                for lab in hints:
+                    r = hint_rows.get(str(lab), 0)
+                    try:
+                        if under:
+                            lab.grid_configure(row=r + 1, column=0, columnspan=hint_col + 1, sticky="ew",
+                                               padx=(int(12 * scale), 0), pady=(0, int(4 * scale)))
+                        else:
+                            padx, pady = hint_pad.get(str(lab), ((8, 0), 0))
+                            lab.grid_configure(row=r, column=hint_col, columnspan=1, sticky="ew",
+                                               padx=padx, pady=pady)
+                    except Exception:
+                        pass
+                state["under"] = under
+            place_hints(False)
+            box._hints_under = lambda: state["under"]   # for the tests
+        else:
+            under_px, state, place_hints = 0, {"under": False}, None
+
         def wrap_all(event):
             """Review: one pass from the box's width (no label-by-label settling): hints wrap to what is left beside
             the label and entry columns, the full-width rows to the box."""
@@ -4740,6 +4952,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 used = 0
             hint_w = max(inner - used - int(8 * scale), int(60 * scale))
+            if place_hints is not None:
+                try:
+                    label_w = int(box.grid_bbox(0, 0, 0, 0)[2])
+                except Exception:
+                    label_w = 0
+                # Both ways from a steady estimate of the room beside the entries (the label column and the entries'
+                # minimum, not the grid as the hints themselves have shaped it), with a margin between going under
+                # and coming back, so the hints never flip back and forth.
+                room = inner - label_w - entry_min - int(8 * scale)
+                if not state["under"] and room < under_px:
+                    place_hints(True)
+                elif state["under"] and room > HINT_BACK_FACTOR * under_px:
+                    place_hints(False)
+                if state["under"]:
+                    hint_w = max(inner - int(20 * scale), int(60 * scale))
             for lab in hints:
                 try:
                     lab.configure(wraplength=hint_w)
@@ -4765,7 +4992,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return entry
 
     def _page_input(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Input", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -5006,7 +5234,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ttk.Label(optics, textvariable=self.mount_hint, style="Hint.TLabel", wraplength=text_wrap_px(optics, 55),
                   justify=LEFT).grid(row=9, column=0, columnspan=3, sticky=W)
         optics.columnconfigure(1, weight=1)
-        return page
+        return page_host
 
     # ---- planet (Transits) ---------------------------------------------------------------
     def _auto_planet_lookup(self):
@@ -7564,7 +7792,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.log("Your own site, optics, and camera settings are back (they were set aside for another telescope's frames).")
 
     def _page_blink(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Blink", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -7614,7 +7843,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.blink_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.blink_ax = self.blink_fig.add_subplot(111)
             self.blink_canvas = FigureCanvasTkAgg(self.blink_fig, master=host)
-            self.blink_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.blink_canvas.get_tk_widget(), PLOT_MIN_PX["blink"], content_scale(self),
+                                        width_px=400)
             self.blink_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             # 2.2.5: keep the title band the same height in pixels when the window is resized.
             self.blink_canvas.mpl_connect("resize_event", lambda _e: self._blink_layout())
@@ -7622,7 +7852,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav.pack(fill=X, side="bottom", before=host, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_INPUT)).pack(side=LEFT)
         ttk.Button(nav, text="Next: Calibrate", command=lambda: self.show_step(STEP_CAL)).pack(side=RIGHT)
-        return page
+        return page_host
 
     def _blink_folder(self):
         return self.light_dir.get() if self.blink_source.get() == "lights" else self.flat_dir.get()
@@ -8629,7 +8859,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.refresh_preview()
 
     def _page_calibrate(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Calibrate", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -8689,7 +8920,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav.pack(fill=X, side="bottom", before=self.log_box, pady=(10, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_BLINK)).pack(side=LEFT)
         ttk.Button(nav, text="Next: Photometry", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT)
-        return page
+        return page_host
 
     @staticmethod
     def _cal_kind(path: str, reason: str) -> str | None:
@@ -9420,7 +9651,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                             "(their IDs and magnitudes fill in from the catalogs).")
 
     def _page_photo(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         self.photo_title = StringVar(value="Photometry")
@@ -9643,7 +9875,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.photo_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.photo_ax = self.photo_fig.add_subplot(111)
             self.photo_canvas = FigureCanvasTkAgg(self.photo_fig, master=plot_host)
-            self.photo_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.photo_canvas.get_tk_widget(), PLOT_MIN_PX["photo"], content_scale(self),
+                                        width_px=400)
             self.photo_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.photo_canvas.get_tk_widget().bind(
                 "<Map>", lambda _e: self.after(50, self._fit_visible_canvases), add="+")
@@ -9678,7 +9911,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                      command=self.toggle_photo_log)
         self.log_toggle.pack(side=RIGHT)
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
-        return page
+        return page_host
 
     def _wrapped_labels(self, widget):
         """2.3.4: every label under `widget` that wraps its text (for ScrollBody.shrink_wrap)."""
@@ -18129,7 +18362,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             ScanWindow(self, result)
 
     def _page_discovery_output(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=4)
         card.pack(fill=BOTH, expand=True)
         self.discovery_host = ttk.Frame(card, style="Card.TFrame")
@@ -18138,7 +18372,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(4, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT, padx=8, pady=4)
-        return page
+        return page_host
 
     def _discovery_placeholder(self):
         """2.2.9: before a scan the Field scan page shows its empty plot frame and table, as Variables and Transits
@@ -18191,7 +18425,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ax_s.text(0.5, 0.5, "No field scan yet", transform=ax_s.transAxes, ha="center", va="center", color="#7a8a94")
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=body)
-        canvas.get_tk_widget().configure(width=400, height=300)
+        page_scroll.min_plot_height(canvas.get_tk_widget(), PLOT_MIN_PX["discovery"], content_scale(self), width_px=400)
         canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         canvas.draw_idle()
 
@@ -18745,6 +18979,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             "binning": binning, "pattern": pattern, "debayer": mode, "precalibrated": bool(precalibrated),
             "mode_key": self.mode_key, "filt": self._filter_code(), "band": self._band(),
             "header": dict(self.preview_header or {}),
+            # 2.4.0 fit-in F1 (#60, Fable S2): what the run calibrated with, for the sky-dominance check at the end
+            "sky_masters": masters,
         }
         if watch:
             self.log(f"Watch stars measured every frame ({len(watch)}): " + ", ".join(w.name for w in watch))
@@ -19387,6 +19623,30 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.run_findings = list(getattr(self, "last_job_findings", None) or [])
                 self.run_findings_night = f"JD{math.floor(night_points[0].jd)}" if night_points else None
 
+    def _say_sky_dominated(self, night_points, ctx=None):
+        """2.4.0 fit-in F1 (#60): the ⚠ for a night with no flat whose target is swamped by the sky in its aperture
+        (a Findings entry, so it travels with the result). Never stops the run. Fable S2: the run's own aperture and
+        masters (captured when it started, in ctx), not the boxes as they are now."""
+        try:
+            ctx = ctx or {}
+            masters = ctx.get("sky_masters", self.masters)
+            precal = ctx.get("precalibrated", self.precalibrated)
+            if precal or masters is None:
+                return
+            have_flat = masters.flat is not None
+            sky_calibrated = masters.bias is not None or masters.dark is not None
+            radius = ctx.get("radius")
+            if radius is None:
+                radius = float(self.radius.get())
+            frac = core.target_light_fraction(night_points, float(radius))
+            if math.isfinite(frac):
+                log_to_file(f"Target's share of its aperture's light: {frac * 100:.1f} % (median of the night)")
+            note = core.sky_dominated_note(frac, have_flat, sky_calibrated)
+            if note:
+                self.log(note)
+        except Exception as exc:
+            log_to_file(f"Sky-dominance check skipped: {type(exc).__name__}: {exc}")
+
     def _photometry_done_body(self, night_points, mode, color_info=None, cancelled=False, error=None) -> bool:
         """The done-step; True when the run's points went into the series (its findings then go with them)."""
         remeasure, self._remeasure = getattr(self, "_remeasure", None), None   # 2.3.0 (#50)
@@ -19428,6 +19688,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             onsky_log.write_async(ctx, night_points, APP_VERSION, log=lambda t: self.call_ui(self.log, t, True))   # 2.3.6 (m704/m705): Log only
         self._mark_rotator_excursion(night_points)
         self._mark_recenters(night_points)   # 2.4.0 step 8 (#66): after the flip is known (a flip is not a re-center)
+        self._say_sky_dominated(night_points, ctx)   # 2.4.0 fit-in F1 (#60); Fable S2: the run's own settings
         if color_info:
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
@@ -22058,7 +22319,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._check_planet_transits(unchecked, source="loaded")   # 2.2.16 (item 9): names the file
 
     def _page_output(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         # 2.2.19 (nit): the star's name in the heading ("Output – Variability: BL Cam").
@@ -22110,7 +22372,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # ---- 3. Corrections: how nights and segments are lined up
         g = groups.parent("corrections")
         groups.add("corrections", ttk.Checkbutton(
-            g, text="Line up segments (nights, meridian flip)",
+            g, text="Line up segments (nights, flips, re-centers)",
             variable=self.norm_segments, command=self.refit_period), pad=14)
         groups.add("corrections", ttk.Checkbutton(
             g, text="Line up flip/re-center only (keep nights)", variable=self.align_flip,
@@ -22200,7 +22462,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.out_ax3 = self.out_fig.add_subplot(223)
             self.out_ax4 = self.out_fig.add_subplot(224)
             self.out_canvas = FigureCanvasTkAgg(self.out_fig, master=host)
-            self.out_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.out_canvas.get_tk_widget(), PLOT_MIN_PX["output"], content_scale(self),
+                                        width_px=400)
             self.out_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.out_canvas.mpl_connect("motion_notify_event", self._on_hover)
             self.out_canvas.mpl_connect("resize_event", self._refit_lc_title)   # 2.2.14 (item 16)
@@ -22240,7 +22503,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # (greyed), or "Fetch AAVSO chart" when only the chart is missing (field_image_action).
         self.field_button = saves.add(ttk.Button(g, text="Save field image", command=self.field_image_action))
         self.register_field_button(self.field_button, "Save field image")
-        return page
+        return page_host
 
     def transit_page_on_screen(self) -> bool:
         """2.2.17 (item 4): the Transit fit page is the page shown (Transits mode, Output step, not Variable View)."""
@@ -27434,7 +27697,8 @@ class ExtremumWindow:
         top.pack(fill=BOTH, expand=True)
         nav = ttk.Frame(top, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(6, 0))
-        ttk.Button(nav, text="Measure", style="Accent.TButton", command=self.measure).pack(side=LEFT)
+        self.measure_button = ttk.Button(nav, text="Measure", style="Accent.TButton", command=self.measure)
+        self.measure_button.pack(side=LEFT)
         self.save_button = ttk.Button(nav, text="Save to times CSV", command=self.save, state="disabled")
         self.save_button.pack(side=LEFT, padx=6)
         ttk.Button(nav, text="Choose times CSV…", command=self.choose_csv).pack(side=LEFT)
@@ -27708,6 +27972,11 @@ class ExtremumWindow:
         return night, pts, vals
 
     def measure(self):
+        """2.4.0 fit-in F1 (#116): the boxes are read here (Tk thread); the fits and time conversions, which took ~10 s
+        on GSC 03308-00462 with the window frozen, run on a worker thread under the busy bar, Measure greyed until
+        they are done; _measure_done shows the result."""
+        if getattr(self, "_measuring", False):
+            return
         night, pts, vals = self._night_points()
         if len(pts) < 12:
             messagebox.showinfo(APP_TITLE, "That night has too few usable points (12 or more needed).", parent=self.win)
@@ -27722,6 +27991,7 @@ class ExtremumWindow:
                 messagebox.showerror(APP_TITLE, "Half-window: minutes, or blank for automatic.", parent=self.win)
                 return
         t = np.array([o.jd for o in pts], dtype=float)
+        vals = np.array(vals, dtype=float)
         guesses = [None]
         if period and epoch:
             # Every extremum the elements predict in this night (the night may hold two maxima of a short-period star).
@@ -27732,8 +28002,46 @@ class ExtremumWindow:
         noise_p, noise_source, noise_why_not = self._noise_period()
         noise_half = getattr(self, "_noise_half", None)
         source_words = self._noise_source_words({"noise_source": noise_source, "noise_half": noise_half})
+        ra, dec, lat, lon = self._coords()
+        use_bjd = self.system.get() == "BJD"
+        job = dict(night=night, kind=kind, kind_word=self.kind.get(), period=period, epoch=epoch, hw=hw, t=t,
+                   vals=vals, guesses=guesses,
+                   noise=(noise_p, noise_source, noise_why_not, noise_half), source_words=source_words,
+                   coords=(ra, dec, lat, lon), use_bjd=use_bjd)
+        self._measuring = True
+        try:
+            self.measure_button.configure(state="disabled")
+            self.save_button.configure(state="disabled")
+        except Exception:
+            pass
+        self.result_text.set(f"Measuring the time of {self.kind.get()}…")
+        tok = self.app.busy_begin(f"Measuring the time of {self.kind.get()}…")
+
+        def work():
+            try:
+                return self._measure_work(job)
+            except Exception as exc:   # never leaves Measure greyed: the error is shown like a failed fit
+                traceback.print_exc()
+                return [], [f"the measurement stopped: {type(exc).__name__}: {exc}"]
+
+        if self.SYNC:   # tests: the same steps, in line
+            self._measure_done(job, work(), tok)
+            return
+        try:
+            threading.Thread(target=lambda: self.app.call_ui(self._measure_done, job, work(), tok), daemon=True).start()
+        except Exception as exc:   # Fable N7: never left greyed with the bar running
+            self._measure_done(job, ([], [f"the measurement could not start: {exc}"]), tok)
+
+    SYNC = False   # tests set True: Measure runs in line (the threaded path has its own test)
+
+    @staticmethod
+    def _measure_work(job):
+        """Worker thread: no Tk here, only the numbers read by measure()."""
+        t, vals, kind, period, epoch, hw = job["t"], job["vals"], job["kind"], job["period"], job["epoch"], job["hw"]
+        noise_p, noise_source, noise_why_not, noise_half = job["noise"]
+        source_words = job["source_words"]
         results, problems = [], []
-        for g in guesses:
+        for g in job["guesses"]:
             try:
                 r = core.measure_extremum(t, vals, kind, period=noise_p, t_guess=g, half_width=hw,
                                           window_period=period if period and epoch else None, tune_period=True,
@@ -27744,7 +28052,7 @@ class ExtremumWindow:
             if any(abs(r["t"] - q["t"]) < 0.05 * (period or 1.0) for q in results):
                 continue
             results.append(r)
-        if not results and guesses != [None]:
+        if not results and job["guesses"] != [None]:
             # 2.3.5 (John, 14 Nov, GSC 03308-00462): elements that have drifted put every predicted window on the
             # other branch (P 0.15151 d put it on the night's minimum), so "no extremum inside the window" was all
             # the window said. The night's own extremum is measured instead, and the text says why.
@@ -27758,7 +28066,7 @@ class ExtremumWindow:
                 results.append(r)
             except ValueError as exc:
                 problems.append(str(exc))
-        ra, dec, lat, lon = self._coords()
+        ra, dec, lat, lon = job["coords"]
         for r in results:
             # The period the error really used (None when there was none, or the noise model could not be fitted).
             r["noise_asked"], r["noise_source"], r["noise_why_not"] = noise_p, noise_source, noise_why_not
@@ -27770,22 +28078,37 @@ class ExtremumWindow:
                               "note": f"time conversion failed: {exc}"}
             r["oc"] = None
             if period and epoch:
-                t_sys = r["times"]["bjd_tdb" if self.system.get() == "BJD" else "hjd"]
+                t_sys = r["times"]["bjd_tdb" if job["use_bjd"] else "hjd"]
                 if not math.isfinite(t_sys):
                     t_sys = r["t"]   # no RA/Dec: JD against the elements (said in the text)
                 # A minimum may be a secondary eclipse (half a cycle).
                 r["oc"] = core.o_minus_c(t_sys, period, epoch, half_cycles=kind == "min")
+        return results, problems
+
+    def _measure_done(self, job, out, tok):
+        self.app.busy_end(tok)
+        self._measuring = False
+        results, problems = out
+        try:
+            if not self.win.winfo_exists():
+                return
+            self.measure_button.configure(state="normal")
+        except Exception:
+            return   # the window was closed while measuring: nothing to show
+        night, kind, period, epoch = job["night"], job["kind"], job["period"], job["epoch"]
         self.results = results
         self.night_key = night
         self.save_button.configure(state="normal" if results else "disabled")
-        self.result_text.set(self._result_lines(results, problems, kind, period, epoch) if results or problems
+        # Fable S1: the words are the job's (Type and system as they were when Measure was pressed)
+        self.result_text.set(self._result_lines(results, problems, kind, period, epoch,
+                                                system="BJD" if job["use_bjd"] else "HJD") if results or problems
                              else "No extremum found.")
         if not results:
-            self.app.log("Time of " + self.kind.get() + f" ({night}): " + "; ".join(problems or ["none found"]))
+            self.app.log("Time of " + job["kind_word"] + f" ({night}): " + "; ".join(problems or ["none found"]))
         self.draw()
         grow_to_content(self.win)
 
-    def _result_lines(self, results, problems, kind, period, epoch) -> str:
+    def _result_lines(self, results, problems, kind, period, epoch, system: str | None = None) -> str:
         word = "max" if kind == "max" else "min"
         lines = []
         for r in results:
@@ -27808,7 +28131,7 @@ class ExtremumWindow:
                              f"± {fo['err'] * 1440:.2f} min")
             if r.get("oc"):
                 oc = r["oc"]
-                sys_word = self.system.get() if math.isfinite(tm["hjd"]) else "JD"
+                sys_word = (system or self.system.get()) if math.isfinite(tm["hjd"]) else "JD"
                 lines.append(f"       O−C {oc['oc_d']:+.5f} d = {oc['oc_min']:+.1f} ± {err_min:.1f} min   cycle "
                              f"{oc['cycle']:g}   (C = {sys_word} {oc['calc']:.5f}; P {period:.8f}, E {epoch:.5f})")
             lines += ["       " + ln for ln in self._noise_lines(r)]
@@ -28695,7 +29018,7 @@ class ScanView:
         self.ax_lc = self.fig.add_subplot(2, 2, 2)
         self.ax_ls = self.fig.add_subplot(2, 2, 4)
         self.canvas = FigureCanvasTkAgg(self.fig, master=body)
-        self.canvas.get_tk_widget().configure(width=400, height=300)
+        page_scroll.min_plot_height(self.canvas.get_tk_widget(), PLOT_MIN_PX["discovery"], content_scale(app), width_px=400)
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         self.canvas.mpl_connect("button_press_event", self._on_click)
         # 2.2.19 (#12): drag on the scatter plot to pick the stars in a box.
@@ -29426,9 +29749,14 @@ def main():
     enable_windows_dpi()
     global UPDATE_CHECK
     UPDATE_CHECK = True   # 2.3.3 (#57): the real program asks GitHub (tests and the self-test never do)
+    iers_bg.start(log_to_file)   # 2.4.0 fit-in F1 (#116): the 21.7 s post-solve freeze was astropy downloading IERS-A
     app = App()
+    app._ui_watch = ui_watch.UIWatch(log_to_file).start()   # 2.4.0 fit-in F1 (#116): stalls and where, in the log file
     app.mainloop()
 
 
 if __name__ == "__main__":
+    # 2.4.0 fit-in F1 (#116): run as a script this module is __main__, so a later 'import clearv_app' (transit_ui,
+    # neighbors_ui) loaded and compiled a second copy of the whole file (3.2 s stall at start) with its own globals.
+    sys.modules.setdefault("clearv_app", sys.modules[__name__])
     main()

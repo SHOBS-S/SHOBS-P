@@ -22,6 +22,7 @@ import photometry_core as core
 import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
+import page_scroll   # 2.4.0 fit-in F1c (#109)
 from group_rows import LABEL_WIDTH, GroupRows   # 2.4.0 (#98): the Output pages' function groups
 
 try:
@@ -140,8 +141,9 @@ class TransitPage:
         self.report = None          # a loaded AAVSO exoplanet report (EXOTIC), when that is the source
         self.source_night = None
         self.meta_for_files = {}
-        self.frame = ttk.Frame(parent)
-        card = ttk.Frame(self.frame, style="Card.TFrame", padding=12)
+        # 2.4.0 fit-in F1c (#109): the page scrolls when the window is shorter than it needs (a large Text size)
+        self.frame = page_scroll.PageScroll(parent)
+        card = ttk.Frame(self.frame.body, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Output – Transit fit", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.planet_text = StringVar(value=planet_summary(None))
@@ -464,7 +466,9 @@ class TransitPage:
         self._set_columns()
         self.notes = Text(strip, height=8, width=20, wrap="word", font=(core.UI_FONT, 9), relief="flat", bg="#ffffff")
         # On a short window the table gives up rows (down to 3) before the plot gives up height.
+        self._strip_body = body
         body.bind("<Configure>", self._fit_strip, add="+")
+        self.frame.add_refit_hook(self._fit_strip)   # 2.4.0 F1c (review M2): also when the window's height changes
         self.notes.tag_configure("warn", foreground="#b35c00")
         self.notes.tag_configure("info", foreground="#33424d")
         # 2.2.17 (item 4): the comp-choice caution's link to Comp health.
@@ -486,7 +490,9 @@ class TransitPage:
             self.canvas = FigureCanvasTkAgg(self.fig, master=body)
             # Ask for a small size and let the page stretch it: the figure's own 8-inch width (more on a scaled
             # display) pushed the page past the screen edge (2.2).
-            self.canvas.get_tk_widget().configure(width=420, height=320)
+            _mod = _app_module(app)
+            page_scroll.min_plot_height(self.canvas.get_tk_widget(), _mod.PLOT_MIN_PX["transit"],
+                                        _mod.content_scale(app), width_px=420)
             self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             # 2.2.10: margins in points, so a big plot does not float in wide fractional margins.
             try:
@@ -2268,22 +2274,25 @@ class TransitPage:
         except Exception:
             pass
 
-    def _fit_strip(self, event):
-        """Rows in the table: 8, fewer (down to 3) when the page is short, so the plot keeps at least ~300 px."""
+    def _fit_strip(self, event=None):
+        """Rows in the table: 8, fewer (down to 3) when the page is short, so the plot keeps its minimum height.
+        2.4.0 fit-in F1c (#109, review M2): the room is what the window gives the plot and table, not the height the
+        scrolling page lends them (that only ever grew, so the table kept 8 rows and the page scrolled for it)."""
         try:
+            body = self._strip_body
             try:
                 rowh = int(ttk.Style(self.table).lookup("Treeview", "rowheight") or 28)
             except Exception:
                 rowh = 28
             scale = max(float(self.table.tk.call("tk", "scaling")) / 1.3333, 1.0)
             rowh = max(rowh, int(20 * scale))
-            room = event.height - 300 * scale
-            try:
-                if self.table_xscroll.winfo_ismapped():
-                    room -= int(self.table_xscroll.winfo_reqheight())
-            except Exception:
-                pass
-            rows = max(3, min(8, int(room // rowh) - 1))
+            height = int(body.winfo_height()) - int(self.frame.overflow())
+            # Re-review S1: the part that does not change with the row count (the plot at its minimum, the table's
+            # header, padding, a sideways scroll bar) is measured, not assumed to be one row, so the page drops a
+            # row instead of scrolling for a few pixels.
+            cur = int(self.table.cget("height") or 0)
+            fixed = int(body.winfo_reqheight()) - cur * rowh
+            rows = max(3, min(8, int((height - fixed) // rowh)))
             if int(self.table.cget("height") or 0) != rows:
                 self.table.configure(height=rows)
                 self.notes.configure(height=rows)   # 2.2.11: the notes ask no more height than the table

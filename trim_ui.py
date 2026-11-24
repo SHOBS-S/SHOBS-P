@@ -340,8 +340,8 @@ class TrimMixin:
             return
         left = sum(1 for o in pts if not o.flag and math.isfinite(o.mag) and not (lo <= o.jd <= hi))
         if left < core.TRIM_MIN_POINTS:
-            messagebox.showerror(TITLE, f"That trim would leave {left} usable points on {label}; a night needs at "
-                                        f"least {core.TRIM_MIN_POINTS}. To drop the whole night, use Remove night….")
+            messagebox.showinfo(TITLE, f"That trim would leave {left} usable points on {label}; a night needs at "
+                                       f"least {core.TRIM_MIN_POINTS}. To drop the whole night, use Remove night.")
             return
         # Review N7: the minimum holds for the night's other point set too (Points: Per frame / Stacked), since the
         # trim goes with the night whichever set the results use: 20 frames left can be 4 stacks.
@@ -352,9 +352,9 @@ class TrimMixin:
                        and not [w for w in (o.flag or "").split() if w != core.TRIM_FLAG]
                        and not any(a_ <= o.jd <= b_ for a_, b_ in spans))
             if left < core.TRIM_MIN_POINTS:
-                messagebox.showerror(TITLE, f"That trim would leave {left} usable points on {label} with Points: "
-                                            f"{other[0]}; a night needs at least {core.TRIM_MIN_POINTS} either way. "
-                                            "To drop the whole night, use Remove night….")
+                messagebox.showinfo(TITLE, f"That trim would leave {left} usable points on {label} with Points: "
+                                           f"{other[0]}; a night needs at least {core.TRIM_MIN_POINTS} either way. "
+                                           "To drop the whole night, use Remove night.")
                 return
         # A span is kept inside its own night (1 s beyond the first and last point), so it never needs an open end.
         pad = 1.0 / 86400.0

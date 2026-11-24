@@ -159,7 +159,7 @@ You have three ways to take steps out. Each is a checkbox on the Output page. Th
 
 - **Line up flip/re-center only (keep nights)** shifts the after-flip part of each night to match its before-flip part, and the part after each re-center to match the part before it (see "A re-center without a flip" below). Night-to-night changes are kept. Use it for one night, or when flips happen at different times each night.
 - **Pier side as segments** lines up all the frames taken on one pier side with all the frames on the other, across the whole series. Use it for a campaign where every night has a flip. If the pier side is unknown on some nights (no ROTATOR, no PIERSIDE, no flip), those nights are left as they are, and a caution says so.
-- **Line up segments (nights, meridian flip)** sets every night, every flip segment and every re-center segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
+- **Line up segments (nights, flips, re-centers)** sets every night, every flip segment and every re-center segment to the same level. It removes *all* night-to-night changes, including real ones. Use it only to search for a period much shorter than a night.
 
 If more than one is ticked, **Line up segments** wins over **Pier side as segments**, which wins over **Line up flip/re-center only**. (Before 2.4.0 that box read **Line up flip only (keep nights)**.)
 

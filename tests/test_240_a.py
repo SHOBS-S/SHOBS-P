@@ -160,7 +160,7 @@ class TestOutputPages(unittest.TestCase):
         self.assertTrue(pts[0].startswith("Leave flagged points out"))
         for word in ("Apply", "Transmission loss…", "Planet transits…"):
             self.assertIn(word, pts)
-        self.assertEqual(g.texts("corrections"), ["Line up segments (nights, meridian flip)",
+        self.assertEqual(g.texts("corrections"), ["Line up segments (nights, flips, re-centers)",
                                                   "Line up flip/re-center only (keep nights)",   # step 8 (#66)
                                                   "Pier side as segments",
                                                   "Check-star correction (fold and period)"])

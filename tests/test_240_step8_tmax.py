@@ -191,6 +191,7 @@ class WindowUsesTheBestPeriod(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import clearv_app as ca
+        ca.ExtremumWindow.SYNC = True   # fit-in F1 (#116): Measure in line for these tests
         cls.ca = ca
         cls.tmp = tempfile.TemporaryDirectory()
         cls.p = mock.patch.object(ca, "SETTINGS_FILE", os.path.join(cls.tmp.name, "s.json"))
