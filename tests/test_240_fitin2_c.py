@@ -356,3 +356,34 @@ class TestInputPage(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReReview2(unittest.TestCase):
+    """Re-review 2: R2-S1 (no growing traceback), R2-S2 (Tab through a stale aperture is not hand-typed)."""
+
+    def test_trim_cache_raises_fresh_exception(self):
+        import transit_ui
+        src = open(transit_ui.__file__, encoding="utf-8").read()
+        self.assertIn("(type(exc), exc.args)", src)
+        self.assertNotIn("raise cache[1]\n", src)
+
+    def test_aperture_tab_through_is_not_hand_typed(self):
+        import types
+        import clearv_app as ca
+        app = types.SimpleNamespace()
+        for name in ("_aperture_focus_in", "_aperture_typed", "_aperture_set_by_hand", "_aperture_box"):
+            setattr(app, name, types.MethodType(getattr(ca.App, name), app))
+        class V:
+            def __init__(self, v): self.v = v
+            def get(self): return self.v
+            def set(self, v): self.v = v
+        app.aperture_mm = V("152")
+        app._lights_scope = None
+        app._aperture_focus_in()
+        app._aperture_typed()                       # Tab: nothing changed
+        self.assertIsNone(getattr(app, "_aperture_hand", None))
+        app.aperture_mm.set("203")
+        app._aperture_typed()                       # a real change
+        self.assertEqual(app._aperture_hand, ("203", None))
+        self.assertTrue(app._aperture_set_by_hand("scopeA"))   # tied to the first telescope
+        self.assertEqual(app._aperture_hand[1], "scopeA")

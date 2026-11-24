@@ -3462,6 +3462,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         computer's zone in use, said once in the Log. Returns True when the name loads (or is empty)."""
         name = self.site_tz.get().strip()
         msg = site_time.set_zone(name)
+        gate.bump_series(self)   # re-review R2-N1: Trim reasons with clock times follow the new zone
         self.__dict__.setdefault("_blink_times", {}).clear()   # Blink's clock times were worked out in the old zone
         if msg and warn:
             log_to_file(msg)
@@ -5348,6 +5349,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                            hint="for the scintillation error")   # 2.3.1: focused by the aperture check
         # 2.4.0 fit-in F2 review (S4): a value typed (or pasted) by hand is noted with the lights it was typed for, so
         # the remembered aperture (m140) never overwrites it
+        # re-review R2-S2: only a real change of the text counts (tabbing through a stale value does not)
+        self._aperture_entry.bind("<FocusIn>", lambda _e: self._aperture_focus_in(), add="+")
         for seq in ("<KeyRelease>", "<<Paste>>", "<<Cut>>"):
             self._aperture_entry.bind(seq, lambda _e: self.after_idle(self._aperture_typed), add="+")
         self._field(optics, 2, "Focal length (mm)", self.focal_mm, width=12)
@@ -7660,6 +7663,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.focal_mm.set(focal)
         self.pixel_um.set(round(pixel, 2))
         self.aperture_mm.set("152")   # 2.2.9: MicroObservatory's 6-inch telescope, for the scintillation error
+        self._aperture_before = self.aperture_mm.get().strip()   # re-review R2-S2: set by SHOBS-P, not typed
         self.telescope_name.set("")   # 2.2.16 (item 5): your telescope's name is not theirs (comes back with yours)
         self.log(f"MicroObservatory setup: site {lat:.4f}, {lon:.4f} ({where}); optics {focal:.0f} mm, {pixel:.2f} µm "
                  f"({'from the header scale' if scale else 'approximate'}"
@@ -7874,17 +7878,30 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except (TypeError, ValueError):
             return None
 
+    def _aperture_focus_in(self):
+        """Re-review R2-S2: the box's text when the user came into it, so a key that changes nothing (Tab) is no
+        hand-typed value."""
+        self._aperture_before = self.aperture_mm.get().strip()
+
     def _aperture_typed(self):
         """Review S4: the box's text as typed by hand, and the lights (telescope) it was typed for (None: before any
-        lights were scanned; it holds for the next ones)."""
-        self._aperture_hand = (self.aperture_mm.get().strip(), getattr(self, "_lights_scope", None))
+        lights were scanned; it is tied to the first telescope it is checked against). Re-review R2-S2: only when
+        the text really changed since the user came into the box."""
+        text = self.aperture_mm.get().strip()
+        if text == getattr(self, "_aperture_before", None):
+            return
+        self._aperture_before = text
+        self._aperture_hand = (text, getattr(self, "_lights_scope", None))
 
     def _aperture_set_by_hand(self, scope) -> bool:
         """Review S4: True when the box holds a value typed by hand for these lights (or before any were scanned)."""
         hand = getattr(self, "_aperture_hand", None)
         if not hand or hand[0] != self.aperture_mm.get().strip() or self._aperture_box() is None:
             return False
-        return hand[1] is None or same_scope(hand[1], scope)
+        if hand[1] is None:   # re-review R2-S2: typed before any lights: it belongs to the first telescope only
+            self._aperture_hand = (hand[0], scope)
+            return True
+        return same_scope(hand[1], scope)
 
     def _check_aperture_scope(self, header: dict):
         """2.3.1 (nit, John 5 Nov): the Telescope aperture (it sets the scintillation error) stayed at the last data
@@ -7920,6 +7937,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # telescope measured before gets its remembered aperture without a question; one plain line says so (the
             # box can still be changed by hand before the run).
             self.aperture_mm.set(f"{ap:g}")
+            self._aperture_before = self.aperture_mm.get().strip()   # re-review R2-S2: set by SHOBS-P, not typed
             self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}"
                      + (f" (the box said {cur:g} mm)." if cur is not None else "."))
             return

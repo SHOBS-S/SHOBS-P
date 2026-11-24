@@ -3370,8 +3370,12 @@ class TransitPage:
         key = (self._signature(cheap=True), self.app.lat.get(), self.app.lon.get(), bool(self.flip_at_gap.get()))
         cache = getattr(self, "_trim_cache", None)
         if cache is not None and cache[0] == key:
-            if isinstance(cache[1], Exception):
-                raise cache[1]
+            if isinstance(cache[1], tuple):   # re-review R2-S1: a fresh exception each time (a kept one grows
+                cls, args = cache[1]           # its traceback on every re-raise, ~28 MB/hour on the gate timer)
+                try:
+                    raise cls(*args)
+                except TypeError:
+                    raise ValueError(*args) from None
             return cache[1], cache[2]
         keep = self._data_extra
         try:
@@ -3379,7 +3383,7 @@ class TransitPage:
             t = np.asarray(self._data()[0], dtype=float)
             tmap = self._time_map_for(t)
         except Exception as exc:
-            self._trim_cache = (key, exc, None)
+            self._trim_cache = (key, (type(exc), exc.args), None)
             raise
         finally:
             self._data_extra = keep

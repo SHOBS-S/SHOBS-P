@@ -36,6 +36,7 @@ def bump_series(owner):
     """The series (or its trim flags) changed: every series_memo value is recomputed at its next use."""
     try:
         owner._series_rev = getattr(owner, "_series_rev", 0) + 1
+        owner.__dict__.get("_gate_memo", {}).clear()   # re-review R2-N2: no old lists held after Close series
     except Exception:
         pass
 

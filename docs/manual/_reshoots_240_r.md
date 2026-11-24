@@ -15,8 +15,8 @@ max/min, a button that cannot work yet is greyed (hovering says why), and the jo
 | img/17-trim.png | 17 | a dragged span: **Trim and refit** live; the hint beside the boxes as before (unless the span leaves under 20 points) | CHECK |
 | img/17-exoclock-buttons.png | 17 | the Results row: live after the comp check; greyed (with no fit, or for a few seconds during the check) otherwise | CHECK (take it after the comp check) |
 | img/19-exotic-side-by-side.png | 19 | an opened report: **Trim and refit** greyed with both boxes empty | RESHOOT |
-| img/13-period.png | 13 | Variables Output page: **Remove night…** and **Night notes…** gray with no night chosen; **Trim** gray with both boxes empty (review S8) | CHECK, reshoot if the controls are in view |
-| img/18-inconclusive-verdict.png | 18 | Transit fit page: **Trim and refit** gray with both boxes empty (review S8) | CHECK, reshoot if the controls are in view |
+| img/13-period.png | 13 | Variables Output page: **Remove night…** and **Night notes…** greyed with no night chosen; **Trim** greyed with both boxes empty (review S8) | CHECK, reshoot if the controls are in view |
+| img/18-inconclusive-verdict.png | 18 | Transit fit page: **Trim and refit** greyed with both boxes empty (review S8) | CHECK, reshoot if the controls are in view |
 | img/14-extremum.png | 14 | **Elements from VSX** greyed only when Star ID is empty (the usual shot has a star: no change) | CHECK |
 
 Not changed: img/11-use-comps.png (Apply is live with stars ticked), img/17-multinight-window.png and
