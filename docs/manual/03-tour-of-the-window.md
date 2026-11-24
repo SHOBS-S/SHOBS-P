@@ -43,8 +43,8 @@ To switch modes, click another mode button. Things to know:
 
 - **Your work carries over.** Calibrated frames and marked stars are kept, and you stay on the step you were on. The
   status bar says, for example, **Transits mode. Calibrated frames and marked stars are kept.**
-- **You cannot switch while something is running.** SHOBS-P says **Wait for the current run to finish (or cancel it)
-  before switching modes.**
+- **You cannot switch while something is running.** From 2.4.0 the mode buttons are greyed while a job runs (the
+  busy bar says which); hover over one to see why. They come back when the job ends.
 - **A series belongs to one mode.** If a Variables series is open and you switch to Transits (or the other way), SHOBS-P
   asks first. Switching closes the series in the program; the file on disk is not changed. If it has unsaved nights,
   you are offered a save first.
@@ -103,7 +103,14 @@ Most pages also have **Back** and **Next: …** buttons at the bottom.
 
 Every button shows your click: while the mouse button is down it darkens and looks pushed in, so you can see
 the click landed before the job starts. A button that can't be used right now is greyed out (the colored ones turn a
-pale tan); clicking it does nothing.
+pale tan); clicking it does nothing. From 2.4.0 SHOBS-P greys a button until it can work instead of letting you press
+it and then saying what to do first: **hover over a greyed button** and a small note says why it is greyed and what
+to do, for example *Calibrate first (Calibrate page): the solve uses the calibrated image.* While a job runs, the
+buttons that start a job or change the series (the mode buttons, **New reduction**, **Load series…**, **Close
+series**, **Build masters and calibrate**, **Solve again**, **Run photometry**, **Scan field**, **Stack**, the
+**Points** switch and others), the **Star ID** and **Planet** boxes and the **Filter** box are greyed; the note says
+*Another step is running. This is available again when it finishes.* A lookup (Star ID, planet) or the background comp
+survey is not a job: **Run photometry** stays live during them (it waits for the comp survey by itself).
 
 ## Page titles and hints
 
@@ -117,7 +124,10 @@ The bottom of the window has two lines:
 
 - **The status line** shows the latest message: what just happened, or what to do next. Long messages are cut off
   here; the full text is always in the log (see below). After you save a report, a button may appear beside the
-  message that opens the matching upload page (for example the AAVSO's). It goes away with the next message.
+  message that opens the matching upload page (for example the AAVSO's). It goes away with the next message. After
+  **Use comps…** **Apply**, when frames skipped because of a comp no longer in use can be measured now, the button is
+  **Measure skipped frames** (2.4.0): nothing is measured until you press it, and it stays until you do (or until there
+  is nothing left to measure). Hover over it to see which night it measures.
 - **The credits line** (dimmer) names the libraries and catalogs SHOBS-P is built on.
 
 **A new version.** From 2.3.3, SHOBS-P asks GitHub at start whether a newer release is out (in the background, once
@@ -221,8 +231,8 @@ SHOBS-P tells you about problems in a few ways, from mild to serious:
 ![A caution in a message window, with the same text in the log and status line](img/23-edge-caution.png)
 
 While a job runs (calibration, photometry, a solve), the busy bar (above) says what it is doing and the cursor shows
-that the program is busy, but the window stays live. Starting a second job meanwhile gives **Another step is still
-running. Wait for it to finish.**
+that the program is busy, but the window stays live. The buttons that would start a second job are greyed until it
+ends (2.4.0; before, pressing one popped up **Another step is still running. Wait for it to finish.**).
 
 ## The Credits page
 

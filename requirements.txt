@@ -9,3 +9,6 @@ scipy>=1.10
 tzdata
 # 2.4.0 step 7c: root certificates for the outside-data check (ZTF, TESS) when Windows' store cannot check them
 certifi
+# 2.4.0 fit-in F2 (m133): the site's time zone from its latitude/longitude (offline), with ready-made copies for
+# Windows, Mac and Linux. SHOBS-P still works without it (an older install: the Time zone box is set by hand).
+tzfpy

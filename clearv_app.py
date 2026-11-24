@@ -2083,7 +2083,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         """Take the run lock (self.busy). 2.2.20 (item 3): label shows on the main window's busy bar; bar=False for a
         job whose own window (a dialog) shows its own bar."""
         if self.busy:
-            messagebox.showinfo(APP_TITLE, "Another step is still running. Wait for it to finish.")
+            # 2.4.0 fit-in F2 (#79 item 6, m003): the buttons that start a job are greyed while one runs, so this
+            # is only a backstop (a key or a code path): a status line, no pop-up.
+            self.status.set("Another step is still running. Press it again when that one has finished.")
             return False
         self.busy = True
         self._cancel = threading.Event()
@@ -2383,6 +2385,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         style.configure("TNotebook.Tab", padding=(12, 6))
         style.configure("Status.TLabel", background="#10283b", foreground="#d5e0e6")
         style.configure("TEntry", fieldbackground="#ffffff")
+        # 2.4.0 fit-in F2 (x070): a box whose number is wrong (the aperture sizes out of order, or not a number)
+        style.configure("Invalid.TEntry", fieldbackground="#ffe1e1", foreground="#8a1010")
         # Tall enough rows that text is never clipped on high-DPI Windows displays.
         style.configure("Treeview", rowheight=28, font=(core.UI_FONT, 10))
         style.configure("Treeview.Heading", font=(core.UI_FONT, 10, "bold"), padding=(4, 6))
@@ -2463,6 +2467,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             btn = ttk.Button(self.side, text=m["name"], style=f"Mode{key}.TButton", command=lambda k=key: self.set_mode(k))
             btn.pack(fill=X, padx=10, pady=1)
             self.mode_buttons[key] = btn
+            # 2.4.0 fit-in F2 (#79 item 6, m010): greyed while a job runs (the current mode's button too)
+            self.gate(btn, None, busy=True)
         ttk.Label(self.side, text="STEPS", style="SideHint.TLabel", font=(core.UI_FONT, 8, "bold")).pack(
             anchor=W, padx=16, pady=(12, 0))
         self.step_buttons = []
@@ -2545,7 +2551,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # the end-of-job line ("⚠ 3 things need a look (click to see them)") opens the list too
         self.status_label.bind("<Button-1>", lambda _e: self.open_findings() if self._status_opens_findings() else None)
         self.status_link = ttk.Button(status_row, text="", command=self._open_status_link)
-        self._status_offer = ("", "")   # (status text it belongs to, URL)
+        self._status_offer = ("", "")   # (status text it belongs to, URL; 2.4.0 fit-in F2 m555: or an action)
+        self._status_link_tip = ""
+        # 2.4.0 fit-in F2 (m555): an action offered there (Measure skipped frames) is greyed while a job runs
+        self.gate(self.status_link, lambda: (gate.BUSY_REASON if callable(self._status_offer[1]) and self.busy
+                                             else ""),
+                  tip=lambda: self._status_link_tip, busy=False)
         self.status.trace_add("write", lambda *_: self._status_changed())
         ttk.Label(
             status,
@@ -2860,8 +2871,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not initial and mode == self.mode_key:
             return
         if not initial and self.busy:
-            messagebox.showinfo(APP_TITLE, "Wait for the current run to finish (or cancel it) before switching modes.")
-            return
+            return   # 2.4.0 fit-in F2 (m010): the mode buttons are greyed during a job; a silent backstop
         series_modes = ("variables", "transits")
         if (not initial and self.observations and mode in series_modes and self.series_mode
                 and self.series_mode != mode):
@@ -4016,14 +4026,41 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return (f"scintillation included (Osborn et al. 2015; aperture {setup['aperture_m'] * 1000:g} mm, "
                 f"elevation {setup['altitude_m']:.0f} m)")
 
+    @staticmethod
+    def output_folder_usable(folder: str) -> bool:
+        """2.4.0 fit-in F2 (m034): can a Save write into this folder? It exists and is writable, or (not made yet) its
+        nearest existing parent folder is writable. Checks only: nothing is created."""
+        if not folder:
+            return False
+        path = os.path.abspath(os.path.expanduser(folder))
+        if os.path.exists(path):
+            return os.path.isdir(path) and os.access(path, os.W_OK)
+        parent = os.path.dirname(path)
+        while parent and not os.path.exists(parent):
+            nxt = os.path.dirname(parent)
+            if nxt == parent:
+                return False
+            parent = nxt
+        return bool(parent) and os.path.isdir(parent) and os.access(parent, os.W_OK)
+
+    def _output_words(self, folder: str) -> str:
+        """m034: what the Output row says beside the box."""
+        if not folder:
+            return ""
+        return "in use" if self.output_folder_usable(folder) else "cannot be used"
+
     def _output_typed(self):
         """Typed (or pasted) into the Output box: used for this session only."""
         folder = self.output_dir.get().strip()
-        self._counts["Output"].set("in use" if folder else "")
+        self._counts["Output"].set(self._output_words(folder))   # 2.4.0 fit-in F2 (m034)
 
     def _output_changed(self):
         folder = self.output_dir.get().strip()
-        if folder:
+        if folder and not self.output_folder_usable(folder):   # 2.4.0 fit-in F2 (m034)
+            self._counts["Output"].set("cannot be used")
+            self.status.set(f"The output folder {folder} cannot be used (it cannot be written to): each Save asks "
+                            "where to put the file.")
+        elif folder:
             self._counts["Output"].set("in use")
             self.status.set(f"Save buttons now write into {folder} (never over an existing file).")
         else:
@@ -4212,7 +4249,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as exc:
-            messagebox.showwarning(APP_TITLE, f"The output folder could not be used ({exc}); choose where to save.")
+            # 2.4.0 fit-in F2 (m034): nothing is lost (the save dialog opens next): a plain status line, no box
+            reason = getattr(exc, "strerror", None) or str(exc)
+            self.status.set(f"The output folder {folder} cannot be used ({reason}): choose where to save.")
+            self._counts["Output"].set("cannot be used")
             return ""
         return folder
 
@@ -4315,6 +4355,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                                        f"{button} on the Results row.")
             text = self._series_note(text)
             self._status_offer = ("", "")
+            self._status_link_tip = ""
             self.status.set(text)
             try:
                 self.status_link.pack_forget()
@@ -4326,6 +4367,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         text = self._series_note(text)   # 2.2.21 (nit j): "Series file updated: <name>."
         self.status.set(text)
         self._status_offer = (text, url)
+        self._status_link_tip = ""
         try:
             self.status_link.configure(text=button)
             self.status_link.pack(side=RIGHT, padx=(8, 0), before=self.status_label)
@@ -4334,6 +4376,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _open_status_link(self):
         text, url = self._status_offer
+        if callable(url):   # 2.4.0 fit-in F2 (m555): an action (Measure skipped frames), done once when pressed
+            if self.busy:
+                return
+            self._withdraw_status_action()
+            url()
+            return
         if url:
             # 2.2.18 (item 10): the status line's upload button is an upload button too.
             page = {core.AAVSO_WEBOBS_URL: "webobs", core.AAVSO_EXOPLANET_URL: "exoplanet"}.get(url)
@@ -4355,7 +4403,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             pass
         text, url = getattr(self, "_status_offer", ("", ""))
-        if url and self.status.get() != text:
+        if url and not callable(url) and self.status.get() != text:   # m555: an action stays (see its offer)
             self._status_offer = ("", "")
             try:
                 self.status_link.pack_forget()
@@ -5018,13 +5066,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.16 (item 12): the line wraps to the room left beside the buttons (no fixed width).
         self.close_series_button = ttk.Button(srow, text="Close series", command=self.close_series)
         self.close_series_button.pack(side=RIGHT, padx=(6, 0))
+        self.gate(self.close_series_button, self._close_series_why, busy=True)   # 2.4.0 fit-in F2 (m502)
         load_in = ttk.Button(srow, text="Load series…", command=self.load_series)
         load_in.pack(side=RIGHT, padx=(6, 0))
-        self._add_tooltip(load_in, self.LOAD_SERIES_TIP)
+        self.gate(load_in, None, tip=self.LOAD_SERIES_TIP, busy=True)   # 2.4.0 fit-in F2 (m003)
         # 2.2.19 (#20): start over for another star without restarting SHOBS-P.
-        new_red = ttk.Button(srow, text="New reduction", command=lambda: self.new_reduction(ask=True))
-        new_red.pack(side=RIGHT, padx=(12, 0))
-        self._add_tooltip(new_red, self.NEW_REDUCTION_TIP)
+        self.new_reduction_button = ttk.Button(srow, text="New reduction", command=lambda: self.new_reduction(ask=True))
+        self.new_reduction_button.pack(side=RIGHT, padx=(12, 0))
+        self.gate(self.new_reduction_button, None, tip=self.NEW_REDUCTION_TIP, busy=True)   # 2.4.0 fit-in F2 (m078)
         status_label = ttk.Label(srow, textvariable=self.series_status, style="Card.TLabel", justify=LEFT)
         status_label.pack(side=LEFT, fill=X, expand=True)
         status_label.bind("<Configure>", lambda e: status_label.configure(
@@ -5095,7 +5144,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.5: the target is looked up by itself when you press Enter or leave the box with a new name.
         star_entry.bind("<Return>", lambda _e: self._auto_lookup())
         star_entry.bind("<FocusOut>", lambda _e: self._auto_lookup())
-        ttk.Button(cell, text="Look up again", command=self.lookup_star).pack(side=LEFT, padx=(6, 0))
+        # 2.4.0 fit-in F2 (#79 item 6, m074): the Star ID box is locked while a job runs (a star change then is not
+        # applied); (m096) Look up again is greyed until a Star ID is typed.
+        self.star_entry = self.gate(star_entry, None, busy=True)
+        self.star_lookup_button = ttk.Button(cell, text="Look up again", command=self.lookup_star)
+        self.star_lookup_button.pack(side=LEFT, padx=(6, 0))
+        self.gate(self.star_lookup_button,
+                  lambda: "" if self.star_id.get().strip() else "Type a Star ID or designation first.", busy=True)
         ttk.Button(cell, text="Clear target", command=self.clear_target).pack(side=LEFT, padx=(6, 0))
         # How AAVSO spells the name, when the typed one differs only in spacing or capitals (2.2).
         self.name_hint = StringVar(value="")
@@ -5152,7 +5207,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # the name changed since the last lookup; the button repeats the lookup.
         for seq in ("<Return>", "<KP_Enter>", "<FocusOut>"):
             planet_entry.bind(seq, lambda _e: self._auto_planet_lookup())
-        ttk.Button(cell, text="Look up again", command=self.lookup_planet).pack(side=LEFT, padx=(6, 0))
+        # 2.4.0 fit-in F2 (#79 item 6, m075): locked while a job runs, like the Star ID box; (m062) Look up again
+        # is greyed until a planet name is typed (the examples are in its tooltip).
+        self.gate(planet_entry, None, busy=True)
+        self.planet_lookup_button = ttk.Button(cell, text="Look up again", command=self.lookup_planet)
+        self.planet_lookup_button.pack(side=LEFT, padx=(6, 0))
+        self.gate(self.planet_lookup_button,
+                  lambda: "" if self.planet_name.get().strip() else (
+                      "Type the planet's name first, under any of its names (for example TrES-3 b, KOI-217 b or "
+                      "Kepler-71 b, TOI-2046 b, EPIC 220504338 b)."), busy=True)
         self._planet_entries = []
         for i, (label, var, hint, label2, var2, hint2) in enumerate((
                 ("Period (d)", self.pl_period, "", "T0 (BJD_TDB)", self.pl_t0, ""),
@@ -5357,10 +5420,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def lookup_planet(self, quiet: bool = False):
         name = self.planet_name.get().strip()
         if not name:
-            if not quiet:
-                messagebox.showinfo(APP_TITLE, "Type the planet's name first, under any of its names (for example "
-                                               "TrES-3 b, KOI-217 b or Kepler-71 b, TOI-2046 b, EPIC 220504338 b).")
-            return
+            return   # 2.4.0 fit-in F2 (m062): Look up again is greyed with no name; a silent backstop
         # 2.4.0 (#82): the name of the planet now in the boxes (the box itself already holds the new name)
         self._planet_name_before = getattr(self, "_last_planet_lookup", None) or ""
         self._last_planet_lookup = name   # 2.2.14 (item 2)
@@ -5888,8 +5948,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         folders, masters, site, optics and settings stay). The open series is closed, with a save offered first when it
         has unsaved work. new_star: looked up at once (e.g. the lights' OBJECT). Returns True when done."""
         if self.busy:
-            messagebox.showinfo(APP_TITLE, "Wait for the current step to finish (or cancel it) before starting a new "
-                                           "reduction.")
+            # 2.4.0 fit-in F2 (m078): New reduction is greyed during a job; a status-line backstop
+            self.status.set("New reduction waits for the current step to finish.")
             return False
         old = self.star_id.get().strip()
         if ask and not messagebox.askyesno(
@@ -6903,9 +6963,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def lookup_star(self, quiet: bool = False):
         name = self.star_id.get().strip()
         if not name:
-            if not quiet:
-                messagebox.showinfo(APP_TITLE, "Enter a Star ID or designation first.")
-            return
+            return   # 2.4.0 fit-in F2 (m096): Look up again is greyed with no Star ID; a silent backstop
         self._last_lookup_name = name
         self._lookup_busy_start("star", name, "SIMBAD and VSX")   # 2.2.19 (nit); 2.2.20 (item 3): the busy bar
 
@@ -7131,16 +7189,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         channel = next((ch for ch, p in core.RGB_CHANNELS.items() if p[0] == pair[0]), None)
         if channel != self._rgb_channel and getattr(self, "busy", False):
             # review S1: the channel is read by the running job's frames (process-wide): never switched mid-run
+            # 2.4.0 fit-in F2 (m109): the Filter box is greyed during a job; a silent backstop (Log file only)
             now = core.RGB_CHANNELS[self._rgb_channel]
             self.mono_filter_choice.set(core.mono_filter_label(now) or "")
-            self.log("The channel of the color images cannot change while a step is running; choose it again when "
-                     "it has finished.")
+            log_to_file("The channel of the color images was not changed: a step is running.")
             return
         if channel is None:
+            # 2.4.0 fit-in F2 (m110): the box lists only the four channels on color images; a backstop (Log file)
             now = core.RGB_CHANNELS[self._rgb_channel]
             self.mono_filter_choice.set(core.mono_filter_label(now) or "")
-            self.log(f"These lights are color images: measure one of their channels (Green imaging TG, Red imaging TR, "
-                     f"Blue imaging TB, or Clear CV for luminance). Still {core.RGB_CHANNEL_WORDS[self._rgb_channel]}.")
+            log_to_file(f"Not a channel of these color images; still {core.RGB_CHANNEL_WORDS[self._rgb_channel]}.")
             return
         if channel == self._rgb_channel:
             return
@@ -7192,6 +7250,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             pass
         if can:
             self.label_aavso(auto=True)
+        else:
+            # 2.4.0 fit-in F2 (x066): the header filter and the color-image channel paths cannot solve now (no
+            # calibrated image yet, or it shows the old channel): the next calibration solves at once, so the comps
+            # get magnitudes in the new band without a Solve again (results: the comps' band).
+            self._resolve_after_calibrate = True
+
+    def _resolve_band_after_calibrate(self):
+        """2.4.0 fit-in F2 (x066): after a calibration, the solve a band change was waiting for (see above)."""
+        if not getattr(self, "_resolve_after_calibrate", False):
+            return
+        if self.preview is None or not self.preview_is_debayered or self.busy or self.chart_placed:
+            return
+        self._resolve_after_calibrate = False
+        self._auto_solved_for = getattr(self, "_preview_token", 0)   # the page's own automatic solve is this one
+        self.log(f"Solving for {core.band_label(self._band())} comps (the band changed since the last solve).",
+                 keep_status=True)
+        self.label_aavso(auto=True)
 
     def _detect_sensor(self):
         """2.2.11: no Bayer keyword in the lights: look at the raw flats (up to five, flats before flat-darks). No
@@ -7378,6 +7453,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._rgb_lights_dir = folder
         answers[folder] = channel
         core.set_rgb_channel(channel)
+        self._sync_filter_choices()   # 2.4.0 fit-in F2 (m110)
         self.pattern.set(core.MONO)
         self._sync_camera_note()
         if pat:
@@ -7391,6 +7467,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                  "dark or flat; photon noise from the sky). Pick another channel in the Filter box on the Calibrate "
                  "page (Green, Red, Blue imaging or Clear).")
 
+    def _sync_filter_choices(self):
+        """2.4.0 fit-in F2 (#79 item 6, m110): on color images the Filter box lists only their four channels (Green,
+        Red, Blue imaging, Clear), so a filter that is not a channel cannot be picked; otherwise every filter."""
+        box = getattr(self, "filter_box", None)
+        if box is None:
+            return
+        if getattr(self, "_rgb_channel", None):
+            values = [core.mono_filter_label(core.RGB_CHANNELS[ch]) for ch in ("green", "red", "blue", "luminance")]
+            values = [v for v in values if v]
+        else:
+            values = list(core.MONO_FILTER_CHOICES)
+        try:
+            box.configure(values=values)
+        except Exception:
+            pass
+
     def _leave_rgb_lights(self):
         """2.2.18 (item 1): lights that are not color images after color images: the Bayer pattern from before."""
         before = self._pattern_before_rgb
@@ -7398,6 +7490,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._rgb_lights_dir = None
         self._pattern_before_rgb = None
         core.set_rgb_channel(None)
+        self._sync_filter_choices()   # 2.4.0 fit-in F2 (m110)
         # review S2: the Filter box no longer shows the color images' channel; a mono camera's own filter comes back
         hand = self._mono_filter_hand()
         self.mono_filter = hand
@@ -7504,6 +7597,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                  "Your own setup comes back when you scan your own lights.")
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
+    def _zone_from_site(self, lat, lon, whose: str, quiet_same: bool = False) -> bool:
+        """2.4.0 fit-in F2 (m133): set the Time zone box from a site's latitude/longitude, with one plain Log line
+        naming the zone. False when it cannot be told (no tzfpy package: a note in the log file only)."""
+        zone = site_time.zone_at(lat, lon)
+        if not zone:
+            if not site_time.zone_lookup_available():
+                log_to_file("Time zone not looked up from the site: the tzfpy package is not installed "
+                            "(run the setup again to add it).")
+            return False
+        if zone == self.site_tz.get().strip() and quiet_same:
+            return True
+        if zone != self.site_tz.get().strip():
+            self.site_tz.set(zone)
+        self.log(f"  Time zone set to {zone} from {whose}'s latitude and longitude: local times (and trims typed as "
+                 "clock times) use it.")
+        return True
+
     _SETUP_NAMES = ("lat", "lon", "elevation", "focal_mm", "pixel_um", "aperture_mm", "pattern", "debayer_mode",
                     "sat_limit", "binning", "telescope_name",   # 2.2.16 (item 5): telescope_name
                     "site_tz")   # 2.2.21 (#22): set aside and brought back with your own site
@@ -7591,9 +7701,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
                      + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
                      + (f"; {got}" if got else "") + ". Your own setup comes back when you scan your own lights.")
-            # 2.2.21 (#22): the header names no time zone; local times use the Time zone box until it is set
-            self.log(f"  Check the Time zone box (Input page, Site): local times use {self.site_tz.get() or 'this computer'}"
-                     "'s zone until you pick the frames' site zone.")
+            # 2.2.21 (#22): the header names no time zone. 2.4.0 fit-in F2 (m133, John 24 Nov): the zone is looked
+            # up from the site's latitude/longitude (tzfpy), so local times (and trims typed as clock times)
+            # are the site's; without the package (an older install), the 2.2.21 line as before.
+            if not self._zone_from_site(site[0], site[1], "the frames' site"):
+                self.log(f"  Check the Time zone box (Input page, Site): local times use "
+                         f"{self.site_tz.get() or 'this computer'}'s zone until you pick the frames' site zone.")
             # 2.3.3 (nit, 8 Nov): no elevation in the header: said on the status line, not only in the log (the
             # scintillation error and the AAVSO exoplanet report need it). Remembering it per telescope: 2.4.0.
             self.status.set("Lights from another site: their site and optics are in use."
@@ -7656,6 +7769,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._save_typed_setup()
         if filled:
             self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
+            # 2.4.0 fit-in F2 (m133): a site filled from the header, and no Time zone of yours saved (never set by
+            # hand): the zone follows the site
+            if site and any(f.startswith(("Latitude", "Longitude")) for f in filled) and not self.settings.get("site_tz"):
+                self._zone_from_site(site[0], site[1], "your site", quiet_same=True)
             if unset_filled:   # 2.2.18 (item 11, review S6)
                 self.log("The focal length / pixel size from these lights are now saved as your own optics. "
                          "If they come from another telescope, type your own in the Optics box (Input page).")
@@ -7689,9 +7806,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _check_aperture_scope(self, header: dict):
         """2.3.1 (nit, John 5 Nov): the Telescope aperture (it sets the scintillation error) stayed at the last data
         set's value (MicroObservatory's 152 mm on an 8SE's frames). When the lights' header gives no aperture:
-        - lights from a telescope measured before with another aperture: offer that one;
+        - lights from a telescope measured before with another aperture: that one is set (2.4.0 fit-in F2, m140: no
+          question; one plain Log line);
         - lights from another telescope than the box's value was last used with: ask whether it is right.
-        Asks only; the aperture used is still the box's (written in the night's setup and the settings file)."""
+        The aperture used is the box's (written in the night's setup and the settings file)."""
         scope = lights_scope(header)
         self._lights_scope = scope
         if scope is None or "aperture_mm" in core.header_optics(header) or getattr(self, "_loading_meta", False):
@@ -7709,21 +7827,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 return
             if cur is not None and abs(ap - cur) < 0.5:
                 return
-            ask_key = ("known", words, cur, ap)   # review r2: each question has its own key
-            if ask_key in asked:
-                return
-            if messagebox.askyesno(
-                    APP_TITLE,
-                    f"These lights come from {scope_words(scope)}. Last time you measured frames from that "
-                    f"telescope the Telescope aperture was {ap:g} mm; the box says "
-                    + (f"{cur:g} mm" if cur is not None else "nothing") + ".\n\n"
-                    f"Use {ap:g} mm for these frames? (It sets the scintillation part of the error bars.)"):
-                self.aperture_mm.set(f"{ap:g}")
-                self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}.")
-            else:
-                asked.add(ask_key)
-                self.log(f"Telescope aperture kept at {cur:g} mm for {scope_words(scope)}." if cur is not None else
-                         "Telescope aperture left empty: no scintillation error for these frames.")
+            # 2.4.0 fit-in F2 (m140, John 24 Nov; RESULTS-CHANGING: the scintillation part of the error bars): a
+            # telescope measured before gets its remembered aperture without a question; one plain line says so (the
+            # box can still be changed by hand before the run).
+            self.aperture_mm.set(f"{ap:g}")
+            self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}"
+                     + (f" (the box said {cur:g} mm)." if cur is not None else "."))
             return
         last = self.settings.get("aperture_scope_last")
         if not isinstance(last, dict) or same_scope(last, scope) or cur is None:
@@ -8888,6 +8997,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                    width=10, state="readonly")
         pattern_box.pack(side=LEFT, padx=8)
         pattern_box.bind("<<ComboboxSelected>>", lambda _e: setattr(self, "_pattern_user_set", True))
+        # 2.4.0 fit-in F2 (#79 item 6, m107): greyed for color images (already debayered); not a job starter.
+        self.pattern_box = self.gate(
+            pattern_box, lambda: ("These lights are color images (already debayered): no Bayer pattern. Choose the "
+                                  "channel in the Filter box." if getattr(self, "_rgb_channel", None) else ""),
+            busy=False)
         # 2.2.11: Channel for a color camera; on MONO the same place holds Filter (there is nothing to debayer).
         self.channel_label = ttk.Label(row, text="Channel", style="Card.TLabel")
         self.channel_label.pack(side=LEFT, padx=(12, 0))
@@ -8897,8 +9011,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.filter_box = ttk.Combobox(row, textvariable=self.mono_filter_choice, values=list(core.MONO_FILTER_CHOICES),
                                        width=18, state="readonly")
         self.filter_box.bind("<<ComboboxSelected>>", lambda _e: self._mono_filter_picked())
+        # 2.4.0 fit-in F2 (#79 item 6, m109): the filter (a color image's channel) cannot change during a job
+        self.gate(self.filter_box, None, busy=True)
         self.apply_button = ttk.Button(row, text="Apply channel to the preview", command=self.apply_debayer)
         self.apply_button.pack(side=LEFT, padx=8)
+        self.gate(self.apply_button,   # 2.4.0 fit-in F2 (m198)
+                  lambda: "" if self.calibrated is not None else "Build masters and calibrate first (button below).",
+                  busy=True)
         self.filter_hint_label = ttk.Label(row, textvariable=self.filter_hint, style="Hint.TLabel", justify=LEFT)
         self.filter_hint_label.pack(side=LEFT, padx=(12, 0))
         ttk.Label(
@@ -8911,8 +9030,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ).pack(anchor=W, pady=(6, 0))
         cal_row = ttk.Frame(card, style="Card.TFrame")
         cal_row.pack(anchor=W)
-        ttk.Button(cal_row, text="Build masters and calibrate", style="Accent.TButton",
-                   command=self.run_calibration).pack(side=LEFT)
+        self.calibrate_button = ttk.Button(cal_row, text="Build masters and calibrate", style="Accent.TButton",
+                                           command=self.run_calibration)
+        self.calibrate_button.pack(side=LEFT)
+        self.gate(self.calibrate_button, None, busy=True)   # 2.4.0 fit-in F2 (#79 item 6, m003)
         ttk.Button(cal_row, text="Cancel", command=self.cancel_job).pack(side=LEFT, padx=8)
         # 2.2.8: masters are saved beside their raw frames and reused; this forces a fresh stack.
         self.rebuild_masters = BooleanVar(value=False)
@@ -9457,6 +9578,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log("The lights carry a plate solution in their FITS headers: Solve uses it directly.")
         # 2.2: no separate Debayer step. Debayer the preview now and go straight to Photometry.
         self.apply_debayer(auto=True)
+        self._resolve_band_after_calibrate()   # 2.4.0 fit-in F2 (x066)
 
     def _carry_marks_to_new_reference(self, calibrated, path) -> str:
         """2.3.4 (#74): Calibrate again after rejecting frames in Blink makes the first kept frame the reference. The
@@ -9601,8 +9723,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def apply_debayer(self, auto: bool = False):
         if self.calibrated is None:
-            messagebox.showinfo(APP_TITLE, "Build masters and calibrate first (Calibrate page).")
-            return
+            return   # 2.4.0 fit-in F2 (m198): the button is greyed until calibrated; a silent backstop
         try:
             # Always debayer the calibrated mosaic, so changing the channel and applying again is safe.
             mono = core.debayer(self.calibrated, self.pattern.get(), self.debayer_mode.get())
@@ -9690,6 +9811,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.run_button.pack(side=RIGHT)
         self.label_button = ttk.Button(tools, text="Solve again", command=self.label_aavso)
         self.label_button.pack(side=RIGHT, padx=6)
+        # 2.4.0 fit-in F2 (#79 item 6): greyed until they can work, and while a job runs (m003, m292, m348, x064,
+        # x070); hovering says why. The guards inside the handlers stay as backstops.
+        self.gate(self.run_button, self._run_why, busy=True)
+        self.gate(self.scan_button, self._scan_why, busy=True)
+        self.gate(self.label_button, self._solve_why, busy=True)
         ttk.Combobox(tools, textvariable=self.catalog, values=core.CATALOGS, width=15, state="readonly").pack(side=RIGHT)
         # 2.2.13: the box only chooses which catalog's circles are drawn (every catalog is fetched and merged).
         ttk.Label(tools, text="Circles", style="Card.TLabel").pack(side=RIGHT, padx=(12, 4))
@@ -9711,6 +9837,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.skip_line = ttk.Frame(card, style="Card.TFrame")
         self.skip_button = ttk.Button(self.skip_line, text="Measure skipped frames",
                                       command=self.measure_skipped_frames)
+        self.gate(self.skip_button, None, busy=True)   # 2.4.0 fit-in F2 (m003)
         self.skip_label = ttk.Label(self.skip_line, textvariable=self.skip_text, style="Warn.TLabel", justify=LEFT,
                                     wraplength=int(700 * ui_scale(self)))   # 2.3.0 review: scaled (high DPI)
         self.skip_label.pack(side=LEFT, fill=X, expand=True)
@@ -9739,13 +9866,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         g = group(6)
         ttk.Label(g, text="Aperture r", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
-        ttk.Entry(g, textvariable=self.radius, width=6).pack(side=LEFT)
+        self._aperture_entries = {}   # 2.4.0 fit-in F2 (x070): label -> Entry, coloured red while wrong
+        self._aperture_entries["Aperture r"] = ttk.Entry(g, textvariable=self.radius, width=6)
+        self._aperture_entries["Aperture r"].pack(side=LEFT)
         g = group(8)
         ttk.Label(g, text="sky in", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
-        ttk.Entry(g, textvariable=self.sky_in, width=6).pack(side=LEFT)
+        self._aperture_entries["sky in"] = ttk.Entry(g, textvariable=self.sky_in, width=6)
+        self._aperture_entries["sky in"].pack(side=LEFT)
         g = group(8)
         ttk.Label(g, text="sky out", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
-        ttk.Entry(g, textvariable=self.sky_out, width=6).pack(side=LEFT)
+        self._aperture_entries["sky out"] = ttk.Entry(g, textvariable=self.sky_out, width=6)
+        self._aperture_entries["sky out"].pack(side=LEFT)
         ttk.Button(group(6), text="Suggest…", command=self.suggest_apertures).pack(side=LEFT)
         g = group(14)
         ttk.Label(g, text="raw sat ADU", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
@@ -9816,6 +9947,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.5: redraw the aperture rings shortly after the sizes are typed (or set by Suggest…).
         for _var in (self.radius, self.sky_in, self.sky_out):
             _var.trace_add("write", lambda *_a: self._aperture_sizes_changed())
+            _var.trace_add("write", lambda *_a: self._mark_aperture_boxes())   # 2.4.0 fit-in F2 (x070)
+        self._mark_aperture_boxes()
 
         self.pick_label = StringVar(value="No stars marked.")
         self.pick_label_widget = ttk.Label(card, textvariable=self.pick_label, style="Hint.TLabel")
@@ -10791,6 +10924,64 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 traceback.print_exc()
 
+    # ---- 2.4.0 fit-in F2 (#79 item 6): why the Photometry page's job buttons are greyed ("" = they can work) -----
+    APERTURE_BOXES = (("radius", "Aperture r"), ("sky_in", "sky in"), ("sky_out", "sky out"))
+
+    def _aperture_problems(self) -> tuple[str, set]:
+        """x070: (the reason, the boxes to colour red) for the Aperture r / sky in / sky out boxes; ("", set()) when
+        they are numbers with 0 < r < sky in < sky out."""
+        values = {}
+        for attr, label in self.APERTURE_BOXES:
+            try:
+                values[label] = float(str(getattr(self, attr).get()).strip())
+            except Exception:
+                return f"{label} is not a number. Type a number in that box.", {label}
+            if not math.isfinite(values[label]):
+                return f"{label} is not a number. Type a number in that box.", {label}
+        r, s_in, s_out = values["Aperture r"], values["sky in"], values["sky out"]
+        bad = set()
+        if r <= 0:
+            bad.add("Aperture r")
+        if not r < s_in:
+            bad.add("sky in")
+        if not s_in < s_out:
+            bad.add("sky out")
+        if bad:
+            return (f"The aperture sizes must be in order: Aperture r < sky in < sky out (now {r:g}, {s_in:g}, "
+                    f"{s_out:g} px)."), bad
+        return "", set()
+
+    def _mark_aperture_boxes(self):
+        """x070: a wrong aperture box turns red as it is typed (Run photometry and Scan field grey with the reason)."""
+        bad = self._aperture_problems()[1]
+        for label, entry in (getattr(self, "_aperture_entries", None) or {}).items():
+            try:
+                entry.configure(style="Invalid.TEntry" if label in bad else "TEntry")
+            except Exception:
+                pass
+
+    def _masters_why(self) -> str:
+        if self.masters is None:
+            return "Build masters and calibrate first (Calibrate page)."
+        return ""
+
+    def _run_why(self) -> str:
+        """Run photometry: masters built (x064: a Binning change drops them) and the aperture sizes in order."""
+        return self._masters_why() or self._aperture_problems()[0]
+
+    def _scan_why(self) -> str:
+        """m348: Scan field needs the calibrated, debayered first frame (and masters), like photometry."""
+        if self.masters is None or self.preview is None or not self.preview_is_debayered:
+            return ("Calibrate first (Calibrate page). The scan uses the same frames, calibration, alignment and "
+                    "aperture as photometry.")
+        return self._aperture_problems()[0]
+
+    def _solve_why(self) -> str:
+        """m292: Solve again needs the calibrated image."""
+        if self.preview is None or not self.preview_is_debayered:
+            return "Calibrate first (Calibrate page): the solve uses the calibrated image."
+        return ""
+
     def _image_binning(self) -> int:
         """The binning the image on the Photometry page was made at (the Binning box may have changed since)."""
         if self.calibrated is not None and getattr(self, "masters_binning", None):
@@ -10808,16 +10999,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             return
         old = getattr(self, "masters_binning", None)
-        if self.calibrated is None or not old or new == int(old):
-            self._binning_warned = None
+        if self.masters is None or not old or new == int(old):
             return
-        if getattr(self, "_binning_warned", None) == new:
-            return
-        self._binning_warned = new
-        text = (f"Binning changed from {old} to {new}: run Calibrate again. The image on the Photometry page, its "
-                f"solution and the star markers are still at Binning {old}.")
+        # 2.4.0 fit-in F2 (#79 item 6, x064 and m349, John 24 Nov): masters built at another bin cannot calibrate
+        # these frames, so they are dropped here (Run photometry and Scan field grey until Calibrate rebuilds them),
+        # instead of a ✖ at Run. masters_binning stays: it is the bin of the image now on the Photometry page.
+        self.masters = None
+        text = (f"Binning changed from {old} to {new}: the masters were built at bin {old}, so Calibrate rebuilds "
+                f"them at bin {new}."
+                + (f" The image on the Photometry page, its solution and the star markers stay at bin {old} until "
+                   "then." if self.calibrated is not None else ""))
         self.status.set(text)
-        self.log(text)
+        self.log(text, keep_status=True)
+        self.gates.refresh()
 
     def _auto_solve(self):
         """Solve the image as soon as the frame is calibrated (Discovery 2.2; every mode 2.2.13). Once per image:
@@ -10926,9 +11120,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                          + ".")
         recover = self.recoverable_skips(night)
         if recover:
+            # 2.4.0 fit-in F2 (m555): a plain note when Measure skipped frames can measure them here; ⚠ otherwise
+            here = set(self._skips_measurable(night)[0]) if night == self._latest_night() else set()
             for name, frames in recover.items():
-                parts.append(f"⚠ {len(frames)} frame{'s' if len(frames) != 1 else ''} were skipped because of {name}, "
-                             "which is no longer a comp — Run photometry again to measure them.")
+                k = len(frames)
+                if here and all(p in here for p in frames):
+                    parts.append(f"{k} frame{'s' if k != 1 else ''} {'were' if k != 1 else 'was'} skipped because of "
+                                 f"{name}, which is no longer a comp: Measure skipped frames measures "
+                                 f"{'them' if k != 1 else 'it'} with the comps in use.")
+                else:
+                    parts.append(f"⚠ {k} frame{'s' if k != 1 else ''} {'were' if k != 1 else 'was'} skipped because "
+                                 f"of {name}, which is no longer a comp — Run photometry again to measure "
+                                 f"{'them' if k != 1 else 'it'}.")
         return "\n".join(parts)
 
     def comp_skip_log_text(self, night: str = "") -> str:
@@ -14435,7 +14638,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.watch_box.pack(fill=BOTH, expand=True, pady=(4, 4))
         row = ttk.Frame(watch, style="Card.TFrame")
         row.pack(fill=X)
-        ttk.Button(row, text="Add a star…", command=self.add_watch_dialog).pack(side=LEFT)
+        add_star = ttk.Button(row, text="Add a star…", command=self.add_watch_dialog)
+        add_star.pack(side=LEFT)
+        self.gate(add_star, lambda: "" if self.preview is not None and self.preview_is_debayered else (   # m284
+            "Calibrate first (Calibrate page), so the star can be found on the image."), busy=False)
         ttk.Button(row, text="Remove selected", command=self._remove_selected_watch).pack(side=LEFT, padx=6)
         ttk.Button(row, text="Watch light curves…", command=self.show_watch).pack(side=RIGHT)
 
@@ -14651,8 +14857,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                               "colors": core.star_colors(star)})   # 2.2.14 (item 1)
             self.watch_list.append(entry)
             self.watch_xy[name] = xy
+            # 2.4.0 fit-in F2 (m277): a star clicked before the solve gets its RA/Dec when this image is solved
+            # (_store_watch_positions), so it is found by itself on later nights
+            self.__dict__.setdefault("_watch_click_token", {})[name] = getattr(self, "_preview_token", 0)
             self.status.set(f"Watching {name}." + ("" if star is not None or "ra" in entry else
-                            " It is not a labeled catalog star, so click it again on later nights."))
+                            " It is not a labeled catalog star: its position is stored once the frame is solved."))
             self._remember_discovery_watch(entry)   # 2.2.18 (item 12)
         self.refresh_preview()
         self._refresh_watch_box()
@@ -14698,6 +14907,30 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except (KeyError, TypeError, ValueError):
                 continue
         return out
+
+    def _store_watch_positions(self) -> None:
+        """2.4.0 fit-in F2 (m277): watch stars clicked on this image before it was solved (no catalog star, so no
+        RA/Dec) get their position from the solution, so later nights find them without a click."""
+        tokens = getattr(self, "_watch_click_token", None) or {}
+        if not self.chart_solution or not tokens:
+            return
+        now = getattr(self, "_preview_token", 0)
+        for entry in self.watch_list:
+            name = entry.get("name")
+            xy = self.watch_xy.get(name)
+            if entry.get("ra") is not None or xy is None or tokens.get(name) != now:
+                continue
+            try:
+                ra, dec = core.pixel_to_sky(xy[0], xy[1], self.chart_solution)
+            except Exception:
+                continue
+            if not (math.isfinite(ra) and math.isfinite(dec)):
+                continue
+            entry["ra"], entry["dec"] = float(ra), float(dec)
+            tokens.pop(name, None)
+            self._remember_discovery_watch(entry)
+            self.log(f"{name}: position stored (RA {core.sexagesimal_ra(ra / 15.0)}, Dec {core.sexagesimal_dec(dec)}), "
+                     "so it is found by itself on later nights.", keep_status=True)
 
     def _remember_discovery_watch(self, entry: dict) -> None:
         if self.mode_key != "discovery" or not isinstance(entry, dict) or not entry.get("name"):
@@ -14856,8 +15089,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def add_watch_dialog(self):
         if self.preview is None or not self.preview_is_debayered:
-            messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page), so the star can be found on the image.")
-            return
+            return   # 2.4.0 fit-in F2 (m284): Add a star… is greyed until calibrated; a silent backstop
         text = simpledialog.askstring(
             APP_TITLE,
             "Star to watch: a name (V1441 Cas, NSV 14464, TYC 4006-946-1, a Gaia ID on the labeled chart),\n"
@@ -15253,8 +15485,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def label_aavso(self, auto: bool = False):
         catalog = "Catalogs"   # 2.2.13: every catalog is fetched; the Catalog box only picks which circles show
         if self.preview is None or not self.preview_is_debayered:
-            if not auto:
-                messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page).")
+            if not auto:   # 2.4.0 fit-in F2 (m292): Solve again is greyed until calibrated; a status backstop
+                self.status.set("Calibrate first (Calibrate page): the solve uses the calibrated image.")
             return
         # 2.2.16 (item 10): this image has had a solve attempt (the step strip says "Not solved" if it fails).
         tried_before = getattr(self, "_solve_tried_for", None)
@@ -15818,6 +16050,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._apply_field_check(vet, solved, diag)
         self._restore_discovery_watch()   # 2.2.18 (item 12): this field's remembered Discovery watch stars
         self._locate_watch_stars()
+        if n > 2:   # never from a two-star solve, which may be discarded below
+            self._store_watch_positions()   # 2.4.0 fit-in F2 (m277)
         self._fill_marked_from_chart()
         auto_slots = []
         foreign_image = bool(getattr(self, "_preview_foreign", "")) or (
@@ -17740,14 +17974,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._scan_stack_run = stack_run
         lights = list(stack_run["paths"]) if stack_run else self._lights(log_skips=True)
         if not lights or self.masters is None or self.preview is None or not self.preview_is_debayered:
-            messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). The scan uses the same frames, "
-                                           "calibration, alignment, and aperture as photometry.")
+            # 2.4.0 fit-in F2 (m348): Scan field is greyed until calibrated; a status-line backstop
+            self.status.set("Calibrate first (Calibrate page): the scan uses the same frames, calibration, "
+                            "alignment and aperture as photometry.")
             return
         try:
             binning = max(int(self.binning.get()), 1)
-            radius = float(self.radius.get())
-            sky_in = float(self.sky_in.get())
-            sky_out = float(self.sky_out.get())
+            # 2.4.0 fit-in F2 (x070): a box that is not a number names the box (as Run photometry does)
+            radius = self._num_box(self.radius, "Aperture r")
+            sky_in = self._num_box(self.sky_in, "Sky in")
+            sky_out = self._num_box(self.sky_out, "Sky out")
             if not (0 < radius < sky_in < sky_out):
                 raise ValueError("Need aperture r < sky in < sky out")
             min_p, max_p = float(self.min_period.get()), float(self.max_period.get())
@@ -17763,18 +17999,29 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showerror(APP_TITLE, str(exc))
             return
         if self.masters_binning is not None and binning != self.masters_binning:
-            messagebox.showerror(APP_TITLE, "Binning changed since the masters were built. Rebuild the masters first.")
+            # 2.4.0 fit-in F2 (m349): a Binning change drops the masters (Scan field greys); a status-line backstop
+            self.status.set(f"Binning is {binning} but the masters were built at {self.masters_binning}: Calibrate "
+                            f"rebuilds them at bin {binning}.")
             return
         discovery = self.mode_key == "discovery"
+        box = "Detection threshold (σ)"
         try:
-            nsigma = float(self.scan_sigma.get()) if discovery else 5.0
-            excess_limit = float(self.scan_excess.get()) if discovery else core.SUSPECT_FACTOR
+            # 2.4.0 fit-in F2 (m350): the box that is wrong is named
+            nsigma = self._num_box(self.scan_sigma, box) if discovery else 5.0
+            box = "Suspect at (× normal)"
+            excess_limit = self._num_box(self.scan_excess, box) if discovery else core.SUSPECT_FACTOR
             # 2.4.0 step 7a (#91): 0 or blank switches the own-errors test off
+            box = "or at (χ²ν × normal)"
             chi2_limit = (self._scan_chi2_limit() if discovery and hasattr(self, "scan_excess_chi2")
                           else core.SUSPECT_EXCESS_CHI2)
-            mag_limit = float(self.scan_mag_limit.get()) if discovery and self.scan_mag_limit.get().strip() else None
-        except Exception:
-            messagebox.showerror(APP_TITLE, "Check the scan settings (threshold, suspect levels, faintest magnitude).")
+            box = "Faintest magnitude"
+            mag_limit = (self._num_box(self.scan_mag_limit, box)
+                         if discovery and self.scan_mag_limit.get().strip() else None)
+        except Exception as exc:
+            text = str(exc)
+            if not text.startswith(box):   # Python's own words ("could not convert…") never reach the box
+                text = f"{box}: " + (text if text.startswith("the ") else "not a number") + "."
+            messagebox.showerror(APP_TITLE, f"Check the scan settings: {text}")
             return
         ref = self.preview
         h, w = ref.shape
@@ -18394,18 +18641,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                       "straight away, so every star gets a position, a catalog magnitude and a VSX/SIMBAD check.)",
             style="Hint.TLabel", justify=LEFT, wraplength=1300)
         self.discovery_empty.pack(anchor=W, pady=(2, 6))
-        # The same Results row as after a scan (John, 10 Oct). As on the Variables and Transit fit pages the buttons
-        # stay active and say what to do first.
+        # The same Results row as after a scan (John, 10 Oct). 2.4.0 fit-in F2 (#79 item 6, m374, John 24 Nov):
+        # the 2.2.9 "buttons stay active and say what to do first" choice is retired: until a scan they are greyed,
+        # and hovering says why (the page is rebuilt with live buttons when a scan lands).
         results = ttk.Frame(top, style="Card.TFrame")
         results.pack(fill=X, side="bottom", pady=(4, 0))
         ttk.Label(results, text="Results", style="Hint.TLabel", width=8).pack(side=LEFT)
-
-        def need_scan():
-            messagebox.showinfo(APP_TITLE, "Scan the field first (Scan field on the Photometry page).")
         for i, label in enumerate(("Save plot PNG…", "Save CSV…", "Export suspects CSV…",
                                    "Export all light curves CSV…")):
-            ttk.Button(results, text=label, style="Accent.TButton" if i == 0 else "TButton",
-                       command=need_scan).pack(side=LEFT, padx=6 if i % 2 else 0)
+            b = ttk.Button(results, text=label, style="Accent.TButton" if i == 0 else "TButton")
+            b.pack(side=LEFT, padx=6 if i % 2 else 0)
+            self.gate(b, lambda: "Scan the field first (Scan field on the Photometry page).", busy=False)
         ttk.Button(results, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT)
         body = ttk.Frame(top, style="Card.TFrame")
         body.pack(fill=BOTH, expand=True)
@@ -18667,7 +18913,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showerror(APP_TITLE, text)
             return
         if self.masters is None:
-            messagebox.showerror(APP_TITLE, "Build calibration masters first.")
+            # 2.4.0 fit-in F2 (x064): Run photometry is greyed without masters; a status-line backstop
+            self.status.set("Build masters and calibrate first (Calibrate page).")
             return
         try:
             self._camera_aperture_settle()   # step 4 review (S7): never a run on a new camera's default sizes
@@ -20373,6 +20620,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             pass
         recover = bool(text) and "no longer a comp" in text
+        if not recover:
+            self._withdraw_status_action()   # 2.4.0 fit-in F2 (m555): nothing left for its button to measure
         try:
             if recover:
                 self.skip_button.pack(**self._skip_button_side)
@@ -21977,14 +22226,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         tp = getattr(self, "transit_page", None)
         if tp is not None and hasattr(tp, "update_series_button"):
             tp.update_series_button()   # 2.2.21 (#44): Fit the series' nights… follows the series' nights
-        # 2.2.16 (item 15): the Input and Output pages' Close series buttons are enabled together.
-        for button in (getattr(self, "close_series_button", None), getattr(self, "close_series_button_out", None)):
-            if button is None:
-                continue
-            try:
-                button.configure(state="normal" if self.observations else "disabled")
-            except Exception:
-                pass
+        # 2.2.16 (item 15): the Input and Output pages' Close series buttons are enabled together. 2.4.0 fit-in F2
+        # (#79 item 6, m502): both are gated (_close_series_why: no series, or a job running), not set by hand here.
+        if getattr(self, "gates", None) is not None:
+            self.gates.refresh()
+
+    def _close_series_why(self) -> str:
+        """2.4.0 fit-in F2 (m502): why Close series is greyed ("" when it can work); the busy lock is the gate's."""
+        return "" if self.observations else "No series is open."
 
     def _offer_series_save(self, then: str) -> bool:
         """2.2.15 (item 7, review): before closing or replacing an open series with unsaved points: Yes saves first,
@@ -22103,8 +22352,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.status.set("No series is open.")
             return
         if self.busy:
-            messagebox.showinfo(APP_TITLE, "Wait for the current run to finish (or cancel it) before closing the series.")
-            return
+            return   # 2.4.0 fit-in F2 (m502): Close series is greyed during a job; a silent backstop
         if not asked and not self._offer_series_save("close it"):
             return
         had_file = bool(self.series_path)
@@ -22364,6 +22612,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.16 (item 15): Close series here too (same as the Input page's), enabled only with a series open.
         self.close_series_button_out = groups.add("data", ttk.Button(g, text="Close series",
                                                                      command=self.close_series))
+        self.gate(self.close_series_button_out, self._close_series_why, busy=True)   # 2.4.0 fit-in F2 (m502)
         self.update_series_status()
         groups.add("data", ttk.Button(g, text="Add series file…", command=self.add_series_file))
         groups.add("data", ttk.Button(g, text="Remove night…", command=self.remove_night))
@@ -25380,14 +25629,29 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} measured in fewer than half the "
                      "night's frames but kept (no other comp in use there): only the frames where it was measured "
                      "get a magnitude; the others are flagged nocomp.")
-        # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page)
-        recover = {}
+        # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page).
+        # 2.4.0 fit-in F2 (m555, John 24 Nov: ONE BUTTON): when the frames are here (the latest night's, in the
+        # Lights folder, with an image loaded) a plain line and a Measure skipped frames button on the status line;
+        # nothing is measured until it is pressed. ⚠ only for frames that cannot be measured on their own.
+        recover, n_here = {}, 0
+        latest = self._latest_night()
+        here = self._skips_measurable(latest)[0] if latest else []
         for night in sorted({o.night for o in self.observations}):
             for name, frames in self.recoverable_skips(night).items():
                 recover.setdefault(name, []).extend(frames)
-        for name, frames in recover.items():
-            self.log(f"⚠ {len(frames)} frames were skipped because of {name}, which is no longer a comp — Run "
-                     "photometry again to measure them (or Measure skipped frames on the Photometry page).")
+                k = len([p for p in frames if p in here]) if night == latest else 0
+                n_here += k
+                if k:
+                    self.log(f"{k} frame{'s' if k != 1 else ''} of {self.label_nights(night)} "
+                             f"{'were' if k != 1 else 'was'} skipped because of {name}, which is no longer a comp: "
+                             "Measure skipped frames (status line, or the Photometry page) measures "
+                             f"{'them' if k != 1 else 'it'} with the comps in use.")
+                if len(frames) > k:
+                    m = len(frames) - k
+                    self.log(f"⚠ {m} frame{'s' if m != 1 else ''} of {self.label_nights(night)} "
+                             f"{'were' if m != 1 else 'was'} skipped because of {name}, which is no longer a comp — "
+                             "open that night's frames and Run photometry again to measure "
+                             f"{'them' if m != 1 else 'it'}.")
         self._update_skip_line()
         self._log_zero_point_check()   # 2.2.14 (item 10)
         saved = ""
@@ -25397,8 +25661,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except OSError as exc:
                 messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         n_rec = sum(len(v) for v in recover.values())
+        n_away = n_rec - n_here
         self.status.set(f"Comps in use: {used}.{saved}"
-                        + (f"  ⚠ {n_rec} skipped frames can be measured now (Photometry page)." if n_rec else ""))
+                        + (f"  {n_here} skipped frame{'s' if n_here != 1 else ''} can be measured now:" if n_here
+                           else "")
+                        + (f"  ⚠ {n_away} skipped frame{'s' if n_away != 1 else ''} need Run photometry on "
+                           "their night." if n_away else ""))
+        if n_here:
+            self._offer_measure_skipped(latest, n_here)   # m555: the button beside the line
         # 2.2.17 (item 4): in Transits mode the transit fit follows the new comps (refits on its page); after the status
         # line, so "Refitting…" is what it says (review).
         tp = getattr(self, "transit_page", None)
@@ -25408,6 +25678,46 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 traceback.print_exc()
         return True
+
+    def _skips_measurable(self, night: str) -> tuple[list, list]:
+        """2.4.0 fit-in F2 (m555): (the frames Measure skipped frames can measure now, all its frames) for a night:
+        the frames skipped because of comps no longer in use that are in the Lights folder, with an image loaded."""
+        paths = [p for v in (self.recoverable_skips(night) if night else {}).values() for p in v]
+        if not paths or self.preview is None:
+            return [], paths
+        try:
+            here = set(self._lights())
+        except Exception:
+            here = set()
+        return [p for p in paths if p in here], paths
+
+    def _offer_measure_skipped(self, night: str, n: int):
+        """2.4.0 fit-in F2 (m555): a Measure skipped frames button on the status line (next to the line that says
+        how many). It stays until it is pressed, another offer takes its place, or the frames are no longer
+        skipped (_update_skip_line); greyed while a job runs."""
+        stacked = bool(self.stack_meta(night)) or self.points_choice.get() == "stack"
+        tip = (f"Measures the {n} skipped frame{'s' if n != 1 else ''} of {self.label_nights(night)} with the comps "
+               "in use and adds them to the night."
+               + (" This night shows stacked points: it switches to Points: Per frame first and drops the night's "
+                  "stacks (press Stack again afterwards)." if stacked else ""))
+        self._status_offer = (self.status.get(), self.measure_skipped_frames)
+        self._status_link_tip = tip
+        try:
+            self.status_link.configure(text="Measure skipped frames")
+            self.status_link.pack(side=RIGHT, padx=(8, 0), before=self.status_label)
+        except Exception:
+            pass
+        self.gates.refresh()
+
+    def _withdraw_status_action(self):
+        """m555: the status line's Measure skipped frames button goes (pressed, or nothing left to measure)."""
+        if callable(getattr(self, "_status_offer", ("", ""))[1]):
+            self._status_offer = ("", "")
+            self._status_link_tip = ""
+            try:
+                self.status_link.pack_forget()
+            except Exception:
+                pass
 
     def _comps_not_on_night(self, night_points) -> list:
         """2.2.19 (#20): the Use comps stars that no frame of this night measured (as a comp or a spare)."""
@@ -27570,10 +27880,12 @@ class SuggestWindow:
         self.result_text = StringVar(value="")
         ttk.Label(top, textvariable=self.result_text, style="Box.TLabel", justify=LEFT).pack(anchor=W, pady=(10, 0))
         ttk.Button(nav, text="Use these aperture sizes", style="Accent.TButton", command=self.use).pack(side=LEFT)
-        ttk.Button(nav, text="Test 4 apertures on 30 frames", command=lambda: app.test_apertures(fwhm, self, 30)).pack(
-            side=LEFT, padx=8)
-        ttk.Button(nav, text="60 frames (slower, surer)", command=lambda: app.test_apertures(fwhm, self, 60)).pack(
-            side=LEFT)
+        test30 = ttk.Button(nav, text="Test 4 apertures on 30 frames", command=lambda: app.test_apertures(fwhm, self, 30))
+        test30.pack(side=LEFT, padx=8)
+        test60 = ttk.Button(nav, text="60 frames (slower, surer)", command=lambda: app.test_apertures(fwhm, self, 60))
+        test60.pack(side=LEFT)
+        for b in (test30, test60):   # 2.4.0 fit-in F2 (#79 item 6, m003): greyed while a job runs
+            app.gate(b, None, busy=True)
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
         self.body.fit()
         fit_to_content(win)
@@ -28571,7 +28883,9 @@ class ExportWindow:
         # Buttons first, so they stay in view; the rest scrolls if the screen is short (2.2.2).
         nav = ttk.Frame(outer, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(10, 0))
-        ttk.Button(nav, text="Export…", style="Accent.TButton", command=self.export).pack(side=LEFT)
+        export_button = ttk.Button(nav, text="Export…", style="Accent.TButton", command=self.export)
+        export_button.pack(side=LEFT)
+        app.gate(export_button, None, busy=True)   # 2.4.0 fit-in F2 (John 24 Nov #7): greyed while a job runs
         ttk.Button(nav, text="Close", command=win.destroy).pack(side=RIGHT)
         # 2.3.3 (nit, 9 Nov): the result in this window (rows and file), not only on the main window's status line
         # behind it (with an Output folder set there is no Save dialog either, so nothing showed that it worked)
@@ -28594,11 +28908,21 @@ class ExportWindow:
         setups = ttk.Frame(top, style="Card.TFrame")
         setups.pack(fill=X, pady=(0, 8))
         ttk.Label(setups, text="Saved setup", style="Card.TLabel").pack(side=LEFT)
-        self.setup_box = ttk.Combobox(setups, textvariable=self.setup_name, values=sorted(load_export_setups()), width=24)
+        self._setup_names = set(load_export_setups())   # 2.4.0 fit-in F2: kept here, so the gates never read the file
+        self.setup_box = ttk.Combobox(setups, textvariable=self.setup_name, values=sorted(self._setup_names), width=24)
         self.setup_box.pack(side=LEFT, padx=6)
-        ttk.Button(setups, text="Load", command=self.load_setup).pack(side=LEFT)
-        ttk.Button(setups, text="Save as this name", command=self.save_setup).pack(side=LEFT, padx=6)
-        ttk.Button(setups, text="Delete", command=self.delete_setup).pack(side=LEFT)
+        # 2.4.0 fit-in F2 (#79 item 6, m636, m637): Load and Delete are live only for a saved setup's name, Save only
+        # with a name typed; hovering says why
+        self.load_setup_button = ttk.Button(setups, text="Load", command=self.load_setup)
+        self.load_setup_button.pack(side=LEFT)
+        self.save_setup_button = ttk.Button(setups, text="Save as this name", command=self.save_setup)
+        self.save_setup_button.pack(side=LEFT, padx=6)
+        self.delete_setup_button = ttk.Button(setups, text="Delete", command=self.delete_setup)
+        self.delete_setup_button.pack(side=LEFT)
+        app.gate(self.load_setup_button, self._saved_setup_why, busy=False)
+        app.gate(self.delete_setup_button, self._saved_setup_why, busy=False)
+        app.gate(self.save_setup_button, lambda: "" if self.setup_name.get().strip() else (
+            "Type a name for this setup in the Saved setup box first."), busy=False)
 
         def group(title):
             box = ttk.LabelFrame(top, text=title, style="Group.TLabelframe", padding=(10, 4, 10, 8))
@@ -28641,11 +28965,16 @@ class ExportWindow:
         setup["scint"] = self.app._scint_setup()
         return setup
 
+    def _saved_setup_why(self) -> str:
+        """m636: Load / Delete need the name of a saved setup in the box."""
+        if not self._setup_names:
+            return "No setups saved yet: set the choices below, type a name and press Save as this name."
+        return "" if self.setup_name.get() in self._setup_names else "Pick a saved setup in the box first."
+
     def load_setup(self):
         setup = load_export_setups().get(self.setup_name.get())
         if not setup:
-            messagebox.showinfo(APP_TITLE, "Pick a saved setup first.", parent=self.win)
-            return
+            return   # 2.4.0 fit-in F2 (m636): Load is greyed until a saved setup is picked; a silent backstop
         self.time.set(setup.get("time", "JD_UTC"))
         self.values.set(setup.get("values", "mag"))
         self.points.set(setup.get("points", "all"))
@@ -28656,8 +28985,7 @@ class ExportWindow:
     def save_setup(self):
         name = self.setup_name.get().strip()
         if not name:
-            messagebox.showinfo(APP_TITLE, "Type a name for this setup in the box first.", parent=self.win)
-            return
+            return   # 2.4.0 fit-in F2 (m637): Save is greyed until a name is typed; a silent backstop
         setups = load_export_setups()
         setups[name] = self.current_setup()
         try:
@@ -28665,6 +28993,7 @@ class ExportWindow:
         except OSError as exc:
             messagebox.showerror(APP_TITLE, f"Could not save setups: {exc}", parent=self.win)
             return
+        self._setup_names = set(setups)
         self.setup_box.configure(values=sorted(setups))
         self.app.status.set(f"Saved export setup '{name}'.")
 
@@ -28673,6 +29002,7 @@ class ExportWindow:
         if self.setup_name.get() in setups:
             del setups[self.setup_name.get()]
             save_export_setups(setups)
+            self._setup_names = set(setups)
             self.setup_box.configure(values=sorted(setups))
             self.setup_name.set("")
 

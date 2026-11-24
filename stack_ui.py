@@ -96,14 +96,20 @@ class StackMixin:
         ctl = ttk.Frame(srow, style="Card.TFrame")
         ctl.pack(side="top", anchor=W, pady=(2, 0))
         ttk.Label(ctl, text="Stack N", style="Card.TLabel").pack(side=LEFT, padx=(0, 2))
-        n_entry = ttk.Entry(ctl, textvariable=self.stack_n, width=6)
+        # 2.4.0 fit-in F2 (m727, m726): a spin box from 2 frames up (to the night's frames, set with the suggestion),
+        # pre-filled with the suggested N, so no "type N" / "N must be 2 or more" boxes are needed
+        n_entry = ttk.Spinbox(ctl, textvariable=self.stack_n, width=6, from_=2, to=9999, increment=1,
+                              command=lambda: setattr(self, "_stack_n_typed", True))
         n_entry.pack(side=LEFT)
         n_entry.bind("<Key>", lambda _e: setattr(self, "_stack_n_typed", True), add="+")
+        self.stack_n_box = n_entry
         ttk.Label(ctl, text="frames   Precision goal", style="Card.TLabel").pack(side=LEFT, padx=(8, 2))
         ttk.Entry(ctl, textvariable=self.stack_goal, width=6).pack(side=LEFT)
         ttk.Label(ctl, text="ppt per point (optional)", style="Card.TLabel").pack(side=LEFT, padx=(2, 8))
         self.stack_button = ttk.Button(ctl, text="Stack", command=self.start_stack)
         self.stack_button.pack(side=LEFT)
+        # 2.4.0 fit-in F2 (#79 item 6: m724, m725, m728): greyed while a job runs, or until it can work
+        self.gate(self.stack_button, self._stack_why, busy=True)
         # The Points switch, its own small box (Option A, John 3 Nov). 2.3.2 (John, run-through): on the Stack row,
         # right after the Stack button, so it comes and goes with the row and leaves the View box its width.
         box = ttk.LabelFrame(ctl, text="Points", style="Group.TLabelframe", padding=(8, 2, 8, 4))
@@ -115,6 +121,10 @@ class StackMixin:
         self.points_stack_button = ttk.Radiobutton(row, text="Stacked", value="stack", variable=self.points_choice,
                                                    command=self._points_switched)
         self.points_stack_button.pack(side=LEFT, padx=(8, 0))
+        # 2.4.0 fit-in F2 (m745): the switch is greyed while a job runs (it would change the data under it); Stacked
+        # also until this night has stacks (was set by hand in _stack_ui_update)
+        self.gate(self.points_frame_button, None, busy=True)
+        self.gate(self.points_stack_button, self._points_stack_why, busy=True)
         use = ttk.Label(box, textvariable=self.results_use, style="Hint.TLabel", justify=LEFT)
         use.pack(side="top", anchor=W, pady=(2, 0))
         # the line wraps at the switch's own width, so the box never needs more room than the two buttons
@@ -156,7 +166,7 @@ class StackMixin:
                 pass
         self._stack_place_points_box()
         try:
-            self.points_stack_button.configure(state="normal" if live else "disabled")
+            self.gates.refresh()   # 2.4.0 fit-in F2: Stacked follows _points_stack_why (no hand-set state)
         except Exception:
             pass
         self.results_use.set(self.results_use_text(night))
@@ -167,6 +177,20 @@ class StackMixin:
                 self.out_groups.boxes["view"].flow()   # 2.4.0 (#98): the label sits in the View group's row
             except Exception:
                 pass
+
+    def _stack_why(self) -> str:
+        """2.4.0 fit-in F2 (m725, m728): why Stack is greyed ("" when it can work; the busy lock is the gate's)."""
+        if not self._stack_source_live():
+            return "Run photometry first (Scan field in Discovery): the Stack step uses that run's frames."
+        if self.masters is None:
+            return "Calibrate first (Calibrate page): the stacks are made of calibrated frames."
+        return ""
+
+    def _points_stack_why(self) -> str:
+        src = self._stack_source_live()
+        if src is None or not self._stack_set_live(src["night"]):
+            return "Press Stack first: this night has no stacks yet."
+        return ""
 
     def results_use_text(self, night=None) -> str:
         """'Results use: Stacked (40 frames)' / 'Results use: Per frame'."""
@@ -307,8 +331,14 @@ class StackMixin:
             self.stack_line_label.configure(style="Warn.TLabel" if warn else "Hint.TLabel")
         except Exception:
             pass
+        box = getattr(self, "stack_n_box", None)
+        if box is not None:   # 2.4.0 fit-in F2 (m727): up to the frames that can be stacked
+            try:
+                box.configure(to=max(2, len(kept)))
+            except Exception:
+                pass
         if fill_n and (not self._stack_n_typed or goal):
-            self.stack_n.set(str(sug["n"]))
+            self.stack_n.set(str(max(2, int(sug["n"]))))   # m727: the box starts at 2 (1 = no stacking: Per frame)
             self._stack_n_typed = False
         self._stack_sug = {"sug": sug, "noise": noise, "cap": cap, "cadence": cadence}
         if log:
@@ -322,28 +352,24 @@ class StackMixin:
 
     # ---- Stack -----------------------------------------------------------------------------------------------
     def start_stack(self):
+        # 2.4.0 fit-in F2 (#79 item 6: m724, m725, m728): Stack is greyed while a job runs and until it can work,
+        # so these are silent backstops (a key or a code path)
         if self.busy:
-            messagebox.showinfo(TITLE, "Another step is still running. Wait for it to finish.")
             return
         src = self._stack_source_live()
-        if not src:
-            messagebox.showinfo(TITLE, "Run photometry first (Scan field in Discovery): the Stack step uses that "
-                                       "run's frames, alignment and noise.")
-            return
-        try:
-            n = int(float(self.stack_n.get().strip()))
-        except ValueError:
-            messagebox.showerror(TITLE, "Type the stack size N (frames per stack, 2 or more) in the Stack N box.")
-            return
-        if n < 2:
-            messagebox.showerror(TITLE, "N is the number of frames per stack: 2 or more (1 means no stacking: choose "
-                                        "Points: Per frame).")
-            return
-        if self.masters is None:
-            messagebox.showerror(TITLE, "Calibrate first (Calibrate page): the stacks are made of calibrated frames.")
+        if not src or self.masters is None:
             return
         recs = self._stack_records(src)
         kept = [r for r in recs if r["keep"]]
+        # m726, m727: the Stack N spin box starts at 2; anything else typed is clamped silently (the suggestion
+        # when it is not a number), and the box shows the N used
+        try:
+            n = int(float(self.stack_n.get().strip()))
+        except ValueError:
+            n = int((getattr(self, "_stack_sug", None) or {}).get("sug", {}).get("n") or 2)
+        n = max(2, min(n, max(2, len(kept))))
+        if self.stack_n.get().strip() != str(n):
+            self.stack_n.set(str(n))
         if len(kept) < 2:
             messagebox.showerror(TITLE, "Fewer than 2 frames can be stacked (the others are flagged, or could not be "
                                         "aligned).")
@@ -579,9 +605,9 @@ class StackMixin:
             self._stack_ui_update()
             return
         if self.busy:
-            # a run or a fit is going on: the switch waits (it would change the data under it)
+            # a run or a fit is going on: the switch waits (it would change the data under it). 2.4.0 fit-in F2
+            # (m745): the switch is greyed during a job, so this is a silent backstop
             self.points_choice.set("stack" if which == "frame" else "frame")
-            messagebox.showinfo(TITLE, "Another step is still running. Switch the points when it is done.")
             return
         self._apply_points(src["night"], which)
 

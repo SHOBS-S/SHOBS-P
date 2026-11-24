@@ -143,8 +143,10 @@ Watch stars are measured on every later run, with their own light curves. There 
 - On the Photometry page, with **● Watch it** chosen, click the star in the image.
 
 A watch star is remembered by its catalog name and sky position when the field is solved. A star that is not a
-labeled catalog star on an unsolved image is remembered only by its pixel position; the status bar warns *"It is
-not a labeled catalog star, so click it again on later nights."*
+labeled catalog star, clicked on an image that is not solved yet, gets its sky position when that image is solved
+(2.4.0): the status bar says *"… It is not a labeled catalog star: its position is stored once the frame is solved."*,
+and after the solve the log says *"…: position stored (RA …, Dec …), so it is found by itself on later nights."* No
+second click is needed on later nights. (A solve of only two catalog stars, which may be discarded, stores nothing.)
 
 ## Measure another night
 

@@ -456,7 +456,7 @@ class TestStackInApp(unittest.TestCase):
                 self.assertGreaterEqual(n_pts, 55)
                 self.assertIn("Comps are weak", app.stack_line.get())
                 self.assertEqual(app.results_use.get(), "Results use: Per frame")
-                self.assertEqual(str(app.points_stack_button.cget("state")), "disabled")
+                self.assertTrue(app.points_stack_button.instate(["disabled"]))   # 2.4.0 fit-in F2: gated (ttk flags)
                 app.stack_n.set("5")
                 app._stack_n_typed = True
                 app.start_stack()

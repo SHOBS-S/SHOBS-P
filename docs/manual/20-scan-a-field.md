@@ -140,7 +140,10 @@ next one.
 
 ## Run the scan
 
-1. Press **Scan field** (top right).
+1. Press **Scan field** (top right). It is greyed (2.4.0) until the frames are calibrated, while the aperture boxes are
+   not in order (chapter 8) and while a job runs; hover over it to see why. A settings box that is not a number stops
+   the scan with a message that names the box, for example *Check the scan settings: Detection threshold (σ) is not
+   a number. Type a number in that box.*
 2. Wait. The busy bar at the bottom of the window (chapter 3) says **Scanning 412 stars in 38 frames…**, then
    counts the frames, for example **Field scan… 12 of 38, about 1:20 left**. Each frame is calibrated, aligned and
    every star measured, so a scan takes about as long as a photometry run with many stars. **Cancel run** stops it.
@@ -313,7 +316,8 @@ another night.
 
 ## Save the results
 
-The **Results** row holds:
+The **Results** row holds the buttons below. Before the first scan the page shows them greyed (2.4.0; hover over one:
+*Scan the field first (Scan field on the Photometry page).*); they come live when a scan lands.
 
 - **Save plot PNG…**: the three plots with a one-line summary, `<field>_<filter>_<date>_SHOBS-P_scan.png`
   (`<field>` is the Input page's Star ID if one is left from another mode, otherwise `field`).
