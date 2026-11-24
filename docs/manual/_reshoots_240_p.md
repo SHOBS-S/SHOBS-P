@@ -20,3 +20,12 @@ No screenshots are taken until 2.4.0 is complete. Rows by issue.
 | Shot | Chapter | What changed in it | Action |
 |---|---|---|---|
 | img/14-* Time of max/min window shots | 14 | Nothing in a finished result. While measuring, **Measure** is grey and the result box reads *Measuring the time of maximum…* | none (optional new shot while measuring) |
+
+## #109 fit-in F1c (pages scroll; notes under; side bar width)
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| Input page shots showing the **Site** and **Optics** boxes (img/04-*, img/03-*) | 3, 4 | At 100 % on a normal window the notes beside the entries are wider (about 20 characters before they wrap; *for exoplanet reports and scintillation* on two lines instead of four). On a narrow box they sit under their entries | RESHOOT at 100 % |
+| optional: a page at 150 % with its scroll bar | 3 | NEW: the scroll bar at the page's right edge, notes under their entries | OPTIONAL NEW SHOT (add the reference in ch 3 if taken) |
+| shots at 100 % that show a page's right edge | all | No change at 100 % when the page fits: no scroll bar appears. A shot taken on a short window would now show one | none, if shot on a full-height window |
+

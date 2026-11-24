@@ -21,6 +21,14 @@ SHOBS-P starts at that size every day until you change it. A change applies the 
 whether to restart now (**No** is the default, since a restart drops anything not saved). Use it when everything looks
 tiny on a large screen run at its full resolution, common on a Mac with a big external display.
 
+At a large Text size on a smaller screen a page can be taller than the window. The page then gets a scroll bar at its
+right edge, and the mouse wheel or trackpad scrolls it (over a plot or the image the wheel keeps its own job, such as
+zooming; scroll beside it, or drag the scroll bar). Plots keep a readable height: the page scrolls rather than
+squeezing them. The sidebar scrolls the same way when the window is short, so **Text size** can always be reached to
+set it back, and it widens with the Text size so its words are not cut off. On the Input page, when the **Site**,
+**Optics** and **AAVSO report** boxes are too narrow for their short notes (*west is negative*, *for the scintillation
+error* …) beside the entries, the notes move under their entries, and back beside them when there is room.
+
 ## The three modes and their colors
 
 Each mode colors the whole window, so you can always see which one you are in:

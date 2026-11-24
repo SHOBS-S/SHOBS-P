@@ -22,6 +22,7 @@ import photometry_core as core
 import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
+import page_scroll   # 2.4.0 fit-in F1c (#109)
 from group_rows import LABEL_WIDTH, GroupRows   # 2.4.0 (#98): the Output pages' function groups
 
 try:
@@ -140,8 +141,9 @@ class TransitPage:
         self.report = None          # a loaded AAVSO exoplanet report (EXOTIC), when that is the source
         self.source_night = None
         self.meta_for_files = {}
-        self.frame = ttk.Frame(parent)
-        card = ttk.Frame(self.frame, style="Card.TFrame", padding=12)
+        # 2.4.0 fit-in F1c (#109): the page scrolls when the window is shorter than it needs (a large Text size)
+        self.frame = page_scroll.PageScroll(parent)
+        card = ttk.Frame(self.frame.body, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Output – Transit fit", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
         self.planet_text = StringVar(value=planet_summary(None))
@@ -486,7 +488,9 @@ class TransitPage:
             self.canvas = FigureCanvasTkAgg(self.fig, master=body)
             # Ask for a small size and let the page stretch it: the figure's own 8-inch width (more on a scaled
             # display) pushed the page past the screen edge (2.2).
-            self.canvas.get_tk_widget().configure(width=420, height=320)
+            _mod = _app_module(app)
+            page_scroll.min_plot_height(self.canvas.get_tk_widget(), _mod.PLOT_MIN_PX["transit"],
+                                        _mod.content_scale(app), width_px=420)
             self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             # 2.2.10: margins in points, so a big plot does not float in wide fractional margins.
             try:

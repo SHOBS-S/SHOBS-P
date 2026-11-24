@@ -51,6 +51,7 @@ import busy_bar   # 2.2.20 (item 3)
 import ui_watch   # 2.4.0 fit-in F1 (#116)
 import iers_bg    # 2.4.0 fit-in F1 (#116): astropy's IERS table refresh off the Tk thread
 import text_scale   # 2.4.0 fit-in F1 (#109, Fable M1)
+import page_scroll   # 2.4.0 fit-in F1c (#109)
 import findings   # 2.4.0 step 2 (#102): the Findings panel
 import shobs_update   # 2.3.3 (#57): is a newer release out? (shared with SHOBS-SCHED and SHOBS-FLUX)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
@@ -1016,6 +1017,41 @@ def ui_scale(widget) -> float:
         return max(float(widget.tk.call("tk", "scaling")) / 1.3333, 1.0)
     except Exception:
         return 1.0
+
+
+# 2.4.0 fit-in F1c (#109): an Input-page hint (west is negative, for the scintillation error …) stays beside its entry
+# while about this many characters fit beside the entries (at their minimum width), else the box's hints go under
+# their entries; they come back beside them when the room is HINT_BACK_FACTOR times that, so they never flip back
+# and forth.
+HINT_BESIDE_CHARS = 20
+HINT_BACK_FACTOR = 1.4
+
+def side_bar_width(text_size_pct) -> int:
+    """2.4.0 fit-in F1c (#109): the side bar's width (px), 230 at 100 % Text size, wider or narrower with it."""
+    try:
+        pct = int(text_size_pct)
+    except (TypeError, ValueError):
+        pct = 100
+    return int(round(230 * pct / 100.0))
+
+
+def content_scale(widget) -> float:
+    """2.4.0 fit-in F1c (#109): how much bigger than normal the contents are drawn: the display's scaling (which also
+    carries the Text size where tk scaling does the work: Windows, Linux) times the font factor (a Mac)."""
+    try:
+        factor = float(getattr(text_scale, "FACTOR", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        factor = 1.0
+    if abs(factor - 1.0) > 1e-6:
+        # The Mac path: the fonts carry the Text size; Aqua's own scale is points (1.0), and the tk scaling that
+        # apply() also raised does not draw anything bigger there, so it is not counted twice.
+        return factor
+    return ui_scale(widget)
+
+
+# 2.4.0 fit-in F1c (#109): the least height (px at normal size, times content_scale) a page gives its plot or image
+# before the page scrolls instead of squeezing it further.
+PLOT_MIN_PX = {"blink": 300, "photo": 320, "discovery": 340, "output": 400, "transit": 380}
 
 
 TEXT_SIZES = (90, 100, 115, 130, 150)   # 2.4.0 fit-in F1 (#109): the side bar's Text size choices, % of normal
@@ -2401,9 +2437,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         outer = ttk.Frame(self)
         outer.pack(fill=BOTH, expand=True)
 
-        self.side = ttk.Frame(outer, style="Side.TFrame", width=230)
-        self.side.pack(side=LEFT, fill=Y)
-        self.side.pack_propagate(False)
+        # 2.4.0 fit-in F1c (#109): the side bar widens with the Text size (its words were cut off at 150 %), and
+        # scrolls when the window is shorter than it (so Text size can always be reached to set it back).
+        self.side_host = page_scroll.PageScroll(outer, bg=MODES[self.mode_key]["side"], body_style="Side.TFrame",
+                                                style="Side.TFrame", width=side_bar_width(self.text_size))
+        self.side_host.pack(side=LEFT, fill=Y)
+        self.side_host.pack_propagate(False)
+        self.side = self.side_host.body
         ttk.Label(self.side, text="Shiloh Hill\nObservatory\nPhotometry\n(SHOBS-P)", font=(core.UI_FONT, 13, "bold"), style="Side.TLabel", justify=LEFT).pack(
             anchor=W, padx=16, pady=(18, 4)
         )
@@ -2509,7 +2549,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ).pack(anchor=W, padx=12, pady=(0, 4))
 
     def _page_credits(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Credits and sources", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -2549,7 +2590,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         box.pack(fill=BOTH, expand=True, before=nav)
         box.insert(END, core.credits_text())
         box.configure(state="disabled")
-        return page
+        return page_host
 
     def copy_citation(self):
         """2.2.18 (item 15): the suggested citation onto the clipboard (Tk's clipboard; it stays after SHOBS-P closes
@@ -2840,6 +2881,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.mode_key = mode
         m = MODES[mode]
         self._apply_theme(mode)
+        try:   # 2.4.0 fit-in F1c (#109): the side bar's scroll area under its body takes the mode's color too
+            self.side_host.canvas.configure(background=m["side"])
+        except Exception:
+            pass
         self._update_no_auid()   # 2.2.20 (item 4): Variables mode only
         self.subtitle.set(m["subtitle"])
         self.banner_text.set(m["banner"])
@@ -4811,7 +4856,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             px = 8 * min_chars
         # Review: entries take twice the hints' share of spare width, so they stay reasonably wide when maximized.
-        box.columnconfigure(entry_col, weight=2, minsize=int(px + 12 * scale))
+        entry_min = int(px + 12 * scale)
+        box.columnconfigure(entry_col, weight=2, minsize=entry_min)
         box.columnconfigure(hint_col, weight=1)
         hints, spans = [], []
         for kid in list(box.winfo_children()):
@@ -4839,6 +4885,55 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             else:
                 spans[k] = (kid, None)
 
+        # 2.4.0 fit-in F1c (#109, iMac at 150 %): when the room beside the entries is too narrow for a hint (it wrapped
+        # one word to a line and pushed the box's last rows out of sight), the hints move under their entries and
+        # wrap to the box; they move back beside them when the room comes back (with a margin, so no flip-flopping).
+        # Every row number is doubled once here, so each row has a free row under it for its hint.
+        if hints:
+            for kid in list(box.winfo_children()):
+                try:
+                    info = kid.grid_info()
+                    if info:
+                        kid.grid_configure(row=2 * int(info.get("row", 0)))
+                except Exception:
+                    pass
+            hint_rows = {}
+            for lab in hints:
+                try:
+                    hint_rows[str(lab)] = int(lab.grid_info().get("row", 0))
+                except Exception:
+                    hint_rows[str(lab)] = 0
+            try:
+                from tkinter import font as tkfont
+                under_px = int(tkfont.nametofont("TkDefaultFont").measure("0" * HINT_BESIDE_CHARS))
+            except Exception:
+                under_px = int(7 * HINT_BESIDE_CHARS * scale)
+            state = {"under": False}
+
+            def place_hints(under: bool):
+                # Beside: the hint column keeps room for about HINT_BESIDE_CHARS characters (the entries no longer
+                # take it all and leave one word a line). Under: the hint spans the whole box under its row.
+                try:
+                    box.columnconfigure(hint_col, minsize=0 if under else under_px)
+                except Exception:
+                    pass
+                for lab in hints:
+                    r = hint_rows.get(str(lab), 0)
+                    try:
+                        if under:
+                            lab.grid_configure(row=r + 1, column=0, columnspan=hint_col + 1, sticky="ew",
+                                               padx=(int(12 * scale), 0), pady=(0, int(4 * scale)))
+                        else:
+                            lab.grid_configure(row=r, column=hint_col, columnspan=1, sticky="ew",
+                                               padx=(8, 0), pady=(0, 0))
+                    except Exception:
+                        pass
+                state["under"] = under
+            place_hints(False)
+            box._hints_under = lambda: state["under"]   # for the tests
+        else:
+            under_px, state, place_hints = 0, {"under": False}, None
+
         def wrap_all(event):
             """Review: one pass from the box's width (no label-by-label settling): hints wrap to what is left beside
             the label and entry columns, the full-width rows to the box."""
@@ -4848,6 +4943,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 used = 0
             hint_w = max(inner - used - int(8 * scale), int(60 * scale))
+            if place_hints is not None:
+                try:
+                    label_w = int(box.grid_bbox(0, 0, 0, 0)[2])
+                except Exception:
+                    label_w = 0
+                # Both ways from a steady estimate of the room beside the entries (the label column and the entries'
+                # minimum, not the grid as the hints themselves have shaped it), with a margin between going under
+                # and coming back, so the hints never flip back and forth.
+                room = inner - label_w - entry_min - int(8 * scale)
+                if not state["under"] and room < under_px:
+                    place_hints(True)
+                elif state["under"] and room > HINT_BACK_FACTOR * under_px:
+                    place_hints(False)
+                if state["under"]:
+                    hint_w = max(inner - int(20 * scale), int(60 * scale))
             for lab in hints:
                 try:
                     lab.configure(wraplength=hint_w)
@@ -4873,7 +4983,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return entry
 
     def _page_input(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Input", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -5114,7 +5225,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ttk.Label(optics, textvariable=self.mount_hint, style="Hint.TLabel", wraplength=text_wrap_px(optics, 55),
                   justify=LEFT).grid(row=9, column=0, columnspan=3, sticky=W)
         optics.columnconfigure(1, weight=1)
-        return page
+        return page_host
 
     # ---- planet (Transits) ---------------------------------------------------------------
     def _auto_planet_lookup(self):
@@ -7672,7 +7783,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.log("Your own site, optics, and camera settings are back (they were set aside for another telescope's frames).")
 
     def _page_blink(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Blink", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -7722,7 +7834,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.blink_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.blink_ax = self.blink_fig.add_subplot(111)
             self.blink_canvas = FigureCanvasTkAgg(self.blink_fig, master=host)
-            self.blink_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.blink_canvas.get_tk_widget(), PLOT_MIN_PX["blink"], content_scale(self),
+                                        width_px=400)
             self.blink_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             # 2.2.5: keep the title band the same height in pixels when the window is resized.
             self.blink_canvas.mpl_connect("resize_event", lambda _e: self._blink_layout())
@@ -7730,7 +7843,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav.pack(fill=X, side="bottom", before=host, pady=(6, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_INPUT)).pack(side=LEFT)
         ttk.Button(nav, text="Next: Calibrate", command=lambda: self.show_step(STEP_CAL)).pack(side=RIGHT)
-        return page
+        return page_host
 
     def _blink_folder(self):
         return self.light_dir.get() if self.blink_source.get() == "lights" else self.flat_dir.get()
@@ -8737,7 +8850,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.refresh_preview()
 
     def _page_calibrate(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=16)
         card.pack(fill=BOTH, expand=True)
         ttk.Label(card, text="Calibrate", font=(core.UI_FONT, 16, "bold"), style="Card.TLabel").pack(anchor=W)
@@ -8797,7 +8911,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav.pack(fill=X, side="bottom", before=self.log_box, pady=(10, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_BLINK)).pack(side=LEFT)
         ttk.Button(nav, text="Next: Photometry", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT)
-        return page
+        return page_host
 
     @staticmethod
     def _cal_kind(path: str, reason: str) -> str | None:
@@ -9528,7 +9642,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                             "(their IDs and magnitudes fill in from the catalogs).")
 
     def _page_photo(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         self.photo_title = StringVar(value="Photometry")
@@ -9751,7 +9866,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.photo_fig = Figure(figsize=(8, 4.2), dpi=100, facecolor="#ffffff")
             self.photo_ax = self.photo_fig.add_subplot(111)
             self.photo_canvas = FigureCanvasTkAgg(self.photo_fig, master=plot_host)
-            self.photo_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.photo_canvas.get_tk_widget(), PLOT_MIN_PX["photo"], content_scale(self),
+                                        width_px=400)
             self.photo_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.photo_canvas.get_tk_widget().bind(
                 "<Map>", lambda _e: self.after(50, self._fit_visible_canvases), add="+")
@@ -9786,7 +9902,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                      command=self.toggle_photo_log)
         self.log_toggle.pack(side=RIGHT)
         ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
-        return page
+        return page_host
 
     def _wrapped_labels(self, widget):
         """2.3.4: every label under `widget` that wraps its text (for ScrollBody.shrink_wrap)."""
@@ -18237,7 +18353,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             ScanWindow(self, result)
 
     def _page_discovery_output(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=4)
         card.pack(fill=BOTH, expand=True)
         self.discovery_host = ttk.Frame(card, style="Card.TFrame")
@@ -18246,7 +18363,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(4, 0))
         ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT, padx=8, pady=4)
-        return page
+        return page_host
 
     def _discovery_placeholder(self):
         """2.2.9: before a scan the Field scan page shows its empty plot frame and table, as Variables and Transits
@@ -18299,7 +18416,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ax_s.text(0.5, 0.5, "No field scan yet", transform=ax_s.transAxes, ha="center", va="center", color="#7a8a94")
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=body)
-        canvas.get_tk_widget().configure(width=400, height=300)
+        page_scroll.min_plot_height(canvas.get_tk_widget(), PLOT_MIN_PX["discovery"], content_scale(self), width_px=400)
         canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         canvas.draw_idle()
 
@@ -22193,7 +22310,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._check_planet_transits(unchecked, source="loaded")   # 2.2.16 (item 9): names the file
 
     def _page_output(self):
-        page = ttk.Frame(self.pages)
+        page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
+        page = page_host.body
         card = ttk.Frame(page, style="Card.TFrame", padding=12)
         card.pack(fill=BOTH, expand=True)
         # 2.2.19 (nit): the star's name in the heading ("Output – Variability: BL Cam").
@@ -22335,7 +22453,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.out_ax3 = self.out_fig.add_subplot(223)
             self.out_ax4 = self.out_fig.add_subplot(224)
             self.out_canvas = FigureCanvasTkAgg(self.out_fig, master=host)
-            self.out_canvas.get_tk_widget().configure(width=400, height=300)
+            page_scroll.min_plot_height(self.out_canvas.get_tk_widget(), PLOT_MIN_PX["output"], content_scale(self),
+                                        width_px=400)
             self.out_canvas.get_tk_widget().pack(fill=BOTH, expand=True)
             self.out_canvas.mpl_connect("motion_notify_event", self._on_hover)
             self.out_canvas.mpl_connect("resize_event", self._refit_lc_title)   # 2.2.14 (item 16)
@@ -22375,7 +22494,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # (greyed), or "Fetch AAVSO chart" when only the chart is missing (field_image_action).
         self.field_button = saves.add(ttk.Button(g, text="Save field image", command=self.field_image_action))
         self.register_field_button(self.field_button, "Save field image")
-        return page
+        return page_host
 
     def transit_page_on_screen(self) -> bool:
         """2.2.17 (item 4): the Transit fit page is the page shown (Transits mode, Output step, not Variable View)."""
@@ -28890,7 +29009,7 @@ class ScanView:
         self.ax_lc = self.fig.add_subplot(2, 2, 2)
         self.ax_ls = self.fig.add_subplot(2, 2, 4)
         self.canvas = FigureCanvasTkAgg(self.fig, master=body)
-        self.canvas.get_tk_widget().configure(width=400, height=300)
+        page_scroll.min_plot_height(self.canvas.get_tk_widget(), PLOT_MIN_PX["discovery"], content_scale(app), width_px=400)
         self.canvas.get_tk_widget().pack(fill=BOTH, expand=True)
         self.canvas.mpl_connect("button_press_event", self._on_click)
         # 2.2.19 (#12): drag on the scatter plot to pick the stars in a box.
