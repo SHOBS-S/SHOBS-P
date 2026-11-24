@@ -102,16 +102,16 @@
   {
    "section": "Anywhere",
    "patterns": [
-    "Another step is still running. Wait for it to finish."
+    "Another step is running. This is available again when it finishes."
    ],
    "todo": "Wait, or press Cancel / Cancel run."
   },
   {
    "section": "Anywhere",
    "patterns": [
-    "Wait for the current run to finish (or cancel it) before switching modes."
+    "Another step is still running. Press it again when that one has finished."
    ],
-   "todo": "Wait or cancel."
+   "todo": "Press it again when the busy bar is gone."
   },
   {
    "section": "Anywhere",
@@ -137,9 +137,9 @@
   {
    "section": "Anywhere",
    "patterns": [
-    "The output folder could not be used (…); choose where to save."
+    "The output folder … cannot be used (…): choose where to save."
    ],
-   "todo": "Pick another folder on the Input page."
+   "todo": "Choose where to save in the dialog, and pick another Output folder on the Input page."
   },
   {
    "section": "Anywhere",
@@ -351,9 +351,17 @@
   {
    "section": "Input",
    "patterns": [
-    "These lights come from …. Last time you measured frames from that telescope the Telescope aperture was … mm; the box says … mm. Use … mm for these frames?"
+    "Telescope aperture set to … mm, as last used with … (the box said … mm).",
+    "… Use … mm for these frames?"
    ],
-   "todo": "Yes, unless you know the box is right."
+   "todo": "Nothing, unless the telescope's aperture has changed: then type it in the Telescope aperture box (Input page, Optics)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Time zone set to … from the frames' site's latitude and longitude: local times (and trims typed as clock times) use it."
+   ],
+   "todo": "Nothing (or pick the zone yourself when the log says to check it)."
   },
   {
    "section": "Input",
@@ -701,6 +709,21 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Calibrate first (Calibrate page): the solve uses the calibrated image.",
+    "Run photometry"
+   ],
+   "todo": "Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry"
+   ],
+   "todo": "Fix the red box."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Comp 2 and the check star are the same star (Comp 2: …). The check star tests the comps, so it can't also be one of them. …",
     "Run photometry"
    ],
@@ -919,9 +942,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Binning is 2 but the masters were built at 1."
+    "Binning changed from 1 to 2: the masters were built at bin 1, so Calibrate rebuilds them at bin 2.",
+    "Binning is 2 but the masters were built at 1. …"
    ],
-   "todo": "Calibrate again, or set binning back."
+   "todo": "Press Build masters and calibrate (Calibrate page), or set Binning back and calibrate."
   },
   {
    "section": "Photometry",
@@ -1298,9 +1322,18 @@
   {
    "section": "Photometry",
    "patterns": [
-    "N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."
+    "N frames were skipped because of …, which is no longer a comp: Measure skipped frames measures them with the comps in use.",
+    "also on the status line:"
    ],
-   "todo": "Press Measure skipped frames at the right of the line."
+   "todo": "Press Measure skipped frames (at the right of the line, or beside the status line). On a stacked night it switches to Points: Per frame and drops the stacks first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them.",
+    "… — open that night's frames and Run photometry again …"
+   ],
+   "todo": "Open that night's frames and press Run photometry."
   },
   {
    "section": "Photometry",
@@ -1357,13 +1390,6 @@
     "That makes only K stacks; a field scan needs at least 10. Use a smaller N."
    ],
    "todo": "Use a smaller N."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
-    "Run photometry first (Scan field in Discovery): the Stack step uses that run's frames, alignment and noise."
-   ],
-   "todo": "Run photometry first."
   },
   {
    "section": "Photometry",
@@ -2190,6 +2216,31 @@
     "Field not solved: these lights do not say where they point."
    ],
    "todo": "Type the field center on the Input page and Solve again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Check the scan settings: Detection threshold (σ) is not a number. Type a number in that box.",
+    "Suspect at (× normal)",
+    "or at (χ²ν × normal)",
+    "Faintest magnitude",
+    "; 2.4.0, before"
+   ],
+   "todo": "Fix that box and press Scan field again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "buttons before a scan:"
+   ],
+   "todo": "Press Scan field on the Photometry page."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "…: position stored (RA …, Dec …), so it is found by itself on later nights."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Discovery mode",

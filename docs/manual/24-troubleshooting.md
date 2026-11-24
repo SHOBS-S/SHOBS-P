@@ -37,6 +37,9 @@ What the self-test does, in sections:
    `selftest.py`; see chapter 2);
 5. opens the main window and closes it again, with nothing clicked.
 
+Section 1 also says whether the time zone lookup (the optional timezonefinder package, 2.4.0) is installed: `ok` with
+its check when it is, or a `note` line when it is not (Windows and Mac installs). Without it nothing fails.
+
 Lines marked `ok` passed; `FAIL` did not. Some lines say a step was *skipped*: for example section 4 when there are no
 sample reports (`(no sample transit reports to run on: skipped)`), or the planet-name checks when the NASA Exoplanet Archive cannot be reached. A
 skipped step is not a failure.
@@ -118,6 +121,9 @@ message above."*
 
 | Problem | Fix |
 |---|---|
+| A button is greyed and nothing happens when you click it. | From 2.4.0 a button is greyed until it can work (for example **Run photometry** before Calibrate, or anything that starts a job while one runs). Hover over it: a note says why and what to do. |
+| The Output row says **cannot be used**. | The folder cannot be written to (read-only, a file of that name, a drive that is not connected). Choose another folder; until then each Save asks where to put the file. |
+| Frames from another site show local times in your own time zone. | Pick the site's zone in the **Time zone** box (Input page, Site). On Linux SHOBS-P sets it from the site's latitude and longitude (timezonefinder); the Windows and Mac installs have no ready-made copy of that package, so the log asks you to check the box. |
 | The folders are empty every time you start. | That is by design: folders are not remembered. Your site, optics and observer code are. |
 | A folder shows *0 files*. | SHOBS-P reads FITS (`.fits`, `.fit`, `.fts`, also compressed) and XISF. Save camera RAW, TIFF or JPEG frames as FITS. |
 | A monochrome camera's frames look like a checkerboard. | The Bayer pattern is wrong. On the Calibrate page choose **MONO** (SHOBS-P sets it by itself from raw flats, or from the lights' sky background when there are bias or dark frames or the sky is bright; otherwise it asks **Color or monochrome camera?** at **Scan folders**). |
