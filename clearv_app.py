@@ -7599,12 +7599,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _zone_from_site(self, lat, lon, whose: str, quiet_same: bool = False) -> bool:
         """2.4.0 fit-in F2 (m133): set the Time zone box from a site's latitude/longitude, with one plain Log line
-        naming the zone. False when it cannot be told (no timezonefinder package: a note in the log file only)."""
+        naming the zone. False when it cannot be told (no tzfpy package: a note in the log file only)."""
         zone = site_time.zone_at(lat, lon)
         if not zone:
             if not site_time.zone_lookup_available():
-                log_to_file("Time zone not looked up from the site: the timezonefinder package is not installed "
-                            "(pip install timezonefinder, or run the setup again).")
+                log_to_file("Time zone not looked up from the site: the tzfpy package is not installed "
+                            "(run the setup again to add it).")
             return False
         if zone == self.site_tz.get().strip() and quiet_same:
             return True
@@ -7702,7 +7702,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                      + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
                      + (f"; {got}" if got else "") + ". Your own setup comes back when you scan your own lights.")
             # 2.2.21 (#22): the header names no time zone. 2.4.0 fit-in F2 (m133, John 24 Nov): the zone is looked
-            # up from the site's latitude/longitude (timezonefinder), so local times (and trims typed as clock times)
+            # up from the site's latitude/longitude (tzfpy), so local times (and trims typed as clock times)
             # are the site's; without the package (an older install), the 2.2.21 line as before.
             if not self._zone_from_site(site[0], site[1], "the frames' site"):
                 self.log(f"  Check the Time zone box (Input page, Site): local times use "

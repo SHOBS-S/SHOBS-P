@@ -4,7 +4,7 @@ Changes that show in pictures: buttons that cannot work yet are greyed (with a h
 live; while a job runs the job buttons, the mode buttons, **New reduction** / **Load series…** / **Close series**,
 the **Star ID** / **Planet** / **Filter** boxes are greyed; **Stack N** is a spin box (up/down arrows); a wrong
 aperture box turns pale red; after **Use comps…** Apply the status line can carry a **Measure skipped frames**
-button; the Credits page's SOFTWARE list names timezonefinder; the empty **Output – Field scan** page shows its four
+button; the Credits page's SOFTWARE list names tzfpy; the empty **Output – Field scan** page shows its four
 Results buttons greyed. None of these shots has been taken (the builder cannot take them). Do not reuse an old
 image for a page that changed: reshoot it.
 
@@ -13,7 +13,7 @@ image for a page that changed: reshoot it.
 | img/08-stack-row.png | 08 | **Stack N** is a spin box (arrows at its right) | RESHOOT |
 | img/08-points-stacked.png | 08 | **Stack N** spin box in view | RESHOOT |
 | img/20-discovery-stack-row.png | 20 | **Stack N** spin box | RESHOOT |
-| img/26-credits-page.png | 26 | SOFTWARE list adds **timezonefinder** (if that part of the list is in view) | CHECK, reshoot if in view |
+| img/26-credits-page.png | 26 | SOFTWARE list adds **tzfpy** (if that part of the list is in view) | CHECK, reshoot if in view |
 | img/03-busy-bar.png | 03 | mid-run: if any page button is in the shot, the job buttons (Run photometry, Solve again, mode buttons in the sidebar) are now greyed | CHECK, reshoot if buttons are in view |
 | img/03-window-parts.png | 03 | sidebar mode buttons and page buttons: only if the shot was taken during a job, or shows a button that is now greyed (e.g. Close series with no series: unchanged) | CHECK |
 | img/05-input-page.png | 05 | **Look up again** greyed when its box is empty; **Close series** greyed with no series (as before); Output row may say **cannot be used** | CHECK, reshoot if a lookup box is empty in the shot |

@@ -135,14 +135,15 @@ def set_zone(name: str) -> str | None:
 
 
 # 2.4.0 fit-in F2 (m133, John 24 Nov): the zone of a site from its latitude and longitude, offline, with the
-# timezonefinder package (MIT; its boundary data are from timezone-boundary-builder, built from OpenStreetMap data,
-# under the ODbL). An older install without the package simply has no lookup (zone_at returns "").
+# tzfpy package (MIT; ready-made copies for Windows, Mac and Linux, no other packages; its boundary data are from
+# timezone-boundary-builder, built from OpenStreetMap data, under the ODbL, simplified to within ~110 m of a border).
+# An older install without the package simply has no lookup (zone_at returns "").
 _FINDER = None
 _FINDER_MISSING = False
 
 
 def zone_lookup_available() -> bool:
-    """True when the timezonefinder package can be used."""
+    """True when the tzfpy package can be used."""
     return _finder() is not None
 
 
@@ -150,16 +151,16 @@ def _finder():
     global _FINDER, _FINDER_MISSING
     if _FINDER is None and not _FINDER_MISSING:
         try:
-            from timezonefinder import TimezoneFinder
-            _FINDER = TimezoneFinder()
-        except Exception:   # not installed (an older install), or its data cannot be read
+            from tzfpy import get_tz
+            _FINDER = get_tz
+        except Exception:   # not installed (an older install), or it cannot load
             _FINDER_MISSING = True
     return _FINDER
 
 
 def zone_at(lat, lon) -> str:
     """The IANA zone name at latitude/longitude (degrees, east positive), or "" when it cannot be told (no
-    timezonefinder package, a point with no zone, or a zone this computer's zone database cannot load)."""
+    tzfpy package, a point with no zone, or a zone this computer's zone database cannot load)."""
     try:
         lat, lon = float(lat), float(lon)
     except (TypeError, ValueError):
@@ -172,7 +173,7 @@ def zone_at(lat, lon) -> str:
     if finder is None:
         return ""
     try:
-        name = finder.timezone_at(lng=lon, lat=lat) or ""
+        name = finder(lon, lat) or ""   # tzfpy: get_tz(longitude, latitude)
     except Exception:
         return ""
     return name if is_valid(name) else ""

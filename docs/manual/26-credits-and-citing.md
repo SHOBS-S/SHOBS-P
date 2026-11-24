@@ -12,8 +12,8 @@ To see every source SHOBS-P uses:
    to put it on the clipboard (the status bar says **Citation copied to the clipboard.**). See "How to cite SHOBS-P"
    below.
 3. Read the list under it. It has three parts:
-   - **SOFTWARE**: Astropy, photutils, ccdproc, NumPy, SciPy, Matplotlib and timezonefinder (2.4.0: the site's time
-     zone from its latitude and longitude; MIT License. Its time zone boundaries come from timezone-boundary-builder,
+   - **SOFTWARE**: Astropy, photutils, ccdproc, NumPy, SciPy, Matplotlib and tzfpy (2.4.0: the site's time zone
+     from its latitude and longitude; MIT License. Its time zone boundaries come from timezone-boundary-builder,
      built from OpenStreetMap data, © OpenStreetMap contributors, under the Open Database License (ODbL)).
    - **CATALOGS AND SERVICES**: Gaia DR3, APASS, Tycho-2, AAVSO VSX, the AAVSO Variable Star Plotter, SIMBAD,
      the NASA Exoplanet Archive (planet values and TESS TOI status), ExoFOP, ExoClock (planet priorities) and

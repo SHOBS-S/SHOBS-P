@@ -273,7 +273,7 @@ on. If the `OBJECT` names a different star in another place, it asks the same **
 site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
 their setup; your own comes back automatically the next time you scan a folder of your own lights. FITS headers do
 not say the site's time zone, so from 2.4.0 SHOBS-P looks the zone up from the site's latitude and longitude (offline,
-with the timezonefinder package, see chapter 26) and sets the **Time zone** box; one log line names it, for example
+with the tzfpy package, see chapter 26) and sets the **Time zone** box; one log line names it, for example
 *Time zone set to America/Phoenix from the frames' site's latitude and longitude: local times (and trims typed as
 clock times) use it.* Your own zone comes back with your own setup. The zone matters for results where you type a
 trim as a clock time (it decides which points an HHMM trim takes). An install without that package (it is installed

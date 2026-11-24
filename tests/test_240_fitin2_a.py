@@ -36,7 +36,7 @@ class TestZoneLookup(unittest.TestCase):
 
     def test_zone_at(self):
         if not site_time.zone_lookup_available():
-            self.skipTest("timezonefinder not installed")
+            self.skipTest("tzfpy not installed")
         self.assertEqual(site_time.zone_at(31.68, -110.88), "America/Phoenix")
         self.assertEqual(site_time.zone_at(52.2, 21.0), "Europe/Warsaw")
         self.assertEqual(site_time.zone_at(35.37, 360.0 - 81.96), "America/New_York")   # 0-360 longitude
@@ -45,16 +45,15 @@ class TestZoneLookup(unittest.TestCase):
 
     def test_missing_package_is_silent(self):
         with mock.patch.object(site_time, "_FINDER", None), mock.patch.object(site_time, "_FINDER_MISSING", False), \
-                mock.patch.dict(sys.modules, {"timezonefinder": None}):
+                mock.patch.dict(sys.modules, {"tzfpy": None}):
             self.assertEqual(site_time.zone_at(31.68, -110.88), "")
             self.assertFalse(site_time.zone_lookup_available())
 
     def test_requirements_and_setup(self):
         req = _src("requirements.txt")
-        line = next(l for l in req.splitlines() if l.startswith("timezonefinder"))
-        self.assertIn("sys_platform", line)   # only where a ready-made copy exists (setup never compiles)
-        self.assertNotIn("timezonefinder", _src("shobs_check_python.py").split("PACKAGES = ")[1].split(")")[0])
-        self.assertIn("timezonefinder", _src("photometry_core.py"))   # credited
+        self.assertIn("tzfpy", [l.strip() for l in req.splitlines()])   # every platform (ready-made copies)
+        self.assertNotIn("tzfpy", _src("shobs_check_python.py").split("PACKAGES = ")[1].split(")")[0])
+        self.assertIn("tzfpy", _src("photometry_core.py"))   # credited
         self.assertIn("ODbL", _src("photometry_core.py"))
 
 
