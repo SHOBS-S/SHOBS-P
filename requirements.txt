@@ -9,3 +9,7 @@ scipy>=1.10
 tzdata
 # 2.4.0 step 7c: root certificates for the outside-data check (ZTF, TESS) when Windows' store cannot check them
 certifi
+# 2.4.0 fit-in F2 (m133): the site's time zone from its latitude/longitude (offline). Optional: SHOBS-P works without
+# it (the Time zone box is then set by hand). Only where pip has a ready-made copy (SHOBS-P's setup never compiles,
+# --only-binary): timezonefinder publishes Linux x86-64 wheels only, so a plain line would stop setup on Windows/Mac.
+timezonefinder; sys_platform == "linux" and platform_machine == "x86_64"

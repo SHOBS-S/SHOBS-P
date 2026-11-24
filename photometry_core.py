@@ -10270,6 +10270,12 @@ CREDITS = [
         ("SciPy", "Star detection filters.", "Virtanen, P. et al. 2020, Nature Methods 17, 261.", "https://scipy.org"),
         ("Matplotlib", "All plots and image displays.", "Hunter, J. D. 2007, Computing in Science & Engineering 9, 90.",
          "https://matplotlib.org"),
+        # 2.4.0 fit-in F2 (m133, John 24 Nov): the site's time zone from its latitude and longitude
+        ("timezonefinder", "The site's time zone from its latitude and longitude (frames from another site).",
+         "Kissinger (formerly Michelfeit), J., timezonefinder (MIT License). Time zone boundaries from "
+         "timezone-boundary-builder (Evan Siroky), built from OpenStreetMap data: (c) OpenStreetMap contributors, "
+         "Open Database License (ODbL).",
+         "https://github.com/jannikmi/timezonefinder"),
     ]),
     ("Catalogs and services", [
         ("Gaia DR3 (ESA)", "Comparison stars, positions, proper motions, Johnson V/B/R synthetic photometry, field stars for color calibration.",

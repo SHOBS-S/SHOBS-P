@@ -61,6 +61,14 @@ def main() -> None:
     except Exception as exc:
         check("astropy / photutils import", False, str(exc))
     check("version is 2.2.3 or later", tuple(int(x) for x in ca.APP_VERSION.split(".")) >= (2, 2, 3), ca.APP_VERSION)
+    # 2.4.0 fit-in F2 (m133): the site time-zone lookup is optional (timezonefinder); said, never a FAIL without it
+    import site_time as _st
+    if _st.zone_lookup_available():
+        check("time zone from latitude/longitude (timezonefinder)", _st.zone_at(33.45, -112.07) == "America/Phoenix",
+              _st.zone_at(33.45, -112.07))
+    else:
+        out("  note  time zone lookup from latitude/longitude not installed (optional timezonefinder package): "
+            "the Time zone box is set by hand for frames from another site")
     # 2.2.19 (#18): the multi-night module is in the install, and its timing arithmetic works (negative epochs too).
     import multinight as mn
     lin = mn.linear_ephemeris([-4, 0, 3], [2460000.0 - 4 * 2.5, 2460000.0, 2460000.0 + 3 * 2.5], [0.001] * 3)

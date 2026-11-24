@@ -9,6 +9,8 @@ Written without f-strings so that an old Python 2 or 3.5 still reports its versi
 import sys
 
 PACKAGES = ("numpy", "scipy", "matplotlib", "astropy", "photutils", "ccdproc", "tzdata")   # 2.2.21 (#22): tzdata
+# 2.4.0 fit-in F2 (m133): timezonefinder is optional (only installed where a ready-made copy exists; SHOBS-P works
+# without it), so it is not checked here: a missing copy must never make setup try another Python.
 
 
 def main():
