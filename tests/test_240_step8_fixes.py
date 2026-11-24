@@ -444,7 +444,9 @@ class TestTrimFixes(TT.TrimCase):
         self.open()
         self.pick(N1)
         m = self.trim("0.45", "")
-        self.assertIn("Trim: '0.45' is not clear.", m["error"][0])
+        self.assertEqual(m["error"], [])   # 2.4.0 fit-in F2: Trim's greyed reason and the status line, no box
+        self.assertIn("Trim: '0.45' is not clear.", self.app.status.get())
+        self.assertIn("Trim: '0.45' is not clear.", self.app._trim_why())
         self.assertFalse(any(core.is_trimmed(o) for o in self.app.observations))
 
     def test_dropped_trims_are_a_finding(self):
@@ -489,10 +491,13 @@ class TestTrimFixes(TT.TrimCase):
             self.assertTrue(app._stack_set_live(N1))
             self.assertEqual(app._trim_other_set(N1)[0], "Stacked")
             m = self.trim("", f"{frames[9].jd + 1e-6:.6f}")   # 10 of 40 frames, 6 of 24 stacks: 18 stacks left
-            self.assertEqual((len(m["error"]), len(m["info"])), (0, 1), m)   # fit-in F1: a plain note
-            self.assertIn("would leave 18 usable points", m["info"][0])
-            self.assertTrue(m["info"][0].endswith("use Remove night."), m["info"][0])
-            self.assertIn("with Points: Stacked; a night needs at least 20 either way", m["info"][0])
+            # fit-in F2: no box at all; the words are Trim's greyed reason and the status line
+            self.assertEqual((len(m["error"]), len(m["info"])), (0, 0), m)
+            said = app.status.get()
+            self.assertIn("would leave 18 usable points", said)
+            self.assertTrue(said.endswith("use Remove night."), said)
+            self.assertIn("with Points: Stacked; a night needs at least 20 either way", said)
+            self.assertEqual(said, app._trim_why())
             self.assertFalse(any(core.is_trimmed(o) for o in app.observations))
             m = self.trim("", f"{frames[4].jd + 1e-6:.6f}")   # 5 frames, 3 stacks: 21 left
             self.assertEqual(m["error"], [])
