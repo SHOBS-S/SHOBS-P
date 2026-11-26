@@ -23,6 +23,10 @@ To see every source SHOBS-P uses:
      below), the timing methods, the Sun's position (for the approximate BJD_TDB of a report that has no site) and
      more.
 
+   From 2.4.0 the transit model is the exact formula for quadratic limb darkening of Mandel & Agol (2002, ApJ 580,
+   L171), written for SHOBS-P, with its elliptic integrals worked out by Bulirsch's method (1969, Numer. Math. 13,
+   305). Earlier versions added up 200 thin rings of the star to get the same curve.
+
    For each source the page says what SHOBS-P uses it for and gives the reference. Sentences in quotes are the
    acknowledgements each source asks for, in its own words.
 4. To keep a copy, click **Save credits as text…**. It writes `SHOBS-P_credits.txt` (into the Output folder if one is

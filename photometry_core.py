@@ -10381,9 +10381,11 @@ CREDITS = [
          "fitted to field stars with catalog colors.",
          "Henden, A. A. & Kaitchuck, R. H. 1982, Astronomical Photometry (Van Nostrand Reinhold).", ""),
         ("Luminance weights", "Clear (CV) channel from an OSC frame.", "ITU-R Recommendation BT.601.", ""),
-        ("Transit light curve", "Transit model: exact planet-star overlap areas summed over limb-darkened annuli "
-         "(any grazing geometry), quadratic limb darkening.",
-         "Mandel, K. & Agol, E. 2002, ApJ 580, L171; Seager, S. & Mallen-Ornelas, G. 2003, ApJ 585, 1038 (durations).", ""),
+        ("Transit light curve", "Transit model: the exact formula for a planet crossing a star with quadratic limb "
+         "darkening (any geometry, grazing included), written for SHOBS-P; its elliptic integrals by Bulirsch's "
+         "method.",
+         "Mandel, K. & Agol, E. 2002, ApJ 580, L171; Bulirsch, R. 1969, Numer. Math. 13, 305; Seager, S. & "
+         "Mallen-Ornelas, G. 2003, ApJ 585, 1038 (durations).", ""),
         ("Limb-darkening parametrization", "q1, q2 sampling that keeps the stellar profile physical; broad priors near "
          "V-band values for the star's temperature.",
          "Kipping, D. M. 2013, MNRAS 435, 2152; Claret, A. 2000, A&A 363, 1081.", ""),

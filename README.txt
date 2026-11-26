@@ -278,6 +278,14 @@ mode, T = Transits, V = Variables)
      companions and look-alikes on that night, each one quiet or not at the star's period. Outside data: what
      ZTF, TESS and ATLAS hold at the star's position, and whether they find the same period (within 1 %).
      Confirming a variable and reporting it to VSX stays the observer's job.
+- T  Faster, exact transit model: the transit curve is now worked out with the exact formula for quadratic limb
+     darkening (Mandel & Agol 2002) instead of adding up 200 rings of the star. Same curve (the two agree to under
+     1 part per million for planets up to 0.15 of the star's size; the formula is the more exact one), several
+     times faster: a 300-frame Auto (BIC) fit takes about a third of the time. RESULTS CHANGE, slightly: fitted
+     values move by a small fraction of their error bars (under 0.2 sigma on a test night), because the MCMC's
+     random steps fall a little differently. Multi-night uses the same exact formula for every night (it read
+     the curve off a 126-point table before, about 1.3 parts per million off); its values move as little
+     (under 0.25 sigma on a four-night test).
 
 New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
 - S  Stacking when comps are weak [#54]: after a run, the Photometry page's Stack row compares the comp ensemble's
@@ -1544,8 +1552,8 @@ Luminance weights
   ITU-R Recommendation BT.601.
 
 Transit light curve
-  Used for: Transit model: exact planet-star overlap areas summed over limb-darkened annuli (any grazing geometry), quadratic limb darkening.
-  Mandel, K. & Agol, E. 2002, ApJ 580, L171; Seager, S. & Mallen-Ornelas, G. 2003, ApJ 585, 1038 (durations).
+  Used for: Transit model: the exact formula for a planet crossing a star with quadratic limb darkening (any geometry, grazing included), written for SHOBS-P; its elliptic integrals by Bulirsch's method.
+  Mandel, K. & Agol, E. 2002, ApJ 580, L171; Bulirsch, R. 1969, Numer. Math. 13, 305; Seager, S. & Mallen-Ornelas, G. 2003, ApJ 585, 1038 (durations).
 
 Limb-darkening parametrization
   Used for: q1, q2 sampling that keeps the stellar profile physical; broad priors near V-band values for the star's temperature.

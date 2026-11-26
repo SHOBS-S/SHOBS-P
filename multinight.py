@@ -24,28 +24,13 @@ import numpy as np
 import photometry_core as core
 import transit_core as tc
 
-# ---- Fast model for the joint fit -------------------------------------------------------------------------------
-# The occultation depends on z alone once Rp/R* and the limb darkening are set, and those are shared by all nights.
-# So each model evaluation computes the exact transit_core.occultation on a grid of 126 separations (denser near the
-# limb and the contact points) and interpolates every night's points on it. Checked against the direct model: max
-# error 2e-6 in flux for Rp/R* 0.12 (5e-4 of the depth at worst over Rp/R* 0.02-0.5), far below any night's noise;
-# 3-6x faster than the direct model for 2-6 nights.
-_S_IN = np.sin(np.linspace(0.0, math.pi / 2, 48))[:-1]
-_S_EDGE = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, 80)))
+# ---- Model for the joint fit ------------------------------------------------------------------------------------
+# 2.4.0 fit-in F3: every night's points go straight through transit_core.occultation (the exact analytic model).
+# Before that the joint fit interpolated the model on a grid of 126 separations per evaluation (about 1.3e-6 in
+# flux off the exact curve for Rp/R* 0.12), because the exact model was slow; it no longer is.
 MIN_POINTS = 20
 OUTLIER_SIGMA = 3.0
 DEFAULT_STEPS = 1500
-
-
-def occ_curve(k: float, u1: float, u2: float):
-    lo = max(1.0 - k, 0.0)
-    g = np.concatenate([lo * _S_IN, lo + (1.0 + k - lo) * _S_EDGE])
-    return g, tc.occultation(g, k, u1, u2)
-
-
-def fast_occultation(z, k: float, u1: float, u2: float) -> np.ndarray:
-    g, f = occ_curve(k, u1, u2)
-    return np.interp(np.asarray(z, dtype=float), g, f, right=1.0)
 
 
 def norm_name(name) -> str:
@@ -407,7 +392,11 @@ class JointProblem:
         out = {}
         for g, (ik, i1, i2) in self._ig.items():
             u1, u2 = tc.kipping_to_u(x[i1], x[i2])
-            out[g] = (x[ik], u1, u2, occ_curve(x[ik], u1, u2))   # one grid per shape set and evaluation
+            # one call of the exact model for all of the group's nights together (much cheaper than one per night)
+            js = [j for j, d in enumerate(self.nights) if d["group"] == g]
+            z = [tc.separation(self.nights[j]["t"], x[self._in[j][0]], self.period, x[0], x[1]) for j in js]
+            occ = np.split(tc.occultation(np.concatenate(z), x[ik], u1, u2), np.cumsum([len(v) for v in z])[:-1])
+            out[g] = (x[ik], u1, u2, dict(zip(js, occ)))
         return out
 
     def in_bounds(self, x) -> bool:
@@ -433,10 +422,11 @@ class JointProblem:
         d = self.nights[j]
         itc, ic0, icam, ict, ist = self._in[j]
         shape = shape or self._shape(x)
-        k, u1, u2, (grid, curve) = shape[d["group"]]
-        tt = d["t"] if t is None else np.asarray(t, dtype=float)
-        z = tc.separation(tt, x[itc], self.period, x[0], x[1])
-        occ = tc.occultation(z, k, u1, u2) if exact else np.interp(z, grid, curve, right=1.0)
+        k, u1, u2, night_occ = shape[d["group"]]
+        if t is None:
+            occ = night_occ[j]                # the exact model at the night's own times, from _shape
+        else:                                 # always exact from 2.4.0 fit-in F3 (`exact` is kept for callers)
+            occ = tc.occultation(tc.separation(np.asarray(t, dtype=float), x[itc], self.period, x[0], x[1]), k, u1, u2)
         if transit_only:
             return occ
         return occ * self.baseline(x, j, t)
