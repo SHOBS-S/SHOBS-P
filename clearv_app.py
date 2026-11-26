@@ -14064,11 +14064,42 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             rec["xy"] = move(rec.get("xy"))
         # The variable-star × marks too: they were placed on the old image.
         self.variable_marks = [(*move((x, y)), v) for x, y, v in self.variable_marks]
-        if self.spare_marks:
-            self.log("Spare comps cleared with the binning change; Solve again to pick spares on this image.")
-        self.spare_marks = []
+        # 2.4.0 fit-in F4 (#79 item 8b; m248): the spares' marks move with the image too (they were cleared, with
+        # "Solve again to pick spares"). The new image is solved by itself, and Run picks its spares from that solve.
+        self.spare_marks = [(*move((x, y)), n) for x, y, n in self.spare_marks]
+        # m249: each marker is then re-centred on its star on the new image (a 2x binning change leaves it up to
+        # half a new pixel off; the stars' shapes change too), so nothing has to be checked by hand.
+        lost = []
+        img = self.preview if (self.preview is not None
+                               and tuple(self.preview.shape[:2]) == tuple(new_shape[:2])) else None
+        if img is not None and moved:
+            try:
+                r_new = max(2.0, float(self.radius.get()))
+            except Exception:
+                r_new = 6.0
+            reach = max(3.0, 0.75 * r_new)
+            for role in ("target",) + COMP_ROLES + ("check",):
+                xy = getattr(self, f"{role}_xy")
+                if xy is None:
+                    continue
+                try:
+                    cx, cy, shift = core.recenter(img, xy[0], xy[1], r_new)
+                    on_star = core.star_under(img, cx, cy, r_new)
+                except Exception:
+                    continue
+                if on_star and math.isfinite(shift) and shift <= reach:
+                    setattr(self, f"{role}_xy", (float(cx), float(cy)))
+                else:
+                    lost.append("Target" if role == "target" else "Check" if role == "check" else role_label(role))
         if moved:
-            self.log(f"Binning changed: {moved} marker(s) moved to the new image (x{sx:g}). Check them before running.")
+            self.log(f"Binning changed: {moved} marker{'s' if moved != 1 else ''} moved to the same star"
+                     f"{'s' if moved != 1 else ''} on the new image (x{sx:g})"
+                     + (" and re-centred." if img is not None and not lost else "."), keep_status=True)
+        if lost:
+            self.log("No star was found under " + ", ".join(lost) + " on the new image: "
+                     + ("its marker is" if len(lost) == 1 else "their markers are")
+                     + " where the old one would be. Run photometry re-centres a marker that is a little off, and "
+                     "asks first when it is far off.", keep_status=True)
 
     def on_image_click(self, event):
         if event.xdata is None or event.ydata is None or self.preview is None:
@@ -16774,23 +16805,95 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.20 (item 3): the busy bar's words (no ticking seconds), the status line keeps its last result line
         self._job_words("Solving: fetching catalogs: " + " ".join(parts))
 
+    # ---- 2.4.0 fit-in F4 (#79 item 8a): catalog answers that come late are applied in the background -----------
+    # (m299 m300 m304 m307 m322 m323 m324 m327 m328 m346 m347: nothing asks to solve again for them any more.)
+    CATALOG_RETRY_S = (45, 120, 300)   # a catalog that did not answer is asked again by itself after these waits
+    LATE_POLL_MS = 3000                # while a job runs, the late answer waits and looks again this often
+    LATE_POLL_MAX = 400                # ... for 20 minutes at most
+
+    def _late_key(self):
+        return (getattr(self, "_preview_token", 0), getattr(self, "preview_path", None))
+
+    def _catalog_retry_later(self) -> str:
+        """A catalog (or VSX / SIMBAD) did not answer for the image on the page: ask again by itself, in the
+        background, after CATALOG_RETRY_S (one retry pending at a time, three per image; a Solve again by hand
+        starts the count again). Returns the words that end the Log line."""
+        st = getattr(self, "_cat_retry", None)
+        if not isinstance(st, dict) or st.get("key") != self._late_key():
+            st = self._cat_retry = {"key": self._late_key(), "n": 0, "pending": None}
+        if st.get("pending") is not None:
+            return self._cat_retry_words(st)
+        if st["n"] >= len(self.CATALOG_RETRY_S):
+            st["wait"] = None
+            return self._cat_retry_words(st)
+        wait = self.CATALOG_RETRY_S[st["n"]]
+        st["n"] += 1
+        st["wait"] = wait
+        try:
+            st["pending"] = self.after(int(wait * 1000), lambda k=st["key"]: self._late_resolve(k, "retry"))
+        except Exception:
+            st["pending"] = None
+        return self._cat_retry_words(st)
+
+    @staticmethod
+    def _cat_retry_words(st: dict) -> str:
+        if st.get("wait"):
+            w = st["wait"]
+            when = f"{w} s" if w < 90 else f"{w / 60:.0f} min"
+            return (f"It is asked again by itself in about {when}; its stars are added then, with nothing to "
+                    "press.")
+        return (f"It did not answer after {st.get('n', 0)} more tries by itself; it is asked again at the next "
+                "solve.")
+
+    def _late_apply(self):
+        """A late catalog answer for the image on the page: solve again by itself (at once: the answers are
+        kept, no new request), as soon as nothing else is running."""
+        try:
+            self.after(200, lambda k=self._late_key(): self._late_resolve(k, "apply"))
+        except Exception:
+            pass
+
+    def _late_resolve(self, key, kind: str = "apply", polls: int = 0):
+        """The background solve for a late catalog answer ("apply") or a retry of a catalog that did not answer
+        ("retry"). Dropped when the image on the page has changed; waits while a job or a solve is running."""
+        st = getattr(self, "_cat_retry", None)
+        if kind == "retry" and isinstance(st, dict) and st.get("key") == key:
+            st["pending"] = None
+        try:
+            if key != self._late_key() or self.preview is None or not self.preview_is_debayered:
+                return
+            if self.busy or getattr(self, "_solving", False):
+                if polls < self.LATE_POLL_MAX:
+                    self.after(self.LATE_POLL_MS, lambda: self._late_resolve(key, kind, polls + 1))
+                return
+            self._late_solve = kind
+            self.log("Catalog answers arrived after the solve: solving again by itself to use them (nothing is "
+                     "asked twice)." if kind == "apply" else
+                     "Asking the catalogs that did not answer again (solving by itself, in the background).",
+                     keep_status=True)
+            self.label_aavso(auto=True)
+        except Exception:
+            traceback.print_exc()
+
     def _catalog_late(self, cat, d, same_lights):
         """2.2.16 (item 2; review): Gaia's deep half after the solve, worded by what really happened.
-        2.2.19 (#11): also the AAVSO chart answering a background retry (or after the solve stopped waiting)."""
+        2.2.19 (#11): also the AAVSO chart answering a background retry (or after the solve stopped waiting).
+        2.4.0 fit-in F4 (8a): an answer for the image on the page is put to use by itself (_late_apply); one that
+        still did not come is asked again by itself (_catalog_retry_later)."""
         if cat == "AAVSO sequence":
             secs = f"{d.get('seconds', 0):.0f} s after it was first asked"
             tries = int(d.get("retry") or 0)
             if d.get("arrived"):
                 text = (f"AAVSO sequence answered " + (f"on retry {tries}, " if tries else "after the solve, ") + secs
                         + f": {d.get('n', 0)} sequence stars" + (f" (chart {d['chartid']})" if d.get("chartid") else ""))
-                text += ("; Solve again to use them (at once, no new request)." if same_lights
+                text += ("; they are put to use now, by themselves." if same_lights
                          else " (that solve was for other lights).")
-                if same_lights and not self.busy:
-                    self.status.set("The AAVSO sequence answered after the solve: Solve again to use it.")
+                if same_lights:
+                    self._late_apply()
             else:
                 text = (f"AAVSO sequence still did not answer after {tries} retr{'y' if tries == 1 else 'ies'} "
-                        f"({d.get('error') or 'no answer'}); its stars are missing this time."
-                        + (" Solve again later to retry." if same_lights else ""))
+                        f"({d.get('error') or 'no answer'}); its stars are missing for now."
+                        + (" " + self._catalog_retry_later() if same_lights else ""))
             self.log(text)
             return
         secs = f"{d.get('seconds', 0):.0f} s after it was asked"
@@ -16806,17 +16909,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 text += ". Kept for this field"
             elif cached is False:
                 text += ". It could not be saved for this field (see the next lines)"
-            if same_lights:
-                text += ("; Solve again to use them" + (" (at once)." if cached is True else "."))
-                if not self.busy:
-                    self.status.set("Gaia's deep stars arrived after the solve: Solve again to use them.")
+            if same_lights and cached is True and not d.get("incomplete"):
+                text += "; they are put to use now, by themselves."
+                self._late_apply()
+            elif same_lights:
+                text += ". " + self._catalog_retry_later()   # not kept: it has to be asked again
             else:
                 text += ("; they are used when that field is solved again." if cached is True else
                          " (that solve was for other lights).")
         else:
             text = (f"Gaia DR3: the deep part (VizieR) did not finish ({d.get('error') or 'no answer'}, {secs}); "
-                    "stars fainter than the archive's G 17 have no Gaia magnitude from that solve."
-                    + (" Solve again to retry." if same_lights else ""))
+                    "stars fainter than the archive's G 17 have no Gaia magnitude for now."
+                    + (" " + self._catalog_retry_later() if same_lights else ""))
         self.log(text)
         for err in core.CATALOG_CACHE_ERRORS[:]:
             self.log(f"  Catalog cache: could not save {err}")
@@ -16877,10 +16981,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._update_step_hint()
         diag = getattr(self, "_chart_diag", {})
         auto = diag.get("auto", False)
+        late, self._late_solve = getattr(self, "_late_solve", None), None   # 2.4.0 fit-in F4 (8a)
+        if not auto and not late:
+            self._cat_retry = None   # a solve by hand starts the background retries afresh
         if error is not None:
             self.status.set("Not solved: the catalog request failed.")
             if auto:
-                self.log(f"✖ Solve: the catalog request failed ({error}). Click Solve again to retry.")
+                # 2.4.0 fit-in F4 (8a, m299): asked again by itself; ✖ only once the retries are used up
+                words = self._catalog_retry_later()
+                gave_up = "at the next solve" in words
+                self.log(("✖ " if gave_up else "") + f"Solve: the catalog request failed ({error}). {words}"
+                         + (" Press Solve again (top right) to try now." if gave_up else ""))
                 return
             messagebox.showerror(APP_TITLE, f"Solve: {error}")
             return
@@ -17115,17 +17226,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # 2.2.14 (review S3): half of Gaia missing; say what that costs tonight.
             faint = gst.get("esa_faintest")
             self.log("  Gaia: the deep VizieR part did not answer (" + str(gst["deep"]) + "); stars fainter than G "
-                     + (f"{faint:.1f}" if faint else "about 15") + " have no Gaia magnitude. Solve again to retry.")
+                     + (f"{faint:.1f}" if faint else "about 15") + " have no Gaia magnitude for now. "
+                     + self._catalog_retry_later())
         if gst.get("esa") not in (None, "ok") and gst.get("deep") == "ok":
             self.log("  Gaia: the ESA archive's GSPC part did not answer (" + str(gst["esa"]) + "); no Gaia colors "
-                     "tonight (V from G and BP-RP only). Solve again to retry.")
+                     "for now (V from G and BP-RP only). " + self._catalog_retry_later())
         for cat, err in (diag.get("catalog_errors") or {}).items():
             if cat == "AAVSO sequence":
                 # 2.2.19 (#11): the HTTP status, "blocked" for a Cloudflare page, and the background retries.
                 retrying = (diag.get("catalog_retrying") or {}).get(cat)
                 if str(err).startswith("blocked"):
-                    self.log(f"  AAVSO sequence {err}: AAVSO's site refused the request; its stars are missing this "
-                             "time. Solve again later.")
+                    self.log(f"  AAVSO sequence {err}: AAVSO's site refused the request; its stars are missing for "
+                             "now. " + self._catalog_retry_later())
                 elif retrying:
                     self.log(f"  AAVSO sequence did not answer ({err}); asking again in the background ({retrying} "
                              "tries over about 20 s), so the solve goes on without it. The log says if it answers.")
@@ -17133,10 +17245,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     self.log(f"  AAVSO sequence did not answer ({err}); still waiting for it in the background. "
                              "The log says if it answers.")
                 else:
-                    self.log(f"  AAVSO sequence did not answer ({err}); its stars are missing this time. Solve again "
-                             "to retry.")
+                    self.log(f"  AAVSO sequence did not answer ({err}); its stars are missing for now. "
+                             + self._catalog_retry_later())
                 continue
-            self.log(f"  {cat} did not answer ({err}); its stars are missing this time. Solve again to retry.")
+            self.log(f"  {cat} did not answer ({err}); its stars are missing for now. "
+                     + self._catalog_retry_later())
         cached_notes = list((diag.get("catalog_from_cache") or {}).values())   # 2.2.21 (#21)
         for cache_note in cached_notes:
             self.log(f"  {cache_note}" + (f" Chart {chart_id} (goes in the AAVSO report)." if chart_id
@@ -18645,10 +18758,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         for check_note in getattr(answered, "notes", None) or []:   # 2.2.21 (#21, #48)
             self.log(f"Variable-star check: {check_note}")
         if not answered:
-            self.field_check_text.set("Variable-star check: VSX and SIMBAD could not be reached, so the comps were "
-                                      "not checked. Solve again later.")
-            self.log("Variable-star check: VSX and SIMBAD could not be reached; comps and spares were not checked."
-                     + (f" ({answered.vsx_error})" if getattr(answered, "vsx_error", "") else ""))
+            words = self._catalog_retry_later()   # 2.4.0 fit-in F4 (8a, m346): asked again by itself
+            self.field_check_text.set("Variable-star check: VSX and SIMBAD could not be reached, so the comps are "
+                                      "not checked yet. " + words.replace("its stars are added", "the check is made"))
+            self.log("Variable-star check: VSX and SIMBAD could not be reached; comps and spares are not checked "
+                     "yet." + (f" ({answered.vsx_error})" if getattr(answered, "vsx_error", "") else "")
+                     + " " + words.replace("its stars are added", "the check is made"))
             return
         h, w = self.preview.shape
         try:
@@ -18664,11 +18779,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             f"; {flagged} of them are labeled stars (red circle), the rest are red × (Show variables). Comps and the "
             "check star are checked by position, whatever catalog you labeled with. Variables are never used as "
             "spares or in the color fit. Hover to see what they are."
-            + (" VSX was not reached, so VSX-only variables are not marked: Solve again later." if no_vsx else "")
+            + (" VSX was not reached, so VSX-only variables are not marked yet; it is asked again by itself."
+               if no_vsx else "")
             + "".join(" " + n for n in (getattr(answered, "notes", None) or [])))
         self.log(f"Variable-star check ({src}): {len(self.variable_marks)} known or suspected variables in the frame; "
                  f"{flagged} labeled star(s) flagged and left out of spares and the color fit."
-                 + (f" VSX not reached ({answered.vsx_error}); Solve again later to check against VSX."
+                 + (f" VSX not reached ({answered.vsx_error}). "
+                    + self._catalog_retry_later().replace("its stars are added", "the VSX check is made")
                     if no_vsx and getattr(answered, "vsx_error", "") else ""))
         self._scan_known_refresh()   # 2.2.19 (#14)
 
@@ -19721,24 +19838,32 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     MARKER_STEP = "Markers before Run photometry"
 
+    MARKER_SNAP_FAR = 1.0   # x the aperture radius: a snap that would move a marker further than this is asked first
+
     def _warn_marker_offsets(self, radius: float) -> list:
-        """2.2.18 (item 5): before photometry, say in the Log when the frames would be measured off a marked star's
-        center (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit).
-        Every frame is then measured beside the star and it reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off
-        read 2.2 mag faint). Returns [(label, offset px)] of the markers it warned about. Never blocks the run."""
+        """2.2.18 (item 5): before photometry, find the markers the frames would be measured off-centre at
+        (core.marker_offset follows what reduce_frame does: its own centring, refused beyond the jump limit). Every
+        frame is then measured beside the star and it reads faint (HD 219134, 2.2.17 rebuild: a check 9 px off read
+        2.2 mag faint).
+        2.4.0 fit-in F4 (m378; John 26 Nov, call 3): such a marker is RE-CENTRED by itself (snapped to the star
+        there) with a plain note, and the run goes on with it. Only a snap that would move the marker FAR (more than
+        MARKER_SNAP_FAR x the aperture radius: it could be another star) is asked first; "Leave it" keeps the old
+        ⚠ finding. A faint star marked on purpose in a brighter one's wing is still left alone and only noted.
+        Returns [(label, offset px)] of the markers left off-centre. Never blocks the run."""
         if self.preview is None or not self.preview_is_debayered:
             return []
         seeing = self._seeing()
         fwhm = seeing if math.isfinite(seeing) else None
-        rows = [("Target", self.target_xy, "gauss")] + [(role_label(r), getattr(self, f"{r}_xy"), "dip")
-                                                        for r in COMP_ROLES] + [("Check", self.check_xy, "dip")]
-        warned = []
+        rows = [("target", "Target", self.target_xy, "gauss")] \
+            + [(r, role_label(r), getattr(self, f"{r}_xy"), "dip") for r in COMP_ROLES] \
+            + [("check", "Check", self.check_xy, "dip")]
+        warned, snapped = [], []
         # 2.4.0 step 4 (#71): each off-center marker is a finding of its own (Findings panel), replaced on the next
         # Run; near the frame edge the line says how far the marker is from it (step 3's margin, #78).
         store = getattr(self, "findings", None)
         if store is not None:
             store.drop_step(self.MARKER_STEP)
-        for label, xy, wing in rows:
+        for role, label, xy, wing in rows:
             if xy is None:
                 continue
             try:
@@ -19754,16 +19879,41 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                          f"{info['y']:.1f}). The marker looks like a faint star beside it, measured where it is marked; "
                          "if that is not the star you meant, clear it and click again.")
                 continue
+            far = info["offset"] > self.MARKER_SNAP_FAR * radius
+            move = True
+            if far:
+                try:
+                    move = ask_choice(
+                        self, APP_TITLE,
+                        f"The {where} is {info['offset']:.1f} px from the nearest star, at ({info['x']:.1f}, "
+                        f"{info['y']:.1f}). That is further than the aperture radius ({radius:g} px), so it may be "
+                        "another star than the one you meant.\n\nMove the marker onto that star? (Leave it: the "
+                        "frames are measured where it is marked, beside the star, and it reads faint.)",
+                        [("move", "Move it onto that star"), ("leave", "Leave it")], safe="leave") == "move"
+                except Exception:
+                    move = False
+            if move:
+                setattr(self, f"{role}_xy", (float(info["x"]), float(info["y"])))
+                snapped.append(label)
+                self.log(f"{label} marker re-centred on its star before the run: moved {info['offset']:.1f} px, from "
+                         f"({xy[0]:.1f}, {xy[1]:.1f}) to ({info['x']:.1f}, {info['y']:.1f}).", keep_status=True)
+                continue
             warned.append((label, info["offset"]))   # 2.3.6 (audit fix, m377): only real off-center markers
             edge = self._edge_text(xy) if label != "Target" else ""
             text = (f"⚠ {where} is {info['offset']:.1f} px from the center of the star there ({info['x']:.1f}, "
                     f"{info['y']:.1f})" + (f"; the stars are {fwhm:.1f} px across (FWHM)" if fwhm else "")
                     + (f"; the marker is {edge}" if edge else "")
-                    + ". The frames would be measured beside the star, so it would read faint. Clear it and click the "
-                      "star again (zoom in first) if that is not intended.")
+                    + ". Left where it is, as chosen: the frames are measured beside the star, so it reads faint. "
+                      "Clear it and click the star again (zoom in first) if that is not intended.")
             self.log(text, finding=False)
             if store is not None:
                 store.add("warn", text, step=self.MARKER_STEP, where="Before Run photometry")
+        if snapped:
+            try:
+                self.refresh_preview()
+                self.update_star_panel()
+            except Exception:
+                traceback.print_exc()
         # 2.4.0 fit-in F3 (m379, display half): no "Check the Log: …" status pointer: each line above is a finding,
         # so the job summary and the Findings panel point at it (the run overwrote the status line at once anyway)
         return warned
