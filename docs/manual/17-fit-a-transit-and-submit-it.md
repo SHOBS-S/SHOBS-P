@@ -438,6 +438,43 @@ and refit** adds another span; **Clear trim** puts every point back and refits.
 A trim needs at least 20 points left (the button says how many would be left). It belongs to the night it was made on: choosing another night, opening a
 report or running photometry again clears it.
 
+### One point far from the fit (from 2.4.0)
+
+A cosmic ray, a satellite or a plane across the target or a comp can lift or drop a single frame by several percent.
+One such frame can make up much of a night's scatter, and so of the error bars the fit scales up to match it.
+
+After every fit SHOBS-P looks at how far each point is from the fit. The yardstick is the night's typical scatter
+about the fit, worked out from the median (1.4826 × the median absolute deviation), so that the one bad point cannot
+widen its own yardstick. A single point more than 5 of these (5σ) from the fit gets:
+
+- a plain note that names the frame (its frame number and file name, or for an opened report its place in the report),
+  its local time and BJD_TDB, how far it is from the fit, and what the scatter would be without it;
+- a red ring on the plot (a red arrow at the panel's edge when the point is above or below it). The bin it falls in
+  is drawn **without** it, so the bin does not show the bad frame as if it were real data; the legend says so;
+- the button **Leave it out and refit** in the Points row.
+
+**Nothing is left out unless you press the button.** The point is still in the fit, the numbers and the saved files
+until you do. Look at the frame in Blink first if you can: leave out a frame that is bad, not one that is only
+inconvenient.
+
+**Leave it out and refit** refits without the point. It then shows as a red × labeled *left out as a single-point
+outlier (not fitted)*, the notes say which frame is left out, and **Put it back** appears; pressing it refits with
+every left-out point back in. Both buttons are greyed while a fit or check runs.
+
+Two or more such points next to each other are not single points. They are something real in the night (a flare,
+cloud, a fit that does not follow the data), so none of them is named: use **Trim** for a bad stretch. Frames put back
+with **Refit with flagged frames** are never named either. No point is named when leaving it out would leave fewer
+than 20.
+
+A left-out point belongs to its night or report, just like a trim. It stays out of every refit of the same data
+(**Trim and refit**, **Clear trim**, another detrend, **Use comps…**, **Refit with flagged frames**) and so out of the
+comp check, the **Robustness check** and every saved file, until **Put it back**. Choosing another night, opening or
+closing a report, or loading another series puts it back, with a line in the log. A left-out point is recorded in the
+report's NOTES (`SHOBS-P: left out of the fit as single-point outlier (the user's choice): …`), in the settings file
+(**Single points left out of the fit as outliers**) and in the fit CSV, as a row flagged `trimmed outlier`. The
+Multi-night window leaves that row out when it loads the fit CSV; nights it takes straight from the series are not
+changed by anything done on this page (as with a trim).
+
 > **Caution:** Trim to remove bad data, not to make a result look better. Never trim the ingress, egress or the
 > bottom of the transit because they disagree with the model.
 
@@ -510,7 +547,8 @@ When the verdict is "detected" and you are happy with the fit:
    `model`, `residual`, `flag`, `airmass`, `segment` and (from 2.3.4) `rel_flux_err_raw`, one row per point in time order. `rel_flux` is the raw
    relative flux (divided by its median, not detrended); the baseline is in `model`. `segment` says `before flip` or
    `after flip` on a night with a meridian flip, and is blank otherwise. Trimmed points are rows too, flagged
-   `trimmed`, with no error, model, residual or airmass. With an **Output** folder set, both files get the same number
+   `trimmed`, with no error, model, residual or airmass; so is a point left out as a single-point outlier, flagged
+   `trimmed outlier` (from 2.4.0). With an **Output** folder set, both files get the same number
    as the report and plot of this fit. For a fit of an opened EXOTIC report, only the fit CSV is saved. Under its
    first line, the fit CSV has comment lines starting with `#`: the planet, filter, fitted Tc and verdict, the O − C
    line, what the columns hold, and the time of the meridian flip when there was one.

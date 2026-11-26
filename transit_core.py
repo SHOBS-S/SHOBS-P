@@ -3948,3 +3948,75 @@ def flip_from_gap(t, min_gap_min: float = FLIP_GAP_MIN_MIN) -> float | None:
         return None
     return float(t[k] + dt[k] / 2)
 
+
+
+# ---- 2.4.0 fit-in F3 (#117): single-point outliers in the transit fit ----------------------------------------------
+# Joanna's WASP-39 b night (MicroObservatory, 31 Mar 2022): one frame at mid-transit +8.9 % high (a cosmic ray or a
+# satellite) made up much of the night's scatter and so of the scaled-up error bars. The fit never drops a point by
+# itself: find_point_outliers only names the points; the Transit fit page offers to leave them out.
+OUTLIER_NSIGMA = 5.0    # a point this many robust sigmas from the fit is named (John, decision 9)
+OUTLIER_MAX_RUN = 1     # John 26 Nov: strictly isolated points only; 2 or more in a row are real structure: none named
+MAD_TO_SIGMA = 1.4826   # the median absolute deviation of a Gaussian, times this, is its sigma
+
+
+def robust_sigma(values) -> float:
+    """The robust scatter of values: 1.4826 x the median absolute deviation about their median (nan when none)."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if not v.size:
+        return float("nan")
+    return float(MAD_TO_SIGMA * np.median(np.abs(v - np.median(v))))
+
+
+def find_point_outliers(t, resid, nsigma: float = OUTLIER_NSIGMA, max_run: int = OUTLIER_MAX_RUN, skip=None,
+                        min_points: int = 20) -> dict:
+    """2.4.0 fit-in F3 (#117): the single points whose residual is more than nsigma robust sigmas (MAD x 1.4826) from
+    the median residual of a finished fit. Points are taken in time order; up to max_run such points next to each
+    other count as single points (max_run 1: strictly isolated points only), a longer run is real structure and none
+    of it is named. skip (one flag per point)
+    marks points never named (flagged frames the user put back): they still count in the scatter, and one standing
+    beyond the limit still counts toward a run. Nothing is changed or dropped here.
+
+    Returns {"index": positions in the arrays as given (time order), "nsigma": each one's signed distance in robust
+    sigmas, "sigma": the robust sigma, "median": the median residual, "limit": nsigma, "runs_ignored": how many
+    longer runs were left alone}. index is empty when nothing stands out, or with fewer than min_points points."""
+    t = np.asarray(t, dtype=float)
+    r = np.asarray(resid, dtype=float)
+    out = {"index": [], "nsigma": [], "sigma": float("nan"), "median": float("nan"), "limit": float(nsigma),
+           "runs_ignored": 0}
+    if t.shape != r.shape or t.ndim != 1:
+        return out
+    ok = np.isfinite(t) & np.isfinite(r)
+    if int(ok.sum()) < min_points:
+        return out
+    med = float(np.median(r[ok]))
+    sigma = robust_sigma(r[ok])
+    out.update(sigma=sigma, median=med)
+    if not (math.isfinite(sigma) and sigma > 0):
+        return out
+    z = np.where(ok, (r - med) / sigma, 0.0)
+    far = ok & (np.abs(z) > nsigma)
+    if not far.any():
+        return out
+    skip = np.asarray(skip, dtype=bool) if skip is not None and np.shape(skip) == t.shape else np.zeros(t.shape, bool)
+    order = [int(k) for k in np.argsort(t, kind="stable") if ok[k]]
+    run = []
+
+    def close():
+        if not run:
+            return
+        if len(run) > max_run:
+            out["runs_ignored"] += 1
+        else:
+            for k in run:
+                if not skip[k]:
+                    out["index"].append(k)
+                    out["nsigma"].append(float(z[k]))
+        run.clear()
+    for k in order:
+        if far[k]:
+            run.append(k)
+        else:
+            close()
+    close()
+    return out

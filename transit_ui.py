@@ -25,6 +25,7 @@ import site_time   # 2.2.21 (#22): local times in the site's time zone
 import page_scroll   # 2.4.0 fit-in F1c (#109)
 import gate   # 2.4.0 fit-in F2 (#79 item 6)
 from group_rows import LABEL_WIDTH, GroupRows   # 2.4.0 (#98): the Output pages' function groups
+from transit_outlier_ui import OutlierMixin   # 2.4.0 fit-in F3 (#117): single-point outliers
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -179,7 +180,7 @@ def _refresh_gates(app):
             pass
 
 
-class TransitPage:
+class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = transit_outlier_ui.py
     """Output page in Transits mode."""
 
     def __init__(self, app, parent):
@@ -271,6 +272,7 @@ class TransitPage:
             g, text="Trim high airmass", command=self.trim_high_airmass), shown=False)
         _gate(app, self.trim_airmass_button, self._job_why, busy=False)   # 2.4.0 fit-in F2
         self._airmass_offer = None
+        self._build_outlier_buttons(g, groups)   # 2.4.0 fit-in F3 (#117): Leave it out and refit / Put it back
         self.trim_text = StringVar(value="")
         groups.add("points", ttk.Label(g, textvariable=self.trim_text, style="Hint.TLabel", justify=LEFT), wrap=True)
         self._trims = []          # [(BJD_TDB from, to)]; ±inf for an open end
@@ -759,6 +761,7 @@ class TransitPage:
         self.result = None
         self._fit_signature = None
         self._reset_trim()      # 2.2.17 (item 5): a trim belongs to its source
+        self._reset_left_out("the report was closed")   # 2.4.0 fit-in F3 (#117)
         self._show_source()
         self._fill_table()
         self.draw()
@@ -982,6 +985,7 @@ class TransitPage:
         self._clear_progress()
         if self.report is not None or self.night.get() != self.source_night:
             self._reset_trim()      # 2.2.17 (item 5): a trim belongs to its source
+            self._reset_left_out("another night was chosen")   # 2.4.0 fit-in F3 (#117)
         self.report = None
         self._show_source()
         self.result = None
@@ -1012,6 +1016,8 @@ class TransitPage:
             text += f"; {m} in this fit" + (f" ({m - n} flagged put back)" if m > n else "")
             if r.get("trim"):
                 text += f", {r['trim']['n']} trimmed"     # 2.2.17 (item 5)
+            if r.get("left_out"):
+                text += f", {r['left_out']['n']} left out as an outlier"   # 2.4.0 fit-in F3 (#117)
         self.source_text.set(text)
 
     def _signature(self, cheap: bool = False):
@@ -1130,6 +1136,7 @@ class TransitPage:
         self._clear_progress()
         self.report = rep
         self._reset_trim()      # 2.2.17 (item 5)
+        self._reset_left_out("a report was opened")   # 2.4.0 fit-in F3 (#117)
         self.night.set("")
         self.night_label.set("")
         h = rep["header"]
@@ -1514,6 +1521,7 @@ class TransitPage:
                  f"Frames skipped at photometry (reason: frame numbers): {rep.get('skipped', 'none')}",   # 2.3.0 (#50)
                  f"Frames left out (flag: frame numbers): {rep.get('left_out', 'none')}",
                  f"Frames trimmed: {self._trimmed_frames(meta, r) or 'none'}",
+                 self.left_out_settings_line(meta, r),   # 2.4.0 fit-in F3 (#117)
                  "Detrend: " + tc.detrend_text(r.get("detrend"))
                  + (" (Auto, the lowest BIC)" if r.get("detrend_choice") else ""),
                  f"Calibration: {rep.get('calibration', '')}", rep.get("gain") or "Gain: not recorded"]
@@ -1658,6 +1666,8 @@ class TransitPage:
             t, flux, err, am, trim = self._apply_trim(t, flux, err, am)
             if trim:
                 meta["trim"] = trim
+            # 2.4.0 fit-in F3 (#117): points the user left out as single-point outliers stay out, like the trim
+            t, flux, err, am = self._apply_left_out(t, flux, err, am, meta)
         except Exception as exc:
             if auto:
                 self._notes_text([("info", str(exc))])
@@ -2328,6 +2338,7 @@ class TransitPage:
             result["trim"] = meta["trim"]
             result.setdefault("flags", []).append(("info", meta["trim"]["text"]))
             self.app.log("Transit fit: " + meta["trim"]["text"])
+        self._outliers_after_fit(result, meta)   # 2.4.0 fit-in F3 (#117): a plain note and the offer, nothing dropped
         lines = self.settings_lines(meta, result)
         if lines:   # 2.2.19 (#40): the run's settings, in full, in the log (one line per fit)
             text = "Transit fit settings: " + " | ".join(lines)
@@ -2689,6 +2700,7 @@ class TransitPage:
 
     def _fill_table(self):
         self._update_robust_button()   # 2.4.0 (Fable N13): grayed whenever the page has no fit
+        self._show_outlier_buttons()   # 2.4.0 fit-in F3 (#117): the offer belongs to the fit on the page
         if self.result is None and getattr(self, "_airmass_offer", None) is not None:
             # Fable N2: the high-airmass offer belongs to the fit it was made for
             self._airmass_offer = None
@@ -2932,8 +2944,9 @@ class TransitPage:
             ax.plot(x[fmask], y[fmask], "o", ms=4, mfc="none", mec="#d08a2e", mew=0.8,
                     label=f"flagged {wf.get('label', '')} (errors ×{wf.get('factor', 2):g})".replace("  ", " "))
         width = self._plot_bin_width(r["cadence_days"] * 24)   # 2.3.2 (item 6): Plot bins box; legend names it
-        width, bin_note = self._bins_that_work(x, width, r["cadence_days"] * 24, y)   # step 6c (item f)
-        bins = _bin(x, y, width)
+        yb = self._outlier_bin_values(r, y)   # 2.4.0 fit-in F3 (#117): a named single-point outlier is in no bin
+        width, bin_note = self._bins_that_work(x, width, r["cadence_days"] * 24, yb)   # step 6c (item f)
+        bins = _bin(x, yb, width)
         if bins:
             ax.errorbar([b[0] for b in bins], [b[1] for b in bins], [b[2] for b in bins], fmt="o", color="k", ms=4,
                         capsize=2, label=plot_bin_label(width) + (f"\n({bin_note})" if bin_note else ""))
@@ -3013,7 +3026,7 @@ class TransitPage:
         hi = max(np.percentile(y, 99), 1.0) + 0.004
         ax.set_ylim(lo, hi)
         axr.plot(x, r["residuals"] / r["baseline"] * 100, ".", color="#9aa7b0", ms=3)
-        rb = _bin(x, r["residuals"] / r["baseline"] * 100, width)   # 2.3.2 (item 6): the same bins as above
+        rb = _bin(x, self._outlier_bin_values(r, r["residuals"] / r["baseline"] * 100), width)   # 2.3.2 (item 6): the same bins as above
         if rb:
             axr.plot([b[0] for b in rb], [b[1] for b in rb], "o", color="k", ms=3)
         axr.axhline(0, color="k", lw=0.8)
@@ -3031,6 +3044,7 @@ class TransitPage:
             # "Fit anyway" pulled to a Tc away from the data: show the data, not the empty hours between.
             x_lo, x_hi = xd_lo - 0.25, xd_hi + 0.25
         ax.set_xlim(x_lo, x_hi)
+        self._draw_outliers(r, best, x, y, lo, hi)   # 2.4.0 fit-in F3 (#117): ringed; left-out points as crosses
         for label in ax.get_xticklabels():
             label.set_visible(False)
         self._make_span_selector(best["tc"])   # 2.2.17 (item 5): drag across the plot to fill the trim boxes
@@ -3610,6 +3624,9 @@ class TransitPage:
         if trim:
             # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(trim["report_note"])
+        left = (self.result or {}).get("left_out")
+        if left:   # 2.4.0 fit-in F3 (#117): points left out as single-point outliers, in the report's NOTES
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(left["report_note"])
         o = tc.oc_summary(self.result or {})
         if o is not None and state != "none" and (self.report or {}).get("date_type") != "JD_UTC":
             # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
@@ -3891,6 +3908,8 @@ class TransitPage:
         """2.2.19 (#40): <report stem>_settings.txt beside the report: the full settings block. Never costs the
         report (logged on failure)."""
         lines = self.settings_lines(meta, self.result)
+        if not lines and (self.result or {}).get("left_out"):
+            lines = [self.left_out_settings_line(meta, self.result)]   # 2.4.0 fit-in F3 (#117): a report's fit too
         # 2.4.0 (#93): the fit's exact inputs at full precision (for a report's fit too, which has no other settings)
         try:   # Fable nit: never costs the report (a fit-inputs line that cannot be written is left out)
             inputs = tc.fit_inputs_lines(self.result) if self.result else []
@@ -4171,6 +4190,13 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
         # review: trimmed rows have no error either (the fit never weighted them)
         ft = np.asarray(trim.get("flux", []), dtype=float) / med
         rows += [(tt[k], ft[k], nan, nan, nan, "trimmed", nan, nan) for k in range(tt.size)]
+    left = r.get("left_out") or {}
+    lt = np.asarray(left.get("t", []), dtype=float)
+    if lt.size:
+        # 2.4.0 fit-in F3 (#117): points left out as single-point outliers are rows too, flagged "trimmed outlier"
+        # (never fitted; "trimmed" first so Multi-night and older readers leave them out as they do trimmed rows)
+        lf = np.asarray(left.get("flux", []), dtype=float) / med
+        rows += [(lt[k], lf[k], nan, nan, nan, "trimmed outlier", nan, nan) for k in range(lt.size)]
     fc = trim.get("flagged_cut") or {}
     if r.get("with_flagged") and len(fc.get("t", [])):
         # review: frames both flagged (put back with Fit with flagged) and trimmed: "trimmed" first, then the flag
