@@ -118,8 +118,10 @@ class TestFlipStepReporting(unittest.TestCase):
         self.assertNotIn("step", r["summary"])
         self.assertTrue(tc.flip_step_line(r).startswith("Flip step not needed: "), tc.flip_step_line(r))
         self.assertIn("kept only at 10 or more", tc.flip_step_line(r))
-        # the flags (page notes, PNG, fit text) say it was tested and left out
-        self.assertTrue(any("this fit has no step term" in text for _l, text in r["flags"]))
+        # 2.4.0 fit-in F3 (m775): a step tested and not needed is good news, no longer repeated among the cautions;
+        # the result line / table row (flip_step_line, above) and the fit text (flip_lines) still say it
+        self.assertFalse(any("this fit has no step term" in text for _l, text in r["flags"]))
+        self.assertTrue(any("fitted without a step" in line for line in tc.flip_lines(r)))
 
     def test_texts(self):
         meta = {"version": "2.3.0", "obscode": "XYZ", "filter": "V"}

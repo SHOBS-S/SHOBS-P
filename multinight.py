@@ -75,8 +75,7 @@ def to_bjd_tdb(t, date_type: str, radec=None, lat=None, lon=None):
         return t + 69.184 / 86400.0, "HJD_UTC moved to BJD_TDB (+69.184 s; good to a few seconds)"
     if dt.startswith("JD"):
         if radec is None:
-            raise NightError("times are JD_UTC and the star's RA/Dec is not known, so they cannot be put on BJD_TDB: "
-                             "look the planet up on the Input page (or in this window), then add the file again")
+            raise NightError(JD_UTC_NO_RADEC + ", then add the file again")
         out = None
         if lat is not None and lon is not None:
             try:
@@ -122,9 +121,21 @@ def _finish_night(n: dict) -> dict:
 
 
 # 2.2.20 (#45): a night without airmass among nights with it (and airmass detrending on).
+# 2.4.0 fit-in F3 (x094/x095, x108/x111): one wording each
+NOT_FIT_CSV = "not a SHOBS-P transit-fit CSV (it needs time, rel_flux and rel_flux_err columns)"
+JD_UTC_NO_RADEC = ("times are JD_UTC and the star's RA/Dec is not known, so they cannot be put on BJD_TDB: look the "
+                   "planet up on the Input page (or in this window)")
 NO_AIRMASS_WARN = ("⚠ No airmass in this file: its baseline is fitted against time only, unlike the other nights. "
                    "Tc may shift.")
 TIME_ONLY_BUTTON = "Fit every night against time only"
+
+
+def no_airmass_note(labels) -> str:
+    """2.4.0 fit-in F3 (m701): the summary's one note for every night without airmass among nights with it."""
+    one = len(labels) == 1
+    return (f"⚠ No airmass in the file for {', '.join(labels)}: {'its' if one else 'their'} baseline is fitted "
+            f"against time only, unlike the other nights; Tc may shift. “{TIME_ONLY_BUTTON}” makes all nights "
+            "match.")
 
 
 def mixed_airmass(nights: list, detrend_airmass: bool = True) -> list:
@@ -183,10 +194,10 @@ def load_fit_csv(path: str, radec=None) -> dict:
                 continue
             rows.append(row)
     if head is None or len(head) < 3:
-        raise NightError("not a SHOBS-P transit-fit CSV (no time, rel_flux, rel_flux_err columns)")
+        raise NightError(NOT_FIT_CSV)
     low = [c.lower() for c in head]
     if "rel_flux" not in low or "rel_flux_err" not in low:
-        raise NightError("not a SHOBS-P transit-fit CSV (no rel_flux / rel_flux_err columns)")
+        raise NightError(NOT_FIT_CSV)
     i_t, i_f, i_e = 0, low.index("rel_flux"), low.index("rel_flux_err")
     i_flag = low.index("flag") if "flag" in low else None
     # 2.2.20 (#45): CSVs from 2.2.20 on carry airmass and the flip segment (older ones: neither)
@@ -928,20 +939,27 @@ def timing_statements(a: dict) -> list:
         if lin["dof"] <= 0:
             out.append(("info", "Two nights: their own linear ephemeris passes through both exactly (no check of the "
                                 "scatter; a third night gives one)."))
+        # 2.4.0 fit-in F3 (m666/m668): one line. The scatter ⚠ names its outlier nights itself; a night that is
+        # out while the scatter test passes is a plain note.
+        bad = [a["labels"][i] for i, r in enumerate(own["rows"]) if lin["dof"] > 0
+               and abs(r["oc_min"]) > OUTLIER_SIGMA * r["sigma_min"]]
+        if lin["dof"] <= 0:
+            pass
         elif lin["chi2_red"] > 3.0:
             out.append(("warn", f"⚠ The nights scatter about their own linear ephemeris more than their error bars "
-                                f"allow (χ²ν {lin['chi2_red']:.1f}): look at the outlier nights, or the Tc errors "
-                                "are too small (red noise, a partial transit). Its errors are scaled by "
-                                f"√χ²ν = {math.sqrt(lin['chi2_red']):.2f}."))
+                                f"allow (χ²ν {lin['chi2_red']:.1f}); "
+                                + (f"outlier night{'s' if len(bad) > 1 else ''}: {', '.join(bad)}" if bad else
+                                   "no single night stands out, so the Tc errors are too small (red noise, a "
+                                   "partial transit)")
+                                + f". Its errors are scaled by √χ²ν = {math.sqrt(lin['chi2_red']):.2f}."))
         else:
             out.append(("ok", f"✔ The nights fit a linear ephemeris (χ²ν {lin['chi2_red']:.2f}, {lin['dof']} degree"
                               f"{'' if lin['dof'] == 1 else 's'} of freedom): no sign of timing variations at this "
                               "precision."))
-        bad = [a["labels"][i] for i, r in enumerate(own["rows"]) if lin["dof"] > 0
-               and abs(r["oc_min"]) > OUTLIER_SIGMA * r["sigma_min"]]
-        if bad:
-            out.append(("warn", f"⚠ Outlier night{'s' if len(bad) > 1 else ''} (|O − C| > {OUTLIER_SIGMA:g}σ from "
-                                f"the nights' own ephemeris): {', '.join(bad)}."))
+            if bad:
+                out.append(("info", f"Night{'s' if len(bad) > 1 else ''} {', '.join(bad)} "
+                                    f"{'are' if len(bad) > 1 else 'is'} more than {OUTLIER_SIGMA:g}σ from the nights' "
+                                    "own ephemeris."))
     return out
 
 
@@ -1928,7 +1946,7 @@ class MultiNightWindow:
         if self.use_current.get() and r is not None:
             try:
                 if (self.page.report or {}).get("date_type") == "JD_UTC":
-                    raise NightError("the page's times are JD_UTC (star position unknown)")
+                    raise NightError("the page's " + JD_UTC_NO_RADEC)
                 cur = night_from_result(r, getattr(self.page, "meta_for_files", {}), "Transit fit page")
                 if tui._state(r.get("verdict")) == "none":
                     raise NightError("the page's fit found no transit")
@@ -1986,7 +2004,9 @@ class MultiNightWindow:
         if not self._running:
             if mixed and n_use >= 2:
                 # 2.2.20 (#45): not "ready" while nights are fitted differently
-                self.prog_text.set(f"⚠ {n_use} nights in use; {len(mixed)} with no airmass (see above).")
+                # 2.4.0 fit-in F3 (m677): plain; the note under the table is the one place that says it in full
+                self.prog_text.set(f"{n_use} nights in use ({len(mixed)} fitted against time only: see the note "
+                                   "under the table).")
             else:
                 self.prog_text.set(f"{n_use} night{'s' if n_use != 1 else ''} ready" + (": add at least two to fit."
                                                                                          if n_use < 2 else "."))
@@ -2610,9 +2630,12 @@ def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
     out.append(("head", "Reading"))
     out += list(a.get("statements") or [])
     notes = []
-    # 2.2.20 (#45): nights fitted differently (some baselines follow airmass, some cannot) get a ⚠ line each
+    # 2.2.20 (#45): nights fitted differently (some baselines follow airmass, some cannot).
+    # 2.4.0 fit-in F3 (m701): one ⚠ note naming all of them, where each night had its own line.
     mixed = "airmass" in fit["detrend"] and any(n.get("airmass") for n in fit["nights"]) and \
         any(not n.get("airmass") for n in fit["nights"])
+    if mixed:
+        notes.append(("warn", no_airmass_note([n["label"] for n in fit["nights"] if not n.get("airmass")])))
     for n in fit["nights"]:
         bits = []
         bits.append(f"error bars ×{n['error_scale']:.2f} ({n.get('scale_rule', '')}; χ²ν {n['rchi2_raw']:.2f}, "
@@ -2630,8 +2653,6 @@ def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
         if n.get("single_tc"):
             d = (n["tc"][0] - n["single_tc"][0]) * 86400
             bits.append(f"joint Tc {d:+.0f} s from the single-night fit")
-        if mixed and not n.get("airmass"):
-            notes.append(("warn", f"{n['label']}: {NO_AIRMASS_WARN} ({TIME_ONLY_BUTTON} makes all nights match.)"))
         if bits:
             notes.append(("info", f"{n['label']}: " + "; ".join(bits)))
     if notes:

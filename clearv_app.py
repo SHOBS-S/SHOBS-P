@@ -1508,6 +1508,61 @@ def too_short_period_text(span_days: float, shortest_days: float) -> str:
             "longer.")
 
 
+def period_verdict(period_days, checks: dict) -> tuple[str, list[str]]:
+    """2.4.0 fit-in F3 (area J): the one verdict on the best period, from the checks the Period box already makes.
+    Returns (state, reasons): "reliable" (no reasons), "doubtful" (worst reason first) or "none" (why not).
+    checks: fap, too_short, carried_by (night labels), night_fap, airmass_demoted, outside (text), alias, edge,
+    short_span, constant (text for a star that looks constant), no_search (text when no search could be made).
+    Display only: it changes no number."""
+    if checks.get("no_search"):
+        return "none", [str(checks["no_search"])]
+    if checks.get("too_short"):
+        return "none", ["one short night covers under two cycles of the best peak (no reliable period yet); "
+                        "add nights"]
+    fap = checks.get("fap", float("nan"))
+    night_fap = checks.get("night_fap", float("nan"))
+    carried = list(checks.get("carried_by") or [])
+    demoted = bool(checks.get("airmass_demoted"))
+    if not (isinstance(fap, (int, float)) and math.isfinite(fap) and fap <= 0.01):
+        return "none", ["no significant period: " + (checks.get("constant")
+                                                      or "the star looks constant at this precision")]
+    nights_say_no = isinstance(night_fap, (int, float)) and math.isfinite(night_fap) and night_fap > 0.01
+    if nights_say_no and not carried and not demoted:
+        return "none", [f"no significant period: counting nights, the peak's false-alarm probability is "
+                        f"{night_fap:.1e} (a night's points share offsets)"]
+    reasons = []
+    if carried:
+        reasons.append(f"depends on {', '.join(carried)} alone (no reliable period: often an offset between "
+                       "nights, not the star)")
+    if demoted:
+        reasons.append("follows the nights' airmass" + ("" if carried else " (no reliable period)"))
+    if nights_say_no:
+        reasons.append(f"false-alarm probability {night_fap:.1e} counting nights")
+    if checks.get("outside"):
+        reasons.append(f"{checks['outside']} outside the search")
+    if checks.get("alias"):
+        reasons.append("near a day alias")
+    if checks.get("edge"):
+        reasons.append("at the edge of the search")
+    if checks.get("short_span"):
+        reasons.append("the data span under 1.5 cycles")
+    return ("doubtful" if reasons else "reliable"), reasons
+
+
+def period_verdict_line(period_days, checks: dict) -> str:
+    """The Period box's first row for period_verdict: only the Doubtful row carries ⚠."""
+    state, reasons = period_verdict(period_days, checks)
+    p = f"{period_days:.5f} d" if period_days else ""   # the digits of the Best / Peak row
+    if state == "reliable":
+        fap = checks.get("fap", float("nan"))
+        pct = fap * 100.0
+        return f"Period  Reliable: {p} (FAP " + ("under 0.01 %" if pct < 0.01 else f"{pct:.2g} %") + ")"
+    if state == "doubtful":
+        return f"Period  ⚠ Doubtful: {p} — " + "; ".join(reasons)
+    text = "; ".join(reasons)
+    return "Period  None: " + text + ("" if text.endswith(".") else ".")
+
+
 def shade_long_periods(ax, span_days: float, periods) -> bool:
     """2.2.12: gray out the periods longer than about half the data span on a periodogram (log period axis), labeled
     "longer than the data can test". The search still runs there (a multi-night series can test them). Returns True
@@ -4380,17 +4435,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showerror(APP_TITLE, text.lstrip("✖ "), **kw)
             return False
 
+    def series_not_saved(self, exc, parent=None, box: bool = True) -> str:
+        """2.4.0 fit-in F3 (m536/m574): the one message for a series file that could not be written, with what to
+        do. Log (it takes the status line) and, for a save the user asked for, an error box. Returns the short
+        tail a caller can put after its own status line."""
+        why = (getattr(exc, "strerror", None) or str(exc) or type(exc).__name__)
+        text = f"✖ Series not saved ({why}). Save series… to another folder before closing."
+        self.log(text)
+        if box:
+            kw = {"parent": parent} if parent is not None else {}
+            messagebox.showerror(APP_TITLE, text.lstrip("✖ "), **kw)
+        return " ✖ Series not saved: see the Log."
+
     def saved_notice(self, path: str, advice: str = ""):
-        """After a save: with an output folder the status bar says where it went (no dialog to click away);
-        without one, the usual dialog."""
-        if self.output_dir.get().strip():
-            folder = os.path.basename(os.path.dirname(path)) or os.path.dirname(path)
-            self.status.set(self._series_note(f"Saved {os.path.basename(path)} to {folder}."
-                                              + (f" {advice}" if advice else ""), keep=True))   # 2.2.21 (nit j)
-            self.log(f"Saved {path}")
-        else:
-            self.status.set(self._series_note(f"Saved {path}", keep=True))   # 2.2.21 (nit j)
-            messagebox.showinfo(APP_TITLE, f"Saved\n{path}" + (f"\n\n{advice}" if advice else ""))
+        """After a save the status line says where it went and the Log has the full path: no dialog to click
+        away, with or without an Output folder (2.4.0 fit-in F3, m040)."""
+        folder = os.path.basename(os.path.dirname(path)) or os.path.dirname(path)
+        self.status.set(self._series_note(f"Saved {os.path.basename(path)} to {folder}."
+                                          + (f" {advice}" if advice else ""), keep=True))   # 2.2.21 (nit j)
+        self.log(f"Saved {path}", keep_status=True)
 
     # ---- upload links (2.2.15, item 8) -------------------------------------------------------
     def open_link(self, url: str, what: str = ""):
@@ -5220,8 +5283,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # How AAVSO spells the name, when the typed one differs only in spacing or capitals (2.2).
         self.name_hint = StringVar(value="")
         self.name_row = ttk.Frame(target, style="Card.TFrame")
-        ttk.Label(self.name_row, textvariable=self.name_hint, style="Warn.TLabel").pack(side=LEFT)
-        ttk.Button(self.name_row, text="Use it", command=self._use_suggested_name).pack(side=LEFT, padx=(8, 0))
+        # 2.4.0 fit-in F3 (area L, John's call 6): a plain line, no button: Look up switches the spelling by itself
+        ttk.Label(self.name_row, textvariable=self.name_hint, style="Hint.TLabel").pack(side=LEFT)
         self.name_row.grid(row=1, column=1, columnspan=2, sticky=W)
         self.name_row.grid_remove()
         self.ra_sexa = StringVar(value="")
@@ -5313,7 +5376,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # Report
         report = self._group(right, "AAVSO report")
         report.pack(fill=X)
-        self._field(report, 0, "Observer code", self.observer, width=14)
+        self.observer_entry = self._field(report, 0, "Observer code", self.observer, width=14)   # F3 (L): marked
         # 2.4.0 (#97): the Chart ID is not asked here any more (nothing could fill it at Input); it shows beside the
         # comps on the Photometry page and again at Save AAVSO, each with an Edit.
         report.columnconfigure(1, weight=1)
@@ -5902,18 +5965,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _update_name_hint(self):
         good = core.suggest_star_name(self.star_id.get())
         if good:
-            self.name_hint.set(f"AAVSO spells this \u201c{good}\u201d")
+            self.name_hint.set(f"AAVSO spells this \u201c{good}\u201d: Look up switches to it.")
             self.name_row.grid()
         else:
             self.name_hint.set("")
             self.name_row.grid_remove()
 
-    def _use_suggested_name(self):
-        good = core.suggest_star_name(self.star_id.get())
-        if good:
-            self.star_id.set(good)
-            self.status.set(f"Star ID set to {good}.")
-            self._auto_lookup()
+    def _aavso_spelling(self) -> str:
+        """2.4.0 fit-in F3 (area L, John's call 6): the Star ID takes AAVSO's spelling by itself when it differs
+        only in spacing or capitals, with one plain line. Called at Look up (and once more at Save AAVSO report,
+        for a name no lookup has seen). Returns the Star ID as it now stands."""
+        name = self.star_id.get().strip()
+        good = core.suggest_star_name(name)
+        if not good:
+            return name
+        self.star_id.set(good)
+        self.log(f"Star ID written the way AAVSO spells it: {good} (was {name}).")
+        return good
 
     def clear_target(self, quiet: bool = False, why: str = ""):
         """Empty the target (Star ID, RA, Dec) and the marked stars and comp/check fields that belong to it.
@@ -7035,7 +7103,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.lookup_star(quiet=True)
 
     def lookup_star(self, quiet: bool = False):
-        name = self.star_id.get().strip()
+        name = self._aavso_spelling()   # 2.4.0 fit-in F3 (area L): AAVSO's spelling, by itself
         if not name:
             return   # 2.4.0 fit-in F2 (m096): Look up again is greyed with no Star ID; a silent backstop
         self._last_lookup_name = name
@@ -7054,8 +7122,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _lookup_done(self, found, error, name: str = "", quiet: bool = False):
         if name and name != self.star_id.get().strip():
-            # The name changed while this lookup ran (typed again, or "Use it" on the spelling hint): look up the
-            # name that is there now instead of reporting the old one.
+            # The name changed while this lookup ran (typed again): look up the name that is there now instead
+            # of reporting the old one.
             self._lookup_busy_stop("star", name=name, soon=True)   # 2.2.19 (nit)
             self._auto_lookup()
             return
@@ -20634,7 +20702,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     self.status.set(f"Planet transit flags saved to {os.path.basename(self.series_path)}."
                                     + self._held_words())
             except OSError as exc:
-                self.log(f"⚠ Could not save the series with the planet transit flags: {exc}")
+                self.series_not_saved(exc, box=False)
 
     def edit_planet_transits(self):
         """2.2.15 (item 1): leave out or keep a night's frames that fell in a planet transit (the highlighted night,
@@ -20933,7 +21001,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                saved = self.series_not_saved(exc)
         self.status.set(f"{len(new_points)} skipped frame(s) measured and added to {night}.{saved}")
         tp = getattr(self, "transit_page", None)
         if self.mode_key == "transits" and tp is not None:
@@ -21586,10 +21654,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         else:
             self.log("Cancel requested; stopping after the current frame…")
 
+    @staticmethod
+    def _bins_too_coarse(minutes: float, period_days: float) -> str:
+        """2.4.0 fit-in F3 (m486/m488): the one plain Bins row for a period too short for the chosen bins,
+        whether the known period or the peak found from the bins said so."""
+        return f"Bins    every point used ({minutes:g}-min bins too coarse for {period_days:.4g} d)"
+
     def _refresh_period(self):
         self._apply_cloud()
         usable = self._usable()
         self.period = None
+        self._usable_count = len(usable)   # 2.4.0 fit-in F3 (F2-c): the Refit period gate reads it
         if len(usable) < 8:
             return
         corrected = self._analysis_values(usable)
@@ -21610,8 +21685,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 expected = []
             if expected and min(expected) < 10.0 * minutes / 1440.0:
                 short = min(expected)
-                self._period_bins_note = (f"Bins    {short:.4g} d spans only {short * 1440.0 / minutes:.1f} "
-                                          f"{minutes:g}-min bins: searched every point instead")
+                self._period_bins_note = self._bins_too_coarse(minutes, short)
                 minutes = None
         if minutes:
             # Bins make each night count by the hours observed, not by how many frames were taken,
@@ -21640,8 +21714,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 again = None
             if again:
-                self._period_bins_note = (f"Bins    ⚠ the peak from {minutes:g}-min bins ({self.period['period_days']:.4g}"
-                                          f" d) spans under 10 bins: searched every point instead")
+                self._period_bins_note = self._bins_too_coarse(minutes, self.period["period_days"])
                 self.period = again
                 jd, values, point_nights = point_jd, point_values, [o.night for o in usable]
                 self._period_note = point_note
@@ -22731,16 +22804,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             traceback.print_exc()
         nights = sorted({obs.night for obs in observations})
-        self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then choose Add.")
+        # 2.4.0 fit-in F3 (m512/m513, John's call 5): the status line alone, no pop-up to click away.
+        self.status.set(f"Loaded {len(observations)} points from {len(nights)} night(s). Reduce the new night, then "
+                        "choose Add; the series' comps and check are placed after the solve.")
         self._series_loaded_token = getattr(self, "_preview_token", 0)   # 2.3.5 (review r3 S2): the image at the load
         self._resolve_for_loaded_series()   # 2.3.4 (run-through): an image solved before the load gets the series' stars
-        messagebox.showinfo(
-            APP_TITLE,
-            f"Loaded {len(observations)} points, {len(nights)} night(s).\n\n"
-            "Point Input at the new night's bias, dark, flat, and lights, run the flow, and choose Yes when asked to add the night.\n\n"
-            "After the image is solved, the series' comps and check are placed on their stars by their saved sky "
-            "positions (names and magnitudes as saved). Check them before Run.",
-        )
         # 2.2.15 (item 1, review): nights without a planet-transit check get one now (one lookup in the background,
         # one question for all nights with frames in a transit; silent otherwise).
         unchecked = [n for n in nights if not self._night_info(n).get("planet_transits")]
@@ -22797,12 +22865,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ttk.Label(cloud_box, text="Cloud flag: more than", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         ttk.Entry(cloud_box, textvariable=self.cloud_limit, width=5).pack(side=LEFT)
         ttk.Label(cloud_box, text="% below the night's median", style="Card.TLabel").pack(side=LEFT, padx=(4, 6))
-        ttk.Button(cloud_box, text="Apply", command=self.refit_period).pack(side=LEFT)
+        # 2.4.0 fit-in F3 (F2-c): Apply, Transmission loss…, Planet transits… and Refit period are greyed without
+        # a series (and during a job), with the reason on hover. Apply stays live under 8 usable points: a looser
+        # cloud limit is one way back to 8.
+        apply_button = ttk.Button(cloud_box, text="Apply", command=self.refit_period)
+        apply_button.pack(side=LEFT)
+        self.gate(apply_button, self._series_why)
         groups.add("points", cloud_box)
         # 2.2.14 (item 18): keep or leave out a night's transmission-loss (dew/haze) points.
-        groups.add("points", ttk.Button(g, text="Transmission loss…", command=self.edit_transmission))
+        self.gate(groups.add("points", ttk.Button(g, text="Transmission loss…", command=self.edit_transmission)),
+                  self._series_why)
         # 2.2.15 (item 1): leave out or keep a night's frames taken during a planet's predicted transit.
-        groups.add("points", ttk.Button(g, text="Planet transits…", command=self.edit_planet_transits))
+        self.gate(groups.add("points", ttk.Button(g, text="Planet transits…", command=self.edit_planet_transits)),
+                  self._series_why)
         # 2.4.0 step 8 (#89): Trim, one night at a time (trim_ui.TrimMixin); greyed until a night is chosen.
         self._trim_build_ui(groups, g)
 
@@ -22846,6 +22921,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         groups.add("fit", from_box, pad=10)
         self.refit_period_button = groups.add("fit", ttk.Button(g, text="Refit period", style="Accent.TButton",
                                                                 command=self.refit_period))
+        self.gate(self.refit_period_button, self._refit_why)   # 2.4.0 fit-in F3 (F2-c)
 
         # ---- 5. Comps
         g = groups.parent("comps")
@@ -22927,10 +23003,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         saves.frame.pack(side=LEFT, fill=X, expand=True)
         self.out_saves = saves
         g = saves.frame
+        # 2.4.0 fit-in F3 (area L, John's call 3): what the report and the CSV hold is chosen and shown here (the
+        # highlighted night by default), so no save asks "that night or the whole series?".
+        self.save_scope_text = StringVar(value="")
+        self.save_scope_box = ttk.Combobox(g, textvariable=self.save_scope_text, state="readonly", width=34)
+        self.save_scope_box.bind("<<ComboboxSelected>>", lambda _e: self._save_scope_picked())
+        saves.add(self.save_scope_box, pad=14)
+        self.gate(self.save_scope_box, self._series_why, busy=False,
+                  tip="What Save AAVSO report and Save light-curve CSV hold: the night highlighted in the night "
+                      "table, or the whole series.")
         # 2.4.0 fit-in F2 (m505 m582 m608 m569 m615): the saves are greyed until there is a light curve
         self.gate(saves.add(ttk.Button(g, text="Save series", command=self.save_series), pad=14), self._series_why)
         self.gate(saves.add(ttk.Button(g, text="Save AAVSO report", style="Accent.TButton", command=self.save_aavso)),
                   self._series_why, busy=False)
+        # 2.4.0 fit-in F3 (area L, John's call 4): what WebObs would reject is said as soon as it is so
+        self.webobs_needs = StringVar(value="")
+        saves.add(ttk.Label(g, textvariable=self.webobs_needs, style="Hint.TLabel"))
+        for _var in (self.observer, self.star_id):
+            _var.trace_add("write", lambda *_: self._mark_webobs())
+        self._sync_save_marks()
         notes_box = ttk.Frame(g, style="Card.TFrame")
         ttk.Label(notes_box, text="Notes", style="Card.TLabel").pack(side=LEFT, padx=(0, 4))
         notes_entry = ttk.Entry(notes_box, textvariable=self.notes, width=30)
@@ -22959,6 +23050,115 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _series_why(self) -> str:
         return "" if self.observations else self.NO_SERIES
+
+    TOO_FEW_POINTS = "Need at least 8 usable points."
+
+    def _refit_why(self) -> str:
+        """2.4.0 fit-in F3 (F2-c): why Refit period cannot work. The count is the last period search's own
+        (_refresh_period), so the gate costs nothing and follows every change that refits."""
+        if not self.observations:
+            return self.NO_SERIES
+        count = getattr(self, "_usable_count", None)
+        return self.TOO_FEW_POINTS if count is not None and count < 8 else ""
+
+    # ---- 2.4.0 fit-in F3 (area L): the save scope on the Results row, and what WebObs would reject ---------------
+    def _scope_words(self, scope: str) -> str:
+        if scope == "night" and self.highlight_night:
+            return f"night {self.night_label(self.highlight_night, short=True, with_target=False)}"
+        n = len({o.night for o in self.observations})
+        return f"whole series ({n} night{'' if n == 1 else 's'})"
+
+    def _sync_save_scope(self) -> str:
+        """The scope box follows the night table: a newly highlighted night becomes the default (John's call 3),
+        no highlight means the whole series; a choice made in the box holds until the highlight changes."""
+        nights = {o.night for o in self.observations}
+        night = self.highlight_night if (self.highlight_night in nights and len(nights) >= 2) else None
+        key = (night, len(nights))
+        if key != getattr(self, "_save_scope_key", None):
+            self._save_scope_key = key
+            self._save_scope_choice = "night" if night else "series"
+        if not night:
+            self._save_scope_choice = "series"
+        values = ["Saving: " + self._scope_words("series")] + (["Saving: " + self._scope_words("night")] if night
+                                                               else [])
+        box = getattr(self, "save_scope_box", None)
+        if box is not None:
+            try:
+                box.configure(values=values)
+                self.save_scope_text.set(values[1 if self._save_scope_choice == "night" else 0]
+                                         if self.observations else "")
+            except Exception:
+                pass
+        return self._save_scope_choice
+
+    def _save_scope_picked(self):
+        try:
+            self._save_scope_choice = "night" if self.save_scope_box.current() == 1 else "series"
+        except Exception:
+            self._save_scope_choice = "series"
+        self._sync_save_scope()
+        try:
+            self.save_scope_box.selection_clear()
+        except Exception:
+            pass
+        self.status.set(f"Save AAVSO report and Save light-curve CSV now hold the "
+                        f"{self._scope_words(self._save_scope_choice)}.")
+
+    def webobs_rejects(self) -> list:
+        """What AAVSO WebObs would reject in a report saved now: [(key, words)], key 'observer' / 'star' / 'check'.
+        Advice (mixed filters, a comp without a real name) is not in this list: see _report_advice."""
+        out = []
+        if not self.observer.get().strip():
+            out.append(("observer", "the AAVSO observer code is empty (Input page)"))
+        if not self.star_id.get().strip():
+            out.append(("star", "the Star ID is empty (Input page)"))
+        # 2.2.5: two or more comps make an ensemble report, which AAVSO accepts only with a check star.
+        if len(self.active_comps or self.comps_used or []) > 1 and self.observations \
+                and not any(o.kmag is not None for o in self._usable()):
+            out.append(("check", "more than one comp and no check star (AAVSO takes an ensemble report only with "
+                                 "one)"))
+        return out
+
+    def _report_advice(self) -> list:
+        """Things worth knowing before an upload that WebObs does not reject: plain Log notes, never a question."""
+        out = []
+        if len({o.filt for o in self._usable()}) > 1:
+            out.append("AAVSO report: the series mixes filters; each row carries its own.")
+        # 2.2.14 (item 7): a comp without a real name (the run called it comp1) goes out as that placeholder.
+        given = getattr(self, "report_names", {}) or {}
+        for name in self.active_comps or self.comps_used or []:
+            if placeholder_star_name(given.get(name, name)) and not self.seq_auids.get(name):
+                out.append(f"AAVSO report: a comp has no star name (the report calls it “{name}”).")
+        return out
+
+    def _mark_webobs(self):
+        """An empty Observer code or Star ID box turns red as soon as it is empty while there is a light curve to
+        report (the Results row says "WebObs needs …"); nothing is marked before there is anything to send."""
+        try:
+            rejects = self.webobs_rejects() if self.observations else []
+        except Exception:
+            rejects = []
+        keys = {k for k, _w in rejects}
+        for key, entry in (("observer", getattr(self, "observer_entry", None)),
+                           ("star", getattr(self, "star_entry", None))):
+            if entry is None:
+                continue
+            try:
+                entry.configure(style="Invalid.TEntry" if key in keys else "TEntry")
+            except Exception:
+                pass
+        short = {"observer": "an observer code", "star": "a Star ID", "check": "a check star (more than one comp)"}
+        var = getattr(self, "webobs_needs", None)
+        if var is not None:
+            where = " (Input page)" if keys & {"observer", "star"} else ""
+            var.set("WebObs needs " + ", ".join(short[k] for k, _w in rejects) + where if rejects else "")
+
+    def _sync_save_marks(self):
+        try:
+            self._sync_save_scope()
+            self._mark_webobs()
+        except Exception:
+            traceback.print_exc()
 
     def _use_comps_why(self) -> str:
         if not self.observations:
@@ -23296,6 +23496,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.update_series_status()   # 2.2.15 (item 7): every change to the series ends in a redraw
         self.update_field_buttons()   # 2.4.0 (#101): a new night, reduction or series makes Save field image live
         self.update_trim_state()      # 2.4.0 step 8 (#89): Trim is live only with one night chosen
+        self._sync_save_marks()       # 2.4.0 fit-in F3 (area L): the scope box and the WebObs marks follow
         if self.out_canvas is None:
             return
         self._trim_axis = None
@@ -23472,6 +23673,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             cautions.append(old_model)
         period_lines = []
         self._period_range_fix = None   # 2.2.19 (#19)
+        self._period_verdict = None
         # 2.2: one short night cannot pin a period down; show the fold and periodogram grayed, with a note.
         span_used = (max(o.jd for o in usable) - min(o.jd for o in usable)) if usable else 0.0
         too_short = bool(self.period) and len(nights) == 1 and span_used < 2.0 * self.period["period_days"]
@@ -23493,7 +23695,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_title("Too short for a period search")
-            period_lines = [too_short_period_text(span_used, shortest)]
+            hopeless_text = too_short_period_text(span_used, shortest)
+            period_lines = [period_verdict_line(None, {"no_search": hopeless_text[0].lower() + hopeless_text[1:]})]
         elif self.period and usable:
             p = self.period["period_days"]
             epoch = self.period["epoch_jd"]
@@ -23539,34 +23742,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                            and not nights_say_no and not am_check.get("demoted"))
             ax.set_title(f"Folded  P = {p:.5f} d" if significant else f"Best peak (not significant)  P = {p:.5f} d")
             ax.grid(True, alpha=0.3)
-            period_lines = []
-            if not significant:
-                if too_short:
-                    period_lines.append("No reliable period yet: one short night covers under two cycles of the "
-                                        "best peak. Add nights.")
-                elif carried_now and not (math.isfinite(fap) and fap > 0.01):
-                    period_lines.append(f"No reliable period: the peak depends on {', '.join(carried_now)} alone "
-                                        "(often an offset between nights, not the star).")
-                elif am_check.get("demoted") and not (math.isfinite(fap) and fap > 0.01):
-                    period_lines.append("No reliable period: the peak follows the nights' airmass; it is not shown "
-                                        "to be the star.")
-                elif nights_say_no and not (math.isfinite(fap) and fap > 0.01):
-                    period_lines.append(f"No significant period: counting nights, the peak's false-alarm "
-                                        f"probability is {night_fap:.1e} (a night's points share offsets).")
-                else:
-                    in_night = [float(np.std(corrected[np.array([o.night == n for o in usable])]))
-                                for n in nights if sum(o.night == n for o in usable) >= 3]
-                    night_meds = [float(np.median(corrected[np.array([o.night == n for o in usable])]))
-                                  for n in nights if sum(o.night == n for o in usable) >= 3]
-                    per_point = f"scatter {np.median(in_night):.3f} mag per point" if in_night else ""
-                    n2n = f"{np.std(night_meds):.3f} mag night to night" if len(night_meds) > 1 else ""
-                    detail = ", ".join(x for x in (per_point, n2n) if x)
-                    period_lines.append("No significant period: the star looks constant at this precision"
-                                        + (f" ({detail})." if detail else "."))
-            period_lines += [
-                ("Best    " if significant else "Peak    ")
-                + f"{p:.5f} d ({p * 24:.2f} h)" + ("" if significant else "   (not significant)")
-                + ("   (one short night: not reliable)" if too_short else ""),
+            # 2.4.0 fit-in F3 (area J): one verdict row (Reliable / ⚠ Doubtful / None) leads the box; the rows
+            # below give the reasons in plain words. Filled in further down, when every check has been read.
+            verdict_checks = {"fap": fap, "too_short": too_short, "carried_by": carried_now,
+                              "night_fap": night_fap, "airmass_demoted": bool(am_check.get("demoted"))}
+            if not (math.isfinite(fap) and fap <= 0.01) and not too_short:
+                in_night = [float(np.std(corrected[np.array([o.night == n for o in usable])]))
+                            for n in nights if sum(o.night == n for o in usable) >= 3]
+                night_meds = [float(np.median(corrected[np.array([o.night == n for o in usable])]))
+                              for n in nights if sum(o.night == n for o in usable) >= 3]
+                per_point = f"scatter {np.median(in_night):.3f} mag per point" if in_night else ""
+                n2n = f"{np.std(night_meds):.3f} mag night to night" if len(night_meds) > 1 else ""
+                detail = ", ".join(x for x in (per_point, n2n) if x)
+                verdict_checks["constant"] = ("the star looks constant at this precision"
+                                              + (f" ({detail})" if detail else ""))
+            period_lines = [
+                "",   # the verdict row
+                ("Best    " if significant else "Peak    ") + f"{p:.5f} d ({p * 24:.2f} h)",
                 f"Power   {self.period['power']:.2f}" + (f"   FAP {fap:.1e}" if math.isfinite(fap) else "")
                 + (f" (points), {night_fap:.1e} counting nights ("
                    + ("from the nightly means" if (self.period.get("night_fap") or {}).get("method") == "nightly means"
@@ -23596,7 +23788,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 findable = [(lab, pp) for lab, pp in outside if pp <= data_span / 2.0]
                 if findable:
                     _o, fix = core.period_range_check(findable, lo_now, hi_now)
-                    period_lines.append(f"Range   ⚠ {what} outside the search ({lo_now:g}–{hi_now:g} d)")
+                    period_lines.append(f"Range   {what} outside the search ({lo_now:g}–{hi_now:g} d)")
+                    verdict_checks["outside"] = what
                     cautions.append(f"The search ({lo_now:g}–{hi_now:g} d) cannot find {what}: the best peak above is "
                                     "another period. Widen the Period search (the button in the Period box) and "
                                     "refit.")
@@ -23608,32 +23801,34 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                     "under two cycles, so no search can find it yet. Add nights.")
             if getattr(self, "_period_bins_note", ""):
                 period_lines.append(self._period_bins_note)
-            head = 0 if significant else 1
             # 2.3.1 (nit): on one short night the peak is already "not reliable"; a day alias or the search's edge
-            # adds nothing but ⚠ marks (the cautions below say what to do: add nights).
+            # adds nothing (the cautions below say what to do: add nights).
             if self.period.get("alias_text") and not too_short:
-                period_lines[head] += "   ⚠ near a day alias"
+                verdict_checks["alias"] = True
                 cautions.append(self.period["alias_text"])
             carried = self.period.get("carried_by") or []
             if carried:
-                period_lines.append("Check   ⚠ depends on " + ", ".join(carried) + " alone")
+                period_lines.append("Check   depends on " + ", ".join(carried) + " alone")   # (m524) plain
                 cautions.append(f"Leave {', '.join(carried)} out and this period disappears: one night carries it "
                                 "(often an offset between nights, not the star). Check that night before trusting it.")
             # 2.2.17 (item 10): nightly means that follow airmass, and what that does to the period.
             am_text = core.airmass_trend_text(am_trend)
             if am_text:
-                period_lines.append(f"Airmass ⚠ nightly means follow airmass ({am_trend['slope']:+.3f} mag per "
+                period_lines.append(f"Airmass nightly means follow airmass ({am_trend['slope']:+.3f} mag per "
                                     "airmass)" + ("; period demoted" if am_check.get("demoted") else ""))
                 cautions.append(am_text + (" " + am_check["why"] if am_check.get("why") else
                                            " The period survives with the trend taken out and without the "
                                            "high-airmass nights."))
             edge_text = core.period_edge_text(self.period) if not too_short else ""
             if edge_text:
-                period_lines[head] += "   ⚠ at the edge"
+                verdict_checks["edge"] = True
                 cautions.append(edge_text)
             if math.isfinite(baseline) and p > baseline / 1.5 and not too_short:
+                verdict_checks["short_span"] = True
                 cautions.append(f"The data span only {baseline:.2f} d, under 1.5 cycles of the best period; it is not "
                                 "pinned down yet.")
+            period_lines[0] = period_verdict_line(p, verdict_checks)
+            self._period_verdict = period_verdict(p, verdict_checks)
             marked = self._parse_marks()
             if marked:
                 freqs = np.asarray(self.period["freqs"])
@@ -23647,7 +23842,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         period_lines.append(f"Marked  {m:g} d (outside the search)")
         else:
             ax.set_title("Not enough points for a period")
-            period_lines = ["Needs at least 8 usable points."]
+            period_lines = [period_verdict_line(None, {"no_search": "needs at least 8 usable points"})]
         legacy = [n for n in nights if n in self.legacy_mixed]
         if legacy:
             cautions.append(f"Re-reduce {', '.join(legacy)}: reduced by an early version that binned before the debayer, so the channels were mixed "
@@ -24437,7 +24632,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                saved = self.series_not_saved(exc)
         nights = sorted({o.night for o in self.observations})
         self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}")
         self._warn_legacy(legacy, os.path.basename(path))
@@ -24471,8 +24666,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             words = self._save_series_words(ask=False)   # re-review 3: a night note never re-derives the series
         except OSError as exc:
-            messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
-            self.status.set(f"Note for {night} " + ("set" if text else "removed") + ", but the file was not saved.")
+            self.series_not_saved(exc)   # 2.4.0 fit-in F3 (m536): its Log line is the status line
             return
         verb = ("saved." if text else "removed.") if not words.startswith(" Not saved") else ("set." if text else "removed.")
         self.status.set(f"Note for {night} " + verb + words)
@@ -25620,16 +25814,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"{old} is {new} (same star): series name"
                      + (f" and {bw} {mag:.3f}" if mag is not None and new in self.comps_used
                         and not plan.get("band_mismatch") else "") + " used.")
-        for name, (t, s) in (plan.get("remag") or {}).items():
-            if name not in plan["renamed"].values():
-                self.log(f"{name}: the series' catalog {bw} {s:.3f}{(plan.get('sources') or {}).get(name, '')} used for this night, not tonight's {t:.3f} "
-                         f"(the night moves {s - t:+.3f} mag with it).")
+        # 2.4.0 fit-in F3 (m541/m543): the why is said once, in the line of the comp with the largest shift; the
+        # other comps go to the Log only, and the old "(The series' catalog magnitude wins …)" tail is gone.
+        remags = sorted(((name, t, s) for name, (t, s) in (plan.get("remag") or {}).items()
+                         if name not in plan["renamed"].values()), key=lambda r: -abs(r[2] - r[1]))
+        for k, (name, t, s) in enumerate(remags):
+            src = (plan.get("sources") or {}).get(name, "")
+            if k == 0:
+                self.log(f"{name}: the series' catalog {bw} {s:.3f}{src} is used for this night, not tonight's "
+                         f"{t:.3f} (the night moves {s - t:+.3f} mag), so every night stays on one zero point; Use "
+                         "comps… (Output page) can re-derive the series with other comps.")
+            else:
+                self.log(f"{name}: the series' catalog {bw} {s:.3f}{src} is used for this night, not tonight's "
+                         f"{t:.3f} (the night moves {s - t:+.3f} mag).", keep_status=True)
         if plan.get("check_mag"):
             t, s = plan["check_mag"]
             self.log(f"Check star {plan['check']}: the series' catalog {bw} {s:.3f}{(plan.get('sources') or {}).get(plan['check'], '')} used, not tonight's {t:.3f}.", keep_status=True)
-        if plan.get("remag") or plan.get("check_mag"):
-            self.log("  (The series' catalog magnitude wins, so every night stays on one zero point; Use comps… on the "
-                     "Output page can re-derive the whole series with other comps.)")
         # 2.2.14 (item 11): watch stars and spares measured under another name join the series' star.
         for kind, mapping, key in (("Watch star", plan.get("watch") or {}, "w"), ("Spare", plan.get("spares") or {}, "s")):
             for old, new in mapping.items():
@@ -26105,7 +26305,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                saved = self.series_not_saved(exc)
         self.status.set("Catalog magnitudes changed." + saved)
         # review: a uniform shift of a night cannot change its relative flux, so the transit fit is not redone.
         return True
@@ -26272,7 +26472,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                saved = self.series_not_saved(exc)
         self.status.set(f"Removed the night of {self.night_label(night, short=True)}. {len(self.observations)} points left.{saved}")
 
     @staticmethod
@@ -26393,10 +26593,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.status.set(f"✔ Period search {rng[0]:g}–{rng[1]:g} d done.")
 
     def refit_period(self):
+        """2.4.0 fit-in F3 (F2-c): no pop-up under 8 usable points: the Refit period button is greyed with that
+        reason, and the Period box says it (a check box or Apply that still lands here just redraws)."""
         if not self.observations:
             return
-        if len(self._usable()) < 8:
-            messagebox.showinfo(APP_TITLE, "Need at least 8 usable points.")
         self._refresh_period()
         self.draw_output()
 
@@ -26499,47 +26699,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def save_aavso(self):
         if not self.observations:
             return   # 2.4.0 fit-in F2 (m582): greyed without a light curve
-        problems = []
-        if not self.observer.get().strip():
-            problems.append("AAVSO observer code is empty")
-        if not self.star_id.get().strip():
-            problems.append("Star ID is empty")
-        good = core.suggest_star_name(self.star_id.get())
-        before = self.star_id.get()
-        rename = False
-        if good:
-            if messagebox.askyesno(APP_TITLE, f"The Star ID is \u201c{self.star_id.get().strip()}\u201d. AAVSO spells it "
-                                              f"\u201c{good}\u201d, and WebObs may not match the other spelling to the "
-                                              f"star.\n\nUse \u201c{good}\u201d in the report?"):
-                # 2.2.18 (item 21): the report and its file name use AAVSO's spelling, but the Star ID keeps it only
-                # when the report is saved; a cancel anywhere below puts the old name back.
-                rename = True
-                self.star_id.set(good)
-        saved = False
-        try:
-            saved = self._save_aavso_report(problems)
-        finally:
-            if rename and not saved:
-                self.star_id.set(before)
-            elif rename:
-                self.log(f"Star ID set to \u201c{good}\u201d (AAVSO's spelling), as used in the saved report.")
+        # 2.4.0 fit-in F3 (area L, John's call 6): AAVSO's spelling by itself, with one plain line (Look up does
+        # it; this is for a name no lookup has seen, such as one that came with a loaded series). No question.
+        self._aavso_spelling()
+        self._save_aavso_report()
 
-    def _save_aavso_report(self, problems: list) -> bool:
-        """The rest of save_aavso (2.2.18 item 21: split off so a cancel can undo the Star ID spelling). True when
-        the report was written."""
-        if len({o.filt for o in self._usable()}) > 1:
-            problems.append("the series mixes filters")
-        # 2.2.5: two or more comps make an ensemble report, which AAVSO accepts only with a check star.
-        if len(self.active_comps or self.comps_used or []) > 1 and not any(o.kmag is not None for o in self._usable()):
-            problems.append("ensemble report (more than one comp) without a check star; AAVSO requires one")
-        # 2.2.14 (item 7): a comp without a real name (the run called it comp1) goes out as that placeholder.
-        given = getattr(self, "report_names", {}) or {}
-        for name in self.active_comps or self.comps_used or []:
-            if placeholder_star_name(given.get(name, name)) and not self.seq_auids.get(name):
-                problems.append(f"a comp has no star name (the report would call it “{name}”)")
-        if problems:
-            if not ask_no(APP_TITLE, "Before you upload:\n  • " + "\n  • ".join(problems) + "\n\nSave the report anyway?"):
+    def _save_aavso_report(self) -> bool:
+        """The rest of save_aavso. True when the report was written.
+        2.4.0 fit-in F3 (area L, John's call 4): the gate is split. What WebObs will reject (webobs_rejects) is
+        asked once, default No; advice (_report_advice) is a plain Log note and stops nothing."""
+        rejects = [words for _key, words in self.webobs_rejects()]
+        if rejects:
+            if not ask_no(APP_TITLE, "WebObs will reject this file:\n  • " + "\n  • ".join(rejects)
+                          + "\n\nSave the report anyway?"):
                 return False
+        for line in self._report_advice():
+            self.log(line, keep_status=True)
         if not self._name_report_check():
             return False
         if not self._notes_check():   # 2.2.20 (#46)
@@ -26578,8 +26753,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._write_variables_settings(path, points)   # 2.3.1 (nit): Variables reports get a settings file too
         self._note_report(points, path, scope)
         self._field_image_with_report(path)   # 2.2.19 (#28)
-        self.saved_notice(path, "Upload with the AAVSO WebObs file tool after you check the observer code, chart, and "
-                                "comparison magnitude.")
+        self.saved_notice(path, f"It holds the {self._scope_words(scope)}. Upload with the AAVSO WebObs file tool "
+                                "after you check the observer code, chart, and comparison magnitude.")
         # 2.2.20 (item 4): with no AUID the status line says so once, before the upload offer
         warn = NO_AUID_WARNING if self._no_auid_needed() else ""
         if warn:
@@ -26691,6 +26866,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                              "never across a flip)")
             if setup.get("app_version"):
                 lines.append(f"Reduced with: SHOBS-P {setup['app_version']}")
+        # 2.4.0 fit-in F3 (area J): the Period box's verdict row, as on the page and in the saved plot (the period
+        # of the series on the page; ASCII, as the file is)
+        verdict = (getattr(self, "_summary_snapshot", None) or {}).get("period") or [""]
+        if str(verdict[0]).startswith("Period  "):
+            lines.append("Period verdict: " + str(verdict[0])[len("Period  "):].replace("⚠ ", "")
+                         .replace(" — ", " - ").replace("–", "-"))
         return lines
 
     def run_findings_lines(self) -> list:
@@ -27204,20 +27385,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     # ---- 2.2.3: save just the highlighted night, and duplicate-upload warnings --------------
     def _save_scope(self, what: str) -> str | None:
-        """'night' or 'series' for a Save, or None when canceled. Asks only when a night is highlighted in a
-        series of more than one night."""
-        nights = {o.night for o in self.observations}
-        if not self.highlight_night or self.highlight_night not in nights or len(nights) < 2:
-            return "series"
-        answer = messagebox.askyesnocancel(
-            APP_TITLE,
-            f"{self._night_label(self.highlight_night)} is highlighted.\n\n"
-            f"Yes: save the {what} for just that night.\n"
-            f"No: save the {what} for the whole series ({len(nights)} nights).\n"
-            "Cancel: don't save.")
-        if answer is None:
-            return None
-        return "night" if answer else "series"
+        """'night' or 'series' for a Save. 2.4.0 fit-in F3 (area L, John's call 3): read from the scope box on
+        the Results row (the highlighted night by default); no question."""
+        return self._sync_save_scope()
 
     def _night_label(self, night: str) -> str:
         return self.night_label(night)
@@ -27303,11 +27473,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # 2.2.19 (nit): written in a worker thread with a spinner (the window froze ~10 s: the CSV's frame-label
             # column reads the frame folders' headers); the whole series when no night is highlighted, as before.
             self._save_in_background(path, lambda: core.write_curve_csv(path, obs, notes, scint),
-                                     f"light-curve CSV ({len(obs)} points)")
+                                     f"light-curve CSV ({len(obs)} points, {self._scope_words(scope)})")
             self._last_csv_scope = scope   # 2.2.18 (item 18): the Transit page's fit CSV joins this numbered set
         return path or ""
 
-    def _save_in_background(self, path: str, write, what: str):
+    def _save_in_background(self, path: str, write, what: str, asked: bool = True):
         """2.2.19 (nit): run write() (no Tk, no on-screen figure) in a worker thread. A save that is done within a
         moment finishes as before; a longer one shows "Saving the …" on the busy bar (2.2.20, item 3: no text
         spinner) until a ✔ / ✖ line. The file is created at once, so the next save's numbering (_family_path)
@@ -27341,9 +27511,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         os.remove(path)   # the placeholder of a save that failed
                 except OSError:
                     pass
-                self.log(f"✖ Could not save {path}: {state['error']}")
-                self.status.set(f"✖ Could not save the {what}: {state['error']}")
-                messagebox.showerror(APP_TITLE, f"Could not save the {what}:\n{state['error']}")
+                # 2.4.0 fit-in F3 (m609/m610): one sentence (guarded_write's words) for the Log, the status line
+                # and, only for a save the user pressed, the box.
+                exc = state["error"]
+                why = (exc.strerror if isinstance(exc, OSError) else None) or str(exc) or type(exc).__name__
+                text = (f"✖ {os.path.basename(path)} not saved ({why}). Save it to another folder, or close the "
+                        "program that has the file open.")
+                self.log(text)
+                if asked:
+                    messagebox.showerror(APP_TITLE, text.lstrip("✖ "))
                 return
             took = time.monotonic() - state["t0"]
             self.log(f"Saved {path}")

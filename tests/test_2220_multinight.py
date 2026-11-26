@@ -322,7 +322,9 @@ class TestWindow(unittest.TestCase):
         self.assertTrue(statuses[2].startswith("⚠ No airmass in this file"))
         self.assertIn("No airmass in this file", w.night_note.get())
         self.assertTrue(w.time_only_button.winfo_manager())
-        self.assertTrue(w.prog_text.get().startswith("⚠"))
+        # 2.4.0 fit-in F3 (m677): plain, pointing at the note under the table (which has the ⚠)
+        self.assertNotIn("⚠", w.prog_text.get())
+        self.assertIn("fitted against time only: see the note under the table", w.prog_text.get())
         # the old CSV's Single-night Tc is filled by a quick fit
         self.assertTrue(self.pump(lambda: bool(self.tree_value(w, w.tree.get_children()[2], "single").strip()
                                                and "fitting" not in self.tree_value(w, w.tree.get_children()[2],

@@ -2297,9 +2297,17 @@ class TransitPage:
             self.draw(placeholder="Not fitted yet: press Fit transit.")
             return
         if meta.get("comp_noise"):
+            # 2.4.0 fit-in F3 (m802): a plain note on a detected transit, ⚠ only when the verdict is anything else;
+            # one wording (core.comp_noise_warning), in the Log once without taking the status line.
             flags = result.setdefault("flags", [])
-            flags.insert(1 if flags else 0, ("warn", meta["comp_noise"]))   # after the verdict line
-            self.app.log("Comps: " + meta["comp_noise"])
+            detected = (result.get("verdict") or {}).get("state") == "detected"
+            flags.insert(1 if flags else 0, ("info" if detected else "warn", meta["comp_noise"]))   # after the verdict
+            self.app.log(meta["comp_noise"], keep_status=True)
+        without = without_flagged_words(getattr(self, "result", None), result)
+        if without:
+            # 2.4.0 fit-in F3 (m779): the fit without the flagged frames is still at hand: no refit to compare
+            result["flags"] = [(lvl, text + " " + without if text.startswith("This fit includes ") else text)
+                               for lvl, text in result.get("flags") or []]
         if self.report is not None and self.report.get("time_note"):
             # 2.2.17 review: the report's time system, converted or not, in the notes and fit file.
             tn = self.report["time_note"]
@@ -2830,9 +2838,9 @@ class TransitPage:
         self.notes.configure(state="normal")
         self.notes.delete("1.0", END)
         for level, text in flags:
-            if level == "warn" and self._comp_link_wanted(text):
-                # 2.2.17 (item 4): a comp-choice caution links straight to Comp health.
-                self.notes.insert(END, "⚠ " + text + " ", level)
+            if self._comp_link_wanted(text):
+                # 2.2.17 (item 4): a comp-choice caution links straight to Comp health (F3: a plain one too).
+                self.notes.insert(END, ("⚠ " if level == "warn" else "• ") + text + " ", level)
                 self.notes.insert(END, COMP_LINK, (level, "link"))
                 self.notes.insert(END, "\n\n", level)
                 continue
@@ -4351,7 +4359,25 @@ def _norm(name) -> str:
 
 # 2.2.17 (item 4): the comp-choice cautions (photometry_core.comp_noise_warning, transit_core.leave_one_comp_out) and
 # the link the notes add after them.
-COMP_CAUTION_PREFIXES = ("The comparison stars set most of the noise", "Leaving out ", "The comp choice moves")
+COMP_CAUTION_PREFIXES = ("Comps limit the noise", "Leaving out ", "The comp choice moves")
+
+
+def without_flagged_words(previous, result) -> str:
+    """2.4.0 fit-in F3 (m779): "Without them: depth 1.52 %, Tc 2461000.51234." for a fit that includes flagged
+    frames, when `previous` is the fit of the same night without them (its points are this fit's less the flagged
+    ones, and the same planet); "" when that fit is not at hand."""
+    wf = (result or {}).get("with_flagged")
+    if not wf or not previous or previous.get("with_flagged"):
+        return ""
+    try:
+        if len(previous["t"]) != len(result["t"]) - int(wf["n"]):
+            return ""
+        if (previous.get("planet") or {}).get("name") != (result.get("planet") or {}).get("name"):
+            return ""
+        s = previous["summary"]
+        return f"Without them: depth {s['depth'][0] * 100:.2f} %, Tc {s['tc'][0]:.5f}."
+    except Exception:
+        return ""
 COMP_LINK = "→ Open Comp health…"
 _FIT_SERIAL = __import__("itertools").count(1)   # 2.2.17 review: one number per fit (id() can be reused)
 
@@ -4430,21 +4456,25 @@ def parse_clock(text):
     if not raw:
         return None, None
     t = raw.lower().replace("h", ":").replace(".", ":").replace(" ", "")
+
+    def bad():   # 2.4.0 fit-in F3 (x280/x292/x297): the one message, raised from one place
+        return ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+
     if ":" in t:
         hh, _, mm = t.partition(":")
         if not hh.isdigit() or (mm and (not mm.isdigit() or len(mm) != 2)):
-            raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+            raise bad()
         h, m = int(hh), int(mm or 0)
     elif t.isdigit() and len(t) <= 2:
         h, m = int(t), 0
     elif t.isdigit() and len(t) in (3, 4):
         h, m = int(t[:-2]), int(t[-2:])
     else:
-        raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+        raise bad()
     if h == 24 and m == 0:
         h = 0
     if not (0 <= h <= 23 and 0 <= m <= 59):
-        raise ValueError(f"'{raw}' is not a time; use HHMM or HH:MM (for example 2300 or 23:00)")
+        raise bad()
     return h, m
 
 

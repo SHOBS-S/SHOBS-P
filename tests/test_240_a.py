@@ -174,7 +174,11 @@ class TestOutputPages(unittest.TestCase):
         saves = app.out_saves.shown_widgets()
         words = [str(w.cget("text")) if w.winfo_class() == "TButton" else "/".join(
             str(c.cget("text")) for c in w.winfo_children() if c.winfo_class() == "TLabel") for w in saves]
-        self.assertEqual(words[:3], ["Save series", "Save AAVSO report", "Notes"])
+        # 2.4.0 fit-in F3 (area L): the row starts with the Saving box (what the report and the CSV hold), and the
+        # "WebObs needs …" line sits between Save AAVSO report and its Notes
+        self.assertEqual(saves[0].winfo_class(), "TCombobox")
+        self.assertIs(saves[0], app.save_scope_box)
+        self.assertEqual([w for w in words[1:5] if w], ["Save series", "Save AAVSO report", "Notes"])
         self.assertNotIn("Refit period", words)
         for gone in ("Load series", "Comp health…", "Use comps…", "Night notes…"):
             self.assertNotIn(gone, words)

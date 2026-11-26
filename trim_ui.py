@@ -306,8 +306,7 @@ class TrimMixin:
         try:
             return self._save_series_words()
         except OSError as exc:
-            messagebox.showwarning(TITLE, f"Could not save the series: {exc}")
-            return ""
+            return self.series_not_saved(exc)   # 2.4.0 fit-in F3 (m536): one message, with what to do
 
     def _trim_other_set(self, night):
         """Review N7: ("Stacked" or "Per frame", its points) for the night's point set that is NOT on screen now, when

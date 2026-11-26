@@ -2460,14 +2460,18 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     best = r["best"]
     period = r["period"]
     k = best["k"]
+    # 2.4.0 fit-in F3 (m756/m759): one "Shape" note. A fitted a/R* or b more than 3σ from the published value and
+    # "left free, Rp/R* goes elsewhere" are one symptom (the data do not hold the published shape): said once, ⚠
+    # only when the fit itself pulls away; the free-shape test alone is a plain note (added below, where the free
+    # fit is read).
+    shape_off = []
     for name, label in (("a_rs", "a/R*"), ("b", "b")):
         if name in r["priors"] and name in s:
             mean, sigma = r["priors"][name]
             dev = (s[name][0] - mean) / sigma
             if abs(dev) > 3:
-                flags.append(("warn", f"{label} = {s[name][0]:.3g} is {abs(dev):.1f}σ from the published "
-                                      f"{mean:.3g} ± {sigma:.2g}. The light curve pulls hard against the known shape: "
-                                      "look for a trend, a bad comp, or clouds."))
+                shape_off.append(f"{label} = {s[name][0]:.3g} is {abs(dev):.1f}σ from the published "
+                                 f"{mean:.3g} ± {sigma:.2g}")
     if best["b"] > 1.0 - k:
         flags.append(("info", f"Grazing geometry (b {best['b']:.2f} > 1 − Rp/R* {1 - k:.2f}): the planet's disk "
                               "crosses the star's edge, so size and impact parameter trade off and Rp/R* depends "
@@ -2507,12 +2511,18 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
             flags.append(("info", f"With the shape left free the fit is not constrained ({ff['unconstrained']}): "
                                   "this light curve alone cannot fix a/R* and b, so the Free shape column is left "
                                   "empty. The reported values use the published a/R* and b."))
-    elif ff:
+    free_goes = ""
+    if ff and not ff.get("unconstrained"):
         dk = ff["p"]["k"] - k
         if "k" in s and s["k"][1] > 0 and abs(dk) > 2 * s["k"][1]:
-            flags.append(("warn", f"With the shape left free, Rp/R* goes to {ff['p']['k']:.3f} (b {ff['p']['b']:.2f}, "
-                                  f"a/R* {ff['p']['a_rs']:.1f}). The data alone do not pin the shape; the reported "
-                                  "values lean on the published a/R* and b."))
+            free_goes = (f"left free, Rp/R* goes to {ff['p']['k']:.3f} (b {ff['p']['b']:.2f}, "
+                         f"a/R* {ff['p']['a_rs']:.1f})")
+    if shape_off:
+        flags.insert(0, ("warn", "Shape: " + "; ".join(shape_off + ([free_goes] if free_goes else []))
+                         + ". The light curve does not hold the published shape. First look at Comp health, then "
+                         "trim a cloudy end."))
+    elif free_goes:
+        flags.append(("info", f"Shape: {free_goes}; the reported values lean on the published a/R* and b."))
     t = r["t"]
     t14 = s.get("t14", (total_duration(period, best["a_rs"], best["b"], k), 0))[0]
     t1, t4 = best["tc"] - t14 / 2, best["tc"] + t14 / 2
@@ -2520,15 +2530,17 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
     post = (t > t4).sum()
     pre_min = (t1 - t.min()) * 1440 if pre else 0.0
     post_min = (t.max() - t4) * 1440 if post else 0.0
+    # 2.4.0 fit-in F3 (m760-m764): one "Coverage" note joins what applies (baseline, ingress / egress not observed,
+    # a gap), where a partial night used to get up to four ⚠ lines.
+    cover, cover_why, cover_tail = [], "", []
     if pre_min < 20 or post_min < 20:
         side = "before ingress" if pre_min < 20 else "after egress"
         if pre_min < 20 and post_min < 20:
             side = "before ingress or after egress"
         # 2.2.13: say when flagged frames (cloud) left out of the fit are what emptied that side.
-        why = excluded_baseline_text(r.get("excluded"), t1, t4, pre_min < 20, post_min < 20, pre_min, post_min)
-        flags.append(("warn", (why + " " if why else "") +
-                      f"Little or no baseline {side} ({pre_min:.0f} min before, {post_min:.0f} min after). "
-                      "A one-sided baseline lets a trend imitate depth or shift Tc."))
+        cover_why = excluded_baseline_text(r.get("excluded"), t1, t4, pre_min < 20, post_min < 20, pre_min, post_min)
+        cover.append(f"little or no baseline {side} ({pre_min:.0f} min before, {post_min:.0f} min after)")
+        cover_tail.append("A one-sided baseline lets a trend imitate depth or shift Tc.")
     ts = np.sort(t)
     inside = ts[(ts >= t1) & (ts <= t4)]
     if inside.size >= 2:
@@ -2540,18 +2552,25 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         if (ts > t4).any():
             seq = seq + [t4]
         big = float(np.diff(seq).max()) * 1440 if len(seq) > 1 else 0.0
-        if big > max(10.0, 0.2 * t14 * 1440):
-            flags.append(("warn", f"A {big:.0f}-minute gap in the data inside the transit. Ingress, egress, or the "
-                                  "bottom may be missing, so the shape and Tc are less certain."))
+        missing = False
         if not (ts < t1).any() and (inside.min() - t1) * 1440 > 10:
-            flags.append(("warn", f"The data start {(inside.min() - t1) * 1440:.0f} min after the fitted ingress: "
-                                  "ingress was not observed."))
+            cover.append(f"ingress not observed (data start {(inside.min() - t1) * 1440:.0f} min after it)")
+            missing = True
         if not (ts > t4).any() and (t4 - inside.max()) * 1440 > 10:
-            flags.append(("warn", f"The data end {(t4 - inside.max()) * 1440:.0f} min before the fitted egress: "
-                                  "egress was not observed."))
-    else:
-        flags.append(("warn", "Almost no points inside the predicted transit window: the transit was missed "
-                              "(clouds, a gap, or the ephemeris)."))
+            cover.append(f"egress not observed (data end {(t4 - inside.max()) * 1440:.0f} min before it)")
+            missing = True
+        if big > max(10.0, 0.2 * t14 * 1440):
+            cover.append(f"a {big:.0f}-min gap inside the transit")
+            missing = True
+        if missing:
+            cover_tail.append("The shape and Tc are less certain.")
+    elif (r.get("verdict") or {}).get("state") != "none":
+        # (m764) with the verdict "no transit measured" this adds nothing: the verdict says it
+        cover.append("almost no points inside the predicted transit window: the transit was missed (clouds, a gap, "
+                     "or the ephemeris)")
+    if cover:
+        flags.append(("warn", (cover_why + " " if cover_why else "") + "Coverage: " + "; ".join(cover) + "."
+                      + (" " + " ".join(cover_tail) if cover_tail else "")))
     step = (r.get("verdict") or {}).get("step")
     if step and not step["explains"]:
         flags.append(("info", f"Step check: a {abs(step['step']) * 100:.1f}% jump at the {step['gap_min']:.0f}-minute "
@@ -2628,12 +2647,8 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
         flags.append(("info", f"Meridian flip: the step test (with/without a step, ΔBIC) could not be done "
                               f"({r['flip_gate_error']}), so this fit has no step term. If the light curve shows a "
                               "jump at the flip, fit again or check the frames around it."))
-    if ft and not ft.get("kept"):
-        # 2.3.0 (#8): the step was tested (BIC) and left out: the fit has no step term.
-        rel_h = (ft["t_flip"] - best["tc"]) * 24
-        flags.append(("info", f"Meridian flip at BJD_TDB {ft['t_flip']:.5f} ({rel_h:+.2f} h from mid-transit): "
-                              + flip_step_line(r) + f". The step is kept only at ΔBIC {FLIP_STEP_DBIC:g} or more, so "
-                              "this fit has no step term."))
+    # 2.4.0 fit-in F3 (m775): a step that was tested (BIC) and not needed is good news; the result line and the
+    # table's "Flip step not needed: …" row say it, so it is no longer repeated among the cautions.
     if flip:
         rel_h = (flip["t_flip"] - best["tc"]) * 24
         st, se = flip["step"]
@@ -2647,29 +2662,32 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                      f"(least squares); ΔBIC {ns['dbic']:+.0f} "
                      + ("in favor of the step." if ns["dbic"] >= 0 else "against the step."))
         flags.append(("info", text))
+        # 2.4.0 fit-in F3 (m776/m778): on a detected transit the verdict line gives these two reasons itself
+        # ("depth unreliable …" / "Inconclusive … the flip step"), so they are not repeated as ⚠ notes. With
+        # another verdict (which does not carry them) they stay, as plain notes.
+        in_verdict = (r.get("verdict") or {}).get("state") == "detected"
         c = flip.get("corr")
         if c is not None and math.isfinite(c):
             if abs(c) > FLIP_CORR_WARN:
-                flags.append(("warn", f"Step–depth correlation {c:+.2f} (MCMC): the step and the depth trade off; "
-                                      "depth not measurable from this night."))
+                if not in_verdict:
+                    flags.append(("info", f"Step–depth correlation {c:+.2f} (MCMC): the step and the depth trade "
+                                          "off; depth not measurable from this night."))
             else:
                 flags.append(("info", f"Step–depth correlation {c:+.2f} (MCMC); its uncertainty is part of the depth's."))
-        if not flip.get("baseline_ok", True):
+        if not flip.get("baseline_ok", True) and not in_verdict:
             sd = flip["sides"]
-            flags.append(("warn", f"Out-of-transit baseline on each side of the flip: {sd['before'][0]:.0f} min "
+            flags.append(("info", f"Out-of-transit baseline on each side of the flip: {sd['before'][0]:.0f} min "
                                   f"({_frames(sd['before'][1])}) before, {sd['after'][0]:.0f} min "
                                   f"({_frames(sd['after'][1])}) after. Each side needs at least {FLIP_MIN_OOT_MIN:.0f} min and "
-                                  f"{FLIP_MIN_OOT_FRAMES} frames to tell the step from the depth, so "
-                                  + ("neither the depth nor the timing is trusted (the step trades off against both)."
-                                     if FLIP_NO_BASELINE_VERDICT == "inconclusive" else
-                                     "the depth is not trusted; the timing is.")))
+                                  f"{FLIP_MIN_OOT_FRAMES} frames to tell the step from the depth."))
     for bf in r.get("bound_flags") or []:
         flags.append((bf.get("level", "warn"), bf["text"]))   # 2.2.19 (#31); b against 0 is a note (review)
     wf = r.get("with_flagged")
     if wf:
-        flags.append(("warn", f"This fit includes {wf['n']} frame{'s' if wf['n'] != 1 else ''} flagged {wf['label']}, "
-                              f"with their error bars ×{wf['factor']:g}. Compare it with the fit without them (Fit "
-                              "transit) before reporting it."))
+        # 2.4.0 fit-in F3 (m779): plain (the user pressed Refit with flagged frames, and the verdict line starts
+        # with it). The page adds "Without them: depth …, Tc …" when that fit is still at hand (transit_ui).
+        flags.append(("info", f"This fit includes {wf['n']} frame{'s' if wf['n'] != 1 else ''} flagged {wf['label']}, "
+                              f"error bars ×{wf['factor']:g}."))
     return flags
 
 
