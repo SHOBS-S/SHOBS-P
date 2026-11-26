@@ -28,8 +28,10 @@ example **Local time (UTC−4)** before the US change on 1 Nov 2026 and **Local 
 and files do not depend on the time zone.
 
 > **Tip:** If your capture program writes the site into the FITS headers (keywords such as `SITELAT` and `SITELONG`),
-> SHOBS-P offers to fill the Site box from them when you press **Scan folders**. It always asks before saving a
-> header's site as yours, because the frames may come from someone else's telescope.
+> SHOBS-P uses that site for those frames when you press **Scan folders** and your Site boxes are empty, and the
+> **Setup for these frames** box on the Input page says so (from 2.4.0). Nothing is saved as yours until you press
+> **Save as my setup** there, because the frames may come from someone else's telescope. Press it once on your own
+> frames and the site, optics and mount are yours from then on (SHOBS-SCHED reads them too).
 
 ## Enter your optics
 
@@ -65,8 +67,10 @@ Leave **Include scintillation (atmospheric twinkling) in the error bars** ticked
 real scatter, especially for bright stars and short exposures.
 
 > **Tip:** A new install starts with **Focal length (mm)** and **Pixel size (µm)** empty. If your capture program
-> writes `FOCALLEN` and `XPIXSZ` into the headers, **Scan folders** fills them in while the boxes are empty, and asks
-> if your own values differ from the header's. If your headers don't have them, type them before you solve: with
+> writes `FOCALLEN` and `XPIXSZ` into the headers, **Scan folders** fills them in for these frames while the boxes are
+> empty, and the **Setup for these frames** box lists any of your own values that differ from the header's. A value
+> filled from a header is not saved until you press **Save as my setup** (from 2.4.0; before, it was saved without
+> asking); a value you type is saved as always. If your headers don't have them, type them before you solve: with
 > neither the boxes nor a plate solution in the header, the solve stops and says the boxes are empty. Once set, both are
 > remembered. Wrong values are the most common reason a solve fails, so check them once. Optics read from a loaded
 > series or from another telescope's frames are never saved as yours.

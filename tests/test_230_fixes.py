@@ -391,7 +391,9 @@ class TestStackFixesInApp(unittest.TestCase):
             app.tk.call("tk", "scaling", old)
 
     def test_darkflat_notes_cached(self):
-        """Fix 9: the dark-flat note reads the folders' headers once, then again only when a folder changes."""
+        """Fix 9: the dark-flat note reads the folders' headers once, then again only when a folder changes.
+        2.4.0 fit-in F3 (area B): _darkflat_notes is gone; the calibration plan (_calibration_plan) keeps the same
+        cache for every box, and its short warning carries the words."""
         app = self.app
         tmp = tempfile.mkdtemp()
         try:
@@ -406,15 +408,26 @@ class TestStackFixesInApp(unittest.TestCase):
                     fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16), header=h).writeto(
                         os.path.join(folder, f"{typ.lower()}_{i}.fits"))
             app.bias_dir.set("")
+            app.dark_dir.set("")
+            lt = os.path.join(tmp, "light")
+            os.makedirs(lt)
+            h = fits.Header()
+            h["EXPTIME"] = 60.0
+            h["IMAGETYP"] = "LIGHT"
+            fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16), header=h).writeto(os.path.join(lt, "light_0.fits"))
+            app._loading_meta = True   # the box only: no folder-picked checks (they would ask about the lights)
+            app.light_dir.set(lt)
+            app._loading_meta = False
+            app.__dict__.pop("_plan_cache", None)
             app.darkflat_dir.set(df)
             app.flat_dir.set(fl)
             real = core.read_header
             calls = []
             with mock.patch.object(core, "read_header", side_effect=lambda p, *a, **k: calls.append(p) or real(p, *a, **k)):
-                a = app._darkflat_notes(None, None)
+                a = app._calibration_plan()["short"]
                 n1 = len(calls)
                 self.assertGreater(n1, 0)
-                b =app._darkflat_notes(None, None)
+                b = app._calibration_plan()["short"]
                 self.assertEqual(len(calls), n1)
                 self.assertEqual(a, b)
                 self.assertTrue(any("Dark flats 1 s, flats 2 s" in t for t in a), a)
@@ -422,11 +435,14 @@ class TestStackFixesInApp(unittest.TestCase):
                 h["EXPTIME"] = 1.0
                 fits.PrimaryHDU(np.zeros((8, 8), dtype=np.uint16), header=h).writeto(os.path.join(fl, "zz.fits"))
                 os.utime(fl, ns=(time.time_ns() + 10 ** 9, time.time_ns() + 10 ** 9))
-                app._darkflat_notes(None, None)
+                app._calibration_plan()
                 self.assertGreater(len(calls), n1)
         finally:
             app.darkflat_dir.set("")
             app.flat_dir.set("")
+            app._loading_meta = True
+            app.light_dir.set("")
+            app._loading_meta = False
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_restack_keeps_per_frame_points(self):

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import queue
+import shutil
 import sys
 import threading
 import time
@@ -914,7 +915,8 @@ def exoclock_upload_text(jd_utc, flux, err, planet: str, meta: dict) -> str:
 
 
 def exoclock_info_text(planet: str, meta: dict, upload_name: str) -> str:
-    """2.2.20 (#47): ExoClock_<planet>_<date>_info.txt (step 6c; ExoClock_info.txt before): what to pick on ExoClock's
+    """2.2.20 (#47): ExoClock_info.txt (2.4.0 fit-in F3, #113: always this name, inside the save's own folder, beside
+    its upload file; ExoClock_<planet>_<date>_info.txt loose in the Output folder before): what to pick on ExoClock's
     upload form for the file just saved."""
     lines = [f"ExoClock upload form, for {upload_name} (SHOBS-P {meta.get('version', '')})",
              "",
@@ -935,6 +937,17 @@ def exoclock_name(planet: str, jd_first: float) -> str:
     day = datetime.fromtimestamp((float(jd_first) - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
     safe = "".join(ch if ch not in '<>:"/\\|?* ' else "_" for ch in exoclock_planet(planet)) or "planet"
     return f"ExoClock_{safe}_{day}.txt"
+
+
+EXOCLOCK_INFO_NAME = "ExoClock_info.txt"
+
+
+def exoclock_folder_name(planet: str, jd_first: float, obscode: str = "") -> str:
+    """2.4.0 fit-in F3 (#113): the folder Save for ExoClock… writes, named like the ExoFOP package's:
+    ExoClock_<planet>_<YYYYMMDD>_<observer code, or 'obs'>_SHOBS-P."""
+    stem = os.path.splitext(exoclock_name(planet, jd_first))[0]
+    code = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(obscode or "").strip()) or "obs"
+    return f"{stem}_{code}_SHOBS-P"
 
 
 def field_compass(vec_n, vec_e, w: int, h: int):
@@ -1796,6 +1809,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.show_apertures = BooleanVar(value=True)    # 2.2.5: aperture and sky ring around the marked stars
         self.candidates_only = BooleanVar(value=False)  # 2.2.5: Discovery: only scan candidates and watch stars
         self._own_setup = None                 # your site/optics/camera, set aside while using MicroObservatory frames
+        # 2.4.0 fit-in F3 (A1): what the "Setup for these frames" strip says (None: no strip), the values a header
+        # put in a box that are not saved as yours, and this session's "Use my own setup" answers per Lights folder
+        self._frames_setup = None
+        self._header_held = {}
+        self._frames_choice_s = {}
+        self._frames_mount = None
+        self._sensor_conflict = None           # A2: a color mask seen while the Bayer pattern is MONO
+        self._sensor_conflict_answered = None
         self.scale_approx = False              # the plate scale is only approximate: widen Solve's search
         self.app_version = APP_VERSION
         self.elevation = StringVar(value=str(self.settings.get("site_elevation", "")))
@@ -3104,6 +3125,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         self._counts[key].set(self._count_text(key, path))
         self.status.set(f"{key}: {self._counts[key].get()}")
+        if key == "Lights":
+            self._update_setup_strip()   # 2.4.0 fit-in F3 (A1): the strip is about the lights that were scanned
         if key in ("Lights", "Dark"):
             self.after(50, lambda k=key: self._frames_folder_picked(k))   # 2.2.19 (#20)
         elif key in ("Bias", "Dark flats", "Flat"):
@@ -3141,6 +3164,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 return
             if not (os.path.isdir(path) or (key in CAL_KEYS and os.path.isfile(path))):
                 self._counts[key].set("no such folder")
+                # 2.4.0 fit-in F3 (F2-a): the last good path is forgotten, so typing it back counts it again (the
+                # label stayed at "no such folder" for a path that exists)
+                self._folder_counted[key] = None
                 return
             self._folder_chosen(variable, key)
 
@@ -3201,6 +3227,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         2340) never reach the file (or SHOBS-SCHED)."""
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return   # a borrowed site (MicroObservatory frames) or a series file's site is not the user's own
+        if self._header_held_now(key):
+            return   # 2.4.0 fit-in F3 (A1): put there by a header, saved only by Save as my setup
         if self._site_unconfirmed():
             self._typed_site_pending = True
             self.__dict__.setdefault("_typed_held", set()).add(key)
@@ -3224,6 +3252,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.__dict__.setdefault("_site_after", {}).pop(key, None)
         if getattr(self, "_own_setup", None) is not None or getattr(self, "_loading_meta", False):
             return
+        if self._header_held_now(key):
+            return   # 2.4.0 fit-in F3 (A1)
         if self._site_unconfirmed():
             self._typed_site_pending = True
             self.__dict__.setdefault("_typed_held", set()).add(key)
@@ -3451,6 +3481,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._own_setup = own
         self._typed_held = set()
         self._typed_borrow = ""   # tied to the Lights folder at the next Scan folders (_header_setup)
+        self._frames_setup = {"kind": "typed", "folder": ""}   # 2.4.0 fit-in F3 (A1): the strip says so
+        self._update_setup_strip()
         self.log("Site typed for these frames only: used for them, not saved as yours. Your own site, optics and "
                  "camera settings come back when you scan a folder of your own lights."
                  + (" Not kept as yours either (typed since your setup was last confirmed): " + "; ".join(undone)
@@ -3538,6 +3570,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         if key != "observer_code" and getattr(self, "_own_setup", None) is not None:
             return
+        if key != "observer_code" and self._header_held_now(key):
+            return   # 2.4.0 fit-in F3 (A1): a header's value is saved only by Save as my setup
         if key != "observer_code" and self._setup_saving_held(key):
             return   # 2.3.2 (item 1): saved with the typed site on Yes, never on No
         try:
@@ -3566,6 +3600,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _store_own_value(self, key: str, value):
         """2.2.18 (item 11, review nit): the debounced save of _remember_own_value."""
         self.__dict__.setdefault("_own_value_after", {}).pop(key, None)
+        if key != "observer_code" and self._header_held_now(key):
+            return   # 2.4.0 fit-in F3 (A1)
         if key != "observer_code" and (getattr(self, "_own_setup", None) is not None or self._setup_saving_held(key)):
             return   # 2.3.2 (item 1): a site was typed (or borrowed) during the pause
         if self.settings.get(key) != value:
@@ -3913,10 +3949,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return info
 
     def _save_header_mount(self, lights=None) -> str | None:
-        """2.2.19 (nit): the mount your own lights' headers name for sure is saved to the settings file (for
-        SHOBS-SCHED) and set in the Mount box, when no mount of yours is saved yet. Never from a borrowed setup
-        (another site's frames, MicroObservatory) or while a series is loaded; a saved choice is never overwritten."""
-        if "mount" in self.settings or self._own_setup is not None or getattr(self, "_loading_meta", False):
+        """2.2.19 (nit) saved the mount your own lights' headers name for sure as yours, without asking. 2.4.0 fit-in
+        F3 (A1, John's call 1: nothing saved silently): it is only noted for the "Setup for these frames" strip, whose
+        Save as my setup button saves it. These lights are measured with the headers' mount either way (_mount_info).
+        Returns the mount noted (None when the headers are not sure of one)."""
+        self._frames_mount = None
+        if getattr(self, "_loading_meta", False):
             return None
         try:
             d = self._mount_info(lights)["detected"]
@@ -3925,12 +3963,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         mount = d.get("mount")
         if not d.get("sure") or mount not in core.MOUNT_LABELS:
             return None
-        self.settings["mount"] = mount
-        self._save_settings()
-        if self._mount_choice_key() != mount:
-            self.mount_choice.set(core.mount_label(mount))
-        self.log(f"Mount: {core.mount_label(mount)} from the lights' headers ({d.get('why')}), saved as yours (change "
-                 "it in the Optics box if that is wrong).")
+        self._frames_mount = {"mount": mount, "why": str(d.get("why") or ""), "folder": self.light_dir.get().strip()}
         return mount
 
     def _update_mount_hint(self, lights=None, log: bool = False):
@@ -3986,6 +4019,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         """2.2.2: the aperture and the scintillation switch are remembered between sessions."""
         # 2.2.9: a borrowed aperture (another telescope's frames) is not the user's own: not remembered.
         if (getattr(self, "_own_setup", None) is None and not getattr(self, "_loading_meta", False)   # 2.3.2 review
+                and not self._header_held_now("aperture_mm")   # 2.4.0 fit-in F3 (A1): a header's value is not yours
                 and not self._setup_saving_held("aperture_mm")):   # 2.3.2 item 1
             self.settings["aperture_mm"] = self.aperture_mm.get().strip()
             self.settings.pop("aperture_cm", None)
@@ -4354,8 +4388,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         path = core.tidy_save_name(raw) if raw else ""
         if path and path != raw and os.path.exists(path):
             free = self._unique_path(path)
+            # 2.4.0 fit-in F3 (m036): one line (the Log line is the status line too)
             self.log(f"{os.path.basename(path)} already exists: saved as {os.path.basename(free)} instead.")
-            self.status.set(f"{os.path.basename(path)} already exists: saved as {os.path.basename(free)} instead.")
             path = free
         if path:
             self._result_dir = os.path.dirname(os.path.abspath(path))
@@ -4598,7 +4632,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def save_exoclock(self) -> str:
         """2.2.20 (#47): the shown transit fit as ExoClock's upload file (ExoClock_<planet>_<YYYYMMDD>.txt: JD_UTC at
         mid-exposure, relative flux not detrended, error; the frames the fit used, as the AAVSO exoplanet report) and
-        ExoClock_<planet>_<date>_info.txt beside it (what to pick on the form). Returns the upload file's path ('' if
+        ExoClock_info.txt beside it (what to pick on the form), both in their own folder
+        ExoClock_<planet>_<YYYYMMDD>_<obscode>_SHOBS-P (2.4.0 fit-in F3, #113). Returns the upload file's path ('' if
         none)."""
         tp = getattr(self, "transit_page", None)
         r = getattr(tp, "result", None) if tp is not None else None
@@ -4665,30 +4700,53 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not jd.size:
             messagebox.showinfo(APP_TITLE, "ExoClock file not saved: no frames are left once the flagged ones are out.")
             return ""
+        # 2.4.0 fit-in F3 (#113, John 19 Nov: he uploaded the ExoFOP package's _fit.txt to ExoClock by mistake, the
+        # ExoFOP folder being the only one in the Output folder): the ExoClock files get their own folder too,
+        # ExoClock_<planet>_<date>_<obscode>_SHOBS-P, holding the upload file and ExoClock_info.txt. A second save of
+        # the same night is ..._2. Written as <folder>.part and renamed, so a half-written folder never has the name.
+        folder = self.output_directory("Folder for the ExoClock files", parent=self)
+        if not folder:
+            return ""
         name = exoclock_name(planet, float(np.nanmin(jd)))
-        path = self.output_path(name, title="Save for ExoClock", defaultextension=".txt",
-                                filetypes=[("Text", "*.txt")], parent=self)
-        if not path:
-            return ""
-        # step 6c (item d): named after its upload file (ExoClock_TOI-2046b_20260903_info.txt), so each pairs with
-        # its own upload; one ExoClock_info.txt for every planet piled up as _2, _3 … in a night's folder
-        info_path = self._unique_path(os.path.splitext(path)[0] + "_info.txt")
+        base = exoclock_folder_name(planet, float(np.nanmin(jd)), meta.get("obscode") or "")
+        final, k = os.path.join(folder, base), 2
+        while os.path.exists(final) or os.path.exists(final + ".part"):
+            final, k = os.path.join(folder, f"{base}_{k}"), k + 1
+        part = final + ".part"
         try:
-            with core.AsciiWriter(path, newline="\n") as fh:
+            os.makedirs(part)
+            with core.AsciiWriter(os.path.join(part, name), newline="\n") as fh:
                 fh.write(exoclock_upload_text(jd, flux, err, planet, meta))
-            with core.AsciiWriter(info_path, newline="\n") as fh:
-                fh.write(exoclock_info_text(planet, meta, os.path.basename(path)))
+            with core.AsciiWriter(os.path.join(part, EXOCLOCK_INFO_NAME), newline="\n") as fh:
+                fh.write(exoclock_info_text(planet, meta, name))
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"Could not save the ExoClock file:\n{exc}")
+            shutil.rmtree(part, ignore_errors=True)
+            messagebox.showerror(APP_TITLE, f"Could not save the ExoClock files:\n{exc}")
             return ""
-        self.log(f"ExoClock file: {path} ({len(r['t'])} frames, JD_UTC mid-exposure, flux not detrended); "
-                 f"form notes: {info_path}")
+        renamed = False
+        for k in range(8):   # Windows: a file just written can still be held open (antivirus, indexer)
+            try:
+                os.replace(part, final)
+                renamed = True
+                break
+            except OSError:
+                import time as _time
+                _time.sleep(0.25 * (k + 1))
+        if not renamed:
+            self.log(f"✖ ExoClock files written to {part}, but the folder could not be renamed to "
+                     f"{os.path.basename(final)} (a file in it was still open). Rename the folder yourself, or press "
+                     "Save for ExoClock… again.")
+            return ""
+        path = os.path.join(final, name)
+        self._result_dir = folder
+        self.log(f"ExoClock folder: {final} ({len(jd)} frames, JD_UTC mid-exposure, flux not detrended)",
+                 keep_status=True)
         try:
             self._remember_report("exoclock", tp._fit_nights(), path)
         except Exception:
             pass
-        self.status.set(self._series_note(f"✔ Saved. On the form, pick Mid-exposure ({os.path.basename(path)}; what "
-                                          f"to pick is in {os.path.basename(info_path)})."))   # 2.2.21 (nit j)
+        self.status.set(self._series_note(f"✔ Saved {os.path.basename(final)}: upload the .txt inside (what to pick "
+                                          f"on the form is in {EXOCLOCK_INFO_NAME})."))   # 2.2.21 (nit j)
         try:
             tp._series_hint_after_save()   # 2.2.21 (#44): Fit the series' nights… when the series has 2+ nights
         except Exception:
@@ -5143,8 +5201,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         nav = ttk.Frame(card, style="Card.TFrame")
         nav.pack(fill=X, side="bottom", pady=(12, 0))
-        ttk.Button(nav, text="Scan folders", command=self.scan_folders).pack(side=LEFT)
-        ttk.Button(nav, text="Try it with sample data…", command=self.write_demo).pack(side=LEFT, padx=8)
+        # 2.4.0 fit-in F3 (F2-h): both are greyed while a job runs, like every other button that starts something
+        # (they stayed live under the busy lock). Calibrate calls scan_folders() itself, not through the button.
+        self.scan_folders_button = ttk.Button(nav, text="Scan folders", command=self.scan_folders)
+        self.scan_folders_button.pack(side=LEFT)
+        self.gate(self.scan_folders_button, None, busy=True)
+        self.demo_button = ttk.Button(nav, text="Try it with sample data…", command=self.write_demo)
+        self.demo_button.pack(side=LEFT, padx=8)
+        self.gate(self.demo_button, None, busy=True)
         ttk.Button(nav, text="Next: Blink", command=lambda: self.show_step(STEP_BLINK)).pack(side=RIGHT)
 
         # Frames
@@ -5173,10 +5237,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                                                         int(300 * ui_scale(self))))
                                                for h in (out_hint, df_hint)], add="+")
         # 2.2.19 (#20): darks and lights of different exposures, said here before Calibrate.
+        # 2.4.0 fit-in F3 (area B, John's call 7): the calibration plan, plain and always there once the folders are
+        # filled; the line under it (⚠ / ✖) only when something is wrong. Neither takes room while it is empty.
+        plan_box = ttk.Frame(frames, style="Card.TFrame")
+        plan_box.pack(fill=X)
+        self._plan_holder = plan_box
+        self.plan_note = StringVar(value="")
+        self.plan_label = ttk.Label(plan_box, textvariable=self.plan_note, style="Hint.TLabel",
+                                    wraplength=text_wrap_px(frames, 120), justify=LEFT)
         self.dark_exposure_note = StringVar(value="")
-        self.dark_exposure_label = ttk.Label(frames, textvariable=self.dark_exposure_note, style="Warn.TLabel",
+        self.dark_exposure_label = ttk.Label(plan_box, textvariable=self.dark_exposure_note, style="Warn.TLabel",
                                              wraplength=text_wrap_px(frames, 120), justify=LEFT)
-        self.dark_exposure_label.pack(anchor=W)
+        frames.bind("<Configure>", lambda e: [h.configure(wraplength=max(int(e.width) - int(10 * ui_scale(self)),
+                                                                        int(300 * ui_scale(self))))
+                                               for h in (self.plan_label, self.dark_exposure_label)], add="+")
         # 2.4.0 (#111): what a change of camera emptied and reset, in plain words, while those lights are in the box
         self.camera_note = StringVar(value="")
         self.camera_note_label = ttk.Label(frames, textvariable=self.camera_note, style="Hint.TLabel",
@@ -5318,8 +5392,32 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # comps on the Photometry page and again at Save AAVSO, each with an Edit.
         report.columnconfigure(1, weight=1)
 
+        # 2.4.0 fit-in F3 (A1, John's call 1): "Setup for these frames": what site and optics Scan folders took for
+        # these lights and from where, with the buttons that change it. Not modal; shown once lights are scanned.
+        self.setup_group = self._group(right, "Setup for these frames")
+        self.setup_strip_text = StringVar(value="")
+        self.setup_strip_label = ttk.Label(self.setup_group, textvariable=self.setup_strip_text, style="Card.TLabel",
+                                           wraplength=text_wrap_px(right, 55), justify=LEFT)
+        self.setup_strip_label.pack(anchor=W, fill=X)
+        self.setup_group.bind("<Configure>", lambda e: (self.setup_strip_label.configure(
+            wraplength=max(int(e.width) - int(30 * ui_scale(self)), int(200 * ui_scale(self)))),
+            self._setup_buttons_layout(int(e.width))), add="+")
+        self._setup_button_row = ttk.Frame(self.setup_group, style="Card.TFrame")
+        self._setup_button_row.pack(anchor=W, pady=(6, 0))
+        self.setup_buttons = {}
+        for _name, _text, _cmd, _why in (
+                ("save", "Save as my setup", self._setup_save_as_mine, self._setup_save_why),
+                ("own", "Use my own setup", self._setup_use_own, None),
+                ("frames", "Use the frames' setup", self._setup_use_frames, None),
+                ("header", "Use the header values", self._setup_use_header, None)):
+            _b = ttk.Button(self._setup_button_row, text=_text, command=_cmd)
+            self.gate(_b, _why, busy=True)
+            self.setup_buttons[_name] = _b
+        for _var in (self.lat, self.lon, self.elevation, self.focal_mm, self.pixel_um, self.aperture_mm):
+            _var.trace_add("write", lambda *_a: self._setup_strip_soon())
         # 2.2.9: Site and Optics are two boxes.
         site = self._group(right, "Site")
+        self._site_group = site
         site.pack(fill=X, pady=(10, 0))
         _site_entries = (
             self._field(site, 0, "Latitude (°, north +)", self.lat, width=12),
@@ -5998,9 +6096,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         job is running (nothing changed; 2.2.19 r2: S9)."""
         if self.busy:
             # 2.2.19 (r2: S9): never clear the stars a running job is measuring; the user picks the star again after
-            self.log(f"Star change not applied ({why}): wait for the current step to finish (or cancel it), then "
-                     "choose the star again.")
-            self.status.set("Wait for the current step to finish (or cancel it), then choose the new star again.")
+            # 2.4.0 fit-in F3 (m075): one wording, Log and status line alike
+            self.log(f"Star not changed ({why}): a step is still running. Choose the star again when it finishes.")
             return "busy"
         if self.observations:
             name = os.path.basename(self.series_path) if self.series_path else "the open series"
@@ -6224,80 +6321,114 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             return False
 
-    def _darkflat_notes(self, light_exp, dark_exp) -> list[str]:
-        """2.3.0 (item 11): the Input page's dark-flat lines: darks scaled with no bias and no dark flats (wrong
-        offset), and dark flats whose exposure differs from the flats'."""
-        out = []
-        have_bias = bool(self.bias_dir.get().strip())
-        have_df = bool(self.darkflat_dir.get().strip())
-        if (dark_exp and light_exp and not have_bias and not have_df
-                and core.exposures_match(dark_exp, light_exp) is False):
-            out.append(f"⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats "
-                       f"({dark_exp:g} s darks to {light_exp:g} s lights scales the camera's offset too). Add bias "
-                       "frames or dark flats, or use darks at the lights' exposure.")
-        if have_df and self.flat_dir.get().strip():
-            # 2.3.0 review fix: the two exposures are cached on the folders (names and modification times), so a note
-            # refresh does not read up to 21 headers on the window's thread every time
-            def stamp(path):
-                try:
-                    return (path, os.stat(path).st_mtime_ns)
-                except OSError:
-                    return (path, None)
-            key = (stamp(self.darkflat_dir.get().strip()), stamp(self.flat_dir.get().strip()))
-            cached = getattr(self, "_darkflat_exp_cache", None)
-            if cached and cached[0] == key:
-                df_exp, flat_exp = cached[1]
-            else:
-                df_exp = self._header_exposure(self._first_header(self.darkflat_dir))
-                try:   # the first real flat (dark flats saved in the Flat folder are not counted)
-                    frames, master = core.calibration_source(self.flat_dir.get())
-                    first = master or next((p for p in frames[:20] if not core.frame_is_dark_flat(p)), None)
-                    flat_exp = self._header_exposure(core.read_header(first)) if first else None
-                except Exception:
-                    flat_exp = None
-                self._darkflat_exp_cache = (key, (df_exp, flat_exp))
-            if core.exposures_match(df_exp, flat_exp) is False:
-                out.append(f"Dark flats {df_exp:g} s, flats {flat_exp:g} s: dark flats should match the flats' "
-                           f"exposure. Take dark flats at {flat_exp:g} s.")
-        return out
-
-    def _update_dark_exposure_note(self) -> str:
-        """2.2.19 (#20): the Input page says when the darks' exposure differs from the lights' before Calibrate: ✖ when
-        the master dark would be scaled more than 3x (Calibrate then asks), ⚠ for a smaller difference (scaled to the
-        lights' exposure), ✔ once you chose at Calibrate to scale these darks. Empty when they match or are unknown."""
-        if not hasattr(self, "dark_exposure_note"):
-            return ""
-        text, style = "", "Warn.TLabel"
-        light_exp = self._header_exposure(self._first_header(self.light_dir)) if self.light_dir.get().strip() else None
-        dark_exp = self._header_exposure(self._first_header(self.dark_dir)) if self.dark_dir.get().strip() else None
-        if light_exp and dark_exp and abs(dark_exp / light_exp - 1.0) > 0.02:
-            factor = light_exp / dark_exp
-            chosen = getattr(self, "_dark_scale_chosen", None) == (self.dark_dir.get(), self.light_dir.get())
-            if chosen:
-                text = (f"✔ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g}, as "
-                        "you chose at Calibrate.")
-                style = "Hint.TLabel"
-            elif core.dark_scale_problem(dark_exp, light_exp):
-                text = (f"✖ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark would be scaled ×{factor:.3g}, "
-                        f"which stamps its noise on every light. Point Dark at {light_exp:g} s darks (Calibrate asks "
-                        "otherwise).")
-                style = "Bad.TLabel"
-            else:
-                text = (f"Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g} to the "
-                        f"lights' exposure. Fine for a cooled camera; {light_exp:g} s darks are better.")
-                style = "Hint.TLabel"   # 2.3.6 (audit fix, m087): a plain note, not in the warning colour
-        # 2.3.0 (item 11): no bias and no dark flats under scaled darks; dark flats that do not match the flats
-        extra = self._darkflat_notes(light_exp, dark_exp)
-        if extra:
-            text = "\n".join([t for t in (text,) if t] + extra)
-            if style == "Hint.TLabel":
-                style = "Warn.TLabel"
-        self.dark_exposure_note.set(text)
+    # ---- 2.4.0 fit-in F3 (area B): one calibration plan, for the Input page's line and Calibrate's Log --------------
+    @staticmethod
+    def _plan_stamp(path: str):
+        """A box's folder (or master file) and its modification time: the key the plan's header reads are cached on."""
+        path = (path or "").strip()
         try:
-            self.dark_exposure_label.configure(style=style)
+            return (path, os.stat(path).st_mtime_ns)
+        except OSError:
+            return (path, None)
+
+    def _plan_box(self, name: str) -> dict:
+        """What the plan needs from one box ("light", "bias", "dark", "darkflat", "flat"): {"have", "exp"} and, for
+        the Bias box, "holds_darkflats". The first header is read once per folder and modification time (the 2.3.0
+        review fix, now for every box), so a plan refresh on the window's thread reads nothing it has read before."""
+        var = {"light": self.light_dir, "bias": self.bias_dir, "dark": self.dark_dir,
+               "darkflat": self.darkflat_dir, "flat": self.flat_dir}[name]
+        path = var.get().strip()
+        if not path:
+            return {"have": False, "exp": None, "holds_darkflats": False}
+        cache = self.__dict__.setdefault("_plan_cache", {})
+        key = self._plan_stamp(path)
+        hit = cache.get(name)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        out = {"have": True, "exp": None, "holds_darkflats": False}
+        try:
+            if name == "flat":   # the first real flat (dark flats saved in the Flat folder are not counted)
+                frames, master = core.calibration_source(path)
+                first = master or next((f for f in frames[:20] if not core.frame_is_dark_flat(f)), None)
+                out["exp"] = self._header_exposure(core.read_header(first)) if first else None
+            else:
+                out["exp"] = self._header_exposure(self._first_header(var))
+            if name == "bias":
+                out["holds_darkflats"] = self._bias_holds_dark_flats()
         except Exception:
             pass
-        return text
+        cache[name] = (key, out)
+        return out
+
+    def _calibration_plan(self) -> dict | None:
+        """2.4.0 fit-in F3 (area B, John's call 7): how the boxes on the Input page will be calibrated, from
+        core.calibration_plan (the same function Calibrate's Log uses, so the page and the Log cannot differ). None
+        until Lights and at least one calibration box are filled. Adds "light_exp" and "dark_exp"."""
+        box = {n: self._plan_box(n) for n in ("light", "bias", "dark", "darkflat", "flat")}
+        if not box["light"]["have"] or not any(box[n]["have"] for n in ("bias", "dark", "darkflat", "flat")):
+            return None
+        plan = core.calibration_plan(
+            box["bias"]["have"], box["dark"]["have"], box["flat"]["have"], box["darkflat"]["have"],
+            dark_exp=box["dark"]["exp"], light_exp=box["light"]["exp"], flat_exp=box["flat"]["exp"],
+            darkflat_exp=box["darkflat"]["exp"], darkflats_in_bias=box["bias"]["holds_darkflats"])
+        plan["light_exp"], plan["dark_exp"] = box["light"]["exp"], box["dark"]["exp"]
+        return plan
+
+    @staticmethod
+    def _plan_words(plan: dict) -> str:
+        """'lights = …; flats = ….' (the plan's one sentence, shared by the page and the Log)."""
+        return f"lights = {plan['lights']}" + (f"; flats = {plan['flats']}" if plan["flats"] else "") + "."
+
+    def _update_dark_exposure_note(self) -> str:
+        """2.4.0 fit-in F3 (area B; was 2.2.19 #20 and 2.3.0 item 11, three wordings): the Input page's calibration
+        plan. Line one is plain and always there once Lights and a calibration box are filled ("Plan: lights = light −
+        bias − (dark − bias); flats = flat − dark flat."). Under it, only when something is wrong: ✖ when the master
+        dark would be scaled more than 3x (Calibrate then asks), ⚠ for each of the plan's warnings (darks scaled with
+        no bias and no dark flats; dark flats that do not match the flats). Returns both, one line each."""
+        if not hasattr(self, "dark_exposure_note"):
+            return ""
+        try:
+            plan = self._calibration_plan()
+        except Exception:
+            plan = None
+        line, wrong, style = "", [], "Warn.TLabel"
+        if plan is not None:
+            line = "Plan: " + self._plan_words(plan)
+            light_exp, dark_exp = plan["light_exp"], plan["dark_exp"]
+            if light_exp and dark_exp and abs(dark_exp / light_exp - 1.0) > 0.02:
+                factor = light_exp / dark_exp
+                chosen = getattr(self, "_dark_scale_chosen", None) == (self.dark_dir.get(), self.light_dir.get())
+                if chosen:
+                    line += (f" ✔ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled "
+                             f"×{factor:.3g}, as you chose at Calibrate.")
+                elif core.dark_scale_problem(dark_exp, light_exp):
+                    wrong.append(f"✖ Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark would be scaled "
+                                 f"×{factor:.3g}, which stamps its noise on every light. Point Dark at {light_exp:g} s "
+                                 "darks (Calibrate asks otherwise).")
+                    style = "Bad.TLabel"
+                else:   # 2.3.6 (m087): plain; fine for a cooled camera
+                    line += (f" Darks {dark_exp:g} s, lights {light_exp:g} s: the master dark is scaled ×{factor:.3g}; "
+                             f"{light_exp:g} s darks are better.")
+            wrong += [f"⚠ {w}" for w in plan.get("short") or []]
+        if hasattr(self, "plan_note"):
+            self.plan_note.set(line)
+        self.dark_exposure_note.set("\n".join(wrong))
+        try:
+            self.dark_exposure_label.configure(style=style)
+            # a line with nothing to say takes no room on the page (both live in their own holder, in this order)
+            for label, shown in ((getattr(self, "plan_label", None), bool(line)),
+                                 (self.dark_exposure_label, bool(wrong))):
+                if label is None:
+                    continue
+                label.pack_forget()
+                if shown:
+                    label.pack(anchor=W)
+            if not line and not wrong:
+                # Tk keeps a frame's last size when its last child is unpacked: ask for (almost) none
+                self._plan_holder.configure(height=1)
+        except Exception:
+            pass
+        return "\n".join([t for t in (line,) if t] + wrong)
 
     # ---- 2.4.0 (#111): lights from another camera never keep the last camera's calibration, aperture and limits ----
     _CAMERA_BOXES = (("Bias", "bias_dir"), ("Dark", "dark_dir"), ("Dark flats", "darkflat_dir"), ("Flat", "flat_dir"))
@@ -7004,7 +7135,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     + ("" if obj_where is None else f" ('{obj}' is {core.sky_separation_arcsec(target[0], target[1], *obj_where) / 3600.0:.1f}° away)"
                        if target is not None else "")
                     + ". Check that these are the right lights, or update the target on the Input page.")
-            self.log("Lights: " + text)
+            # 2.4.0 fit-in F3 (m094): the question below is the one message; the Log keeps the finding quietly, and
+            # the answer is the line that reaches the status line
+            self.log("Lights: " + text, keep_status=True)
             # 2.2.16 (item 11): without pointing, OBJECT is what says the field changed: offer the same clearing as a
             # field change (target, every comp and the check, suggested comps, spares, session watch stars).
             import re
@@ -7019,6 +7152,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                        f"{star}. No keeps {name}.", default="no"):
                 # 2.2.19 (#20): a new reduction, as for lights pointing elsewhere.
                 self.new_reduction(new_star=star, why=f"the lights' FITS OBJECT is {obj}, not {name}")
+            else:
+                self.log(f"Kept {name} (the lights' FITS OBJECT says '{obj}').")
 
     def _check_lights_pointing(self, header: dict):
         """Discovery shows the Field center box only when the lights cannot say where they point."""
@@ -7168,7 +7303,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         traceback.print_exc()   # review N1: never costs the Bayer-pattern detection below
                 self._update_mount_hint(lights, log=True)   # 2.2.18 (item 8)
                 if not core.is_microobservatory(lights[0], header):
-                    self._save_header_mount(lights)   # 2.2.19 (nit)
+                    self._save_header_mount(lights)   # 2.2.19 (nit); 2.4.0 fit-in F3 (A1): noted, not saved
+                self._update_setup_strip()   # 2.4.0 fit-in F3 (A1): "Setup for these frames"
                 pat = core.header_bayer(header)
                 if rgb:
                     self.status.set(f"{len(lights)} lights: color images, "
@@ -7383,6 +7519,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 pass
             what = "the flat" if source == "flat" else "the lights' sky background"
+            self._sensor_conflict = None   # 2.4.0 fit-in F3 (A2): set again below when the mask and MONO disagree
             if kind == "mono" and self.pattern.get() != core.MONO:
                 if self._pattern_user_set:
                     self.log(f"{what[0].upper() + what[1:]} shows no color mask (its 2x2 pixel planes agree to "
@@ -7396,12 +7533,56 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.status.set(f"Monochrome camera found (no color mask in {what}): Bayer pattern MONO.")
             elif kind == "cfa" and self.pattern.get() == core.MONO:
                 more = f" (its 2x2 pixel planes differ by {contrast * 100:.0f}%)" if contrast else ""
-                self.log(f"⚠ {what} shows a color mask{more}, but the Bayer pattern is MONO. For a color "
-                         "camera, pick its pattern (often RGGB) on the Calibrate page.")
+                folder = self.light_dir.get().strip()
+                if getattr(self, "_sensor_conflict_answered", None) == folder:
+                    # answered "It is monochrome" for these lights: a plain line, no ⚠, no second question
+                    self.log(f"{what[0].upper() + what[1:]} shows a color mask{more}; Bayer pattern MONO, as you "
+                             "answered for these lights.", keep_status=True)
+                else:
+                    # 2.4.0 fit-in F3 (A2, m116): Calibrate stops on this (it only logged a ⚠ before, and a color
+                    # camera was then measured as monochrome)
+                    self._sensor_conflict = {"folder": folder, "what": what, "more": more, "binned": binned}
+                    self.log(f"⚠ {what} shows a color mask{more}, but the Bayer pattern is MONO. For a color "
+                             "camera, pick its pattern (often RGGB) on the Calibrate page; Calibrate asks before it "
+                             "starts.")
             elif kind is None and not self._pattern_user_set:
                 self._ask_sensor(contrast)
         except Exception as exc:
             self.log(f"Could not check the flat or lights for a color mask ({exc}).")
+
+    def _sensor_conflict_check(self) -> bool:
+        """2.4.0 fit-in F3 (A2, m116): before Calibrate builds anything: the flat (or the lights' sky) shows a color
+        mask while the Bayer pattern is MONO. Asked once per Lights folder; either answer counts as a pattern picked
+        by hand. False when the user cancels (Calibrate does not start)."""
+        c = getattr(self, "_sensor_conflict", None)
+        folder = self.light_dir.get().strip()
+        if not c or c.get("folder") != folder or self.pattern.get() != core.MONO or getattr(self, "_rgb_channel", None):
+            return True
+        what = c["what"][0].upper() + c["what"][1:]
+        answer = ask_choice(
+            self, APP_TITLE,
+            f"{what} shows a color mask{c['more']}, but the Bayer pattern is MONO"
+            + (c["binned"] if c["binned"] else "") + ".\n\n"
+            "Calibrating a color camera as monochrome gives wrong photometry: the colors are never separated.\n\n"
+            "Which camera took these frames?",
+            [("color", "Color camera (RGGB)"), ("mono", "It is monochrome"), ("cancel", "Cancel")], safe="cancel")
+        if answer == "color":
+            self.pattern.set("RGGB")
+            self._pattern_user_set = True
+            self._sensor_conflict = None
+            self._sync_camera_note()
+            self.log("Camera: color (your answer). Bayer pattern set to RGGB: check that it is your camera's pattern "
+                     "in the Camera box on the Calibrate page.")
+            return True
+        if answer == "mono":
+            self._pattern_user_set = True
+            self._sensor_conflict = None
+            self._sensor_conflict_answered = folder
+            self.log("Camera: monochrome (your answer). Bayer pattern left at MONO.", keep_status=True)
+            return True
+        self.log("Calibration not started: pick the camera's Bayer pattern in the Camera box (Calibrate page), "
+                 "MONO for a monochrome camera, then press Calibrate again.")
+        return False
 
     def _sensor_pedestal(self):
         """2.2.18 (review M1): the camera's bias level for the lights' sky test: the median of a SHOBS-P master bias or
@@ -7596,8 +7777,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             pass
 
     def _setup_microobservatory(self, header: dict, n_lights: int):
-        """MicroObservatory frames: monochrome, 12-bit, taken in Arizona with a 560 mm telescope. Offer the
-        telescope's camera, site, and optics; your own come back when you scan your own lights."""
+        """MicroObservatory frames: monochrome, 12-bit, taken in Arizona with a 560 mm telescope. The telescope's
+        camera, site, and optics are used for them (2.4.0 fit-in F3: without a question); your own come back when
+        you scan your own lights."""
         site = core.header_site(header)
         if site and site[1] > 0:
             # MicroObservatory writes the longitude west-positive (110.88 for Arizona); SHOBS-P uses east-positive.
@@ -7621,26 +7803,24 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         pixel = binned_pixel / cam_bin
         frame_scale = binned_pixel / focal * 206.265   # arcsec per pixel of the frame as saved (what the solve uses)
         self.scale_approx = not scale
-        use = messagebox.askyesno(
-            APP_TITLE,
-            f"These {n_lights} lights look like MicroObservatory frames, taken in Arizona with a small telescope and a "
-            "monochrome camera.\n\nUse that telescope's setup for these frames?\n"
-            f"  Site: latitude {lat:.3f}, longitude {lon:.3f}" + (f", elevation {elev:.0f} m" if elev else "")
-            + f" ({where})\n"
-            f"  Optics: focal length {focal:.0f} mm, pixel {pixel:.1f} µm"
-            + (f" (the camera's pixel; the camera bins {cam_bin}x{cam_bin}, so about {frame_scale:.1f}\"/px"
-               if cam_bin > 1 else f" (about {frame_scale:.1f}\"/px")
-            + ("" if scale else "; Solve refines it") + ")\n"
-            "  Camera: monochrome (no debayer), clear filter (CV), binning 1, saturation 4000 ADU\n\n"
-            "Your own site, optics, and camera settings are kept and come back when you scan a folder of your own "
-            "lights.",
-        )
-        if not use:
-            self.log("MicroObservatory frames: setup not changed (answered No). Set Bayer pattern MONO on the Calibrate page "
-                     "for these monochrome frames.")
+        # 2.4.0 fit-in F3 (A1, John's call 1): no question. The telescope's setup is used for these frames at once
+        # and the "Setup for these frames" strip says so; Use my own setup there undoes it (and is remembered for
+        # this folder). Nothing of it is ever saved as yours.
+        folder = self.light_dir.get().strip()
+        st = self._frames_setup or {}
+        if self._frames_choice_s.get(folder) == "own":
+            self.scale_approx = False
+            self._restore_own_setup()   # not a previous telescope's setup either
+            self._frames_setup = {"kind": "own_chosen", "folder": folder, "mobs": True,
+                                  "words": "MicroObservatory frames (a monochrome camera in Arizona)"}
+            self._update_setup_strip()
+            return
+        if st.get("kind") == "mobs" and st.get("folder") == folder and self._own_setup is not None \
+                and self.pattern.get() == core.MONO:
+            self._update_setup_strip()   # already in use for this folder (a second Scan folders): nothing to redo
+            self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
             return
         if self._own_setup is None:
-            # Taken only when the borrowed setup is accepted (2.2.4), so answering No never freezes the saved site.
             self._own_setup = self._setup_snapshot()
         self._typed_borrow = None   # 2.3.2 review S1: this borrow comes from the frames, not from typed boxes
         self.pattern.set(core.MONO)
@@ -7669,7 +7849,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                  f"({'from the header scale' if scale else 'approximate'}"
                  + (f"; camera pixel, binned {cam_bin}x{cam_bin} by the camera" if cam_bin > 1 else "")
                  + f", {frame_scale:.2f}\"/px); monochrome, CV, saturation 4000 ADU. "
-                 "Your own setup comes back when you scan your own lights.")
+                 "In use for these frames only; your own setup comes back when you scan your own lights.")
+        self._frames_setup = {"kind": "mobs", "folder": folder, "where": where,
+                              "camera": "monochrome, clear filter (CV), saturation 4000 ADU"}
+        self._update_setup_strip()
         self.status.set(f"{n_lights} MicroObservatory lights: telescope setup in use.")
 
     def _zone_from_site(self, lat, lon, whose: str, quiet_same: bool = False) -> bool:
@@ -7703,16 +7886,122 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _setup_snapshot(self) -> dict:
         return {n: self._setup_value(n) for n in self._SETUP_NAMES}
 
+    # ---- 2.4.0 fit-in F3 (A1, John's call 1): "Setup for these frames" ----------------------------------------------
+    # Scan folders used to ask up to four questions here (is that your own site? use the site in these frames? use
+    # MicroObservatory's setup? use the header values?) and saved two things without asking (the mount, the optics).
+    # Now the header's site and optics are used for the frames at once, nothing is saved as yours, and one strip on
+    # the Input page says what was taken and from where, with Save as my setup / Use my own setup.
+    # RESULTS-CHANGING: the site sets the airmass and the BJD times. Frames from a far site used it only after a Yes;
+    # now they use it unless Use my own setup is pressed.
+    _HELD_BOX = {"site_lat": "lat", "site_lon": "lon", "site_elevation": "elevation", "site_tz": "site_tz",
+                 "focal_mm": "focal_mm", "pixel_um": "pixel_um", "aperture_mm": "aperture_mm"}
+    FRAMES_SETUPS_KEPT = 20
+    FRAMES_SAME_SITE_KM = 5.0
+
+    def _header_held_now(self, key: str) -> bool:
+        """True while the box for settings key `key` still holds a value a header put there (not yours, so never
+        saved by the box's own remember-me). A value typed over it is yours again: the hold ends."""
+        held = self.__dict__.get("_header_held")
+        if not held or key not in held or key not in self._HELD_BOX:
+            return False
+        cur = self._setup_value(self._HELD_BOX[key])
+        try:
+            a, b = float(cur), float(held[key])
+            same = abs(a - b) <= 1e-9 * max(1.0, abs(b))
+        except (TypeError, ValueError):
+            same = str(cur).strip() == str(held[key]).strip()
+        if same:
+            return True
+        held.pop(key, None)
+        self._setup_strip_soon()
+        return False
+
+    def _set_from_header(self, name: str, value):
+        """Put a header's value in a Site/Optics box and hold it (unsaved) until Save as my setup."""
+        key = {v: k for k, v in self._HELD_BOX.items()}[name]
+        if name in ("lat", "lon"):
+            shown = f"{value:.4f}"
+        elif name in ("elevation", "aperture_mm"):
+            shown = f"{value:g}"
+        else:
+            shown = value
+        self.__dict__.setdefault("_header_held", {})[key] = shown
+        getattr(self, name).set(shown)
+
+    def _frames_record(self, scope, site):
+        """The remembered answer for this telescope at this site (settings 'frames_setups'), or None."""
+        if not site:
+            return None
+        for r in reversed(self.settings.get("frames_setups") or []):
+            if not isinstance(r, dict):
+                continue
+            try:
+                near = core.site_distance_km((float(r["lat"]), float(r["lon"])), site[:2]) <= self.FRAMES_SAME_SITE_KM
+            except (KeyError, TypeError, ValueError):
+                continue
+            rs = r.get("scope")
+            if near and ((rs is None and scope is None)
+                         or (rs is not None and scope is not None and same_scope(rs, scope))):
+                return r
+        return None
+
+    def _store_frames_record(self, scope, site, use: str, values: dict | None = None):
+        if not site:
+            return
+        old = self._frames_record(scope, site)
+        kept = [r for r in (self.settings.get("frames_setups") or []) if isinstance(r, dict) and r is not old]
+        rec = {"scope": scope, "lat": round(float(site[0]), 4), "lon": round(float(site[1]), 4), "use": use,
+               "values": dict(values if values is not None else ((old or {}).get("values") or {}))}
+        self.settings["frames_setups"] = (kept + [rec])[-self.FRAMES_SETUPS_KEPT:]
+        self._save_settings()
+
+    def _drop_frames_record(self, scope, site):
+        old = self._frames_record(scope, site)
+        if old is not None:
+            self.settings["frames_setups"] = [r for r in self.settings.get("frames_setups") or [] if r is not old]
+            self._save_settings()
+
+    def _frames_choice(self, folder: str, scope, site) -> str:
+        """'own' when Use my own setup was pressed for this Lights folder (this session) or for this telescope at
+        this site (remembered), else ''."""
+        if self._frames_choice_s.get(folder) == "own":
+            return "own"
+        rec = self._frames_record(scope, site)
+        return "own" if rec and rec.get("use") == "own" else ""
+
+    def _remember_frames_setup(self):
+        """Rule 6, at a photometry run: what the header did not give and you typed for a far site's frames (the
+        elevation above all) comes back when that telescope's lights are scanned again."""
+        st = self._frames_setup or {}
+        if st.get("kind") != "frames" or self._own_setup is None or getattr(self, "_loading_meta", False):
+            return
+        if st.get("folder") != self.light_dir.get().strip() or not st.get("site"):
+            return
+        values = {}
+        for name in ("elevation", "focal_mm", "pixel_um", "site_tz"):
+            v = str(self._setup_value(name)).strip()
+            if v:
+                values[name] = v
+        old = self._frames_record(st.get("scope"), st["site"])
+        if old is not None and old.get("use") == "frames" and old.get("values") == values:
+            return
+        self._store_frames_record(st.get("scope"), st["site"], "frames", values)
+
     def _header_setup(self, header: dict):
-        """2.2.9 (John): Scan files fills the Site and Optics boxes from the lights' FITS header.
-        - Frames from a site far (> 50 km) from yours (another observer, a remote telescope): offer to use that site
-          and those optics for these frames; your own come back when you scan your own lights (as for MicroObservatory).
-        - Your own frames: empty boxes are filled silently; values that differ are listed in one question.
+        """2.2.9 (John): Scan folders takes the site and optics from the lights' FITS header. 2.4.0 fit-in F3 (A1):
+        without a question, and without saving anything as yours.
+        - Frames from a site far (> 50 km) from yours, or with a site when none of yours is saved: that site and
+          those optics are used for these frames; yours are set aside and come back when you scan your own lights.
+          Use my own setup (the strip) undoes it, and is remembered for that telescope at that site.
+        - Your own frames: empty boxes are filled from the header (held, not saved); values that differ are listed
+          in the strip with Use the header values.
         Binning is never taken from the header (XBINNING is the camera's; SHOBS-P's Binning is its own)."""
         site = core.header_site(header)
         opt = core.header_optics(header)
         own = self._own_setup
         ref = own if own is not None else self._setup_snapshot()
+        folder = self.light_dir.get().strip()
+        scope = lights_scope(header)
 
         def fnum(v):
             try:
@@ -7725,32 +8014,32 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         cam = " / ".join(str(header.get(k) or "").strip() for k in ("TELESCOP", "INSTRUME") if header.get(k))
         if (site and own is not None and fnum(self.lat.get()) == round(site[0], 4)
                 and fnum(self.lon.get()) == round(site[1], 4)):
+            st = self._frames_setup or {}
+            if st.get("kind") != "frames" or st.get("folder") != folder:
+                self._frames_setup = {"kind": "frames", "folder": folder, "site": tuple(site), "cam": cam,
+                                      "scope": scope, "where": st.get("where", "") if st.get("kind") == "frames" else ""}
             return   # these frames' setup is already in use
-        far = asked = False
+        far = False
+        where = ""
         if site and ref_lat is not None and ref_lon is not None:
             dist = core.site_distance_km((ref_lat, ref_lon), site[:2])
             far = dist > 50
             where = f"{dist:.0f} km from your site"
         elif site:
-            # No site of your own yet: never save a header's site as yours without asking (it may be a friend's).
-            where = "and your Site boxes are empty"
-            far = ask_choice(
-                self, APP_TITLE,
-                f"These lights were taken at latitude {site[0]:.3f}, longitude {site[1]:.3f}"
-                + (f" ({cam})" if cam else "") + ".\n\nIs that your own site?",
-                [("own", "My site from now on"), ("these", "These frames only")], safe="these") != "own"
-            asked = True
-            self._header_site_is_own = not far   # 2.3.2 review N2: Yes saves it below, with no second question
+            # No site of your own yet: a header's site is never saved as yours by itself (it may be a friend's).
+            far = True
+            where = "no site of yours is saved yet"
         if far:
-            if not asked and not messagebox.askyesno(
-                    APP_TITLE,
-                    f"These lights were taken at latitude {site[0]:.3f}, longitude {site[1]:.3f}"
-                    + (f" ({cam})" if cam else "") + f", {where}.\n\n"
-                    "Use the site and optics in these frames for them? Your own site, optics and camera "
-                    "settings are kept and come back when you scan a folder of your own lights."):
+            taken = (f"latitude {site[0]:.3f}, longitude {site[1]:.3f}" + (f" ({cam})" if cam else "")
+                     + f", {where}")
+            if self._frames_choice(folder, scope, site) == "own":
                 self._restore_own_setup()   # not a previous telescope's setup either
-                self.log("Lights from another site: your own site and optics kept (answered No). Check the "
-                         "Site and Optics boxes before photometry; the airmass and BJD times use them.")
+                self._frames_setup = {"kind": "own_chosen", "folder": folder, "site": tuple(site), "cam": cam,
+                                      "scope": scope, "where": where,
+                                      "words": f"These lights were taken at {taken}"}
+                self.log(f"Lights from another site ({taken}): your own site and optics are in use for them, as you "
+                         "chose. The airmass and BJD times use the Site boxes. Use the frames' setup (Input page) "
+                         "changes that.")
                 return
             if self._own_setup is None:
                 self._own_setup = self._setup_snapshot()
@@ -7764,37 +8053,58 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         pass
                 self.scale_approx = False
             self._typed_borrow = None   # 2.3.2 review S1: the frames' own site now, not a typed one
+            vals = (self._frames_record(scope, site) or {}).get("values") or {}   # rule 6: typed for them before
+            back = []
             self.lat.set(f"{site[0]:.4f}")
             self.lon.set(f"{site[1]:.4f}")
             # Never leave your own elevation with another site's coordinates (2.2.8 MicroObservatory lesson).
-            self.elevation.set(f"{site[2]:.0f}" if site[2] is not None else "")
+            if site[2] is not None:
+                self.elevation.set(f"{site[2]:.0f}")
+            elif fnum(vals.get("elevation")) is not None:
+                self.elevation.set(str(vals["elevation"]))
+                back.append(f"elevation {fnum(vals['elevation']):g} m")
+            else:
+                self.elevation.set("")
             for key in ("focal_mm", "pixel_um", "aperture_mm"):
                 if key in opt:
                     getattr(self, key).set(round(opt[key], 2) if key != "aperture_mm" else f"{opt[key]:.0f}")
+                elif key != "aperture_mm" and (fnum(vals.get(key)) or 0) > 0:
+                    getattr(self, key).set(fnum(vals[key]))
+                    back.append(f"{'focal length' if key == 'focal_mm' else 'pixel size'} {fnum(vals[key]):g}")
             self.telescope_name.set("")   # 2.2.16 (item 5): another telescope; yours comes back with your setup
             got = ", ".join(f"{k.split('_')[0]} from {v}" for k, v in opt["source"].items())
             self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
-                     + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation unknown")
-                     + (f"; {got}" if got else "") + ". Your own setup comes back when you scan your own lights.")
+                     + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation not in the header")
+                     + (f"; {got}" if got else "") + f" ({where})."
+                     + (f" As typed for this telescope's frames before: {', '.join(back)}." if back else "")
+                     + " In use for these frames only; nothing is saved as yours. Save as my setup and Use my own "
+                       "setup are on the Input page.")
             # 2.2.21 (#22): the header names no time zone. 2.4.0 fit-in F2 (m133, John 24 Nov): the zone is looked
             # up from the site's latitude/longitude (tzfpy), so local times (and trims typed as clock times)
             # are the site's; without the package (an older install), the 2.2.21 line as before.
             if not self._zone_from_site(site[0], site[1], "the frames' site"):
-                self.log(f"  Check the Time zone box (Input page, Site): local times use "
-                         f"{self.site_tz.get() or 'this computer'}'s zone until you pick the frames' site zone.")
+                if vals.get("site_tz") and site_time.is_valid(str(vals["site_tz"])):
+                    self.site_tz.set(str(vals["site_tz"]))
+                    self.log(f"  Time zone {vals['site_tz']}, as used for this telescope's frames before.",
+                             keep_status=True)
+                else:
+                    self.log(f"  Check the Time zone box (Input page, Site): local times use "
+                             f"{self.site_tz.get() or 'this computer'}'s zone until you pick the frames' site zone.")
+            self._frames_setup = {"kind": "frames", "folder": folder, "site": tuple(site), "cam": cam,
+                                  "scope": scope, "where": where}
             # 2.3.3 (nit, 8 Nov): no elevation in the header: said on the status line, not only in the log (the
-            # scintillation error and the AAVSO exoplanet report need it). Remembering it per telescope: 2.4.0.
-            self.status.set("Lights from another site: their site and optics are in use."
-                            + ("" if site[2] is not None else
-                               " Elevation not in the header — type it on the Input page."))
+            # scintillation error and the AAVSO exoplanet report need it); the strip keeps saying it until typed.
+            self.status.set("Lights from another site: their site and optics are in use for these frames."
+                            + ("" if fnum(self.elevation.get()) is not None else
+                               " Elevation not in the header: type it on the Input page."))
             return
         # 2.3.2 (item 1): a site typed "for these frames only" stays in use for that Lights folder when its header
         # names no site (nothing says these are your own frames); another folder brings your own setup back.
         borrow = getattr(self, "_typed_borrow", None)
         if not site and borrow is not None and self._own_setup is not None:
-            folder = self.light_dir.get().strip()
             if borrow in ("", folder):
                 self._typed_borrow = folder
+                self._frames_setup = {"kind": "typed", "folder": folder}
                 self.log("The site and optics typed for these frames stay in use (their header names no site).")
                 return
         # Your own frames (or no site in the header): any borrowed setup goes back first.
@@ -7812,61 +8122,287 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 wanted.append((key, label, round(v, 2) if key == "pixel_um" else round(v), opt["source"][key],
                                0.02 * v))
         filled, differ = [], []
-        # 2.2.18 (review S6): values you said No to before are not filled in silently either
-        declined_tokens = {t for d in (self.settings.get("header_declined") or []) for t in str(d).split(";")}
-        unset_filled = False
         for key, label, value, src, tol in wanted:
             cur = fnum(self._setup_value(key))
-            unset = key in ("focal_mm", "pixel_um") and cur is not None and cur > 0 and self._optics_unset(key)
-            if unset and f"{key}={value:g}" in declined_tokens:
-                continue
-            if cur is None or (key in ("focal_mm", "pixel_um") and (cur <= 0 or unset)):
-                getattr(self, key).set(value if key not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
+            if cur is None or (key in ("focal_mm", "pixel_um") and cur <= 0):
+                # an empty box takes the header's value for these frames; it is held, not saved (it was saved as
+                # your own optics without asking before 2.4.0 fit-in F3)
+                self._set_from_header(key, value)
                 filled.append(f"{label} {value:g} ({src})")
-                # review S5 (2.3.2 item 14): an empty box with nothing of yours saved gets the caution too
-                unset_filled = unset_filled or unset or (key in ("focal_mm", "pixel_um") and key not in self.settings)
             elif abs(cur - value) > tol:
                 differ.append((key, label, cur, value, src))
-        # 2.2.19 (nit): focal length and pixel size read from your own lights' header are saved to the settings file
-        # (for SHOBS-SCHED) when no value of yours is saved yet; a saved (typed) value is never overwritten here.
-        if self._own_setup is None and not getattr(self, "_loading_meta", False):
-            for key, _label, value, _src, tol in wanted:
-                if key not in ("focal_mm", "pixel_um") or key in self.settings or f"{key}={value:g}" in declined_tokens:
-                    continue
-                cur = fnum(self._setup_value(key))
-                if cur is not None and abs(cur - value) <= tol:
-                    self._store_own_value(key, float(cur))
-        if getattr(self, "_header_site_is_own", False):
-            # 2.3.2 review N2: "Is that your own site?" Yes: the header's site is saved as yours now (item 1 would
-            # otherwise hold it, the boxes having been empty, and ask again at Run).
-            self._header_site_is_own = False
-            self._typed_site_pending = False
-            self._save_typed_setup()
+        self._frames_setup = {"kind": "own", "folder": folder, "differ": differ}
         if filled:
-            self.log("Filled from the lights' FITS header: " + "; ".join(filled) + ".")
-            # 2.4.0 fit-in F2 (m133): a site filled from the header, and no Time zone of yours saved (never set by
-            # hand): the zone follows the site
-            if site and any(f.startswith(("Latitude", "Longitude")) for f in filled) and not self.settings.get("site_tz"):
-                self._zone_from_site(site[0], site[1], "your site", quiet_same=True)
-            if unset_filled:   # 2.2.18 (item 11, review S6)
-                self.log("The focal length / pixel size from these lights are now saved as your own optics. "
-                         "If they come from another telescope, type your own in the Optics box (Input page).")
-        if not differ:
+            self.log("Filled from the lights' FITS header for these frames: " + "; ".join(filled) + ". Not saved as "
+                     "yours: Save as my setup (Input page) does that.")
+        if differ:
+            self.log("The lights' FITS header differs from the Site and Optics boxes: "
+                     + "; ".join(f"{label} yours {cur:g}, header {value:g} ({src})"
+                                 for _k, label, cur, value, src in differ)
+                     + ". Yours are used; Use the header values is on the Input page.", keep_status=True)
+
+    # -- the strip itself
+    def _setup_values_words(self) -> str:
+        """'site 31.6800, -110.8800, 1268 m; focal length 560 mm, pixel 13.5 µm, aperture 152 mm' from the boxes."""
+        def num(name):
+            try:
+                v = float(self._setup_value(name))
+                return v if math.isfinite(v) else None
+            except (TypeError, ValueError):
+                return None
+        lat, lon, elev = num("lat"), num("lon"), num("elevation")
+        parts = []
+        if lat is not None and lon is not None:
+            parts.append(f"site {lat:.4f}, {lon:.4f}" + (f", {elev:.0f} m" if elev is not None else ""))
+        optics = []
+        focal, pixel, ap = num("focal_mm"), num("pixel_um"), num("aperture_mm")
+        if focal and focal > 0:
+            optics.append(f"focal length {focal:g} mm")
+        if pixel and pixel > 0:
+            optics.append(f"pixel {pixel:g} µm")
+        if ap and ap > 0:
+            src = getattr(self, "_aperture_source", "")
+            optics.append(f"aperture {ap:g} mm" + (f" ({src})" if src else ""))
+        if optics:
+            parts.append(", ".join(optics))
+        return "; ".join(parts)
+
+    def _setup_mount_note(self, folder: str):
+        fm = getattr(self, "_frames_mount", None)
+        return fm if fm and fm.get("folder") == folder else None
+
+    def _setup_strip_parts(self, st: dict | None = None):
+        """(text, [button names]) for the strip, from its state and the boxes as they are now."""
+        st = st if st is not None else (self._frames_setup or {})
+        kind = st.get("kind")
+        folder = self.light_dir.get().strip()
+        values = self._setup_values_words()
+        fm = self._setup_mount_note(folder)
+        mount = f"{core.mount_label(fm['mount'])} mount" if fm else ""
+        try:
+            float(self.elevation.get())
+            no_elev = ""
+        except (TypeError, ValueError):
+            no_elev = " Elevation is not in the header: type it in the Elevation box."
+        if kind == "frames":
+            source = "From the lights' headers" + (f" ({st['cam']})" if st.get("cam") else "") \
+                     + (f", {st['where']}" if st.get("where") else "")
+            return ("; ".join(t for t in (values, mount) if t) + f". {source}. In use for these frames only: nothing "
+                    "is saved as yours." + no_elev, ["save", "own"])
+        if kind == "mobs":
+            return ("MicroObservatory's telescope: " + "; ".join(t for t in (values, st.get("camera", "")) if t)
+                    + (f" ({st['where']})" if st.get("where") else "") + ". In use for these frames only.",
+                    ["save", "own"])
+        if kind == "typed":
+            return ("The site and optics you typed" + (f": {values}" if values else "") + ". In use for these "
+                    "frames only: your saved setup is kept.", ["save", "own"])
+        if kind == "own_chosen":
+            return (f"{st.get('words') or 'These lights come from another site'}. Your own setup is in use for "
+                    "them, as you chose" + (f": {values}" if values else "") + ".", ["frames"])
+        if kind == "own":
+            labels = {"site_lat": "latitude", "site_lon": "longitude", "site_elevation": "elevation",
+                      "site_tz": "time zone", "focal_mm": "focal length", "pixel_um": "pixel size",
+                      "aperture_mm": "telescope aperture"}
+            held = [f"{labels.get(k, k)} {v}" for k, v in list((self.__dict__.get("_header_held") or {}).items())
+                    if self._header_held_now(k)]
+            if fm and "mount" not in self.settings:
+                held.append(mount)
+            differ = []
+            for key, label, _cur, value, _src in st.get("differ") or []:
+                try:
+                    now = float(self._setup_value(key))
+                except (TypeError, ValueError):
+                    continue
+                if abs(now - value) > 1e-9 * max(1.0, abs(value)):
+                    differ.append(f"{label} yours {now:g}, header {value:g}")
+            # a loaded series (or a site still being typed) can put another site in the boxes: never call it yours
+            mine = not self._site_unconfirmed()
+            text = ("Your own setup" if mine else "The Site and Optics boxes (not your saved site)") \
+                + (f": {values}" if values else "") + "."
+            buttons = []
+            if held:
+                text += " From the lights' headers, not saved as yours: " + "; ".join(held) + "."
+                buttons.append("save")
+            if differ:
+                text += " The lights' headers differ: " + "; ".join(differ) + "."
+                buttons.append("header")
+            return text, buttons
+        return "", []
+
+    def _setup_save_why(self) -> str:
+        """Why Save as my setup is greyed ("" when it can work)."""
+        st = self._frames_setup or {}
+        if st.get("kind") == "mobs":
+            return "This is MicroObservatory's telescope, not yours: its setup is used for these frames only."
+        if st.get("kind") in ("frames", "typed") and self._box_site() is None:
+            return "Fill in the Latitude and Longitude boxes first."
+        return ""
+
+    def _setup_strip_soon(self):
+        """A Site/Optics box changed: the strip follows (once, when Tk is idle)."""
+        if not hasattr(self, "setup_group") or not self._frames_setup or getattr(self, "_setup_strip_job", None):
             return
-        key = ";".join(f"{k}={v:g}" for k, _l, _c, v, _s in differ)
-        declined = self.settings.get("header_declined") or []
-        if key in declined:
+        def later():
+            self._setup_strip_job = None
+            self._update_setup_strip()
+        try:
+            self._setup_strip_job = self.after_idle(later)
+        except Exception:
+            self._setup_strip_job = None
+
+    def _setup_buttons_layout(self, width: int | None = None):
+        """The strip's buttons side by side when the box is wide enough for them, else one under the other (the
+        right-hand column is narrow on a half-screen window; a clipped button cannot be pressed)."""
+        names = getattr(self, "_setup_buttons_shown", [])
+        try:
+            if width is None:
+                width = int(self.setup_group.winfo_width())
+            gap = int(6 * ui_scale(self))
+            need = sum(int(self.setup_buttons[n].winfo_reqwidth()) + gap for n in names) + int(30 * ui_scale(self))
+            stacked = width > 1 and need > width
+            if getattr(self, "_setup_buttons_laid", None) == (tuple(names), stacked):
+                return
+            self._setup_buttons_laid = (tuple(names), stacked)
+            for button in self.setup_buttons.values():
+                button.pack_forget()
+            for name in names:
+                if stacked:
+                    self.setup_buttons[name].pack(anchor=W, pady=(0, 4))
+                else:
+                    self.setup_buttons[name].pack(side=LEFT, padx=(0, gap))
+        except Exception:
+            traceback.print_exc()
+
+    def _update_setup_strip(self):
+        """Show the strip for the lights in the Lights box (hidden when there is nothing to say about them)."""
+        if not hasattr(self, "setup_group"):
             return
-        lines = "\n".join(f"  {label}: yours {cur:g}, header {value:g} ({src})" for _k, label, cur, value, src in differ)
-        if messagebox.askyesno(APP_TITLE, "The lights' FITS header differs from the Site and Optics boxes:\n" + lines
-                               + "\n\nUse the header values? (No keeps yours and will not ask again for these values.)"):
-            for k, _label, _cur, value, _src in differ:
-                getattr(self, k).set(value if k not in ("lat", "lon", "elevation", "aperture_mm") else f"{value:g}")
-            self.log("Site/Optics updated from the lights' FITS header: "
-                     + "; ".join(f"{label} {value:g}" for _k, label, _c, value, _s in differ) + ".")
+        st = self._frames_setup
+        if st and st.get("folder") not in ("", self.light_dir.get().strip()):
+            st = None   # said about another Lights folder
+        text, names = self._setup_strip_parts(st) if st and not getattr(self, "_loading_meta", False) else ("", [])
+        try:
+            if not text:
+                self.setup_group.pack_forget()
+                return
+            self.setup_strip_text.set(text)
+            self._setup_buttons_shown = list(names)
+            self._setup_buttons_layout()
+            if names:
+                self._setup_button_row.pack(anchor=W, pady=(6, 0))
+            else:
+                self._setup_button_row.pack_forget()
+            if not self.setup_group.winfo_manager():
+                self.setup_group.pack(fill=X, pady=(10, 0), before=self._site_group)
+        except Exception:
+            traceback.print_exc()
+
+    def _setup_save_as_mine(self):
+        """Save as my setup: the one place a header's (or a typed "these frames only") site, optics and mount become
+        your saved setup, the one SHOBS-SCHED reads."""
+        st = self._frames_setup or {}
+        kind = st.get("kind")
+        if kind not in ("frames", "typed", "own") or self._setup_save_why():
+            return
+        folder = self.light_dir.get().strip()
+        self._flush_site_saves()
+        fm = self._setup_mount_note(folder)
+        if kind == "own":
+            keys = {k for k in list(self._header_held) if self._header_held_now(k)}
+            self._header_held = {}
+            self._typed_held = set(keys)
+            self._save_typed_setup(back_home=True)
+            save_mount = bool(fm) and "mount" not in self.settings
         else:
-            self.settings["header_declined"] = (declined + [key])[-20:]
+            self._own_setup = None
+            self._typed_borrow = None
+            self._header_held = {}
+            self._typed_site_pending = False
+            self._typed_held = {k for _n, k in self._TYPED_SETUP_KEYS}
+            self._save_typed_setup()
+            save_mount = bool(fm)
+            self._frames_choice_s.pop(folder, None)
+            if st.get("site"):
+                self._drop_frames_record(st.get("scope"), st["site"])
+        if save_mount:
+            self.settings["mount"] = fm["mount"]
             self._save_settings()
+            if self._mount_choice_key() != fm["mount"]:
+                self.mount_choice.set(core.mount_label(fm["mount"]))
+        words = "; ".join(t for t in (self._setup_values_words(),
+                                      f"{core.mount_label(fm['mount'])} mount" if save_mount else "") if t)
+        self._frames_setup = {"kind": "own", "folder": folder, "differ": []}
+        self._update_setup_strip()
+        self.log(f"Saved as your setup: {words or 'the Site and Optics boxes'}. SHOBS-SCHED reads it too.")
+
+    def _setup_use_own(self):
+        """Use my own setup: your saved site and optics for these frames after all (remembered for this folder, and
+        for a far site's telescope)."""
+        st = dict(self._frames_setup or {})
+        kind = st.get("kind")
+        if kind not in ("frames", "mobs", "typed"):
+            return
+        folder = self.light_dir.get().strip()
+        self._restore_own_setup()
+        if kind == "typed":
+            self._frames_setup = {"kind": "own", "folder": folder, "differ": []}
+            self.log("Your own setup is in use again; the site typed for these frames is dropped.")
+        elif kind == "mobs":
+            self._frames_choice_s[folder] = "own"
+            if self.pattern.get() != core.MONO:
+                self.pattern.set(core.MONO)   # the frames are monochrome whoever's site is used
+            self._frames_setup = {"kind": "own_chosen", "folder": folder, "mobs": True,
+                                  "words": "MicroObservatory frames (a monochrome camera in Arizona)"}
+            self.log("Your own site and optics are in use for these MicroObservatory frames. Bayer pattern MONO "
+                     "(they are monochrome); check the saturation level and the Site boxes before photometry.")
+        else:
+            self._frames_choice_s[folder] = "own"
+            self._store_frames_record(st.get("scope"), st.get("site"), "own")
+            taken = (f"latitude {st['site'][0]:.3f}, longitude {st['site'][1]:.3f}"
+                     + (f" ({st['cam']})" if st.get("cam") else "") + (f", {st['where']}" if st.get("where") else ""))
+            self._frames_setup = {"kind": "own_chosen", "folder": folder, "site": st.get("site"),
+                                  "cam": st.get("cam"), "scope": st.get("scope"), "where": st.get("where"),
+                                  "words": f"These lights were taken at {taken}"}
+            self.log(f"Your own site and optics are in use for these frames (taken at {taken}). The airmass and BJD "
+                     "times use the Site boxes: check them before photometry.")
+        self._update_setup_strip()
+
+    def _setup_use_frames(self):
+        """Use the frames' setup: back from Use my own setup to what the lights' headers say."""
+        st = dict(self._frames_setup or {})
+        if st.get("kind") != "own_chosen":
+            return
+        folder = self.light_dir.get().strip()
+        self._frames_choice_s.pop(folder, None)
+        if st.get("site"):
+            self._drop_frames_record(st.get("scope"), st["site"])
+        try:
+            lights = self._lights()
+            header = core.read_header(lights[0])
+        except Exception as exc:
+            self.log(f"✖ Could not read the first light ({exc}): press Scan folders.")
+            return
+        if core.is_microobservatory(lights[0], header):
+            self._setup_microobservatory(header, len(lights))
+        else:
+            self._header_setup(header)
+        self._update_setup_strip()
+
+    def _setup_use_header(self):
+        """Use the header values (your own frames whose header differs from your boxes): the boxes take them for
+        these frames. They are not saved as yours until Save as my setup."""
+        st = self._frames_setup or {}
+        if st.get("kind") != "own":
+            return
+        done = []
+        for key, label, _cur, value, _src in st.get("differ") or []:
+            self._set_from_header(key, value)
+            done.append(f"{label} {value:g}")
+        st["differ"] = []
+        if done:
+            self.log("Site/Optics set from the lights' FITS header for these frames: " + "; ".join(done)
+                     + ". Not saved as yours: Save as my setup does that.")
+        self._update_setup_strip()
 
     # ---- 2.3.1 (nit): the Telescope aperture box follows the telescope, not the last data set ----------------------
     APERTURE_SCOPES_KEPT = 20
@@ -7913,6 +8449,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         scope = lights_scope(header)
         hand = self._aperture_set_by_hand(scope)   # review S4: asked before _lights_scope moves to these lights
         self._lights_scope = scope
+        # 2.4.0 fit-in F3 (A1 rule 5): where the aperture in use comes from, for the strip
+        self._aperture_source = ("from the header" if "aperture_mm" in core.header_optics(header)
+                                 else "typed by hand" if hand else "")
         if scope is None or "aperture_mm" in core.header_optics(header) or getattr(self, "_loading_meta", False):
             return
         cur = self._aperture_box()
@@ -7938,6 +8477,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # box can still be changed by hand before the run).
             self.aperture_mm.set(f"{ap:g}")
             self._aperture_before = self.aperture_mm.get().strip()   # re-review R2-S2: set by SHOBS-P, not typed
+            self._aperture_source = f"as last used with {scope_words(scope)}"
             self.log(f"Telescope aperture set to {ap:g} mm, as last used with {scope_words(scope)}"
                      + (f" (the box said {cur:g} mm)." if cur is not None else "."))
             return
@@ -7963,9 +8503,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._remember_aperture_scope(scope)   # review S2: a Yes is remembered at once
             return
         asked.add(ask_key)
-        self.log(f"Telescope aperture: type the aperture of {scope_words(scope)} in the Optics box (Input page); "
-                 f"it says {cur:g} mm from the last frames.")
-        self.status.set("Type this telescope's aperture in the Optics box (Input page).")
+        # 2.4.0 fit-in F3 (m146): one line, short enough for the status line (log() sets it)
+        self.log(f"These lights are from {scope_words(scope)}: type its aperture in the Optics box (Input page); it "
+                 f"still says {cur:g} mm from the last frames.")
         box = getattr(self, "_aperture_entry", None)
         if box is not None:
             try:
@@ -7976,6 +8516,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _remember_aperture_scope(self, scope: dict | None = None):
         """2.3.1: at a photometry run, which aperture went with which telescope (for _check_aperture_scope). Review S4:
         the telescope of the frames on the Photometry page (not only the last Scan folders)."""
+        try:
+            self._remember_frames_setup()   # 2.4.0 fit-in F3 (A1 rule 6): what was typed for this telescope's frames
+        except Exception:
+            traceback.print_exc()
         if scope is None:
             try:
                 lights = self._lights()
@@ -8004,6 +8548,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 pass
         self._own_setup = None
         self._typed_borrow = None   # 2.3.2 (item 1)
+        self._frames_setup = None   # 2.4.0 fit-in F3 (A1): the strip goes (a scan fills it again)
+        self._update_setup_strip()
         self.scale_approx = False
         if getattr(self, "_mono_filter_source", None) == "mobs":
             hand = self._mono_filter_hand()
@@ -8116,13 +8662,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if self.blink_source.get() == "lights":
             self.blink_paths = core.split_lights(self.blink_paths)[0]
         else:
-            # 2.3.0 (item 11): dark flats saved beside the flats are not flats; and say when the dark flats' exposure
-            # differs from the flats'
+            # 2.3.0 (item 11): dark flats saved beside the flats are not flats. 2.4.0 fit-in F3 (m150): only the
+            # count here; the exposure advice is the Input page's calibration-plan line (it was glued on, a second
+            # wording of the same fact)
             self.blink_paths, in_flats = core.split_dark_flats(self.blink_paths)
-            notes = self._darkflat_notes(None, None)
-            if in_flats or notes:
-                self.status.set(" ".join(([f"{len(in_flats)} dark flat(s) in the Flat folder are not shown (they are "
-                                           "not flats)."] if in_flats else []) + notes))
+            if in_flats:
+                self.status.set(f"{len(in_flats)} dark flat{'s' if len(in_flats) != 1 else ''} in the Flat folder "
+                                f"{'are' if len(in_flats) != 1 else 'is'} not shown (they are not flats).")
         self.blink_index = min(self.blink_index, max(0, len(self.blink_paths) - 1))
         self._blink_labels = dict(zip(self.blink_paths, core.frame_labels_for(self.blink_paths)))   # 2.2.17 (round 2)
         self._blink_index_of = {p: i for i, p in enumerate(self.blink_paths)}   # 2.4.0 (#100)
@@ -9141,7 +9687,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                            command=self.run_calibration)
         self.calibrate_button.pack(side=LEFT)
         self.gate(self.calibrate_button, None, busy=True)   # 2.4.0 fit-in F2 (#79 item 6, m003)
-        ttk.Button(cal_row, text="Cancel", command=self.cancel_job).pack(side=LEFT, padx=8)
+        # 2.4.0 fit-in F3 (F2-g): greyed (with the reason on hover) while there is nothing to cancel
+        self.cal_cancel_button = ttk.Button(cal_row, text="Cancel", command=self.cancel_job)
+        self.cal_cancel_button.pack(side=LEFT, padx=8)
+        self.gate(self.cal_cancel_button, self._cancel_why, busy=False)
         # 2.2.8: masters are saved beside their raw frames and reused; this forces a fresh stack.
         self.rebuild_masters = BooleanVar(value=False)
         ttk.Checkbutton(cal_row, text="Rebuild masters (ignore saved ones)", variable=self.rebuild_masters).pack(
@@ -9404,8 +9953,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             dark_exp=exp_of(dark, dark_file), light_exp=light_exp, flat_exp=exp_of(flat_paths, flat_file),
             darkflat_exp=exp_of(dflat, dflat_file), darkflats_in_bias=self._bias_holds_dark_flats(),
             flats_calibrated=flats_calibrated)
-        lines = [f"Calibration: lights = {plan['lights']}" + (f"; flats = {plan['flats']}" if plan["flats"] else "")
-                 + "."]
+        lines = ["Calibration: " + self._plan_words(plan)]   # 2.4.0 fit-in F3 (area B): the page's sentence
         lines += [f"  {n}" for n in plan["notes"]]
         lines += [f"⚠ {w}" for w in plan["warnings"]]
         return lines
@@ -9425,6 +9973,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 traceback.print_exc()   # a failed check never stops the calibration itself
             finally:
                 self._scan_from_calibrate = False
+        if not self._sensor_conflict_check():   # 2.4.0 fit-in F3 (A2): a color mask under MONO stops here
+            return
         self._prune_rejected()   # 2.2.19 (#20): another folder's rejected frames never count here
         self._camera_folders_snapshot()   # 2.4.0 (#111): these boxes go with these lights' camera
         # 2.2.8: a calibration entry is a folder of raw frames (SHOBS-P masters in it are not frames) or a master file.
@@ -10157,7 +10707,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.log_toggle = ttk.Button(self.photo_prog_row, text="Hide log" if log_shown else "Show log",
                                      command=self.toggle_photo_log)
         self.log_toggle.pack(side=RIGHT)
-        ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job).pack(side=RIGHT, padx=6)
+        self.photo_cancel_button = ttk.Button(self.photo_prog_row, text="Cancel run", command=self.cancel_job)
+        self.photo_cancel_button.pack(side=RIGHT, padx=6)
+        self.gate(self.photo_cancel_button, self._cancel_why, busy=False)   # 2.4.0 fit-in F3 (F2-g)
         return page_host
 
     def _wrapped_labels(self, widget):
@@ -22307,10 +22859,68 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._add_tooltip(widget, words)
         return widget
 
+    def _cancel_why(self) -> str:
+        """2.4.0 fit-in F3 (F2-g): why Cancel (Calibrate) and Cancel run (Photometry) are greyed: "" while there is
+        something cancel_job acts on (a running job, a run waiting for the comp survey, a Fit transit or Fit nights
+        waiting for an ephemeris lookup)."""
+        if self.busy or getattr(self, "_run_after_survey", False):
+            return ""
+        tp = getattr(self, "transit_page", None)
+        if tp is not None:
+            if getattr(tp, "_fit_queued", None):
+                return ""
+            mn = getattr(tp, "_multinight", None)
+            if mn is not None and getattr(mn, "_fit_after_lookup", False):
+                return ""
+        return "Nothing is running."
+
+    TOOLTIP_REFRESH_MS = 250
+
     def _add_tooltip(self, widget, text):
         """2.2.16 (item 12): a small hover note on a widget (shown after a short pause, gone when the pointer leaves).
         Wraps at about 50 characters of the UI font, so it sizes itself on any screen."""
-        state = {"tip": None, "job": None}
+        state = {"tip": None, "job": None, "label": None, "words": "", "watch": None}
+
+        def now_words():
+            try:
+                return (text() if callable(text) else text) or ""
+            except Exception:
+                return ""
+
+        def close():
+            if state["watch"] is not None:
+                try:
+                    widget.after_cancel(state["watch"])
+                except Exception:
+                    pass
+                state["watch"] = None
+            if state["tip"] is not None:
+                try:
+                    state["tip"].destroy()
+                except Exception:
+                    pass
+            state["tip"] = state["label"] = None
+
+        def watch():
+            """2.4.0 fit-in F3 (F2-f): while the tip is up, its words follow the widget (a gated button that changes
+            state under the pointer kept the old reason): read again every 250 ms; no words, no tip."""
+            state["watch"] = None
+            if state["tip"] is None:
+                return
+            try:
+                if not widget.winfo_exists():
+                    close()
+                    return
+                words = now_words()
+                if not words:
+                    close()
+                    return
+                if words != state["words"]:
+                    state["label"].configure(text=words)
+                    state["words"] = words
+                state["watch"] = widget.after(self.TOOLTIP_REFRESH_MS, watch)
+            except Exception:
+                close()
 
         def show():
             state["job"] = None
@@ -22319,10 +22929,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             tip = None
             # 2.4.0 (#96, #101): the words may be a function (a tooltip that follows the widget's state); no words,
             # no tooltip.
-            try:
-                words = text() if callable(text) else text
-            except Exception:
-                words = ""
+            words = now_words()
             if not words:
                 return
             try:
@@ -22334,9 +22941,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 tip = Toplevel(widget)
                 tip.wm_overrideredirect(True)
                 tip.wm_geometry(f"+{x}+{y}")
-                ttk.Label(tip, text=words, style="Hint.TLabel", justify=LEFT, padding=int(6 * k), relief="solid",
-                          borderwidth=1, wraplength=wrap).pack()
-                state["tip"] = tip
+                label = ttk.Label(tip, text=words, style="Hint.TLabel", justify=LEFT, padding=int(6 * k),
+                                  relief="solid", borderwidth=1, wraplength=wrap)
+                label.pack()
+                state["tip"], state["label"], state["words"] = tip, label, words
+                if callable(text):   # fixed words never change
+                    state["watch"] = widget.after(self.TOOLTIP_REFRESH_MS, watch)
             except Exception:
                 state["tip"] = None
                 if tip is not None:   # never leave an empty borderless window behind
@@ -22356,12 +22966,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 except Exception:
                     pass
                 state["job"] = None
-            if state["tip"] is not None:
-                try:
-                    state["tip"].destroy()
-                except Exception:
-                    pass
-                state["tip"] = None
+            close()
 
         widget.bind("<Enter>", enter, add="+")
         widget.bind("<Leave>", leave, add="+")

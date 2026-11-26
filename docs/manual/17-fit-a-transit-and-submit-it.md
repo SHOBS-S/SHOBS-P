@@ -530,12 +530,16 @@ knows when to look. Any timed transit is welcome there, TESS target or not. Uplo
 The ExoClock line under the Results row says how much ExoClock needs this planet (ALERT and HIGH most), how many
 recent observations it has, and whether it asks for a bigger telescope than yours.
 
-1. Click **Save for ExoClock…**. SHOBS-P writes two files:
+1. Click **Save for ExoClock…**. SHOBS-P writes a folder of its own in the Output folder (from 2.4.0), named like
+   the ExoFOP package's: `ExoClock_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P`, for example
+   `ExoClock_TOI-2046b_20261027_JABA_SHOBS-P`. In it are two files:
    - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt` (the planet without spaces,
      and the UTC date of the first frame). This is the file you upload. It has three columns: the time in JD_UTC at
      mid-exposure, the relative flux (not detrended), and its error. Only the frames the fit used are in it.
-   - `ExoClock_TOI-2046b_20261027_info.txt` (named after the upload file): what to pick on ExoClock's upload form
-     for that file.
+   - `ExoClock_info.txt`: what to pick on ExoClock's upload form for that file.
+
+   A second save of the same night makes a new folder ending in `_2`; nothing is overwritten. (Before 2.4.0 the two
+   files lay loose in the Output folder, where the ExoFOP package's `…_fit.txt` was easy to pick by mistake.)
 
    ExoClock wants JD_UTC times, and turning BJD_TDB back into JD_UTC needs the star's RA/Dec. For your own
    photometry that is the Input page's. For a fit of an **opened report** it is the report's own star: the planet
@@ -544,10 +548,10 @@ recent observations it has, and whether it asks for a bigger telescope than your
    which may hold another target. The site is the report's OBSLAT/OBSLON, else the Input page's. If the lookup does not
    answer, nothing is saved and the message says why; try again later.
 
-   The status line says *"✔ Saved. On the form, pick Mid-exposure (ExoClock_TOI-2046b_20261027.txt; what to pick is
-   in ExoClock_TOI-2046b_20261027_info.txt)."*
+   The status line says *"✔ Saved ExoClock_TOI-2046b_20261027_JABA_SHOBS-P: upload the .txt inside (what to pick on
+   the form is in ExoClock_info.txt)."*
 2. Click **Go to ExoClock…**. The upload page opens in your browser. Log in.
-3. Fill in the form from the `_info.txt` file:
+3. Fill in the form from `ExoClock_info.txt`:
    - **Planet**: the name with no space, for example `TOI-2046b`.
    - **Time format**: **JD_UTC**.
    - **Time stamp**: **Mid-exposure**. The form starts on **Exposure start**, so change it. This is the one most
@@ -555,7 +559,8 @@ recent observations it has, and whether it asks for a bigger telescope than your
    - **Flux format**: **Flux**.
    - **Filter**: as the info file says. A color camera's green channel (`TG`) is listed as **Johnson V**.
    - **Exposure time**: in seconds, as the info file says.
-4. Upload the `ExoClock_…txt` file.
+4. Upload the `ExoClock_<planet>_<YYYYMMDD>.txt` file from the ExoClock folder (not `ExoClock_info.txt`, and not a
+   file from the ExoFOP package: ExoClock answers those with *index list out of range*).
 
 ![The Results row with the ExoClock buttons](img/17-exoclock-buttons.png)
 

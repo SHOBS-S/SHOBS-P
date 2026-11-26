@@ -243,13 +243,17 @@ class TestNotesInApp(unittest.TestCase):
                 mock.patch.object(tp, "_confirm_export", return_value=True):
             path = app.save_exoclock()
         self.assertEqual(os.path.basename(path), "ExoClock_TOI-2046b_20261027.txt")
-        self.assertTrue(os.path.exists(os.path.join(folder, "ExoClock_TOI-2046b_20261027_info.txt")))   # step 6c
+        # 2.4.0 fit-in F3 (#113): its own folder, the info file always ExoClock_info.txt (was _info.txt beside it)
+        own = os.path.join(folder, "ExoClock_TOI-2046b_20261027_JABA_SHOBS-P")
+        self.assertEqual(os.path.dirname(path), own)
+        self.assertTrue(os.path.exists(os.path.join(own, "ExoClock_info.txt")))
         with open(path) as fh:
             rows = [ln.split() for ln in fh if ln.strip() and not ln.startswith("#")]
         self.assertEqual(len(rows), 28)   # 2.2.20 review: put-back flagged frames are left out
         self.assertLess(abs(float(rows[0][0]) - jd[0]) * 86400, 0.1)
         self.assertAlmostEqual(float(rows[0][2]), 0.002, places=6)   # measurement error, not the scaled one
-        self.assertTrue(app.status.get().startswith("✔ Saved. On the form, pick Mid-exposure"))
+        self.assertTrue(app.status.get().startswith(
+            "✔ Saved ExoClock_TOI-2046b_20261027_JABA_SHOBS-P: upload the .txt inside"))
         with mock.patch.object(ca.App, "open_link", return_value=True) as ol:
             app.open_exoclock()
             self.assertEqual(ol.call_args[0][0], "https://www.exoclock.space/upload/")

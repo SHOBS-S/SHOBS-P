@@ -109,6 +109,35 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "(Calibrate) or",
+    "(Photometry):"
+   ],
+   "todo": "Nothing. The button wakes up when a job starts."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "… already exists: saved as …_2 instead."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Saved ExoClock_…_SHOBS-P: upload the .txt inside (what to pick on the form is in ExoClock_info.txt)."
+   ],
+   "todo": "Upload the ExoClock_<planet>_<date>.txt in that folder (chapter 17)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "ExoClock files written to ….part, but the folder could not be renamed to … (a file in it was still open)."
+   ],
+   "todo": "Rename the folder yourself, or press Save for ExoClock… again."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Another step is still running. Press it again when that one has finished."
    ],
    "todo": "Press it again when the busy bar is gone."
@@ -179,9 +208,9 @@
   {
    "section": "Input",
    "patterns": [
-    "These 78 lights look like MicroObservatory frames … Use that telescope's setup for these frames? … Optics: focal length 560 mm, pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)"
+    "MicroObservatory setup: site …, … (…); optics 560 mm, 6.80 µm (from the header scale; camera pixel, binned 2x2 by the camera, 5.01\"/px); monochrome, CV, saturation 4000 ADU. In use for these frames only; your own setup comes back when you scan your own lights."
    ],
-   "todo": "Yes for these frames; your own setup comes back when you scan your own lights. See 5. Input."
+   "todo": "Nothing. Use my own setup in the Setup for these frames box puts your site and optics back. See 5. Input."
   },
   {
    "section": "Input",
@@ -309,16 +338,30 @@
   {
    "section": "Input",
    "patterns": [
-    "Darks 60 s, lights 120 s: the master dark is scaled ×2 …"
+    "Plan: lights = light − bias − (dark − bias); flats = flat − dark flat."
+   ],
+   "todo": "Nothing, unless a ⚠ or ✖ line follows it."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… Darks 60 s, lights 120 s: the master dark is scaled ×2; 120 s darks are better."
    ],
    "todo": "Point Dark at darks of the lights' exposure if you have them."
   },
   {
    "section": "Input",
    "patterns": [
-    "No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights scales the camera's offset too). …"
+    "Darks can't be scaled correctly without bias or dark flats: add bias frames or dark flats, or use 55 s darks."
    ],
    "todo": "Add bias frames or dark flats (Dark flats row), or use darks at the lights' exposure. See 7. Calibrate."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Flats 0.5 s, darks 55 s and no bias: the master flat comes out wrong. Put dark flats in the Dark flats box, or add bias frames."
+   ],
+   "todo": "Put dark flats in the Dark flats row, or add bias frames."
   },
   {
    "section": "Input",
@@ -368,14 +411,80 @@
    "patterns": [
     "These lights come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says … mm from those frames. Is … mm right for this telescope?"
    ],
-   "todo": "Yes keeps the value; No puts the cursor in the Telescope aperture (mm) box: type the aperture."
+   "todo": "Yes keeps the value; No puts the cursor in the Telescope aperture (mm) box: type the aperture. After No the status bar and the log say These lights are from …: type its aperture in the Optics box (Input page); it still says … mm from the last frames."
   },
   {
    "section": "Input",
    "patterns": [
-    "These lights were taken at latitude …, longitude …, N km from your site."
+    "Setup for these frames",
+    "(2.4.0; before, the question"
    ],
-   "todo": "Yes uses their site and optics for these frames only; your own come back with your own frames."
+   "todo": "Nothing for someone else's frames. Save as my setup if they are your own (first night, or you moved). Use my own setup to use your saved site and optics for them after all. See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Using the site and optics in these frames: …, … (N km from your site). In use for these frames only; nothing is saved as yours. Save as my setup and Use my own setup are on the Input page."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… Elevation is not in the header: type it in the Elevation box.",
+    "Elevation not in the header: type it on the Input page."
+   ],
+   "todo": "Type the elevation. After a photometry run it comes back by itself for that telescope's frames."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Save as my setup to keep them (SHOBS-SCHED reads them too); or type your own value in the box."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames",
+    "(2.4.0; before, the question"
+   ],
+   "todo": "Nothing if yours are right. Use the header values puts the header's in the boxes for these frames; Save as my setup then keeps them."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Use the frames' setup to go back to the header's site and optics."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Saved as your setup: site …; focal length …, pixel …; … mount. SHOBS-SCHED reads it too."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Save as my setup"
+   ],
+   "todo": "Nothing for MicroObservatory frames; else fill in the Site boxes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Star not changed (…): a step is still running. Choose the star again when it finishes."
+   ],
+   "todo": "Choose the star again when the busy bar is gone."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Kept … (the lights' FITS OBJECT says '…')."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Input",
@@ -491,6 +600,28 @@
     "No light frames found."
    ],
    "todo": "Check the folder and the Blink page."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "The flat shows a color mask (its 2x2 pixel planes differ by 38%), but the Bayer pattern is MONO. Calibrating a color camera as monochrome gives wrong photometry: the colors are never separated. Which camera took these frames?",
+    "The lights' sky background shows …"
+   ],
+   "todo": "Color camera (RGGB) sets RGGB and goes on (check the pattern in the Camera box). It is monochrome keeps MONO and is not asked again for this Lights folder. Cancel (the default) stops. See 7. Calibrate."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "the flat shows a color mask (…), but the Bayer pattern is MONO. For a color camera, pick its pattern (often RGGB) on the Calibrate page; Calibrate asks before it starts."
+   ],
+   "todo": "Pick the camera's pattern in the Camera box, or answer the question when you calibrate."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "Calibration not started: pick the camera's Bayer pattern in the Camera box (Calibrate page), MONO for a monochrome camera, then press Calibrate again."
+   ],
+   "todo": "Do what it says."
   },
   {
    "section": "Calibrate",

@@ -48,11 +48,23 @@ What the counts mean:
 SHOBS-P reads FITS (`.fits`, `.fit`, `.fts`, also gzip and fpack-compressed) and PixInsight XISF files. If a folder
 holds only files it cannot read, such as camera RAW or TIFF, the log says so.
 
-**Darks of another exposure.** When the darks' exposure differs from the lights', an orange line under the Frames box
-says so as soon as you choose the folders, for example **Darks 60 s, lights 120 s: the master dark is scaled ×2 to
-the lights' exposure. Fine for a cooled camera; 120 s darks are better.** When the dark would be scaled more than 3
-times, the line is red (✖) and Calibrate will ask about it. Once you have chosen at Calibrate to scale these darks,
-the line turns gray (✔).
+**The calibration plan.** Once **Lights** and at least one of Bias, Dark, Dark flats and Flat are filled, a gray line
+under the Frames box says how these frames will be calibrated (from 2.4.0), for example **Plan: lights = light − bias
+− (dark − bias); flats = flat − dark flat.** It is the same sentence the Calibrate log starts with, so you can check
+the plan before you calibrate. When the darks' exposure differs from the lights', the line adds it: **Darks 60 s,
+lights 120 s: the master dark is scaled ×2; 120 s darks are better.** That is fine for a cooled camera. Once you have
+chosen at Calibrate to scale darks that are far off, it adds **✔ … as you chose at Calibrate.**
+
+A second line appears under the plan only when something is wrong:
+
+- **✖ Darks 30 s, lights 180 s: the master dark would be scaled ×6, which stamps its noise on every light. Point Dark
+  at 180 s darks (Calibrate asks otherwise).** (red) The dark would be scaled more than 3 times.
+- **⚠ Darks can't be scaled correctly without bias or dark flats: add bias frames or dark flats, or use 55 s darks.**
+- **⚠ Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.**
+- **⚠ Flats 0.5 s, darks 55 s and no bias: the master flat comes out wrong. Put dark flats in the Dark flats box, or
+  add bias frames.**
+
+Chapter 7 explains each of them.
 
 Any of Bias, Dark, Dark flats and Flat may be left empty. That step is simply skipped. Press **✕** to empty a row; the
 status bar says, for example, **Dark folder cleared. Calibration will skip it.**
@@ -63,12 +75,6 @@ flats (optional, like Bias): darks taken at the flats' exposure. They are taken 
 also stand in for it, so Bias can stay empty. Leave it empty if you have none."* If you have bias, darks and flats,
 leave it empty: nothing changes. Like the other frame folders it starts empty every time SHOBS-P starts, and it is not
 saved in a series. Chapter 7 says how the dark flats are used.
-
-Two more lines can appear in the same place as the dark-exposure line:
-
-- **⚠ No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights
-  scales the camera's offset too). Add bias frames or dark flats, or use darks at the lights' exposure.**
-- **Dark flats 2 s, flats 0.5 s: dark flats should match the flats' exposure. Take dark flats at 0.5 s.**
 
 **Using a saved master.** Bias, Dark, Dark flats and Flat each have a **Master file…** button. Use it to pick one master file that
 SHOBS-P built on an earlier night (they are in the `SHOBS-P masters` subfolder of your calibration folders). Masters
@@ -217,8 +223,10 @@ it.
 
 These boxes are described in chapter 4, including the **Mount** choice. They are usually filled already: the site,
 time zone, telescope, focal length, pixel size and mount are remembered, and **Scan folders** fills empty boxes from your FITS
-headers. When you have not saved a focal length, pixel size or mount yet, the values from your own lights' headers are
-remembered as yours (never those of someone else's frames, MicroObservatory's or a loaded series).
+headers for the frames at hand. What you type is remembered as yours. What a header filled in is not (from 2.4.0):
+it is used for these frames, and saved only when you press **Save as my setup** in the **Setup for these frames** box
+(see "Setup for these frames" below). Before 2.4.0 a focal length, pixel size or mount read from your lights' headers
+was saved as yours without asking.
 
 **Time zone** (in the Site box) is the site's time zone, for example `America/New_York`. Every local time in
 SHOBS-P uses it, labeled like **Local time (UTC−5)**. Type part of a name (`Phoenix`, `Warsaw`) to narrow the list,
@@ -235,8 +243,12 @@ It is what:
 - reads the Bayer pattern (or detects a monochrome camera from the flats or the lights' sky) and the filter;
 - finds color images that are already debayered and asks which channel to measure;
 - reads the mount from the headers when they make it clear;
-- fills empty Site and Optics boxes from the header;
+- takes the site and optics from the header for these frames, and says what it took in the **Setup for these
+  frames** box;
 - runs the checks below.
+
+**Scan folders** and **Try it with sample data…** are greyed while a job runs (from 2.4.0), like the other buttons
+that start something.
 
 When it is done, the status bar says **Folders scanned.** (or what it found).
 
@@ -271,26 +283,49 @@ point at your target anyway, SHOBS-P only notes in the log that "the OBJECT keyw
 on. If the `OBJECT` names a different star in another place, it asks the same **These frames are …, not …** question
 (the default answer is **No**).
 
-**Frames from another site.** If the header's site is more than 50 km from yours, SHOBS-P asks whether to use the
-site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
-their setup; your own comes back automatically the next time you scan a folder of your own lights. FITS headers do
-not say the site's time zone, so from 2.4.0 SHOBS-P looks the zone up from the site's latitude and longitude (offline,
-with the tzfpy package, see chapter 26) and sets the **Time zone** box; one log line names it, for example
-*Time zone set to America/Phoenix from the frames' site's latitude and longitude: local times (and trims typed as
-clock times) use it.* Your own zone comes back with your own setup. The zone matters for results where you type a
-trim as a clock time (it decides which points an HHMM trim takes). An install without that package (it is installed
-on Linux only, where a ready-made copy exists; see chapter 2) keeps the 2.2.21 behavior: the log reminds you to check
-the **Time zone** box, and you pick the frames' site zone there so their local times are right. The same lookup sets
-the zone when **Scan folders** fills your own empty Site boxes from the header and you have never chosen a Time zone. When the header has no elevation either, the status line adds **Elevation not in the
-header — type it on the Input page** (from 2.3.3): the scintillation error and the AAVSO exoplanet report use it, and
-it must be typed again for each run of those frames.
+**Setup for these frames** (from 2.4.0). After **Scan folders**, a box of that name above the Site box says which
+site and optics are in use for the lights in the Lights row, and where they came from. It replaces four questions
+SHOBS-P used to ask (*Is that your own site?*, *Use the site and optics in these frames?*, *Use that telescope's setup
+for these frames?* and *Use the header values?*). Nothing in it needs an answer before you go on, and nothing is saved
+as your setup unless you press **Save as my setup**.
 
-**Header values that differ from yours.** If the header's latitude, longitude, elevation, aperture, focal length or
-pixel size differs from your boxes, SHOBS-P lists the differences and asks **Use the header values?** **No** keeps
-yours, and SHOBS-P will not ask again about those same values.
+- **Your own frames.** The box says **Your own setup: site 35.3030, -81.9400, 280 m; focal length 2900 mm, pixel
+  3.76 µm, aperture 356 mm.** If an empty Site or Optics box was filled from the header, it adds **From the lights'
+  headers, not saved as yours: focal length 2098; …** with a **Save as my setup** button. The mount the headers show
+  for sure is listed there too while no mount of yours is saved. If the header's latitude, longitude, elevation,
+  aperture, focal length or pixel size differs from your boxes, it adds **The lights' headers differ: Latitude yours
+  35.303, header 35.34; …** with a **Use the header values** button. Your own values are used until you press it; the
+  header values it puts in the boxes are then used for these frames, and saved only by **Save as my setup**.
+- **Frames from another site.** If the header's site is more than 50 km from yours (a remote telescope, a friend's
+  data), or the header has a site and no site of yours is saved yet, SHOBS-P uses the frames' site and optics for
+  them at once. The box says, for example, **site 31.6800, -110.8800, 1268 m; focal length 560 mm, pixel 13.5 µm.
+  From the lights' headers (… / …), 2843 km from your site. In use for these frames only: nothing is saved as
+  yours.** Your own site, optics and camera settings are set aside and come back by themselves the next time you scan
+  a folder of your own lights. Two buttons:
+  - **Save as my setup**: these are your own frames (your first night, or you moved). The site, time zone, optics
+    and the mount the headers show are saved as yours; SHOBS-SCHED reads them too.
+  - **Use my own setup**: your saved site and optics are used for these frames after all. SHOBS-P remembers that
+    for this telescope at this site, says so in the box and the log each time its lights are scanned, and offers
+    **Use the frames' setup** to go back.
+- **No elevation in the header.** The box (and the status line) says **Elevation is not in the header: type it in
+  the Elevation box.** The scintillation error and the AAVSO exoplanet report use it. Type it once: after a
+  photometry run it comes back by itself the next time that telescope's lights from that site are scanned, with a
+  focal length, pixel size or time zone you had to type for them.
+- **MicroObservatory frames** get that telescope's setup the same way, without a question (see below). **Save as my
+  setup** is greyed for them: it is MicroObservatory's telescope, not yours.
+- **A site you typed for these frames only** (next paragraph) shows here too, with the same two buttons.
 
-**Your Site boxes are empty.** If the header has a site and yours is empty, SHOBS-P asks **Is that your own site?**
-**My site from now on** saves it as yours; **These frames only** (the default) uses it for these frames only.
+> **Caution:** This changes results for frames from another site (from 2.4.0). The site sets the airmass and the BJD
+> times. Before, the frames' site was used only after you answered **Yes**; now it is used unless you press **Use my
+> own setup**. If you used to answer **No** for some frames, press **Use my own setup** for them once.
+
+FITS headers do not say the site's time zone, so SHOBS-P looks the zone up from the frames' site's latitude and
+longitude (offline, with the tzfpy package, see chapter 26) and sets the **Time zone** box; one log line names it, for
+example *Time zone set to America/Phoenix from the frames' site's latitude and longitude: local times (and trims
+typed as clock times) use it.* Your own zone comes back with your own setup. The zone matters for results where you
+type a trim as a clock time (it decides which points an HHMM trim takes). An install without that package (an install
+set up before 2.4.0: run the setup again, see chapter 2) keeps the 2.2.21 behavior: the log reminds you to check the
+**Time zone** box, and you pick the frames' site zone there so their local times are right.
 
 **A site you typed that is not your saved one.** When you type a site into the Site boxes for someone else's frames
 (a friend's data, or frames whose headers have no site), SHOBS-P does not save it while you type. When you leave the
@@ -306,14 +341,17 @@ frames only** (the default) uses it for these frames only: your saved site, opti
 is saved while the typed site is in use. If you saved an Optics value earlier in the same session (for example the
 other telescope's aperture before its site), it goes back too, and the log names it. The typed site stays in use for
 that Lights folder when its header has no site; your own setup comes back the next time you scan a folder of your own
-lights. Small changes at your own site (a corrected elevation, a fourth decimal) are saved without a question.
+lights, or when you press **Use my own setup** in the **Setup for these frames** box. Small changes at your own site
+(a corrected elevation, a fourth decimal) are saved without a question.
 
 **Monochrome camera.** If there is no Bayer keyword and the raw flats show no color mask, the status bar says
 **Monochrome camera found (no color mask in the flat): Bayer pattern MONO.** Without flats, SHOBS-P tests the lights'
 sky background instead (it needs bias or dark frames, or a bright sky); then the status bar says **Monochrome camera
 found (no color mask in the lights' sky background): Bayer pattern MONO.** If neither can tell, SHOBS-P asks once
 for these lights: **Color or monochrome camera?** If your camera really is a color camera, choose the pattern on the
-Calibrate page.
+Calibrate page. The other way round, a color mask seen while the **Bayer pattern** says **MONO**, is a ⚠ line in the
+log at the scan, and from 2.4.0 **Build masters and calibrate** stops on it and asks which camera took the frames
+(chapter 7).
 
 **Color images, already debayered.** If the lights have three color channels, SHOBS-P asks which channel to measure:
 **Green (TG)**, **Red (TR)**, **Blue (TB)** or **Luminance (CV)**. It asks once per lights folder; the status bar then
@@ -322,13 +360,17 @@ calibrated again (chapter 4).
 
 **The mount.** If the headers clearly show the mount (for example a meridian flip, or a derotator), that mount is
 used for these lights, and the hint under **Mount** says so. If it differs from your **Mount** box, the hint suggests
-changing the box when this is your own telescope.
+changing the box when this is your own telescope. From 2.4.0 the headers' mount is no longer saved as yours by
+itself: **Save as my setup** in the **Setup for these frames** box does that.
 
-**MicroObservatory frames** are recognized, and SHOBS-P offers to use that telescope's known setup for them. Newer
+**MicroObservatory frames** are recognized, and SHOBS-P uses that telescope's known setup for them: site, optics,
+monochrome camera, clear filter, binning 1 and a 4000 ADU saturation level. From 2.4.0 it does so without asking; the
+**Setup for these frames** box and the log say what was set, and **Use my own setup** puts your site and optics back
+(the Bayer pattern stays MONO, since the frames are monochrome). Newer
 MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
-their site, focal length and frame size. The question shows the optics it would use: focal length 560 mm and
+their site, focal length and frame size. The optics are focal length 560 mm and
 **pixel 6.8 µm**, the camera's own pixel. The camera bins it 2×2 (the header says `XBINNING = 2`), so the frames are
-**about 5.0″ per pixel**, and the question says so. (Before 2.4.0 the box got 13.6 µm, the binned pixel, which the
+**about 5.0″ per pixel**, and the log line says so. (Before 2.4.0 the box got 13.6 µm, the binned pixel, which the
 solve then multiplied by the header's binning again: 10″ per pixel, and the frames did not solve unless you typed
 6.8 µm yourself. Older MicroObservatory files that name no binning still get 13.6 µm, which is right for them.)
 The site comes from the header too, including its elevation (`HEIGHT`, 1268 m at Whipple Observatory's base camp;

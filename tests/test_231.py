@@ -199,7 +199,8 @@ class TestInApp(unittest.TestCase):
         self.assertIn("another telescope", msg)
         self.assertIn("152 mm", msg)
         self.assertEqual(app.aperture_mm.get(), "152")   # asks only; never changed behind the user's back
-        self.assertIn("Optics box", app.status.get())
+        # 2.4.0 fit-in F3 (m146): one Log line (it is the status line too); the separate status wording is gone
+        self.assertIn("type its aperture in the Optics box (Input page)", self.logged[-1])
         # a value typed since that run (the box no longer holds the old one): no question
         self.boxes["askyesno"].reset_mock()
         app.aperture_mm.set("203")
