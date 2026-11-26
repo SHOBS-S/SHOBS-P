@@ -488,7 +488,9 @@ class TestDarkFlatsBox(unittest.TestCase):
             app.light_dir.set(lights)
             self.pump(600)
             text = app._update_dark_exposure_note()
-            self.assertIn("darks can't be scaled correctly without bias or dark flats", text)
+            # 2.4.0 fit-in F3 (area B): the plan line first, then the plan's own short warning
+            self.assertTrue(text.startswith("Plan: lights = light − dark scaled ×0.5."), text)
+            self.assertIn("⚠ Darks can't be scaled correctly without bias or dark flats", text)
             app.flat_dir.set(flats)
             app.darkflat_dir.set(dfl)
             self.pump(600)

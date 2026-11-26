@@ -27,6 +27,32 @@ def _is_own(filename: str) -> bool:
         return False
 
 
+# 2.4.0 fit-in F3 (F2-b): on Windows a native message box or file dialog runs its own modal loop inside one Tk call,
+# so Tk timers do not fire and the beat stops while the question is up ("UI thread busy for 98.7 s" for a box the
+# user was reading). These are tkinter's own modules for such boxes; wait_window is a Toplevel question's wait.
+MODAL_FILES = ("commondialog.py", "messagebox.py", "filedialog.py", "simpledialog.py", "colorchooser.py")
+MODAL_FUNCTIONS = ("wait_window",)
+
+
+def _in_modal(frame) -> bool:
+    """True when the Tk thread's stack (its innermost frame, walked outwards) is inside a tkinter question or file
+    dialog: the user is answering, the window is not stuck."""
+    seen = 0
+    while frame is not None and seen < 200:
+        try:
+            code = frame.f_code
+            folder, name = os.path.split(code.co_filename)
+            if code.co_name in MODAL_FUNCTIONS and name == "__init__.py" and os.path.basename(folder) == "tkinter":
+                return True
+            if name in MODAL_FILES and os.path.basename(folder) == "tkinter":
+                return True
+        except Exception:
+            return False
+        frame = frame.f_back
+        seen += 1
+    return False
+
+
 class UIWatch:
     def __init__(self, log, main_thread_id: int | None = None, stall_s: float = STALL_S, long_s: float = LONG_S,
                  clock=time.monotonic):
@@ -87,6 +113,11 @@ class UIWatch:
                      "counting again.")
             return
         gap = now - self.last
+        if gap >= self.stall_s and self._in_question():
+            # F2-b: a question or file dialog is up: no stall. Count from now, so a real stall after the answer is
+            # timed from the answer. A stall reported before the box opened still gets its "responding again" line.
+            self.last = now
+            return
         if gap >= self.stall_s and self._said == 0:
             self._stall_start = self.last
             self._said = 1
@@ -96,6 +127,12 @@ class UIWatch:
         elif gap >= self.long_s and self._said == 1:
             self._said = 2
             self.log(f"UI thread still busy after {gap:.1f} s; it is now in:\n{self.stack_text()}")
+
+    def _in_question(self) -> bool:
+        try:
+            return _in_modal(sys._current_frames().get(self.main_id))
+        except Exception:
+            return False
 
     def start(self):
         def run():

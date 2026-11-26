@@ -202,7 +202,8 @@ it was already sent in another package.
 ## The ExoClock file
 
 ExoClock (exoclock.space) collects transit times to keep planets' ephemerides up to date for the Ariel mission.
-**Save for ExoClock…** writes two files:
+**Save for ExoClock…** writes two files into a folder of their own in the Output folder (from 2.4.0),
+`ExoClock_<planet>_<YYYYMMDD>_<observer code>_SHOBS-P` (a second save of the same night ends in `_2`):
 
 - `ExoClock_<planet>_<YYYYMMDD>.txt`, for example `ExoClock_TOI-2046b_20261027.txt`: the planet's name with no
   spaces (as ExoClock spells it) and the UTC date of the first frame. A few header lines start with `#` (planet,
@@ -210,14 +211,13 @@ ExoClock (exoclock.space) collects transit times to keep planets' ephemerides up
   time in **JD_UTC** at **mid-exposure**, the relative flux (divided by its median, not detrended; ExoClock fits its
   own baseline) and its measurement error (ExoClock scales the errors itself). Only the frames the fit used are in
   it, as in the AAVSO report; flagged frames you put back with **Fit with flagged** are left out too.
-- `ExoClock_<planet>_<YYYYMMDD>_info.txt` (named after its upload file, for example
-  `ExoClock_TOI-2046b_20261027_info.txt`): what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
+- `ExoClock_info.txt` (always this name, since each folder holds its own): what to pick on ExoClock's upload form for that file: **Planet** (for example `TOI-2046b`),
   **Time format** `JD_UTC`, **Time stamp** `Mid-exposure`, **Flux format** `Flux`, **Filter** (a color camera's `TG`
   is listed as Johnson V), **Exposure time** in seconds, and the upload page's address.
 
 > **Caution:** ExoClock's form starts on **Exposure start**. Change it to **Mid-exposure**, or every time is off by
-> half an exposure. The status line reminds you: *"✔ Saved. On the form, pick Mid-exposure (…; what to pick is in
-> ExoClock_TOI-2046b_20261027_info.txt)."*
+> half an exposure. The status line points at the form notes: *"✔ Saved ExoClock_…_SHOBS-P: upload the .txt inside
+> (what to pick on the form is in ExoClock_info.txt)."*
 
 **Go to ExoClock…** opens the upload page (https://www.exoclock.space/upload/) in your browser; log in and upload the
 `ExoClock_…txt` file. As with the other upload pages, the night of the file you saved last is marked sent (**Sent**

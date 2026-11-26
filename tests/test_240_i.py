@@ -393,14 +393,17 @@ class TestMicroObservatoryPixel(unittest.TestCase):
     def _setup(self, header):
         app = self.app
         app._own_setup = None
+        # 2.4.0 fit-in F3 (A1): no question any more; the Log line carries the optics words
         asked = []
-        with mock.patch.object(self.ca.messagebox, "askyesno", side_effect=lambda t, text, *a, **k:
-                               asked.append(text) or True):
+        with mock.patch.object(self.ca.messagebox, "askyesno") as box, \
+                mock.patch.object(app, "log", side_effect=lambda t, *a, **k: asked.append(str(t))):
             app._setup_microobservatory(header, 78)
+            box.assert_not_called()
+        asked = ["\n".join(t for t in asked if t.startswith("MicroObservatory setup:"))]
         app.preview_header = header
         solve_scale = float(app.pixel_um.get()) / float(app.focal_mm.get()) * 206.265 \
             * self.ca.solve_camera_bin(header)
-        return [ln for ln in asked[0].splitlines() if "Optics" in ln][0], float(app.pixel_um.get()), solve_scale
+        return [ln for ln in asked[0].splitlines() if "optics" in ln][0], float(app.pixel_um.get()), solve_scale
 
     def test_current_headers_xbinning_2(self):
         head = {"TELESCOP": "Cecilia", "OBSERVAT": "Whipple Observatory", "LATITUDE": 31.68, "LONGITUD": -110.88,
@@ -409,7 +412,7 @@ class TestMicroObservatoryPixel(unittest.TestCase):
         line, pixel, scale = self._setup(head)
         self.assertAlmostEqual(pixel, 6.8, places=1)
         self.assertAlmostEqual(scale, 5.0, delta=0.05)
-        self.assertIn("pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)", line)
+        self.assertIn("6.80 µm (from the header scale; camera pixel, binned 2x2 by the camera, 5.01\"/px)", line)
         self.assertAlmostEqual(self.app._optics_scale_arcsec(), scale, places=6)   # the field image's scale too
 
     def test_older_headers_without_binning(self):
@@ -417,7 +420,7 @@ class TestMicroObservatoryPixel(unittest.TestCase):
         line, pixel, scale = self._setup(head)
         self.assertAlmostEqual(pixel, 13.6, places=1)
         self.assertAlmostEqual(scale, 5.0, delta=0.05)
-        self.assertIn("pixel 13.6 µm (about 5.0\"/px)", line)
+        self.assertIn("13.60 µm (from the header scale, 5.01\"/px)", line)
         head = dict(head, XBINNING=1)
         self.assertAlmostEqual(self._setup(head)[2], 5.0, delta=0.05)
 
@@ -427,7 +430,7 @@ class TestMicroObservatoryPixel(unittest.TestCase):
             line, pixel, scale = self._setup(head)
             self.assertAlmostEqual(pixel, want_pixel, places=1)
             self.assertAlmostEqual(scale, 13.6 / 560 * 206.265, places=3)   # about 5.0"/px either way
-            self.assertIn("Solve refines it", line)
+            self.assertIn("(approximate", line)
 
 
 if __name__ == "__main__":
