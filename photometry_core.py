@@ -3531,6 +3531,52 @@ def header_e_per_adu(header: dict | None) -> float | None:
     return float(v)
 
 
+def cfa_channels_identical(mosaic: np.ndarray, n_stars: int = 30, box: int = 4) -> dict:
+    """2.4.0 fit-in F4 (m191): were a colour camera's binned frames made by mixing the red, green and blue pixels?
+    Then the four Bayer positions of the mosaic all hold the same mix: every star has the same "colour" between
+    them and the sky is equally bright in each. Measured on the brightest stars (sky-subtracted light in a small
+    box, per Bayer position): "spread" = the robust scatter, over the stars, of the magnitude difference between
+    the two diagonal positions (0,0) and (1,1) (red and blue on any Bayer pattern), and "sky" = the two positions'
+    sky ratio. identical: True when spread < 0.03 mag and the sky ratio is within 2 % of 1 (real colour data
+    show 0.1 mag or more between stars); False when the channels differ; None when it cannot be told (fewer than
+    8 usable stars). Returns {"identical", "spread", "sky", "n"}."""
+    out = {"identical": None, "spread": float("nan"), "sky": float("nan"), "n": 0}
+    m = np.asarray(mosaic, dtype=np.float32)
+    if m.ndim != 2 or min(m.shape) < 64:
+        return out
+    h, w = (m.shape[0] // 2) * 2, (m.shape[1] // 2) * 2
+    a, b = m[0:h:2, 0:w:2], m[1:h:2, 1:w:2]
+    lum = a + b
+    try:
+        found = detect_sources(lum, max_sources=n_stars * 3, nsigma=12.0, min_sep=3.0 * box)
+    except Exception:
+        return out
+    sky_a, sky_b = float(np.nanmedian(a)), float(np.nanmedian(b))
+    top = float(np.nanpercentile(lum, 99.999))
+    diffs = []
+    for x, y in found:
+        xi, yi = int(round(x)), int(round(y))
+        if not (box <= xi < a.shape[1] - box and box <= yi < a.shape[0] - box):
+            continue
+        pa = a[yi - box:yi + box + 1, xi - box:xi + box + 1]
+        pb = b[yi - box:yi + box + 1, xi - box:xi + box + 1]
+        if float(np.nanmax(pa + pb)) >= 0.95 * top and len(found) > 2 * n_stars:
+            continue   # the very brightest may be clipped
+        fa, fb = float(np.nansum(pa - sky_a)), float(np.nansum(pb - sky_b))
+        if fa > 0 and fb > 0:
+            diffs.append(-2.5 * math.log10(fa / fb))
+        if len(diffs) >= n_stars:
+            break
+    out["n"] = len(diffs)
+    if sky_b:
+        out["sky"] = sky_a / sky_b
+    if len(diffs) < 8:
+        return out
+    out["spread"] = float(robust_sigma(np.array(diffs)))
+    out["identical"] = bool(out["spread"] < 0.03 and math.isfinite(out["sky"]) and abs(out["sky"] - 1.0) < 0.02)
+    return out
+
+
 def debayer_weights(pattern: str, mode: str) -> dict:
     """2.2.17 (item 8): the weight of each 2x2 Bayer position (iy, ix) in one superpixel of debayer(pattern, mode);
     {(0, 0): 1.0} for a monochrome camera."""
@@ -8254,8 +8300,9 @@ def aperture_test_stats(mags_by_r: dict, ref_label: str, has_comp2: bool, boot: 
 
     def series(m):
         comps = m[:, 1] if (not has_comp2 or ref_label == "comp 2") else np.nanmean(m[:, 1:3], axis=1)
-        other = m[:, 3] if ref_label in ("check star", "field star") else (m[:, 2] if ref_label == "comp 2"
-                                                                            else m[:, 0])   # 2.2.19: field star
+        # 2.4.0 fit-in F4 (m627): "steadiest spare (name)" is judged in the check star's place (column 3)
+        judged = ref_label in ("check star", "field star") or ref_label.startswith("steadiest spare")
+        other = m[:, 3] if judged else (m[:, 2] if ref_label == "comp 2" else m[:, 0])   # 2.2.19: field star
         return other - comps, m[:, 0] - comps
 
     ref = np.array([series(mags_by_r[r][:n])[0] for r in radii])

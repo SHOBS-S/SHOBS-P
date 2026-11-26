@@ -1262,6 +1262,31 @@ class ScrollBody:
             # 2.2.12: X11 sends the wheel as buttons 4 and 5.
             self.canvas.bind_all("<Button-4>", lambda e: self._wheel(e, units=-1))
             self.canvas.bind_all("<Button-5>", lambda e: self._wheel(e, units=1))
+        # 2.4.0 fit-in F4 (F1c leftovers): a Tk 8.7 / 9 trackpad (no <MouseWheel> from it any more)
+        if not hasattr(self, "_touch_carry"):
+            self._touch_carry = [0]
+        self._touch_bound = page_scroll.bind_touchpad(self.canvas, None, lambda e: self._wheel(
+            e, units=page_scroll.touchpad_units(getattr(e, "delta", 0), self._touch_carry)))
+        self._guard_value_boxes()
+
+    def _guard_value_boxes(self):
+        """2.4.0 fit-in F4 (F1c leftover): a drop-down or spin box inside this body no longer takes the wheel to
+        change its value (the Photometry side panel's Catalog and Pick boxes did); the wheel scrolls the body, as on
+        the main pages (F1c M1). A binding on the widget itself runs before its class's, so it can stop it."""
+        stack = [self.inner]
+        while stack:
+            w = stack.pop()
+            try:
+                cls = str(w.winfo_class())
+                if cls in page_scroll.WHEEL_NO_VALUE and not getattr(w, "_wheel_guarded", False):
+                    w._wheel_guarded = True
+                    w.bind("<MouseWheel>", lambda e: self._wheel(e, force=True) or "break")
+                    if sys.platform.startswith("linux"):
+                        w.bind("<Button-4>", lambda e: self._wheel(e, units=-1, force=True) or "break")
+                        w.bind("<Button-5>", lambda e: self._wheel(e, units=1, force=True) or "break")
+                stack.extend(w.winfo_children())
+            except Exception:
+                continue
 
     def _leave(self, event):
         # Moving onto a child widget is not leaving the body.
@@ -1272,6 +1297,8 @@ class ScrollBody:
             if sys.platform.startswith("linux"):
                 self.canvas.unbind_all("<Button-4>")
                 self.canvas.unbind_all("<Button-5>")
+            if getattr(self, "_touch_bound", False):
+                self.canvas.unbind_all("<TouchpadScroll>")
         except Exception:
             pass
 
@@ -1330,10 +1357,13 @@ class ScrollBody:
         except Exception:
             pass
 
-    def _wheel(self, event, units=None):
+    def _wheel(self, event, units=None, force: bool = False):
         try:
-            if str(event.widget.winfo_class()) in ("TCombobox", "Text", "Listbox", "Treeview"):
+            cls = str(event.widget.winfo_class())
+            if cls in ("Text", "Listbox", "Treeview"):
                 return
+            if cls in page_scroll.WHEEL_NO_VALUE and not force:
+                return   # its own guard (_guard_value_boxes) scrolls the body once; this is the bind_all echo
             n = units if units is not None else core.wheel_units(getattr(event, "delta", 0))
             if n:
                 self.canvas.yview_scroll(n, "units")
@@ -4104,12 +4134,37 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if info["note"] and (d.get("sure") or info["mount"] != core.MOUNT_GEM or (folder, info["note"]) not in seen):
                 self.log(info["note"])
                 seen.add((folder, info["note"]))
-            top = d.get("max_alt")
-            if info["mount"] == core.MOUNT_ALTAZ and top is not None and top >= tcore.ZENITH_KEYHOLE_ALT:
-                self.log(f"Zenith keyhole: the field reached altitude {top:.1f}° (above {tcore.ZENITH_KEYHOLE_ALT:g}°), "
-                         "where an alt-az mount's azimuth speed and the field rotation get extreme; frames there can "
-                         "trail or smear. Check them on the Blink page.")
+            # 2.4.0 fit-in F4 (m031): the zenith-keyhole line is no longer said here from the altitude alone ("frames
+            # there CAN trail"): the photometry run says it, only when frames up there really are smeared, and
+            # names them (keyhole_note)
         return info
+
+    KEYHOLE_ELONG = 1.25      # a star this much longer than wide ...
+    KEYHOLE_ELONG_REL = 1.2   # ... and this many times the night's usual elongation counts as smeared
+
+    @classmethod
+    def keyhole_note(cls, night_points: list) -> str:
+        """2.4.0 fit-in F4 (m031): for an alt-az night: the frames taken above tcore.ZENITH_KEYHOLE_ALT (from each
+        frame's airmass) in which the target really is smeared (elongation over KEYHOLE_ELONG and over
+        KEYHOLE_ELONG_REL x the night's median), named by their frame numbers. "" when no frame up there is
+        smeared (then nothing is said: the altitude alone is no finding), or when the airmass is not known."""
+        lim = 1.0 / math.sin(math.radians(tcore.ZENITH_KEYHOLE_ALT))
+        el = [o.elong for o in night_points if math.isfinite(getattr(o, "elong", float("nan")))]
+        if len(el) < 5:
+            return ""
+        usual = float(np.median(el))
+        high = [o for o in night_points if o.airmass is not None and math.isfinite(o.airmass) and o.airmass <= lim]
+        bad = [o for o in high if math.isfinite(o.elong) and o.elong >= cls.KEYHOLE_ELONG
+               and o.elong >= cls.KEYHOLE_ELONG_REL * usual]
+        if not bad:
+            return ""
+        labs = core.frame_labels_for([o.path for o in bad])
+        worst = max(o.elong for o in bad)
+        return (f"Zenith keyhole: {len(bad)} of the {len(high)} frame{'s' if len(high) != 1 else ''} taken above "
+                f"{tcore.ZENITH_KEYHOLE_ALT:g}° altitude are smeared (stars up to {worst:.1f} × longer than wide; "
+                f"the night's usual is {usual:.2f}): frame{'s' if len(bad) != 1 else ''} "
+                f"{cls._frame_ranges(labs)}. Near the zenith an alt-az mount turns too fast to track. Look at them "
+                "on the Blink page and reject the bad ones, then run photometry again.")
 
     def _telescope_text(self, header: dict | None = None) -> str:
         """2.2.16 (item 5): the telescope as written out: the Telescope field, else a TELESCOP that is not a mount,
@@ -7099,8 +7154,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         name = self.star_id.get().strip() or "the target"
         if not generic and core.same_object_name(obj, name):
             # Review: the frames are labeled as the Input page's star (its RA/Dec must be off): no new reduction.
-            self.log(f"Lights: OBJECT {obj} is the Star ID, but they point {sep:.0f}° from its RA/Dec: check the RA/Dec "
-                     "on the Input page (Look up again).")
+            # 2.4.0 fit-in F4 (m089; RESULTS-CHANGING for the target position): the star is looked up again by
+            # itself first (once per star and pointing); only when its RA/Dec is still that far off is it said,
+            # as a ⚠ with what to do.
+            if getattr(self, "_relookup_tried", None) != key[2:] + (name,):
+                self._relookup_tried = key[2:] + (name,)
+                self.log(f"Lights: OBJECT {obj} is the Star ID, but they point {sep:.0f}° from the RA/Dec on the "
+                         f"Input page, so {name} is looked up again (the RA/Dec is replaced by what SIMBAD or VSX "
+                         "gives).", keep_status=True)
+                try:
+                    self.lookup_star(quiet=True)
+                except Exception:
+                    traceback.print_exc()
+                return
+            self.log(f"⚠ Lights: OBJECT {obj} is the Star ID, but they point {sep:.0f}° from its RA/Dec, also after "
+                     "looking it up again. Either the Star ID is another star than these frames show, or the frames' "
+                     "pointing is wrong: check the Star ID, or type the field's RA/Dec on the Input page.")
             return
         # 2.2.19 (#20): the question is a new reduction (the series, planet, comps, Use comps choice… go too).
         ask = ((f"These frames are {obj}, not {name}." if not generic else f"These frames are not {name}.")
@@ -10380,9 +10449,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             camera_bin = 1
         # 2.2.19 (#37): not for MicroObservatory (binned 2x2 by design) or a monochrome camera (no color to mix).
         if camera_bin > 1 and not core.is_microobservatory(path, header or {}) and self.pattern.get() != core.MONO:
-            self.log(f"The camera binned these frames (XBINNING={camera_bin}). Some capture programs bin a color "
-                     "sensor by mixing neighboring red, green, and blue pixels. If the channels look identical or B-V "
-                     "sits exactly on the comps' color, capture unbinned and bin here instead.")
+            # 2.4.0 fit-in F4 (m191): the channels are compared here, so the user is not asked to. Channels that
+            # differ (real colour data): nothing is said. Identical channels: a ⚠ with what to do. Not measurable
+            # (too few stars): the old plain note.
+            try:
+                mix = core.cfa_channels_identical(self.calibrated)
+            except Exception:
+                mix = {"identical": None}
+            if mix.get("identical"):
+                self.log(f"⚠ The camera binned these frames (XBINNING={camera_bin}) by mixing the red, green and "
+                         f"blue pixels: the colour channels are identical (star colours agree to "
+                         f"{mix['spread']:.3f} mag over {mix['n']} stars). Colours (B-V, V-R) cannot be measured "
+                         "from them, and the green channel is not V. Capture unbinned and set Binning here "
+                         "instead; for these frames use them as unfiltered (CV) data.")
+            elif mix.get("identical") is None:
+                self.log(f"The camera binned these frames (XBINNING={camera_bin}), and there are too few bright "
+                         "stars to tell whether the colour channels were mixed. If B-V sits exactly on the comps' "
+                         "colour, capture unbinned and set Binning here instead.", keep_status=True)
         self._check_lights_pointing(header or {})
         self._read_mono_filter(header or {})
         self._check_target_field(header or {})
@@ -12833,8 +12916,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showinfo(APP_TITLE, "Mark at least one comparison star; the test compares stars against it.",
                                 parent=window.win)
             return
+        spare = None
+        if self.mode_key != "discovery" and test_check is None:
+            # 2.4.0 fit-in F4 (m627; RESULTS-CHANGING for the aperture picked): with no check star the test judged
+            # on comp 2, or on the target itself (which may truly vary). Now on the steadiest spare of the last run:
+            # a star that is neither the target nor in the ensemble, as a check star is.
+            spare = self._steadiest_spare()
+            if spare is not None:
+                test_check = spare[1]
         if self.mode_key == "discovery":
             ref_label = "field star"
+        elif spare is not None:
+            ref_label = f"steadiest spare ({spare[0]})"
         elif test_check is not None:
             ref_label = "check star"
         elif test_c2 is not None:
@@ -12950,6 +13043,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
+
+    def _steadiest_spare(self):
+        """2.4.0 fit-in F4 (m627): the spare comp of the last run that held steadiest against the comp ensemble
+        (smallest robust scatter of spare minus ensemble over the latest night's clean frames, at least 5 of them):
+        (name, (x, y) on this image), or None (no run yet, no spares, or none measured often enough)."""
+        marks = {n: (float(x), float(y)) for x, y, n in (getattr(self, "spare_marks", None) or [])}
+        if not marks or not self.observations:
+            return None
+        night = self._latest_night()
+        pts = [o for o in self.observations if o.night == night and not o.flag and math.isfinite(o.cmag)]
+        best = None
+        for name, xy in marks.items():
+            d = [o.spare_insts[name] - o.cmag for o in pts
+                 if name in (o.spare_insts or {}) and math.isfinite(o.spare_insts[name])]
+            if len(d) < 5:
+                continue
+            sc = core.robust_sigma(np.array(d, dtype=float))
+            if math.isfinite(sc) and (best is None or sc < best[0]):
+                best = (sc, name, xy)
+        return (best[1], best[2]) if best else None
 
     def _aperture_test_field_stars(self, fwhm: float, n: int = 4) -> list:
         """2.2.19 (nit): for the aperture test in Discovery: up to n bright, isolated, unsaturated stars away from the
@@ -20583,6 +20696,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # across a flip with a frame that is not used.
         rebase_from = self.preview_path if (self.preview_path and self.preview_path not in lights
                                            and self.preview_path in self.rejected) else None
+        # 2.4.0 fit-in F4 (step 8 nit N3): the frame this run's alignments are measured against (session only)
+        self._run_ref_frame = (lights[0] if (rebase_from is not None and lights) else self.preview_path) or ""
         # 2.2.19 (#9): frames the reference search found without the target (they are skipped and listed).
         known_missing = self._target_missing_now(lights)   # 2.2.19 (r2: M1): only for the target it was found for
         edge_margin = radius + 1.0   # the target's aperture must be on the frame (a clipped sky ring is measured as before)
@@ -20695,6 +20810,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             cancelled = False
             if rebase_from is not None and lights:
                 # 2.2.19 (#24): carry the markers to the first kept frame and use it as the reference.
+                # 2.4.0 fit-in F4 (nit, John 15 Nov): the busy bar says so while it is set up
+                self.call_ui(self._job_words, f"Setting up the reference (frame {core.frame_label(lights[0])})…")
                 try:
                     raw0, head0, cal0 = stack_load_frame(lights[0], binning, masters)   # 2.3.0 (#54): or a stack
                     new_ref = core.debayer(cal0, pattern, mode)
@@ -20970,6 +21087,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     self.call_ui(self.log, line)
             except Exception as exc:
                 self.call_ui(self.log, f"  (centring and peak notes skipped: {type(exc).__name__}: {exc})")
+            if altaz and not stack_run:
+                try:   # 2.4.0 fit-in F4 (m031): the zenith keyhole, only when frames there really are smeared
+                    key_line = self.keyhole_note(night_points)
+                    if key_line:
+                        self.call_ui(self.log, "⚠ " + key_line)
+                except Exception as exc:
+                    log_to_file(f"Zenith keyhole note skipped: {type(exc).__name__}: {exc}")
             flip_like = []
             if turns and altaz:
                 # 2.3.0 (item 10): a ~180° turn in one frame gap on an "alt-az" night is a meridian flip (HD 189733 b,
@@ -21230,6 +21354,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             messagebox.showerror(APP_TITLE, "No frames produced a magnitude. The Calibrate page log says why each frame was skipped.")
             return
         night = f"JD{math.floor(night_points[0].jd)}"
+        # step 8 nit N3: which reference frame this night's alignments (and so its re-center segments) stand on
+        self.__dict__.setdefault("_night_ref_frame", {})[night] = getattr(self, "_run_ref_frame", "")
         self._run_comps = list(self.comps_used)   # 2.3.0 (item 10): the run's own comps, before any series layout
         # 2.2.7: new photometry is what the Transit fit page should show: drop an EXOTIC report left loaded there.
         if getattr(self, "transit_page", None) is not None and self.transit_page.report is not None:
@@ -22101,6 +22227,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         scale, factor = getattr(self, "_run_jump_scale", None) or (None, 1)
         known = [(getattr(p, "_stack_reg", None), p.segment, getattr(p, "jump", 0)) for p in old_pts
                  if getattr(p, "_stack_reg", None)]
+        # 2.4.0 fit-in F4 (step 8 nit N3): the added frames' registrations are against the image on the page now.
+        # When that is another frame than the night's run used (a new reference since), the two sets of shifts do
+        # not compare: each added frame then joins the segment of its neighbour in time (the fallback below).
+        was_ref = (getattr(self, "_night_ref_frame", None) or {}).get(night)
+        if known and was_ref is not None and was_ref != getattr(self, "_run_ref_frame", was_ref):
+            known = []
+            log_to_file(f"Measure skipped frames, {night}: the reference frame changed since the night's run; the "
+                        "added frames take their re-center segment from the frame before them.")
         for o in new_points:
             jump = None
             try:
@@ -29512,10 +29646,14 @@ class SuggestWindow:
         elif ref_label == "field star":
             lines.insert(len(lines) - 1, "Discovery has no comps, so the test uses bright, isolated, unsaturated field "
                                          "stars: two as comps, one judged (the field star below).")
+        elif ref_label.startswith("steadiest spare"):
+            # 2.4.0 fit-in F4 (m627)
+            lines.insert(len(lines) - 1, f"No check star is marked, so the test judges on the {ref_label} of the "
+                                         "last run: a star that is neither the target nor one of the comps.")
         if single:
             lines.append(f"{'r (px)':>7}  {ref_label.split(' (')[0] + ' scatter':>23}  {'lowest':>7}")
         else:
-            lines.append(f"{'r (px)':>7}  {ref_label + ' scatter':>23}  {'lowest':>7}  {'target scatter':>17}  "
+            lines.append(f"{'r (px)':>7}  {ref_label.split(' (')[0] + ' scatter':>23}  {'lowest':>7}  {'target scatter':>17}  "
                          f"{'lowest':>7}")
         for row in rows:
             lines.append(f"{row['r']:>7g}  {row['ref_sigma']:>14.4f} ± {row['ref_err']:.4f}  {row['ref_win']:>6.0%}"

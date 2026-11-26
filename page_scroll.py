@@ -49,6 +49,43 @@ def wheel_units(delta, platform: str | None = None) -> int:
     return n
 
 
+TOUCHPAD_PX_PER_UNIT = 20   # a touchpad's pixels for one scroll step (about one yscrollincrement)
+
+
+def touchpad_dy(delta) -> int:
+    """2.4.0 fit-in F4 (F1c leftover): the vertical part of a Tk 8.7 / 9 <TouchpadScroll> event's %D (two signed
+    16-bit numbers packed as dx << 16 | dy; tk::PreciseScrollDeltas). Positive = fingers moving down (content
+    down, as a wheel turned up). 0 for anything unreadable."""
+    try:
+        d = int(delta)
+    except (TypeError, ValueError):
+        return 0
+    dy = d & 0xFFFF
+    return dy - 0x10000 if dy >= 0x8000 else dy
+
+
+def touchpad_units(delta, carry: list) -> int:
+    """Scroll steps for one <TouchpadScroll> event; carry is a one-item list holding the pixels not yet spent, so
+    many small events add up to whole steps. Down the page is positive (as wheel_units)."""
+    carry[0] -= touchpad_dy(delta)
+    n = int(carry[0] / TOUCHPAD_PX_PER_UNIT)
+    carry[0] -= n * TOUCHPAD_PX_PER_UNIT
+    return n
+
+
+def bind_touchpad(widget, tag_or_all, handler) -> bool:
+    """Bind <TouchpadScroll> (Tk 8.7 / 9: a Mac trackpad no longer sends <MouseWheel>) where this Tk knows it.
+    tag_or_all: a bind tag, or None for bind_all. False on Tk 8.6 (no such event), where nothing is bound."""
+    try:
+        if tag_or_all is None:
+            widget.bind_all("<TouchpadScroll>", handler)
+        else:
+            widget.bind_class(tag_or_all, "<TouchpadScroll>", handler)
+        return True
+    except Exception:
+        return False
+
+
 def body_height(view_height: int, wanted_height: int) -> int:
     """The body fills the view while the page fits and is never shorter than the page asks for."""
     return max(int(view_height), int(wanted_height), 1)
@@ -96,6 +133,16 @@ class PageScroll(ttk.Frame):
         if sys.platform.startswith("linux"):
             self.bind_class(self._tag, "<Button-4>", lambda e: self._wheel(e, units=-1))
             self.bind_class(self._tag, "<Button-5>", lambda e: self._wheel(e, units=1))
+        # 2.4.0 fit-in F4 (F1c leftovers): a Tk 8.7 / 9 trackpad scrolls the page too; and the page's own canvas
+        # and frame take the wheel as well (the strips where the canvas shows beside or under the body were dead)
+        self._touch_carry = [0]
+        bind_touchpad(self, self._tag, lambda e: self._wheel(
+            e, units=touchpad_units(getattr(e, "delta", 0), self._touch_carry)))
+        for w in (self, self.canvas):
+            try:
+                w.bindtags((self._tag,) + tuple(w.bindtags()))
+            except Exception:
+                pass
         self.after(POLL_MS, self._poll)
 
     # -- size --------------------------------------------------------------------------------------------------------
