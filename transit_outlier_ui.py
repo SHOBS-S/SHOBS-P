@@ -6,7 +6,7 @@ much of the night's scatter (and so of the error bars the fit scales up).
 
 John's call (decision 9, 26 Nov 2026): FLAG + OFFER. After every fit each point's residual is tested against the
 robust (MAD x 1.4826) scatter of the residuals (transit_core.find_point_outliers: beyond 5 sigma, single points only;
-three or more in a row are real structure and are left alone). A point that stands out gets
+two or more in a row are real structure and are left alone). A point that stands out gets
 
 - a plain note (never a caution) naming the frame, its time and how far out it is,
 - a red ring on the plot, and its bin is drawn without it (the legend says so),

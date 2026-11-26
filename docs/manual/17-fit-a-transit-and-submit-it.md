@@ -457,7 +457,7 @@ inconvenient.
 outlier (not fitted)*, the notes say which frame is left out, and **Put it back** appears; pressing it refits with
 every left-out point back in. Both buttons are greyed while a fit or check runs.
 
-Three or more such points next to each other are not single points. They are something real in the night (a flare,
+Two or more such points next to each other are not single points. They are something real in the night (a flare,
 cloud, a fit that does not follow the data), so none of them is named: use **Trim** for a bad stretch. Frames put back
 with **Refit with flagged frames** are never named either. No point is named when leaving it out would leave fewer
 than 20.

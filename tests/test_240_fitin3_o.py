@@ -1,6 +1,6 @@
 """2.4.0 fit-in F3 (#117, builder O): single-point outliers in the transit fit (John's decision 9: flag + offer).
 
-core   transit_core.find_point_outliers: robust (MAD x 1.4826) scatter, beyond 5 sigma, single points only (a run of
+core   transit_core.find_point_outliers: robust (MAD x 1.4826) scatter, beyond 5 sigma, single points only, strictly isolated (a run of
        three or more is real structure), put-back flagged frames never named.
 night  Joanna's WASP-39 b case on a synthetic night: one +8.9 % point at mid-transit among 51. It is named; the
        reduced chi-square falls without it.
@@ -57,7 +57,7 @@ class TestFindPointOutliers(unittest.TestCase):
 
     def test_limits(self):
         self.assertEqual(tc.OUTLIER_NSIGMA, 5.0)
-        self.assertEqual(tc.OUTLIER_MAX_RUN, 2)
+        self.assertEqual(tc.OUTLIER_MAX_RUN, 1)   # John 26 Nov: strictly isolated
         self.assertAlmostEqual(tc.robust_sigma(np.random.default_rng(1).normal(0, 2.0, 20000)), 2.0, delta=0.06)
 
     def test_one_point(self):
@@ -80,8 +80,10 @@ class TestFindPointOutliers(unittest.TestCase):
 
     def test_runs_are_real_structure(self):
         r = self.r.copy()
-        r[20:22] = 0.06                      # two in a row: still single points
-        self.assertEqual(tc.find_point_outliers(self.t, r)["index"], [20, 21])
+        r[20] = 0.06                         # one alone: named
+        self.assertEqual(tc.find_point_outliers(self.t, r)["index"], [20])
+        r[20:22] = 0.06                      # two in a row (John 26 Nov): not single, none named
+        self.assertEqual(tc.find_point_outliers(self.t, r)["index"], [])
         r[20:23] = 0.06                      # three in a row: a real feature, none named
         got = tc.find_point_outliers(self.t, r)
         self.assertEqual(got["index"], [])
@@ -321,6 +323,30 @@ class TestTransitPageOutliers(unittest.TestCase):
         finally:
             app.busy = False
             tp._left_out = keep
+            tp._show_outlier_buttons()
+
+    def test_john_calls_26_nov(self):
+        """John 26 Nov (13:03): (2) left-out points live in the report's _settings.txt only, never the series file;
+        (3) no cap on repeated leave-outs; (4) re-running photometry keeps a left-out point (matched by its time)
+        unless the series counter changes."""
+        tp, app = self.app.transit_page, self.app
+        keep, rep, gen0 = list(tp._left_out), tp.report, getattr(app, "_series_gen", 0)
+        try:
+            src = open(os.path.join(os.path.dirname(tc.__file__), "clearv_app.py"), encoding="utf-8").read()
+            self.assertNotIn("_left_out", src, "(2) the series file never records a left-out point")
+            tp._left_out = [{"t": float(self.t[k]), "label": f"point {k + 1}", "pct": 1.0, "nsigma": 6.0}
+                            for k in range(12)]
+            self.assertEqual(int(tp._left_out_mask(self.t).sum()), 12, "(3) no cap")
+            tp.report = None                                   # a night's own photometry, not a report
+            tp._left_out_gen = gen0
+            tp._left_out_source_check()                        # (4) photometry run again: same series counter
+            self.assertEqual(len(tp._left_out), 12)
+            app._series_gen = gen0 + 1                         # a loaded / cleared series: put back
+            tp._left_out_source_check()
+            self.assertEqual(tp._left_out, [])
+        finally:
+            app._series_gen = gen0
+            tp.report, tp._left_out = rep, keep
             tp._show_outlier_buttons()
 
     def test_too_few_points_left(self):

@@ -3937,7 +3937,7 @@ def flip_from_gap(t, min_gap_min: float = FLIP_GAP_MIN_MIN) -> float | None:
 # satellite) made up much of the night's scatter and so of the scaled-up error bars. The fit never drops a point by
 # itself: find_point_outliers only names the points; the Transit fit page offers to leave them out.
 OUTLIER_NSIGMA = 5.0    # a point this many robust sigmas from the fit is named (John, decision 9)
-OUTLIER_MAX_RUN = 2     # 3 or more such points in a row are real structure (a flare, cloud, a bad fit): none named
+OUTLIER_MAX_RUN = 1     # John 26 Nov: strictly isolated points only; 2 or more in a row are real structure: none named
 MAD_TO_SIGMA = 1.4826   # the median absolute deviation of a Gaussian, times this, is its sigma
 
 
@@ -3954,7 +3954,8 @@ def find_point_outliers(t, resid, nsigma: float = OUTLIER_NSIGMA, max_run: int =
                         min_points: int = 20) -> dict:
     """2.4.0 fit-in F3 (#117): the single points whose residual is more than nsigma robust sigmas (MAD x 1.4826) from
     the median residual of a finished fit. Points are taken in time order; up to max_run such points next to each
-    other count as single points, a longer run is real structure and none of it is named. skip (one flag per point)
+    other count as single points (max_run 1: strictly isolated points only), a longer run is real structure and none
+    of it is named. skip (one flag per point)
     marks points never named (flagged frames the user put back): they still count in the scatter, and one standing
     beyond the limit still counts toward a run. Nothing is changed or dropped here.
 
