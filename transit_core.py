@@ -91,6 +91,8 @@ def occultation(z: np.ndarray, k: float, u1: float, u2: float) -> np.ndarray:
     z = np.abs(np.asarray(z, dtype=float))
     out = np.ones_like(z)
     p = float(k)
+    # A NaN k also lands here (NaN > 1e-8 is False) and gives all 1.0, not NaN: the fits keep k inside finite
+    # bounds, so this only ever answers a caller's bad input with "no transit".
     if not p > 1e-8:                                  # no planet (or a dip below double precision)
         return out
     hit = z < 1.0 + p

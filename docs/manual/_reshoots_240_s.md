@@ -86,3 +86,11 @@ refit** in the Points row; after pressing it the point is a red × and **Put it 
 | img/17-trim.png | 17 | as above | CHECK |
 | img/19-exotic-side-by-side.png | 19 | as above (an opened report is checked the same way) | CHECK |
 | img/18-inconclusive-verdict.png | 18 | as above | CHECK |
+
+## After the F3 review (fixes M1, M2, S1–S4)
+
+No new shots. Words only, in the **Setup for these frames** box:
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/05-input-page.png, NEW img/05-setup-for-these-frames.png | 5 | The aperture in the box's text may be followed by its source in brackets, for example *aperture 356 mm (typed by hand)*. Take the shots as planned; nothing else differs unless a site was typed over the header's. | CHECK |

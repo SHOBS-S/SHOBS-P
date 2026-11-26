@@ -650,8 +650,34 @@ def camera_binning(path: str, header: dict) -> tuple[int, int, str]:
     return 1, 1, "assumed"
 
 
+def site_is_real(lat, lon) -> bool:
+    """2.4.0 fit-in F3 (review M1): False for a site no telescope stands at: not a number, latitude outside +-90,
+    longitude outside +-360, or exactly 0 / 0 (what a capture program writes when no site was set)."""
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        return False
+    if abs(lat) > 90 or abs(lon) > 360:
+        return False
+    return not (lat == 0 and lon == 0)
+
+
 def header_site(header: dict):
-    """(lat, lon east-positive, elevation m) from common FITS site keywords, or None."""
+    """(lat, lon east-positive, elevation m) from common FITS site keywords, or None. None too when the header's
+    numbers are not a real site (site_is_real; 2.4.0 fit-in F3 review M1: they were used for the airmass and BJD
+    without a question). header_site_raw gives the numbers as written."""
+    site = header_site_raw(header)
+    if site is None or not site_is_real(site[0], site[1]):
+        return None
+    if site[2] is not None and not math.isfinite(site[2]):
+        return site[0], site[1], None
+    return site
+
+
+def header_site_raw(header: dict):
+    """(lat, lon, elevation m) as the FITS site keywords give them, unchecked, or None when one is missing."""
     def num(*keys):
         for key in keys:
             v = header.get(key)

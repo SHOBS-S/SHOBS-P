@@ -4065,6 +4065,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         t_first = float(r["t"].min())
         if r.get("trim") is not None and len(r["trim"].get("t", [])):
             t_first = min(t_first, float(np.min(r["trim"]["t"])))   # review: a trim never moves the package's date
+        lo = r.get("left_out") or {}
+        if len(lo.get("t", [])):
+            # 2.4.0 fit-in F3 (review nit): nor does a first frame left out as an outlier (across midnight UTC)
+            t_first = min(t_first, float(np.min(lo["t"])))
         date = datetime.fromtimestamp((t_first - 2440587.5) * 86400.0, tz=timezone.utc).strftime("%Y%m%d")
         base = f"{planet}_{date}_{meta.get('obscode') or 'obs'}_SHOBS-P"
         # 2.2.17 (item 9): the folder is ExoFOP_<planet>_<tag>; the files inside keep <planet>_<tag> names.

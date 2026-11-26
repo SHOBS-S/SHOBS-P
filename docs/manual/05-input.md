@@ -316,6 +316,24 @@ as your setup unless you press **Save as my setup**.
 - **MicroObservatory frames** get that telescope's setup the same way, without a question (see below). **Save as my
   setup** is greyed for them: it is MicroObservatory's telescope, not yours.
 - **A site you typed for these frames only** (next paragraph) shows here too, with the same two buttons.
+- **A header's site that is wrong.** If the header's site is in use and you type another latitude or longitude over
+  it (some programs write the longitude west-positive: 110.88 where SHOBS-P needs -110.88), your typed site is used
+  for these frames and stays when you press **Scan folders** again. The box then says **The site was typed over the
+  lights' header's (the header says 31.6800, 110.8800; …); the rest is from the headers.** It is still not saved as
+  yours.
+- **A header's site that is no site.** Latitude 0 and longitude 0 together, a latitude outside ±90 or a longitude
+  outside ±360 is what a capture program writes when no site was set. SHOBS-P does not use it; the log says **The
+  lights' header gives latitude 0, longitude 0: not a real site, so it is not used. The Site boxes are used for these
+  frames.** Check the Site boxes, or type the frames' site.
+- **Another telescope's lights** get their own header's values. A focal length or pixel size that the last lights'
+  header had put in an empty box (never saved as yours) is taken out first, so it is not used for a telescope it
+  does not belong to.
+- **After Load series** the Site boxes hold the series' site. If the box was describing the lights' header setup, it
+  now says **The Site and Optics boxes hold the loaded series' values: …. Scan folders brings back the setup for the
+  lights in the Lights box.** with no buttons.
+- **The aperture's source.** After the aperture in the box's text, brackets say where it comes from when SHOBS-P
+  knows: **(from the header)**, **(typed by hand)**, **(as last used with …)**, **(confirmed for this telescope)**,
+  or **(still from the last frames, …: check it)** while it is still the value of the telescope you measured last.
 
 > **Caution:** This changes results for frames from another site (from 2.4.0). The site sets the airmass and the BJD
 > times. Before, the frames' site was used only after you answered **Yes**; now it is used unless you press **Use my
@@ -368,7 +386,8 @@ itself: **Save as my setup** in the **Setup for these frames** box does that.
 **MicroObservatory frames** are recognized, and SHOBS-P uses that telescope's known setup for them: site, optics,
 monochrome camera, clear filter, binning 1 and a 4000 ADU saturation level. From 2.4.0 it does so without asking; the
 **Setup for these frames** box and the log say what was set, and **Use my own setup** puts your site and optics back
-(the Bayer pattern stays MONO, since the frames are monochrome). Newer
+(the Bayer pattern stays MONO for them, since the frames are monochrome; your own pattern comes back when you scan
+your own lights, and the log says **Bayer pattern back to RGGB (it was MONO for the MicroObservatory frames).**). Newer
 MicroObservatory files have neither `MOBS_` in the name nor a MicroObservatory keyword; SHOBS-P recognizes them by
 their site, focal length and frame size. The optics are focal length 560 mm and
 **pixel 6.8 µm**, the camera's own pixel. The camera bins it 2×2 (the header says `XBINNING = 2`), so the frames are

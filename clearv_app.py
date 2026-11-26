@@ -7936,11 +7936,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         st = self._frames_setup or {}
         if self._frames_choice_s.get(folder) == "own":
             self.scale_approx = False
+            kept = self.__dict__.get("_pattern_before_mobs")
+            if kept and kept.get("folder") != folder:
+                self._pattern_back_after_mobs(folder)   # another MicroObservatory folder's: yours first (review S3)
+            own_pattern = (self._own_setup or {}).get("pattern", self.pattern.get())
             self._restore_own_setup()   # not a previous telescope's setup either
+            if not self.__dict__.get("_pattern_before_mobs") and own_pattern not in (None, "", core.MONO):
+                self._pattern_before_mobs = {"folder": folder, "pattern": own_pattern}
+            if self.pattern.get() != core.MONO:
+                self.pattern.set(core.MONO)   # the frames are monochrome whoever's site is used
             self._frames_setup = {"kind": "own_chosen", "folder": folder, "mobs": True,
                                   "words": "MicroObservatory frames (a monochrome camera in Arizona)"}
             self._update_setup_strip()
             return
+        self._pattern_back_after_mobs(folder)   # review S3: before your setup is set aside again (MONO is not yours)
         if st.get("kind") == "mobs" and st.get("folder") == folder and self._own_setup is not None \
                 and self.pattern.get() == core.MONO:
             self._update_setup_strip()   # already in use for this folder (a second Scan folders): nothing to redo
@@ -8104,8 +8113,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if st.get("folder") != self.light_dir.get().strip() or not st.get("site"):
             return
         values = {}
+        if self._frames_typed_over(st) is not None:
+            return   # review M2: typed for another site than the header's; not filed under the header's
         for name in ("elevation", "focal_mm", "pixel_um", "site_tz"):
             v = str(self._setup_value(name)).strip()
+            if name in ("focal_mm", "pixel_um"):
+                # review nit: your own optics the header never overrode are not "typed for this telescope's frames"
+                try:
+                    if abs(float(v) - float(self._own_setup.get(name))) <= 1e-9 * max(1.0, abs(float(v))):
+                        continue
+                except (TypeError, ValueError):
+                    pass
             if v:
                 values[name] = v
         old = self._frames_record(st.get("scope"), st["site"])
@@ -8122,12 +8140,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         - Your own frames: empty boxes are filled from the header (held, not saved); values that differ are listed
           in the strip with Use the header values.
         Binning is never taken from the header (XBINNING is the camera's; SHOBS-P's Binning is its own)."""
+        folder = self.light_dir.get().strip()
+        self._pattern_back_after_mobs(folder)   # review S3: these are not MicroObservatory's monochrome frames
         site = core.header_site(header)
+        if site is None:
+            # review M1: 0 / 0 or an impossible latitude is what a capture program writes when no site was set. It
+            # was used for the airmass and BJD without a question; now it counts as "no site in the header".
+            raw = core.header_site_raw(header)
+            if raw is not None:
+                self.log(f"The lights' header gives latitude {raw[0]:g}, longitude {raw[1]:g}: not a real site, so "
+                         "it is not used. The Site boxes are used for these frames.")
         opt = core.header_optics(header)
         own = self._own_setup
         ref = own if own is not None else self._setup_snapshot()
-        folder = self.light_dir.get().strip()
         scope = lights_scope(header)
+        prev = self._frames_setup or {}
 
         def fnum(v):
             try:
@@ -8138,13 +8165,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         ref_lat, ref_lon = fnum(ref.get("lat")), fnum(ref.get("lon"))
         cam = " / ".join(str(header.get(k) or "").strip() for k in ("TELESCOP", "INSTRUME") if header.get(k))
-        if (site and own is not None and fnum(self.lat.get()) == round(site[0], 4)
-                and fnum(self.lon.get()) == round(site[1], 4)):
-            st = self._frames_setup or {}
-            if st.get("kind") != "frames" or st.get("folder") != folder:
-                self._frames_setup = {"kind": "frames", "folder": folder, "site": tuple(site), "cam": cam,
-                                      "scope": scope, "where": st.get("where", "") if st.get("kind") == "frames" else ""}
+        # review M2 / S1: "already in use" is told from the strip's state, not from the boxes. Same Lights folder, same
+        # header site, same telescope: nothing is redone, so a site (or elevation) typed over the header's stays;
+        # the strip says it was typed. Another folder or telescope goes through the far branch below and gets its
+        # own header's values (before, another telescope at the same site kept the first one's optics).
+        same_frames = (prev.get("kind") == "frames" and prev.get("folder") == folder
+                       and site is not None and prev.get("site") == tuple(site)
+                       and ((prev.get("scope") is None and scope is None) or same_scope(prev.get("scope"), scope)))
+        if own is not None and same_frames:
             return   # these frames' setup is already in use
+        # the same telescope's other folder: an elevation typed for it (its header has none) is not lost
+        carried_elev = None
+        if (own is not None and prev.get("kind") == "frames" and site is not None and site[2] is None
+                and self._frames_typed_over(prev) is None and same_scope(prev.get("scope"), scope)
+                and core.site_distance_km(prev["site"][:2], site[:2]) <= self.FRAMES_SAME_SITE_KM):
+            carried_elev = fnum(self.elevation.get())
         far = False
         where = ""
         if site and ref_lat is not None and ref_lon is not None:
@@ -8189,6 +8224,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             elif fnum(vals.get("elevation")) is not None:
                 self.elevation.set(str(vals["elevation"]))
                 back.append(f"elevation {fnum(vals['elevation']):g} m")
+            elif carried_elev is not None:
+                self.elevation.set(f"{carried_elev:g}")
             else:
                 self.elevation.set("")
             for key in ("focal_mm", "pixel_um", "aperture_mm"):
@@ -8235,6 +8272,24 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 return
         # Your own frames (or no site in the header): any borrowed setup goes back first.
         self._restore_own_setup()
+        # review S4: a value another telescope's header put in an empty box (held, never yours) does not carry to
+        # these frames: the box is emptied first, so this header fills it or it stays empty.
+        was = self.__dict__.get("_header_held_from")
+        if was is not None and self.__dict__.get("_header_held"):
+            if not (same_scope(was[1], scope) or ((was[1] is None or scope is None) and was[0] == folder)):
+                gone = []
+                for key in list(self._header_held):
+                    if self._header_held_now(key):
+                        self._header_held.pop(key, None)
+                        try:
+                            getattr(self, self._HELD_BOX[key]).set("")
+                            gone.append(key)
+                        except Exception:
+                            pass
+                if gone:
+                    self.log("Values the last lights' header had put in empty Site/Optics boxes are taken out: these "
+                             "lights come from another telescope or folder.", keep_status=True)
+        self._header_held_from = (folder, scope)
         wanted = []
         if site:
             wanted += [("lat", "Latitude", round(site[0], 4), "header site", 0.01),
@@ -8288,6 +8343,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             optics.append(f"pixel {pixel:g} µm")
         if ap and ap > 0:
             src = getattr(self, "_aperture_source", "")
+            hand = getattr(self, "_aperture_hand", None)
+            if src.startswith("still from") and hand and hand[0] == str(self._setup_value("aperture_mm")).strip():
+                src = "typed by hand"   # typed since the scan said it was the last telescope's
             optics.append(f"aperture {ap:g} mm" + (f" ({src})" if src else ""))
         if optics:
             parts.append(", ".join(optics))
@@ -8310,9 +8368,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             no_elev = ""
         except (TypeError, ValueError):
             no_elev = " Elevation is not in the header: type it in the Elevation box."
+        if kind == "series":
+            return ("The Site and Optics boxes hold the loaded series' values" + (f": {values}" if values else "")
+                    + ". Scan folders brings back the setup for the lights in the Lights box.", [])
         if kind == "frames":
             source = "From the lights' headers" + (f" ({st['cam']})" if st.get("cam") else "") \
                      + (f", {st['where']}" if st.get("where") else "")
+            over = self._frames_typed_over(st)
+            if over is not None:
+                # review M2: a site typed over the header's is kept by the next Scan folders, and said here
+                source = (f"The site was typed over the lights' header's (the header says {over[0]:.4f}, "
+                          f"{over[1]:.4f}" + (f"; {st['cam']}" if st.get("cam") else "") + "); the rest is from the "
+                          "headers")
             return ("; ".join(t for t in (values, mount) if t) + f". {source}. In use for these frames only: nothing "
                     "is saved as yours." + no_elev, ["save", "own"])
         if kind == "mobs":
@@ -8354,6 +8421,47 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 buttons.append("header")
             return text, buttons
         return "", []
+
+    def _frames_typed_over(self, st: dict | None = None):
+        """The header's (lat, lon) when the Site boxes no longer hold it for a far site's frames (typed over, review
+        M2), else None."""
+        st = st if st is not None else (self._frames_setup or {})
+        site = st.get("site")
+        if st.get("kind") != "frames" or not site:
+            return None
+        here = self._box_site()
+        if here is None or (abs(here[0] - site[0]) < 5e-5 and abs(here[1] - site[1]) < 5e-5):
+            return None   # the header's site, or a box still being typed
+        return site[0], site[1]
+
+    def _pattern_back_after_mobs(self, folder: str):
+        """Review S3: Use my own setup on MicroObservatory frames set the Bayer pattern to MONO (they are
+        monochrome) with nothing remembering yours. Yours comes back when the lights are no longer that folder's
+        MicroObservatory frames with your setup (unless the box was changed by hand meanwhile)."""
+        kept = self.__dict__.get("_pattern_before_mobs")
+        if not kept:
+            return
+        self._pattern_before_mobs = None
+        try:
+            if self.pattern.get() == core.MONO and kept.get("pattern") not in (None, "", core.MONO):
+                self.pattern.set(kept["pattern"])
+                self.log(f"Bayer pattern back to {kept['pattern']} (it was MONO for the MicroObservatory frames).",
+                         keep_status=True)
+        except Exception:
+            traceback.print_exc()
+
+    def _series_over_frames_setup(self, before):
+        """Review S2: Load series put the series' site in the boxes while the strip described the lights' header
+        setup (or MicroObservatory's). The strip then says whose values the boxes hold, with no Save button, and
+        nothing of it is filed under the header's telescope."""
+        st = self._frames_setup or {}
+        if st.get("kind") not in ("frames", "mobs"):
+            return
+        now = self._box_site()
+        if now == before:
+            return
+        self._frames_setup = {"kind": "series", "folder": st.get("folder", "")}
+        self._update_setup_strip()
 
     def _setup_save_why(self) -> str:
         """Why Save as my setup is greyed ("" when it can work)."""
@@ -8469,12 +8577,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if kind not in ("frames", "mobs", "typed"):
             return
         folder = self.light_dir.get().strip()
+        own_pattern = (self._own_setup or {}).get("pattern")
         self._restore_own_setup()
         if kind == "typed":
             self._frames_setup = {"kind": "own", "folder": folder, "differ": []}
             self.log("Your own setup is in use again; the site typed for these frames is dropped.")
         elif kind == "mobs":
             self._frames_choice_s[folder] = "own"
+            if own_pattern not in (None, "", core.MONO):
+                self._pattern_before_mobs = {"folder": folder, "pattern": own_pattern}   # review S3
             if self.pattern.get() != core.MONO:
                 self.pattern.set(core.MONO)   # the frames are monochrome whoever's site is used
             self._frames_setup = {"kind": "own_chosen", "folder": folder, "mobs": True,
@@ -8616,6 +8727,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         if abs(last_ap - cur) >= 0.5:
             return   # the box was changed since that run: someone already typed a value for these frames
+        # review nit (m145, A1 rule 5): the strip names where the value comes from while it is still the last
+        # telescope's. The Yes/No stays: triage K15 keeps its after-No line, and rule 5 only adds the source.
+        self._aperture_source = f"still from the last frames, {scope_words(last)}: check it"
         ask_key = ("last", words, cur)
         if ask_key in asked:
             return
@@ -8625,6 +8739,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 f"({scope_words(last)}).\n\nThe Telescope aperture box still says {cur:g} mm from those frames. Is "
                 f"{cur:g} mm right for this telescope? (It sets the scintillation part of the error bars.)\n\n"
                 "Yes keeps it; No takes you to the box (Input page, Optics) to type this telescope's aperture."):
+            self._aperture_source = "confirmed for this telescope"
             self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
             self._remember_aperture_scope(scope)   # review S2: a Yes is remembered at once
             return
@@ -22654,11 +22769,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     def _apply_meta(self, meta: dict):
         # 2.2.4: a series file's site is shown for that series but never saved as your own site.
+        site_before = self._box_site()
         self._loading_meta = True
         try:
             self._apply_meta_values(meta)
         finally:
             self._loading_meta = False
+        try:
+            self._series_over_frames_setup(site_before)   # 2.4.0 fit-in F3 (review S2)
+        except Exception:
+            traceback.print_exc()
         # re-review 2 (item 4): the aperture and raw sat ADU a series brings are the series' own, whatever their
         # value: a camera change does not reset them, and a new camera's pending "set from the star sizes" is off
         # (a series at the default 8/14/22 keeps it; one equal to last night's sizes is not taken for carried over).

@@ -480,7 +480,8 @@ than 20.
 A left-out point belongs to its night or report, just like a trim. It stays out of every refit of the same data
 (**Trim and refit**, **Clear trim**, another detrend, **Use comps…**, **Refit with flagged frames**) and so out of the
 comp check, the **Robustness check** and every saved file, until **Put it back**. Choosing another night, opening or
-closing a report, or loading another series puts it back, with a line in the log. A left-out point is recorded in the
+closing a report, or loading another series puts it back, with a line in the log. If you later trim the part the
+point lies in, the trim has it: **Put it back** goes, and the log says so. A left-out point is recorded in the
 report's NOTES (`SHOBS-P: left out of the fit as single-point outlier (the user's choice): …`), in the settings file
 (**Single points left out of the fit as outliers**) and in the fit CSV, as a row flagged `trimmed outlier`. The
 Multi-night window leaves that row out when it loads the fit CSV; nights it takes straight from the series are not

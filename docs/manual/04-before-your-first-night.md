@@ -56,7 +56,9 @@ knows a telescope by the header's TELESCOP, INSTRUME and focal length). When you
   replaced when you scan them again. (This sets the scintillation part of the error bars.)
 - from another telescope than the last frames you measured, it asks whether the box's value is right: *"These lights
   come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says
-  152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box.
+  152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box. The **Setup for
+  these frames** box on the Input page shows where the aperture in use comes from, for example *aperture 152 mm
+  (still from the last frames, …: check it)*.
 
 Apart from that one case (a telescope it already knows), the box changes only when you answer Yes or type a new
 value, and the same question is not asked again for the same telescope and value. Each night records the box's aperture when it was measured (the settings file's

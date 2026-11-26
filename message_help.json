@@ -468,6 +468,48 @@
   {
    "section": "Input",
    "patterns": [
+    "The lights' header gives latitude 0, longitude 0: not a real site, so it is not used. The Site boxes are used for these frames."
+   ],
+   "todo": "Check the Site boxes (Input page). For someone else's frames, type their site; SHOBS-P then asks whether it is yours or for these frames only. Set the site in your capture program for next time."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Nothing. Use my own setup goes to your saved site; scanning another Lights folder starts from that folder's header again."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Nothing to work on the series. Press Scan folders before measuring the lights in the Lights row."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Values the last lights' header had put in empty Site/Optics boxes are taken out: these lights come from another telescope or folder."
+   ],
+   "todo": "Nothing if this header gives the value (the log says Filled from the lights' FITS header …). Otherwise type the focal length and pixel size for this telescope."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Bayer pattern back to … (it was MONO for the MicroObservatory frames)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Transit fit: frame … is no longer among the points being fit (trimmed away, or left out by another setting), so it is no longer counted as left out as an outlier."
+   ],
+   "todo": "Nothing. If you clear the trim, the point is fitted again and offered again when it is still an outlier."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Save as my setup"
    ],
    "todo": "Nothing for MicroObservatory frames; else fill in the Site boxes."

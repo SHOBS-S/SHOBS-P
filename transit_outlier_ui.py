@@ -146,6 +146,22 @@ class OutlierMixin:
         labels = self._frame_labels(t, meta)
         meta["frame_names"] = {"t": t.copy(), "label": labels}
         meta.pop("left_out", None)
+        # 2.4.0 fit-in F3 (review nit): a left-out point that is no longer among the fit's points (it now lies in a
+        # trimmed part, or another setting dropped it) is not "left out" any more. Put it back would refit and say "back in" for
+        # a point still trimmed away, so the record goes and the Log says why.
+        gone = [rec for rec in getattr(self, "_left_out", None) or []
+                if not np.any(np.abs(t - float(rec["t"])) < MATCH_DAYS)]
+        if gone:
+            self._left_out = [rec for rec in self._left_out if not any(rec is g for g in gone)]
+            try:
+                names = "; ".join(str(g.get("label") or f"BJD_TDB {float(g['t']):.5f}") for g in gone)
+                self.app.log(f"Transit fit: {names} {_plural(len(gone), 'is', 'are')} no longer among the points "
+                             "being fit (trimmed away, or left out by another setting), so "
+                             f"{_plural(len(gone), 'it is', 'they are')} no longer counted as left out as "
+                             f"{_plural(len(gone), 'an outlier', 'outliers')}.")
+            except Exception:
+                pass
+            self._show_outlier_buttons()
         cut = self._left_out_mask(t)
         if not cut.any():
             return t, flux, err, am
