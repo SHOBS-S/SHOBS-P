@@ -4108,6 +4108,32 @@ def apply_saved_inputs(planet: dict | None, saved: dict, file: str = "") -> dict
     return out
 
 
+# 2.4.0 fit-in F4 (sheet sweep, house rule: an error says what to do): the fit's own errors, with the way out.
+FIT_FAILED_HELP = (
+    ("usable points", "Put flagged frames back (Refit with flagged frames), trim less, or reduce more frames of "
+                      "this night."),
+    ("did not converge", "Check the planet's values on the Input page (period, T0, depth, a/R*, b), trim a bad "
+                         "stretch, or pick a simpler Detrend, and fit again."),
+    ("outside the priors or bounds", "Check the planet's values on the Input page (Rp/R* or depth, a/R*, b): one of "
+                                     "them is outside what a transit can have. Look up again, or type the value."),
+    ("could not start the MCMC", "Fit again; if it happens again, trim a bad stretch or pick a simpler Detrend."),
+    ("could not be fitted", "Leave that night out (Leave out / put back) and fit again; fit it alone on the Transit "
+                            "fit page to see what is wrong with it."),
+    ("at least two usable nights", "Add nights, or put a left-out night back (Leave out / put back)."),
+    ("period is not known", "Press Look up, or enter the planet on the Input page."),
+)
+
+
+def fit_failed_help(error: str) -> str:
+    """What to do about a fit error ('' when the error is not one of the fit's own): for the Transit fit page's box
+    and the Multi-night window's line."""
+    low = str(error or "").lower()
+    for key, words in FIT_FAILED_HELP:
+        if key in low:
+            return words
+    return ""
+
+
 def _ascii_line(text: str) -> str:
     import photometry_core as core
     return core.ascii_safe(str(text).replace("\u2212", "-").replace("\u00b1", "+/-"))

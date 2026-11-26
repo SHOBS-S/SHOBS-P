@@ -164,3 +164,47 @@ class Hook(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SheetSweep(unittest.TestCase):
+    """The sheet's wording rows of this package (house rule: an error says what to do; a button that cannot work
+    yet is greyed with the reason on hover, not answered with a box)."""
+
+    def test_fit_errors_say_what_to_do(self):
+        import transit_core as tc
+        self.assertIn("Refit with flagged frames", tc.fit_failed_help("only 14 usable points; a transit fit needs at "
+                                                                      "least 20"))
+        self.assertIn("simpler Detrend", tc.fit_failed_help("the least-squares fit did not converge with any detrend "
+                                                            "choice"))
+        self.assertIn("Input page", tc.fit_failed_help("the starting fit is outside the priors or bounds"))
+        self.assertIn("Leave that night out", tc.fit_failed_help("n2.csv: the night alone could not be fitted (x)"))
+        self.assertIn("Look up", tc.fit_failed_help("the planet's period is not known: look the planet up first"))
+        self.assertEqual(tc.fit_failed_help("[Errno 13] Permission denied"), "")
+        self.assertEqual(tc.fit_failed_help(None), "")
+
+    def test_wording_in_the_sources(self):
+        import multinight as mn
+        import transit_ui as tui
+        src_t, src_m = inspect.getsource(tui), inspect.getsource(mn)
+        self.assertIn("tc.fit_failed_help(error[0])", src_t)
+        self.assertIn("tc.fit_failed_help(error[0])", src_m)
+        self.assertEqual(tui.SAVE_ELSEWHERE, "Save to another folder, or close the program that has the file open.")
+        self.assertGreaterEqual(src_t.count("{SAVE_ELSEWHERE}"), 4)
+        self.assertEqual(src_m.count("{tui.SAVE_ELSEWHERE}"), 3)
+        self.assertIn("Save the report again with BJD_TDB times in the program that wrote it", src_t)     # m812
+        self.assertNotIn('showinfo("SHOBS-P", "Fit the nights first."', src_m)
+        self.assertEqual(mn.FIT_NIGHTS_FIRST, "Fit the nights first (Fit nights).")
+
+    def test_multinight_night_errors_say_what_to_do(self):
+        import multinight as mn
+        with self.assertRaises(mn.NightError) as ctx:
+            mn.to_bjd_tdb([2460000.5], "MJD")
+        self.assertIn("it reads BJD_TDB, HJD_UTC and JD_UTC", str(ctx.exception))
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "X_CV_01-OCT-2026_SHOBS-P_transit_fit.csv")
+            with open(p, "w") as fh:
+                fh.write("BJD_TDB,rel_flux,rel_flux_err,model,residual,flag\n2460000.5,1.0,,,,trimmed\n")
+            with self.assertRaises(mn.NightError) as ctx:
+                mn.load_fit_csv(p)
+        self.assertIn("save the fit CSV again from the Transit fit page", str(ctx.exception))

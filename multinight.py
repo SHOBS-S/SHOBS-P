@@ -71,7 +71,8 @@ def to_bjd_tdb(t, date_type: str, radec=None, lat=None, lon=None):
             out = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
             return out, "JD_UTC converted to BJD_TDB (approximate, good to a few seconds: no site in the file)"
         return out, "JD_UTC converted to BJD_TDB"
-    raise NightError(f"times are {dt}, which SHOBS-P does not convert")
+    raise NightError(f"times are {dt}, which SHOBS-P does not convert (it reads BJD_TDB, HJD_UTC and JD_UTC): save "
+                     "the report with one of those")   # 2.4.0 fit-in F4 (sheet sweep): what to do
 
 
 def _float(v):
@@ -115,6 +116,7 @@ JD_UTC_NO_RADEC = ("times are JD_UTC and the star's RA/Dec is not known, so they
 # night, so there is nothing for the user to do: a plain status, ONE plain note, no ⚠ and no button.
 NO_AIRMASS_STATUS = "no airmass in the file: baseline fitted against time"
 PER_FILTER_LABEL = "Depth and limb darkening per filter"
+FIT_NIGHTS_FIRST = "Fit the nights first (Fit nights)."
 
 
 def no_airmass_note(labels, mode: str | None = tc.DETREND_AUTO) -> str:
@@ -221,7 +223,8 @@ def load_fit_csv(path: str, radec=None) -> dict:
         a.append(av if av is not None else np.nan)
         after.append(i_seg is not None and len(row) > i_seg and row[i_seg].strip().lower() == "after flip")
     if not t:
-        raise NightError("the CSV has no fitted rows")
+        raise NightError("the CSV has no fitted rows (every row is trimmed or has no error): save the fit CSV again "
+                         "from the Transit fit page")   # 2.4.0 fit-in F4 (sheet sweep): what to do
     t_old = np.asarray(t)
     tcol = head[0].strip().upper()
     t_new, note = to_bjd_tdb(t_old, tcol if tcol in ("BJD_TDB", "JD_UTC", "HJD_UTC") else "BJD_TDB", radec)
@@ -1610,8 +1613,17 @@ class MultiNightWindow:
         self.busy = BusyBar(bottom, label_style="Hint.TLabel", frame_style="Card.TFrame")
         self.busy.pack(side=LEFT)
         ttk.Label(bottom, text="Results", style="Hint.TLabel").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton", command=self.save_csv).pack(side=LEFT)
-        ttk.Button(bottom, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
+        # 2.4.0 fit-in F4 (sheet sweep, house rule): greyed until the nights are fitted (it was a box: "Fit the
+        # nights first."), with the reason on hover
+        self.save_csv_button = ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton",
+                                          command=self.save_csv)
+        self.save_csv_button.pack(side=LEFT)
+        self.save_png_button = ttk.Button(bottom, text="Save plot PNG…", command=self.save_png)
+        self.save_png_button.pack(side=LEFT, padx=6)
+        for b_ in (self.save_csv_button, self.save_png_button):
+            tui._gate(app, b_, lambda: "" if self.fit else FIT_NIGHTS_FIRST, busy=False)
+            if getattr(app, "gates", None) is None:   # an app without gates: greyed by hand (see _saves_state)
+                b_.state(["disabled"])
         # 2.2.20 (item 5): the joint fit's corner plot (enabled once the nights are fitted)
         self.corner_button = ttk.Button(bottom, text="Corner plot…", command=self.open_corner)
         self.corner_button.pack(side=LEFT)
@@ -2305,11 +2317,13 @@ class MultiNightWindow:
                 self.prog_text.set("Canceled.")
                 self._placeholder("Canceled: Fit nights runs it again.")
             else:
-                self.prog_text.set("✖ Fit failed: " + error[0])
+                todo = tc.fit_failed_help(error[0])   # 2.4.0 fit-in F4 (sheet sweep): what to do, on the same line
+                self.prog_text.set("✖ Fit failed: " + error[0] + (". " + todo if todo else ""))
                 self.app.log(error[1])
                 self._placeholder("The joint fit failed: " + error[0])
             return
         self.fit = fit
+        self._saves_state()
         self.prog_text.set(f"✔ Done: {len(fit['nights'])} nights, MCMC acceptance {fit['chain']['acceptance']:.2f}.")
         try:
             self.corner_button.state(["!disabled"])     # 2.2.20 (item 5)
@@ -2453,9 +2467,19 @@ class MultiNightWindow:
         first, last = nights[0]["label"], nights[-1]["label"]
         return f"{tui._file_planet(self.planet_name())}_{first}_to_{last}_SHOBS-P_multinight"
 
+    def _saves_state(self):
+        """The two saves follow the fit (greyed until the nights are fitted)."""
+        tui._refresh_gates(self.app)
+        if getattr(self.app, "gates", None) is None:
+            for b_ in (self.save_csv_button, self.save_png_button):
+                try:
+                    b_.state(["!disabled"] if self.fit else ["disabled"])
+                except Exception:
+                    pass
+
     def save_csv(self):
         if not self.fit:
-            messagebox.showinfo("SHOBS-P", "Fit the nights first.", parent=self.win)
+            self.prog_text.set(FIT_NIGHTS_FIRST)   # backstop: the button is greyed until there is a fit
             return
         path = self.app.output_path(self._stem() + "_timings.csv", title="Save multi-night timing CSV",
                                     defaultextension=".csv", filetypes=[("CSV", "*.csv")], parent=self.win)
@@ -2467,14 +2491,15 @@ class MultiNightWindow:
                 meta["series"] = os.path.basename(getattr(self.app, "series_path", "") or "") or "open (not saved)"
             n = write_timing_csv(path, self.fit, self.analysis, meta)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the CSV: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the CSV: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self.app.log(f"Multi-night timing CSV: {path} ({n} epochs)")
         self.app.saved_notice(path, "Per-epoch mid-times (BJD_TDB) with the ephemerides in the header.")
 
     def save_png(self):
         if not self.fit or self.fig is None:
-            messagebox.showinfo("SHOBS-P", "Fit the nights first.", parent=self.win)
+            self.prog_text.set(FIT_NIGHTS_FIRST)   # backstop: the button is greyed until there is a fit
             return
         path = self.app.output_path(self._stem() + ".png", title="Save multi-night plot PNG",
                                     defaultextension=".png", filetypes=[("PNG", "*.png")], parent=self.win)
@@ -2484,7 +2509,8 @@ class MultiNightWindow:
             save_figure(self.fig, path, self.fit, self.analysis, self.planet_name(),
                         getattr(self.app, "app_version", ""))
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self._draw()
         self.app.log(f"Multi-night plot PNG: {path}")
@@ -2675,7 +2701,8 @@ class MultiCornerWindow:
         try:
             tpost.save_corner(self.result, path, shape_only=self._shape_only())
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self.app.log(f"Multi-night corner plot PNG: {path}")
         self.app.saved_notice(path)

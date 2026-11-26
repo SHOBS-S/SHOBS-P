@@ -2482,6 +2482,42 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Transit fit failed: only 14 usable points; a transit fit needs at least 20"
+   ],
+   "todo": "Put flagged frames back (Refit with flagged frames), trim less, or reduce more frames of the night."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit failed: the least-squares fit did not converge …"
+   ],
+   "todo": "Check the planet's values on the Input page (period, T0, depth, a/R\\*, b), trim a bad stretch, or pick a simpler Detrend, and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit failed: the starting fit is outside the priors or bounds"
+   ],
+   "todo": "Check Rp/R\\* or depth, a/R\\* and b on the Input page: look up again, or type the value."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are …, which SHOBS-P does not convert; it fits them as BJD_TDB, so Tc may be off. Save the report again with BJD_TDB times in the program that wrote it (SHOBS-P also reads HJD_UTC and JD_UTC)."
+   ],
+   "todo": "Save the report again with BJD_TDB times."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Could not save the PNG / the fit CSV / the corner plot: … Save to another folder, or close the program that has the file open.",
+    "The AAVSO exoplanet report could not be saved: …"
+   ],
+   "todo": "Do what it says, then save again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Comps checked: depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min (all comps 1.84 %; without each 1.80–1.88 %)",
     "Comps checked: depth spread …, Tc spread …"
    ],
@@ -2672,6 +2708,42 @@
     "ready (filter SR, most nights CV: one depth for all, as chosen)"
    ],
    "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit failed: …: the night alone could not be fitted (…). Leave that night out (Leave out / put back) and fit again; fit it alone on the Transit fit page to see what is wrong with it."
+   ],
+   "todo": "Leave it out and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit failed: the joint least-squares fit did not converge. Check the planet's values on the Input page …"
+   ],
+   "todo": "Check the planet's values, or leave out the weakest night, and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Save timing CSV…",
+    "Save plot PNG…"
+   ],
+   "todo": "Press Fit nights."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "times are …, which SHOBS-P does not convert (it reads BJD_TDB, HJD_UTC and JD_UTC): save the report with one of those"
+   ],
+   "todo": "Save that report again with BJD_TDB times."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "the CSV has no fitted rows (every row is trimmed or has no error): save the fit CSV again from the Transit fit page"
+   ],
+   "todo": "Fit that night on the Transit fit page and save its light-curve CSV again."
   },
   {
    "section": "Output, Transits mode",

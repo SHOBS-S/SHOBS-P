@@ -360,6 +360,18 @@ class Window(unittest.TestCase):
         self.assertFalse(w.per_filter.get())
         self.assertNotIn("⚠", w.night_note.get())
 
+    def test_saves_are_greyed_until_the_nights_are_fitted(self):
+        w = self.w
+        for b in (w.save_csv_button, w.save_png_button):
+            self.assertIn("disabled", b.state(), b.cget("text"))
+        w.save_csv()                       # a backstop press: a line, no box
+        self.assertEqual(w.prog_text.get(), mn.FIT_NIGHTS_FIRST)
+        w.fit = {"nights": []}
+        w._saves_state()
+        for b in (w.save_csv_button, w.save_png_button):
+            self.assertNotIn("disabled", b.state(), b.cget("text"))
+        w.fit = None
+
     def test_fit_is_started_with_the_choice(self):
         w = self.w
         w.nights = [night(0), night(1, filt="SR")]

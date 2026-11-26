@@ -168,6 +168,9 @@ JD_UTC_NOT_CONVERTED = ("⚠ The report's times are JD_UTC, not BJD_TDB, and the
                         "JD_UTC, up to ±8 min from BJD_TDB, with no usable O − C. " + JD_UTC_WHAT_TO_DO)
 
 
+# 2.4.0 fit-in F4 (sheet sweep): a save that failed says the way out, in the words of the app's other saves
+SAVE_ELSEWHERE = "Save to another folder, or close the program that has the file open."
+
 # 2.4.0 fit-in F4 (#93)
 SAVED_PRIORS_BUTTON = "Fit with saved priors…"
 SAVED_PRIORS_OFF_BUTTON = "Fit with the current priors"
@@ -2400,7 +2403,9 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
             if error[0] != "Canceled":
                 self.app.log(error[1])
-                messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}")
+                # 2.4.0 fit-in F4 (sheet sweep): the box says what to do, not only what failed
+                todo = tc.fit_failed_help(error[0])
+                messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}" + (f"\n\n{todo}" if todo else ""))
             return
         if self._signature() != getattr(self, "_pending_signature", None):
             if self._refit_pending:
@@ -3221,7 +3226,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 rep["time_note"] = JD_UTC_NOT_CONVERTED   # open_report says "looking up…" while its lookup runs
             return
         rep["time_note"] = (f"⚠ The report's times are {dt}, which SHOBS-P does not convert; it fits them as BJD_TDB, so "
-                            "Tc may be off.")
+                            "Tc may be off. Save the report again with BJD_TDB times in the program that wrote it "
+                            "(SHOBS-P also reads HJD_UTC and JD_UTC).")   # 2.4.0 fit-in F4 (m812): what to do
 
     @staticmethod
     def _report_jd_to_bjd(rep, radec, looked_up: str = "") -> None:
@@ -3963,7 +3969,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         try:
             self._write_png(path)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}")
+            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}\n\n{SAVE_ELSEWHERE}")
             return
         self.app.status.set(f"Wrote {path}")
         self.app.log(f"Transit plot PNG: {path}")
@@ -4062,7 +4068,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC",
                               meta=self.meta_for_files)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}")
+            messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}\n\n{SAVE_ELSEWHERE}")
             return
         app.log(f"Transit fit CSV: {fit_path} ({n} rows)")
         # 2.2.21 (#44): the fit CSV is recorded in the series for its night, so Fit the series' nights… finds it
@@ -4173,7 +4179,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(tc.aavso_exoplanet_report(self.result, meta))
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"The AAVSO exoplanet report could not be saved:\n{exc}", parent=self.app)
+            messagebox.showerror("SHOBS-P", f"The AAVSO exoplanet report could not be saved:\n{exc}\n\n"
+                                            f"{SAVE_ELSEWHERE}", parent=self.app)
             return
         self.app.log(f"AAVSO exoplanet report: {path}")
         self._write_settings(path, meta)
@@ -5103,7 +5110,8 @@ class CornerWindow:
         try:
             tpost.save_corner(self.result, path, shape_only=shape_only)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}\n\n{SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         page._corner_written(path, shape_only)
         self.app.log(f"Corner plot PNG: {path}" + (" (replaces this fit's corner plot saved with the plot PNG, now "
