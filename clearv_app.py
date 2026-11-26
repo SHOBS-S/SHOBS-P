@@ -1461,6 +1461,64 @@ def scope_words(scope: dict | None) -> str:
 CATALOG_OUTAGE_MAIN = ("Gaia DR3", "APASS DR9", "Tycho-2")   # 2.3.1: the catalogs a solve leans on
 
 
+def scan_limits_text(result) -> str:
+    """2.4.0 fit-in F3 (area K): what limited a field scan ("brightest 800 measured (limit reached; raise Most stars
+    to measure to go fainter); crowding not tested: check suspects on the image"), '' when nothing did."""
+    return "; ".join(str(w) for w in ((result or {}).get("limits") or []) if w)
+
+
+def recover_words(k: int, name: str, here: bool, night: str = "") -> str:
+    """2.4.0 fit-in F3 (m558 / m555 / m216): the one sentence for frames skipped because of a comp that is no longer
+    in use. here = Measure skipped frames can measure them now (a plain note); otherwise ⚠ and Run photometry.
+    night = the night's label, for the Log (the Photometry page's line is about the night shown)."""
+    head = (f"{k} frame{'s' if k != 1 else ''}" + (f" of {night}" if night else "")
+            + f" {'were' if k != 1 else 'was'} skipped because of {name}, which is no longer a comp")
+    it = "them" if k != 1 else "it"
+    if here:
+        return f"{head}: Measure skipped frames measures {it} with the comps in use."
+    return (f"⚠ {head} — Run photometry " + ("on that night's frames " if night else "")
+            + f"again to measure {it}.")
+
+
+# 2.4.0 fit-in F3 (area E, John's call 8): one verdict per comp / check slot. A star's ⚠ reasons, worst first.
+SLOT_RANK = {"variable": 1, "linear": 2, "edge": 3, "no_mag": 4, "color": 5}
+
+
+def reason_short(text: str) -> str:
+    """A slot reason without its mark, cut before its explanation: "⚠ only 12 px from the frame edge: its sky ring …"
+    -> "only 12 px from the frame edge"."""
+    text = str(text).lstrip("⚠✖ ").strip()
+    cut = len(text)
+    for sep in (": ", " — ", "; "):
+        k = text.find(sep)
+        if 0 < k < cut:
+            cut = k
+    return text[:cut].rstrip(". ")
+
+
+def slot_verdict(reasons, notes=(), source=(), good: str = "", first=()) -> tuple[str, str]:
+    """(text, label style) for one slot of the Stars panel. reasons = [(rank, "bad" | "warn", text)]: the slot shows
+    ONE mark with the worst reason in full, then "also: …" with the others in short plain words; notes = the plain
+    notes; source = where the magnitude came from (last); good = "comp" / "check star" when every test passed (the
+    notes then read "✓ good comp: …"); first = what Enter just did, or the series' magnitude disagreement.
+    The style follows the worst reason only: red for a known variable, amber for any other, green for a good star."""
+    reasons = sorted(reasons, key=lambda r: r[0])
+    pieces, style = list(first), "Hint.TLabel"
+    if reasons:
+        pieces.append("⚠ " + str(reasons[0][2]).lstrip("⚠✖ ").strip())
+        if len(reasons) > 1:
+            pieces.append("also: " + "; ".join(reason_short(r[2]) for r in reasons[1:]))
+        style = "Bad.TLabel" if reasons[0][1] == "bad" else "Warn.TLabel"
+        pieces += list(notes)
+    elif good and notes:
+        pieces.append(f"✓ good {good}: " + ", ".join(notes))
+        style = "Good.TLabel"
+    else:
+        pieces += list(notes)
+    pieces += list(source)
+    return "   ".join(p for p in pieces if p), style
+
+
 def catalog_outage_text(errors: dict | None, counts: dict | None, n_matched: int | None = None) -> str:
     """2.3.1 (nit): a solve that failed while catalog services were down says so first, naming them: "Gaia DR3 (HTTP
     503) and APASS DR9 (no stars came back) did not answer: a catalog service outage, not your settings." Empty when
@@ -10277,6 +10335,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             names = ("1 Solve", "2 Scan field")
             done = {0} if solved else set()
             if solved:
+                why = self._scan_why()   # 2.4.0 fit-in F3 (F2-d): as the Run step, the Scan field gate's reason
+                if why:
+                    return names, done, 1, "Not ready: " + why
                 return names, done, 1, "Solved. Watch or exclude stars if you like, then Scan field."
             if not ready:
                 return names, done, 0, "Calibrate first (Calibrate page); the field is solved straight away."
@@ -10323,6 +10384,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                        self.suggested_comps else ".") + not_solved)
         if not check:
             return names, done, 3, "Pick Check and click a check star: a steady star that tests the comps." + not_solved
+        # 2.4.0 fit-in F3 (F2-d): never "Ready" while Run photometry is greyed: say the gate's reason
+        why = self._run_why()
+        if why:
+            return names, done, 4, "Not ready: " + why
         return names, done, 4, "Ready: Run photometry." + turn
 
     def _place_step_strip(self):
@@ -10406,6 +10471,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         return (f"✖ {head} {core.radec_colons(c[0], c[1])}, {core.angle_words(off['sep_deg'])} from {name} "
                 f"({core.radec_colons(ra, dec)}). {tail} Check the telescope's target coordinates (and the target "
                 "on the Input page).")
+
+    def _target_off_frames_text(self, name: str = "", extra: str = "") -> str:
+        """2.4.0 fit-in F3 (m202 / m296): the one sentence for "the Input page's target is not on these frames", with
+        where it lies when that is known (_target_off_words) and what to check. extra = what was done about it."""
+        name = name or self.star_id.get().strip() or "RA/Dec"
+        where = getattr(self, "_target_off_words", "") or ""
+        return (f"⚠ The Input page target ({name}) is not on these frames" + (f" ({where})" if where else "")
+                + (f"; {extra}" if extra else "") + ": check the Star ID or RA/Dec on the Input page.")
 
     def _later_frames_point_near(self, ra: float, dec: float, field_deg: float):
         """2.4.0 (#99): do other frames of the night point at the target, by their header pointing? True: at least
@@ -10542,12 +10615,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             elif off is not None and off["case"] == "near":
                 self._target_off_words = (f"the target is {core.angle_words(off['beyond_deg'])} beyond the "
                                           f"{off['way']} edge")
-            said = f" ({self._target_off_words})" if self._target_off_words else ""
             # 2.2.19 (#9): step forward to the first frame that holds the target (a telescope still settling)
             if self._start_target_search(ra, dec, name, where, xy, edge):
                 return False
-            self.log(f"Target: {where} is not on this frame by its plate solution{said}; click the target by hand "
-                     "on a frame that shows it.")
+            # 2.4.0 fit-in F3 (m202 / m296): one sentence for the fact, without "click the target by hand"
+            self.log(self._target_off_frames_text(name))
             return False
         if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
             self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
@@ -11066,6 +11138,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 entry.configure(style="Invalid.TEntry" if label in bad else "TEntry")
             except Exception:
                 pass
+        self._update_step_hint()   # 2.4.0 fit-in F3 (F2-d): the step strip follows the Run gate
 
     def _masters_why(self) -> str:
         if self.masters is None:
@@ -11134,6 +11207,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.status.set(text)
                 self.log(text, keep_status=True)
             self.gates.refresh()
+            self._update_step_hint()   # 2.4.0 fit-in F3 (F2-d)
             return
         self._bin_note = True
         text = (f"Binning changed from {old} to {new}: the masters were built at bin {old}. Calibrate again to "
@@ -11143,6 +11217,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.status.set(text)
         self.log(text, keep_status=True)
         self.gates.refresh()
+        self._update_step_hint()   # 2.4.0 fit-in F3 (F2-d): "Not ready: The masters were built at bin N…"
 
     def _auto_solve(self):
         """Solve the image as soon as the frame is calibrated (Discovery 2.2; every mode 2.2.13). Once per image:
@@ -11202,10 +11277,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             return n_obs
 
-    def comp_skip_text(self, night: str = "", said=None) -> str:
+    USE_COMPS_HOW = "Leave it out with Use comps… (Output page)."
+
+    def comp_skip_text(self, night: str = "", said=None, edges=None) -> str:
         """2.3.0 (#50): the Photometry page's line about this night's measurement: frames skipped (how many and why),
         comps left out of some frames, and, when Use comps no longer uses a comp that caused skips, that those frames
-        can be measured now. '' when nothing was skipped or left out."""
+        can be measured now. '' when nothing was skipped or left out.
+        2.4.0 fit-in F3 (area F, m458 / m459 / m471): ONE line per problem star: a comp in use or the check that was
+        left out of frames is a ⚠ line that says what to do; edges = the end-of-run summary's {name or "check":
+        {"words": near the edge / weak flat, "how": what to do}} (_run_summary), folded into that star's line."""
         info = self._night_info(night) if night else {}
         if not night:
             obs = [o for o in self.observations if math.isfinite(getattr(o, "jd", float("nan")))]
@@ -11244,30 +11324,28 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             what = ", ".join(rec.get("reasons") or {}) or "off the frame edge"
             n = len(rec.get("frames") or [])
             whole = name in (info.get("night_out") or [])
-            parts.append(("⚠ " if whole else "") + f"{label} left out of {n} frame{'s' if n != 1 else ''} ({what}; frames "
-                         f"{self._frame_ranges(rec.get('frames') or [])})"
+            edge = (edges or {}).get(name) or {}
+            more = edge.get("words") or ""
+            if more and edge.get("flat_pct") is None and "edge" in what:
+                more = ""   # "off the frame edge" says it already
+            how = edge.get("how") or ("" if whole or name == "check" else self.USE_COMPS_HOW)
+            parts.append(f"⚠ {label} left out of {n} frame{'s' if n != 1 else ''} ({what}; frames "
+                         f"{self._frame_ranges(rec.get('frames') or [])}" + (f"; it {more}" if more else "") + ")"
                          + ("; out of the whole night (missing in most frames)" if whole else
                             "; those frames use the other comps" if name != "check" else "; no check value there")
-                         + ".")
+                         + "." + (f" {how}" if how else ""))
         recover = self.recoverable_skips(night)
         if recover:
             # 2.4.0 fit-in F2 (m555): a plain note when Measure skipped frames can measure them here; ⚠ otherwise
             here = set(self._skips_measurable(night)[0]) if night == self._latest_night() else set()
             for name, frames in recover.items():
-                k = len(frames)
-                if here and all(p in here for p in frames):
-                    parts.append(f"{k} frame{'s' if k != 1 else ''} {'were' if k != 1 else 'was'} skipped because of "
-                                 f"{name}, which is no longer a comp: Measure skipped frames measures "
-                                 f"{'them' if k != 1 else 'it'} with the comps in use.")
-                else:
-                    parts.append(f"⚠ {k} frame{'s' if k != 1 else ''} {'were' if k != 1 else 'was'} skipped because "
-                                 f"of {name}, which is no longer a comp — Run photometry again to measure "
-                                 f"{'them' if k != 1 else 'it'}.")
+                # 2.4.0 fit-in F3 (m558): one sentence builder with the Log lines after Use comps…
+                parts.append(recover_words(len(frames), name, bool(here) and all(p in here for p in frames)))
         return "\n".join(parts)
 
-    def comp_skip_log_text(self, night: str = "") -> str:
+    def comp_skip_log_text(self, night: str = "", edges=None) -> str:
         """2.4.0 (#94): comp_skip_text for the Log: without the unreadable frames the Log named as they were met."""
-        return self.comp_skip_text(night, said=getattr(self, "_unreadable_said", None))
+        return self.comp_skip_text(night, said=getattr(self, "_unreadable_said", None), edges=edges)
 
     def recoverable_skips(self, night: str) -> dict:
         """2.3.0 (#50): {comp name: [frame paths]} for this night's frames skipped only because of comps that the
@@ -11513,12 +11591,35 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         chk = tcore.transit_window_check(min(j0, j1) - 0.0105, max(j0, j1) + 0.0105, planet)
         if chk is None or chk["overlap"]:
             return True
-        side = "after" if chk["hours"] > 0 else "before"
-        return messagebox.askyesno(
-            APP_TITLE,
-            f"No transit of {planet.get('name') or 'the planet'} is predicted during these lights: the nearest is "
-            f"{abs(chk['hours']):.1f} h {side} them.\n\nIf this is a variability run, switch to Variables mode "
-            "first (the series and reports are kept per mode).\n\nRun photometry in Transits mode anyway?")
+        # 2.4.0 fit-in F3 (m220 / m222): the one question for this fact, asked the same way as _mode_guard's
+        what = self._no_transit_words(planet, chk)
+        answer = self._ask_no_transit(what)
+        if answer == "variables":
+            return self._rerun_in_mode("variables")
+        if answer == "run":
+            self.log(f"Run in Transits mode as chosen ({what[0].lower() + what[1:]}).", keep_status=True)
+            return True
+        return False
+
+    @staticmethod
+    def _no_transit_words(planet: dict, chk: dict) -> str:
+        """m220 / m222: the fact, in one wording for both questions."""
+        return (f"No transit of {planet.get('name') or 'the planet'} is predicted during these lights (the nearest is "
+                f"{abs(chk['hours']):.1f} h {'after' if chk['hours'] > 0 else 'before'} them)")
+
+    def _ask_no_transit(self, what: str, why=(), series_open: bool = False, planet: bool = True) -> str:
+        """m220 / m222: Transits mode on lights that hold no transit (or with no planet entered): one question with
+        buttons that say what they do. Returns "variables", "run" or "cancel" (the safe answer)."""
+        text = what + (", and " + " and ".join(why) if why else "") + "."
+        if planet:
+            text += " Check the planet and the frames' date."
+        text += ("\n\nIf this is a variability run, switch to Variables mode (the series and reports are kept per "
+                 "mode).")
+        if series_open:
+            text += (" Running in Transits mode anyway starts a new series; the Variables series is not changed.")
+        return ask_choice(self, APP_TITLE, text,
+                          [("variables", "Switch to Variables mode"), ("run", "Run in Transits mode anyway"),
+                           ("cancel", "Cancel")], safe="cancel")
 
     def _lights_span(self, lights):
         """(first, last) mid-exposure JD of the lights, or None when the headers have no usable time."""
@@ -11640,17 +11741,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     if planet is None:
                         what = "No planet is entered on the Input page"
                     else:
-                        what = (f"No transit of {planet.get('name') or 'the planet'} is predicted during these lights "
-                                f"(the nearest is {abs(chk['hours']):.1f} h {'after' if chk['hours'] > 0 else 'before'} "
-                                "them)")
-                    answer = messagebox.askyesnocancel(
-                        APP_TITLE, f"{what}, and {' and '.join(why)}.\n\nRun in Variables mode instead?\n\n"
-                                   "Yes: switch to Variables mode and run there.\nNo: run in Transits mode anyway"
-                                   + (" (the night starts a new series; the Variables series is not changed)"
-                                      if series_open else "") + ".\nCancel: don't run.", default=messagebox.CANCEL)
-                    if answer is None:
+                        what = self._no_transit_words(planet, chk)
+                    # 2.4.0 fit-in F3 (m220 / m222): the same question as _transit_in_lights, plus the reason
+                    answer = self._ask_no_transit(what, why, bool(series_open), planet is not None)
+                    if answer == "cancel":
                         return False
-                    if answer:
+                    if answer == "variables":
                         return self._rerun_in_mode("variables")
                     # The open-series question would ask the same again: this No answers it (a new series).
                     self._series_mode_answered = bool(series_open)
@@ -11826,21 +11922,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         kept = "" if typed else " (kept from before)"
         if donut is not None:
             if r < donut["clip_below"]:
-                text = (f"⚠ Defocused stars: the aperture clips the ring — use r ≥ {donut['clip_below']:g} px (now r = "
-                        f"{r:g}; Suggest… gives r = {donut['radius']:g}, sky {donut['sky_in']:g}–"
-                        f"{donut['sky_out']:g}).")
+                # 2.4.0 fit-in F3 (m230, display half; the full fix is #61): a plain note at load, no ⚠ and so no
+                # finding: Run photometry's question (m227) is the one place that needs an answer
+                text = (f"Defocused stars: r = {r:g} px{kept} clips the ring; Suggest… gives r = "
+                        f"{donut['radius']:g}, sky {donut['sky_in']:g}–{donut['sky_out']:g} px.")
         else:
             fwhm = self._seeing()
             if math.isfinite(fwhm) and fwhm > 0 and r > 2.5 * fwhm:
                 prop = core.suggest_apertures(fwhm)
-                text = (f"⚠ Aperture r = {r:g} px{kept} is {r / fwhm:.1f} × the stars' FWHM ({fwhm:.1f} "
+                text = (f"Aperture r = {r:g} px{kept} is {r / fwhm:.1f} × the stars' FWHM ({fwhm:.1f} "
                         f"px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = "
                         f"{prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px.")
         if text and text != getattr(self, "_aperture_caution_said", None):
             self._aperture_caution_said = text
             self.log(text)
 
-    APERTURE_CAUTION_STARTS = ("Aperture r = ", "Defocused stars: the aperture clips the ring")
+    # (the second and third: the ⚠ findings of 2.4.0 before fit-in F3, still dismissed from an older session's list)
+    APERTURE_CAUTION_STARTS = ("Aperture r = ", "Defocused stars: the aperture clips the ring", "Defocused stars: r = ")
 
     def _aperture_caution_recheck(self):
         """2.4.0 (#111): the Aperture / sky boxes changed (typed, Suggest…, a reset): the aperture caution of this
@@ -14857,8 +14955,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 continue
             if name and xy is None and role != "target" and self.preview is not None:
                 # 2.2.3: a name left from an earlier run with no marker on this image.
-                var.set("⚠ not marked on this image: click the star, or ✕ to clear the name")
-                lab.configure(style="Warn.TLabel")
+                # 2.4.0 fit-in F3 (m275): a plain hint (it stops nothing until Run, which asks once)
+                var.set("no marker on this image: click the star, or ✕ to clear the name")
+                lab.configure(style="Hint.TLabel")
                 continue
             # Find the star by name, then by where it is marked, so the check works whatever catalog was labeled.
             star = self._chart_star_named(name) or (self._chart_star_at(xy) if xy is not None else None)
@@ -14866,7 +14965,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             mags = self._bands_for(role, name) if role != "target" else {}
             if not mags and star:
                 mags = dict(star.get("mags") or {})
-            parts, style = [], "Hint.TLabel"
+            # 2.4.0 fit-in F3 (area E, John's call 8): one verdict per slot. reasons = the ⚠ ones as (rank, level,
+            # text), worst first (SLOT_RANK); parts = the plain notes after them. The slot shows one mark and the
+            # worst reason in full, then "also: …" with the others in short plain words (slot_verdict).
+            parts, source, reasons, bv_ok, var_ok, asides = [], [], [], False, False, []
+
+            def sort_in(text, rank):
+                """A helper's note: a ⚠ one is a reason of that rank, any other a plain note (an aside: a star
+                with one is not called a good comp, it is described)."""
+                if text.startswith("⚠"):
+                    reasons.append((rank, "warn", text))
+                else:
+                    parts.append(text)
+                    asides.append(text)
+
             if role != "target" and star is not None:
                 # 2.2.13: where the magnitude came from, and the AAVSO sequence label when the star has one.
                 src = (star.get("mag_source") or {}).get(star.get("band", "V")) or star.get("catalog")
@@ -14878,7 +14990,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     src = f"{src} ({band_note})"   # 2.2.17 (item 1): e.g. i′ from Gaia G and BP-RP, ±0.04
                 seq = star.get("seq")
                 if src or seq:
-                    parts.append(f"{core.band_label(star.get('band', 'V'))} from {src}"
+                    source.append(f"{core.band_label(star.get('band', 'V'))} from {src}"
                                  + (f" · AAVSO sequence {seq.get('label')}" if seq and seq.get("label") else ""))
             if role != "target":
                 # 2.2.14 (item 1): B-V from one catalog (named), not the best B against the best V.
@@ -14887,41 +14999,41 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 if spare_info.get("widened") and spare_info.get("fainter_than_target") is not None:
                     # 2.2.14 (item 6): a spare from a widened window, adopted as a comp, shows how faint it is.
                     # (a comp's own brightness note below already gives it, so only the check star repeats it here)
-                    parts.append("spare comp (widened window)" + ("" if comp_number(role) and self.target_xy is not None
+                    source.append("spare comp (widened window)" + ("" if comp_number(role) and self.target_xy is not None
                                                                   else ", " + _fainter_text(spare_info["fainter_than_target"])))
                 if bv is not None:
                     if bv > core.RED_LIMIT_BV:
                         parts.append(f"very red, B−V {bv:.2f}: red giants often vary, and the color is far from most targets")
                     else:
-                        parts.append(f"✓ B−V {bv:.2f}" + (f" ({src})" if src else ""))
-                        style = "Good.TLabel"
+                        parts.append(f"B−V {bv:.2f}" + (f" ({src})" if src else ""))
+                        bv_ok = True
                 else:
                     parts.append("no catalog B−V for this star")
-            no_v = self._no_catalog_v_note(role)
-            if no_v:
-                parts.insert(0, "⚠ " + no_v)   # 2.2.14 (item 4)
-                if style != "Bad.TLabel":
-                    style = "Warn.TLabel"
-            note = self._comp_brightness_note(role, xy)
-            if note:
-                parts.append(note)
-                if note.startswith("⚠") and style != "Bad.TLabel":
-                    style = "Warn.TLabel"
             lin_note = self._linearity_note(role, xy)   # 2.2.19 (#16)
             if lin_note:
-                parts.insert(0, lin_note)
-                if lin_note.startswith("⚠") and style != "Bad.TLabel":   # 2.3.6 (review nit): plain notes stay plain
-                    style = "Warn.TLabel"
+                sort_in(lin_note, SLOT_RANK["linear"])   # 2.3.6 (review nit): plain notes stay plain
             edge_note = self._edge_note(role, xy)   # 2.2.19 (nit)
             if edge_note:
-                parts.insert(0, edge_note)
-                if edge_note.startswith("⚠") and style != "Bad.TLabel":
-                    style = "Warn.TLabel"
+                sort_in(edge_note, SLOT_RANK["edge"])
+            no_v = self._no_catalog_v_note(role)
+            if no_v:
+                reasons.append((SLOT_RANK["no_mag"], "warn", no_v))   # 2.2.14 (item 4)
+            note = self._comp_brightness_note(role, xy)
+            bright_ok = not note
+            for piece in (note.split("   ") if note else []):
+                if piece.startswith("✓ "):
+                    bright_ok = True
+                    parts.append(piece[2:])
+                else:
+                    sort_in(piece, SLOT_RANK["color"])
             if hits:
-                parts.append(("Listed: " if role == "target" else "⚠ ") + core.variable_text({"variable": hits}))
-                style = "Hint.TLabel" if role == "target" else "Bad.TLabel"
+                if role == "target":
+                    parts.append("Listed: " + core.variable_text({"variable": hits}))
+                else:
+                    reasons.append((SLOT_RANK["variable"], "bad", core.variable_text({"variable": hits})))
             elif role != "target":
                 if checked and (star or xy is not None):
+                    var_ok = True
                     parts.append("not a known or suspected variable (" + core.check_sources_text(
                         self.field_check_sources)   # 2.2.21 (#48): "; VSX not reached"
                                  + ("" if star else ", checked by position") + ")")
@@ -14929,14 +15041,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     parts.append("variable check: Solve first")
                 else:
                     parts.append("variable check: mark it on the image to check it by position")
-            v_note = self._series_v_note(role) if role != "target" else ""   # 2.4.0 step 4 (#56)
-            if v_note:
-                parts.insert(0, v_note)
+            first = []
             if slot_note and "  Marker at (" not in slot_note[1]:
                 # 2.2.14 (item 14): e.g. "renamed only" (2.2.16 item 8: now with its ✓; a placed star's line is not
                 # repeated, the panel shows the star itself)
-                parts.insert(0, slot_note[1])
-            var.set("   ".join(parts))
+                first.append(slot_note[1])
+            v_note = self._series_v_note(role) if role != "target" else ""   # 2.4.0 step 4 (#56)
+            if v_note:
+                first.append(v_note)
+            good = ""
+            if role != "target" and not reasons and bv_ok and var_ok and bright_ok and not asides and not first:
+                good = "check star" if role == "check" else "comp"
+            text, style = slot_verdict(reasons, parts, source=source, good=good, first=first)
+            var.set(text)
             lab.configure(style=style)
         if hasattr(self, "suggest_text"):
             self.suggest_text.set("\n".join(self._suggested_lines()))   # 2.2.19 (#15)
@@ -15262,8 +15379,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                              True)
             except Exception as exc:
                 self.call_ui(self.busy_end, tok)
-                self.call_ui(self.status.set, f"✖ Could not find {text}.")
-                self.call_ui(messagebox.showerror, APP_TITLE, f"Could not find {text}: {exc}")
+                # 2.4.0 fit-in F3 (m285 / m286): one plain line (status line and Log), no error box: a Watch star
+                # that was not found stops nothing
+                why = str(exc).strip().rstrip(".")
+                self.call_ui(self.log, f"{text} not found at SIMBAD or VSX" + (f" ({why})" if why else "")
+                             + ": check the spelling, or click the star with Watch.")
 
         self._blink_worker = threading.Thread(target=work, daemon=True)
         self._blink_worker.start()
@@ -15702,9 +15822,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except (TypeError, ValueError):
                 w_saved, h_saved = self.preview.shape[1] * wcs_factor, self.preview.shape[0] * wcs_factor
             if not (np.isfinite(px_) and np.isfinite(py_) and -50 <= px_ <= w_saved + 50 and -50 <= py_ <= h_saved + 50):
-                self.log(f"⚠ Solve: the Input page target ({self.star_id.get().strip() or 'RA/Dec'}) is not in these "
-                         "lights, according to their plate solution; the chart is placed from the solution alone. "
-                         "Update the target on the Input page.")
+                self._target_off_words = ""   # this solve's finding: where it lies is not worked out here
+                self.log(self._target_off_frames_text(
+                    extra="the chart is placed from the plate solution alone"))
                 field_solve = True
         # The reference point the chart solution is built around: the target when one is marked (its marker is the
         # anchor), else the catalog query's center.
@@ -15838,9 +15958,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 if not stars:
                     # 2.3.1 (nit): say it is the catalog services, not the user's RA/Dec or optics
                     if failed:
-                        raise ValueError("No star catalog answered for this field ("
-                                         + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "). That is a catalog "
-                                         "service outage, not your RA/Dec or Optics values. Try Solve again later.")
+                        # 2.4.0 fit-in F3 (x079 / x003): the outage in catalog_outage_text's words (one wording);
+                        # the older sentence only when it has nothing to say (a minor catalog alone failed)
+                        raise ValueError(
+                            catalog_outage_text(failed, self._chart_diag["catalogs"])
+                            or ("No star catalog answered for this field ("
+                                + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "): a catalog service "
+                                "outage. That is not your RA/Dec or Optics values. Solve again in a few minutes."))
                     raise ValueError("No catalog returned stars for this field.")   # review S5 (r2: no empty "()")
                 usable = [s for s in stars if s.get("bright") is not None]
                 usable.sort(key=lambda s: s["bright"])
@@ -16127,8 +16251,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             off = diag.get("header_target_off")
             if off is not None and off > max(3.0 * self._num(self.radius, 8.0), 8.0):
                 tx, ty = diag["header_target_xy"]
-                self.log(f"  The header's solution puts {self.star_id.get() or 'the target'} at ({tx:.0f}, {ty:.0f}), "
-                         f"{off:.0f} px from the Target marker. Check the marker is on your star.")
+                # 2.4.0 fit-in F3 (m311): no Log twin before the question; one Log line with the answer after it
                 # 2.3.5 (m312): one question on both paths (the automatic one only logged it), Keep as the safe
                 # button; the chart labels follow the header either way.
                 name = self.star_id.get() or "the target"
@@ -16145,18 +16268,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                  "are no longer skipped.")
                     self._forget_target_search()   # review S9: as a click on another star does
                     self.target_xy = (float(tx), float(ty))
-                    self.log(f"  Target marker moved to ({tx:.0f}, {ty:.0f}), where the header's solution puts it.")
+                    self.log(f"  Target marker moved to ({tx:.0f}, {ty:.0f}), where the header's solution puts "
+                             f"{name} ({off:.0f} px from where it was).")
+                else:
+                    mx, my = self.target_xy if self.target_xy is not None else (float("nan"), float("nan"))
+                    self.log(f"  Target marker kept at ({mx:.0f}, {my:.0f}); the header's solution puts {name} "
+                             f"{off:.0f} px away at ({tx:.0f}, {ty:.0f}).", keep_status=True)
         if diag.get("field_solved"):
             self.log(f"Solve: field solved from star patterns ({solved['hits']} of {solved.get('match_count', n)} "
                      "bright catalog stars matched); no target needed.")
         if diag.get("moved_from") is not None:
             old = diag["moved_from"]
             self.target_xy = tuple(diag["target"])
-            self.log(f"Solve: the target marker at ({old[0]:.0f}, {old[1]:.0f}) was not on the target; the chart locked "
-                     f"with the target at ({self.target_xy[0]:.0f}, {self.target_xy[1]:.0f}), and the marker was moved there.")
-            messagebox.showinfo(APP_TITLE, f"The Target marker was on a neighboring star. The chart locked with the target "
-                                           f"{math.hypot(self.target_xy[0] - old[0], self.target_xy[1] - old[1]):.0f} px "
-                                           "away, and the marker has been moved there. Check it is your star.")
+            # 2.4.0 fit-in F3 (m314 / m315): one sentence, built once, for the Log and the box (a warning box: the
+            # marker moved without being asked), with the way back
+            moved = (f"⚠ The Target marker was on a neighboring star: the chart locked with the target "
+                     f"{math.hypot(self.target_xy[0] - old[0], self.target_xy[1] - old[1]):.0f} px away, and the "
+                     f"marker was moved there ({self.target_xy[0]:.0f}, {self.target_xy[1]:.0f}). Check it is your "
+                     "star; click with Target to move it back.")
+            self.log(moved)
+            messagebox.showwarning(APP_TITLE, moved)
         h, w = self.preview.shape
         in_frame = [(x, y, star) for x, y, star in placed if 4 <= x < w - 4 and 4 <= y < h - 4]
         # Snap matched stars onto their detected centers so clicks land exactly.
@@ -18116,7 +18247,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             sky_in = self._num_box(self.sky_in, "Sky in")
             sky_out = self._num_box(self.sky_out, "Sky out")
             if not (0 < radius < sky_in < sky_out):
-                raise ValueError("Need aperture r < sky in < sky out")
+                # 2.4.0 fit-in F3 (x063): the backstop behind the red boxes says what they say
+                raise ValueError(self._aperture_problems()[0] or core.APERTURE_ORDER_TEXT)
             min_p, max_p = float(self.min_period.get()), float(self.max_period.get())
             if self.mode_key == "discovery" and hasattr(self, "disc_min_period"):
                 # 2.2.18 (item 16): Discovery's own period range, on its own page.
@@ -18165,9 +18297,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 cap = 800
         found_all = core.detect_sources(ref, max_sources=cap, nsigma=max(nsigma, 2.0), min_sep=max(2 * radius, 8.0))
+        # 2.4.0 fit-in F3 (area K, m351 / m352 / m353): what limited this scan is collected here and said where the
+        # result is read: the "Field scan done" Log line, the status line and the results header (result["limits"]).
+        # The lines at the start stay in the Log only (keep_status): hundreds of progress lines follow them.
+        limits = []
         if len(found_all) >= cap:
+            limits.append(f"brightest {cap} measured (limit reached"
+                          + ("; raise Most stars to measure to go fainter)" if discovery else ")"))
             self.log(f"Field scan: the {cap}-star limit was reached, so only the brightest {cap} stars are measured"
-                     + (" (raise \"Most stars to measure\" to go fainter)." if discovery else "."))
+                     + (" (raise \"Most stars to measure\" to go fainter)." if discovery else "."), keep_status=True)
         found = [(x, y) for x, y in found_all if edge <= x < w - edge and edge <= y < h - edge]
         crowded = 0
         crowd_test = None
@@ -18178,7 +18316,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 crowd_test = self._scan_crowding(ref, radius, sky_out, nsigma, cap)
             except Exception as exc:
-                self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).")
+                self._scan_no_crowding(limits, exc)
                 crowd_test = None
         if discovery and self.scan_skip_crowded.get() and found and crowd_test is not None:
             try:   # review: a failing crowding test never stops the scan
@@ -18187,7 +18325,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 crowded = len(found) - len(keep)
                 found = keep
             except Exception as exc:
-                self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).")
+                self._scan_no_crowding(limits, exc)
                 crowd_test = None
         excluded = 0
         if self.scan_excluded:
@@ -18535,6 +18673,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     "blended": list(blended), "clipped_some": clipped_some,   # 2.2.19 (#25, #26)
                     "ref_path": ref_path,   # 2.2.19 (#14): the frame the positions belong to
                     "stack_frames": frame_recs,   # 2.3.0 (#54)
+                    "limits": list(limits),   # 2.4.0 fit-in F3 (area K): what limited this scan
                 }
                 too_faint = set()
                 limit = mag_limit
@@ -18735,17 +18874,27 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         src = core.check_sources_text(result.get("vsx_sources") or ["VSX"])   # 2.2.21 (#48)
         by = result.get("suspect_by") or {}
         n_err = sum(1 for v in by.values() if v == "own errors")
+        limits = scan_limits_text(result)   # 2.4.0 fit-in F3 (area K): said with the result, not before the scan
         self.log(f"Field scan done: {len(result['labels'])} stars, {result['frames']} frames, {n} suspect(s)"
                  + (f" ({n_err} by their own error bars only)" if n_err else "")
                  + (f", {known} already known ({src})" if result.get("vsx") is not None
-                    else ", no sky positions (run Solve for the VSX/SIMBAD check)"))
-        self.status.set(f"Field scan: {n} suspect(s)."
+                    else ", no sky positions (run Solve for the VSX/SIMBAD check)")
+                 + (f". Limits: {limits}." if limits else ""))
+        self.status.set(f"Field scan: {n} suspect(s)." + (f" Limits: {limits}." if limits else "")
                         + (f" Suspects file not written ({saved_err})." if saved_err else ""))   # Fable N1
         if self.mode_key == "discovery":
             self._show_scan_on_output(result)
             self.show_step(STEP_OUTPUT)
         else:
             ScanWindow(self, result)
+
+    def _scan_no_crowding(self, limits: list, exc) -> None:
+        """2.4.0 fit-in F3 (m353 / m352): the crowding test could not run: one Log line (the Log's own, keep_status)
+        and one entry in the scan's limits, whichever of the two steps failed."""
+        words = "crowding not tested: check suspects on the image"
+        if words not in limits:
+            limits.append(words)
+            self.log(f"Field scan: crowding test skipped ({type(exc).__name__}: {exc}).", keep_status=True)
 
     def _page_discovery_output(self):
         page_host = page_scroll.PageScroll(self.pages)   # 2.4.0 F1c (#109): scrolls when too short
@@ -18755,9 +18904,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.discovery_host = ttk.Frame(card, style="Card.TFrame")
         self.discovery_host.pack(fill=BOTH, expand=True)
         self._discovery_placeholder()
-        nav = ttk.Frame(card, style="Card.TFrame")
-        nav.pack(fill=X, side="bottom", pady=(4, 0))
-        ttk.Button(nav, text="Back", command=lambda: self.show_step(STEP_PHOTO)).pack(side=RIGHT, padx=8, pady=4)
+        # 2.4.0 fit-in F3 (F2-e): one Back, on the Results row (placeholder and results alike), as on the Variables
+        # Output page; the page-level Back under it is gone
         return page_host
 
     def _discovery_placeholder(self):
@@ -18925,9 +19073,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(text, finding=False)
             if store is not None:
                 store.add("warn", text, step=self.MARKER_STEP, where="Before Run photometry")
-        if warned:
-            self.status.set("Check the Log: " + ", ".join(label for label, _o in warned)
-                            + (" is" if len(warned) == 1 else " are") + " marked off the center of the star.")
+        # 2.4.0 fit-in F3 (m379, display half): no "Check the Log: …" status pointer: each line above is a finding,
+        # so the job summary and the Findings panel point at it (the run overwrote the status line at once anyway)
         return warned
 
     def _markers_in_order(self) -> bool:
@@ -18991,19 +19138,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                          + ", ".join(f"{label} {name}" for _r, label, name in mine) + ".", keep_status=True)
         if ghosts:
             listing = "\n".join(f"  • {label}: {name}" for _r, label, name in ghosts)
-            answer = messagebox.askyesnocancel(
-                APP_TITLE,
-                "These have a name in the Stars panel but no marker on this image, so they would not be measured:\n"
-                f"{listing}\n\nYes: clear those names and continue.\nNo: continue and leave them as they are.\n"
-                "Cancel: stop, so you can mark them.")
-            if answer is None:
+            # 2.4.0 fit-in F3 (m275 / m382): one question with two answers (the slot shows a plain hint until
+            # then); the third answer, run and leave the names, is gone
+            if ask_choice(
+                    self, APP_TITLE,
+                    "These have a name but no marker on this image, so they would not be measured:\n"
+                    f"{listing}",
+                    [("run", "Run without them (names cleared)"), ("stop", "Stop to mark them")],
+                    safe="stop") != "run":
                 return False
-            if answer:
-                for role, _label, _name in ghosts:
-                    self.clear_mark(role, redraw=False)
-                self._update_pick_label()
-                self.refresh_preview()
-                self.update_star_panel()
+            for role, _label, _name in ghosts:
+                self.clear_mark(role, redraw=False)
+            self._update_pick_label()
+            self.refresh_preview()
+            self.update_star_panel()
+            self.log("Run without (names cleared, no marker on this image): "
+                     + ", ".join(f"{label} {name}" for _r, label, name in ghosts) + ".", keep_status=True)
         return True
 
     def run_photometry(self, only=None, night: str = "", stack_run=None):
@@ -19107,7 +19257,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             sky_in = self._num_box(self.sky_in, "Sky in")
             sky_out = self._num_box(self.sky_out, "Sky out")
             if not (0 < radius < sky_in < sky_out):
-                raise ValueError("Need aperture r < sky in < sky out")
+                # 2.4.0 fit-in F3 (x063): the backstop behind the red boxes says what they say
+                raise ValueError(self._aperture_problems()[0] or core.APERTURE_ORDER_TEXT)
             for star in comps + ([check] if check is not None else []):
                 if math.hypot(star.x - target.x, star.y - target.y) < radius:
                     raise ValueError(f"{star.name} is marked on top of the target. Select it and click a different star.")
@@ -20245,9 +20396,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._refresh_period()
         self._log_zero_point_check(night)   # 2.2.14 (item 10)
         self._noise_note(night_points)
-        # 2.3.1 (nit): one pop-up for the edge problems and the frames left out (two came one after the other)
-        edge_lines = self._warn_edges(night, night_points)
-        self._warn_run_skips(night, edge_lines)   # 2.3.0 (#50, item 10): on screen, not only in the log
+        # 2.4.0 fit-in F3 (area F, John's call 2): one end-of-run summary, no box: one line per problem star in the
+        # Log and the Findings panel, which opens by itself when there is something to see
+        self._run_summary(night, night_points)
         try:
             self._stack_after_run(night, night_points)   # 2.3.0 (#54): noise check, Stack row
         except Exception as exc:
@@ -20699,34 +20850,82 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     as_spares.append(n)
         info["measured"] = {"comps": run_comps, "spares": as_spares}
 
-    def _warn_run_skips(self, night: str, edge_lines: list | None = None):
-        """2.3.0 (#50, item 10): say on screen (and in the log) what the run left out: skipped frames with their
-        reason, comps left out of some frames, and a ~180° turn on an alt-az night. 2.3.1: with the stars near the
-        frame edge (_warn_edges) in the same pop-up."""
+    def _run_summary(self, night: str, night_points: list) -> list:
+        """2.4.0 fit-in F3 (area F; John's call 2, 26 Nov: NO box). What the run left out, said once, at its end:
+        - skipped frames with their reason (⚠ only when over 10 % of the night, 2.3.6);
+        - ONE ⚠ line per comp in use, or the check, that was left out of frames, with where it sat (edge, weak flat)
+          and what to do (comp_skip_text; before: a "left out" line, a second ⚠ "near the frame edge" line ending
+          "Consider leaving it out", and a warning box repeating both: m458 / m459 / m471);
+        - a comp or check that only came near the edge and was measured all night: a plain Log line (no ⚠);
+        - spares near the edge: the log file only (2.4.0 step 6b).
+        Each ⚠ line is a finding (job summary "⚠ N things need a look", settings file, report NOTES by the 2.3.6
+        path). With a ⚠ here, a ~180° turn or an ensemble zero-point ⚠ in this run, the Findings panel opens.
+        Returns the ⚠ lines."""
         info = self._night_info(night)
-        text = self.comp_skip_text(night)
-        if text:
-            # 2.4.0 (#94): the Log does not repeat the unreadable frames it named as they were met
-            log_fn = getattr(self, "comp_skip_log_text", None)
-            log_text = log_fn(night) if log_fn is not None else text
-            for line in log_text.splitlines():
-                self.log(f"{night}: {line}", level=self._msg_level(line))   # 2.3.6 (audit fix): the line's own level
-        flips = info.get("flip_like") or []
-        edge_lines = list(edge_lines or [])
-        if not flips and not text and not edge_lines:
+        edges, quiet = self._run_edge_notes(night, night_points, info.get("comp_drops") or {})
+        said = []
+        log_fn = getattr(self, "comp_skip_log_text", None)   # 2.4.0 (#94): unreadable frames are not named twice
+        text = log_fn(night, edges=edges) if log_fn is not None else self.comp_skip_text(night, edges=edges)
+        for line in text.splitlines():
+            level = self._msg_level(line)   # 2.3.6 (audit fix): the line's own level
+            self.log(f"{night}: {line}", level=level)
+            if level != "note":
+                said.append(line)
+        for line in quiet:
+            self.log(f"{night}: {line}", keep_status=True)
+        job = [t for lv, t in (getattr(self, "_job_findings", None) or []) if lv in ("warn", "error")]
+        if said or info.get("flip_like") or any("Ensemble zero point" in t for t in job):
+            self._open_findings_for_run()
+        return said
+
+    def _open_findings_for_run(self):
+        """The Findings panel opens by itself after a run that has something to look at (never a modal box)."""
+        store = getattr(self, "findings", None)
+        if store is None or not len(store):
             return
-        # 2.3.6 run-through (John 16 Nov, "plain note please"): a plain skipped-frames note (10 % of the night or
-        # less) never pops up a warning box; it stays in the Log and on the Photometry page's skip line. Only that
-        # line: comps or the check left out of some frames still get the box (Fable review).
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        if not flips and not edge_lines and lines and all(
-                not ln.startswith(("⚠", "✖")) and _re.match(r"^\d+ frames? skipped:", ln) for ln in lines):
-            return
-        body = ["⚠ " + self.flip_like_text(fl) for fl in flips] + ([text] if text else [])
-        if edge_lines:
-            body.append("Near the frame edge or a weak part of the flat:\n  • " + "\n  • ".join(edge_lines))
-        messagebox.showwarning(APP_TITLE, f"{self.label_nights(night)}:\n\n" + "\n\n".join(body)
-                               + "\n\nThe Photometry page shows this beside the View box, under the Aperture line.")
+        try:
+            self.open_findings()
+        except Exception:
+            traceback.print_exc()
+
+    def _run_edge_notes(self, night: str, night_points: list, drops: dict) -> tuple[dict, list]:
+        """For _run_summary: ({comp name or "check": {"words", "flat_pct", "how"}} for the stars comp_skip_text has
+        a line for, [plain Log lines for comps / the check that came near the edge but were measured all night])."""
+        shape = getattr(self.preview, "shape", None) if self.preview is not None else None
+        if not shape:
+            return {}, []
+        try:
+            margin = 3.0 * float(self.sky_out.get())
+        except Exception:
+            margin = 60.0
+        flat = getattr(self.masters, "flat", None) if self.masters is not None else None
+        scale = 1.0 if self.pattern.get() == core.MONO else 2.0
+        try:
+            records = core.edge_records(night_points, shape, list(self.comps_used), self.check_used, margin, flat,
+                                        scale)
+        except Exception:
+            records = []
+        edges, quiet = {}, []
+        for rec in records:
+            if rec["kind"] == "spare":
+                # 2.4.0 step 6b (John 19 Nov, so-what test): nothing to do, so not on the page: the log file only
+                log_to_file(f"{night}: {rec['label']} {rec['words']} (a spare: only measured, not used).")
+                continue
+            key = "check" if rec["kind"] == "check" else rec["name"]
+            if key in drops:
+                edges[key] = {"words": rec["words"], "flat_pct": rec["flat_pct"]}
+            elif rec["kind"] == "check":
+                alt = self._check_alt_words(night_points, shape, margin) if rec["near"] else ""
+                quiet.append(f"{rec['label']} {rec['words']}; it was measured in every frame."
+                             + (f" {alt}" if alt else ""))
+            else:
+                quiet.append(f"{rec['label']} {rec['words']}; it was measured in every frame.")
+        if "check" in drops:
+            # 2.3.1 (nit; TrES-3 b 0705): the check lost frames: name a spare that stays farther in
+            alt = self._check_alt_words(night_points, shape, margin)
+            if alt:
+                edges.setdefault("check", {"words": "", "flat_pct": None})["how"] = alt
+        return edges, quiet
 
     def _update_skip_line(self):
         """2.3.0 (#50): the Photometry page's line about skipped frames and comps left out (shown only with text),
@@ -20942,68 +21141,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             except Exception:
                 traceback.print_exc()
 
-    def _warn_edges(self, night: str, night_points: list) -> list:
-        """2.2.3: tell when a comp, spare or check star sat near the frame edge (or in a weak part of the flat).
-        2.3.1: returns the lines for the pop-up (comps in use and the check); spares are only logged."""
-        shape = getattr(self.preview, "shape", None) if self.preview is not None else None
-        if not shape:
-            return []
-        try:
-            margin = 3.0 * float(self.sky_out.get())
-        except Exception:
-            margin = 60.0
-        flat = getattr(self.masters, "flat", None) if self.masters is not None else None
-        scale = 1.0 if self.pattern.get() == core.MONO else 2.0
-        try:
-            problems = core.edge_problems(night_points, shape, list(self.comps_used), self.check_used, margin,
-                                          flat, scale)
-        except Exception:
-            problems = []
-        # 2.3.1 (nit, John 4 Nov): a spare near the edge does not matter (it is only measured): a quiet log line. The
-        # pop-up is kept for the comps in use and the check; a check near the edge also names a better check star.
-        spares = [p for p in problems if p.startswith("spare ")]
-        loud = [p for p in problems if not p.startswith("spare ")]
-        for p in spares:
-            # 2.4.0 step 6b (John 19 Nov, so-what test): nothing to do, so not on the page: the log file only
-            log_to_file(f"{night}: {p.split(':')[0]} (a spare: only measured, not used).")
-        # review S1: the check's own line (edge distance or vignetting) is kept; the frames it was off the frame and a
-        # better spare are added to it
-        orig = next((p for p in loud if p.startswith("check ")), "")
-        extra = self._check_edge_line(night, night_points, shape, margin, "frame edge" in orig)
-        if extra:
-            loud = [p for p in loud if not p.startswith("check ")] + [(orig + " " if orig else f"check {self.check_used}: ") + extra]
-        for p in loud:
-            self.log(f"⚠ {night}: {p}")
-        return loud   # shown in _warn_run_skips' pop-up
-
-    def _check_edge_line(self, night: str, night_points: list, shape, margin: float, near: bool) -> str:
-        """2.3.1 (nit): the check star near the edge, or off it in some frames (TrES-3 b 0705: Gaia DR3 …4848 off the
-        edge in frames 194–213): how many frames lost their check value, and a spare that stays farther in."""
+    def _check_alt_words(self, night_points: list, shape, margin: float) -> str:
+        """2.3.1 (nit): what to do about a check star near or off the frame edge: a spare that stays farther in
+        (TrES-3 b 0705), else how far in to pick the next one."""
         check = self.check_used
         if not check:
             return ""
-        miss = core.check_missing_frames(night_points)
-        if not near and not miss:
-            return ""   # a vignetting-only problem keeps its own line as it is
-        import transit_ui as tu
-        pts = sorted(night_points, key=lambda o: o.jd)
-        nums = tu.frame_numbers([getattr(o, "path", "") for o in pts])
-        text = ""
-        if miss:
-            text = (f"The check star was off the frame in {len(miss)} frame{'s' if len(miss) != 1 else ''} "
-                    f"({tu.frame_ranges([nums[k] for k in miss])}), which have no check value. ")
         alt = core.check_edge_alternative(night_points, shape, margin, check)
         if alt:
             star = self._chart_star_named(alt["name"]) if hasattr(self, "_chart_star_named") else None
             mag = (star or {}).get("mag")
-            text += (f"A better check star stays farther in: {alt['name']}"
-                     + (f" ({core.band_label(self._band())} {float(mag):.2f})" if mag is not None else "")
-                     + f", {abs(alt['dmag']):.1f} mag {'fainter' if alt['dmag'] > 0 else 'brighter'} than {check}, "
-                     f"at least {alt['closest_px']:.0f} px in all night (measured as a spare). Pick it as the check "
-                     "next time.")
-        else:
-            text += f"Pick a check star at least {margin:.0f} px in next time."
-        return text if near or miss else ""
+            return (f"A better check star stays farther in: {alt['name']}"
+                    + (f" ({core.band_label(self._band())} {float(mag):.2f})" if mag is not None else "")
+                    + f", {abs(alt['dmag']):.1f} mag {'fainter' if alt['dmag'] > 0 else 'brighter'} than {check}, "
+                    f"at least {alt['closest_px']:.0f} px in all night (measured as a spare). Pick it as the check "
+                    "next time.")
+        return f"Pick a check star at least {margin:.0f} px in next time."
 
     def _photon_noise_setup(self, lights, binning, pattern, mode, masters, precalibrated, stars, radius, sky_in,
                             sky_out, log=None, all_lights=None, stacks: bool = False, gain_inputs=None,
@@ -21488,10 +21641,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         """2.2.18 (item 4): the Keep question with labeled buttons; the answer is logged with the night and the time.
         True = use the points."""
         keep = ask_choice(self, APP_TITLE, message, [(True, self.KEEP_USE), (False, self.KEEP_LEAVE)], safe=False)
-        keep = keep is True
-        self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} question ({where}) answered "
-                 f"\u201c{self.KEEP_USE if keep else self.KEEP_LEAVE}\u201d.")
-        return keep
+        # 2.4.0 fit-in F3 (m477 / m480): the answer and its outcome are one Log line (_set_keep_transmission)
+        return keep is True
 
     def _offer_keep_transmission(self, night: str) -> None:
         """2.2.14 (item 18): after photometry, a night whose lost light is transmission loss (all stars fading
@@ -21515,17 +21666,20 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             "(comps, check, spares) faded by the same amount, smoothly, with a flat sky: "
             f"{core.HAZE_LABEL}, not cloud.\n\n" + self._keep_question(night)
             + " Transmission loss… on the Output page changes this later.", "after photometry")
-        self._set_keep_transmission(night, keep)
+        self._set_keep_transmission(night, keep, "after photometry")
 
-    def _set_keep_transmission(self, night: str, keep: bool) -> None:
+    def _set_keep_transmission(self, night: str, keep: bool, where: str = "") -> None:
+        """where = when the question was asked ("after photometry", "Transmission loss…"): 2.4.0 fit-in F3 (m477):
+        the one Log line for the answer and what follows from it."""
         info = self._night_info(night, create=True)
         if keep:
             info["keep_transmission"] = True
         else:
             info.pop("keep_transmission", None)
+        asked = f" (asked {'at ' if where.startswith('Transmission') else ''}{where})" if where else ""
         self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} points "
-                 + ("kept (errors follow the reduced light, plus the star-to-star scatter measured in that stretch)."
-                    if keep else "left out (flagged)."))
+                 + (f"kept{asked}: errors follow the reduced light plus the star-to-star scatter there."
+                    if keep else f"left out, flagged{asked}."))
 
     def edit_transmission(self):
         """2.2.14 (item 18): keep or leave out a night's transmission-loss points (the highlighted night, or the
@@ -21550,8 +21704,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             + ("used in the light curve" if kept else "left out (flagged)") + ".\n\n" + self._keep_question(night),
             "Transmission loss…")
         if keep != kept:
-            self._set_keep_transmission(night, keep)
+            self._set_keep_transmission(night, keep, "Transmission loss…")
             self.refit_period()
+        else:
+            self.log(f"{self.label_nights(night)}: {core.HAZE_LABEL} points still "
+                     + ("kept" if keep else "left out, flagged") + " (asked at Transmission loss…).",
+                     keep_status=True)
 
     def cancel_job(self):
         if getattr(self, "_run_after_survey", False):
@@ -25832,17 +25990,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 recover.setdefault(name, []).extend(frames)
                 k = len([p for p in frames if p in here]) if night == latest else 0
                 n_here += k
+                # 2.4.0 fit-in F3 (m558 / m555 / m216): the Photometry page's sentence (recover_words), with the night
                 if k:
-                    self.log(f"{k} frame{'s' if k != 1 else ''} of {self.label_nights(night)} "
-                             f"{'were' if k != 1 else 'was'} skipped because of {name}, which is no longer a comp: "
-                             "Measure skipped frames (status line, or the Photometry page) measures "
-                             f"{'them' if k != 1 else 'it'} with the comps in use.")
+                    self.log(recover_words(k, name, True, self.label_nights(night)))
                 if len(frames) > k:
-                    m = len(frames) - k
-                    self.log(f"⚠ {m} frame{'s' if m != 1 else ''} of {self.label_nights(night)} "
-                             f"{'were' if m != 1 else 'was'} skipped because of {name}, which is no longer a comp — "
-                             "open that night's frames and Run photometry again to measure "
-                             f"{'them' if m != 1 else 'it'}.")
+                    self.log(recover_words(len(frames) - k, name, False, self.label_nights(night)))
         self._update_skip_line()
         self._log_zero_point_check()   # 2.2.14 (item 10)
         saved = ""
@@ -25850,7 +26002,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                # 2.4.0 fit-in F3 (m536 / m532, package C's line, edited here with m558 as the triage asks): the one
+                # "Series not saved" message. App.series_not_saved is package C's helper; until the packages are
+                # merged this branch falls back to the old box, so it runs on its own.
+                not_saved = getattr(self, "series_not_saved", None)
+                if callable(not_saved):
+                    saved = not_saved(exc) or ""
+                else:
+                    messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
         n_rec = sum(len(v) for v in recover.values())
         n_away = n_rec - n_here
         self.status.set(f"Comps in use: {used}.{saved}"
@@ -29603,8 +29762,10 @@ class ScanView:
         n = len(r["candidates"])
         n_hand = n - len(self._scan_suspects())
         level = r.get("chi2_limit")
+        limits = scan_limits_text(r)   # 2.4.0 fit-in F3 (area K): first, so it is not buried in the header
         self.header_text.set(
-            f"{len(r['labels'])} stars, {r['frames']} frames. Magnitudes are {self._cal_text}. "
+            (f"Limits of this scan: {limits}. " if limits else "")
+            + f"{len(r['labels'])} stars, {r['frames']} frames. Magnitudes are {self._cal_text}. "
             f"{n} suspect(s)" + (f" ({n_hand} added by hand)" if n_hand else "")
             + f": stars that scatter at least {r.get('excess_limit', 3.0):g}x more than stars of the same brightness"
             + (f", or whose scatter against their own error bars (χ²ν) is at least {level:g}x that of stars as bright"

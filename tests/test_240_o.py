@@ -467,26 +467,33 @@ class TestCameraChange(unittest.TestCase):
             time.sleep(0.02)
 
     def test_fixing_the_boxes_clears_the_kept_from_before_finding(self):
+        """2.4.0 fit-in F3 (m230, display half): the aperture note at load is a plain note (status line and Log),
+        no longer a ⚠ finding: Run photometry's question is the one place that needs an answer. It is still said
+        again in the new numbers after a change that does not fit, and not at all once the sizes fit."""
         app = self.app
         self._log.stop()
         self.addCleanup(self._log.start)
         self._image(2.3)
-        with mock.patch.object(app, "_donut_apertures", return_value=None):
+        said = []
+        real = app.log
+        with mock.patch.object(app, "_donut_apertures", return_value=None), \
+                mock.patch.object(app, "log", side_effect=lambda t, *a, **k: (said.append(str(t)), real(t, *a, **k))):
             app._aperture_caution(app._preview_token, measured=True)
-            texts = [f.text for f in app.findings.items]
-            self.assertEqual(len(texts), 1, texts)
-            self.assertIn("⚠ Aperture r = 8 px (kept from before) is 3.5 × the stars' FWHM (2.3 px)", texts[0])
-            self.assertTrue(app.findings.items[0].hint, "chapter 23 has the What to do")
-            # still too large after a change: the finding is replaced, in the new numbers, no longer "kept from before"
+            self.assertEqual(len(said), 1, said)
+            self.assertTrue(said[0].startswith("Aperture r = 8 px (kept from before) is 3.5 × the stars' FWHM (2.3 "
+                                               "px)"), said)
+            self.assertEqual([f.text for f in app.findings.items], [], "a plain note is not a finding")
+            self.assertEqual(app.status.get(), said[0])
+            # still too large after a change: said again, in the new numbers, no longer "kept from before"
             app.radius.set(7.0)
             self._pump()
-            texts = [f.text for f in app.findings.items]
-            self.assertEqual(len(texts), 1, texts)
-            self.assertIn("⚠ Aperture r = 7 px is 3.0 × the stars' FWHM", texts[0])
-            self.assertNotIn("kept from before", texts[0])
-            # fixed: gone, with no new solve
+            self.assertEqual(len(said), 2, said)
+            self.assertTrue(said[1].startswith("Aperture r = 7 px is 3.0 × the stars' FWHM"), said)
+            self.assertNotIn("kept from before", said[1])
+            # fixed: nothing more is said, with no new solve
             app.radius.set(4.1)
             self._pump()
+            self.assertEqual(len(said), 2, said)
             self.assertEqual([f.text for f in app.findings.items], [])
 
     def test_new_camera_image_sets_the_boxes_instead_of_warning(self):

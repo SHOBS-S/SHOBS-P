@@ -511,9 +511,7 @@ class StackMixin:
             if px > 1.0:
                 self.log(f"  The field turned by up to {summ['turn']:.2f}° inside a stack (about {px:.1f} px at "
                          "the frame's corners): stars far from the center are slightly smeared in the stacks.")
-        if summ.get("mode") == "discovery":
-            self.log("  The scan on the stacks cannot see changes faster than one stack "
-                     f"({stack_core._dur(summ['exp'])} of exposure).")
+        # 2.4.0 fit-in F3 (m740): "a stack hides events faster than itself" is said on the Stack row, the one place
         run = {"paths": paths, "meta": meta, "night": src["night"], "summary": summ, "src": src, "seeing": seeing}
         self._stack_run_ctx = run
         if src.get("scan"):
