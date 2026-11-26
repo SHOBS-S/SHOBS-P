@@ -47,6 +47,8 @@ millionth of the star's light for a planet up to 0.15 of the star's size, and th
 and is several times faster to work out, so a fit, the MCMC, **Auto (BIC)**, the Robustness check and the corner plot
 all finish sooner (a 300-frame Auto fit: about a third of the time). Fitted values can move from an older version's,
 but only by a small fraction of their error bars: the MCMC draws its random steps a little differently.
+**Multi-night…** uses the same exact formula for every night (before 2.4.0 it read the curve off a table of 126
+points, about a millionth of the star's light away from the exact curve).
 
 The fit needs your site's latitude and longitude, for its BJD times. From 2.4.0 SHOBS-P asks about this before the
 photometry, not after it: when you press **Run photometry** in Transits mode with an empty Site box, it says *"No

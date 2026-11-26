@@ -281,9 +281,7 @@ class ShapesAndCallers(unittest.TestCase):
         self.assertEqual(np.shape(mags), (50,))
         self.assertTrue(np.isfinite(mags).all())
         self.assertTrue(0.01 < mags.max() < 0.02)
-        z = z_grid(0.12, 301)
-        grid_err = np.abs(mn.fast_occultation(z, 0.12, 0.4, 0.25) - tc.occultation(z, 0.12, 0.4, 0.25)).max()
-        self.assertLess(grid_err, 5e-6)
+        self.assertFalse(hasattr(mn, "fast_occultation"))   # Multi-night's interpolation grid is gone
         dip = tc.ld_center_depth({"k": 0.1, "b": 0.2, "teff": 5800})
         self.assertTrue(0.01 < dip < 0.014)
 
@@ -294,6 +292,83 @@ class ShapesAndCallers(unittest.TestCase):
             z = tc.separation(t, 0.0012, 3.0, a_rs, b)
             d = np.abs(tc.occultation(z, k, 0.42, 0.26) - tc.occultation_annulus_reference(z, k, 0.42, 0.26))
             self.assertLess(d.max(), 1 * PPM, (k, a_rs, b))
+
+
+class MultiNightExact(unittest.TestCase):
+    """2.4.0 fit-in F3: the joint fit evaluates the exact model (no 126-point interpolation grid)."""
+    PLANET = dict(name="TOI-2046 b", host="TOI-2046", period=1.4971842, t0=2460000.5, t0_err=0.0005,
+                  period_err=1e-6, k=0.12, a_rs=5.0, b=0.3, teff=6000, t14=0.08)
+
+    @classmethod
+    def setUpClass(cls):
+        import multinight as mn
+        cls.mn = mn
+        nights = []
+        for i, (nn, flt, npts) in enumerate(((100, "CV", 90), (102, "SR", 70), (105, "CV", 110))):
+            rng = np.random.default_rng(300 + i)
+            tcn = cls.PLANET["t0"] + nn * cls.PLANET["period"]
+            t = np.linspace(tcn - 0.11, tcn + 0.12, npts)
+            am = 1.05 + 0.8 * ((t - t[0]) / (t[-1] - t[0]) - 0.3) ** 2
+            f = tc.occultation(tc.separation(t, tcn, cls.PLANET["period"], 5.0, 0.3), 0.12, 0.4, 0.25)
+            f = f * (1 + 0.01 * (am - am.mean())) + rng.normal(0, 0.002, npts)
+            nights.append(mn._finish_night({"kind": "csv", "source": f"n{i}", "planet": "TOI-2046 b", "filter": flt,
+                                            "obsdate": f"0{i + 1}-OCT-2026", "t": t, "flux": f,
+                                            "err": np.full(npts, 0.002), "airmass": am, "t_flip": None,
+                                            "single_tc": None, "notes": []}))
+        mn.check_nights(nights, "TOI-2046 b")
+        cls.fits = {pf: mn.joint_fit(nights, dict(cls.PLANET, ld_band="CV"), per_filter=pf, mcmc_steps=60)
+                    for pf in (False, True)}
+
+    def _direct(self, prob, x, j, t=None):
+        d = prob.nights[j]
+        ik, i1, i2 = prob._ig[d["group"]]
+        root_q1 = math.sqrt(x[i1])                       # the fit's q1, q2 -> u1, u2
+        u1, u2 = 2.0 * root_q1 * x[i2], root_q1 * (1.0 - 2.0 * x[i2])
+        tt = d["t"] if t is None else t
+        return tc.occultation(tc.separation(tt, x[prob._in[j][0]], prob.period, x[0], x[1]), x[ik], u1, u2)
+
+    def test_every_night_is_the_exact_model(self):
+        """One shape for all nights, and one per filter (two groups, nights of unequal length): each night's model
+        in the likelihood is transit_core.occultation at that night's own times, to the last bit."""
+        for pf, fit in self.fits.items():
+            prob = fit["problem"]
+            self.assertEqual(len({d["group"] for d in prob.nights}), 2 if pf else 1)
+            rng = np.random.default_rng(5)
+            flat = fit["chain"]["flat"]
+            for x in [np.asarray(flat[i], dtype=float) for i in rng.integers(0, len(flat), 6)]:
+                shape = prob._shape(x)
+                for j, d in enumerate(prob.nights):
+                    want = self._direct(prob, x, j)
+                    got = prob.night_model(x, j, shape=shape, transit_only=True)
+                    self.assertEqual(got.shape, d["t"].shape)
+                    np.testing.assert_array_equal(got, want)
+                    np.testing.assert_array_equal(prob.night_model(x, j, transit_only=True, exact=True), want)
+                    np.testing.assert_array_equal(prob.night_model(x, j), want * prob.baseline(x, j))
+                    other = d["t"][::3] + 1e-4
+                    np.testing.assert_array_equal(prob.night_model(x, j, t=other, transit_only=True),
+                                                  self._direct(prob, x, j, other))
+
+    def test_likelihood_is_built_on_the_exact_model(self):
+        for fit in self.fits.values():
+            prob = fit["problem"]
+            x = np.asarray(fit["chain"]["flat"][0], dtype=float)
+            chi2 = 0.0
+            for j, d in enumerate(prob.nights):
+                r = (d["flux"] - self._direct(prob, x, j) * prob.baseline(x, j)) / d["err"]
+                chi2 += float(np.dot(r, r))
+                self.assertAlmostEqual(prob.night_chi2(x)[j], float(np.dot(r, r)), places=9)
+            pr = prob._prior_resid(x)
+            self.assertAlmostEqual(prob.log_prob(x), -0.5 * (chi2 + float(np.dot(pr, pr))), places=9)
+            self.assertEqual(len(prob.residual_vector(x)), sum(len(d["t"]) for d in prob.nights) + len(pr))
+
+    def test_saved_night_models_are_exact_and_the_grid_is_gone(self):
+        fit = self.fits[False]
+        self.assertEqual(len(fit["nights"]), 3)
+        self.assertTrue(abs(fit["summary"]["k:all"][0] - 0.12) < 0.01)
+        with open(os.path.join(ROOT, "multinight.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        for gone in ("occ_curve", "fast_occultation", "_S_IN", "_S_EDGE", "np.interp(z, grid"):
+            self.assertNotIn(gone, src)
 
 
 class Speed(unittest.TestCase):

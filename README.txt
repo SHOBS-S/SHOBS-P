@@ -283,7 +283,9 @@ mode, T = Transits, V = Variables)
      1 part per million for planets up to 0.15 of the star's size; the formula is the more exact one), several
      times faster: a 300-frame Auto (BIC) fit takes about a third of the time. RESULTS CHANGE, slightly: fitted
      values move by a small fraction of their error bars (under 0.2 sigma on a test night), because the MCMC's
-     random steps fall a little differently.
+     random steps fall a little differently. Multi-night uses the same exact formula for every night (it read
+     the curve off a 126-point table before, about 1.3 parts per million off); its values move as little
+     (under 0.25 sigma on a four-night test).
 
 New in 2.3.0 (S = shared by every mode, T = Transits, V = Variables, D = Discovery; GitHub issue numbers in brackets)
 - S  Stacking when comps are weak [#54]: after a run, the Photometry page's Stack row compares the comp ensemble's
