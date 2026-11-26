@@ -290,7 +290,8 @@ class TestChapter23(unittest.TestCase):
         import findings
         hints = findings.load_hints()
         meas = dict(TestNoiseSetupWords.MEAS)
-        for k, words in ((2.0, "EGAIN is too small"), (0.4, "Fix EGAIN in the capture program")):
+        # 2.4.0 fit-in F4 (m473): 0.6, not 0.4: over 2x off the sky's gain is now used and no caution is given
+        for k, words in ((2.0, "EGAIN is too small"), (0.6, "Fix EGAIN in the capture program")):
             s = core.photon_noise_setup({"EGAIN": 1.0}, 1, core.MONO, "luminance", None, True, False, 0.5, 500.0,
                                         sky_meas=dict(meas, k=k, k_lo=0.98 * k, k_hi=1.02 * k))
             self.assertIn(words, findings.match_hint("⚠ " + s["warning"], hints) or "")

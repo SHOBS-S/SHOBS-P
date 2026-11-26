@@ -96,8 +96,16 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 - one line of reduction settings, starting `SHOBS-P settings:` (aperture, comps, check, frames left out, trimmed
   frames, detrending, gain, calibration, and, for stacked points, `points are stacks of 40 frames (effective exposure
   30 s)`). The gain part says which gain was used: `Gain 0.255 e-/ADU (header EGAIN)`, `Gain measured from the
-  night's sky, 39.3 e- per image unit` (2.4.0), or `Gain from the sky's own noise, a lower limit of 28.7 e- per image
-  unit`,
+  night's sky, 39.3 e- per image unit` (2.4.0), `Gain as the sky measured it with this camera before, 0.26 e-/ADU,
+  …` (2.4.0: no EGAIN and no measurement that night), or `Gain from the sky's own noise, a lower limit of 28.7 e-
+  per image unit`,
+- what the ERR column holds (2.4.0): `SHOBS-P: ERR is each point's measured error x 1.234, scaled to the scatter and
+  the red noise (raw reduced chi-square 1.31, red-noise beta 1.08)`, or `… not scaled …` when the scale is 1 (error
+  bars are never scaled down). The ExoFOP package's `…_lightcurve.csv` says the same of its `rel_flux_err` in a `#`
+  line under the Created line,
+- with a comp check, the result with both error terms (2.4.0): `SHOBS-P: depth 1.84 +/- 0.05 (stat) +/- 0.04 (comps)
+  %; Tc +/- 0.52 (stat) +/- 0.31 (comps) min (all comps 1.84 %; without each 1.80-1.88 %)`. The `#RESULTS` line keeps
+  the statistical error alone,
 - a parameter limited by its prior range (chapter 17, "The corner plot").
 
 ### The settings file and the field image
@@ -285,8 +293,13 @@ Things to know:
 - **The ephemeris.** If the report has no predicted mid-transit, SHOBS-P looks one up (NASA Exoplanet Archive, then
   an EXOTIC `inits` file next to the report). Without any, no O − C is given.
 - **Time systems.** BJD_TDB is used as it is. HJD is moved to BJD_TDB (+69.184 s). JD_UTC is converted when the star's
-  position is known from the Input page or the lookup. If it is not, the times are kept as JD_UTC and a warning says
-  Tc may be off by up to 8 minutes, with no usable O − C; enter the star on the Input page and open the report again.
+  position is known from the Input page or the lookup. If it is not, SHOBS-P looks the star up from the report's
+  planet (NASA Exoplanet Archive; from 2.4.0) and converts the times when the answer is in: the banner reads *"The
+  report's times are JD_UTC: SHOBS-P is looking up its star's position to convert them to BJD_TDB…"* and then *"…
+  SHOBS-P converted them to BJD_TDB at the position of its star, looked up from the planet (NASA Exoplanet
+  Archive)."* **Fit transit** pressed meanwhile waits for it. Only when that lookup finds nothing are the times kept
+  as JD_UTC, and a warning says Tc may be off by up to 8 minutes, with no usable O − C; enter the star on the Input
+  page and open the report again.
 - **What is not available.** **Comp health…**, **Use comps…**, **Refit with flagged frames** and the comp check
   need your own photometry, so they are off for a report.
 - **Going back.** Click **Close report**, or pick one of your nights in **Night**. Your own photometry was kept. The

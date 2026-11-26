@@ -68,7 +68,9 @@ strip; the page has no progress bar of its own.
 
 - **Planet line**: the planet's period, duration, depth and shape, and where they came from.
 - **Data** row. **Night**: which night of your photometry is fitted (for example *"KELT-16 b · night of 5–6 Oct 2026"*). The newest
-  night is chosen. Picking another one clears the fit; press **Fit transit** to fit it. The hint beside it counts the points: usable, in this fit,
+  night is chosen. Picking another one clears the fit; press **Fit transit** to fit it. When a night is added to
+  the series while the page shows an older one (a new run, for example), the box switches to the night just added
+  (from 2.4.0; the Log says so), unless a report is shown or a fit is running. The hint beside it counts the points: usable, in this fit,
   flagged, trimmed.
 - **Open AAVSO exoplanet report (EXOTIC)…** (same row): fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
   **Close report** appears beside the Night box while a report is open.
@@ -269,7 +271,13 @@ The notes under the table also say:
   check 37.1 +/- 2.7; method: background model and source mask, idea by Mike Fitzgerald)."* (see "The gain behind the
   error bars" in [8. Photometry basics](08-photometry-basics.md)). When it cannot be measured, the one-frame estimate
   is used and the note says so: *"Gain from the sky's own noise, a lower limit of 28.7 e- per image unit (no EGAIN in
-  the headers; error bars are on the safe side)."* With no estimate at all, 1 e-/ADU is assumed, in orange. On frames
+  the headers; error bars are on the safe side)."* With no estimate at all, 1 e-/ADU is assumed, in orange. From
+  2.4.0 both of these are rare: once a night's sky has measured the gain, SHOBS-P remembers it for that camera, and
+  a later night that cannot measure it says *"Gain as the sky measured it with this camera before, 0.26 e-/ADU, …
+  (measured on 2026-11-14; no EGAIN in the headers, and this night's sky could not measure it)."* And when the
+  header's EGAIN is more than twice off what the night's sky measures, the sky's gain is used and the note ends
+  *"…; the header EGAIN 1 e-/ADU is over 2x off it and was not used"* (see "The gain behind the error bars" in
+  [8. Photometry basics](08-photometry-basics.md)). On frames
   the camera binned (XBINNING above 1), SHOBS-P also works out from the sky's noise whether the camera summed or
   averaged the binned pixels, for example *"Gain 0.768 e-/ADU (header EGAIN); camera bin 3x3 averaged, so 6.91 e- per
   stored ADU used (from the sky's noise)"*. See "Camera binning and the gain" in [7. Calibrate](07-calibrate.md);
@@ -357,14 +365,23 @@ that is a central transit, and the note says to read b as an upper limit.
 A bad comparison star can make or hide a transit. The page checks this in three ways.
 
 **Leave-one-comp-out.** With two or more comps, after every fit SHOBS-P refits once with each comp left out. The
-result line then adds, for example, *"Comps checked: depth spread 0.12 %, Tc spread 45 s"*, and the notes give the
+result line then gives the result with two error terms (from 2.4.0), for example *"Comps checked: depth 1.84 ± 0.05
+(stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min (all comps 1.84 %; without each 1.80–1.88 %)"*, and
+the **Depth (%)** row of the table reads *1.84 ± 0.05 (stat) ± 0.04 (comps)*. The first ± is the statistical error,
+exactly as before. The second, **(comps)**, says how far the comp choice moves the result: half the range over the
+fit with all comps and the fits with each comp left out. The two are not added together, and the report's result
+fields keep the statistical error alone. The words in brackets are the reference: the depth with all comps, and the
+lowest and highest depth without each one. The same line goes into the Log, the settings file (*Result with both
+error terms: …*), the fit CSV's header, the fit file and the report's NOTES. The notes also give the
 range beside the depth with all comps and the points used: *"Comp choice check (each of the 4 comps left out in turn,
 least squares): depth 1.58–1.72 % beside 1.65 % with all comps (218 points; …)"*. Each refit uses the same frames as
 the main fit: a frame where one comp is missing is measured from the others, on the night's scale, as the photometry
 does (from 2.3.5; before, such frames were dropped from every refit, which gave a wrong range). If a refit had to
 use fewer points (no other comp in some frames), the note says so. If leaving one comp out moves the depth or Tc by
-more than its statistical error, the notes name that comp in orange, with a link to Comp health. The spread is a
-diagnostic (how much the comp choice moves the result), not an error bar; the files call it the *Comp-choice check
+more than its statistical error, the notes name that comp in orange, with a link to Comp health, and a button
+**Open Use comps, untick …** (with the comp's name) appears in the Comps row (from 2.4.0). It opens **Use comps…**
+with that comp already unticked and a line saying why; nothing changes until you press **Apply** there, and the
+transit is then fitted again without it. The files also keep the older line, the *Comp-choice check
 (diagnostic)*. Wait for this check to finish (a few seconds) before saving: saves made while it runs are refused, so
 that the files carry its result.
 
@@ -377,6 +394,28 @@ detrend and press Fit transit."*; nothing is fitted until you press it.
 
 These two buttons work only on this session's photometry. While an EXOTIC report is shown they are grayed out, and
 the hint beside them says why.
+
+## Fit again with an earlier fit's priors (Fit with saved priors…, 2.4.0)
+
+The catalogs change. A planet looked up today can come back with another a/R\*, b or ephemeris than last month, and
+a fit made today then differs a little from the one you reported. Every report's settings file
+(`…_settings.txt`), fit CSV and fit file hold the fit's exact inputs, in lines that start *Fit input*: the period
+and T0, a/R\*, b, Rp/R\*, T14, Teff, and the shape and limb-darkening priors as they were used.
+
+**Fit with saved priors…** (beside **Fit transit**) reads those lines back and fits the night or the report on the
+page with exactly those values:
+
+1. Press **Fit with saved priors…** and choose the earlier fit's `…_settings.txt` (or its `…_transit_fit.csv`).
+   For an opened report, the settings file beside it is offered first.
+2. The fit runs at once. The notes say *"This fit used the priors saved in X_settings.txt (period, T0, a/R\*, b, limb
+   darkening), not today's looked-up values."*, and the new files' *Fit input* lines end with *"saved priors: the
+   values above were read from X_settings.txt"*.
+3. While saved priors are in use the button reads **Fit with the current priors**, and every fit of that night or
+   report (a trim, a point left out, another detrend) keeps using them. Press it to go back to today's values. A
+   change of night, report or planet also ends it, with a Log line.
+
+If the file is for a planet with another period (more than 1 % off), SHOBS-P asks before using it (default No). A
+file with no *Fit input* lines (one saved before 2.4.0) cannot be used, and a box says so.
 
 ## How robust is the result? (Robustness check, 2.4.0)
 

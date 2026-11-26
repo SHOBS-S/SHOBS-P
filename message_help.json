@@ -1698,6 +1698,20 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Photon noise: the header gives EGAIN … e-/ADU (about … electrons per image unit), but the night's sky measures … (… x that; …). That is over 2x off, so the sky's gain is used for the error bars and EGAIN is not (…)."
+   ],
+   "todo": "Nothing. Check what your capture program writes as EGAIN."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Photon noise: the headers give no EGAIN …, and tonight's sky could not measure the gain (…), so the gain the sky measured with this camera before is used: … e-/ADU (…)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Photon noise: … so the gain comes from the sky's own noise on one frame (… electrons per image unit, a lower limit: error bars on the safe side). It could not be measured from the night's sky: …"
    ],
    "todo": "For a measurement next time, put two or more darks at the lights' exposure (or bias frames) in the Dark (or Bias) folder."
@@ -2440,6 +2454,20 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Gain measured from the night's sky, … e- per image unit (…); the header EGAIN … e-/ADU is over 2x off it and was not used"
+   ],
+   "todo": "Nothing. Check the EGAIN your capture program writes (12/14-bit data stored as 16-bit, a pedestal, binning)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Gain as the sky measured it with this camera before, … e-/ADU, … e- per image unit (measured on …; no EGAIN in the headers, and this night's sky could not measure it)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Gain from the sky's own noise, a lower limit of … e- per image unit (no EGAIN in the headers; error bars are on the safe side)"
    ],
    "todo": "Nothing, or add darks at the lights' exposure and run photometry again for a measured gain."
@@ -2450,6 +2478,85 @@
     "Gain 1 e-/ADU assumed (no EGAIN in the headers, no usable sky estimate) …"
    ],
    "todo": "Add EGAIN to the headers if you know the camera's gain."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Comps checked: depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min (all comps 1.84 %; without each 1.80–1.88 %)",
+    "Comps checked: depth spread …, Tc spread …"
+   ],
+   "todo": "Nothing when (comps) is the smaller one. When it is larger, look at the comps (Comp health…)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Open Use comps, untick …"
+   ],
+   "todo": "Press it: Use comps… opens with that comp unticked; Apply there fits the transit without it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… is unticked here because the Transit fit moves most when it is left out. Press Apply to use the other comps (the transit is then fitted again), or tick it again to keep it."
+   ],
+   "todo": "Apply, or tick the comp again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "This fit used the priors saved in …_settings.txt (period, T0, a/R\\"
+   ],
+   "todo": "Nothing; press Fit with the current priors to go back."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… holds no fit inputs. Choose the …_settings.txt that SHOBS-P 2.4.0 or later saved beside a report …"
+   ],
+   "todo": "Choose the settings file (or the fit CSV) of a fit saved with 2.4.0 or later."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The priors in … are for a planet with period … d; the planet here has … d. Use them anyway?"
+   ],
+   "todo": "No (the default) unless you mean it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit: saved priors (…) no longer in use: the night, the report or the planet changed."
+   ],
+   "todo": "Press Fit with saved priors… again if you want them for the new one."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are JD_UTC: SHOBS-P is looking up its star's position to convert them to BJD_TDB…",
+    "The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB at the position of its star, looked up from the planet (NASA Exoplanet Archive)."
+   ],
+   "todo": "Nothing. Fit transit pressed meanwhile waits for the lookup."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are JD_UTC, not BJD_TDB, and the star's position is not known: Tc is in JD_UTC, up to ±8 min from BJD_TDB, with no usable O − C. Enter the star on the Input page (Look up, or type RA/Dec) and open the report again to have them converted."
+   ],
+   "todo": "Enter the star on the Input page and open the report again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit: the Night box now shows …, the night just added."
+   ],
+   "todo": "Nothing; pick the other night in the Night box if you want it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… The table gives the larger prayer-bead error for Tc (± 0.62 min) and depth (± 0.050 %); these panels show the MCMC's spread"
+   ],
+   "todo": "Nothing: quote the table's error."
   },
   {
    "section": "Output, Transits mode",

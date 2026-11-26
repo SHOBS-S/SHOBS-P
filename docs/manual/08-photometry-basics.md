@@ -759,6 +759,21 @@ over the whole night. Frames it has to read whole (XISF, compressed FITS, stacks
 over 8 megapixels. **Measure skipped frames** measures the same frames as the night's own run, so the added
 frames get the same gain.
 
+**When a night cannot measure it (from 2.4.0).** Each night whose sky measures the gain leaves the value behind for
+that camera (camera name, gain setting, offset and binning), in the file `shobs_p_sky_gain.json` in the SHOBS data
+folder. A later night with no EGAIN whose own sky cannot give the gain (too few frames, clouds, a sky too faint
+against the read noise) then uses the remembered value, the median of the last nights (up to 12), and the log says
+*"… so the gain the sky measured with this camera before is used: 0.26 e-/ADU (about 0.26 electrons per image unit;
+the median of 3 nights, the last 2026-11-14)."* Only a camera never measured before falls back on the one-frame
+lower limit, or on 1 e-/ADU.
+
+**When EGAIN is far off (from 2.4.0).** With EGAIN in the headers, the night's sky is still measured as a check. Up
+to 1.5 times apart nothing is said; between 1.5 and 2 times a ⚠ line says which way EGAIN looks wrong, and EGAIN is
+still used. Over 2 times apart, with the measurement's whole spread beyond that mark, the sky's gain is used for the
+error bars and EGAIN is not: *"Photon noise: the header gives EGAIN 1 e-/ADU (about 1 electrons per image unit), but
+the night's sky measures 0.26 (0.26 x that; …). That is over 2x off, so the sky's gain is used for the error bars
+and EGAIN is not (…)."* This changes the size of that night's error bars, not its magnitudes.
+
 ### Comps near the frame edge
 
 When the field drifts during the night, a comparison star near the edge can slide partly off the frame. SHOBS-P then

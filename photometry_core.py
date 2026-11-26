@@ -3502,6 +3502,11 @@ def _mag_variance(flux: float, variance: float) -> float:
 # The old fixed 0.005 mag added to every point is gone: the real 60 s nights scatter LESS than 0.005 per point.
 E_PER_ADU_RANGE = (0.01, 100.0)   # plausible camera gains in e-/ADU; anything else is not a gain
 MEAS_CHECK = 1.5                 # 2.4.0 (#104): EGAIN vs the gain measured from the sky, either way, before a caution
+# 2.4.0 fit-in F4 (m473, #79 item 8g; RESULTS-CHANGING for the error bars): when the gain MEASURED from the night's sky
+# is over this many times off what EGAIN gives, either way, with its whole 16-84 % spread beyond the mark, the sky's
+# gain is used for the error bars and EGAIN is not (between MEAS_CHECK and this, the caution of #104 stays and EGAIN is
+# used). Too high a sky reading on a faint sky is not trusted downwards (SKY_CHECK_E), as in the caution.
+MEAS_OVERRIDE = 2.0
 SKY_CHECK_E = 100.0               # sky electrons per image pixel above which read noise cannot hide a gain mismatch
 OLD_ERR_FLOOR = 0.005             # the fixed term of the pre-2.2.17 model (kept only for points measured with it)
 
@@ -3658,7 +3663,8 @@ def _sky_meas_brief(meas: dict | None) -> dict | None:
 
 def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: str, flat=None,
                        bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan"),
-                       sky_level: float = float("nan"), sky_meas: dict | None = None) -> dict:
+                       sky_level: float = float("nan"), sky_meas: dict | None = None,
+                       remembered: dict | None = None) -> dict:
     """2.2.17 (item 8): how the photon noise is converted to electrons for a run. Returns {"electrons": number or map,
     "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": the log line(s), "warning": '' or a
     caution, "k_median", "sky_k"}.
@@ -3675,7 +3681,11 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
     takes the place of sky_k everywhere: as the gain without EGAIN, in the camera-binning choice, and in the EGAIN
     cross-check, which then compares with a measurement and is tighter (1.5x either way, beyond the measurement's own
     16-84 % spread, instead of 2x up / 0.5x down). Without it, sky_k (the single-frame lower limit) is used as before
-    and the words say it is a lower limit. The result's "sky_method" is "measured" or "lower limit"."""
+    and the words say it is a lower limit. The result's "sky_method" is "measured" or "lower limit".
+    2.4.0 fit-in F4 (#79 item 8g): remembered = sky_gain.recall(header), the gain the sky measured on earlier nights
+    with this camera ({"e_per_adu", "nights", "last"}). Without EGAIN and without a measurement tonight it is used
+    in place of the one-frame lower limit and of the assumed 1 e-/ADU ("sky_method" "remembered"). m473: with EGAIN,
+    a measurement over MEAS_OVERRIDE (2x) off it takes EGAIN's place ("egain_ignored" = the header's value)."""
     b = max(int(binning or 1), 1)
     meas = sky_meas if (sky_meas and sky_meas.get("ok") and bias_removed
                         and math.isfinite(float(sky_meas.get("k", float("nan")))) and sky_meas["k"] > 0) else None
@@ -3749,6 +3759,23 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
         stored_gain = gain * cam_bin * cam_bin if binned == "averaged" else gain
         warning = ""
         if meas is not None:
+            # 2.4.0 fit-in F4 (m473): over 2x off, measured: the sky's gain is used, EGAIN is not
+            lo_, hi_ = float(meas.get("k_lo", sky_k)), float(meas.get("k_hi", sky_k))
+            sky_e_ = sky_level * at if math.isfinite(sky_level) else float("nan")
+            too_small = sky_k > MEAS_OVERRIDE * at and lo_ > MEAS_OVERRIDE * at
+            too_large = (sky_k < at / MEAS_OVERRIDE and hi_ < at / MEAS_OVERRIDE and math.isfinite(sky_e_)
+                         and sky_e_ > SKY_CHECK_E)
+            if too_small or too_large:
+                why_ = ("EGAIN may be too small for the stored values, or the frames carry a pedestal"
+                        if too_small else
+                        "EGAIN may be per native ADU of 12/14-bit data stored as 16-bit, or for unsummed binning")
+                return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
+                        "sky_k": sky_k, "warning": "", **extra, "egain_ignored": float(gain),
+                        "camera_bin": cam_bin, "camera_bin_mode": binned,
+                        "note": f"Photon noise: the header gives EGAIN {gain:.3g} e-/ADU (about {at:.3g} electrons "
+                                f"per image unit), but the night's sky measures {sky_k:.3g} ({sky_k / at:.2f} x "
+                                f"that; {meas_words}). That is over {MEAS_OVERRIDE:g}x off, so the sky's gain is "
+                                f"used for the error bars and EGAIN is not ({why_})." + ll_note}
             # 2.4.0 (#104): a measurement, so the check is tighter (see the docstring)
             note += (f" The night's sky measures {sky_k:.3g} electrons per image unit ({sky_k / at:.2f} x that; "
                      f"from {meas['n_pairs']} frame pairs).") + ll_note
@@ -3790,6 +3817,29 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                 "note": f"Photon noise: {why}, so the gain is measured from the night's sky: {meas_words}. Method: "
                         f"{_sg.METHOD_WORDS if _sg else 'background model and source mask'}."
                         + (f" {ptc_words}" if ptc_words else "") + ll_note + ped_note}
+    # 2.4.0 fit-in F4 (#79 item 8g): the gain the sky measured on earlier nights with this camera, before the
+    # one-frame lower limit and the assumed 1 e-/ADU (not for pre-calibrated frames: their values may be rescaled)
+    rem = remembered if (remembered and not precalibrated) else None
+    try:
+        rem_g = float(rem["e_per_adu"]) if rem else float("nan")
+    except (KeyError, TypeError, ValueError):
+        rem_g = float("nan")
+    if rem is not None and math.isfinite(rem_g) and rem_g > 0:
+        k = electrons_per_unit(rem_g, b, pattern, mode, flat)
+        at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
+        why_not = str((sky_meas or {}).get("why") or "")
+        nn = int(rem.get("nights") or 1)
+        return {"electrons": k, "e_per_adu": None, "source": "sky", "k_median": at, "sky_k": sky_k, "warning": "",
+                **dict(extra, sky_method="remembered"),
+                "remembered": {"e_per_adu": rem_g, "nights": nn, "last": str(rem.get("last") or "")},
+                "note": f"Photon noise: {why}"
+                        + (f", and tonight's sky could not measure the gain ({why_not})" if why_not else
+                           ", and tonight's sky could not measure the gain")
+                        + f", so the gain the sky measured with this camera before is used: {rem_g:.3g} e-/ADU "
+                          f"(about {at:.3g} electrons per image unit; "
+                        + (f"the median of {nn} nights, the last {rem.get('last')}" if nn > 1 and rem.get("last")
+                           else f"measured on {rem.get('last')}" if rem.get("last") else "from an earlier night")
+                        + ")." + ped_note}
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:
         why_not = str((sky_meas or {}).get("why") or "")
         safe = ("a lower limit: error bars on the safe side" if not (precalibrated or pedestal)

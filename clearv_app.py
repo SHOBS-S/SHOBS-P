@@ -21871,12 +21871,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                    f"({meas.get('why', '')})")
         try:
             setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
-                                            sky_level, sky_meas=meas)
+                                            sky_level, sky_meas=meas,
+                                            remembered=_sky_gain_recall(header))   # 2.4.0 fit-in F4 (8g)
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
                                                                   "the pre-2.2.17 error model is used."}
+        _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, all_lights or lights)   # F4 (8g)
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
+        for key_ in ("egain_ignored", "remembered"):   # 2.4.0 fit-in F4 (m473, 8g): for the settings file's Gain line
+            if setup.get(key_):
+                self._noise_model[key_] = setup[key_]
         if setup.get("sky_method"):   # 2.4.0 (#104): measured from the night's sky, or the one-frame lower limit
             self._noise_model["sky_method"] = setup["sky_method"]
             if setup.get("sky_meas"):
@@ -26739,12 +26744,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         WatchWindow(self)
 
-    def choose_comps(self):
+    def choose_comps(self, untick=None):
+        """untick (2.4.0 fit-in F4, m754): comps the window opens with unticked (the Transit page's "Open Use comps,
+        untick X"); nothing is applied until the user presses Apply."""
         why = self._use_comps_why()
         if why:
             self.status.set(why)   # 2.4.0 fit-in F2 (m547): Use comps… is greyed with these words
             return
-        UseCompsWindow(self)
+        return UseCompsWindow(self, untick=untick)
 
     def apply_comp_selection(self, selection: list[str], confirmed: bool = False) -> bool:
         """Re-derive every magnitude from the chosen comps. Returns True when applied. confirmed (2.2.18 item 3,
@@ -28778,11 +28785,70 @@ class CompHealthWindow:
         self.app.add_watch_by_name(row["label"])
 
 
+USE_COMPS_FLIP_HINT = ("Flip step: how far the star steps against the other stars at the meridian flip (the largest "
+                       "over the nights with a flip; mmag, + = fainter after the flip). Two comps that step opposite "
+                       "ways cancel while both are in use; leave one out and the Transit fit may need a flip step.")
+
+
+def use_comps_flip_text(step) -> str:
+    """2.4.0 fit-in F4: the Use comps window's Flip step cell: '+65 mmag', or '—' with no flip (or too few frames on
+    one side)."""
+    try:
+        v = float(step)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v * 1000:+.0f} mmag" if math.isfinite(v) else "—"
+
+
+def use_comps_untick_text(names) -> str:
+    """2.4.0 fit-in F4 (m754): the line saying why a comp is unticked when the window is opened from the Transit
+    page."""
+    names = list(names)
+    return (f"{', '.join(names)} {'is' if len(names) == 1 else 'are'} unticked here because the Transit fit moves "
+            "most when it is left out. Press Apply to use the other comps (the transit is then fitted again), or "
+            "tick it again to keep it.")
+
+
+def _sky_gain_recall(header) -> dict | None:
+    """2.4.0 fit-in F4 (#79 item 8g): the gain the sky measured with this camera on earlier nights (sky_gain.recall);
+    None when there is none, and never an error."""
+    try:
+        return _sky_gain_mod().recall(header)
+    except Exception:
+        return None
+
+
+def _sky_gain_night(jd: float) -> str:
+    """The night's date (the local evening's, as the on-sky log names it) for the remembered gain."""
+    import onsky_log as ol
+    return ol.night_of(jd)
+
+
+def _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, lights) -> bool:
+    """2.4.0 fit-in F4 (#79 item 8g): after a night whose sky measured the gain, keep it for this camera (e-/ADU of
+    the stored values), so a later night that cannot measure it has a better fallback than the one-frame lower limit.
+    Never stops a run."""
+    try:
+        if not (meas and meas.get("ok")) or (setup or {}).get("sky_method") != "measured":
+            return False
+        sg = _sky_gain_mod()
+        g = sg.stored_e_per_adu(meas["k"], core.electrons_per_unit(1.0, binning, pattern, mode, flat))
+        night = ""
+        try:
+            night = _sky_gain_night(core.mid_jd(core.read_header(lights[0]))) if lights else ""
+        except Exception:
+            night = ""
+        return sg.remember(header, g, night=night, n_pairs=int(meas.get("n_pairs") or 0))
+    except Exception:
+        return False
+
+
 class UseCompsWindow:
     """Choose which measured stars (the run's comps and the spare comps) form the comparison ensemble."""
 
-    def __init__(self, app):
+    def __init__(self, app, untick=None):
         self.app = app
+        untick = [str(n) for n in (untick or [])]
         win = Toplevel(app)
         self.win = win
         win.title(f"{APP_TITLE} — comparison stars in use")
@@ -28822,8 +28888,11 @@ class UseCompsWindow:
         current = set(app.active_comps or app.comps_used)
         grid = ttk.Frame(inner, style="Card.TFrame")
         grid.pack(fill=X)
+        # 2.4.0 fit-in F4 (nit, 4 Nov): each star's step at the meridian flip, when a night has one
+        self.flip_steps = {row["label"]: row.get("flip_step", float("nan")) for row in health.get("summary", [])}
+        has_flip = any(isinstance(v, float) and math.isfinite(v) for v in self.flip_steps.values())
         for c, head in enumerate(("Use", "Star", "Role", "Catalog mag", "Nights measured", "Night offset",
-                                  "Scatter in night", "Comp health")):
+                                  "Scatter in night", "Comp health") + (("Flip step",) if has_flip else ())):
             ttk.Label(grid, text=head, style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).grid(
                 row=0, column=c, sticky=W, padx=6, pady=(0, 4))
         self.vars = {}
@@ -28841,6 +28910,8 @@ class UseCompsWindow:
         widened_rows = 0
         for r, (name, role) in enumerate(names, 1):
             var = BooleanVar(value=name in current or bool(set(aliases.get(name, ())) & current))
+            if name in untick or set(aliases.get(name, ())) & set(untick):
+                var.set(False)   # m754: opened from the Transit page to try the fit without this comp
             self.vars[name] = var
             var.trace_add("write", lambda *_a: app.gates.refresh())   # 2.4.0 fit-in F2 (m625): Apply at once
             ttk.Checkbutton(grid, variable=var).grid(row=r, column=0, sticky=W, padx=6)
@@ -28873,6 +28944,9 @@ class UseCompsWindow:
                     continue
                 colour = "#b00020" if c == 7 and text.startswith("SUSPECT") else "#1c2b33"
                 ttk.Label(grid, text=text, style="Card.TLabel", foreground=colour).grid(row=r, column=c, sticky=W, padx=6, pady=2)
+            if has_flip:
+                ttk.Label(grid, text=use_comps_flip_text(self.flip_steps.get(name)), style="Card.TLabel").grid(
+                    row=r, column=8, sticky=W, padx=6, pady=2)
         # 2.2.18 (item 3): the check star's catalog magnitude (its plot and the next nights' check), typed here too.
         check = app.check_used or ""
         if check:
@@ -28893,6 +28967,15 @@ class UseCompsWindow:
                                              "nothing is measured again.",
                                  style="Hint.TLabel", wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(8, 0))
+        if has_flip:
+            wrapped.append(ttk.Label(inner, text=USE_COMPS_FLIP_HINT, style="Hint.TLabel", wraplength=wrap,
+                                     justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
+        gone = [n for n in untick if n in self.vars and not self.vars[n].get()]
+        if gone:
+            wrapped.append(ttk.Label(inner, text=use_comps_untick_text(gone), style="Card.TLabel", wraplength=wrap,
+                                     justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
         if len(names) == len(app.comps_used):
             ttk.Label(inner, text="No spare comps in this series yet. Nights reduced after a Solve "
                                   "carry spares.", style="Hint.TLabel").pack(anchor=W, pady=(8, 0))

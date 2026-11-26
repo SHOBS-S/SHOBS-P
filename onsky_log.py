@@ -127,6 +127,8 @@ def electron_scale(noise: dict | None) -> dict:
     out["note"] = ("from the header EGAIN" if src == "EGAIN" else
                    "measured from the night's sky (no EGAIN): background model, source mask and neighbouring-frame "
                    "differences, with the read noise taken off (SHOBS-P 2.4.0)" if noise.get("sky_method") == "measured"
+                   else "the gain the sky measured with this camera on earlier nights (no EGAIN, and no measurement "
+                        "this night; SHOBS-P 2.4.0)" if noise.get("sky_method") == "remembered"
                    else "from the sky's own noise (no EGAIN): a lower limit, so electrons from it are too few")
     if out["camera_bin_mode"] == "averaged":
         out["note"] += "; the camera averaged its binned pixels, so EGAIN x camera_bin^2 per stored ADU"

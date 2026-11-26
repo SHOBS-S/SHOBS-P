@@ -63,7 +63,7 @@ If a spare looks interesting, select its row and press **Watch selected spare**.
 SHOBS-P stores each comp's and spare's measurement in every frame. **Use comps…** recomputes every point of the series from a different set of comps, in seconds.
 
 1. On the Output page, press **Use comps…**.
-2. The **Comparison stars in use** window lists every comp and spare with its **Catalog mag**, **Nights measured** (for example `7 of 8`), **Night offset**, **Scatter in night** and **Comp health** verdict (SUSPECT in red).
+2. The **Comparison stars in use** window lists every comp and spare with its **Catalog mag**, **Nights measured** (for example `7 of 8`), **Night offset**, **Scatter in night** and **Comp health** verdict (SUSPECT in red). When a night has a meridian flip, a **Flip step** column (from 2.4.0) gives each star's jump against the other stars at the flip, for example `+65 mmag` (the largest over the nights; `—` when it could not be measured). Two comps that step opposite ways cancel while both are in use; leave one out and the Transit fit may need a flip step.
 3. Tick the stars you want in the comparison. Untick a SUSPECT comp; tick a steady spare measured on every night.
 4. Press **Apply**. It is greyed while no star is ticked (from 2.4.0), and, like **Back to the original comps**, while a
    step is running.
