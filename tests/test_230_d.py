@@ -416,15 +416,17 @@ class TestRunInApp(unittest.TestCase):
         self.assertGreater(flips[0]["turn"], 170)
         app._update_skip_line()
         text = app.skip_text.get()
-        self.assertIn("that looks like a meridian flip. Is the Mount set right (German equatorial)?", text)
+        # 2.4.0 fit-in F4 (#79 item 8d): the half-turn IS treated as a meridian flip: a plain note, the frames on
+        # the other side of it are the flip segment, and nothing asks to set the Mount and run again
+        self.assertIn(": a meridian flip. The frames on the other side of it are treated as after a flip", text)
+        self.assertNotIn("⚠", text)
+        self.assertNotIn("run photometry again", text)
         self.assertIn(f"between frames {flips[0]['before']} and {flips[0]['after']}", text)
-        # 2.4.0 fit-in F3 (area F): no box after the run; the ⚠ is on the Findings list, which opened by itself
+        obs = sorted(app.observations, key=lambda o: o.jd)
+        self.assertEqual([o.segment for o in obs], [""] * 12 + ["flip"] * 12)
         self.assertEqual([c for c in self.boxes["showwarning"].call_args_list if "meridian flip" in str(c)], [])
-        self.assertTrue(any("looks like a meridian flip" in f.text for f in app.findings.items),
-                        [f.text for f in app.findings.items])
-        win = getattr(app, "_findings_win", None)
-        self.assertTrue(win is not None and win.alive())
-        win.close()
+        self.assertFalse(any("meridian flip" in f.text for f in app.findings.items),
+                         [f.text for f in app.findings.items])
 
     def test_altaz_smooth_rotation_no_warning(self):
         stars = [("T", 300, 225, 50000), ("C1", 260, 210, 60000), ("C2", 345, 240, 40000)]

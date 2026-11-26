@@ -11900,11 +11900,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
     @staticmethod
     def flip_like_text(fl: dict) -> str:
-        """2.3.0 (item 10): the warning for a ~180° field turn in one frame gap on an alt-az night."""
-        return (f"The field turned by {fl['turn']:.0f}° between frames {fl['before']} and {fl['after']} — that looks "
-                "like a meridian flip. Is the Mount set right (German equatorial)? An alt-az field turns smoothly, not "
-                "by half a turn between two frames. If it was a flip, set Mount to German equatorial in the Optics "
-                "box (Input page) and run photometry again, so the frames after the flip are treated as after it.")
+        """2.3.0 (item 10): a ~180° field turn in one frame gap on a night with Mount set to Alt-az.
+        2.4.0 fit-in F4 (#79 item 8d, x016; RESULTS-CHANGING): it IS treated as a meridian flip (the frames on the
+        other side of it are the flip segment), so this is a plain note; nothing has to be set and run again."""
+        return (f"The field turned by {fl['turn']:.0f}° between frames {fl['before']} and {fl['after']}: a meridian "
+                "flip. The frames on the other side of it are treated as after a flip, as on a German equatorial "
+                "mount (Mount is set to Alt-az; an alt-az field turns smoothly, never by half a turn between two "
+                "frames).")
 
     def _night_frame_count(self, night: str) -> int:
         """2.3.6 (release review S2): how many frames the night's measured points stand for. Per-frame points count
@@ -20473,12 +20475,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         last_good["sources"] = frame_sources
                         last_good["reg"] = reg
                         if not reg.get("flipped"):
-                            turns.append(float(reg.get("angle", 0.0)))
+                            frame_turn = float(reg.get("angle", 0.0))
+                            turns.append(frame_turn)
                             turn_paths.append(path)   # 2.3.0 (item 10): which frame each angle belongs to
                             try:
                                 turn_jd.append(float(core.mid_jd(header)))
                             except Exception:
                                 turn_jd.append(float("nan"))
+                    else:
+                        frame_turn = None
                     f_target = core.move_star(target, reg, data.shape)
                     fh, fw = data.shape[:2]
                     if not (edge_margin <= f_target.x < fw - edge_margin and edge_margin <= f_target.y < fh - edge_margin):
@@ -20593,6 +20598,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         )
                     else:
                         shift_text = ""
+                    obs._turn = frame_turn if (reg is not None and not reg.get("flipped")) else None   # F4 (8d)
                     obs._stack_reg = reg   # 2.3.0 (#54): the frame's drift, for the Stack step (not saved)
                     if stack_meta and path in stack_meta:
                         # 2.3.0 (#54): a stack's raw peaks and pier side are its frames'
@@ -20665,8 +20671,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 labs = core.frame_labels_for(list(turn_paths))
                 flip_like = core.flip_like_turns(list(turns), labs, list(turn_jd))   # sorted by time inside
                 self._run_flip_like = flip_like
-                for fl in flip_like:
-                    self.call_ui(self.log, "⚠ " + self.flip_like_text(fl))
+                if flip_like:
+                    # 2.4.0 fit-in F4 (#79 item 8d, x016; RESULTS-CHANGING): the half-turn is a meridian flip: the
+                    # frames turned against the reference frame are the flip segment (as reg["flipped"] marks them
+                    # on a German mount), so the fit's flip step, Comp health and the segments all see it.
+                    n_flip = core.mark_flip_by_turn(night_points)
+                    for fl in flip_like:
+                        self.call_ui(self.log, "  " + self.flip_like_text(fl))
+                    self.call_ui(self.log, f"  {n_flip} frame{'s' if n_flip != 1 else ''} marked as the flip segment.")
             if turns:
                 # 2.2.18 (item 8): how far the field turned on the sensor through the night.
                 unwrapped = np.degrees(np.unwrap(np.radians(turns)))   # review: a turn across ±180° is not 360°
@@ -21583,7 +21595,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         for line in quiet:
             self.log(f"{night}: {line}", keep_status=True)
         job = [t for lv, t in (getattr(self, "_job_findings", None) or []) if lv in ("warn", "error")]
-        if said or info.get("flip_like") or any("Ensemble zero point" in t for t in job):
+        # 2.4.0 fit-in F4 (8d): a ~180° turn is treated as a flip now (a plain note), so it opens nothing
+        if said or any("Ensemble zero point" in t for t in job):
             self._open_findings_for_run()
         return said
 
@@ -21653,7 +21666,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 flips = self._night_info(max(obs, key=lambda o: o.jd).night).get("flip_like") or []
         except Exception:
             flips = []
-        text = "\n".join([("⚠ " + self.flip_like_text(fl)) for fl in flips] + ([text] if text else []))
+        text = "\n".join([self.flip_like_text(fl) for fl in flips] + ([text] if text else []))   # F4 (8d): plain
         self.skip_text.set(text)
         try:   # 2.3.6 (John, S2): a few skipped frames are a plain note, so the line is in the plain colour too
             self.skip_label.configure(style="Warn.TLabel" if "⚠" in text else "Hint.TLabel")

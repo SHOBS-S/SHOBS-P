@@ -7803,6 +7803,25 @@ def flip_like_turns(angles: list[float], labels: list[str], times: list[float] |
     return out
 
 
+def mark_flip_by_turn(points: list[Obs]) -> int:
+    """2.4.0 fit-in F4 (#79 item 8d): on a night whose alignment followed the field's turn (Mount set to Alt-az)
+    and that held a ~180° turn in one frame gap (flip_like_turns), the frames turned by more than 90° against the
+    reference frame are the meridian flip's other side: their segment becomes "flip", as a German-mount run marks
+    them. Each point's turn is its _turn (degrees against the reference; None = not known, left alone). Returns
+    the frames marked."""
+    n = 0
+    for o in points:
+        a = getattr(o, "_turn", None)
+        if a is None or not math.isfinite(float(a)):
+            continue
+        d = ((float(a) + 180.0) % 360.0) - 180.0
+        if abs(d) > 90.0:
+            if o.segment != "flip":
+                o.segment = "flip"
+            n += 1
+    return n
+
+
 def remap_night_comps(points: list[Obs], night_comps: list[str], series_comps: list[str]) -> int:
     """2.2.19 (#34): put one night's points into the series' comp layout. comp_insts / comp_vars / pos["c"] are
     positional (the k-th comp of the run), so a night measured with other comps than the series' comps_used (the
