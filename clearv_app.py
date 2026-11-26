@@ -14350,9 +14350,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if not text or self.mode_key == "discovery":
             return
         if getattr(self, f"{role}_xy") is not None:
+            # 2.4.0 fit-in F4 (#64 item 3, m336): a name typed over a marked slot that this image knows (the series'
+            # star record, tonight's catalogs, a J-designation) takes its marker AND its magnitude from that star
+            if self._slot_retyped(role, text):
+                return
             # 2.2.14 (item 14): say what Enter did here (it only renamed the marked star).
-            self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is (✕ clears it, "
-                                 "then Enter places the name).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
+            self._slot_say(role, f"✓ {role_label(role)} renamed to {text}; the marker stays where it is and the "
+                                 "magnitude is unchanged (the name is not a star this image knows; ✕ clears the "
+                                 "marker, then Enter looks the name up).")   # 2.2.16 (item 8): every outcome ✓ or ⚠
             self._say_check_clash(role)   # 2.4.0 (#68): renamed to the check star's (or a comp's) name
             return
         if self.preview is None or not self.preview_is_debayered:
@@ -14393,6 +14398,61 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.call_ui(self._slot_lookup_failed, role, text, exc)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _slot_retyped(self, role: str, text: str) -> bool:
+        """2.4.0 fit-in F4 (#64 item 3, m336; nit of 5 Nov; RESULTS-CHANGING for that comp's V): a name typed over
+        a slot that already has a marker. Before, Enter only changed the label: the marker and the magnitude stayed
+        the old star's. Now, when the name is a star this image knows (the series' star record by its stored
+        position, else tonight's catalogs by name, else a J-designation's own coordinates), the slot is placed
+        on THAT star as a fresh name is, so its magnitude (and colours) come from the star record, and the Log
+        shows the old and the new magnitude. When the star cannot be placed here, the marker goes back and
+        nothing changes. False: the name is not a star this image knows (the caller only renames)."""
+        if not self.chart_solution or self.preview is None or not self.preview_is_debayered:
+            return False
+        plan = None
+        saved = self._saved_radec(text)
+        if saved is not None:
+            plan = ("sky", saved, 5.0, True)
+        else:
+            star = self._chart_star_named(text)
+            if star is not None and self._chart_xy_of(star) is not None:
+                plan = ("xy", self._chart_xy_of(star))
+            else:
+                coords = designation_coords(text)
+                if coords is not None:
+                    plan = ("sky", coords, WATCH_SAME_ARCSEC, False)
+        if plan is None:
+            return False
+        old_xy = getattr(self, f"{role}_xy")
+        mag_var = getattr(self, f"{role}_mag")
+        old_mag = str(mag_var.get()).strip()
+        setattr(self, f"{role}_xy", None)
+        try:
+            if plan[0] == "xy":
+                self._set_slot(role, plan[1], text)
+            else:
+                self._place_slot_sky(role, text, plan[1][0], plan[1][1], reach=plan[2], saved=plan[3])
+        except Exception:
+            traceback.print_exc()
+        new_xy = getattr(self, f"{role}_xy")
+        if new_xy is None:
+            setattr(self, f"{role}_xy", old_xy)   # not placed here: the marker goes back, nothing changed
+            if str(mag_var.get()).strip() != old_mag:
+                mag_var.set(old_mag)
+            said = (self._slot_notes.get(role) or ("", "", False))[1]
+            self.refresh_preview()
+            self._slot_say(role, (said + " " if said else f"{text} could not be placed on this image. ")
+                           + "The marker stays on the star it was on, and its magnitude"
+                           + (f" ({old_mag})" if old_mag else "") + " is unchanged.", bad=True)
+            return True
+        moved = math.hypot(new_xy[0] - old_xy[0], new_xy[1] - old_xy[1])
+        new_mag = str(mag_var.get()).strip()
+        name_now = getattr(self, f"{role}_name").get().strip() or text
+        self.log(f"{role_label(role)}: now {name_now}. Magnitude was {old_mag or 'empty'}, now "
+                 f"{new_mag or 'empty'}"
+                 + (f"; the marker moved {moved:.0f} px to that star." if moved > 2.0
+                    else "; the same star, so the marker stays."), keep_status=True)
+        return True
 
     def _slot_lookup_failed(self, role: str, text: str, exc):
         if getattr(self, f"{role}_name").get().strip() != text:
@@ -14526,6 +14586,28 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # survey still has comps to choose)
         wanted = {name_key(n) for n in (list(getattr(self, "active_comps", None) or []) or list(self.comps_used or []))}
         return bool(placed) and bool(wanted) and wanted <= placed
+
+    def _series_no_survey(self) -> bool:
+        """2.4.0 fit-in F4 (#72, John's rule of 20 Nov): a LOADED SERIES never runs the comp survey or the catalog
+        comp search (the S1–S4 suggestions), whether or not its comps are all placed on this image: the series has
+        its comps, and Comp health after the run judges them. A comp that is off this image tonight gets a plain
+        note (_say_survey_skipped). Not in Discovery; never without a series that has comps."""
+        if self.mode_key == "discovery" or not getattr(self, "series_path", ""):
+            return False
+        return bool(list(getattr(self, "active_comps", None) or []) or list(self.comps_used or []))
+
+    def _series_comps_unplaced(self) -> tuple[list, list]:
+        """For the #72 note: the series' comps (and check) named in the boxes but without a marker on this image:
+        ([names really off the image], [names not placed for another reason])."""
+        token = getattr(self, "_preview_token", 0)
+        states = getattr(self, "_slot_state", None) or {}
+        off, other = [], []
+        for role in COMP_ROLES + ("check",):
+            name = getattr(self, f"{role}_name").get().strip()
+            if not name or getattr(self, f"{role}_xy") is not None:
+                continue
+            (off if states.get(role) == (token, name, "off") else other).append(name)
+        return off, other
 
     def _sky_on_frame(self, ra: float, dec: float):
         """2.4.0 step 4 (#72): where a sky position falls on this image: {"px", "py", "state", "beyond", "side"}.
@@ -17663,7 +17745,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # back the catalog suggestions below stand, and _survey_done suggests again with it.
         t_snr0 = self._star_snr(self.preview, self.target_xy)   # (as `faint` below: the survey judges in its window)
         self._survey_skipped_now = False
-        survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
+        if self._series_no_survey():
+            # 2.4.0 fit-in F4 (#72, John 20 Nov): a loaded series never runs the survey or the catalog comp search
+            # (not even from a survey made before the series was loaded)
+            self._say_survey_skipped()
+            self._survey_skipped_now = True
+            survey = None
+        else:
+            survey = self._comp_survey(cands, t_inst, math.isfinite(t_snr0) and t_snr0 < 30)
         if survey is None and self._survey_skipped_now:
             # step 6b (Fable S4): the series' comps are all placed and the survey was skipped: no catalog-only
             # suggestions (unvetted) beside them. Re-review 1: the boxes' colour and brightness hints still need these
@@ -18021,9 +18110,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if not res or res.get("error"):
                 return None
             return self._survey_view(res, cands, t_inst, r, faint)
-        if self._series_comps_all_placed():
-            # step 6b (John 19 Nov): the series' comps are all placed: no survey (Comp health after the run judges
-            # them). Fable S4: below the cache, so a survey already done for this image is still used
+        if self._series_no_survey():
+            # step 6b (John 19 Nov), 2.4.0 fit-in F4 (#72, John 20 Nov): a loaded series: no survey, whether or not
+            # its comps are all placed (Comp health after the run judges them). Fable S4: below the cache, so a
+            # survey already done for this image is still used
             self._say_survey_skipped()
             self._survey_skipped_now = True
             return None
@@ -18248,19 +18338,34 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         threading.Thread(target=work, daemon=True).start()
 
     def _say_survey_skipped(self):
-        """step 6b: one Log line per image and target that the survey was skipped for the series' own comps."""
-        key = (self.preview_path, tuple(self.target_xy or ()))
+        """step 6b: one Log line per image and target that the survey was skipped for the series' own comps.
+        2.4.0 fit-in F4 (#72): for ANY loaded series; a comp that is off this image tonight is named in a plain
+        note (it is not measured tonight and stays in the series)."""
+        off, other = self._series_comps_unplaced()
+        key = (self.preview_path, tuple(self.target_xy or ()), tuple(off), tuple(other))
         if getattr(self, "_survey_skip_said", None) == key:
             return
         self._survey_skip_said = key
-        self.log("Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can "
-                 "start at once (Comp health after the run shows how they did).", keep_status=True)
+        if not off and not other:
+            self.log("Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry "
+                     "can start at once (Comp health after the run shows how they did).", keep_status=True)
+            return
+        text = ("Comp survey and comp suggestions skipped: a series is loaded, and a series keeps its own comps "
+                "(Comp health after the run shows how they did).")
+        if off:
+            text += (f" {', '.join(off)} {'is' if len(off) == 1 else 'are'} not on this image tonight, so "
+                     f"{'it is' if len(off) == 1 else 'they are'} not measured; the name"
+                     f"{'' if len(off) == 1 else 's'} stay{'s' if len(off) == 1 else ''} in the series.")
+        if other:
+            text += (f" {', '.join(other)} {'has' if len(other) == 1 else 'have'} no marker yet: click the star "
+                     "with its box picked, or press Solve again.")
+        self.log(text, keep_status=True)
 
     def _drop_survey_for_series(self) -> bool:
         """step 6b: Run photometry pressed while the survey reads, with the series' comps all placed: the survey is
         called off (it would only change suggestions nobody needs) and the run starts now. True when dropped."""
         cache = getattr(self, "_survey_cache", None)
-        if cache is None or cache.get("state") != "loading" or not self._series_comps_all_placed():
+        if cache is None or cache.get("state") != "loading" or not self._series_no_survey():
             return False
         self._survey_cache = None   # its worker sees this and stops at the next frame
         self.busy_end(cache.pop("tok", None))
