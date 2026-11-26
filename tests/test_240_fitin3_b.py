@@ -734,9 +734,8 @@ class TestInApp(unittest.TestCase):
         # one ⚠ line per problem star, with what to do; none says "Consider"
         c3 = self._said("C3 left out of")
         self.assertEqual(len(c3), 1, c3)
-        self.assertTrue(c3[0].startswith(f"{night}: ⚠ C3 left out of"), c3)
-        self.assertTrue(c3[0].endswith("those frames use the other comps. Leave it out with Use comps… (Output "
-                                       "page)."), c3)
+        # 2.4.0 fit-in F4 (#79 item 4): a comp off the frame in any frame is out for the whole night: a plain note
+        self.assertTrue(c3[0].startswith(f"{night}: C3 left out of the whole night: missing from"), c3)
         k = self._said("check star left out of")
         self.assertEqual(len(k), 1, k)
         self.assertIn("no check value there. A better check star stays farther in: FAR", k[0])
@@ -745,9 +744,9 @@ class TestInApp(unittest.TestCase):
         self.assertEqual([t for t in self.logged if "comes within" in t and "⚠" in t], [])
         # they are findings (the job summary, the settings file and the report NOTES follow, 2.3.6)
         texts = [f.text for f in app.findings.items]
-        self.assertTrue(any("C3 left out of" in t for t in texts), texts)
+        self.assertFalse(any("C3 left out of" in t for t in texts), texts)   # F4: a plain note is no finding
         self.assertTrue(any("check star left out of" in t for t in texts), texts)
-        self.assertTrue(any("C3 left out of" in t for t in app.run_findings), app.run_findings)
+        self.assertTrue(any("check star left out of" in t for t in app.run_findings), app.run_findings)
         self.assertIn("finding", app.run_findings_note())
         # and the Findings panel opened by itself
         win = getattr(app, "_findings_win", None)

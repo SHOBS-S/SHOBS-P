@@ -11940,18 +11940,48 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 parts.append(f"⚠ {len(skips)} frame{'s' if len(skips) != 1 else ''} skipped (unreadable files, "
                              "named above).")
         drops = info.get("comp_drops") or {}
+        # 2.4.0 fit-in F4 (#79 item 4, m218; John 14 and 26 Nov): ONE comp set per night. A comp left out of the
+        # whole night (off the frame in any frame, or over the linear limit) is a PLAIN note naming it; ⚠ only
+        # when the night is left with fewer than core.NIGHT_SET_MIN comps (or stands on comps that are not in
+        # every frame). The 10 % rule below (John, 26 Nov 12:43) now holds for the check star, and for a comp of a
+        # night reduced before 2.4.0 (its part-night comp was tied in, not left out).
+        out_names = list(info.get("night_out") or [])
+        why_out = info.get("night_why") or {}
+        left = list(info.get("night_use") or [])
+        few = list(info.get("night_few") or [])
+        new_rule = bool(why_out) or bool(few) or "night_use" in info
+        if new_rule and (out_names or few):
+            short = bool(few) or len(left) < core.NIGHT_SET_MIN
+            for name in out_names:
+                rec = drops.get(name) or {}
+                edge = (edges or {}).get(name) or {}
+                more = edge.get("words") or ""
+                frames = rec.get("frames") or []
+                where = f"; frames {self._frame_ranges(frames)}" if frames else ""
+                reason = why_out.get(name) or "not measured in every frame"
+                parts.append(f"{name} left out of the whole night: {reason}{where}"
+                             + (f"; it {more}" if more and edge.get("flat_pct") is not None else "") + ".")
+            if few:
+                parts.append(f"⚠ No comp was measured in every frame: the night stands on {', '.join(few)}, and the "
+                             f"frames without {'it' if len(few) == 1 else 'them'} have no magnitude. Choose comps "
+                             "that stay on the frame all night (Use comps…, Output page).")
+            elif short:
+                parts.append("⚠ That leaves " + (f"only {left[0]}" if len(left) == 1 else "no comp")
+                             + " for the night. Add a comp that stays on the frame and under the linear limit all "
+                             "night (a spare comp with Use comps…, Output page), then press Run photometry.")
+            elif left:
+                parts.append(f"The night uses {', '.join(left)} in every frame.")
         for name, rec in drops.items():
+            if new_rule and name != "check" and name in out_names:
+                continue   # said above
             label = "check star" if name == "check" else name
             what = ", ".join(rec.get("reasons") or {}) or "off the frame edge"
             n = len(rec.get("frames") or [])
-            whole = name in (info.get("night_out") or [])
+            whole = name in out_names
             edge = (edges or {}).get(name) or {}
             more = edge.get("words") or ""
             if more and edge.get("flat_pct") is None and "edge" in what:
                 more = ""   # "off the frame edge" says it already
-            # John, 26 Nov (12:43): the 10 % rule of the skipped frames (2.3.6). A comp in use or the check left
-            # out of MORE than 10 % of the night's frames is a ⚠ (a finding, with what to do); at 10 % or less it
-            # is a plain note (Log and status line; not a finding, not counted in "N findings from the run").
             n_all = len(skips) + self._night_frame_count(night)
             big = whole or n_all == 0 or n > SKIP_FINDING_SHARE * n_all
             how = (edge.get("how") or ("" if whole or name == "check" else self.USE_COMPS_HOW)) if big else ""
@@ -12067,7 +12097,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                      "reduce the frames after the flip on their own.")
         if linear_limit is not None and math.isfinite(linear_limit):
             over = []
-            stars = [target] + list(comps) + ([check] if check is not None else [])
+            # 2.4.0 fit-in F4 (m218): a comp over the limit is out for the whole night and named by its own plain
+            # line (night_out_lines); this ⚠ is for the target and the check star, which cannot be left out
+            gone = {n for v in (getattr(self, "_run_night_out", None) or {}).values() for n in v}
+            stars = [target] + [c for c in comps if c.name not in gone] + ([check] if check is not None else [])
             for st in stars:
                 vals = [o.raw_peaks.get(st.name) for o in night_points if o.raw_peaks]
                 vals = [float(v) for v in vals if v is not None and math.isfinite(float(v))]
@@ -12077,7 +12110,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if over:
                 lines.append(f"⚠ Linear limit {linear_limit:,.0f} ADU: raw peak at or above it in "
                              + "; ".join(over) + " frames. Above the linear limit the camera's response bends, so "
-                             "those measurements read too faint (Comp health counts them per star).")
+                             "those measurements read too faint. Shorter exposures or more defocus next time; a "
+                             "comp over the limit is left out of the night by itself.")
         return lines
 
     # ---- aperture suggestion ------------------------------------------------------------
@@ -20232,6 +20266,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         turn_paths, turn_jd = [], []   # 2.3.0 (item 10): each angle's frame and time
         skipped = []      # 2.3.0 (#50): [{"path", "why", "comps", "target"}]
         self._run_skipped, self._run_night_out, self._run_flip_like = [], {}, []
+        self._run_night_why, self._run_night_use, self._run_night_few = {}, {}, {}   # 2.4.0 fit-in F4 (#79 item 4)
         if len(ref_sources) < 3:
             self.log("⚠ Too few stars found on the reference frame to align frames. Positions will not follow drift.")
         if stack_run is not None:   # 2.3.0 (#54): the series' comp layout is put back when the stacks are done
@@ -20559,21 +20594,33 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     skipped.append({"path": p, "why": f"{target.name} is not on this frame", "comps": [],
                                     "target": True})
             self._run_skipped = sorted(skipped, key=lambda s: lights.index(s["path"]) if s["path"] in lights else 0)
-            if any(o.comp_drop for o in night_points):
-                # 2.3.0 (#50): frames measured without some of their comps are put on the night's ensemble scale
-                # (each comp to its own median offset; night_ensemble), so the light curve has no step there.
+            over_lin = (linear_limit is not None and math.isfinite(linear_limit) and not stack_run and any(
+                (v is not None and math.isfinite(float(v)) and float(v) >= linear_limit)
+                for o in night_points for c in comps for v in [(o.raw_peaks or {}).get(c.name)]))
+            if any(o.comp_drop for o in night_points) or over_lin:
+                # 2.4.0 fit-in F4 (#79 item 4, m218; RESULTS-CHANGING): ONE comp set per night. A comp missing from
+                # any frame (off the frame edge) or over the linear limit in any frame is left out of the whole
+                # night; every frame is the plain mean of the same comps. (2.3.0 #50 tied the part-night comp in.)
                 try:
                     names = [c.name for c in comps]
                     cat = {c.name: float(c.catalog_mag) for c in comps}
                     no_std = [o.check_std is None for o in night_points]   # a check without catalog V stays so
-                    res = core.recompute_with_comps(night_points, names, names, cat)
+                    res = core.recompute_with_comps(night_points, names, names, cat,
+                                                    linear_limit=None if stack_run else linear_limit)
                     for o, none in zip(night_points, no_std):
                         if none:
                             o.check_std = None
                     core.fill_comp_flux(night_points, names, cat)
                     self._run_night_out = (res.get("night_out") or {})
+                    self._run_night_why = (res.get("night_why") or {})
+                    self._run_night_use = (res.get("night_use") or {})
+                    self._run_night_few = (res.get("night_few") or {})
+                    core.clear_out_comp_flags(night_points, [n for v in self._run_night_use.values() for n in v],
+                                              names, sat_limit)
                 except Exception as exc:
-                    self.call_ui(self.log, f"⚠ Comps left out of some frames: their re-derivation was skipped ({exc}).")
+                    self.call_ui(self.log, f"⚠ Comps left out of the night: the magnitudes could not be worked out "
+                                           f"again without them ({exc}). Run photometry again; if it comes back, "
+                                           "leave that comp out with Use comps… (Output page).")
             # 2.2.19 (#9, #30, #24, #16): what the run found about the target's frames, centring and peaks
             try:
                 # 2.3.0 (#54): not again on the stacks (their values are sums, not raw counts; the frames had them)
@@ -20978,10 +21025,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                      "for another star, use New reduction on the Input page.")
         elif self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
-                result = core.recompute_with_comps(night_points, self.active_comps, self.comps_used, self._comp_catalog(),
+                result = self._recompute_with_comps(night_points, self.active_comps, self.comps_used, self._comp_catalog(),
                                                    self._star_aliases())
                 self.log(f"Applied the chosen comps ({', '.join(self.active_comps)}) to {night}"
-                         + (f"; {result['missing']} frame(s) lack one of them and are flagged nocomp." if result["missing"] else "."))
+                         + (f"; {result['missing']} frame(s) have none of them and are flagged nocomp." if result["missing"] else "."))
+                self._night_out_log(result)   # 2.4.0 fit-in F4 (#79 item 4)
             except ValueError as exc:
                 self.log(f"⚠ Could not apply the chosen comps to {night}: {exc}")
         self.legacy_mixed.discard(night)
@@ -21460,8 +21508,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         info["comp_drops"] = drops
         out = getattr(self, "_run_night_out", None) or {}
         info["night_out"] = sorted({n for v in out.values() for n in v})
+        # 2.4.0 fit-in F4 (#79 item 4, m218): why each comp is out for the night, and the comps the night stands on
+        info["night_why"] = {n: w for v in (getattr(self, "_run_night_why", None) or {}).values()
+                             for n, w in v.items()}
+        info["night_use"] = sorted({n for v in (getattr(self, "_run_night_use", None) or {}).values() for n in v}) \
+            if info["night_out"] else []
+        info["night_few"] = sorted({n for v in (getattr(self, "_run_night_few", None) or {}).values() for n in v})
         info["flip_like"] = list(getattr(self, "_run_flip_like", None) or [])
-        for key in ("skipped", "comp_drops", "night_out", "flip_like"):
+        for key in ("skipped", "comp_drops", "night_out", "night_why", "night_use", "night_few", "flip_like"):
             if not info[key]:
                 info.pop(key)
         # 2.3.0 (item 10): what this run really measured as comps (the comp box) and which of the series' comps (or
@@ -21713,7 +21767,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.observations = core.merge_nights(self.observations, new_points)
         night_pts = [o for o in self.observations if o.night == night]
         try:
-            core.recompute_with_comps(night_pts, self.active_comps or self.comps_used, self.comps_used,
+            self._recompute_with_comps(night_pts, self.active_comps or self.comps_used, self.comps_used,
                                       self._comp_catalog(), self._star_aliases())
         except ValueError as exc:
             self.log(f"⚠ Measure skipped frames: could not re-derive {night} with the comps in use: {exc}")
@@ -21969,7 +22023,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
         def full_load(path):
             return core.debayer(stack_load_frame(path, binning, masters)[2], pattern, mode)
-        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load, whole=whole)
+        # 2.4.0 fit-in F4: the saturation cut is made on the RAW pixels (the limit is a raw value)
+        load = sg.window_loader(binning, masters, pattern, mode, full_load=full_load, whole=whole, sat=sat)
         n_pairs = len(sg.pick_pairs(len([p for p in lights if p not in skip]), max_pairs))
         if log is not None and n_pairs:
             log(f"Measuring the gain from the night's sky ({n_pairs} frame pair{'s' if n_pairs != 1 else ''})…")
@@ -25381,7 +25436,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 have.extend(e for e in entries if isinstance(e, dict) and e not in have)
         if self.active_comps and set(self.active_comps) != set(self.comps_used):
             try:
-                core.recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
+                self._recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
             except ValueError as exc:
                 self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}")
@@ -25778,7 +25833,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             if not self._comp_selection_ok(kept):
                 return [], gone   # the re-derive was refused (points would be lost): the file's choice stays
-            result = core.recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
+            result = self._recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
                                                self._star_aliases())
             self._comp_selection_applied(kept, result, save=False)
         except Exception as exc:
@@ -25834,7 +25889,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if not self._comp_selection_ok(kept):
                 self.log(kept_words)   # the re-derive was refused (points would be lost)
                 return []
-            result = core.recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
+            result = self._recompute_with_comps(self.observations, kept, self.comps_used, self._comp_catalog(),
                                                self._star_aliases())
             self.log(f"{names} left out of the series' comps in use ({'its comp box was' if one else 'their comp boxes were'}"
                      f" cleared): every night is re-derived with {', '.join(kept)}, as Use comps… does.")
@@ -26575,7 +26630,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.check_used = plan["check"]
         if comps_changed or plan.get("remag"):
             try:
-                core.recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
+                self._recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
             except ValueError as exc:
                 self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
         for old, new in plan["renamed"].items():
@@ -26722,6 +26777,41 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         UseCompsWindow(self)
 
+    def _recompute_with_comps(self, points, selection, comp_names, catalog, aliases=None, **kw) -> dict:
+        """2.4.0 fit-in F4 (#79 item 4, m218): core.recompute_with_comps with the page's linear limit (one comp set
+        per night: a comp off the frame or over the limit in any frame is out for the whole night), and each
+        night's record (night_out, night_why, night_use, night_few) kept in step, so the Photometry page, the
+        settings file and the Transit fit all name the same set. Main thread only (it reads a Tk box)."""
+        kw.setdefault("linear_limit", self._linear_limit())
+        result = core.recompute_with_comps(points, selection, comp_names, catalog, aliases, **kw)
+        try:
+            for night in result.get("night_use") or {}:
+                vals = {"night_out": sorted((result.get("night_out") or {}).get(night) or []),
+                        "night_why": dict((result.get("night_why") or {}).get(night) or {}),
+                        "night_few": sorted((result.get("night_few") or {}).get(night) or [])}
+                vals["night_use"] = sorted(result["night_use"][night]) if vals["night_out"] else []
+                info = self._night_info(night, create=any(vals.values()))   # no empty record for a clean night
+                for key, val in vals.items():
+                    if val:
+                        info[key] = val
+                    else:
+                        info.pop(key, None)
+                for store, key in ((getattr(self, "_run_night_out", None), "night_out"),
+                                   (getattr(self, "_run_night_why", None), "night_why"),
+                                   (getattr(self, "_run_night_use", None), "night_use"),
+                                   (getattr(self, "_run_night_few", None), "night_few")):
+                    if isinstance(store, dict) and night in store:
+                        store[night] = (result.get(key) or {}).get(night) or ([] if key != "night_why" else {})
+        except Exception:
+            traceback.print_exc()
+        return result
+
+    def _night_out_log(self, result: dict):
+        """2.4.0 fit-in F4 (#79 item 4): the Log's line per night with a comp left out (plain; ⚠ when the night is
+        left with fewer than core.NIGHT_SET_MIN comps)."""
+        for line in core.night_out_lines(result, lambda nt: self.night_label(nt, short=True)):
+            self.log(line)
+
     def apply_comp_selection(self, selection: list[str], confirmed: bool = False) -> bool:
         """Re-derive every magnitude from the chosen comps. Returns True when applied. confirmed (2.2.18 item 3,
         review): _comp_selection_ok has already asked."""
@@ -26729,7 +26819,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return False
         catalog = self._comp_catalog()
         aliases = self._star_aliases()
-        result = core.recompute_with_comps(self.observations, selection, self.comps_used, catalog, aliases)
+        result = self._recompute_with_comps(self.observations, selection, self.comps_used, catalog, aliases)
         return self._comp_selection_applied(selection, result)
 
     def _comp_selection_ok(self, selection: list[str], extra_catalog: dict | None = None) -> bool:
@@ -26747,20 +26837,23 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                                   "(their comp magnitudes were not saved) and would be left out. Continue?"):
                 return False
         trial = []
-        # 2.3.0 (#50): a frame missing only some of the chosen stars is derived from the others (night_ensemble);
-        # only frames with none of them, or nights that never measured one, are flagged nocomp.
+        # 2.4.0 fit-in F4 (#79 item 4): one comp set per night (night_ensemble): a chosen star missing from some
+        # frames is left out of that night; only frames with none of the night's set, or nights that never measured
+        # one of the chosen stars, are flagged nocomp.
         by_night: dict = {}
         for o in self.observations:
             by_night.setdefault(o.night, []).append(o)
         for night, pts in by_night.items():
-            ens = core.night_ensemble(pts, selection, self.comps_used, aliases)["ens"]
+            ens = core.night_ensemble(pts, selection, self.comps_used, aliases,
+                                      linear_limit=self._linear_limit())["ens"]
             trial += [night for o, e in zip(pts, ens) if not math.isfinite(o.target_inst) or not math.isfinite(e)]
         if trial:
             nights = sorted(set(trial))
             if not ask_no(
                 APP_TITLE,
-                f"{len(trial)} point(s) on {', '.join(nights)} lack one of the chosen stars (it was not measured that "
-                "night, or not in those frames). They will be flagged 'nocomp' and left out. Continue?"):
+                f"{len(trial)} point(s) on {', '.join(nights)} would have no comparison star: one of the chosen "
+                "stars was not measured that night at all (another field's comp?). They will be flagged 'nocomp' "
+                "and left out. Continue?"):
                 return False
         return True
 
@@ -26777,18 +26870,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.draw_output()
         used = ", ".join(selection)
         self.log(f"Comps in use: {used}. {result['done']} points re-derived"
-                 + (f" ({result['partial']} of them from the comps present in that frame)" if result.get("partial")
-                    else "")
                  + (f", {result['missing']} flagged nocomp." if result["missing"] else "."))
-        for night, names in sorted((result.get("night_out") or {}).items()):
-            # 2.3.0 (#50): the rule said once: a comp measured in fewer than half a night's frames is not used there
-            self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} left out of the whole night "
-                     f"(measured in fewer than half its frames); the night uses the other comps.")
-        for night, names in sorted((result.get("night_few") or {}).items()):
-            # 2.3.0 review fix: the night's only comps are kept even when measured in few of its frames
-            self.log(f"  {self.night_label(night, short=True)}: {', '.join(names)} measured in fewer than half the "
-                     "night's frames but kept (no other comp in use there): only the frames where it was measured "
-                     "get a magnitude; the others are flagged nocomp.")
+        # 2.4.0 fit-in F4 (#79 item 4, m218): one comp set per night; a comp not in every frame of a night, or over
+        # the linear limit, is left out of that night (a plain line; ⚠ only when too few comps are left)
+        self._night_out_log(result)
         # 2.3.0 (#50): frames skipped because of a comp no longer in use can be measured now: say so (log, page).
         # 2.4.0 fit-in F2 (m555, John 24 Nov: ONE BUTTON): when the frames are here (the latest night's, in the
         # Lights folder, with an image loaded) a plain line and a Measure skipped frames button on the status line;
@@ -27141,7 +27226,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                    if not (set(o.flag.split()) - {"nocomp", core.TRANSIT_FLAG})]
                                   or self.observations, names, self.check_used, self._spares_in_series(), aliases,
                                   night_sign=self._pier_night_sign(),
-                                  linear_limit=self._linear_limit() or self._num(self.sat_limit, None))   # 2.2.19 (#16)
+                                  linear_limit=self._linear_limit() or self._num(self.sat_limit, None),   # 2.2.19 (#16)
+                                  limit_word="the linear limit" if self._linear_limit() else "the saturation level")
         if result is None:
             messagebox.showinfo(
                 APP_TITLE,

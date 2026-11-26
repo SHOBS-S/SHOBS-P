@@ -97,14 +97,17 @@ class TestEnsembleNoStep(unittest.TestCase):
         cat = {"A": 10.0, "B": 10.5, "C": 11.4}
         r = core.recompute_with_comps(pts, ["A", "B", "C"], ["A", "B", "C"], cat)
         self.assertEqual(r["missing"], 0)
-        self.assertEqual(r["partial"], 80)
+        # 2.4.0 fit-in F4 (#79 item 4): one comp set per night. C, missing from frame 120 on, is out for the whole
+        # night (2.3.0 tied it in: 80 "partial" frames); every frame is the mean of A and B.
+        self.assertEqual(r["partial"], 0)
+        self.assertEqual(r["night_out"], {"N": ["C"]})
         m = np.array([o.mag for o in pts])
         self.assertLess(abs(np.median(m[120:]) - np.median(m[:120])), 0.002)
         # the ensemble (cmag) follows the extinction smoothly across frame 120: no jump beyond noise
         cm = np.array([o.cmag for o in pts])
         self.assertLess(abs((cm[120] - cm[119]) - 0.3 / 200), 0.01)
         self.assertEqual(pts[150].n_comps, 2)
-        self.assertEqual(pts[50].n_comps, 3)
+        self.assertEqual(pts[50].n_comps, 2)
         # the check star's reduced value has no step either
         k = np.array([o.check_std for o in pts])
         self.assertLess(abs(np.median(k[120:]) - np.median(k[:120])), 0.002)
@@ -307,7 +310,11 @@ class TestRunInApp(unittest.TestCase):
         # on screen: the Photometry page's line, and the settings file's comp list
         text = app.comp_skip_text(night)
         self.assertIn("C3 left out of", text)
-        self.assertIn("those frames use the other comps", text)
+        # 2.4.0 fit-in F4 (#79 item 4): one comp set per night: C3 is out for the whole night, a plain note
+        self.assertIn("C3 left out of the whole night: missing from", text)
+        self.assertIn("The night uses C1, C2 in every frame.", text)
+        self.assertEqual(info.get("night_out"), ["C3"])
+        self.assertTrue(all(o.n_comps == 2 for o in obs))
         self.assertIn("check star left out of", text)
         app._update_skip_line()
         app.update()
@@ -319,12 +326,11 @@ class TestRunInApp(unittest.TestCase):
         self.assertNotIn("check", measured)
         # 2.4.0 fit-in F3 (area F): said on screen after the run by the Findings list (one ⚠ line per star, with
         # what to do), which opens by itself; the warning box is gone
-        self.assertIn("⚠ C3 left out of", text)
-        self.assertIn("Leave it out with Use comps… (Output page).", text)
+        self.assertNotIn("⚠ C3 left out of", text)   # F4: plain (two comps are left)
         self.assertIn("⚠ check star left out of", text)
         self.assertEqual([c for c in self.boxes["showwarning"].call_args_list if "left out" in str(c)], [])
         found = [f.text for f in app.findings.items]
-        self.assertTrue(any("C3 left out of" in t for t in found), found)
+        self.assertTrue(any("check star left out of" in t for t in found), found)
         self.assertTrue(any("check star left out of" in t for t in found), found)
         win = getattr(app, "_findings_win", None)
         self.assertTrue(win is not None and win.alive())

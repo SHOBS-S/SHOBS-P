@@ -1699,8 +1699,9 @@ def _odd_one_out(shifts) -> int | None:
     return j
 
 
-# 2.3.5 (#88): the same rule as photometry_core.night_ensemble (2.3.0, #50), on a points x comps matrix, so the
-# leave-one-comp-out refits use the frames the main fit uses. The two must stay in step (tests/test_235.py).
+# 2.4.0 fit-in F4 (#79 item 4): the same rule as photometry_core.night_ensemble / night_set, on a points x comps
+# matrix: ONE comp set, the comps measured in every frame. The two must stay in step (tests/test_235.py,
+# tests/test_240_fitin4_1a.py). The two numbers below are the 2.3.0 (#50) tie-in's; kept as names, no longer used.
 COMP_TIE_MIN_FRAMES = 5
 COMP_NIGHT_SHARE = 0.5
 
@@ -1712,43 +1713,36 @@ def _omean(values) -> float:
     return math.fsum(vals) / len(vals) if vals else float("nan")
 
 
-def tied_ensemble(cm) -> np.ndarray:
-    """2.3.5 (#88): the comp ensemble per frame on the night's scale, from cm (points x comps, NaN = not measured).
-
-    A frame with every comp keeps the plain mean (so a night with no missing comp gives exactly np.mean). A frame
-    without some comps gets the mean the full set would have had: each comp's offset a_j (its median above the
-    frame level) is taken out of the comps present and the mean offset put back, as night_ensemble does. Comps
-    measured in fewer than COMP_TIE_MIN_FRAMES frames, or in fewer than COMP_NIGHT_SHARE of them, are left out of
-    the whole night (as the photometry does); when that would leave none, they are kept where measured."""
+def set_ensemble(cm) -> np.ndarray:
+    """2.4.0 fit-in F4 (#79 item 4; John 14 and 26 Nov): the comp ensemble per frame from cm (points x comps
+    instrumental magnitudes, NaN = not measured): the plain mean of the comps measured in EVERY frame (frames with
+    no comp at all do not count, and get NaN). A comp missing from any frame is left out of all of them, so the set
+    is the same from the first frame to the last and nothing is tied in (2.3.5 #88 / 2.3.0 #50 did that). When no
+    comp is in every frame, the comps in the most frames are used and the frames without them are NaN."""
     m = np.asarray(cm, dtype=float)
     n = m.shape[0]
     if m.ndim != 2 or n == 0 or m.shape[1] == 0:
         return np.full(n, np.nan)
-    counts = np.isfinite(m).sum(axis=0)
-    keep = [j for j, c in enumerate(counts) if c > 0 and not (c < min(COMP_TIE_MIN_FRAMES, n)
-                                                               or c < COMP_NIGHT_SHARE * n)]
-    if not keep:
-        keep = [j for j, c in enumerate(counts) if c > 0]
+    ok = np.isfinite(m)
+    rows = ok.any(axis=1)
+    miss = (~ok[rows]).sum(axis=0)
+    measured = [j for j in range(m.shape[1]) if ok[:, j].any()]
+    keep = [j for j in measured if miss[j] == 0]
+    if not keep and measured:
+        best = min(int(miss[j]) for j in measured)
+        keep = [j for j in measured if miss[j] == best]
     if not keep:
         return np.full(n, np.nan)
     mk = m[:, keep]
-    ok = np.isfinite(mk)
-    a = np.zeros(len(keep))
-    with np.errstate(invalid="ignore"):
-        for _ in range(12):
-            level = np.array([_omean(mk[f, ok[f]] - a[ok[f]]) if ok[f].any() else np.nan for f in range(n)])
-            new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
-            new_a -= _omean(new_a)
-            if np.allclose(new_a, a, atol=1e-7):
-                a = new_a
-                break
-            a = new_a
+    full = np.isfinite(mk).all(axis=1)
     ens = np.full(n, np.nan)
     for f in range(n):
-        if not ok[f].any():
-            continue
-        ens[f] = _omean(mk[f]) if ok[f].all() else _omean(mk[f, ok[f]] - a[ok[f]]) + _omean(a)   # step 6c: order-free
+        if full[f]:
+            ens[f] = _omean(mk[f])   # step 6c: order-free
     return ens
+
+
+tied_ensemble = set_ensemble   # the 2.3.5 name (nothing is tied in any more); kept for old callers
 
 
 def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, main_summary: dict,
@@ -1782,9 +1776,9 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
     kw = dict(detrend_airmass=detrend_airmass, detrend_time=detrend_time, after_flip=after_flip,
               flagged_mask=flagged_mask, flip_step=None if flip_gated else flip_step, detrend_curve=detrend_curve)
     ref_kw = dict(kw, flip_step=flip_step)
-    # 2.3.5 (#88): np.mean made the ensemble NaN in every frame where any comp was missing (a comp off the frame
-    # edge), so each refit lost those frames while the main fit kept them.
-    ens_all = tied_ensemble(cm)
+    # 2.4.0 fit-in F4 (#79 item 4): the comps measured in every frame (set_ensemble), as the photometry's night
+    # set; the page hands in the night's set already, so this is the plain mean.
+    ens_all = set_ensemble(cm)
     try:
         ref = lsq_fit(t, flux, err, airmass, planet, **ref_kw)
     except Exception as exc:
@@ -1813,7 +1807,7 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         if progress is not None:
             progress(j + 1, m)
         with np.errstate(invalid="ignore", over="ignore"):
-            ens = tied_ensemble(np.delete(cm, j, axis=1))
+            ens = set_ensemble(np.delete(cm, j, axis=1))
             factor = 10 ** (0.4 * (ens - ens_all))
         # Shift expected from this comp's own white noise alone: the main fit's (least-squares) sigma scaled by the
         # noise the swap adds relative to the light curve's own point-to-point noise.
@@ -2062,11 +2056,11 @@ def robustness_check(t, flux, err, airmass, planet: dict, main_summary: dict, de
     if cm is not None and cm.ndim == 2 and cm.shape[1] >= 2 and cm.shape[0] == t.size:
         names = [str(n_) for n_ in (comp_names or [])][:cm.shape[1]]
         names += [f"comp {k + 1}" for k in range(len(names), cm.shape[1])]
-        ens_all = tied_ensemble(cm)
+        ens_all = set_ensemble(cm)
         for j in range(cm.shape[1]):
             def one(j_=j):
                 with np.errstate(invalid="ignore", over="ignore"):
-                    factor = 10 ** (0.4 * (tied_ensemble(np.delete(cm, j_, axis=1)) - ens_all))
+                    factor = 10 ** (0.4 * (set_ensemble(np.delete(cm, j_, axis=1)) - ens_all))
                 ok = np.isfinite(factor)
                 return fit(t[ok], (flux * factor)[ok], (err * factor)[ok], _cut(am, ok), _cut(after_flip, ok),
                            _cut(flagged_mask, ok))
