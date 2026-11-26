@@ -39,6 +39,15 @@ burn-in… 600 of 1,000"*, then *"Fitting the transit: MCMC step… 1,200 of 3,0
 it is all done, the bar goes and the status line says *"✔ Transit fit done; comps checked."* How long it takes
 depends on the number of frames and comps.
 
+**The transit model (2.4.0).** The curve SHOBS-P fits is the exact formula for a round planet crossing a round star
+whose disk is darker toward its edge (quadratic limb darkening), from Mandel & Agol (2002). It covers every case:
+planet off the star, crossing the edge, fully on the disk, and a grazing transit. Before 2.4.0 SHOBS-P got the same
+curve by adding up 200 thin rings of the star; the formula gives the same answer (the two differ by less than a
+millionth of the star's light for a planet up to 0.15 of the star's size, and the formula is the more exact one)
+and is several times faster to work out, so a fit, the MCMC, **Auto (BIC)**, the Robustness check and the corner plot
+all finish sooner (a 300-frame Auto fit: about a third of the time). Fitted values can move from an older version's,
+but only by a small fraction of their error bars: the MCMC draws its random steps a little differently.
+
 The fit needs your site's latitude and longitude, for its BJD times. From 2.4.0 SHOBS-P asks about this before the
 photometry, not after it: when you press **Run photometry** in Transits mode with an empty Site box, it says *"No
 site is set, so the transit fit can't run."* **Set the site now** shows the Input page with the cursor in the

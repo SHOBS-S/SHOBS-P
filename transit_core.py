@@ -15,15 +15,25 @@ from datetime import datetime, timezone
 import numpy as np
 
 # ---- Transit model ------------------------------------------------------------------------------
-# Limb-darkened transit by direct integration over the stellar disk: the star is cut into thin
-# annuli (denser near the limb, where the intensity changes fastest), and for each annulus the
-# fraction of its circumference covered by the planet is exact. This gives the Mandel & Agol (2002)
-# light curve for any limb-darkening law, including grazing transits, to better than 1e-5 in flux.
+# 2.4.0 fit-in F3: the limb-darkened transit is the exact closed form for quadratic limb darkening (Mandel & Agol
+# 2002, ApJ 580, L171), written here from the paper in NumPy. With I(mu) = 1 - u1 (1 - mu) - u2 (1 - mu)^2 and
+# mu^2 = 1 - r^2, the intensity is  (1 - u1 - 2 u2) + (u1 + 2 u2) mu + u2 r^2,  so the light the planet blocks is
+# the sum of three pieces over the part of the star it covers:
+#   uniform disk  -> the area of overlap of two circles (elementary);
+#   r^2 term      -> elementary as well (arcs and one square root);
+#   mu term       -> complete elliptic integrals of the first, second and third kind.
+# The elliptic integrals are computed together by Bulirsch's (1969) "cel" recurrence, a few arithmetic-geometric
+# mean passes on the whole array, to full double precision. No step size, no tables: the only error is rounding.
+# The model before 2.4.0 fit-in F3 (the star cut into 200 annuli) is kept below as occultation_annulus_reference,
+# for the tests only; the two agree to 0.6 ppm for planets up to 0.15 of the star, about 10 ppm at worst for a
+# planet half the star's size or larger (the difference is the old model's: it shrinks as annuli are added).
 
 _NR = 200
 _theta_edges = np.linspace(0.0, math.pi / 2, _NR + 1)
-_RE = np.sin(_theta_edges)                     # annulus edges, dense near the limb
+_RE = np.sin(_theta_edges)                     # annulus edges, dense near the limb (reference model only)
 _RM = 0.5 * (_RE[1:] + _RE[:-1])
+_OCC_TINY = 1e-12                              # how far z is moved off z = 0 and z = k (flux is continuous there)
+_OCC_AGM_TOL = 1e-6                            # arithmetic-geometric mean stop; the error left is its square
 
 
 def _overlap_area(r, z, k):
@@ -44,22 +54,154 @@ def _overlap_area(r, z, k):
     return out
 
 
-def occultation(z: np.ndarray, k: float, u1: float, u2: float) -> np.ndarray:
-    """Relative flux for planet-star separation z (in stellar radii), radius ratio k, quadratic limb darkening.
+def occultation_annulus_reference(z: np.ndarray, k: float, u1: float, u2: float, n_annuli: int = _NR) -> np.ndarray:
+    """The transit model used before 2.4.0 fit-in F3, kept ONLY as a reference for the tests.
 
-    The star is cut into 200 annuli (denser near the limb); the planet's overlap with each is the exact
-    circle-overlap area, so only the smooth limb-darkening profile is approximated (Mandel & Agol 2002
-    light curve to about 1e-5 in flux, including grazing transits)."""
+    The star is cut into n_annuli annuli (denser near the limb); the planet's overlap with each is the exact
+    circle-overlap area, so only the smooth limb-darkening profile is approximated (about 1e-5 in flux at worst
+    with the default 200 annuli; more annuli come closer to the exact curve)."""
     z = np.asarray(z, dtype=float)
     out = np.ones_like(z)
     hit = z < 1.0 + k
     if not hit.any() or k <= 0:
         return out
-    mu = np.sqrt(np.clip(1.0 - _RM * _RM, 0.0, 1.0))
+    if n_annuli == _NR:
+        re_, rm_ = _RE, _RM
+    else:
+        re_ = np.sin(np.linspace(0.0, math.pi / 2, int(n_annuli) + 1))
+        rm_ = 0.5 * (re_[1:] + re_[:-1])
+    mu = np.sqrt(np.clip(1.0 - rm_ * rm_, 0.0, 1.0))
     intensity = 1.0 - u1 * (1.0 - mu) - u2 * (1.0 - mu) ** 2
-    total = np.sum(intensity * math.pi * (_RE[1:] ** 2 - _RE[:-1] ** 2))
-    area = _overlap_area(_RE[None, :], z[hit][:, None], k)
+    total = np.sum(intensity * math.pi * (re_[1:] ** 2 - re_[:-1] ** 2))
+    area = _overlap_area(re_[None, :], z[hit][:, None], k)
     out[hit] = 1.0 - np.sum(intensity * (area[:, 1:] - area[:, :-1]), axis=1) / total
+    return out
+
+
+def occultation(z: np.ndarray, k: float, u1: float, u2: float) -> np.ndarray:
+    """Relative flux for planet-star separation z (in stellar radii), radius ratio k, quadratic limb darkening.
+
+    Exact closed form of Mandel & Agol (2002, ApJ 580, L171) for I(mu) = 1 - u1 (1 - mu) - u2 (1 - mu)^2:
+    circle-overlap area for the uniform part, an elementary term for the r^2 part, and complete elliptic
+    integrals of the first, second and third kind for the mu part (their lambda_e, eta_d and lambda_d). The
+    elliptic integrals come from Bulirsch's (1969, Numer. Math. 13, 305) cel recurrence, vectorised over z.
+    Covers every geometry: no overlap (1), ingress/egress, planet wholly on the disk, a planet larger than the
+    star (down to 0 when it covers the star), z = 0, z = k, z = |1 - k| and z = 1 + k. z may have any shape
+    (a negative z counts as |z|); k, u1, u2 are single numbers. Accuracy: rounding only (about 1e-9 in flux)."""
+    z = np.abs(np.asarray(z, dtype=float))
+    out = np.ones_like(z)
+    p = float(k)
+    if not p > 1e-8:                                  # no planet (or a dip below double precision)
+        return out
+    hit = z < 1.0 + p
+    if p >= 1.0:                                      # a planet as large as the star can cover it completely
+        covered = z <= p - 1.0
+        if covered.any():
+            out[covered] = 0.0
+            hit &= ~covered
+    zz = z[hit]
+    n = zz.size
+    if n == 0:
+        return out
+    c1 = u1 + 2.0 * u2                                # intensity = c0 + c1 mu + u2 r^2
+    c0 = 1.0 - c1
+    total = c0 + 2.0 * c1 / 3.0 + 0.5 * u2            # the whole star, over pi
+    p2 = p * p
+    # z = 0 and z = k are removable singular points of the formulas (the flux itself is smooth there)
+    zz = np.maximum(zz, _OCC_TINY)
+    d = zz - p
+    ad = np.abs(d)
+    if ad.min() < _OCC_TINY:
+        zz = np.where(ad < _OCC_TINY, p + _OCC_TINY, zz)
+        d = zz - p
+        ad = np.abs(d)
+    z2 = zz * zz
+    a = d * d                                         # Mandel & Agol's a = (z - p)^2 and b = (z + p)^2
+    one_a = (1.0 - d) * (1.0 + d)                     # 1 - a, without cancellation near the fourth contact
+    b_one = (zz + (p - 1.0)) * (zz + (p + 1.0))       # b - 1: below 0 when the planet is wholly on the disk
+    q = -d * (zz + p)                                 # p^2 - z^2, without cancellation near z = p
+    pz = p * zz
+    w = z2 + (7.0 * p2 - 4.0)
+    ins = b_one < 0.0
+    n_ins = int(np.count_nonzero(ins))
+    # The mu term is  [A K + B E - 3 (q / a) Pi] / scale  (+ 2/3 when z < p), with modulus and coefficients that
+    # differ between "wholly on the disk" (their lambda_2) and "crossing the limb" (their lambda_1).
+    if n_ins == n:
+        kc2 = -b_one / one_a                          # complementary modulus squared, 1 - m
+        coef_k = (1.0 - 5.0 * z2 + p2) + q * q
+        coef_e = one_a * w
+        pi_p = (zz + p) / ad                          # sqrt(1 - n) of the third-kind integral
+        scale = (4.5 * math.pi) * np.sqrt(one_a)
+    else:
+        kc2 = b_one / (4.0 * pz)
+        coef_k = -b_one * (2.0 * b_one + a - 1.0) - 3.0 * q * (b_one - 1.0)
+        coef_e = 4.0 * pz * w
+        pi_p = 1.0 / ad
+        scale = (9.0 * math.pi) * np.sqrt(pz)
+        if n_ins:
+            oa = one_a[ins]
+            qi = q[ins]
+            kc2[ins] = -b_one[ins] / oa
+            coef_k[ins] = (1.0 - 5.0 * z2[ins] + p2) + qi * qi
+            coef_e[ins] = oa * w[ins]
+            pi_p[ins] = (zz[ins] + p) / ad[ins]
+            scale[ins] = (4.5 * math.pi) * np.sqrt(oa)
+    kc2 = np.minimum(np.maximum(kc2, 1e-24), 1.0)     # exactly at second/third contact K and Pi cancel (finite)
+    kc = np.sqrt(kc2)
+    # Bulirsch's cel(kc, p, a, b), both integrals in one go: row 0 = coef_k K + coef_e E, row 1 = Pi.
+    # The number of passes is set by the smallest kc (the slowest to converge), found with plain floats.
+    k_s = float(kc.min())
+    e_s, m_s, passes = k_s, 1.0, 1
+    while abs(m_s - k_s) > m_s * _OCC_AGM_TOL and passes < 40:
+        m_s, k_s = k_s + m_s, 2.0 * math.sqrt(e_s)
+        e_s = k_s * m_s
+        passes += 1
+    pp = np.empty((2, n))
+    pp[0] = 1.0
+    pp[1] = pi_p
+    aa = np.empty((2, n))
+    aa[0] = coef_k + coef_e
+    aa[1] = 1.0
+    bb = np.empty((2, n))
+    bb[0] = coef_k + coef_e * kc2
+    bb[1] = 1.0 / pi_p
+    kk = kc
+    e = kc
+    m = 1.0
+    t = np.empty((2, n))
+    g = np.empty((2, n))
+    for it in range(passes):                          # in place: aa, bb, t swap roles, nothing is allocated
+        np.divide(bb, pp, out=t)
+        t += aa                                       # new a = b / p + a
+        np.divide(e, pp, out=g)
+        aa *= g
+        aa += bb
+        aa += aa                                      # new b = 2 (a e / p + b)
+        pp += g
+        m = kk + m
+        aa, bb, t = t, aa, bb
+        if it == passes - 1:
+            break
+        kk = 2.0 * np.sqrt(e)
+        e = kk * m
+    cel = (aa * m + bb) / (m * (m + pp))              # times pi / 2, applied below
+    lam_d = (0.5 * math.pi) * (cel[0] - 3.0 * (q / a) * cel[1]) / scale
+    lam_d += (2.0 / 3.0) * (d < 0.0)
+    h = p2 * (p2 + 2.0 * z2)
+    if n_ins == n:
+        blocked = (c0 * p2 + c1 * lam_d + (0.5 * u2) * h) / total
+    else:
+        # crossing the limb: arcs of the two circles, with arctan2 (accurate right up to the contact points)
+        root = np.sqrt(np.maximum(one_a * b_one, 0.0))
+        k0 = np.arctan2(root, p2 + z2 - 1.0)
+        k1 = np.arctan2(root, 1.0 - p2 + z2)
+        lam_e = (p2 * k0 + k1 - 0.5 * root) * (1.0 / math.pi)
+        eta = (k1 + h * k0 - 0.25 * (1.0 + 5.0 * p2 + z2) * root) * (0.5 / math.pi)
+        if n_ins:
+            lam_e[ins] = p2
+            eta[ins] = 0.5 * h[ins]
+        blocked = (c0 * lam_e + c1 * lam_d + u2 * eta) / total
+    out[hit] = 1.0 - np.minimum(np.maximum(blocked, 0.0), 1.0)   # rounding only: never above 1 or below 0
     return out
 
 

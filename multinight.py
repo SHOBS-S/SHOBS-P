@@ -28,8 +28,9 @@ import transit_core as tc
 # The occultation depends on z alone once Rp/R* and the limb darkening are set, and those are shared by all nights.
 # So each model evaluation computes the exact transit_core.occultation on a grid of 126 separations (denser near the
 # limb and the contact points) and interpolates every night's points on it. Checked against the direct model: max
-# error 2e-6 in flux for Rp/R* 0.12 (5e-4 of the depth at worst over Rp/R* 0.02-0.5), far below any night's noise;
-# 3-6x faster than the direct model for 2-6 nights.
+# error 2e-6 in flux for Rp/R* 0.12 (5e-4 of the depth at worst over Rp/R* 0.02-0.5), far below any night's noise.
+# (It was 3-6x faster than the direct model for 2-6 nights before 2.4.0 fit-in F3; the direct model is now the
+# analytic one and about as fast, so this grid saves little. Kept as is: the joint fit's numbers do not move.)
 _S_IN = np.sin(np.linspace(0.0, math.pi / 2, 48))[:-1]
 _S_EDGE = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, 80)))
 MIN_POINTS = 20
