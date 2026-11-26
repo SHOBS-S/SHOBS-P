@@ -56,7 +56,7 @@ On an alt-az mount there are no pier sides or flips, so **Flip step** and **Both
 
 ### Watch a spare
 
-If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run. A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
+If a spare looks interesting, select its row and press **Watch selected spare**. It becomes a *watch star* with its own light curve (Output page, **Watch stars…**). Only spares can be added here: comps and the check star are already measured on every run, so from 2.4.0 the button is greyed until a spare's row is selected (its tooltip says why). A star is a comp or a Watch star, never both (chapter 10, "Comps you clear stay cleared").
 
 ## Use comps: change the comps without reducing again
 
@@ -65,7 +65,8 @@ SHOBS-P stores each comp's and spare's measurement in every frame. **Use comps�
 1. On the Output page, press **Use comps…**.
 2. The **Comparison stars in use** window lists every comp and spare with its **Catalog mag**, **Nights measured** (for example `7 of 8`), **Night offset**, **Scatter in night** and **Comp health** verdict (SUSPECT in red).
 3. Tick the stars you want in the comparison. Untick a SUSPECT comp; tick a steady spare measured on every night.
-4. Press **Apply**.
+4. Press **Apply**. It is greyed while no star is ticked (from 2.4.0), and, like **Back to the original comps**, while a
+   step is running.
 
 ![The Comparison stars in use window for a ten-night series](img/11-use-comps.png)
 
@@ -80,7 +81,7 @@ Things to know:
 - Pick stars measured on **every** night. A frame missing only some of the chosen comps is kept: its point is worked out from the chosen comps that are there, put on the night's scale, so no step appears. Only frames with none of the chosen comps (or nights that never measured a chosen star) are flagged `nocomp` and left out; SHOBS-P tells you how many before it applies. The log line *"Comps in use: … N points re-derived"* adds *"(M of them from the comps present in that frame)"*.
 - **A series comp that is off tonight's frame.** From 2.4.0 the comp keeps its name and magnitude in its row (the row says **not on this frame tonight**) and is simply not measured that night; it is back the next night the frame holds it (chapter 10). Nights measured with different comp sets are compared here like any others.
 - **A comp that drifted off the edge.** From 2.4.0 the suggested comps (green rings S1, S2 …) never include a star that the night's drift takes out of the safe edge margin (chapter 8, "How S1–S4 are chosen"), and a star you pick yourself says so on its Stars panel line. If a comp you picked did drift off the edge in some frames, the comp set changes partway through the night; untick it here to measure the whole night with the same comps.
-- **Dropping a comp that cost frames.** If the run skipped frames because every comp was lost in them (for example a one-comp night whose comp drifted off the frame edge) and your new choice drops those comps, the Photometry page says *"⚠ N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."* Use comps only recalculates frames that were measured; press **Measure skipped frames** on that line to measure the skipped ones with the comps now in use (chapter 8).
+- **Dropping a comp that cost frames.** If the run skipped frames because every comp was lost in them (for example a one-comp night whose comp drifted off the frame edge) and your new choice drops those comps, Use comps only recalculates frames that were measured. When that night's frames are in the Lights folder and its image is loaded, the status line says so in a plain line, for example *"Comps in use: C1, C2. 6 skipped frames can be measured now:"*, with a **Measure skipped frames** button beside it (2.4.0; the Photometry page's line has the same button). Nothing is measured until you press it; it then measures the skipped frames with the comps now in use and adds them to the night (on a stacked night it first switches to **Points: Per frame** and drops the stacks; its hover note says so). When the frames are not here, the line keeps its ⚠: *"⚠ N frames … were skipped because of …, which is no longer a comp — open that night's frames and Run photometry again to measure them."* (chapter 8).
 - Every chosen star needs a catalog magnitude. If one has none, you get **No catalog magnitude for …**. You can type
   one in its **Catalog mag** box (below).
 - The check star cannot be a comp.

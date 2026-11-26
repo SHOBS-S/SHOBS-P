@@ -68,7 +68,10 @@ rebuilt and replaced.
 - **Rebuild masters (ignore saved ones)**: tick this to force a fresh stack, for example if you replaced some frames
   and are not sure SHOBS-P noticed.
 - **Binning**: masters are made for one binning. If you change **Binning** on the Input page, calibrate again; the
-  masters for the other binning stay on disk for later.
+  masters for the other binning stay on disk for later. From 2.4.0 the status bar says so at once (*Binning changed
+  from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild them at bin 2, or set Binning back to
+  1.*), and **Run photometry**, **Scan field** and **Stack** are greyed until you calibrate again or set **Binning**
+  back (the masters in use are kept, marked with their bin).
 - **One master file**: on the Input page, **Master file…** points a row at one master SHOBS-P built earlier, instead
   of a folder of frames.
 
@@ -164,7 +167,8 @@ estimate is a lower limit, so a camera that averaged could, on a faint sky, look
 
 To measure another color of a color camera, choose it in **Channel** and press **Apply channel to the preview**. The
 image is split again with the new color and you go back to the Photometry page. Nothing is recalibrated, so this is
-quick. The image is solved again, because it is a new picture.
+quick. The image is solved again, because it is a new picture. **Apply channel to the preview** is greyed until the
+frames are calibrated (2.4.0), and **Build masters and calibrate** is greyed while a job runs.
 
 ## Already-debayered color images
 
@@ -173,10 +177,12 @@ the calibration for them. The log says **These lights are color images (already 
 dark and flat entries are not used for them.** No question is asked.
 
 The **Filter** box chooses the channel: **Green imaging (TG)**, **Red imaging (TR)**, **Blue imaging (TB)** or
-**Clear / L (CV)** (luminance). Pick another one and press **Build masters and calibrate** again to see it in the
-preview. While a step is running the channel cannot change; the log says **The channel of the color images cannot
-change while a step is running; choose it again when it has finished.** A Bayer pattern picked for these lights is
-put back to **MONO**, because it would debayer them a second time.
+**Clear / L (CV)** (luminance). From 2.4.0 the box lists only these four while such lights are loaded. Pick another
+one and press **Build masters and calibrate** again to see it in the preview; when the comps' band changed with it
+(for example to or from a Sloan band), that calibration solves the image again by itself so the comps get magnitudes
+in the new band. While a step is running the **Filter** box is greyed (the channel cannot change under a running
+step). The **Bayer pattern** box is greyed and shows **MONO** for these lights, because a pattern would debayer them a
+second time; hover over it to see why.
 
 ## Questions you may be asked
 

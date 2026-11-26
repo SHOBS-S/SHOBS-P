@@ -71,7 +71,8 @@ place.
    The first start finds a Python that works, makes SHOBS-P's own environment in
    `~/.local/share/SHOBS-P/python-env` (your own Python is left untouched) and downloads the packages. This takes a
    few minutes. The messages are the same as on a Mac (see "What the first start says" below). Later starts skip the
-   download, unless a new version needs other packages.
+   download, unless a new version needs other packages. The packages include tzfpy (2.4.0), which sets the **Time
+   zone** box from the site's latitude and longitude for frames from another site (chapter 5).
 4. For an entry in your applications menu, type `./run_linux.sh --desktop` once. It needs no `sudo`. It also puts
    an icon on your Desktop, if you have one. Run it again if you move the SHOBS-P folder.
 5. To check the install, type `./run_selftest.sh` (see the self-test below).

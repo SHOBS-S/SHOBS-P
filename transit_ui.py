@@ -23,6 +23,7 @@ import transit_core as tc
 import transit_posterior as tpost   # 2.2.19 (#31)
 import site_time   # 2.2.21 (#22): local times in the site's time zone
 import page_scroll   # 2.4.0 fit-in F1c (#109)
+import gate   # 2.4.0 fit-in F2 (#79 item 6)
 from group_rows import LABEL_WIDTH, GroupRows   # 2.4.0 (#98): the Output pages' function groups
 
 try:
@@ -111,12 +112,27 @@ def quality_text(r) -> str:
     return " · ".join(parts)
 
 
-def fit_progress_words(phase, done, total) -> str:
+def detrend_step_words(done, total, label=None, sub=None) -> str:
+    """2.4.0 fit-in F2 (banked nit 9): Auto's step in words: "reference fit (before 1 of 6)", "trying airmass + time
+    slope (3 of 6)", "trying airmass (3 of 6, with the flip step)"; "2 of 6" when the step has no name."""
+    done, total = int(done), int(total)
+    if label == "reference fit" or (label is None and done == 0):
+        return f"reference fit (before 1 of {total})"
+    if not label:
+        return f"{done} of {total}"
+    if label == "none":
+        label = "no detrend"
+    return f"trying {label} ({done} of {total}" + (f", {sub}" if sub else "") + ")"
+
+
+def fit_progress_words(phase, done, total, label=None, sub=None) -> str:
     """2.2.20 (item 3): the transit fit's busy-bar words: "Fitting the transit: MCMC burn-in… 600 of 1,000", then
     "Fitting the transit: MCMC step… 1,200 of 3,000" (the second count matches the MCMC menu, 2.2.12).
-    2.4.0 (#103): first, with Auto, "Fitting the transit: choosing the detrend… 2 of 6"."""
+    2.4.0 (#103): first, with Auto, "Fitting the transit: choosing the detrend… 2 of 6". 2.4.0 fit-in F2 (banked
+    nit 9): with the choice named, and the flip night's second fit: "…choosing the detrend… trying airmass (3 of 6,
+    with the flip step)"."""
     if phase == "detrend":
-        return f"Fitting the transit: choosing the detrend… {int(done)} of {int(total)}"
+        return f"Fitting the transit: choosing the detrend… {detrend_step_words(done, total, label, sub)}"
     if phase == "prayer":   # 2.4.0 (#62)
         return "Fitting the transit: prayer-bead check of the errors…"
     return f"Fitting the transit: MCMC {'burn-in' if phase == 'burn-in' else 'step'}… {int(done):,} of {int(total):,}"
@@ -130,6 +146,37 @@ NO_AIRMASS_SITE = "no airmass: site not set"
 NO_AIRMASS_DATA = "no airmass in these data"
 # review: the site is set now but the night's points carry no airmass: the photometry ran before the site was typed
 NO_AIRMASS_RERUN = "no airmass in these data (run photometry again with the site set)"
+# 2.4.0 fit-in F2 (#79 item 6): why a Transit fit page button is greyed (its hover tooltip)
+FIT_FIRST = "Fit a transit first (Fit transit, above the plot)."
+COMP_CHECK_RUNNING = "The comps are being checked (a few seconds)."
+CSV_NEEDS = "Run photometry or open an exoplanet report, and fit a transit first."
+CORNER_NEEDS = "Fit a transit first: the corner plot shows that fit's MCMC samples."
+TRIM_TYPE_FIRST = ("Type a From and/or To time (the site's local time, HHMM or HH:MM, or BJD_TDB), or drag across "
+                   "the plot.")
+EPH_WAIT = "Fit transit: waiting for the ephemeris…"
+# 2.4.0 fit-in F2 review (S2, S3): a queued Fit transit (m787) belongs to the report and planet it was pressed for
+FIT_CALLED_OFF = "Fit transit called off (it was waiting for the ephemeris)."
+
+
+def _gate(app, widget, why=None, tip=None, busy=True):
+    """2.4.0 fit-in F2 (#79 item 6): App.gate (grey until it can work, the reason on hover); a stand-in app without
+    gates (tests) leaves the widget as it is."""
+    g = getattr(app, "gate", None)
+    if callable(g) and getattr(app, "gates", None) is not None:
+        try:
+            return g(widget, why, tip=tip, busy=busy)
+        except Exception:
+            pass
+    return widget
+
+
+def _refresh_gates(app):
+    gates = getattr(app, "gates", None)
+    if gates is not None:
+        try:
+            gates.refresh()
+        except Exception:
+            pass
 
 
 class TransitPage:
@@ -175,7 +222,11 @@ class TransitPage:
         groups.add("data", night_box)
         self.close_report_button = groups.add("data", ttk.Button(g, text="Close report", command=self.close_report),
                                               shown=False)
-        groups.add("data", ttk.Button(g, text="Open AAVSO exoplanet report (EXOTIC)…", command=self.open_report), pad=8)
+        self.open_report_button = groups.add("data", ttk.Button(g, text="Open AAVSO exoplanet report (EXOTIC)…",
+                                                                command=self.open_report), pad=8)
+        # 2.4.0 fit-in F2 (#79 item 6): a new source is not loaded under a running fit or check
+        for button in (self.close_report_button, self.open_report_button):
+            _gate(app, button, self._job_why, busy=False)
         self.source_text = StringVar(value="")
         groups.add("data", ttk.Label(g, textvariable=self.source_text, style="Hint.TLabel", justify=LEFT), wrap=True)
 
@@ -198,16 +249,27 @@ class TransitPage:
             except Exception:
                 pass
         groups.add("points", trim_box, pad=8)
-        groups.add("points", ttk.Button(g, text="Trim and refit", command=self.trim_and_refit))
-        groups.add("points", ttk.Button(g, text="Clear trim", command=self.clear_trim))
+        # 2.4.0 fit-in F2 (#79 item 6): Trim and refit greys, with the reason, while the typed / dragged span cannot
+        # be trimmed (nothing typed, a box not understood, no points in it, fewer than 20 left), as Trim does on the
+        # Variables Output page; both greyed during a fit or check.
+        self.trim_refit_button = groups.add("points", ttk.Button(g, text="Trim and refit",
+                                                                 command=self.trim_and_refit))
+        self.clear_trim_button = groups.add("points", ttk.Button(g, text="Clear trim", command=self.clear_trim))
+        self._trim_cache = None   # (key, t, time map) of the data the Trim reason was worked out on
+        for var in (self.trim_from, self.trim_to):
+            var.trace_add("write", lambda *_a: self._trim_typed())
+        _gate(app, self.trim_refit_button, self._trim_why, busy=False)
+        _gate(app, self.clear_trim_button, self._job_why, busy=False)
         # 2.2.13: put the night's cloud-flagged frames back (error bars doubled); shown only when there are some.
         # 2.4.0 (#98): with the other points-in/out controls (it was on the Fit row).
         self.refit_flagged_button = groups.add("points", ttk.Button(
             g, text=f"Refit with flagged frames (errors ×{tc.FLAGGED_ERR_FACTOR:g})",
             command=lambda: self.fit(with_flagged=True)), shown=False)
+        _gate(app, self.refit_flagged_button, self._job_why, busy=False)   # 2.4.0 fit-in F2
         # 2.4.0 (#63): frames past the airmass limit, offered for trimming after a fit (shown only then)
         self.trim_airmass_button = groups.add("points", ttk.Button(
             g, text="Trim high airmass", command=self.trim_high_airmass), shown=False)
+        _gate(app, self.trim_airmass_button, self._job_why, busy=False)   # 2.4.0 fit-in F2
         self._airmass_offer = None
         self.trim_text = StringVar(value="")
         groups.add("points", ttk.Label(g, textvariable=self.trim_text, style="Hint.TLabel", justify=LEFT), wrap=True)
@@ -260,6 +322,9 @@ class TransitPage:
         groups.add("fit", mcmc_box, pad=10)
         self.fit_button = groups.add("fit", ttk.Button(g, text=FIT_TEXT, style="Accent.TButton", command=self.fit),
                                      pad=10)
+        # 2.4.0 fit-in F2 (#79 item 6): greyed while a job runs. Not while a report's ephemeris is looked up: a press
+        # then waits for it (m787).
+        _gate(app, self.fit_button, self._job_why, busy=False)
         groups.add("fit", ttk.Button(g, text="Cancel", command=app.cancel_job))
         # 2.4.0 (#98): a Points or Corrections setting changed since the shown fit: the button says so and the fit's
         # numbers go grey until it is pressed. The fit itself still always waits for the button (2.3.2 item 2).
@@ -278,6 +343,9 @@ class TransitPage:
                                                                  command=self.open_comp_health))
         self.use_comps_button = groups.add("comps", ttk.Button(g, text="Use comps…", command=self.open_use_comps),
                                            pad=8)
+        # 2.4.0 fit-in F2: one mechanism for their state (it was set by hand in _update_comp_buttons)
+        for button in (self.comp_health_button, self.use_comps_button):
+            _gate(app, button, lambda: self._job_why() or self._comp_windows_ok(), busy=False)
         self.comp_hint = StringVar(value="")
         self.comp_hint_label = groups.add("comps", ttk.Label(g, textvariable=self.comp_hint, style="Hint.TLabel",
                                                              justify=LEFT), wrap=True)
@@ -294,16 +362,21 @@ class TransitPage:
         groups.add("analysis", ttk.Button(g, text="Nearby-binary (NEB) check…",
                                           command=lambda: NebWindow(app, self)))
         # 2.2.19 (#18): several nights of the planet fitted together; timing per epoch and an updated ephemeris.
-        groups.add("analysis", ttk.Button(g, text="Multi-night…", command=self.open_multinight))
+        self.multinight_button = groups.add("analysis", ttk.Button(g, text="Multi-night…",
+                                                                   command=self.open_multinight))
+        _gate(app, self.multinight_button, self._job_why, busy=False)   # 2.4.0 fit-in F2
         # 2.2.21 (#44): the open Transits series' nights in the Multi-night window (enabled with 2 or more nights).
         # 2.4.0 (#98): beside Multi-night… (it was in the Results row).
         self.multinight_series_button = groups.add("analysis", ttk.Button(
             g, text="Fit the series' nights…", command=self.open_multinight_series))
-        self.multinight_series_button.state(["disabled"])
+        self._series_nights_n = 0
+        _gate(app, self.multinight_series_button, lambda: self._job_why() or (
+            "" if self._series_nights_n >= 2 else "Needs a Transits series with at least two nights (Multi-night… "
+            "beside it takes reports and fit CSVs instead)."), busy=False)
         # 2.4.0 step 6b (#35): optional: how far the result moves over reasonable reduction choices
         self.robust_button = groups.add("analysis", ttk.Button(g, text="Robustness check",
                                                                command=self.robustness_check))
-        self.robust_button.state(["disabled"])
+        _gate(app, self.robust_button, self._robust_why, busy=False)   # 2.4.0 fit-in F2 (was set by hand)
 
         # ---- 7. View only
         g = groups.parent("view")
@@ -353,21 +426,29 @@ class TransitPage:
             self._results_pads.append(pad)
             return b
 
-        _rbutton(text="Save AAVSO exoplanet report…", command=self.save_aavso, style="Accent.TButton")
+        # 2.4.0 fit-in F2 (#79 item 6: m827 m838 m845 m045 m844): the saves are greyed until there is a fit to save
+        # (and, for the four whose files carry the comp-choice result, while the comp check runs); hovering says why.
+        self.save_aavso_button = _rbutton(text="Save AAVSO exoplanet report…", command=self.save_aavso,
+                                          style="Accent.TButton")
         # 2.2.15 (items 8, 9): the upload pages, beside the saves they are for.
         _rbutton(text="Open AAVSO Exoplanet Database…", command=self.open_aavso_exoplanet)
-        _rbutton(text="Save ExoFOP package…", command=self.save_package)
+        self.save_package_button = _rbutton(text="Save ExoFOP package…", command=self.save_package)
         _rbutton(text="Open ExoFOP…", command=self.open_exofop)
         # 2.2.20 (#47): ExoClock's upload file (+ its _info.txt) and its upload page (App.save_exoclock).
-        _rbutton(text="Save for ExoClock…", command=app.save_exoclock)
+        self.save_exoclock_button = _rbutton(text="Save for ExoClock…", command=app.save_exoclock)
         _rbutton(text="Go to ExoClock…", command=app.open_exoclock)
         # 2.2.18 (item 18): with a fit shown, the fit CSV (time, flux, error, model, residual) is saved with it.
-        _rbutton(text="Save light-curve CSV…", command=self.save_csv)
+        self.save_csv_button = _rbutton(text="Save light-curve CSV…", command=self.save_csv)
         # 2.2.7: the plot as shown, with the verdict and results above it; works for report fits too.
-        _rbutton(text="Save plot PNG…", command=self.save_png)
+        self.save_png_button = _rbutton(text="Save plot PNG…", command=self.save_png)
         # 2.3.0 (John): the corner plot window (it has its own Save PNG…), moved here from the tools row and named
         # like the other Save… buttons.
-        _rbutton(text="Save corner plot…", command=self.open_corner)
+        self.corner_button = _rbutton(text="Save corner plot…", command=self.open_corner)
+        for button in (self.save_aavso_button, self.save_package_button, self.save_exoclock_button,
+                       self.save_png_button):
+            _gate(app, button, self._save_why, busy=False)
+        _gate(app, self.save_csv_button, self._save_csv_why, busy=False)
+        _gate(app, self.corner_button, self._corner_why, busy=False)
         # 2.2.19 (#28): the frame with the target and comps marked, beside the AAVSO chart (after Save plot PNG…).
         # 2.4.0 (#101): once the night's report has saved it, the button reads "Field image saved ✓" (greyed), or
         # "Fetch AAVSO chart" when only the chart is missing (App.field_image_action).
@@ -590,10 +671,8 @@ class TransitPage:
         """2.2.21 (#44): Fit the series' nights… enabled when the open Transits series has 2 or more nights."""
         import multinight
         n = len(multinight.series_transit_nights(self.app))
-        try:
-            self.multinight_series_button.state(["!disabled"] if n >= 2 else ["disabled"])
-        except Exception:
-            pass
+        self._series_nights_n = n
+        _refresh_gates(self.app)   # 2.4.0 fit-in F2: the button's gate reads the count
         if n < 2 and getattr(self, "series_hint", None) is not None:
             self.series_hint.set("")
         win = getattr(self, "_multinight", None)
@@ -673,6 +752,7 @@ class TransitPage:
         """2.2.7: back to the photometry (newest night), dropping a loaded EXOTIC report."""
         if self.report is None:
             return
+        dropped = self.drop_queued_fit("")   # review S3: a fit waiting for this report's ephemeris goes with it
         self._clear_progress()
         self.report = None
         self.night.set("")
@@ -683,6 +763,8 @@ class TransitPage:
         self._fill_table()
         self.draw()
         self.refresh(shown=not quiet)
+        if dropped:
+            self.app.status.set("Fit transit called off: the report was closed.")
         if not self.app.observations:
             self.source_text.set("")
             self._notes_text([("info", "Report closed. Run photometry in Transits mode, or open another report.")])
@@ -932,16 +1014,28 @@ class TransitPage:
                 text += f", {r['trim']['n']} trimmed"     # 2.2.17 (item 5)
         self.source_text.set(text)
 
-    def _signature(self):
-        """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet."""
+    def _signature(self, cheap: bool = False):
+        """What a fit depends on: the night's usable points (after comps, flags, and cloud cuts) and the planet.
+        cheap=True (the Trim gate, review S1): the point part is kept until the series changes (gate.series_memo);
+        a fit's own staleness check always works it out afresh."""
         if self.report is not None:
             return ("report", id(self.report), tuple(self._trims))   # 2.2.17 (item 5): the trim too
         night = self.night.get()
-        obs = [o for o in self.app._usable() if o.night == night]
-        if not obs:
+
+        def points():
+            obs = [o for o in self.app._usable() if o.night == night]
+            if not obs:
+                return None
+            mags = [o.mag for o in obs if math.isfinite(o.mag)]
+            return len(obs), round(float(sum(mags)), 6), round(float(sum(o.jd for o in obs)), 6)
+        if cheap and hasattr(self.app, "__dict__"):
+            part = gate.series_memo(self.app, ("transit_sig", night), points,
+                                    vals=(repr(getattr(getattr(self.app, "skip_flagged", None), "get", lambda: None)()),))
+        else:
+            part = points()
+        if part is None:
             return None
-        mags = [o.mag for o in obs if math.isfinite(o.mag)]
-        return (night, len(obs), round(float(sum(mags)), 6), round(float(sum(o.jd for o in obs)), 6),
+        return (night,) + part + (
                 tuple(self.app.active_comps or self.app.comps_used), planet_summary(self.current_planet()),
                 str(self.app._scint_setup() if hasattr(self.app, "_scint_setup") else None),
                 tuple(self._trims))   # 2.2.17 (item 5)
@@ -1031,6 +1125,8 @@ class TransitPage:
             messagebox.showerror("SHOBS-P", f"Could not read {os.path.basename(path)}:\n{exc}")
             return
         self._report_time_system(rep)   # 2.2.17 review: #DATE_TYPE other than BJD_TDB
+        # review S3: a fit queued for the report shown before is not for this one
+        self.drop_queued_fit("Fit transit called off: another report was opened.")
         self._clear_progress()
         self.report = rep
         self._reset_trim()      # 2.2.17 (item 5)
@@ -1089,9 +1185,30 @@ class TransitPage:
 
         threading.Thread(target=work, daemon=True).start()
 
+    def drop_queued_fit(self, words: str = FIT_CALLED_OFF) -> bool:
+        """2.4.0 fit-in F2 review (S3): call off a Fit transit waiting for the ephemeris (Cancel, Close report,
+        another report, New reduction, the window closing). The status line says so; True when one was waiting."""
+        queued, self._fit_queued = getattr(self, "_fit_queued", None), None
+        if not queued:
+            return False
+        try:
+            if words:
+                self.app.status.set(words)
+            if self.report is not None and queued.get("report") is self.report:
+                self.draw(placeholder="Fit transit called off; press it again when you are ready.")
+        except Exception:
+            pass
+        return True
+
     def _ephemeris_found(self, rep, found, why):
         if getattr(self, "_eph_pending", None) is rep:
             self._eph_pending = None
+        # 2.4.0 fit-in F2 (m787); review S2: a lookup for another report leaves a fit queued for this one alone
+        queued = getattr(self, "_fit_queued", None)
+        if queued and queued.get("report") is rep:
+            self._fit_queued = None
+        else:
+            queued = None
         if self.report is not rep:
             return
         planet = rep["planet"]
@@ -1105,6 +1222,18 @@ class TransitPage:
                          + (f" ({why})" if why else "") + "; no O − C will be given.")
         self.planet_text.set(planet_summary(self.current_planet()))
         self._fill_table()
+        if queued and _norm((self.current_planet() or {}).get("name")) != _norm(queued.get("planet")):
+            # review S3: the planet changed while the fit waited: it was for the other planet
+            self.app.status.set("Fit transit called off: the planet changed while it waited for the ephemeris. "
+                                "Press Fit transit again for this planet.")
+            queued = None
+        if queued:
+            # 2.4.0 fit-in F2 (m787): Fit transit was pressed during the lookup: it runs now (with no ephemeris
+            # found it fits as it would have without one: no O − C)
+            if not self.app.busy:
+                self.fit(with_flagged=bool(queued.get("with_flagged")))
+                return
+            self.app.status.set("The ephemeris is in; press Fit transit when the current job ends.")
         if not self.app.busy:
             name = planet.get("name") or "the planet"
             self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from "
@@ -1501,12 +1630,17 @@ class TransitPage:
                 self.app.status.set("Still checking the comps (a few seconds); Fit transit again when it is done, "
                                     "or Cancel the check.")
             return
-        # 2.2.12: a report's ephemeris is still being looked up. 2.3.2 (item 2): press Fit transit once it is in.
+        # 2.2.12: a report's ephemeris is still being looked up. 2.4.0 fit-in F2 (m787, John 24 Nov): a press now is
+        # kept and the fit starts when the ephemeris lands (_ephemeris_found); it honours the press, so the fit
+        # still never starts without the button (2.3.2 item 2).
         if self.report is not None and getattr(self, "_eph_pending", None) is self.report:
             if not auto:
-                messagebox.showinfo("SHOBS-P", "Still looking up this planet's ephemeris; press Fit transit again "
-                                               "as soon as it is in.")
+                self._fit_queued = {"report": self.report, "with_flagged": with_flagged,
+                                    "planet": (self.current_planet() or {}).get("name")}
+                self.app.status.set(EPH_WAIT)
+                self.draw(placeholder=EPH_WAIT)
             return
+        self._fit_queued = None
         if self.report is None:
             self._trim_source_check()   # review: a series change drops the trim
         self._update_airmass_box()   # 2.4.0 (#96): the box never says airmass when the data have none
@@ -1646,8 +1780,8 @@ class TransitPage:
             self._show_progress()
             app = self.app
 
-            def progress(phase, done, total):
-                app.call_ui(self._progress, phase, done, total)
+            def progress(phase, done, total, label=None, sub=None):
+                app.call_ui(self._progress, phase, done, total, label, sub)
 
             src_planet = (self.report or {}).get("planet") if self.report is not None else None
             # Fable S4: a lookup that got no answer this session is not tried again for 10 minutes
@@ -1699,12 +1833,12 @@ class TransitPage:
             self.app._end_job()
             raise
 
-    def _progress(self, phase, done, total):
+    def _progress(self, phase, done, total, label=None, sub=None):
         """2.2.12: the burn-in and the steps are counted separately ("MCMC burn-in 600 of 1,000", then
         "MCMC step 1,200 of 3,000"), so the second count matches the MCMC menu. 2.2.20 (item 3): in the busy bar's
         words ("Fitting the transit: MCMC step… 1,200 of 3,000"), never a filling bar."""
         if self._fitting:
-            self.app._job_words(fit_progress_words(phase, done, total))
+            self.app._job_words(fit_progress_words(phase, done, total, label, sub))
 
     def _clear_progress(self):
         """A new source: the last fit's message no longer applies (unless a fit is still running). 2.2.16 (item 6,
@@ -1884,13 +2018,32 @@ class TransitPage:
             self._run_pending_refit()   # 2.2.17 (item 4): comps changed while the check ran
 
     # ---- 2.4.0 step 6b (#35): the robustness check --------------------------------------------
+    def _robust_why(self) -> str:
+        """2.4.0 fit-in F2: Robustness check refits the fit on the page (one gate; it was set by hand here)."""
+        job = self._job_why()
+        if job:
+            return job
+        src = getattr(self, "_robust_src", None)
+        if not (bool(src) and src[0] is self.result and self.result is not None):
+            return "Fit the transit first: the robustness check refits the fit on the page."
+        return ""
+
+    def _job_why(self) -> str:
+        """2.4.0 fit-in F2 (#79 item 6): why a Transit fit page job button is greyed now ('' = free): the comp check,
+        or another job holding the run lock."""
+        if getattr(self, "_checking", False):
+            return COMP_CHECK_RUNNING
+        if getattr(self, "_fitting", False) or getattr(self.app, "busy", False):
+            return gate.BUSY_REASON
+        return ""
+
     def _update_robust_button(self):
-        try:
-            src = getattr(self, "_robust_src", None)
-            ok = bool(src) and src[0] is self.result and self.result is not None
-            self.robust_button.state(["!disabled"] if ok else ["disabled"])
-        except Exception:
-            pass
+        _refresh_gates(self.app)
+        if getattr(self.app, "gates", None) is None or not self.app.gates.is_gated(self.robust_button):
+            try:
+                self.robust_button.state(["disabled"] if self._robust_why() else ["!disabled"])
+            except Exception:
+                pass
 
     def robustness_check(self):
         """Refit the shown fit over reasonable reduction choices (least squares, in the background, the busy bar
@@ -1959,6 +2112,9 @@ class TransitPage:
                     allow_airmass=allow_am, detrend_rows=rows, flagged=job.get("flagged"),
                     comp_mags=job.get("comp_mags"), comp_names=job.get("names"), measured=measured, cancel=cancel,
                     progress=lambda j, n: app.call_ui(self._robust_progress, token, f"refit {j} of {n}"),
+                    # 2.4.0 fit-in F2 (banked nit 9): a detrend picked by hand: Auto's hidden pass is counted too
+                    detrend_progress=lambda j, n, label=None, sub=None: app.call_ui(
+                        self._robust_progress, token, "choosing the detrend… " + detrend_step_words(j, n, label, sub)),
                     log=lambda msg: app.call_ui(app.log, msg, True))
                 if rob is not None and why_not:
                     rob["measure_note"] = why_not
@@ -2926,11 +3082,8 @@ class TransitPage:
 
     def _update_comp_buttons(self):
         why = self._comp_windows_ok()
-        for button in (self.comp_health_button, self.use_comps_button):
-            try:
-                button.configure(state="disabled" if why else "normal")
-            except Exception:
-                pass
+        # 2.4.0 fit-in F2: the buttons' state is their gate's (_comp_windows_ok and the run lock)
+        _refresh_gates(self.app)
         self.comp_hint.set(why)
 
     def open_comp_health(self):
@@ -3194,16 +3347,101 @@ class TransitPage:
         else:
             self.trim_text.set("site's local time (HHMM or HH:MM) or BJD_TDB; or drag across the plot")   # 2.2.21 (#22)
 
+    def _trim_typed(self):
+        """2.4.0 fit-in F2: as From / To are typed (or dragged), the hint says why the span cannot be trimmed (a
+        box not understood, no points, too few left); otherwise it shows what is trimmed, as before."""
+        try:
+            if not hasattr(self, "_trims"):
+                return
+            why = "" if not (self.trim_from.get().strip() or self.trim_to.get().strip()) else self._trim_why()
+            if why and why not in (gate.BUSY_REASON, COMP_CHECK_RUNNING):
+                self.trim_text.set(why)
+            else:
+                self._update_trim_text()
+            _refresh_gates(self.app)
+        except Exception:
+            pass
+
+    def _trim_times(self):
+        """(t BJD_TDB, time map) of the source the trim applies to, for the live Trim reason: worked out again only
+        when the data change (_signature), and never touching what a fit reads (_data_extra is put back)."""
+        # 2.4.0 fit-in F2 review (S1): the key's point part is kept until the series changes (gate.series_memo), so
+        # the gate timer does not walk the series four times a second; a failure is kept too (no night, say).
+        key = (self._signature(cheap=True), self.app.lat.get(), self.app.lon.get(), bool(self.flip_at_gap.get()))
+        cache = getattr(self, "_trim_cache", None)
+        if cache is not None and cache[0] == key:
+            if isinstance(cache[1], tuple):   # re-review R2-S1: a fresh exception each time (a kept one grows
+                cls, args = cache[1]           # its traceback on every re-raise, ~28 MB/hour on the gate timer)
+                try:
+                    raise cls(*args)
+                except TypeError:
+                    raise ValueError(*args) from None
+            return cache[1], cache[2]
+        keep = self._data_extra
+        try:
+            self._data_extra = {}
+            t = np.asarray(self._data()[0], dtype=float)
+            tmap = self._time_map_for(t)
+        except Exception as exc:
+            self._trim_cache = (key, (type(exc), exc.args), None)
+            raise
+        finally:
+            self._data_extra = keep
+        self._trim_cache = (key, t, tmap)
+        return t, tmap
+
+    def _trim_plan(self, t=None, tmap=None):
+        """2.4.0 fit-in F2 (#79 item 6): the From–To span as Trim and refit would take it: (reason, plan). reason is
+        '' when it can be trimmed, else the plain words why not (the button's greyed tooltip; the same rules as
+        before, when they were boxes). plan = {lo, hi, swapped, inside, trims, kept} when it can."""
+        a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
+        if not a and not b:
+            return TRIM_TYPE_FIRST, None
+        try:
+            if t is None:
+                t, tmap = self._trim_times()
+            drag = getattr(self, "_drag", None) or {}
+            lo = drag["lo"] if drag and a and a == drag.get("from") else self._clock_to_bjd(a, tmap)
+            hi = drag["hi"] if drag and b and b == drag.get("to") else self._clock_to_bjd(b, tmap)
+        except ValueError as exc:
+            return f"Trim: {exc}", None
+        lo = -math.inf if lo is None else lo
+        hi = math.inf if hi is None else hi
+        # 2.4.0 fit-in F2 (m819): From after To is the same span the other way round; taken as it is meant
+        swapped = lo > hi
+        if swapped:
+            lo, hi = hi, lo
+        trims = self._trims + [(lo, hi)]
+        inside = ~self._trim_mask(t, [(lo, hi)])
+        if not inside.any():
+            return "No points fall between From and To: nothing to trim.", None
+        kept = int(self._trim_mask(t, trims).sum())
+        if kept < 20:
+            return f"That trim would leave {kept} points; a transit fit needs at least 20.", None
+        return "", {"lo": lo, "hi": hi, "swapped": swapped, "inside": inside, "trims": trims, "kept": kept}
+
+    def _trim_why(self) -> str:
+        """Trim and refit's gate: a job running, else the span's own reason (_trim_plan)."""
+        job = self._job_why()
+        if job:
+            return job
+        if not hasattr(self, "_trims"):
+            return TRIM_TYPE_FIRST
+        try:
+            return self._trim_plan()[0]
+        except Exception as exc:   # e.g. no night: the data's own words
+            return str(exc).splitlines()[0] if str(exc) else FIT_FIRST
+
     def trim_and_refit(self):
         """Add the From–To span (an empty From = from the start, an empty To = to the end) to the trimmed spans and
-        refit the same data (no new reduction; the same comps)."""
+        refit the same data (no new reduction; the same comps). 2.4.0 fit-in F2: the button is greyed with the
+        reason while the span cannot be trimmed, so the refusals below are a status line (Enter in a box)."""
         if self._fitting or getattr(self, "_checking", False) or self.app.busy:
             self.app.status.set("Wait for the current fit or check to end, then Trim and refit.")
             return
         a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
         if not a and not b:
-            messagebox.showinfo("SHOBS-P", "Type a From and/or To time (the site's local time, HHMM or HH:MM, or BJD_TDB), or drag "
-                                           "across the plot, then Trim and refit.")
+            self.app.status.set(TRIM_TYPE_FIRST)
             return
         if self.report is None:
             self._trim_source_check()
@@ -3213,29 +3451,23 @@ class TransitPage:
             t = np.asarray(self._data()[0], dtype=float)
             tmap = self._time_map_for(t)
             self._time_map = tmap
-            drag = self._drag or {}
-            lo = drag["lo"] if drag and a and a == drag.get("from") else self._clock_to_bjd(a, tmap)
-            hi = drag["hi"] if drag and b and b == drag.get("to") else self._clock_to_bjd(b, tmap)
         except ValueError as exc:
-            messagebox.showerror("SHOBS-P", f"Trim: {exc}")
+            self.app.status.set(f"Trim: {exc}")
             return
-        lo = -math.inf if lo is None else lo
-        hi = math.inf if hi is None else hi
-        if lo > hi:
-            messagebox.showerror("SHOBS-P", f"Trim: From ({a}) is after To ({b}).")
+        why, plan = self._trim_plan(t, tmap)
+        if why:
+            self.app.status.set(why)
             return
-        trims = self._trims + [(lo, hi)]
-        inside = ~self._trim_mask(t, [(lo, hi)])
-        if not inside.any():
-            messagebox.showinfo("SHOBS-P", "No points fall between From and To: nothing to trim.")
-            return
-        kept = int(self._trim_mask(t, trims).sum())
-        if kept < 20:
-            messagebox.showerror("SHOBS-P", f"That trim would leave {kept} points; a transit fit needs at least 20.")
-            return
-        self._trims = trims
+        if plan["swapped"]:
+            # m819: the boxes show the span used (From before To)
+            a, b = b, a
+            self._drag = None
+            self.trim_from.set(a)
+            self.trim_to.set(b)
+        self._trims = plan["trims"]
         self._drag = None
-        self.app.log(f"Transit fit: trimming {int(inside.sum())} points ({a or 'start'} to {b or 'end'}) and refitting.")
+        self.app.log(f"Transit fit: trimming {int(plan['inside'].sum())} points ({a or 'start'} to {b or 'end'}) "
+                     "and refitting.")
         self._update_trim_text()
         self.fit()
 
@@ -3412,8 +3644,7 @@ class TransitPage:
         """2.2.7: the transit plot as shown, with the planet, source, verdict and results table above it. Works for a
         fit of photometry or of an EXOTIC report."""
         if not self.result or self.fig is None:
-            messagebox.showinfo("SHOBS-P", "Fit a transit first.")
-            return
+            return   # 2.4.0 fit-in F2 (m827): the button is greyed until a fit is shown
         if self._still_checking("plot PNG"):
             return
         fname = self.family_names()[1]
@@ -3484,9 +3715,8 @@ class TransitPage:
 
     def open_corner(self):
         """2.2.19 (#31): the corner plot of the shown fit's MCMC samples, in its own window."""
-        if not self.result or ((self.result.get("chain") or {}).get("flat")) is None:
-            messagebox.showinfo("SHOBS-P", "Fit a transit first: the corner plot shows that fit's MCMC samples.")
-            return
+        if self._corner_why():
+            return   # 2.4.0 fit-in F2: the button is greyed until a fit with MCMC samples is shown
         CornerWindow(self.app, self)
 
     def save_csv(self):
@@ -3503,9 +3733,7 @@ class TransitPage:
             if not path:
                 return
         if not self.result:
-            if not own_lc:
-                messagebox.showinfo("SHOBS-P", "Run photometry or open an exoplanet report, and fit a transit first.")
-            return
+            return   # 2.4.0 fit-in F2: greyed with neither photometry nor a fit (_save_csv_why)
         name = self.family_names()[2]
         if app._out_folder():
             app._save_one_night = getattr(app, "_last_csv_scope", "") == "night" if path else False
@@ -3620,8 +3848,7 @@ class TransitPage:
 
     def save_aavso(self):
         if not self.result:
-            messagebox.showinfo("SHOBS-P", "Fit a transit first.")
-            return
+            return   # 2.4.0 fit-in F2 (m838): greyed until a fit is shown
         if self._still_checking("AAVSO exoplanet report"):
             return
         if not self._confirm_export():
@@ -3758,17 +3985,43 @@ class TransitPage:
 
     def _still_checking(self, what: str) -> bool:
         """2.2.16 (item 6, review): files written while the comp check runs would miss its comp-choice line and
-        cautions; say so and let the user save when it is done."""
+        cautions. 2.4.0 fit-in F2 (m844, John 24 Nov): the save buttons are greyed while it runs, so this is only a
+        backstop: a status line, no box, no queued save."""
         if not getattr(self, "_checking", False):
             return False
-        messagebox.showinfo("SHOBS-P", f"The comps are still being checked (a few seconds). Save the {what} when "
-                                       "that is done, so it carries the comp-choice result.")
+        try:
+            self.app.status.set(f"{COMP_CHECK_RUNNING} Save the {what} when that is done, so it carries the "
+                                "comp-choice result.")
+        except Exception:
+            pass
         return True
+
+    # ---- 2.4.0 fit-in F2 (#79 item 6): why a button is greyed ('' = it can work) ---------------------------------
+    def _save_why(self) -> str:
+        """The AAVSO report, ExoFOP package, ExoClock file and plot PNG: a fit must be shown (m827 m838 m845 m045),
+        and not while the comp check runs (m844)."""
+        if not self.result:
+            return FIT_FIRST
+        if getattr(self, "fig", None) is None:   # review N4: no plot library, not "no fit"
+            return "Saving needs the plot, and matplotlib is not installed (run the setup again)."
+        if getattr(self, "_checking", False):
+            return COMP_CHECK_RUNNING
+        return ""
+
+    def _save_csv_why(self) -> str:
+        """Save light-curve CSV: this session's photometry (the magnitude CSV), or a fit (the fit CSV)."""
+        if (self.app.observations and self.report is None) or self.result:
+            return ""
+        return CSV_NEEDS
+
+    def _corner_why(self) -> str:
+        if not self.result or ((self.result.get("chain") or {}).get("flat")) is None:
+            return CORNER_NEEDS
+        return ""
 
     def save_package(self):
         if not self.result:
-            messagebox.showinfo("SHOBS-P", "Fit a transit first.")
-            return
+            return   # 2.4.0 fit-in F2 (m845): greyed until a fit is shown
         if self._still_checking("ExoFOP package"):
             return
         if not self._confirm_export():

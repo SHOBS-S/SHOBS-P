@@ -9,9 +9,11 @@ This chapter covers the files the Transit fit page writes and where they go:
 - the settings file and the field image saved with a report,
 - opening an EXOTIC report to compare its fit with SHOBS-P's.
 
-All the save buttons are in the **Results** row at the bottom of the Transit fit page. They need a finished fit
-(otherwise: *"Fit a transit first."*). If the comparison-star check is still running, wait a few seconds: SHOBS-P
-asks you to save when it is done, so the files carry its result.
+All the save buttons are in the **Results** row at the bottom of the Transit fit page. They need a finished fit:
+until there is one they are greyed, and hovering over one says *"Fit a transit first (Fit transit, above the
+plot)."* (from 2.4.0). While the comparison-star check is still running, the AAVSO report, ExoFOP package, ExoClock
+and plot PNG saves are greyed for a few seconds (*"The comps are being checked (a few seconds)."*), so the files carry
+its result; they wake up by themselves.
 
 ## Where files go
 

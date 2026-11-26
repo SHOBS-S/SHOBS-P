@@ -102,16 +102,16 @@
   {
    "section": "Anywhere",
    "patterns": [
-    "Another step is still running. Wait for it to finish."
+    "Another step is running. This is available again when it finishes."
    ],
    "todo": "Wait, or press Cancel / Cancel run."
   },
   {
    "section": "Anywhere",
    "patterns": [
-    "Wait for the current run to finish (or cancel it) before switching modes."
+    "Another step is still running. Press it again when that one has finished."
    ],
-   "todo": "Wait or cancel."
+   "todo": "Press it again when the busy bar is gone."
   },
   {
    "section": "Anywhere",
@@ -137,9 +137,9 @@
   {
    "section": "Anywhere",
    "patterns": [
-    "The output folder could not be used (…); choose where to save."
+    "The output folder … cannot be used (…): choose where to save."
    ],
-   "todo": "Pick another folder on the Input page."
+   "todo": "Choose where to save in the dialog, and pick another Output folder on the Input page."
   },
   {
    "section": "Anywhere",
@@ -351,9 +351,17 @@
   {
    "section": "Input",
    "patterns": [
-    "These lights come from …. Last time you measured frames from that telescope the Telescope aperture was … mm; the box says … mm. Use … mm for these frames?"
+    "Telescope aperture set to … mm, as last used with … (the box said … mm).",
+    "… Use … mm for these frames?"
    ],
-   "todo": "Yes, unless you know the box is right."
+   "todo": "Nothing, unless the telescope's aperture has changed: then type it in the Telescope aperture box (Input page, Optics). A value you typed there for these lights is never replaced (the log then says Telescope aperture kept at … mm (typed by hand); … mm was last used with …)."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Time zone set to … from the frames' site's latitude and longitude: local times (and trims typed as clock times) use it."
+   ],
+   "todo": "Nothing (or pick the zone yourself when the log says to check it)."
   },
   {
    "section": "Input",
@@ -701,6 +709,21 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Calibrate first (Calibrate page): the solve uses the calibrated image.",
+    "Run photometry"
+   ],
+   "todo": "Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Run photometry"
+   ],
+   "todo": "Fix the red box."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Comp 2 and the check star are the same star (Comp 2: …). The check star tests the comps, so it can't also be one of them. …",
     "Run photometry"
    ],
@@ -919,9 +942,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Binning is 2 but the masters were built at 1."
+    "Binning changed from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild them at bin 2, or set Binning back to 1.",
+    "Binning is 2 but the masters were built at 1. …"
    ],
-   "todo": "Calibrate again, or set binning back."
+   "todo": "Press Build masters and calibrate (Calibrate page), or set Binning back (the buttons are live again at once)."
   },
   {
    "section": "Photometry",
@@ -1298,9 +1322,18 @@
   {
    "section": "Photometry",
    "patterns": [
-    "N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them."
+    "N frames were skipped because of …, which is no longer a comp: Measure skipped frames measures them with the comps in use.",
+    "also on the status line:"
    ],
-   "todo": "Press Measure skipped frames at the right of the line."
+   "todo": "Press Measure skipped frames (at the right of the line, or beside the status line). On a stacked night it switches to Points: Per frame and drops the stacks first."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them.",
+    "… — open that night's frames and Run photometry again …"
+   ],
+   "todo": "Open that night's frames and press Run photometry."
   },
   {
    "section": "Photometry",
@@ -1357,13 +1390,6 @@
     "That makes only K stacks; a field scan needs at least 10. Use a smaller N."
    ],
    "todo": "Use a smaller N."
-  },
-  {
-   "section": "Photometry",
-   "patterns": [
-    "Run photometry first (Scan field in Discovery): the Stack step uses that run's frames, alignment and noise."
-   ],
-   "todo": "Run photometry first."
   },
   {
    "section": "Photometry",
@@ -1594,52 +1620,9 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full JD), or drag across the light curve, then Trim."
+    "Remove night…"
    ],
-   "todo": "Drag across the bad stretch on the light curve, or type the times."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Trim: '…' is not clear. Type a clock time as HHMM or HH:MM (for example 2300 or 23:00), or a full JD (for example 2461329.699)."
-   ],
-   "todo": "Type a clock time with four digits or a colon (0045, 00:45), or the whole JD (2461329.699 or 61329.699). Or drag across the light curve."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "Trim: From (…) is after To (…)."
-   ],
-   "todo": "Swap them."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "No points of … fall between From and To: nothing to trim."
-   ],
-   "todo": "Check the times, and that the right night is chosen."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "The points of … between From and To are trimmed already."
-   ],
-   "todo": "Nothing to do."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "That trim would leave N usable points on …; a night needs at least 20. To drop the whole night, use Remove night."
-   ],
-   "todo": "Trim less, or use Remove night… if the whole night is bad."
-  },
-  {
-   "section": "Output, Variables mode",
-   "patterns": [
-    "That trim would leave N usable points on … with Points: Stacked; a night needs at least 20 either way. To drop the whole night, use Remove night.",
-    "… with Points: Per frame …"
-   ],
-   "todo": "Trim less, or use Remove night… if the whole night is bad."
+   "todo": "Click the night's row, then press the button again."
   },
   {
    "section": "Output, Variables mode",
@@ -2066,9 +2049,23 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "The comps are still being checked (a few seconds). Save the … when that is done …"
+    "The comps are being checked (a few seconds)."
    ],
-   "todo": "Wait a moment and save again."
+   "todo": "Wait a moment; the buttons wake up by themselves."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Trim and refit"
+   ],
+   "todo": "Trim less."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit transit: waiting for the ephemeris…"
+   ],
+   "todo": "Nothing: the fit starts by itself as soon as the ephemeris is in. Cancel calls it off (Fit transit called off (it was waiting for the ephemeris; …)); so do Close report, another report and a change of planet."
   },
   {
    "section": "Output, Transits mode",
@@ -2159,7 +2156,7 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "Fit a transit first: the corner plot shows that fit's MCMC samples."
+    "Save corner plot…"
    ],
    "todo": "Press Fit transit first."
   },
@@ -2185,11 +2182,57 @@
    "todo": "Read each night's Status and add nights."
   },
   {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit nights: waiting for the ephemeris…"
+   ],
+   "todo": "Nothing: the fit starts by itself when the lookup is in. The window's Cancel, or a change of planet, calls it off (Fit nights called off …)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The planet's period is not known yet: press Look up first."
+   ],
+   "todo": "Press Look up again, or enter the planet on the Input page."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "No published ephemeris: epochs counted from the first night."
+   ],
+   "todo": "Nothing; type an alternative ephemeris to see O − C against it. The ⚠ form (… ; Look up.) means no lookup answered."
+  },
+  {
    "section": "Discovery mode",
    "patterns": [
     "Field not solved: these lights do not say where they point."
    ],
    "todo": "Type the field center on the Input page and Solve again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Check the scan settings: Detection threshold (σ) is not a number. Type a number in that box.",
+    "Suspect at (× normal)",
+    "or at (χ²ν × normal)",
+    "Faintest magnitude",
+    "; 2.4.0, before"
+   ],
+   "todo": "Fix that box and press Scan field again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "buttons before a scan:"
+   ],
+   "todo": "Press Scan field on the Photometry page."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "…: position stored (RA …, Dec …), so it is found by itself on later nights."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Discovery mode",

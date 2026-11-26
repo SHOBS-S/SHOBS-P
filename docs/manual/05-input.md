@@ -85,6 +85,12 @@ The **Output** row chooses where every Save button writes: reports, light curves
   overwritten: a new copy gets `_2`, `_3` and so on. The status bar says **Save buttons now write into …** when you
   choose it.
 - **Without one**, every Save asks where to put the file.
+- **A folder that cannot be used** (2.4.0): SHOBS-P checks the folder when you choose it, or a moment after you
+  stop typing, without creating anything. A network folder (`\\server\share`, or a mapped network drive) is not
+  checked then (a drive that is offline could keep the window waiting): the row says **checked when you save**. When
+  a folder cannot be written to (a read-only folder, a file of that name, a drive that is not there), the
+  row says **cannot be used** instead of **in use**, and each Save opens the save dialog; the status bar says *The
+  output folder … cannot be used (…): choose where to save.* (no message box: nothing is lost).
 
 ## Name the target
 
@@ -107,7 +113,11 @@ Things to know:
 - If the name is only spelled a little differently from the AAVSO's version (spaces or capitals), an orange line
   appears, such as **AAVSO spells this "HD 219134"**, with a **Use it** button. Using the AAVSO spelling keeps your
   reports matching the AAVSO's records.
-- **Look up again** repeats the lookup, for example after the internet was down.
+- **Look up again** repeats the lookup, for example after the internet was down. It is greyed while the Star ID box
+  is empty (hover over it: *Type a Star ID or designation first.*).
+- While a job runs (calibration, photometry, a solve), the **Star ID** and **Planet** boxes, their **Look up
+  again** buttons and **Clear target** are greyed (2.4.0): a star change in the middle of a run would not apply to it. They come back when
+  the job ends.
 - If the lookup fails, the status bar says **Could not look up …** You can type RA and Dec yourself, or leave them
   empty and let the plate solution fill them in later.
 - RA is in decimal **hours** and Dec in decimal **degrees** (J2000).
@@ -179,7 +189,8 @@ duration, depth and shape from the NASA Exoplanet Archive, and also the host sta
 looks the planet up, the busy bar says, for example, **Looking up planet K2-29 b at the NASA Exoplanet Archive…**;
 the boxes stay as they are until the values come. You can also type the host star in **Star ID** and press Enter: the
 busy bar then looks up the star, its planets and the planet in turn, for example **Looking up TrES-3's planets at the
-NASA Exoplanet Archive…**. Chapter 16 covers this box in detail.
+NASA Exoplanet Archive…**. The planet's **Look up again** is greyed while the Planet box is empty; hovering over it
+gives the examples above. Chapter 16 covers this box in detail.
 
 If the planet orbits another star than the one on the page and a series is open, SHOBS-P asks whether to start a new
 reduction. **No** keeps the old star and its series, and the other star's planet does not stay in the Planet boxes:
@@ -263,8 +274,14 @@ on. If the `OBJECT` names a different star in another place, it asks the same **
 **Frames from another site.** If the header's site is more than 50 km from yours, SHOBS-P asks whether to use the
 site and optics in the frames for this night. This is handy for remote telescopes or a friend's data. **Yes** borrows
 their setup; your own comes back automatically the next time you scan a folder of your own lights. FITS headers do
-not say the site's time zone, so the log reminds you to check the **Time zone** box: pick the frames' site zone there
-so their local times are right. When the header has no elevation either, the status line adds **Elevation not in the
+not say the site's time zone, so from 2.4.0 SHOBS-P looks the zone up from the site's latitude and longitude (offline,
+with the tzfpy package, see chapter 26) and sets the **Time zone** box; one log line names it, for example
+*Time zone set to America/Phoenix from the frames' site's latitude and longitude: local times (and trims typed as
+clock times) use it.* Your own zone comes back with your own setup. The zone matters for results where you type a
+trim as a clock time (it decides which points an HHMM trim takes). An install without that package (it is installed
+on Linux only, where a ready-made copy exists; see chapter 2) keeps the 2.2.21 behavior: the log reminds you to check
+the **Time zone** box, and you pick the frames' site zone there so their local times are right. The same lookup sets
+the zone when **Scan folders** fills your own empty Site boxes from the header and you have never chosen a Time zone. When the header has no elevation either, the status line adds **Elevation not in the
 header — type it on the Input page** (from 2.3.3): the scintillation error and the AAVSO exoplanet report use it, and
 it must be typed again for each run of those frames.
 
@@ -326,7 +343,12 @@ Their site and optics are never saved as yours. Their time zone is set to
 
 **Binning.** SHOBS-P never takes **Binning** from the header: it is SHOBS-P's own setting. When your camera itself
 binned the color frames, the log notes it after calibration (chapter 7). Changing **Binning** after calibrating means
-calibrating again; the masters must match.
+calibrating again; the masters must match. From 2.4.0 a **Binning** change says so at once, with a plain line on the
+status bar, for example *Binning changed from 1 to 2: the masters were built at bin 1. Calibrate again to rebuild
+them at bin 2, or set Binning back to 1.* The masters are kept, marked with the bin they were built at: while
+**Binning** says another bin, **Run photometry**, **Scan field** and **Stack** are greyed (hover: *The masters were
+built at bin 1: Calibrate again (or set Binning back to 1).*), and they are live again as soon as you set **Binning**
+back. **Binning** itself is greyed while a job runs.
 
 ## The series line
 
@@ -336,7 +358,9 @@ The line under the page title says which series the night will join:
 - or the name of the open series, how many nights it has, and its last date.
 
 **Load series…** opens a series file you saved before. **Close series** puts the open series aside (the file on disk is
-not changed; you are offered a save first if it has unsaved changes). Chapter 10 covers series in full.
+not changed; you are offered a save first if it has unsaved changes). Chapter 10 covers series in full. **Close series**
+is greyed when no series is open, and **New reduction**, **Load series…** and **Close series** are all greyed while a
+job runs (2.4.0; hover over one to see why).
 
 Closing the SHOBS-P window asks the same way, but only when a series file has unsaved changes or a series of two or
 more nights has never been saved: **Yes** saves first, **No** closes without saving, **Cancel** keeps SHOBS-P open.

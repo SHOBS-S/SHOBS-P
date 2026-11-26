@@ -124,7 +124,15 @@ class TestState(TrimCase):
         self.pick(N1)
         self.assertEqual(app._trim_night(), N1)
         self.assertEqual(app.trim_from.get(), "")
-        self.assertFalse(any(self.disabled(w) for w in app._trim_entries + [app.trim_button]))
+        self.assertFalse(any(self.disabled(w) for w in app._trim_entries))
+        # 2.4.0 fit-in F2 (#79 item 6): Trim itself greys until a span is typed or dragged, the reason on hover
+        self.assertTrue(self.disabled(app.trim_button))
+        self.assertEqual(app.gates.reason(app.trim_button), trim_ui.TYPE_FIRST)
+        app.trim_from.set(f"{self.night(N1)[3].jd:.6f}")
+        app.trim_to.set(f"{self.night(N1)[5].jd:.6f}")
+        self.assertFalse(self.disabled(app.trim_button))
+        app.trim_from.set("")
+        app.trim_to.set("")
         self.assertTrue(self.disabled(app.clear_trim_button))
         if app._trim_span is not None:
             self.assertTrue(app._trim_span.get_active())
@@ -145,7 +153,7 @@ class TestState(TrimCase):
         self.assertTrue(self.disabled(self.app.trim_button))
         self.pick(N1)
         self.assertEqual(self.app._trim_night(), N1)
-        self.assertFalse(self.disabled(self.app.trim_button))
+        self.assertFalse(self.disabled(self.app._trim_entries[0]))   # Trim itself waits for a span (fit-in F2)
 
     def test_controls_are_in_the_points_group(self):
         app = self.app
@@ -229,31 +237,37 @@ class TestTrim(TrimCase):
         self.assertIn("Nothing is trimmed", app.status.get())
 
     def test_refused(self):
+        # 2.4.0 fit-in F2 (#79 item 6): the refusals are Trim's greyed reason (and a status line on Enter), never a
+        # box; From after To (m819) is the same span the other way round and is trimmed
         self.open()
         app = self.app
         self.pick(N1)
         first = self.night(N1)
-        m = self.trim("", "")
-        self.assertIn("Type a From and/or To time", m["info"][0])
-        m = self.trim(f"{first[9].jd:.6f}", f"{first[3].jd:.6f}")
-        self.assertIn("is after To", m["error"][0])
-        m = self.trim("25:99", "")
-        self.assertIn("is not clear", m["error"][0])
-        m = self.trim(f"{first[0].jd - 0.5:.6f}", f"{first[0].jd - 0.4:.6f}")
-        self.assertIn("nothing to trim", m["info"][0])
+
+        def refused(a, b, words):
+            m = self.trim(a, b)
+            self.assertEqual(m, {"info": [], "error": []})
+            self.assertIn(words, app.status.get())
+            app.trim_from.set(a)
+            app.trim_to.set(b)
+            app.gates.refresh()
+            self.assertTrue(self.disabled(app.trim_button))
+            self.assertIn(words, app.gates.reason(app.trim_button))
+            return app.gates.reason(app.trim_button)
+        refused("", "", "Type a From and/or To time")
+        refused("25:99", "", "is not clear")
+        self.assertIn("is not clear", app.trim_text.get(), "the hint says it as it is typed")
+        refused(f"{first[0].jd - 0.5:.6f}", f"{first[0].jd - 0.4:.6f}", "nothing to trim")
         # 40 points, 1 flagged sat (index 3): trimming from index 20 would leave 19 usable, from 21 leaves 20
-        m = self.trim(f"{first[20].jd - 1e-6:.6f}", f"{first[39].jd + 1e-6:.6f}")
-        # fit-in F1: a plain note (no red ✖ box), ending "use Remove night." (not four dots)
-        self.assertEqual(m["error"], [])
-        self.assertIn("would leave 19 usable points", m["info"][0])
-        self.assertIn("at least 20", m["info"][0])
-        self.assertTrue(m["info"][0].endswith("use Remove night."), m["info"][0])
+        words = refused(f"{first[20].jd - 1e-6:.6f}", f"{first[39].jd + 1e-6:.6f}", "would leave 19 usable points")
+        self.assertIn("at least 20", words)
+        self.assertTrue(words.endswith("use Remove night."), words)
         self.assertFalse(any(core.is_trimmed(o) for o in app.observations))
-        m = self.trim(f"{first[21].jd - 1e-6:.6f}", f"{first[39].jd + 1e-6:.6f}")
-        self.assertEqual(m["error"], [])
+        # m819: To before From, swapped
+        m = self.trim(f"{first[39].jd + 1e-6:.6f}", f"{first[21].jd - 1e-6:.6f}")
+        self.assertEqual(m, {"info": [], "error": []})
         self.assertEqual(sum(core.is_trimmed(o) for o in first), 19)
-        m = self.trim(f"{first[25].jd:.6f}", f"{first[30].jd:.6f}")
-        self.assertIn("trimmed already", m["info"][0])
+        refused(f"{first[25].jd:.6f}", f"{first[30].jd:.6f}", "trimmed already")
 
     def test_clock_times_and_the_drag(self):
         import site_time

@@ -358,10 +358,13 @@ class TestRunInApp(unittest.TestCase):
         self.assertTrue(app.apply_comp_selection(["SP"], confirmed=True))
         app.update()
         text = app.comp_skip_text(night)
-        self.assertIn(f"{len(skipped)} frames were skipped because of C1, which is no longer a comp — Run photometry "
-                      "again to measure them", text)
+        # 2.4.0 fit-in F2 (m555): the frames are here, so a plain line and the button (also on the status line)
+        self.assertIn(f"{len(skipped)} frames were skipped because of C1, which is no longer a comp: Measure skipped "
+                      "frames measures them", text)
         self.assertIn("no longer a comp", app.skip_text.get())
         self.assertTrue(app.skip_button.winfo_manager())
+        self.assertTrue(app.status_link.winfo_manager())
+        self.assertEqual(str(app.status_link.cget("text")), "Measure skipped frames")
         # Measure skipped frames: just those frames, into the night
         app.measure_skipped_frames()
         end = time.time() + 120
@@ -376,6 +379,7 @@ class TestRunInApp(unittest.TestCase):
         mags = np.array([o.mag for o in sorted(app.observations, key=lambda o: o.jd)])
         self.assertLess(float(np.std(mags)), 0.02)   # one level, measured against SP throughout
         self.assertFalse(app.skip_button.winfo_manager())
+        self.assertFalse(app.status_link.winfo_manager())   # m555: nothing left for it to measure
         self.assertEqual(app.active_comps, ["SP"])
         self.assertEqual(app.comps_used[:1], ["C1"])
 

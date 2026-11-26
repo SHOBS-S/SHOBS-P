@@ -48,14 +48,16 @@ In the **Optics** box on the Input page:
 lights' header does not give the aperture, SHOBS-P remembers which aperture you measured each telescope with (it
 knows a telescope by the header's TELESCOP, INSTRUME and focal length). When you scan lights:
 
-- from a telescope you measured before with another aperture, it asks: *"… Last time you measured frames from that
-  telescope the Telescope aperture was 203 mm; the box says 152 mm. Use 203 mm for these frames?"*
+- from a telescope you measured before with another aperture, it sets that aperture without asking (2.4.0) and the
+  log says so: *"Telescope aperture set to 203 mm, as last used with … (the box said 152 mm)."* Type another value in
+  the box if that one is wrong; it is used from the next run, and a value you typed for these lights is never
+  replaced when you scan them again. (This sets the scintillation part of the error bars.)
 - from another telescope than the last frames you measured, it asks whether the box's value is right: *"These lights
   come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says
   152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box.
 
-It only asks: the box changes only when you answer Yes or type a new value, and the same question is not asked again
-for the same telescope and value. Each night records the box's aperture when it was measured (the settings file's
+Apart from that one case (a telescope it already knows), the box changes only when you answer Yes or type a new
+value, and the same question is not asked again for the same telescope and value. Each night records the box's aperture when it was measured (the settings file's
 **Telescope aperture box when the night was measured** line). The error bars use the box's value when the report is
 saved; the settings file's **Scintillation** line says which.
 

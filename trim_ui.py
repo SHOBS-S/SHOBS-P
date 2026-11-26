@@ -20,6 +20,7 @@ from tkinter import LEFT, StringVar, messagebox, ttk
 
 import numpy as np
 
+import gate   # 2.4.0 fit-in F2 review (S1): series_memo
 import photometry_core as core
 import site_time
 
@@ -35,6 +36,9 @@ CLEAR_TIP = "Puts this night's trimmed points back. Other nights keep their trim
 NOTHING_TIP = "Nothing is trimmed on this night."
 HINT_NO_NIGHT = "choose a night first"
 HINT_READY = "local time or JD, or drag across the plot"
+# 2.4.0 fit-in F2 (#79 item 6): Trim's greyed reason with nothing typed
+TYPE_FIRST = ("Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full JD), or drag across the "
+              "light curve.")
 GREY = "#9aa7b0"
 
 
@@ -93,30 +97,41 @@ class TrimMixin:
         def tip(words):
             return lambda: words if self._trim_night() is not None else NEED_NIGHT_TIP
 
-        def clear_tip():
+        def need_night():
+            return "" if self._trim_night() is not None else NEED_NIGHT_TIP
+
+        def clear_why():
             night = self._trim_night()
             if night is None:
                 return NEED_NIGHT_TIP
-            return CLEAR_TIP if self._night_trims(night) else NOTHING_TIP
-        for w in labels + [box, from_box, to_box]:
+            return "" if self._night_trims(night) else NOTHING_TIP
+        for w in labels + [box]:
             self._add_tooltip(w, tip(BOX_TIP))
-        self._add_tooltip(self.trim_button, tip(TRIM_TIP))
-        self._add_tooltip(self.clear_trim_button, clear_tip)
+        # 2.4.0 fit-in F2 (#79 item 6): one gate per control (they were greyed by hand in update_trim_state). Trim
+        # also greys, with the reason, while the typed / dragged span cannot be trimmed (F1's boxes, now live).
+        for entry in (from_box, to_box):
+            self.gate(entry, need_night, tip=BOX_TIP, busy=False)
+        self.gate(self.trim_button, self._trim_why, tip=TRIM_TIP)
+        self.gate(self.clear_trim_button, clear_why, tip=CLEAR_TIP)
         self._add_tooltip(self.trim_hint_label, tip(BOX_TIP))
+        for var in (self.trim_from, self.trim_to):
+            var.trace_add("write", lambda *_a: self._trim_typed())
         self.update_trim_state()
 
     # ---- which night, and its spans ---------------------------------------------------------------------------
     def _trim_night(self):
         """The one night Trim works on: the night chosen in the night table; None otherwise (Trim is then not
         available). John, 23 Nov: a night must be selected, even in a one-night series."""
-        nights = []
-        for o in getattr(self, "observations", None) or []:
-            if o.night not in nights:
-                nights.append(o.night)
         chosen = getattr(self, "highlight_night", None)
-        if chosen in nights:
+        if chosen is not None and chosen in self._series_nights():
             return chosen
         return None
+
+    def _series_nights(self) -> frozenset:
+        """2.4.0 fit-in F2 review (S1): the series' nights, kept until the series changes (the gates ask four times
+        a second; walking 40,000 points each time made the window sluggish)."""
+        return gate.series_memo(self, "nights", lambda: frozenset(
+            o.night for o in getattr(self, "observations", None) or []))
 
     def _night_trims(self, night) -> list:
         return core.clean_trim_spans(self._night_info(night).get("trims"))
@@ -127,6 +142,7 @@ class TrimMixin:
 
     def _apply_trims(self) -> int:
         """The 'trim' flag word on exactly the points inside their night's saved spans (every refresh calls this)."""
+        gate.bump_series(self)   # review S1: flags may change in place; the gates' kept answers are recomputed
         return core.apply_trim_flags(self.observations, self._trims_by_night())
 
     def _trim_spans_info(self, night, points=None) -> list:
@@ -250,10 +266,10 @@ class TrimMixin:
             self.trim_from.set("")
             self.trim_to.set("")
         try:
-            for w in self._trim_entries + [self.trim_button]:
-                w.state(["!disabled"] if ok else ["disabled"])
-            has = bool(ok and self._night_trims(night))
-            self.clear_trim_button.state(["!disabled"] if has else ["disabled"])
+            self.gates.refresh()   # 2.4.0 fit-in F2: the boxes, Trim and Clear trim follow their gates at once
+        except Exception:
+            pass
+        try:
             for lab in self._trim_labels + [self.trim_hint_label]:
                 lab.configure(foreground="" if ok else GREY)
         except Exception:
@@ -265,6 +281,14 @@ class TrimMixin:
             except Exception:
                 pass
         if not ok:
+            self.trim_text.set(HINT_NO_NIGHT)
+            return
+        self._trim_typed()
+
+    def _trim_hint(self):
+        """The hint beside Trim: the chosen night's trims, or how to type a span."""
+        night = self._trim_night()
+        if night is None:
             self.trim_text.set(HINT_NO_NIGHT)
             return
         spans = self._trim_spans_info(night)
@@ -301,21 +325,16 @@ class TrimMixin:
             pass
         return None
 
-    def trim_points(self):
-        """Add the From–To span (an empty From = from the night's start, an empty To = to its end) to the chosen
-        night's trims, refit the period and save the series."""
+    def _trim_plan(self):
+        """2.4.0 fit-in F2 (#79 item 6): the From–To span as Trim would take it: (reason, plan). reason is '' when it
+        can be trimmed, else the plain words why not; Trim is greyed with them as its tooltip, and the hint shows
+        them while a box holds text (they were boxes before). plan = {night, label, pts, jds, lo, hi, swapped, new}."""
         night = self._trim_night()
         if night is None:
-            self.status.set(NEED_NIGHT_TIP)
-            return
-        if self.busy:
-            self.status.set("Wait for the current job to end, then Trim.")
-            return
+            return NEED_NIGHT_TIP, None
         a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
         if not a and not b:
-            messagebox.showinfo(TITLE, "Type a From and/or To time (the site's local time, HHMM or HH:MM, or a full "
-                                       "JD), or drag across the light curve, then Trim.")
-            return
+            return TYPE_FIRST, None
         pts = [o for o in self.observations if o.night == night and o.jd is not None and math.isfinite(o.jd)]
         jds = [o.jd for o in pts]
         try:
@@ -323,26 +342,23 @@ class TrimMixin:
             lo = drag["lo"] if drag and a and a == drag.get("from") else self._trim_parse(a, jds)
             hi = drag["hi"] if drag and b and b == drag.get("to") else self._trim_parse(b, jds)
         except ValueError as exc:
-            messagebox.showerror(TITLE, f"Trim: {exc}")
-            return
+            return f"Trim: {exc}", None
         lo = -math.inf if lo is None else lo
         hi = math.inf if hi is None else hi
-        if lo > hi:
-            messagebox.showerror(TITLE, f"Trim: From ({a}) is after To ({b}).")
-            return
+        # 2.4.0 fit-in F2 (m819): From after To is the same span the other way round; taken as it is meant
+        swapped = lo > hi
+        if swapped:
+            lo, hi = hi, lo
         label = self.night_label(night, short=True)
         inside = [o for o in pts if lo <= o.jd <= hi]
         new = [o for o in inside if not core.is_trimmed(o)]
         if not new:
-            messagebox.showinfo(TITLE, (f"The points of {label} between From and To are trimmed already."
-                                        if inside else
-                                        f"No points of {label} fall between From and To: nothing to trim."))
-            return
+            return ((f"The points of {label} between From and To are trimmed already." if inside else
+                     f"No points of {label} fall between From and To: nothing to trim."), None)
         left = sum(1 for o in pts if not o.flag and math.isfinite(o.mag) and not (lo <= o.jd <= hi))
         if left < core.TRIM_MIN_POINTS:
-            messagebox.showinfo(TITLE, f"That trim would leave {left} usable points on {label}; a night needs at "
-                                       f"least {core.TRIM_MIN_POINTS}. To drop the whole night, use Remove night.")
-            return
+            return (f"That trim would leave {left} usable points on {label}; a night needs at least "
+                    f"{core.TRIM_MIN_POINTS}. To drop the whole night, use Remove night."), None
         # Review N7: the minimum holds for the night's other point set too (Points: Per frame / Stacked), since the
         # trim goes with the night whichever set the results use: 20 frames left can be 4 stacks.
         other = self._trim_other_set(night)
@@ -352,10 +368,66 @@ class TrimMixin:
                        and not [w for w in (o.flag or "").split() if w != core.TRIM_FLAG]
                        and not any(a_ <= o.jd <= b_ for a_, b_ in spans))
             if left < core.TRIM_MIN_POINTS:
-                messagebox.showinfo(TITLE, f"That trim would leave {left} usable points on {label} with Points: "
-                                           f"{other[0]}; a night needs at least {core.TRIM_MIN_POINTS} either way. "
-                                           "To drop the whole night, use Remove night.")
+                return (f"That trim would leave {left} usable points on {label} with Points: {other[0]}; a night "
+                        f"needs at least {core.TRIM_MIN_POINTS} either way. To drop the whole night, use Remove "
+                        "night."), None
+        return "", {"night": night, "label": label, "pts": pts, "jds": jds, "lo": lo, "hi": hi, "swapped": swapped,
+                    "new": new}
+
+    def _trim_why(self) -> str:
+        """Trim's gate (the run lock is the gate's own busy check). Review S1: the reason is kept until the boxes,
+        the night, a drag or the series change (Trim itself works the plan out afresh)."""
+        night = self._trim_night()
+        if night is None:
+            return NEED_NIGHT_TIP
+        a, b = self.trim_from.get().strip(), self.trim_to.get().strip()
+        if not a and not b:
+            return TYPE_FIRST
+        drag = self._trim_drag or {}
+        sets = getattr(self, "_stack_sets", {}).get(night)
+
+        def work():
+            try:
+                return self._trim_plan()[0]
+            except Exception as exc:
+                return f"Trim: {exc}"
+        return gate.series_memo(self, "trim_why", work, refs=(sets,),
+                                vals=(a, b, night, tuple(sorted((k, repr(v)) for k, v in drag.items())),
+                                      getattr(self, "mode_key", None)))
+
+    def _trim_typed(self):
+        """2.4.0 fit-in F2: as From / To are typed (or dragged), the hint says why the span cannot be trimmed;
+        otherwise it shows the night's trims, as before."""
+        try:
+            if self._trim_night() is None:
                 return
+            why = self._trim_why() if (self.trim_from.get().strip() or self.trim_to.get().strip()) else ""
+            if why:
+                self.trim_text.set(why)
+            else:
+                self._trim_hint()
+            gates = getattr(self, "gates", None)
+            if gates is not None:
+                gates.refresh()
+        except Exception:
+            pass
+
+    def trim_points(self):
+        """Add the From–To span (an empty From = from the night's start, an empty To = to its end) to the chosen
+        night's trims, refit the period and save the series. 2.4.0 fit-in F2 (#79 item 6): Trim is greyed with the
+        reason while the span cannot be trimmed, so a refusal here (Enter in a box) is a status line, not a box."""
+        night = self._trim_night()
+        if night is None:
+            self.status.set(NEED_NIGHT_TIP)
+            return
+        if self.busy:
+            self.status.set("Wait for the current job to end, then Trim.")
+            return
+        why, plan = self._trim_plan()
+        if why:
+            self.status.set(why)
+            return
+        jds, lo, hi, new, label = plan["jds"], plan["lo"], plan["hi"], plan["new"], plan["label"]
         # A span is kept inside its own night (1 s beyond the first and last point), so it never needs an open end.
         pad = 1.0 / 86400.0
         span = [max(lo, min(jds) - pad), min(hi, max(jds) + pad)]

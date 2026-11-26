@@ -63,7 +63,7 @@ When solved, the title over the image reads, for example, "Solved · AAVSO chart
 **N/E: orientation unknown until the image is solved**.
 
 **Solve again** repeats the solve, for example after a catalog did not answer, or after you corrected the focal
-length.
+length. It is greyed until the frames are calibrated, and while a job runs (2.4.0; hover over it to see why).
 
 **When only two catalog stars line up.** On a sparse field (a small frame, or a short exposure) the catalogs may have
 only two stars on the frame, and two stars can line up by chance. SHOBS-P then asks, on every solve (also the one that
@@ -626,7 +626,8 @@ work out color terms. It makes the run slower; leave it off unless you need colo
 ## Run photometry
 
 1. Check the step strip says **Ready: Run photometry.**
-2. Press **Run photometry**.
+2. Press **Run photometry**. It is greyed (2.4.0) until the masters are built (Calibrate page), while the aperture
+   boxes are not in order (see below) and while a job runs; hover over it to see which.
 3. Answer any questions (below).
 4. Watch the busy bar at the bottom of the window. It says **Photometry on 300 lights…**, then counts the frames
    with the time left, for example **Photometry… 120 of 300, about 3:15 left**. The log shows one line per frame with
@@ -783,14 +784,20 @@ lost in it, for example on a one-comp night when that comp drifts off the edge, 
 edge.
 
 Skipped frames stay skipped when you later drop the comps that caused them with **Use comps…** (chapter 11): Use comps
-recalculates the measured points, it does not measure the skipped frames. The orange line then says *"⚠ N frames were
-skipped because of …, which is no longer a comp — Run photometry again to measure them."*, and a **Measure skipped
-frames** button appears at the right of that line. The log and the status line say it too.
+recalculates the measured points, it does not measure the skipped frames. When that night's frames are in the Lights
+folder and its image is loaded, the line is a plain note (2.4.0): *"N frames were skipped because of …, which is no
+longer a comp: Measure skipped frames measures them with the comps in use."*, with a **Measure skipped frames** button
+at the right of that line. After **Use comps…** **Apply** the status line says it too, with the same button beside it,
+so you can press it from the Output page. Nothing is measured until you press it. When the frames are not here, the
+line keeps its ⚠: *"⚠ N frames were skipped because of …, which is no longer a comp — Run photometry again to measure
+them."*
 
-**Measure skipped frames** measures only those frames, with the comps now in use, and adds them to the night. An open
+**Measure skipped frames** measures only those frames, with the comps now in use, and adds them to the night (this
+changes the night's points). On a night that shows stacked points it first switches to **Points: Per frame** and drops
+that night's stacks (press **Stack** again afterwards); the button's hover note says so. An open
 series with a file is saved automatically; in Transits mode the old fit is cleared (press **Fit transit** to fit again). It needs that night's Lights folder
 on the Input page and its image loaded; otherwise a box explains this and says to use **Run photometry**. Once the
-frames are back, the line and the button go away.
+frames are back, the line and the button go away. The button is greyed while a job runs.
 
 ### Questions it may ask
 
@@ -832,8 +839,12 @@ how far the marker is from the edge ("…; the marker is 22 px from the top edge
 never refuses to run for this); if that is not what you meant, clear the marker, zoom in and click the star again.
 
 Some problems stop the run with a message instead, for example **Mark at least one comparison star (Comps, then click
-the star)**, **Need aperture r < sky in < sky out**, or two markers on the same star. Fix what it says and press **Run
-photometry** again.
+the star)**, or two markers on the same star. Fix what it says and press **Run photometry** again.
+
+**The aperture boxes are checked as you type** (2.4.0). **Aperture r**, **sky in** and **sky out** must be numbers
+with r < sky in < sky out. A box that breaks this turns pale red, and **Run photometry** (and **Scan field** in
+Discovery) is greyed; hover over the button to see why, for example *The aperture sizes must be in order: Aperture r
+< sky in < sky out (now 9, 8, 15 px).* or *sky out is not a number. Type a number in that box.*
 
 If your **Site** boxes are empty, the log notes that there will be no airmass and no scintillation in the error bars.
 Type your site once on the Input page to fix this for good.
@@ -902,11 +913,15 @@ The line reads (N and the numbers are examples):
 - **At least 10 points** are always left in the night.
 
 The **Stack N** box fills in with the suggestion. If you type your own N, it is kept. Typing a precision goal fills
-in the new suggestion.
+in the new suggestion. From 2.4.0 **Stack N** is a spin box: its arrows go from 2 (a stack needs at least two frames;
+for no stacking choose **Points: Per frame**) up to the night's usable frames. A number outside that range, or
+something that is not a number, is set to the nearest allowed value (or the suggestion) when you press **Stack**, and
+the box shows the N used.
 
 ### Stack
 
-Press **Stack**. It asks first only when it needs to:
+Press **Stack**. It is greyed (2.4.0) until a per-frame run (or a scan) has points, without masters, and while a job
+runs; hover over it to see why. It asks first only when it needs to:
 
 - stacks longer than the time cap: *"Stacks of N frames last about …, longer than the time resolution allows (…): they
   may blur the signal. Stack anyway?"*;
@@ -960,7 +975,8 @@ After a stack run SHOBS-P goes to the Output page, with **Points: Stacked** sele
 Once a night has been stacked it has two sets of points. The **Points** box, on the Stack row after the **Stack**
 button, chooses which set is the night's:
 
-- **Per frame** and **Stacked** (grayed until there are stacks). Switching is instant.
+- **Per frame** and **Stacked** (greyed until there are stacks). Switching is instant. Both are greyed while a job
+  runs (2.4.0): a switch would change the points under it.
 - Under them, **Results use: Per frame** or **Results use: Stacked (20 frames)**. The Output page shows the same text
   at the end of its **View** row, after the **Airmass-corrected night means** box (empty until the night is stacked).
 

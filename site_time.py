@@ -134,6 +134,51 @@ def set_zone(name: str) -> str | None:
     return None
 
 
+# 2.4.0 fit-in F2 (m133, John 24 Nov): the zone of a site from its latitude and longitude, offline, with the
+# tzfpy package (MIT; ready-made copies for Windows, Mac and Linux, no other packages; its boundary data are from
+# timezone-boundary-builder, built from OpenStreetMap data, under the ODbL, simplified to within ~110 m of a border).
+# An older install without the package simply has no lookup (zone_at returns "").
+_FINDER = None
+_FINDER_MISSING = False
+
+
+def zone_lookup_available() -> bool:
+    """True when the tzfpy package can be used."""
+    return _finder() is not None
+
+
+def _finder():
+    global _FINDER, _FINDER_MISSING
+    if _FINDER is None and not _FINDER_MISSING:
+        try:
+            from tzfpy import get_tz
+            _FINDER = get_tz
+        except Exception:   # not installed (an older install), or it cannot load
+            _FINDER_MISSING = True
+    return _FINDER
+
+
+def zone_at(lat, lon) -> str:
+    """The IANA zone name at latitude/longitude (degrees, east positive), or "" when it cannot be told (no
+    tzfpy package, a point with no zone, or a zone this computer's zone database cannot load)."""
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return ""
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 360.0):
+        return ""
+    if lon > 180.0:
+        lon -= 360.0
+    finder = _finder()
+    if finder is None:
+        return ""
+    try:
+        name = finder(lon, lat) or ""   # tzfpy: get_tz(longitude, latitude)
+    except Exception:
+        return ""
+    return name if is_valid(name) else ""
+
+
 def zone_name() -> str:
     """The zone in use: the site's name, else the computer's (may be "" when the computer's cannot be named)."""
     return _NAME if _TZ is not None else computer_zone_name()
