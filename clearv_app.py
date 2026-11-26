@@ -26813,14 +26813,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 saved = self._save_series_words()
             except OSError as exc:
-                # 2.4.0 fit-in F3 (m536 / m532, package C's line, edited here with m558 as the triage asks): the one
-                # "Series not saved" message. App.series_not_saved is package C's helper; until the packages are
-                # merged this branch falls back to the old box, so it runs on its own.
-                not_saved = getattr(self, "series_not_saved", None)
-                if callable(not_saved):
-                    saved = not_saved(exc) or ""
-                else:
-                    messagebox.showwarning(APP_TITLE, f"Could not save the series: {exc}")
+                # 2.4.0 fit-in F3 (m536 / m532 / m558): the one "Series not saved" message
+                saved = self.series_not_saved(exc) or ""
         n_rec = sum(len(v) for v in recover.values())
         n_away = n_rec - n_here
         self.status.set(f"Comps in use: {used}.{saved}"

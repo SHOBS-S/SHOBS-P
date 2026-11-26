@@ -109,6 +109,35 @@
   {
    "section": "Anywhere",
    "patterns": [
+    "(Calibrate) or",
+    "(Photometry):"
+   ],
+   "todo": "Nothing. The button wakes up when a job starts."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "… already exists: saved as …_2 instead."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Saved ExoClock_…_SHOBS-P: upload the .txt inside (what to pick on the form is in ExoClock_info.txt)."
+   ],
+   "todo": "Upload the ExoClock_<planet>_<date>.txt in that folder (chapter 17)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "ExoClock files written to ….part, but the folder could not be renamed to … (a file in it was still open)."
+   ],
+   "todo": "Rename the folder yourself, or press Save for ExoClock… again."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
     "Another step is still running. Press it again when that one has finished."
    ],
    "todo": "Press it again when the busy bar is gone."
@@ -179,9 +208,9 @@
   {
    "section": "Input",
    "patterns": [
-    "These 78 lights look like MicroObservatory frames … Use that telescope's setup for these frames? … Optics: focal length 560 mm, pixel 6.8 µm (the camera's pixel; the camera bins 2x2, so about 5.0\"/px)"
+    "MicroObservatory setup: site …, … (…); optics 560 mm, 6.80 µm (from the header scale; camera pixel, binned 2x2 by the camera, 5.01\"/px); monochrome, CV, saturation 4000 ADU. In use for these frames only; your own setup comes back when you scan your own lights."
    ],
-   "todo": "Yes for these frames; your own setup comes back when you scan your own lights. See 5. Input."
+   "todo": "Nothing. Use my own setup in the Setup for these frames box puts your site and optics back. See 5. Input."
   },
   {
    "section": "Input",
@@ -309,16 +338,30 @@
   {
    "section": "Input",
    "patterns": [
-    "Darks 60 s, lights 120 s: the master dark is scaled ×2 …"
+    "Plan: lights = light − bias − (dark − bias); flats = flat − dark flat."
+   ],
+   "todo": "Nothing, unless a ⚠ or ✖ line follows it."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… Darks 60 s, lights 120 s: the master dark is scaled ×2; 120 s darks are better."
    ],
    "todo": "Point Dark at darks of the lights' exposure if you have them."
   },
   {
    "section": "Input",
    "patterns": [
-    "No bias and no dark flats: darks can't be scaled correctly without bias or dark flats (110 s darks to 55 s lights scales the camera's offset too). …"
+    "Darks can't be scaled correctly without bias or dark flats: add bias frames or dark flats, or use 55 s darks."
    ],
    "todo": "Add bias frames or dark flats (Dark flats row), or use darks at the lights' exposure. See 7. Calibrate."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Flats 0.5 s, darks 55 s and no bias: the master flat comes out wrong. Put dark flats in the Dark flats box, or add bias frames."
+   ],
+   "todo": "Put dark flats in the Dark flats row, or add bias frames."
   },
   {
    "section": "Input",
@@ -368,14 +411,80 @@
    "patterns": [
     "These lights come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says … mm from those frames. Is … mm right for this telescope?"
    ],
-   "todo": "Yes keeps the value; No puts the cursor in the Telescope aperture (mm) box: type the aperture."
+   "todo": "Yes keeps the value; No puts the cursor in the Telescope aperture (mm) box: type the aperture. After No the status bar and the log say These lights are from …: type its aperture in the Optics box (Input page); it still says … mm from the last frames."
   },
   {
    "section": "Input",
    "patterns": [
-    "These lights were taken at latitude …, longitude …, N km from your site."
+    "Setup for these frames",
+    "(2.4.0; before, the question"
    ],
-   "todo": "Yes uses their site and optics for these frames only; your own come back with your own frames."
+   "todo": "Nothing for someone else's frames. Save as my setup if they are your own (first night, or you moved). Use my own setup to use your saved site and optics for them after all. See 5. Input."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Using the site and optics in these frames: …, … (N km from your site). In use for these frames only; nothing is saved as yours. Save as my setup and Use my own setup are on the Input page."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "… Elevation is not in the header: type it in the Elevation box.",
+    "Elevation not in the header: type it on the Input page."
+   ],
+   "todo": "Type the elevation. After a photometry run it comes back by itself for that telescope's frames."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Save as my setup to keep them (SHOBS-SCHED reads them too); or type your own value in the box."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames",
+    "(2.4.0; before, the question"
+   ],
+   "todo": "Nothing if yours are right. Use the header values puts the header's in the boxes for these frames; Save as my setup then keeps them."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Use the frames' setup to go back to the header's site and optics."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Saved as your setup: site …; focal length …, pixel …; … mount. SHOBS-SCHED reads it too."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Save as my setup"
+   ],
+   "todo": "Nothing for MicroObservatory frames; else fill in the Site boxes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Star not changed (…): a step is still running. Choose the star again when it finishes."
+   ],
+   "todo": "Choose the star again when the busy bar is gone."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Kept … (the lights' FITS OBJECT says '…')."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Input",
@@ -491,6 +600,28 @@
     "No light frames found."
    ],
    "todo": "Check the folder and the Blink page."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "The flat shows a color mask (its 2x2 pixel planes differ by 38%), but the Bayer pattern is MONO. Calibrating a color camera as monochrome gives wrong photometry: the colors are never separated. Which camera took these frames?",
+    "The lights' sky background shows …"
+   ],
+   "todo": "Color camera (RGGB) sets RGGB and goes on (check the pattern in the Camera box). It is monochrome keeps MONO and is not asked again for this Lights folder. Cancel (the default) stops. See 7. Calibrate."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "the flat shows a color mask (…), but the Bayer pattern is MONO. For a color camera, pick its pattern (often RGGB) on the Calibrate page; Calibrate asks before it starts."
+   ],
+   "todo": "Pick the camera's pattern in the Camera box, or answer the question when you calibrate."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "Calibration not started: pick the camera's Bayer pattern in the Camera box (Calibrate page), MONO for a monochrome camera, then press Calibrate again."
+   ],
+   "todo": "Do what it says."
   },
   {
    "section": "Calibrate",
@@ -724,6 +855,32 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Not ready: The masters were built at bin 1: Calibrate again (or set Binning back to 1).",
+    "Not ready: The aperture sizes must be in order …",
+    "Ready: Run photometry."
+   ],
+   "todo": "Do what the line says; it changes to Ready: Run photometry."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The aperture sizes must be in order: Aperture r < sky in < sky out.",
+    "Mark at least one comparison star (Comps, then click the star).",
+    "… has no catalog magnitude in this band: type it in the box next to the name, or pick another star."
+   ],
+   "todo": "Do what the message says."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Bayer pattern '…' is not one SHOBS-P knows. Pick the camera's pattern in the Bayer pattern box (Calibrate page).",
+    "Unsupported Bayer pattern …"
+   ],
+   "todo": "Pick your camera's pattern on the Calibrate page."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Comp 2 and the check star are the same star (Comp 2: …). The check star tests the comps, so it can't also be one of them. …",
     "Run photometry"
    ],
@@ -777,14 +934,14 @@
    "patterns": [
     "Aperture r = … px (kept from before) is … × the stars' FWHM (… px) on this image: a large aperture adds sky noise and neighbors. Suggest… gives r = …, sky …–… px."
    ],
-   "todo": "Press Suggest… (or type the suggested sizes). The finding goes away once the sizes fit (2.4.0)."
+   "todo": "Press Suggest… (or type the suggested sizes)."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "Defocused stars: the aperture clips the ring — use r ≥ … px (now r = …; Suggest… gives r = …, sky …–…)."
+    "Defocused stars: r = … px (kept from before) clips the ring; Suggest… gives r = …, sky …–… px."
    ],
-   "todo": "Press Suggest…; the finding goes away once the aperture holds the ring."
+   "todo": "Press Suggest…"
   },
   {
    "section": "Photometry",
@@ -817,6 +974,13 @@
   {
    "section": "Photometry",
    "patterns": [
+    "The Target marker was on a neighboring star: the chart locked with the target N px away, and the marker was moved there (x, y). Check it is your star; click with Target to move it back."
+   ],
+   "todo": "Look at the marker. If it is not your star, pick Target and click the right one."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "There is no star under the Target marker at (x, y)."
    ],
    "todo": "No, and click the star again."
@@ -824,9 +988,23 @@
   {
    "section": "Photometry",
    "patterns": [
-    "These have a name in the Stars panel but no marker on this image …"
+    "These have a name but no marker on this image, so they would not be measured: …"
    ],
-   "todo": "Yes clears the names; Cancel lets you mark them."
+   "todo": "Stop to mark them (the default) lets you click the stars; Run without them (names cleared) clears those names and runs. From 2.4.0 there are two answers; before, a third one ran and left the names."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "no marker on this image: click the star, or ✕ to clear the name"
+   ],
+   "todo": "Click the star, or press ✕ to clear the name."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "raw peak … ADU is over the linear limit (…): … — pick a fainter comp.   also: only 12 px from the frame edge; B−V 1.21 against the target's 0.62   V from APASS DR9"
+   ],
+   "todo": "Act on the first reason (its own row in this table says how); the also: ones usually go away with the same new pick."
   },
   {
    "section": "Photometry",
@@ -921,9 +1099,11 @@
   {
    "section": "Photometry",
    "patterns": [
-    "No transit of … is predicted during these lights …"
+    "No transit of … is predicted during these lights (the nearest is … h before them). Check the planet and the frames' date. …",
+    "…, and … is a known variable …",
+    "No planet is entered on the Input page, and …"
    ],
-   "todo": "Check the planet and date; use Variables mode for a variability run."
+   "todo": "Switch to Variables mode for a variability run; Run in Transits mode anyway; Cancel (the default) to check the planet and the date first."
   },
   {
    "section": "Photometry",
@@ -1287,9 +1467,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps."
+    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page).",
+    "… left out of … (…); those frames use the other comps. …"
    ],
-   "todo": "Nothing; pick a comp further in next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
+   "todo": "Take the comp out with Use comps… on the Output page if the night shows steps where it comes and goes; pick a comp further in next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
   },
   {
    "section": "Photometry",
@@ -1301,16 +1482,18 @@
   {
    "section": "Photometry",
    "patterns": [
-    "check star left out of 18 frames (off the frame edge; …); no check value there."
+    "check star left out of 18 frames (off the frame edge; …); no check value there. A better check star stays farther in: … Pick it as the check next time.",
+    "check star left out of … (…); no check value there. Pick a check star at least … px in next time."
    ],
-   "todo": "Nothing; those frames have no check value."
+   "todo": "Those frames have no check value. Pick the named star as the check next time."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "check … comes within … px of (or reaches) the frame edge … The check star was off the frame in N frames (…). A better check star stays farther in: … Pick it as the check next time."
+    "…: comp … comes within … px of the frame edge (stars at least … px in are safe); it was measured in every frame.",
+    "Consider leaving it out of this night's comps"
    ],
-   "todo": "Pick that star as the check next time."
+   "todo": "Nothing now. If Comp health shows that star stepping or drifting, leave it out with Use comps…; pick stars further in next time."
   },
   {
    "section": "Photometry",
@@ -1331,7 +1514,7 @@
    "section": "Photometry",
    "patterns": [
     "N frames were skipped because of …, which is no longer a comp — Run photometry again to measure them.",
-    "… — open that night's frames and Run photometry again …"
+    "N frames of … were skipped because of …, which is no longer a comp — Run photometry on that night's frames again to measure them."
    ],
    "todo": "Open that night's frames and press Run photometry."
   },
@@ -1444,9 +1627,12 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Solve: the Input page target (…) is not in these lights …"
+    "The Input page target (…) is not on these frames (the target is 4′ beyond the north edge): check the Star ID or RA/Dec on the Input page.",
+    "… is not on these frames; the chart is placed from the plate solution alone: check …",
+    "Solve: the Input page target (…) is not in these lights …",
+    "Target: … is not on this frame by its plate solution …; click the target by hand …"
    ],
-   "todo": "Check the target on the Input page, or the Lights folder."
+   "todo": "Check the Star ID or RA/Dec on the Input page, or the Lights folder."
   },
   {
    "section": "Photometry",
@@ -1467,10 +1653,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Could not save the series …",
+    "Series not saved (…). Save series… to another folder before closing.",
     "Could not auto-save the series …"
    ],
-   "todo": "Fix the cause and press Save series."
+   "todo": "Fix the cause and press Save series, or save it to another folder, before you close SHOBS-P."
   },
   {
    "section": "Photometry",
@@ -1671,9 +1857,70 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Before you upload: • AAVSO observer code is empty …"
+    "WebObs will reject this file: • the AAVSO observer code is empty (Input page) … Save the report anyway?",
+    "Before you upload: …"
    ],
-   "todo": "Fix the listed items and save again."
+   "todo": "No (the default), fix the listed items and save again. See 15. Submit to AAVSO."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Save AAVSO report",
+    "), and a red",
+    "Observer code"
+   ],
+   "todo": "Fill the box (or mark a check star and run again); the line and the red go away."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "AAVSO report: the series mixes filters; each row carries its own.",
+    "AAVSO report: a comp has no star name (the report calls it “comp1”)."
+   ],
+   "todo": "Report each filter separately if you want one per file; give the comp its catalog name."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Saving: night 5–6 Oct 2026",
+    "Saving: whole series (8 nights)"
+   ],
+   "todo": "Open the box to choose the other. The status line after a save names what the file holds."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Star ID written the way AAVSO spells it: HD 219134 (was hd219134)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Loaded N points from M night(s). Reduce the new night, then choose Add; the series' comps and check are placed after the solve."
+   ],
+   "todo": "Point Input at the new night's frames and run the flow; check the placed comps before Run photometry."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "… not saved (…). Save it to another folder, or close the program that has the file open."
+   ],
+   "todo": "Close the program that has the file open (a spreadsheet, often), or save to another folder."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "…: the series' catalog V 11.203 is used for this night, not tonight's 11.251 (the night moves −0.048 mag), so every night stays on one zero point; Use comps… (Output page) can re-derive the series with other comps."
+   ],
+   "todo": "Nothing, or Use comps… to re-derive the series with other comps."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Refit period"
+   ],
+   "todo": "Loosen the cloud limit (Apply), untick Leave flagged points out, or add a night."
   },
   {
    "section": "Output, Variables mode",
@@ -1751,17 +1998,40 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "No reliable period …",
-    "No significant period …"
+    "Period  Reliable: … d (FAP … %)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Period  ⚠ Doubtful: … d — near a day alias; depends on … alone",
+    "No reliable period …"
+   ],
+   "todo": "Do not report it yet. See 13. Look for a period."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Period  None: no significant period: the star looks constant at this precision …",
+    "… one short night covers under two cycles of the best peak …",
+    "… needs at least 8 usable points."
    ],
    "todo": "See 13. Look for a period."
   },
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Too short for a period search: one night of … h covers under two cycles of even the shortest period searched …"
+    "Period  None: too short for a period search: one night of … h covers under two cycles of even the shortest period searched …"
    ],
    "todo": "Add nights, or observe longer."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Bins    every point used (10-min bins too coarse for 0.039 d)"
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Output, Variables mode",
@@ -1850,6 +2120,13 @@
     "Elements from VSX"
    ],
    "todo": "For an O − C, type the missing value (this night's own Tmax is a good first epoch). The error needs nothing more."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "(Period box; the verdict row then reads"
+   ],
+   "todo": "Press Search … d instead."
   },
   {
    "section": "Output, Transits mode",
@@ -2005,6 +2282,20 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "One point stands far from the fit: frame 27 (….fits), 21:48 local time (UTC−4), BJD_TDB … is 8.9 % above the fit, 6.1σ … Leave it out and refit takes it out; nothing is left out unless you press it."
+   ],
+   "todo": "Look at the frame in Blink if you can. If it is bad, press Leave it out and refit; if you trust it, do nothing. Chapter 17, One point far from the fit."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Left out of the fit as a single-point outlier: frame 27 (….fits), … Put it back refits with it."
+   ],
+   "todo": "Nothing. Put it back refits with the point in."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Fitting the transit: choosing the detrend… 2 of 6",
     "… looking up the published sizes…",
     "… prayer-bead check of the errors…"
@@ -2106,6 +2397,42 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "goes to … . The light curve does not hold the published shape. First look at Comp health, then trim a cloudy end."
+   ],
+   "todo": "Open Comp health…; trim a cloudy end; see 18. Inconclusive or none."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Shape: left free, Rp/R\\",
+    "…); the reported values lean on the published a/R\\"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Coverage: little or no baseline after egress (… min before, … min after); egress not observed (data end … min before it); a …-min gap inside the transit. …"
+   ],
+   "todo": "Take more baseline next time; treat the depth and Tc with care."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "This fit includes N frames flagged cloud, error bars ×2. Without them: depth … %, Tc …."
+   ],
+   "todo": "Compare the two before reporting."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Comps limit the noise (the target scatters … % per point against the comps, … % against the check star; …). Pick brighter, steadier comps …"
+   ],
+   "todo": "Open Comp health… (the link after the note); pick brighter, steadier comps and run photometry again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Gain measured from the night's sky, … e- per image unit (…)"
    ],
    "todo": "Nothing."
@@ -2198,6 +2525,48 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "The nights scatter about their own linear ephemeris more than their error bars allow (χ²ν …); outlier nights: …. Its errors are scaled by √χ²ν = …."
+   ],
+   "todo": "Look at the named nights (a partial transit, red noise); without them the line may fit."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Night … is more than 3σ from the nights' own ephemeris."
+   ],
+   "todo": "Look at that night's fit."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "No airmass in the file for …: their baseline is fitted against time only, unlike the other nights; Tc may shift. “Fit every night against time only” makes all nights match."
+   ],
+   "todo": "Re-save those nights' fit CSVs with a current SHOBS-P, or press Fit every night against time only."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… nights in use (… fitted against time only: see the note under the table)."
+   ],
+   "todo": "See the note under the table."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "not a SHOBS-P transit-fit CSV (it needs time, rel_flux and rel_flux_err columns)"
+   ],
+   "todo": "Add the …_transit_fit.csv that SHOBS-P saved beside the report."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… times are JD_UTC and the star's RA/Dec is not known, so they cannot be put on BJD_TDB: look the planet up on the Input page (or in this window)"
+   ],
+   "todo": "Look the planet up, then add the file again (or untick and tick the page's night)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "No published ephemeris: epochs counted from the first night."
    ],
    "todo": "Nothing; type an alternative ephemeris to see O − C against it. The ⚠ form (… ; Look up.) means no lookup answered."
@@ -2237,6 +2606,13 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "… not found at SIMBAD or VSX (…): check the spelling, or click the star with Watch."
+   ],
+   "todo": "Check the spelling, or pick Watch and click the star on the image."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "Fewer than 8 stars found in the frame; a field scan needs more."
    ],
    "todo": "Check focus and exposure, or lower Detection threshold (σ)."
@@ -2266,9 +2642,20 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "Limits: brightest 800 measured (limit reached; raise Most stars to measure to go fainter).",
+    "Field scan done: …",
+    "Limits of this scan: …",
     "Field scan: the 800-star limit was reached …"
    ],
-   "todo": "Raise Most stars to measure."
+   "todo": "Raise Most stars to measure and scan again to go fainter."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Limits: … crowding not tested: check suspects on the image.",
+    "Field scan: crowding test skipped (…)."
+   ],
+   "todo": "Look at each suspect on the image (Show on image) and with Check neighbors… before you trust it."
   },
   {
    "section": "Discovery mode",
