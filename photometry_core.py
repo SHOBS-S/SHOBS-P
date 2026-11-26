@@ -12593,6 +12593,24 @@ def rotator_summary(angles: list[float], mount: str | None = None) -> str:
     return ", ".join(f"{g[0]:g}° ({len(g)} file{'s' if len(g) != 1 else ''})" for g in groups)
 
 
+FLAT_ANGLE_MIN = 3   # a master flat from fewer flats than this at the lights' angle is too noisy to build by itself
+
+
+def flats_at_angle(rots: list, light_rot: float, mount: str | None = None) -> list[int]:
+    """2.4.0 fit-in F4 (m167): which flats (by index into rots, each flat's rotator reading or None) were taken at
+    the lights' camera angle (within flat_angle_tolerance; flip-aware on a German mount, flat_angle_difference).
+    A flat with no reading is never counted in."""
+    tol = flat_angle_tolerance(mount)
+    out = []
+    for k, r in enumerate(rots):
+        try:
+            if r is not None and flat_angle_difference(float(r), float(light_rot), mount) <= tol:
+                out.append(k)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def dark_scale_problem(dark_exp: float | None, light_exp: float | None, limit: float = 3.0) -> str | None:
     """A warning when the master dark must be stretched (or shrunk) a long way to match the lights."""
     if not dark_exp or not light_exp or dark_exp <= 0 or light_exp <= 0:

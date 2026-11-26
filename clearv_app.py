@@ -9989,7 +9989,31 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     flat_rots.append(r)
             flat_rot = core.typical_rotator(flat_rots, mount)
             spread = core.rotator_spread(flat_rots, mount)
-            if spread is not None and spread > core.flat_angle_tolerance(mount):
+            mixed = spread is not None and spread > core.flat_angle_tolerance(mount)
+            picked = None
+            if mixed and len(flat) > 1:
+                # 2.4.0 fit-in F4 (m167; John 26 Nov; RESULTS-CHANGING): a Flat folder with flats from more than one
+                # camera angle: the master is built from the flats taken at the LIGHTS' angle, with a plain line
+                # giving how many were used of how many. The question is kept only when too few flats match.
+                all_rots = []
+                for path in flat:
+                    try:
+                        all_rots.append(core.header_rotator(core.read_header(path)))
+                    except Exception:
+                        all_rots.append(None)
+                keep = core.flats_at_angle(all_rots, light_rot, mount)
+                if len(keep) >= core.FLAT_ANGLE_MIN:
+                    picked = [flat[k] for k in keep]
+                    others = [r for k, r in enumerate(all_rots) if k not in set(keep) and r is not None]
+                    n_blank = sum(1 for k, r in enumerate(all_rots) if r is None)
+                    self.log(f"Flats: {len(picked)} of {len(flat)} used for the master flat, the ones taken at the "
+                             f"lights' camera angle ({light_rot:g}°). Left out: "
+                             + "; ".join(([core.rotator_summary(others, mount)] if others else [])
+                                         + ([f"{n_blank} with no rotator reading"] if n_blank else [])) + ".",
+                             keep_status=True)
+                    self._flats_picked = picked
+                    flat_rot = core.typical_rotator([all_rots[k] for k in keep], mount)
+            if mixed and picked is None:
                 if ask_choice(
                         self, APP_TITLE,
                         f"The Flat folder mixes camera angles: {core.rotator_summary(flat_rots, mount)}.\n\n"
@@ -9997,8 +10021,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         + ("(Alt-az mount: readings are the sky angle the derotator held; small drifts are not "
                            "counted.)" if altaz else "(Readings 180° apart "
                            "are the same camera position across a meridian flip and are not counted as different.)")
-                        + "\n\nCalibrate with these flats anyway? (Stop, so you can keep only the flats taken at "
-                        "the lights' angle.)",
+                        + (f"\n\nFewer than {core.FLAT_ANGLE_MIN} of them were taken at the lights' angle "
+                           f"({light_rot:g}°), too few for a master flat of their own." if len(flat) > 1 else "")
+                        + "\n\nCalibrate with these flats anyway? (Stop, so you can take or pick flats at the "
+                        "lights' angle.)",
                         [("go", "Use all these flats"), ("stop", "Stop")], safe="stop") != "go":
                     self.status.set("Calibration not started: the flats were taken at more than one camera angle.")
                     return None
@@ -10219,6 +10245,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             dflat, files["darkflat"] = [], None
         if not self.precalibrated:
             # The checks read headers: a chosen master file stands in for its frames (it carries their keywords).
+            self._flats_picked = None   # 2.4.0 fit-in F4 (m167): set by the checks for a mixed-angle Flat folder
             checked = self._calibration_checks(bias or ([bias_file] if files["bias"] else []),
                                                dark or ([dark_file] if files["dark"] else []),
                                                flat or ([flat_file] if files["flat"] else []), lights)
@@ -10228,6 +10255,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 dark, files["dark"] = [], None   # darks left out (exposure far from the lights')
             elif dark:
                 dark = checked
+            if flat and getattr(self, "_flats_picked", None):
+                flat = list(self._flats_picked)   # m167: only the flats at the lights' camera angle
         if not self._start_job("Building calibration masters…"):
             return
         if self.precalibrated:

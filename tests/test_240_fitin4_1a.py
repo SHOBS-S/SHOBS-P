@@ -211,5 +211,78 @@ class TestSkyGainRawSaturationCut(unittest.TestCase):
         self.assertIn('prep_frame(img, sat, cut=False) if getattr(load, "raw_sat", False)', _src("sky_gain.py"))
 
 
+class TestMixedAngleFlats(unittest.TestCase):
+    """m167: a Flat folder with flats from two camera angles: the master is built from those at the lights' angle."""
+
+    def test_flats_at_angle_is_flip_aware(self):
+        rots = [30.0, 30.4, 210.2, 2.0, 2.1, None, 181.9]
+        self.assertEqual(core.flats_at_angle(rots, 30.0, core.MOUNT_GEM), [0, 1, 2])
+        self.assertEqual(core.flats_at_angle(rots, 2.0, core.MOUNT_GEM), [3, 4, 6])
+        self.assertEqual(core.flats_at_angle([None, None], 2.0), [])
+
+    def _folder(self, d, angles):
+        from astropy.io import fits
+        paths = []
+        for k, a in enumerate(angles):
+            hdr = fits.Header()
+            hdr["EXPTIME"] = 2.0
+            if a is not None:
+                hdr["ROTATOR"] = a
+            p = os.path.join(d, f"flat_{k:03d}.fits")
+            fits.writeto(p, np.full((8, 8), 20000, dtype=np.uint16), hdr)
+            paths.append(p)
+        return paths
+
+    def _check(self, flat_angles, light_angle=30.0):
+        import clearv_app
+        from astropy.io import fits
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            flats = self._folder(d, flat_angles)
+            hdr = fits.Header()
+            hdr["EXPTIME"] = 60.0
+            hdr["ROTATOR"] = light_angle
+            light = os.path.join(d, "light.fits")
+            fits.writeto(light, np.zeros((8, 8), dtype=np.uint16), hdr)
+            logged = []
+            fake = types.SimpleNamespace(
+                _mount_info=lambda lights: {"mount": core.MOUNT_GEM, "detected": {}},
+                log=lambda t, **k: logged.append(t), status=types.SimpleNamespace(set=lambda t: None),
+                _flats_picked=None)
+            with mock.patch.object(clearv_app, "ask_choice", return_value="stop") as ask:
+                out = clearv_app.App._calibration_checks(fake, [], [], flats, [light])
+            return out, fake._flats_picked, logged, ask, flats
+
+    def test_master_from_the_flats_at_the_lights_angle_no_question(self):
+        out, picked, logged, ask, flats = self._check([30.0] * 6 + [2.0] * 4 + [None])
+        self.assertEqual(out, [])            # not stopped
+        ask.assert_not_called()
+        self.assertEqual(picked, flats[:6])
+        line = [t for t in logged if t.startswith("Flats: ")][0]
+        self.assertIn("6 of 11 used for the master flat", line)
+        self.assertIn("lights' camera angle (30°)", line)
+        self.assertIn("2° (4 files)", line)
+        self.assertIn("1 with no rotator reading", line)
+        self.assertNotIn("⚠", line)
+
+    def test_too_few_at_the_lights_angle_still_asks(self):
+        out, picked, logged, ask, _f = self._check([30.0] * 2 + [2.0] * 8)
+        ask.assert_called_once()
+        self.assertIn("Fewer than 3 of them were taken at the lights' angle", ask.call_args[0][2])
+        self.assertIsNone(out)               # Stop is the safe answer
+        self.assertIsNone(picked)
+
+    def test_one_angle_folder_is_left_alone(self):
+        out, picked, logged, ask, _f = self._check([30.0] * 5 + [210.0] * 5)   # a flip is the same camera angle
+        ask.assert_not_called()
+        self.assertIsNone(picked)
+        self.assertEqual([t for t in logged if t.startswith("Flats: ")], [])
+
+    def test_calibrate_uses_the_picked_flats(self):
+        src = _src()
+        self.assertIn("flat = list(self._flats_picked)   # m167", src)
+        self.assertIn("self._flats_picked = None   # 2.4.0 fit-in F4 (m167)", src)
+
+
 if __name__ == "__main__":
     unittest.main()
