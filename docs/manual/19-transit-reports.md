@@ -81,6 +81,7 @@ SHOBS-P adds to the NOTES line, automatically, anything a reader should know:
 - the verdict, when it is not "detected" (for example `SHOBS-P verdict INCONCLUSIVE: …`),
 - "timing usable, depth unreliable", with the reason,
 - any trimmed span,
+- any point left out as a single-point outlier (from 2.4.0: the frame, its BJD_TDB and how far it was from the fit),
 - cloud-flagged frames put back into the fit,
 - times left in JD_UTC from a source report (see below),
 - SHOBS-P's processing bin (see above),
@@ -105,7 +106,7 @@ Beside the report, SHOBS-P writes:
 
 - `…_settings.txt`: the full settings of the reduction, one per line: **Source**, **Aperture** (what the night was
   measured with), **Binning** (camera and processing), **Comps**, **Check**, **Frames skipped at photometry**,
-  **Frames left out** (by flag and frame number), **Frames trimmed**, **Detrend**, **Calibration** (the masters, and
+  **Frames left out** (by flag and frame number), **Frames trimmed**, **Single points left out of the fit as outliers** (from 2.4.0; `none` unless you pressed **Leave it out and refit**), **Detrend**, **Calibration** (the masters, and
   the dark's exposure) and the **Gain** with where it came from (from 2.4.0, on a night with EGAIN, a **Gain check
   from the night's sky** line follows it, in the same unit as EGAIN: for example `Gain check from the night's sky:
   0.255 e-/ADU, 1.05 x the header EGAIN (3 e- per image unit; from 11 frame pairs, …)`, the image-unit figure being the
