@@ -2608,6 +2608,14 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "Scan errors: flat-field floor 0.003 mag and scintillation 0.0021 mag (median of 97 frames) added to every point's photon and sky noise.",
+    "Scintillation not added: it needs the telescope aperture (Input page), the site and the field's position."
+   ],
+   "todo": "Nothing. For the scintillation part, fill in Telescope aperture, the site and the field's RA/Dec on the Input page. See 20. Scan a field."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "buttons before a scan:"
    ],
    "todo": "Press Scan field on the Photometry page."

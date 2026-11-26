@@ -100,7 +100,8 @@ A star is a suspect when it passes **either** test:
 1. **× normal**: its scatter is at least 3 times the typical scatter of stars as bright. This is the scan's first test,
    and needs no error model.
 2. **χ²ν × normal**: SHOBS-P predicts each star's error bar on each frame (photon noise from the camera gain, the sky
-   noise in the aperture, and that frame's zero-point error) and works out the star's χ²ν: how much it scatters
+   noise in the aperture, that frame's zero-point error and, from 2.4.0, an error floor: see below) and works out
+   the star's χ²ν: how much it scatters
    against its own error bars (1 = exactly as much as the error bars say). The star is then compared with stars as
    bright that night. At 2.5 or more, it is a suspect.
 
@@ -112,6 +113,16 @@ off, haze) lifts every star alike and does not flood the list. One wild point (a
 most as a 5 σ point, so it cannot make a star a suspect by itself. From 2.4.0 the 5 σ is measured against the noise
 stars as bright really show that night: each star's error bars are first widened by the χ²ν of its brightness
 (never narrowed), then each point is capped.
+
+**The error floor (from 2.4.0).** Photon and sky noise alone make the brightest stars' error bars far too small:
+what really limits a bright star is the twinkling of the air (scintillation) and what the flat field leaves behind.
+So every point's error bar now also holds the frame's scintillation (worked out from the **Telescope aperture**, the
+frame's airmass and exposure and the site's elevation; the same formula as the Variables and Transits error bars)
+and a flat-field floor of 0.003 mag. The Log says what was added, for example *"Scan errors: flat-field floor 0.003
+mag and scintillation 0.0021 mag (median of 97 frames) added to every point's photon and sky noise."* Without a
+telescope aperture, a site or a position for the field, the scintillation part is left out and the line says so.
+The suspect level stays 2.5. Because each star is still compared with stars as bright, the floor changes a star's
+**χ²ν × normal** only a little; a scan made again with 2.4.0 can still list a star or two more or fewer.
 
 On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
 star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks

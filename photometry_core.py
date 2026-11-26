@@ -9242,6 +9242,82 @@ def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
     return np.where((flux > 0) & np.isfinite(err) & (err > 0), err, np.nan)
 
 
+# 2.4.0 fit-in F4 (#115 finish, John 26 Nov; RESULTS-CHANGING for Discovery): the scan's per-point errors get a
+# floor, so they no longer read low on the brightest stars (photon noise alone gave chi2nu 5-10 there, and the per-point
+# 5 sigma cap then sat too tight on a bright low-amplitude variable). Two terms, in quadrature with the photon and sky
+# noise: each frame's scintillation (the modified Young formula, scintillation_sigma: aperture, airmass, exposure,
+# site height; every star twinkles on its own, and the zero point is a median over many stars, so the star's own
+# scintillation is the whole term) and a flat-field floor, the same for every point.
+# SCAN_FLAT_FLOOR_MAG is the tunable constant: 0.003 mag (0.3 %) is a usual flat-field / pixel-to-pixel residual for
+# an amateur CMOS with sky or panel flats. It has NOT been tuned on scan nights yet (the S033 GSC 03308-00462 nights
+# were not at hand when this was built), and SUSPECT_EXCESS_CHI2 stays at 2.5 until it is: the normalise-then-cap of
+# step 7b still runs after the floor, so a floor that is too low only leaves more for that widening to do, and a floor
+# that is too high flattens the bright stars' chi2nu towards the same typical value for all of them (the excess is a
+# ratio to stars as bright, so it does not make Suspects by itself). 0 switches the flat-field term off.
+SCAN_FLAT_FLOOR_MAG = 0.003
+
+
+def scan_error_floor(airmass=None, exptime_s=None, aperture_m=None, altitude_m: float = 0.0,
+                     flat_floor: float | None = None) -> float:
+    """2.4.0 fit-in F4 (#115): the magnitude error added in quadrature to every star's error on one scan frame:
+    scintillation (when the aperture, the airmass and the exposure are known; a stack passes its total exposure) and
+    the flat-field floor (SCAN_FLAT_FLOOR_MAG unless given). Never NaN: a term that is not known counts 0."""
+    ff = SCAN_FLAT_FLOOR_MAG if flat_floor is None else flat_floor
+    try:
+        ff = float(ff)
+    except (TypeError, ValueError):
+        ff = 0.0
+    if not (math.isfinite(ff) and ff > 0):
+        ff = 0.0
+    sc = 1.0857362 * scintillation_sigma(aperture_m, airmass, exptime_s, altitude_m or 0.0)
+    if not (math.isfinite(sc) and sc > 0):
+        sc = 0.0
+    return math.hypot(ff, sc)
+
+
+def scan_frame_floor(header: dict, jd: float, exptime_s: float, setup: dict | None) -> float:
+    """2.4.0 fit-in F4 (#115): scan_error_floor for one scan frame. setup (read on the window thread): aperture_m,
+    altitude_m, lat, lon and the field's ra_hours / dec_deg (used when the header carries no pointing); any of them
+    may be missing: the scintillation term is then 0 and the flat-field floor still counts. The airmass is worked
+    out as a photometry run does (reduce_frame: the header's pointing, the site, the frame's time)."""
+    setup = setup or {}
+    am = None
+    try:
+        ra_h = _header_float(header or {}, "RA_HRS")
+        if ra_h is None:
+            ra_deg = _header_float(header or {}, "OBJCTRA_DEG", "RA")
+            ra_h = ra_deg / 15.0 if ra_deg is not None else setup.get("ra_hours")
+        dec = _header_float(header or {}, "DEC", "OBJDEC")
+        if dec is None:
+            dec = setup.get("dec_deg")
+        lat, lon = setup.get("lat"), setup.get("lon")
+        if None not in (ra_h, dec, lat, lon) and jd is not None and math.isfinite(float(jd)):
+            am = airmass(float(ra_h), float(dec), float(lat), float(lon), float(jd))
+    except Exception:
+        am = None
+    return scan_error_floor(am, exptime_s, setup.get("aperture_m"), setup.get("altitude_m") or 0.0,
+                            setup.get("flat_floor"))
+
+
+def scan_floor_text(floors, flat_floor: float | None = None) -> str:
+    """One plain Log line on the floor a scan used: 'Scan errors: flat-field floor 0.003 mag and scintillation
+    0.0021 mag (median of the frames) added to every point.'"""
+    ff = SCAN_FLAT_FLOOR_MAG if flat_floor is None else float(flat_floor or 0.0)
+    fl = np.asarray(list(floors) if floors is not None else [], dtype=float)
+    fl = fl[np.isfinite(fl)]
+    sc = np.sqrt(np.clip(fl ** 2 - ff ** 2, 0.0, None)) if fl.size else np.array([])
+    known = sc[sc > 0]
+    bits = ([f"flat-field floor {ff:.3f} mag"] if ff > 0 else [])
+    if known.size:
+        bits.append(f"scintillation {float(np.median(known)):.4f} mag (median of {known.size} frame"
+                    f"{'' if known.size == 1 else 's'})")
+    if not bits:
+        return ""
+    tail = "" if known.size else (" Scintillation not added: it needs the telescope aperture (Input page), the "
+                                  "site and the field's position.")
+    return "  Scan errors: " + " and ".join(bits) + " added to every point's photon and sky noise." + tail
+
+
 def frame_zero_point_errors(inst: np.ndarray, ref, star_med: np.ndarray, zp: np.ndarray) -> np.ndarray:
     """2.4.0 step 7a (#91): the error of each frame's zero point (the median of the reference stars' offsets):
     1.2533 x their robust scatter about it / sqrt(how many). Without it every star looks too noisy against its own
@@ -9323,7 +9399,7 @@ def suspect_score(excess: float, excess_chi2: float, factor_limit: float = SUSPE
     return s if math.isfinite(s) else float("-inf")
 
 
-def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None) -> dict:
+def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None, floor=None) -> dict:
     """Variability statistics for every star in a field.
 
     inst: frames x stars instrumental magnitudes (NaN where unmeasured).
@@ -9335,6 +9411,8 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
     against its own errors (plus the frame zero-point error), the chi2nu stars as bright show that night (the same
     running median as the scatter's), and 'excess_chi2' = chi2nu / that. A night whose error model reads low lifts
     every star alike and cancels out.
+    2.4.0 fit-in F4 (#115): floor (one magnitude error per frame, scan_error_floor, or one number for all frames) is
+    added in quadrature to every star's error on that frame; None or 0 = no floor, as before.
     """
     inst = np.asarray(inst, dtype=float)
     n_frames, n_stars = inst.shape
@@ -9367,7 +9445,11 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         if merr.shape != inst.shape:
             raise ValueError("the error table does not match the magnitudes")
         zp_err = frame_zero_point_errors(inst, ref, star_med, zp)
-        sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2)
+        fl = np.zeros(n_frames)
+        if floor is not None:
+            fl = np.broadcast_to(np.asarray(floor, dtype=float), (n_frames,)).copy()
+            fl = np.where(np.isfinite(fl) & (fl > 0), fl, 0.0)
+        sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2 + fl[:, None] ** 2)
         # 2.4.0 step 7b (#115, John 21 Nov: retune in 7b): normalise, then cap. The error model has no flat-field or
         # other floor, so on the brightest stars it reads low (typical chi2nu 5-10 there); capping each point at 5
         # sigma of THAT error compressed a bright low-amplitude variable under the level (Fable S1). Each star's
@@ -9380,7 +9462,7 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
             out["excess_chi2"] = chi2 / chi2_expected
-        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err})
+        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err, "error_floor": fl})
     return out
 
 

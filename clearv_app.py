@@ -18608,6 +18608,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._scan_known_refresh()   # 2.2.19 (#14)
 
     # ---- Discovery mode ---------------------------------------------------------------
+    def _scan_floor_setup(self) -> dict:
+        """2.4.0 fit-in F4 (#115): what the field scan's error floor needs (core.scan_frame_floor), read on the
+        window thread: the telescope aperture and the site for the scintillation term, the field's position for
+        frames whose header has no pointing. A box that is empty or not a number is left out (that term is then 0)."""
+        def num(var):
+            try:
+                v = float(var.get())
+                return v if math.isfinite(v) else None
+            except Exception:
+                return None
+        d_mm, h = num(self.aperture_mm), num(self.elevation)
+        return {"aperture_m": d_mm / 1000.0 if d_mm and d_mm > 0 else None, "altitude_m": h or 0.0,
+                "lat": num(self.lat), "lon": num(self.lon), "ra_hours": num(self.ra_hours),
+                "dec_deg": num(self.dec_deg)}
+
     def _scan_electrons(self, lights, binning, pattern, mode, masters, precalibrated) -> float:
         """2.4.0 step 7a (#91): electrons per image unit for the field scan's per-point errors: the first light's
         EGAIN through core.photon_noise_setup (binning, superpixel, flat), else 1 e-/ADU. The median of a flat-dependent
@@ -19077,6 +19092,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     gaia_name[k] = next((n for n in core.star_names(star) if n.startswith("Gaia DR3 ")), "")
         catalog_used = f"catalog {core.band_label(self._band())} (best of AAVSO, APASS, Gaia, Tycho per star)"
         scan_electrons = self._scan_electrons(lights, binning, pattern, mode, masters, precal)   # 2.4.0 step 7a (#91)
+        scan_floor_setup = self._scan_floor_setup()   # 2.4.0 fit-in F4 (#115): scintillation + flat-field floor
         # Fable S6: where the night's suspects file goes is fixed when the scan starts (a Star ID, filter or Output
         # folder changed afterwards does not move it); "points" says whether the scan was on frames or stacks
         suspects_where = {"folder": self.output_dir.get().strip(),
@@ -19108,6 +19124,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 raw_peaks, clips = [], []   # 2.2.19 (#25)
                 meas = []   # 2.3.0 review: per frame (or stack), how many frames' raw cores each count stands on
                 merrs = []   # 2.4.0 step 7a (#91): each star's predicted magnitude error on each frame
+                scan_floors = []   # 2.4.0 fit-in F4 (#115): each frame's error floor (scintillation, flat field)
                 # 2.3.0 review fix (#54): a stack has no raw pixels; its stars' peaks, raw cores and clipped counts
                 # are its member frames' (kept from the per-frame scan for the same star list)
                 stack_meta = stack_run["meta"] if stack_run else None
@@ -19190,8 +19207,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         # fails half-way can never leave the lists out of step (2.2.1).
                         merr_row = (core.scan_mag_errors(flux, noise, scan_electrons) if noise is not None
                                     else np.full(len(pos), np.nan))
+                        floor_row = core.scan_frame_floor(header, frame_jd, exp, scan_floor_setup)   # F4 (#115)
                         rows.append(row)
                         merrs.append(merr_row)
+                        scan_floors.append(floor_row)
                         jds.append(frame_jd)
                         rec = stack_core.scan_record(path, frame_jd, exp, reg, side[1])   # 2.3.0 (#54)
                         if members is None:   # 2.3.0 review: what a stack of this frame needs for saturation
@@ -19269,7 +19288,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 # 2.4.0 step 7a (#91): with each star's own errors, for the excess chi2nu Suspect test
                 merr_all = np.vstack(merrs)
                 stats = core.field_variability(inst, exclude=sorted(saturated),
-                                               merr=merr_all if np.isfinite(merr_all).any() else None)
+                                               merr=merr_all if np.isfinite(merr_all).any() else None,
+                                               floor=scan_floors if len(scan_floors) == len(merr_all) else None)
+                if np.isfinite(merr_all).any() and len(scan_floors) == len(merr_all):   # 2.4.0 fit-in F4 (#115)
+                    floor_line = core.scan_floor_text(scan_floors)
+                    if floor_line:
+                        self.call_ui(self.log, floor_line)
                 ex2 = stats.get("excess_chi2")
                 if ex2 is None:
                     ex2 = np.full(len(labels), np.nan)
