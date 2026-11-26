@@ -119,7 +119,8 @@ class TestPeriodVerdict(unittest.TestCase):
     def test_bins_row_is_one_plain_line(self):
         row = ca.App._bins_too_coarse(10.0, 0.039)
         self.assertEqual(row, "Bins    every point used (10-min bins too coarse for 0.039 d)")
-        src = inspect.getsource(ca.App._refresh_period)
+        # 2.4.0 fit-in F4-2: the search is split in two for Load series' worker thread (prepare + job)
+        src = inspect.getsource(ca.App._period_prepare) + inspect.getsource(ca.App._period_job)
         self.assertEqual(src.count("_bins_too_coarse("), 2)
         self.assertNotIn("⚠", src)
 

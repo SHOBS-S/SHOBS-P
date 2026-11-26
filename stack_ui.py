@@ -695,6 +695,11 @@ class StackMixin:
                 traceback.print_exc()
         if which == "stack":
             info["stack"] = {k: v for k, v in (sets.get("meta") or {}).items() if k != "mode"}
+            # 2.4.0 fit-in F4 (nit left from 2.3.6): how many per-frame points the stacks stand for, kept with the
+            # night, so a stacked night saved and loaded again counts its frames exactly as it did in the session
+            # (the skipped-frames 10 % share; see App._night_frame_count)
+            if sets.get("frame"):
+                info["stack"]["frame_points"] = len(sets["frame"])
         else:
             info.pop("stack", None)
         self._refresh_period()

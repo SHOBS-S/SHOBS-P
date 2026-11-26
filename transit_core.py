@@ -2994,9 +2994,24 @@ def nea_resolve(name: str) -> dict | None:
            + urllib.parse.urlencode({"objname": clean}))
     try:
         data = json.loads(_http_get(url, timeout=30).decode("utf-8", "replace"))
-        return _parse_alias_reply(data)
+        info = _parse_alias_reply(data)
+        # 2.4.0 fit-in F4 (m070, m448): the Archive answered; whether it knows the name is kept for the message
+        _NEA_LAST[clean.lower()] = "ok" if info is not None else "unknown"
+        return info
     except Exception:
+        _NEA_LAST[clean.lower()] = "no answer"
         return None   # unreachable, or a reply in an unexpected shape: fall back to the old name guesses
+
+
+_NEA_LAST: dict = {}   # name (lower case) -> "ok" | "unknown" | "no answer": how the last alias lookup of it ended
+
+
+def nea_last_status(name: str) -> str:
+    """2.4.0 fit-in F4 (m070, m448): how the last nea_resolve of this name ended: "ok" (the Archive knows it),
+    "unknown" (the Archive answered and does not list it), "no answer" (not reached, or an unreadable reply), or ""
+    (never asked). Lets a message say "no planet listed" or "the Archive did not answer", not both at once."""
+    clean = " ".join(str(name or "").strip().replace("'", "").split())
+    return _NEA_LAST.get(clean.lower(), "")
 
 
 def _parse_alias_reply(data) -> dict | None:

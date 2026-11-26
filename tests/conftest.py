@@ -56,3 +56,30 @@ def _settings_start_fresh(_settings_file_of_its_own):
             os.remove(path)   # only the session's own temp file (a test's own patched file is left to it)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _load_series_in_line():
+    """2.4.0 fit-in F4 (#100 item 4): Load series reads the file and searches the period on a worker thread. The
+    tests call load_series() and look at the result on the next line, so they run the same steps in line (the
+    threaded path has its own test, which switches this off)."""
+    try:
+        import clearv_app as ca
+    except Exception:
+        yield
+        return
+    with mock.patch.object(ca.App, "SERIES_SYNC", True):
+        yield
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _ask_night_without_a_window():
+    """2.4.0 fit-in F4 (m456, m482): the night chooser of Planet transits… / Transmission loss… is a real window
+    and would wait for a click; under test it answers Cancel unless a test stands its own answer in."""
+    try:
+        import clearv_app as ca
+    except Exception:
+        yield
+        return
+    with mock.patch.object(ca, "ask_night", lambda *a, **k: None):
+        yield
