@@ -34,7 +34,7 @@ The **Period from** box chooses what the search uses: **Every point**, or **5 mi
 
 Bins smear a period shorter than about ten bins. So when the VSX or a marked period is that short, or the best peak
 found from bins is, SHOBS-P searches every point instead, and a **Bins** line in the Period box says so (for
-example "0.039 d spans only 5.6 10-min bins: searched every point instead").
+example "every point used (10-min bins too coarse for 0.039 d)"). It is a plain note: nothing to do.
 
 ### Check-star correction
 
@@ -46,7 +46,8 @@ The pier-side and line-up checkboxes from chapter 12 also affect the search.
 
 | Line | Meaning |
 |---|---|
-| **Best** (or **Peak**) | The best period in days and hours. **Peak … (not significant)** means SHOBS-P does not trust it. |
+| **Period** | The verdict, in one line (from 2.4.0): **Reliable**, **⚠ Doubtful** with the reasons, or **None** with the reason. See "The verdict line" below. |
+| **Best** (or **Peak**) | The best period in days and hours. It reads **Peak** when the peak did not pass the significance tests below. |
 | **Power** | The peak's height (0 to 1), and its **FAP**, false-alarm probability, worked out two ways: from the points, and counting nights |
 | **Basis** | Every point, or how many bins |
 | **Alias** | The one-day alias of the best period (see below) |
@@ -54,7 +55,20 @@ The pier-side and line-up checkboxes from chapter 12 also affect the search.
 | **Fold** | Whether the check-star correction is on |
 | **VSX** | The catalog period, when VSX has one. Also drawn as a green dashed line on the periodogram. |
 
-Further lines appear when they apply: **Check ⚠ depends on … alone**, **Airmass ⚠ nightly means follow airmass**, and **Marked …** for periods you asked about.
+Further lines appear when they apply: **Range … outside the search**, **Bins every point used …**, **Check depends on … alone**, **Airmass nightly means follow airmass**, and **Marked …** for periods you asked about. These rows are plain: they give the reasons behind the verdict. Only the **⚠ Doubtful** verdict line itself carries a ⚠.
+
+### The verdict line
+
+The first row of the Period box says in one line whether to trust the best period:
+
+- **Period  Reliable: 0.03912 d (FAP 0.1 %)**: the period passed every test below.
+- **Period  ⚠ Doubtful: 0.99730 d — near a day alias; depends on 22–23 Oct alone**: a peak stands out, but one or more
+  checks speak against it. The reasons are listed worst first. Do not report the period until they are cleared up.
+- **Period  None: …** with the reason: no period was found (the star looks constant at this precision, one short
+  night, or too few points).
+
+The cautions under the plots say what to do about each reason. The same line is in the saved plot's summary and in
+the report's settings file.
 
 ## What "significant" means here
 
@@ -69,19 +83,19 @@ A period is shown as **Best**, and the fold is titled **Folded**, only when *all
 When one night is too short for even the shortest period searched (under two of its cycles; a 50-minute night with
 the search starting at 0.02 d), there is nothing to test. The Period box then holds one line and no peak:
 
-- **Too short for a period search: one night of 0.8 h covers under two cycles of even the shortest period searched
-  (0.02 d = 0.5 h). Add nights, or observe longer.**
+- **Period  None: too short for a period search: one night of 0.8 h covers under two cycles of even the shortest
+  period searched (0.02 d = 0.5 h). Add nights, or observe longer.**
 
 The fold and the periodogram say the same; no best period is marked.
 
-If any test fails, the Period box starts with a plain sentence saying why, for example:
+If any test fails, the verdict line says why, for example:
 
-- **No reliable period yet: one short night covers under two cycles of the best peak. Add nights.** (On such a night
-  the day-alias and search-edge ⚠ marks are left out: the peak is not reliable either way.)
-- **No reliable period: the peak depends on … alone (often an offset between nights, not the star).**
-- **No reliable period: the peak follows the nights' airmass; it is not shown to be the star.**
-- **No significant period: counting nights, the peak's false-alarm probability is … (a night's points share offsets).**
-- **No significant period: the star looks constant at this precision (scatter … mag per point, … mag night to night).**
+- **Period  None: one short night covers under two cycles of the best peak (no reliable period yet); add nights.**
+  (On such a night the day-alias and search-edge reasons are left out: the peak is not reliable either way.)
+- **Period  ⚠ Doubtful: … d — depends on … alone (no reliable period: often an offset between nights, not the star)**
+- **Period  ⚠ Doubtful: … d — follows the nights' airmass (no reliable period)**
+- **Period  None: no significant period: counting nights, the peak's false-alarm probability is … (a night's points share offsets).**
+- **Period  None: no significant period: the star looks constant at this precision (scatter … mag per point, … mag night to night).**
 
 The last one is a result too. For a suspected variable, "constant to 0.005 mag" is worth knowing.
 
@@ -94,7 +108,7 @@ Observing from one site, you see the star at about the same time each evening. T
 SHOBS-P helps in two ways:
 
 - The **Alias** line gives the one-day alias of the best period. If the periodogram has two peaks of similar height, one at the best period and one at its alias, your data cannot yet tell them apart.
-- If the best period is within 5% of 1, ½ or ⅓ day (solar or sidereal), it adds **⚠ near a day alias** and a caution: treat it as a likely sampling alias unless a single night shows the variation itself.
+- If the best period is within 5% of 1, ½ or ⅓ day (solar or sidereal), the verdict becomes **⚠ Doubtful … near a day alias** and a caution is added: treat it as a likely sampling alias unless a single night shows the variation itself.
 
 Ways to break an alias:
 
@@ -113,14 +127,14 @@ Each appears as a purple dotted line on the periodogram, and the Period box give
 
 ## Other cautions about the period
 
-- **⚠ at the edge**: the best period is at the end of your search range. The true period may lie beyond it, or this is a slow trend. Widen the range and press **Refit period**.
+- **⚠ Doubtful … at the edge of the search**: the best period is at the end of your search range. The true period may lie beyond it, or this is a slow trend. Widen the range and press **Refit period**.
 - **The data span only … d, under 1.5 cycles of the best period; it is not pinned down yet.** Add nights.
 
 ## The airmass check
 
 At higher airmass, a star of a different color from the comps dims a little more or less than they do. If some nights were observed lower in the sky than others, their means can differ for that reason alone, and a period search may fit the pattern of which nights ran low.
 
-SHOBS-P compares each night's mean with that night's median airmass. If they follow each other, the Period box shows **Airmass ⚠ nightly means follow airmass (… mag per airmass)** and a caution gives the slope and the night-to-night spread before and after taking the trend out. SHOBS-P then tries the search with the trend taken out, and without the high-airmass nights. If the period does not survive, it is demoted (**; period demoted**) and shown as not significant.
+SHOBS-P compares each night's mean with that night's median airmass. If they follow each other, the Period box shows **Airmass nightly means follow airmass (… mag per airmass)** and a caution gives the slope and the night-to-night spread before and after taking the trend out. SHOBS-P then tries the search with the trend taken out, and without the high-airmass nights. If the period does not survive, it is demoted (**; period demoted**) and the verdict reads **⚠ Doubtful … follows the nights' airmass**.
 
 The check needs airmass: from the frames' headers, or worked out from the target's RA/Dec and your site. Without them, the log says the check was skipped. Type your site on the Input page to enable it.
 

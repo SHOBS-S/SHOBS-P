@@ -12628,9 +12628,11 @@ def comp_noise_warning(obs: list) -> str | None:
         return None
     if s_tk < 0.6 * s_tc and s_kc > 0.6 * s_tc:
         pct = lambda m: 100 * (10 ** (0.4 * m) - 1)
-        return (f"The comparison stars set most of the noise: the target scatters {pct(s_tc):.1f}% per point against "
-                f"the comps but {pct(s_tk):.1f}% against the check star (and the check {pct(s_kc):.1f}% against the "
-                "comps). Pick brighter, steadier comps (the check star can be one), then run photometry again.")
+        # 2.4.0 fit-in F3 (m802): one wording of "the comps limit the noise" (transit_ui.COMP_CAUTION_PREFIXES
+        # keys the Comp health link on its first words)
+        return (f"Comps limit the noise (the target scatters {pct(s_tc):.1f} % per point against the comps, "
+                f"{pct(s_tk):.1f} % against the check star; the check {pct(s_kc):.1f} % against the comps). Pick "
+                "brighter, steadier comps (the check star can be one), then run photometry again.")
     return None
 
 

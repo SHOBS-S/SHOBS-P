@@ -117,16 +117,19 @@ Report the timing; flag the depth. The report's NOTES carry this sentence automa
 
 The notes beside the table add detail. The ones you will see most with a weak result:
 
-- **"Little or no baseline before ingress (after egress) (… min before, … min after). A one-sided baseline lets a
-  trend imitate depth or shift Tc."** Take more baseline next time.
-- **"A …-minute gap in the data inside the transit. Ingress, egress, or the bottom may be missing…"**
-- **"The data start … min after the fitted ingress: ingress was not observed."** (or *"The data end … before the
-  fitted egress"*)
-- **"Almost no points inside the predicted transit window: the transit was missed (clouds, a gap, or the
-  ephemeris)."**
-- **"… = … is …σ from the published …. The light curve pulls hard against the known shape: look for a trend, a bad
-  comp, or clouds."**
-- **"With the shape left free, Rp/R\* goes to …. The data alone do not pin the shape…"**
+- **"⚠ Coverage: little or no baseline after egress (62 min before, 0 min after); egress not observed (data end 14
+  min before it); a 25-min gap inside the transit. A one-sided baseline lets a trend imitate depth or shift Tc. The
+  shape and Tc are less certain."** One note (from 2.4.0) joins everything about what the night covered: a short
+  baseline before ingress or after egress, an ingress or egress that was not observed, and a gap inside the transit.
+  Only the parts that apply are listed. Take more baseline next time. When almost no points lie inside the predicted
+  window, the note says **"almost no points inside the predicted transit window: the transit was missed (clouds, a
+  gap, or the ephemeris)"**; with the verdict **No transit measured** the verdict itself says so and the note is
+  left out.
+- **"⚠ Shape: a/R\* = … is …σ from the published … ± …; left free, Rp/R\* goes to … (b …, a/R\* …). The light
+  curve does not hold the published shape. First look at Comp health, then trim a cloudy end."** One note (from
+  2.4.0) for a fit that pulls away from the published shape: look for a bad comp, a trend or clouds.
+- **"Shape: left free, Rp/R\* goes to … (b …, a/R\* …); the reported values lean on the published a/R\* and b."** A
+  plain note: the fit itself agrees with the published shape, but the data alone do not pin it.
 - **"With the shape left free the fit is not constrained (…): this light curve alone cannot fix a/R\* and b, so the
   Free shape column is left empty. The reported values use the published a/R\* and b."** The free fit ran away. This
   is information, not a fault of the main fit.

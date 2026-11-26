@@ -62,7 +62,9 @@ strip; the page has no progress bar of its own.
 - **Open AAVSO exoplanet report (EXOTIC)…** (same row): fit someone else's report instead (see [19. Reports](19-transit-reports.md)).
   **Close report** appears beside the Night box while a report is open.
 - **Points** row: **Trim** (below), and **Refit with flagged frames** when the night has cloud-flagged frames the fit
-  left out. From 2.4.0, when some fitted frames are past airmass 3, a **Trim airmass > 3** button appears after the
+  left out. After such a refit a plain note says *"This fit includes 12 frames flagged cloud, error bars ×2.
+  Without them: depth 1.52 %, Tc 2461000.51234."*, so the two fits can be compared without fitting again (the
+  "Without them" part is there when the fit without them was the one on the page just before). From 2.4.0, when some fitted frames are past airmass 3, a **Trim airmass > 3** button appears after the
   fit, with a note saying how many frames that is and how much out-of-transit baseline a trim would leave before and
   after the transit. Pressing it trims them (the same as a Trim span) and refits; **Clear trim** puts them back. The
   limit can be changed with `transit_trim_airmass` in the settings file.
@@ -300,8 +302,10 @@ Where you see the decision:
 - **The plot**: the purple line at the flip (see "Read the plot").
 - **The notes**: for example *"Meridian flip at BJD_TDB … (+2.57 h from mid-transit; the frames' flip segment): a
   baseline step there was fitted together with the transit: step −14.4 ± 0.5 ppt (kept: ΔBIC 629, at least 10
-  needed)."*, then the depth without the step, the step–depth correlation and the baseline on each side. When it is
-  not needed: *"… Flip step not needed: … The step is kept only at ΔBIC 10 or more, so this fit has no step term."*
+  needed)."*, then the depth without the step and the step–depth correlation. When the step and the depth cannot
+  be told apart, or a side of the flip has too little baseline, the verdict line above the plot says so (from 2.4.0
+  the notes do not repeat it). When the step is not needed there is no note (from 2.4.0): the result line and the
+  table's **Flip step** row say it.
 
 ![A transit fit on a meridian-flip night with the flip step kept](img/17-flip-step.png)
 
@@ -642,9 +646,11 @@ A Variables-mode series never offers **Fit the series' nights…**.
 Fit CSVs saved by SHOBS-P 2.2.20 or later carry each point's airmass. Older fit CSVs do not. With **airmass**
 ticked, a night with no airmass among nights that have it is fitted against time only, unlike the others, and its
 Tc may shift. SHOBS-P marks such a night with *"⚠ No airmass in this file: its baseline is fitted against time only,
-unlike the other nights. Tc may shift."* in its **Status**, in a line under the table (with the nights' dates) and in
-the Summary. The line under the fit options says, for example, *"⚠ 4 nights in use; 1 with no airmass (see
-above)."*
+unlike the other nights. Tc may shift."* in its **Status** and in a line under the table (with the nights' dates).
+The Summary has one note for all such nights (from 2.4.0): *"⚠ No airmass in the file for 5–6 Oct, 9–10 Oct: their
+baseline is fitted against time only, unlike the other nights; Tc may shift. “Fit every night against time only”
+makes all nights match."* The line under the fit options says, plainly, *"4 nights in use (1 fitted against time
+only: see the note under the table)."*
 
 You have two ways out:
 
@@ -672,7 +678,9 @@ night's own test kept it (the same ΔBIC ≥ 10 rule as above); the **Nights** p
 *"flip step fitted: … ppt (ΔBIC …), kept"* or *"flip step not needed (ΔBIC …; kept only at 10 or more)"*, and the
 corner plot shows a kept step as *step:N*. Then the timing table lists each epoch: **Tc (BJD_TDB) ± min**, and the
 O − C against three ephemerides: **O − C input** (min and σ), **O − C alternative**, and **O − C own fit**, the nights'
-own updated linear ephemeris. Outlier nights are flagged.
+own updated linear ephemeris. Outlier nights are named: in the ⚠ line when the nights scatter more than their
+error bars allow (*"… (χ²ν 4.2); outlier nights: 5–6 Oct, 9–10 Oct. Its errors are scaled by √χ²ν = 2.05."*), or in a
+plain note when the scatter test passes (*"Night 5–6 Oct is more than 3σ from the nights' own ephemeris."*).
 
 Under the table, a few lines read the timing in plain words. For example, when all nights are late or early by about
 the same amount, and that offset is within what the input ephemeris can predict at these epochs, it says the offset

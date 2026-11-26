@@ -372,7 +372,8 @@ class TestInApp(unittest.TestCase):
         with mock.patch.object(app, "_fill_summary", side_effect=grab):
             app.draw_output()
         self.assertEqual(len(got["period"]), 1, got["period"])
-        self.assertTrue(got["period"][0].startswith("Too short for a period search"), got["period"])
+        # 2.4.0 fit-in F3 (area J): the one line leads with the verdict ("Period  None: …"), same words after it
+        self.assertTrue(got["period"][0].startswith("Period  None: too short for a period search"), got["period"])
         self.assertFalse(any("⚠" in c or "day alias" in c for c in got["cautions"]), got["cautions"])
         self.assertEqual(app.out_ax2.get_title(), "Too short for a period search")
         # a night long enough for the shortest period, but not for its best peak: still the old wording, no ⚠
@@ -382,7 +383,8 @@ class TestInApp(unittest.TestCase):
         app._refresh_period()
         with mock.patch.object(app, "_fill_summary", side_effect=grab):
             app.draw_output()
-        self.assertFalse(got["period"][0].startswith("Too short for a period search"), got["period"])
+        self.assertNotIn("too short for a period search", got["period"][0])
+        self.assertTrue(got["period"][0].startswith("Period  "), got["period"])
 
 
 if __name__ == "__main__":

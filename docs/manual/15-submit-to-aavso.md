@@ -37,8 +37,9 @@ photometry run, other marks or other aperture radii make the button live again.
 
 It also saves a settings file (`…_settings.txt`, from 2.3.1): night by night, the aperture and sky radii, binning,
 comps and check measured, frames skipped and left out, calibration, gain, telescope aperture and stacking, with the
-report's own comps, check and scintillation. Keep it with the report: with it, a night can be reduced again the same
-way.
+report's own comps, check and scintillation, and (from 2.4.0) the Period box's verdict as a last line, for example
+`Period verdict: Reliable: 0.03912 d (FAP 0.1 %)` (chapter 13). Keep it with the report: with it, a night can be
+reduced again the same way.
 
 When a series file is open, saving the report also notes it in the series (for the **Sent** column), so the series
 file is rewritten: the status line ends with **Series file updated: SZ_Lyn.cvseries.** The series keeps its own site
@@ -78,10 +79,11 @@ star you mention on purpose). The same question comes before an AAVSO exoplanet 
 ![The notes question before a report is saved](img/15-notes-question.png)
 *The notes name a star that is not in this reduction.*
 
-**The Star ID is “hd219134”. AAVSO spells it “HD 219134” … Use “HD 219134” in the report?**
-Answer **Yes**. WebObs may not match another spelling to the star. The report and its file name use the AAVSO
-spelling, but the **Star ID** box changes to it only once the report is saved. If you cancel anywhere afterwards, the
-old name stays. The log then says **Star ID set to “HD 219134” (AAVSO's spelling), as used in the saved report.**
+**Star ID written the way AAVSO spells it: HD 219134 (was hd219134).**
+Not a question (from 2.4.0): a plain line. WebObs may not match another spelling to the star, so when a Star ID
+differs from AAVSO's spelling only in spacing or capitals, SHOBS-P switches to AAVSO's spelling by itself. It does so
+when the star is looked up on the Input page; a name that no lookup has seen (one that came with a loaded series) is
+switched when the report is saved. The report and its file name use that spelling.
 
 **Chart ID in this report: na (no AAVSO sequence star is marked as a comp or the check).**
 When the chart ID is `na`, typed by hand, or came from a saved series, the save shows the chart ID that goes into
@@ -92,29 +94,41 @@ closing the question's window. With `na`, the
 question reminds you that AAVSO takes `na` only when the comparison magnitudes are not from an AAVSO chart or
 sequence.
 
-**Before you upload:** followed by a list. Each item is something AAVSO may reject or misfile:
+**WebObs will reject this file:** followed by a list (from 2.4.0 only the things WebObs really rejects are asked
+about):
 
-- **AAVSO observer code is empty**, **Star ID is empty**: fill them in on the Input page. (There is no "Chart ID is empty" any more: the chart ID is `na` until a sequence star or you give it a value.)
-- **the series mixes filters**: report each filter separately (chapter 10).
-- **ensemble report (more than one comp) without a check star; AAVSO requires one**: mark a check star and run again.
-- **a comp has no star name**: the comp would be called something like `comp1`. Give it its catalog name.
+- **the AAVSO observer code is empty (Input page)**, **the Star ID is empty (Input page)**: fill them in on the Input page. (There is no "Chart ID is empty" any more: the chart ID is `na` until a sequence star or you give it a value.)
+- **more than one comp and no check star (AAVSO takes an ensemble report only with one)**: mark a check star and run again.
 
-Answer **No** to stop and fix things, or **Yes** to save anyway.
+Answer **No** (the default) to stop and fix things, or **Yes** to save anyway.
+
+You do not have to wait for the question. As soon as there is a light curve and one of these is missing, the Results
+row says so beside **Save AAVSO report**, for example **WebObs needs an observer code (Input page)**, and the empty
+**Observer code** or **Star ID** box on the Input page turns red. Fill the box and both go away.
+
+Two more things are worth knowing but do not stop an upload, so they are plain Log lines and no question:
+
+- **AAVSO report: the series mixes filters; each row carries its own.** Report each filter separately if you want one filter per file (chapter 10).
+- **AAVSO report: a comp has no star name (the report calls it “comp1”).** Give the comp its catalog name.
 
 **The check star has no name in this series …**
 The check star was never given a real name, so the report would say `KNAME = check`. Type its AUID (for example `000-BJR-417`) or catalog name (for example `TYC 4006-956-1`). SHOBS-P remembers it with the series. If you leave it empty, the report is not saved.
 
 ## One night or the whole series
 
-If a night is highlighted in the night table (and the series has more than one night), SHOBS-P asks:
+The first box on the **Results** row says what **Save AAVSO report** and **Save light-curve CSV** will hold (from
+2.4.0; no save asks any more):
 
-> SZ Lyn · night of 5–6 Oct 2026 is highlighted.
->
-> Yes: save the AAVSO report for just that night.
-> No: save the AAVSO report for the whole series (8 nights).
-> Cancel: don't save.
+- **Saving: night 5–6 Oct 2026** when a night is highlighted in the night table (and the series has more than one
+  night). The highlighted night is the default.
+- **Saving: whole series (8 nights)** with no night highlighted.
 
-With no night highlighted, the whole series is saved.
+While a night is highlighted you can open the box and choose the whole series instead; the choice holds until you
+highlight another night or none. After a save, the status line names what the file holds, for example **Saved
+AAVSO_SZ_Lyn_… to Reports. It holds the night 5–6 Oct 2026. …**
+
+![The Results row with the Saving box](img/15-results-row-scope.png)
+*The Saving box at the start of the Results row.*
 
 **Report each night once.** The simplest habit for a campaign: after you add a night, click it in the night table, save the report for just that night, and upload it.
 

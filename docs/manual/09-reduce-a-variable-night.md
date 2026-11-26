@@ -18,7 +18,7 @@ If you want to add this night to nights you already have, load the series *befor
 
 > **Tip:** Reducing a different star than last time? Press **New reduction** on the Input page first (chapter 5). It clears the old star's comps, check star and other settings, and puts the Output page's **Notes** back to the default (**OSC reduced; not transformed**), so the old star's notes do not slip into this star's report.
 
-> **Tip:** If an amber line appears under Star ID saying how AAVSO spells the name (for example **AAVSO spells this “HD 219134”**), press **Use it**. WebObs matches reports to stars by name, so the AAVSO spelling saves trouble later.
+> **Tip:** WebObs matches reports to stars by name. When you type a name that differs from AAVSO's spelling only in spacing or capitals (**hd219134**), the lookup switches the Star ID to AAVSO's spelling by itself and says so in the Log (**Star ID written the way AAVSO spells it: HD 219134 (was hd219134).**).
 
 Then point the Input page at your frames, blink them, and calibrate, as in chapters 5 to 7.
 
@@ -161,7 +161,7 @@ Two lines can appear under the table: the spread of the nightly means (with two 
 
 ![One night of a ten-night series, clicked in the night table](img/10-night-zoom.png)
 
-> **Caution:** While a night is highlighted, **Save AAVSO report** and **Save light-curve CSV** ask whether to save that night only or the whole series, and **Save plot PNG** saves what is on screen. Click the row again when you want the whole series.
+> **Caution:** While a night is highlighted, **Save AAVSO report** and **Save light-curve CSV** save that night only: the first box on the **Results** row says **Saving: night …** (open it to choose the whole series instead; chapter 15), and **Save plot PNG** saves what is on screen. Click the row again when you want the whole series.
 
 ### The four plots
 

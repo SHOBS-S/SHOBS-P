@@ -9,7 +9,8 @@ The Input page's **Output** folder decides where results go:
 
 - **With an Output folder**, every Save button writes there without asking. The status bar says what was saved
   where, for example *"Saved AAVSO_HD_219134_TG_05-OCT-2026_SHOBS-P.txt to Results."*
-- **Without one**, each Save opens a dialog with a suggested name, and a message confirms where the file went. The
+- **Without one**, each Save opens a dialog with a suggested name, and the status bar then says where the file went
+  (*"Saved … to …"*; from 2.4.0 there is no message to click away, and the Log has the full path). The
   dialog opens in the folder you last saved a result to in this session, with the next free name (and number) filled
   in. A name typed with a number after its extension (`…_SHOBS-P.txt.2`) is tidied to `…_SHOBS-P_2.txt`; if that name
   is taken, the next free one is used and the status bar says so.
@@ -57,8 +58,9 @@ in the picture. The line tells you, and anyone you send the file to, when it was
 | **Time of max/min…** → **Save to times CSV** | `<star>_times_of_extremum.csv`, next to the series file. Each new time is added; a re-measured one replaces the old row. Columns: below. |
 | **Watch stars…** → **Export watch light curves CSV…** | `watch_stars.csv` |
 
-When a night is highlighted in the night table, **Save AAVSO report** and **Save light-curve CSV** first ask whether
-to save that night only or the whole series. See [15. Submit to AAVSO](15-submit-to-aavso.md).
+When a night is highlighted in the night table, **Save AAVSO report** and **Save light-curve CSV** save that night
+only; the first box on the Results row says so (**Saving: night …**) and lets you choose the whole series instead.
+See [15. Submit to AAVSO](15-submit-to-aavso.md).
 
 **The times CSV's columns** (`<star>_times_of_extremum.csv`, one row per time of maximum or minimum):
 

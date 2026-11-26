@@ -110,9 +110,11 @@ Things to know:
   have not answered within 60 seconds, a red line under RA/Dec says so, for example **✖ SZ Lyn: the SIMBAD and VSX
   did not answer within 60 s — type RA/Dec, or Look up again.** Type RA and Dec yourself, or press **Look up again**
   later. (If the answer still comes in after that, it is used.)
-- If the name is only spelled a little differently from the AAVSO's version (spaces or capitals), an orange line
-  appears, such as **AAVSO spells this "HD 219134"**, with a **Use it** button. Using the AAVSO spelling keeps your
-  reports matching the AAVSO's records.
+- If the name is only spelled a little differently from the AAVSO's version (spaces or capitals), the lookup
+  switches the Star ID to AAVSO's spelling by itself (from 2.4.0), and the Log says so in one plain line: **Star ID
+  written the way AAVSO spells it: HD 219134 (was hd219134).** Using the AAVSO spelling keeps your reports matching
+  the AAVSO's records. While you are still typing, a grey line under the box says what will happen: **AAVSO spells
+  this "HD 219134": Look up switches to it.**
 - **Look up again** repeats the lookup, for example after the internet was down. It is greyed while the Star ID box
   is empty (hover over it: *Type a Star ID or designation first.*).
 - While a job runs (calibration, photometry, a solve), the **Star ID** and **Planet** boxes, their **Look up
