@@ -23713,7 +23713,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             kept = self._write_series(path)
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not save: {exc}")
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"Could not save the series to {os.path.basename(path)}: {exc}\n\n"
+                                            "Save it to another folder, or close the program that has the file open, "
+                                            "then press Save series again. The points are still open here.")
             return
         finally:
             self._explicit_save = False
@@ -23724,6 +23727,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         + f". Next night, load this file before reducing: {path}")
 
     def load_series(self):
+        if self.busy:
+            return   # greyed during a job (and while a series is loading); a silent backstop
         # 2.2.15 (review): an open series with unsaved points is offered a save first, as Close series does.
         if self.observations and not self._offer_series_save("load another"):
             return
@@ -24484,7 +24489,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 core.save_color_calibration(saved)
                 self.log(f"  Saved the color term for nights without enough labeled stars ({core.COLOR_CAL_FILE}).")
             except OSError as exc:
-                self.log(f"⚠ Could not save the color term: {exc}")
+                # 2.4.0 fit-in F4 (sheet sweep): a plain note (this night's colors are right; only the copy kept
+                # for later nights is missing), with why it matters
+                self.log(f"Color term not kept for later nights ({exc}): {core.COLOR_CAL_FILE} could not be written. "
+                         "This night's colors are not affected.")
 
     @staticmethod
     def _version_tuple(text) -> tuple:
@@ -25806,7 +25814,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 core.recompute_with_comps(obs, self.active_comps, self.comps_used, self._comp_catalog(),
                                           self._star_aliases())
             except ValueError as exc:
-                self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to the added file: {exc}. Its nights keep the comps "
+                         "they were saved with: open Use comps… (Output page) and press Apply to put every night "
+                         "on the same comps.")   # 2.4.0 fit-in F4 (sheet sweep): says what to do
         for night, info in (meta.get("color_cal") or {}).items():
             self.color_cal.setdefault(night, info)
         for night, info in (meta.get("night_binning") or {}).items():
@@ -26999,7 +27009,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:
                 core.recompute_with_comps(night_points, self.comps_used, self.comps_used, catalog, aliases)
             except ValueError as exc:
-                self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}")
+                self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}. "
+                         "The night keeps tonight's catalog magnitudes, so it may sit off the other nights: open "
+                         "Use comps… (Output page) and press Apply.")   # 2.4.0 fit-in F4 (sheet sweep)
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
             self.log(f"{old} is {new} (same star): series name"
@@ -27161,7 +27173,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         aliases = self._star_aliases()
         missing = [n for n in selection if catalog.get(n) is None]
         if missing:
-            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.")
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.\n\nType "
+                                            f"{'its' if len(missing) == 1 else 'their'} magnitude in the Catalog "
+                                            "mag column, or untick "
+                                            f"{'that star' if len(missing) == 1 else 'those stars'}.")
             return False
         no_base = sum(1 for o in self.observations if not math.isfinite(o.target_inst))
         if no_base:
@@ -27917,7 +27933,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"AAVSO report: {in_transit} frame{'s' if in_transit != 1 else ''} in a planet transit left out "
                      "of the report.")
         if not points:
-            messagebox.showinfo(APP_TITLE, "No usable points to report for that choice.")
+            # 2.4.0 fit-in F4 (sheet sweep): says why and what to do
+            messagebox.showinfo(APP_TITLE, "No usable points to report for that choice: every point of it is "
+                                           "flagged, trimmed or inside a planet's transit. Choose another night or "
+                                           "the whole series in the Saving box, or untick Leave flagged points out.")
             return False
         # 2.2.18 (item 10): saving never warns about duplicates any more; Open AAVSO WebObs… does (an upload is what
         # duplicates, and many reports are never uploaded: HD 219134's go to Dr. Elliott).
@@ -29913,9 +29932,12 @@ class ExtremumWindow:
             return
         kind = "max" if self.kind.get() == "maximum" else "min"
         period, epoch = self._elements()
-        problem = self._elements_problem()   # 2.4.0 fit-in F4 (nit): an unreadable Epoch is said, never ignored
-        if problem:
-            self.source.set(problem)
+        try:   # 2.4.0 fit-in F4 (nit): an unreadable Epoch is said, never ignored
+            problem = self._elements_problem()
+            if problem:
+                self.source.set(problem)
+        except Exception:
+            pass   # the words are extra: Measure itself never depends on them
         hw = None
         if self.window_min.get().strip():
             try:
@@ -30259,7 +30281,10 @@ class ExtremumWindow:
             try:
                 done.append(core.save_extremum_row(path, row))
             except OSError as exc:
-                messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}", parent=self.win)
+                # 2.4.0 fit-in F4 (sheet sweep): says what to do
+                messagebox.showerror(APP_TITLE, f"Could not write {path}: {exc}\n\nClose the program that has the "
+                                                "file open (a spreadsheet?), then press Save again; the measured "
+                                                "time is still in this window.", parent=self.win)
                 return
         self.csv_path = path
         self.app.extremum_csv, self.app.extremum_csv_star = path, self._star()
@@ -30628,7 +30653,9 @@ class ExportWindow:
         try:
             save_export_setups(setups)
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Could not save setups: {exc}", parent=self.win)
+            # 2.4.0 fit-in F4 (sheet sweep): says what it means
+            messagebox.showerror(APP_TITLE, f"Could not save the export setups: {exc}\n\nThe setup still works in "
+                                            "this window; it will not be there next time.", parent=self.win)
             return
         self._setup_names = set(setups)
         self.setup_box.configure(values=sorted(setups))
@@ -30655,7 +30682,10 @@ class ExportWindow:
             lon = float(app.lon.get()) if app.lon.get().strip() else None
             times = core.convert_times(np.array([o.jd for o in points]), setup["time"], ra, dec, lat, lon)
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"Time conversion: {exc}", parent=self.win)
+            # 2.4.0 fit-in F4 (sheet sweep): says what to do
+            messagebox.showerror(APP_TITLE, f"The times could not be converted to {setup['time']}: {exc}\n\nHJD and "
+                                            "BJD need the target's RA/Dec and the site (Input page); JD needs "
+                                            "neither.", parent=self.win)
             return
         if path is None:
             base = (app.star_id.get() or "target").replace(" ", "_")
@@ -31343,9 +31373,11 @@ class ScanView:
             ax.set_xscale("log")
             edge = ls.get("edge")
             # 2.2.19 (nit): a peak at the search edge is not a period ("20 d (edge)" for a drifting star).
-            ax.set_title((f"Lomb-Scargle   {period_cell(per)}  ⚠ peak at the search edge" if edge
+            # 2.4.0 fit-in F4 (8c): plain words in the title, no ⚠ and no red (a peak at the edge is a note; a
+            # known variable is searched over a range that holds its VSX period, see _update_range_note)
+            ax.set_title((f"Lomb-Scargle   {period_cell(per)}  (the peak is at the edge of the search)" if edge
                           else f"Lomb-Scargle   best {per['period']:.4f} d"),
-                         fontsize=10, color="#b00020" if edge else "black")
+                         fontsize=10, color="black")
             ax.set_xlabel("Period (days)")
             ax.set_ylabel("Power")
         else:

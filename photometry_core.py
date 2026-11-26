@@ -6896,7 +6896,9 @@ def lomb_scargle(jd: np.ndarray, mag: np.ndarray, min_period: float, max_period:
     if len(t) < 8:
         return None
     if not (0 < min_period < max_period):
-        raise ValueError("Period search needs 0 < min period < max period")
+        # 2.4.0 fit-in F4 (sheet sweep): shown after "Period search: " on the status line; says what to fix
+        raise ValueError("the min period must be above 0 and below the max period; correct the two Period search "
+                         "boxes")
     ls = LombScargle(t, y, normalization="standard")
     frequency, power = ls.autopower(
         minimum_frequency=1.0 / max_period,
@@ -11225,7 +11227,7 @@ def parse_epoch(text):
     t = str(text or "").strip()
     if not t:
         return None
-    m = _re.fullmatch(r"(?:[A-Za-z][A-Za-z_0-9()]*)?\s*[:=]?\s*([0-9][0-9 ]*(?:[.,][0-9]+)?)", t)
+    m = _re.fullmatch(r"(?:[A-Za-z_()]+(?:[0-9](?=\s*[:=]))?)?\s*[:=]?\s*([0-9][0-9 ]*(?:[.,][0-9]+)?)", t)
     if not m:
         return None
     try:

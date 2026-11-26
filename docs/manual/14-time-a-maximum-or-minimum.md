@@ -87,7 +87,7 @@ in the **Period** box (no epoch needed), and press **Measure** again.
    from VSX** (greyed, from 2.4.0, until **Star ID** on the Input page holds the star's name). When VSX has a period but no epoch (AA LMi, for example), the label says **VSX gives a period but no
    epoch**: the error is fine (it uses that period), and for an O − C you type an epoch yourself. A good first epoch
    is this night's own Tmax; it makes this night cycle 0 with O − C 0. **Elements from VSX** and **Elements from saved times** switch between the two at any time. A time
-   saved against the saved times' elements is marked **saved** in the CSV's elements column. The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
+   saved against the saved times' elements is marked **saved** in the CSV's elements column. You can paste an epoch with its label in front (**JD 2461353.81255**, **HJD=2461353.8**, **BJD_TDB: 2461353.8**): from 2.4.0 the label is ignored and the number is read (before, such an epoch was dropped without a word, and with it the O − C). If the Epoch box holds something that is not a Julian Date, the label beside the elements says so when you press **Measure**: **Epoch '…' is not a Julian Date: type it as 2461353.81255 … No O−C until then.** The label beside it shows **VSX** when the elements are VSX's, or **typed** when you typed your own. VSX epochs are HJD, so leave the system box on **HJD** for VSX elements. Choose **BJD** if your elements are in BJD.
 6. Press **Measure** (greyed while a step runs in the main window). From 2.4.0 the measurement runs in the background: **Measure** greys out and the result box
    says *Measuring the time of maximum…* until the result appears (a few seconds on a long night; the main window's
    busy bar says the same). The window and SHOBS-P keep responding meanwhile.
@@ -144,11 +144,18 @@ From 2.4.0 each saved row also records the period its error used: `noise_period_
 listed in [22. Files SHOBS-P writes](22-files-shobs-p-writes.md).
 
 **Older times saved against VSX's elements.** The CSV keeps each row as it was saved: its own `period_d`, `epoch`,
-`elements` (`VSX HJD`, `saved HJD`, `typed HJD`) and the O − C and cycle worked out then. SHOBS-P never rewrites them,
-so the file stays a record of what was used. So a CSV started in 2.3 with VSX's elements and continued in 2.4.0 with
+`elements` (`VSX HJD`, `saved HJD`, `typed HJD`) and the O − C and cycle worked out then. SHOBS-P does not rewrite them
+by itself, so the file stays a record of what was used. So a CSV started in 2.3 with VSX's elements and continued in 2.4.0 with
 the saved times' elements holds O − C columns against two sets of elements. The window does not mix them: the list and
 the diagram work every row out again against the elements in the boxes. If you analyse the CSV elsewhere, use the time
 columns (`hjd`, `bjd_tdb`) with one set of elements, not the stored `o_c_min` column.
+
+**Store O−C of all saved times with these elements** (from 2.4.0; the button under the elements, greyed until the
+Period and Epoch boxes are filled and the star has saved times) puts the file on one set of elements when you want
+that. It writes, for every saved time of this star, the cycle, the O − C, the period, the epoch and the elements'
+source against the Period and Epoch in the boxes: the same numbers the list and the diagram show. The times, their
+errors and every other column stay as they are, and so do the rows of other stars. The file as it was is kept first,
+beside it, as `<Star>_times_of_extremum_before_oc_YYYYMMDD_HHMMSS.csv`; the Log names it.
 
 Measuring the same extremum again and saving replaces that row (same star, same type, within 0.01 d), so you can refine a timing without making duplicates.
 

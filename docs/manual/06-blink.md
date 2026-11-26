@@ -122,7 +122,7 @@ The stretch is remembered, separately for the Blink and Photometry pages.
 
 ## Blink the flats
 
-Choose **Flats** at the left of the tool row to look through the flat frames the same way. This is a quick way to find
+Choose **Flats** at the left of the tool row to look through the flat frames the same way. (With an empty Flat folder the line under the image reads **No flats in the Flat folder.**) This is a quick way to find
 a flat with a shadow (a hand, a cable) or one taken at the wrong brightness. Flats you reject here are left out of the
 master flat. The list then reads **Rejected flats …**.
 

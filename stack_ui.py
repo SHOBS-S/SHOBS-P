@@ -495,7 +495,9 @@ class StackMixin:
                 self.log("Stacking canceled; the points stay per frame.")
             else:
                 self.log(f"✖ Stacking failed: {error}. The points stay per frame.")
-                messagebox.showerror(TITLE, f"Stacking failed: {error}")
+                # 2.4.0 fit-in F4 (sheet sweep): the box says what the Log says, and what to do
+                messagebox.showerror(TITLE, f"Stacking failed: {error}\n\nThe points stay per frame. Press Stack "
+                                            "to try again, or carry on with the per-frame points.")
             return
         self._progress_end(f"{len(paths)} stacks.")
         seeing = summ.pop("_seeing", None)
@@ -665,7 +667,8 @@ class StackMixin:
                                           self._star_aliases())
                 recomputed = True
             except Exception as exc:
-                self.log(f"⚠ Could not apply the chosen comps to the {which} points: {exc}")
+                self.log(f"⚠ Could not apply the chosen comps to the {which} points: {exc}. They keep the comps "
+                         "they were measured with: open Use comps… (Output page) and press Apply.")   # F4 sweep
         self.observations = core.merge_nights([o for o in self.observations if o.night != night], new)
         info = self._night_info(night, create=True)
         # 2.3.0 review fix: what was changed on the set on screen follows to the set now shown: catalog magnitudes
@@ -685,7 +688,8 @@ class StackMixin:
                         self.log(f"  The catalog magnitudes changed in Use comps… applied to the {which} points too "
                                  f"({res['changed']} points).")
                 except Exception as exc:
-                    self.log(f"⚠ Could not apply the changed catalog magnitudes to the {which} points: {exc}")
+                    self.log(f"⚠ Could not apply the changed catalog magnitudes to the {which} points: {exc}. "
+                             "Open Use comps… (Output page) and press Apply to bring them in line.")   # F4 sweep
         if cat_now is not None:
             cats[which] = dict(cat_now)
         if info.get("planet_transits") and "transit_flagged" in info:
@@ -732,7 +736,8 @@ class StackMixin:
             try:
                 self._write_series(self.series_path)
             except OSError as exc:
-                self.log(f"⚠ Could not auto-save the series: {exc}")
+                self.log(f"⚠ Could not auto-save the series: {exc}. The change is in the open series only: press "
+                         "Save series (under the plot on the Output page).")   # 2.4.0 fit-in F4 (sheet sweep)
 
     def _stack_drop_after_remeasure(self, night, night_points):
         """2.3.0 review fix: Measure skipped frames added frames to the night's per-frame points: its stacks no longer

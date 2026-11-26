@@ -380,9 +380,23 @@
   {
    "section": "Input",
    "patterns": [
+    "The NASA Exoplanet Archive lists no planet for …. If the planet is listed under another name of the star, type the planet's name."
+   ],
+   "todo": "Type the planet's name in Planet if the star has one under another name. See 16. Prepare for a transit night."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "…: the NASA Exoplanet Archive did not answer, so its planets could not be listed. Press Look up again on the Star ID in a minute, or type the planet's name."
+   ],
+   "todo": "Press Look up again in a minute, or type the planet's name."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "No planets found for … at the NASA Exoplanet Archive (none listed under that name, or the Archive did not answer). Type the planet's name, or press Look up again on the Star ID."
    ],
-   "todo": "Type the planet's name in Planet, or look up again later. See 16. Prepare for a transit night."
+   "todo": "Type the planet's name in Planet, or look up again later."
   },
   {
    "section": "Input",
@@ -1897,7 +1911,11 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "Loaded N points from M night(s). Reduce the new night, then choose Add; the series' comps and check are placed after the solve."
+    "Loaded N points from M night(s). Reduce the new night, then choose Add; the series' comps and check are placed after the solve.",
+    "Loading NAME… reading the file",
+    "… the stars and settings",
+    "… the period search",
+    "… drawing the light curve"
    ],
    "todo": "Point Input at the new night's frames and run the flow; check the placed comps before Run photometry."
   },
@@ -2124,9 +2142,165 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "(Period box; the verdict row then reads"
+    "Range   searched 0.02–28 d: widened from 0.02–20 d to cover VSX 22.1 d",
+    "… the saved times' … d",
+    "Period search 0.02–28 d: widened from …",
+    "row, a ⚠ line",
+    "Search … d instead"
    ],
-   "todo": "Press Search … d instead."
+   "todo": "Nothing. To search another range, type it in the boxes; a range that leaves the known period out is widened again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Range   VSX 332 d is outside the search: these points span 3.0 d, under two cycles, too short to test it. Add nights."
+   ],
+   "todo": "Add nights."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Edge    The best period (… d) is at the long end of the search (max … d), and no known period says where to look. …",
+    "… at the short end of the search (min … d) …"
+   ],
+   "todo": "Raise the max period (or lower the min period) and press Refit period. Longer periods need more nights."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Period  None: no significant period: the star does change (0.08 mag within 5–6 Oct 2026; point scatter 0.006 mag), but these nights do not pin a period down. Add nights.",
+    "… the star looks constant at this precision"
+   ],
+   "todo": "Add nights; then look again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Power   0.93   FAP < 1e-99 (points), …",
+    "… 1.4e-03 (the lowest 6 nights can show) counting nights"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Period search: the min period must be above 0 and below the max period; correct the two Period search boxes"
+   ],
+   "todo": "Type a smaller number in the first box than in the second, then press Enter."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Epoch '…' is not a Julian Date: type it as 2461353.81255 (a leading JD, HJD or BJD is fine). No O−C until then.",
+    "Epoch … is not a full Julian Date (2 400 000 to 2 600 000). …",
+    "Period is not a number of days. …"
+   ],
+   "todo": "Correct the box and press Measure again. The time and its error do not need the elements."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "O−C of N saved times of … stored against P …, E … (HJD) in …_times_of_extremum.csv; the file as it was is kept as …_before_oc_YYYYMMDD_HHMMSS.csv.",
+    "O−C not stored: …"
+   ],
+   "todo": "Nothing. The copy beside the file is the CSV as it was; delete it when you no longer want it."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Input page: your own latitude, longitude, observer code are back (the closed series had …)."
+   ],
+   "todo": "Nothing. Check the Site box if you really are at the series' site."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Load series stopped: …. The series may be only partly loaded: load it again."
+   ],
+   "todo": "Press Load series again. If it happens again, send the log file."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Could not save the series to …: …. Save it to another folder, or close the program that has the file open, then press Save series again. The points are still open here.",
+    "Could not save: …"
+   ],
+   "todo": "Save to another folder, or close the program that holds the file, and save again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Color term not kept for later nights (…): … could not be written. This night's colors are not affected.",
+    "Could not save the color term"
+   ],
+   "todo": "Nothing, unless a later night needs it: then reduce this night again when the folder can be written."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Could not apply the chosen comps to the added file: …. Its nights keep the comps they were saved with: open Use comps… (Output page) and press Apply to put every night on the same comps."
+   ],
+   "todo": "Open Use comps… and press Apply."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Same-star names: could not re-derive this night with the series' magnitudes: …. The night keeps tonight's catalog magnitudes, so it may sit off the other nights: open Use comps… (Output page) and press Apply."
+   ],
+   "todo": "Open Use comps… and press Apply."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "No catalog magnitude for …. Type its magnitude in the Catalog mag column, or untick that star."
+   ],
+   "todo": "Type one in the table, or untick the star."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "No usable points to report for that choice: every point of it is flagged, trimmed or inside a planet's transit. Choose another night or the whole series in the Saving box, or untick Leave flagged points out."
+   ],
+   "todo": "Choose another night or the whole series, or keep the flagged points."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Could not write …_times_of_extremum.csv: …. Close the program that has the file open (a spreadsheet?), then press Save again; the measured time is still in this window."
+   ],
+   "todo": "Close the spreadsheet (or other program) and press Save to times CSV again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "The times could not be converted to …: …. HJD and BJD need the target's RA/Dec and the site (Input page); JD needs neither."
+   ],
+   "todo": "Fill them in on the Input page, or export in JD."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Planet transits: the NASA Exoplanet Archive lists no transiting planet with an ephemeris for …, so there is nothing to leave out.",
+    "… was found … (or the NASA Exoplanet Archive could not be reached)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Planet transits: the NASA Exoplanet Archive did not answer, so …'s planets could not be checked. Press Planet transits… again in a minute."
+   ],
+   "todo": "Press Planet transits… again later."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "N nights have frames in a predicted planet transit. Which night do you want to look at?",
+    "N nights have transmission loss … Which night do you want to look at?",
+    "Choose this night",
+    "(2.4.0; before: a box"
+   ],
+   "todo": "Choose the night and press Choose this night; the usual question for that night follows."
   },
   {
    "section": "Output, Transits mode",
@@ -2832,9 +3006,50 @@
   {
    "section": "Discovery mode",
    "patterns": [
-    "VSX period outside the search (…): …"
+    "Searched over a wider range to cover the VSX period: V1 0.9 d (0.02–1.1 d).",
+    "VSX period outside the search (…)",
+    "Search … d instead"
    ],
-   "todo": "Press Search … d instead."
+   "todo": "Nothing."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "VSX period too long for this scan to test (under two cycles): V2 40 d."
+   ],
+   "todo": "Nothing; it needs more nights."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Lomb-Scargle   no period (drift)  (the peak is at the edge of the search)"
+   ],
+   "todo": "Look at the light curve. To test a longer or shorter period, change the Period search boxes above the table."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "1 star picked on the scatter plot: Mark on image shows it.",
+    "N stars picked …",
+    "No star picked on the scatter plot.",
+    "N star(s) picked"
+   ],
+   "todo": "Press Mark on image to see them on the frame."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Stacking failed: …. The points stay per frame. Press Stack to try again, or carry on with the per-frame points."
+   ],
+   "todo": "Press Stack again, or work with the per-frame points."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Could not apply the chosen comps to the stack points: …. They keep the comps they were measured with: open Use comps… (Output page) and press Apply.",
+    "… the changed catalog magnitudes …"
+   ],
+   "todo": "Open Use comps… and press Apply."
   }
  ]
 }

@@ -70,7 +70,7 @@ See [15. Submit to AAVSO](15-submit-to-aavso.md).
 | `hjd`, `bjd_tdb`, `jd_utc` | The adopted time in HJD (UTC), BJD_TDB and JD (UTC). `hjd` and `bjd_tdb` are blank without RA/Dec. |
 | `error_d`, `error_min`, `method` | The adopted error in days and minutes, and the method (polynomial and bootstrap). |
 | `cycle`, `o_c_d`, `o_c_min`, `period_d`, `epoch`, `elements` | The O − C and the elements it was worked out against, with their source (`VSX HJD`, `saved HJD`, `typed HJD`). Blank when no elements were given. |
-| `n_points`, `window_min` | Points in the fit window, and its half-width in minutes. |
+| `n_points`, `window_min` | Points in the fit window (a whole number; until 2.4.0 a row read back and saved again became `16.00`), and its half-width in minutes. |
 | `kvw_jd`, `kvw_err`, `poly_jd`, `poly_err`, `fourier_jd`, `fourier_err` | Each method's own time (JD) and error (days). |
 | `time_note`, `note` | Notes on the time conversion, and the result's ⚠ warnings. |
 | `noise_period_d`, `noise_period_source` | **New in 2.4.0.** The period the error's noise model used, and where it came from: `series` (the Output page's period), `times CSV`, `VSX`, `Period box`, or `none` when the time was measured without a period (its error may be 2–3 times too small). |
@@ -102,7 +102,7 @@ See [19. Reports](19-transit-reports.md).
 
 | Button | File |
 |---|---|
-| **Save plot PNG…** | `<field>_<filter>_<date>_SHOBS-P_scan.png` (`<field>` is the Star ID, or `field`) |
+| **Save plot PNG…** | `<field>_<filter>_<date>_SHOBS-P_scan.png` (from 2.4.0 `<field>` is the field folder's name, as in the suspects file below, or `field`; never a Star ID left from another mode) |
 | **Save CSV…** | `<field>_<filter>_<date>_SHOBS-P_scan.csv`: one row per measured star. |
 | **Export suspects CSV…** | `field_scan_suspects.csv` |
 | **Export all light curves CSV…** | `field_scan_lightcurves.csv` |

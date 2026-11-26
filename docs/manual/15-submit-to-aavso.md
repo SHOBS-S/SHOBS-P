@@ -161,7 +161,7 @@ The marks are saved in the series file. The same marks and warning apply to the 
 - Frames flagged during a planet transit are **always** left out. The log says how many.
 - The magnitudes are as measured against your comps. The line-up checkboxes, the check-star correction and the airmass-corrected night means do not change the report.
 
-If nothing is left, you see **No usable points to report for that choice.**
+If nothing is left, you see **No usable points to report for that choice: every point of it is flagged, trimmed or inside a planet's transit. …** Choose another night or the whole series in the **Saving** box, or untick **Leave flagged points out**.
 
 ## What is in the file
 
@@ -180,7 +180,7 @@ The file begins with `#` header lines: `#TYPE=Extended`, `#OBSCODE=`, `#SOFTWARE
 | AMASS | The airmass, or `na` without a site and pointing |
 | GROUP | `na` |
 | CHART | The chart ID (`na` when the comps are not from an AAVSO chart) |
-| NOTES | Your note, then for an ensemble `ens` and the comps' names, then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep; for stacked points, `points are stacks of 40 frames (effective exposure 30 s)` |
+| NOTES | Your note, then for an ensemble `ens` and the comps' names (each in full, up to 30 characters, from 2.4.0; longer names used to be cut at 15), then the night key (e.g. `night JD2461319`), then any flag words on a flagged point you chose to keep; for stacked points, `points are stacks of 40 frames (effective exposure 30 s)` |
 
 For stacked points (chapter 8, "Stacking when comps are weak"), each line is one stack: its time is the mean of its
 frames' mid-times, and the NOTES give the stack size and its effective exposure (the sum of its frames'

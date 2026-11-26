@@ -69,9 +69,10 @@ If only one star was measured, SHOBS-P cannot tell dew from cloud, so it does no
 
 ### Changing your answer later
 
-1. If the series has more than one night, click the night in the night table first.
-2. Press **Transmission loss…**.
-3. The message says how many frames, when, how deep, and whether they are now used in the light curve or left out. Answer the question again with **Use these points** or **Leave them out**.
+1. Press **Transmission loss…**. With a night chosen in the night table, that night is used. With several such
+   nights and none chosen, a small window asks which night (from 2.4.0; you no longer have to click the night table
+   first): pick it in the **Night** box and press **Choose this night**.
+2. The message says how many frames, when, how deep, and whether they are now used in the light curve or left out. Answer the question again with **Use these points** or **Leave them out**.
 
 Your answer is saved with the series. If no night has transmission loss at the current cloud limit, SHOBS-P says so.
 
@@ -95,8 +96,8 @@ Nothing is said if the star has no known transiting planet, if no frame falls in
 
 To check or change it later:
 
-1. Click the night in the night table if the series has more than one night with transit frames.
-2. Press **Planet transits…**.
+1. Press **Planet transits…**. If several nights have transit frames and none is chosen in the night table, a small
+   window asks which night (from 2.4.0): pick it and press **Choose this night**.
 
 If no night has been checked yet, the button runs the check on every night. Your answer is saved in the series file at once.
 

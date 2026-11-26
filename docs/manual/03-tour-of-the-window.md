@@ -73,7 +73,7 @@ the same, in the same order, on both pages:
 | **Fit** | **MCMC**, **Fit transit**, **Cancel** | **Period search (days)**, **Period from**, **Refit period** |
 | **Comps** | **Comp health…**, **Use comps…** | **Comp health…**, **Use comps…** |
 | **Analysis** | **Nearby-binary (NEB) check…**, **Multi-night…**, **Fit the series' nights…** | **Watch stars…**, **Time of max/min…** |
-| **View** | **credible bands**, **Plot bins** | **Time axis**, **Bin**, **Mark periods** and **Show**, **Airmass-corrected night means** |
+| **View** | **credible bands**, **Plot bins** | **Time axis**, **Plot bins**, **Mark periods** and **Show**, **Airmass-corrected night means** |
 
 - **Points** and **Corrections** hold the settings that feed the result. Hover over a row's label to read what the
   row is for.
@@ -183,7 +183,8 @@ says *⚠ N things need a look (click to see them)*, to open the **Findings** wi
 - **What to do**, for the messages listed in [23. Messages explained](23-messages-explained.md), in the same words as
   that chapter;
 - **✓ Done** beside each entry takes it off the list; **Clear all** empties it; **Show log** shows the log (the
-  Photometry page's, when that page is in front, otherwise the Calibrate page's); **Close** closes the window and
+  Photometry page's or the Calibrate page's, when one of those pages is in front; from any other page, from 2.4.0,
+  the Log opens in a window of its own and the page you are on stays where it is); **Close** closes the window and
   keeps the list.
 
 Running a step again replaces that step's findings from last time, so the list is always about your latest runs; a
