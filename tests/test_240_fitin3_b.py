@@ -651,6 +651,72 @@ class TestInApp(unittest.TestCase):
             line = app.comp_skip_text("N1").splitlines()[0]
         self.assertTrue(line.endswith("; out of the whole night (missing in most frames)."), line)
 
+    def test_ten_percent_rule_for_a_star_left_out(self):
+        """John, 26 Nov: a comp in use or the check left out of frames is a ⚠ finding only past 10 % of the night's
+        frames (the skipped-frames rule, 2.3.6); at 10 % or less the same line is a plain note."""
+        app = self.app
+
+        def lines(n_c3, n_k, measured=100, skipped=0):
+            info = {"comp_drops": {"C3": {"frames": [str(k) for k in range(1, n_c3 + 1)],
+                                          "reasons": {"off the frame edge": n_c3}},
+                                   "check": {"frames": [str(k) for k in range(1, n_k + 1)],
+                                             "reasons": {"off the frame edge": n_k}}},
+                    "skipped": [{"frame": f"s{k}", "path": f"/s{k}.fits", "why": "could not align"}
+                                for k in range(skipped)]}
+            edges = {"check": {"words": "", "flat_pct": None, "how": "Pick a check star at least 39 px in next time."}}
+            with mock.patch.object(app, "_night_info", return_value=info), \
+                    mock.patch.object(app, "_night_frame_count", return_value=measured), \
+                    mock.patch.object(app, "recoverable_skips", return_value={}):
+                got = app.comp_skip_text("N1", edges=edges).splitlines()
+            return [ln for ln in got if "left out of" in ln]
+        # under the threshold: plain notes, nothing to do
+        c3, k = lines(9, 3)
+        self.assertEqual(c3, "C3 left out of 9 frames (off the frame edge; frames 1–9); those frames use the other "
+                             "comps.")
+        self.assertEqual(k, "check star left out of 3 frames (off the frame edge; frames 1–3); no check value there.")
+        # exactly 10 % is still a plain note (the rule is "more than 10 %")
+        c3, k = lines(10, 10)
+        self.assertFalse(c3.startswith("⚠"), c3)
+        self.assertFalse(k.startswith("⚠"), k)
+        self.assertNotIn("Use comps", c3)
+        self.assertNotIn("Pick a check star", k)
+        # past it: ⚠, with what to do
+        c3, k = lines(11, 11)
+        self.assertEqual(c3, "⚠ C3 left out of 11 frames (off the frame edge; frames 1–11); those frames use the "
+                             "other comps. Leave it out with Use comps… (Output page).")
+        self.assertEqual(k, "⚠ check star left out of 11 frames (off the frame edge; frames 1–11); no check value "
+                            "there. Pick a check star at least 39 px in next time.")
+        # the night's frames = measured + skipped, as for the skipped-frames line: 10 of (90 + 10) is exactly 10 %
+        self.assertFalse(lines(10, 1, measured=90, skipped=10)[0].startswith("⚠"))
+        self.assertTrue(lines(11, 1, measured=90, skipped=10)[0].startswith("⚠"))
+        # a comp out of the whole night is always a ⚠
+        info = {"comp_drops": {"C3": {"frames": ["1"], "reasons": {"off the frame edge": 1}}}, "night_out": ["C3"]}
+        with mock.patch.object(app, "_night_info", return_value=info), \
+                mock.patch.object(app, "_night_frame_count", return_value=100), \
+                mock.patch.object(app, "recoverable_skips", return_value={}):
+            self.assertTrue(app.comp_skip_text("N1").startswith("⚠ C3 left out of 1 frame"))
+        # the end-of-run summary: a plain line is logged as a note, is no finding and opens nothing
+        info = {"comp_drops": {"C3": {"frames": ["4", "5"], "reasons": {"off the frame edge": 2}}}}
+        app.findings.clear()
+        opens = []
+        with mock.patch.object(app, "_night_info", return_value=info), \
+                mock.patch.object(app, "_night_frame_count", return_value=100), \
+                mock.patch.object(app, "recoverable_skips", return_value={}), \
+                mock.patch.object(app, "_run_edge_notes", return_value=({}, [])), \
+                mock.patch.object(app, "_open_findings_for_run", side_effect=lambda: opens.append(1)):
+            self.assertEqual(app._run_summary("N1", []), [])
+            self.assertEqual(opens, [])
+            self.assertEqual(len(app.findings), 0)
+            self.assertEqual(self._said("C3 left out of 2 frames"),
+                             ["N1: C3 left out of 2 frames (off the frame edge; frames 4–5); those frames use the "
+                              "other comps."])
+            self.assertEqual(app.status.get(), self._said("C3 left out of 2 frames")[0])
+            info["comp_drops"]["C3"] = {"frames": [str(k) for k in range(1, 31)], "reasons": {"off the frame edge": 30}}
+            said = app._run_summary("N1", [])
+            self.assertEqual(len(said), 1)
+            self.assertEqual(opens, [1])
+            self.assertEqual(len(app.findings), 1)
+
     def test_run_with_a_star_off_the_edge_no_box_findings_opens(self):
         # C3, the check K and a spare start near the top edge and drift off it (1 px/frame)
         stars = [("T", 100, 110, 50000), ("C1", 50, 100, 60000), ("C2", 150, 130, 40000), ("C3", 75, 30, 90000),

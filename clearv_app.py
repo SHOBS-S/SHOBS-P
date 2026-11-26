@@ -11284,7 +11284,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         comps left out of some frames, and, when Use comps no longer uses a comp that caused skips, that those frames
         can be measured now. '' when nothing was skipped or left out.
         2.4.0 fit-in F3 (area F, m458 / m459 / m471): ONE line per problem star: a comp in use or the check that was
-        left out of frames is a ⚠ line that says what to do; edges = the end-of-run summary's {name or "check":
+        left out of more than 10 % of the night's frames is a ⚠ line that says what to do (10 % or less: the same
+        line as a plain note); edges = the end-of-run summary's {name or "check":
         {"words": near the edge / weak flat, "how": what to do}} (_run_summary), folded into that star's line."""
         info = self._night_info(night) if night else {}
         if not night:
@@ -11328,8 +11329,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             more = edge.get("words") or ""
             if more and edge.get("flat_pct") is None and "edge" in what:
                 more = ""   # "off the frame edge" says it already
-            how = edge.get("how") or ("" if whole or name == "check" else self.USE_COMPS_HOW)
-            parts.append(f"⚠ {label} left out of {n} frame{'s' if n != 1 else ''} ({what}; frames "
+            # John, 26 Nov (12:43): the 10 % rule of the skipped frames (2.3.6). A comp in use or the check left
+            # out of MORE than 10 % of the night's frames is a ⚠ (a finding, with what to do); at 10 % or less it
+            # is a plain note (Log and status line; not a finding, not counted in "N findings from the run").
+            n_all = len(skips) + self._night_frame_count(night)
+            big = whole or n_all == 0 or n > SKIP_FINDING_SHARE * n_all
+            how = (edge.get("how") or ("" if whole or name == "check" else self.USE_COMPS_HOW)) if big else ""
+            parts.append(("⚠ " if big else "") + f"{label} left out of {n} frame{'s' if n != 1 else ''} ({what}; frames "
                          f"{self._frame_ranges(rec.get('frames') or [])}" + (f"; it {more}" if more else "") + ")"
                          + ("; out of the whole night (missing in most frames)" if whole else
                             "; those frames use the other comps" if name != "check" else "; no check value there")
@@ -20853,8 +20859,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
     def _run_summary(self, night: str, night_points: list) -> list:
         """2.4.0 fit-in F3 (area F; John's call 2, 26 Nov: NO box). What the run left out, said once, at its end:
         - skipped frames with their reason (⚠ only when over 10 % of the night, 2.3.6);
-        - ONE ⚠ line per comp in use, or the check, that was left out of frames, with where it sat (edge, weak flat)
-          and what to do (comp_skip_text; before: a "left out" line, a second ⚠ "near the frame edge" line ending
+        - ONE line per comp in use, or the check, that was left out of frames, with where it sat (edge, weak flat):
+          a ⚠ that says what to do when it missed more than 10 % of the night's frames, else a plain note (comp_skip_text; before: a "left out" line, a second ⚠ "near the frame edge" line ending
           "Consider leaving it out", and a warning box repeating both: m458 / m459 / m471);
         - a comp or check that only came near the edge and was measured all night: a plain Log line (no ⚠);
         - spares near the edge: the log file only (2.4.0 step 6b).

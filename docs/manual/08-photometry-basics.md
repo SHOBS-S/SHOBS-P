@@ -788,7 +788,8 @@ After the run, an orange line under the "Measured with" line lists what happened
 From 2.4.0 there is one line per star, and it says what to do: *"⚠ C3 left out of 14 frames (off the frame edge;
 frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page)."* When that star also
 sits where the flat is weak, the same line says so. For the check star the line names a spare that stayed farther in
-all night, to pick as the check next time.
+all night, to pick as the check next time. The ⚠ (and the advice) is kept for a star that missed more than 10 % of
+the night's frames; at 10 % or less the line is a plain note, like a few skipped frames.
 
 No box comes up after the run (from 2.4.0). The same lines go in the log, each with its night, and on the
 **Findings** list, which opens by itself when the run has something for you to look at (chapter 3). They also travel
