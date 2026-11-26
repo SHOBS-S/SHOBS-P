@@ -317,7 +317,18 @@ class TestRunInApp(unittest.TestCase):
         self.assertTrue(measured.startswith("C1, C2, C3 (missing in"), measured)
         self.assertIn("SP (as spare", measured)
         self.assertNotIn("check", measured)
-        self.boxes["showwarning"].assert_called()   # said on screen after the run
+        # 2.4.0 fit-in F3 (area F): said on screen after the run by the Findings list (one ⚠ line per star, with
+        # what to do), which opens by itself; the warning box is gone
+        self.assertIn("⚠ C3 left out of", text)
+        self.assertIn("Leave it out with Use comps… (Output page).", text)
+        self.assertIn("⚠ check star left out of", text)
+        self.assertEqual([c for c in self.boxes["showwarning"].call_args_list if "left out" in str(c)], [])
+        found = [f.text for f in app.findings.items]
+        self.assertTrue(any("C3 left out of" in t for t in found), found)
+        self.assertTrue(any("check star left out of" in t for t in found), found)
+        win = getattr(app, "_findings_win", None)
+        self.assertTrue(win is not None and win.alive())
+        win.close()
         comps_row = next(x for x in self._settings_lines(night) if x.startswith("Comps: "))
         self.assertIn("measured: C1, C2, C3 (missing in", comps_row)
         self.assertIn("SP (as spare", comps_row)
@@ -401,8 +412,13 @@ class TestRunInApp(unittest.TestCase):
         text = app.skip_text.get()
         self.assertIn("that looks like a meridian flip. Is the Mount set right (German equatorial)?", text)
         self.assertIn(f"between frames {flips[0]['before']} and {flips[0]['after']}", text)
-        warned = " ".join(str(c) for c in self.boxes["showwarning"].call_args_list)
-        self.assertIn("looks like a meridian flip", warned)
+        # 2.4.0 fit-in F3 (area F): no box after the run; the ⚠ is on the Findings list, which opened by itself
+        self.assertEqual([c for c in self.boxes["showwarning"].call_args_list if "meridian flip" in str(c)], [])
+        self.assertTrue(any("looks like a meridian flip" in f.text for f in app.findings.items),
+                        [f.text for f in app.findings.items])
+        win = getattr(app, "_findings_win", None)
+        self.assertTrue(win is not None and win.alive())
+        win.close()
 
     def test_altaz_smooth_rotation_no_warning(self):
         stars = [("T", 300, 225, 50000), ("C1", 260, 210, 60000), ("C2", 345, 240, 40000)]

@@ -188,7 +188,9 @@ as a thick solid ring labeled S1, S2 … and the sequence star as a thin dashed 
 
 The step strip under the options row shows your progress: **1 Solve → 2 Target → 3 Comps → 4 Check → Run**
 (Discovery: **1 Solve → 2 Scan field**). Done steps get a ✓. The line under it says what to do now, for example
-**Solved. Pick Target and click the target star.** and finally **Ready: Run photometry.**
+**Solved. Pick Target and click the target star.** and finally **Ready: Run photometry.** While **Run photometry**
+(in Discovery, **Scan field**) is greyed, the line says why instead, for example **Not ready: The masters were built
+at bin 1: Calibrate again (or set Binning back to 1).** (from 2.4.0; it changes as soon as you fix it).
 
 **Hide tips** hides the strip once you know your way around; **Show tips** brings it back. SHOBS-P remembers your
 choice.
@@ -248,7 +250,14 @@ under the marker is always taken, as before.
 If the check star has no catalog name (for example when a catalog did not answer), SHOBS-P
 names it by its sky position when you press **Run photometry**, the way APASS names its stars, for example
 `J020351.8+464115`. The log says so, and that name goes into the series, the reports and the settings file instead
-of a bare "check" (a night added to a series whose check was saved as "check" before 2.3.2 keeps the series' name). The line under each row says where the magnitude came from and adds checks:
+of a bare "check" (a night added to a series whose check was saved as "check" before 2.3.2 keeps the series' name). The line under each row gives one verdict for the star (from 2.4.0). A star that passes every test reads, in green,
+*"✓ good comp: B−V 0.71 (APASS DR9), +0.3 mag from the target, not a known or suspected variable (VSX + SIMBAD)   V
+from APASS DR9"*. A star with a problem shows **one** ⚠ with the worst reason in full, then *also:* with its other
+problems in short plain words, then the plain notes and where the magnitude came from, for example *"⚠ raw peak
+41,200 ADU is over the linear limit (36,000): … — pick a fainter comp.   also: only 12 px from the frame edge   B−V
+0.71 (APASS DR9)   V from APASS DR9"*. Worst first: a known variable (the line is red), over the linear limit, the
+frame edge, no catalog magnitude in this band, a color far from the target's. Before 2.4.0 each problem had its own
+⚠, in no order. The checks behind the verdict:
 
 - its color (B−V) and a note if it is very red;
 - how much brighter or fainter than the target it is, with a note if it is more than about 1 magnitude away;
@@ -538,11 +547,12 @@ changes to: "Aperture changed (now r 6, …): run photometry again to apply it."
 next run.
 
 **Aperture kept from another target.** The aperture boxes keep their values from the last target on the same
-camera. On a new image, a caution (Findings list and log) says when they don't fit these stars: an aperture larger
+camera. On a new image, a plain note (status line and log) says when they don't fit these stars: an aperture larger
 than 2.5 × the stars' FWHM (it adds sky noise and neighbors), or, on defocused stars, one that clips the donut. Each
-caution says what **Suggest…** would give. From 2.4.0 the caution goes away as soon as you change the boxes (by hand
-or with **Suggest…**) to sizes that fit; if the new sizes still do not fit, it comes back in the new numbers, without
-"(kept from before)". Before, it stayed in the Findings list until the next solve.
+note says what **Suggest…** would give. When you change the boxes (by hand or with **Suggest…**) and the new sizes
+still do not fit, the note is said again in the new numbers, without "(kept from before)". From 2.4.0 it is a note,
+not a ⚠ on the Findings list: **Run photometry** asks about the aperture when it matters, and that question is the
+one place that needs an answer.
 
 **A new camera (2.4.0).** When the lights come from another camera than the last ones, the boxes are not kept: they
 go back to 8, 14 and 22 px and, on the first calibrated image, are set to what **Suggest…** proposes for these stars
@@ -770,11 +780,21 @@ above the sky in that frame. A clipped comp is never measured, so it cannot leak
 After the run, an orange line under the "Measured with" line lists what happened, for example:
 
 - *"⚠ 16 frames skipped: every comp lost (off the frame edge) (frames 25–40)."*
-- *"C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps."*
-- *"check star left out of 18 frames (off the frame edge; frames 23–40); no check value there."*
+- *"⚠ C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out
+  with Use comps… (Output page)."*
+- *"⚠ check star left out of 18 frames (off the frame edge; frames 23–40); no check value there. …"*
 - *"…; out of the whole night (missing in most frames)."* when the whole-night rule applied.
 
-A warning box after the run lists the same lines, and the log has them too, each with its night.
+From 2.4.0 there is one line per star, and it says what to do: *"⚠ C3 left out of 14 frames (off the frame edge;
+frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page)."* When that star also
+sits where the flat is weak, the same line says so. For the check star the line names a spare that stayed farther in
+all night, to pick as the check next time. The ⚠ (and the advice) is kept for a star that missed more than 10 % of
+the night's frames; at 10 % or less the line is a plain note, like a few skipped frames.
+
+No box comes up after the run (from 2.4.0). The same lines go in the log, each with its night, and on the
+**Findings** list, which opens by itself when the run has something for you to look at (chapter 3). They also travel
+with the result: the settings file lists them and the report's notes say how many there were. A comp or check that
+only came near the edge and was measured in every frame gets a plain log line, no ⚠.
 
 ### Measure skipped frames
 
@@ -813,14 +833,17 @@ You will not see most of these on most nights. Each window explains its choices.
   other frames cannot be aligned to it, and the apertures would not follow any drift. **Stop** (the default) lets you
   check the frame or reject it in Blink, so another frame becomes the reference; **Run without alignment** goes on.
 - **Names without markers.** A comp or check row has a name but no marker on this image (left from an earlier run).
-  **Yes** clears those names and continues; **No** continues and leaves them; **Cancel** stops so you can mark them.
+  **Stop to mark them** (the default) lets you click the stars; **Run without them (names cleared)** clears those
+  names and runs. (From 2.4.0 two answers; the row itself shows a plain hint, *no marker on this image: click the
+  star, or ✕ to clear the name*.)
 - **Stars of the series without a marker (from 2.4.0).** A comp or check of the open series that the solve could not
   place would not be measured tonight. **Go on without them** (the default) runs and keeps their names, so the series
   keeps its stars; **Clear those names and go on** takes them out; **Stop, so I can mark them** lets you click them.
   A series star that is simply off tonight's frame is not asked about: the log notes "Not on this frame tonight, so
   not measured (their names stay): …".
-- **Wrong mode.** In Transits mode with a target that looks like a variable star and no transit predicted, SHOBS-P
-  offers to **Run in Variables mode instead?**. In Variables mode, when the **Planet (Transits)** box holds a planet of
+- **Wrong mode.** In Transits mode with no transit of the planet predicted during the lights (or with no planet
+  entered and a target that looks like a variable star), SHOBS-P asks once, with three buttons (from 2.4.0):
+  **Switch to Variables mode**, **Run in Transits mode anyway**, **Cancel** (the default). In Variables mode, when the **Planet (Transits)** box holds a planet of
   this star, or the target is a known planet host (SHOBS-P looks its planets up in the NASA Exoplanet Archive after the
   Star ID lookup), and a transit is predicted during your frames, it offers **Run in Transits mode instead?** (not
   asked while a Variables series is open). **Yes** fills in the planet and runs in Transits mode. Answer the question rather than canceling: the series and
@@ -833,8 +856,8 @@ You will not see most of these on most nights. Each window explains its choices.
 
 **A marker off its star.** Before the run, SHOBS-P checks that each marker sits on its star's center. If one would be
 measured beside the star (so it would read faint), the log says, for example, "⚠ Check marker at (512.0, 340.5) is
-6.2 px from the center of the star there (…)", and the status bar says **Check the Log: Check is marked off the center
-of the star.** From 2.4.0 each such marker is also listed in the Findings panel, and near the frame edge the line says
+6.2 px from the center of the star there (…)". From 2.4.0 each such marker is listed in the Findings panel (the
+status bar no longer points at the log for it), and near the frame edge the line says
 how far the marker is from the edge ("…; the marker is 22 px from the top edge"). The run always goes on (SHOBS-P
 never refuses to run for this); if that is not what you meant, clear the marker, zoom in and click the star again.
 

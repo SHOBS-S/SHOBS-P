@@ -374,11 +374,34 @@ def read_xisf(path: str, header_only: bool = False):
     return data, header
 
 
+def need_astropy(what: str) -> RuntimeError:
+    """2.4.0 fit-in F3 (x136 / x140 / x169 / x189 / x237): the one message for a missing astropy, with the repair a
+    SHOBS-P user has (the start file installs the packages); what = the thing that cannot be done."""
+    return RuntimeError(f"A package SHOBS-P needs (astropy) is missing, so {what} cannot be done. Run Create "
+                        "shortcuts.bat (Mac/Linux: the start file) again; it repairs the packages.")
+
+
+def _bad_pattern(pattern) -> ValueError:
+    """2.4.0 fit-in F3 (x143 / x148): one message for a Bayer pattern SHOBS-P does not know, with what to do."""
+    return ValueError(f"Bayer pattern '{pattern}' is not one SHOBS-P knows. Pick the camera's pattern in the Bayer "
+                      "pattern box (Calibrate page).")
+
+
+# 2.4.0 fit-in F3 (x144, x149, x203, x063): the backstops behind the Photometry page's own checks use the page's words
+APERTURE_ORDER_TEXT = "The aperture sizes must be in order: Aperture r < sky in < sky out."
+NO_COMP_TEXT = "Mark at least one comparison star (Comps, then click the star)."
+
+
+def no_catalog_mag_text(name: str) -> str:
+    return (f"{name} has no catalog magnitude in this band: type it in the box next to the name, or pick another "
+            "star.")
+
+
 def read_fits(path: str) -> tuple[np.ndarray, dict]:
     if path.lower().endswith(".xisf"):
         return read_xisf(path)
     if fits is None:
-        raise RuntimeError("astropy is required. Install with: pip install astropy")
+        raise need_astropy("reading frames")
     with fits.open(path, memmap=False) as hdul:
         hdu = hdul[0]
         if hdu.data is None:
@@ -1055,7 +1078,7 @@ def _master_cards(kind: str, binning: int, paths: list[str], headers: list[dict]
 def write_master(path: str, data: np.ndarray, cards: dict) -> None:
     """Write a master as 32-bit float FITS with its SHOBS-P stamp."""
     if fits is None:
-        raise RuntimeError("astropy is required to save masters")
+        raise need_astropy("saving masters")
     hdr = fits.Header()
     for key, value in cards.items():
         val, comment = value if isinstance(value, tuple) else (value, "")
@@ -1597,7 +1620,7 @@ def debayer(img: np.ndarray, pattern: str, mode: str = "luminance") -> np.ndarra
         "GBRG": {(0, 0): "G", (0, 1): "B", (1, 0): "R", (1, 1): "G"},
     }
     if pattern not in positions:
-        raise ValueError(f"Unsupported Bayer pattern {pattern}")
+        raise _bad_pattern(pattern)
     h = img.shape[0] // 2 * 2
     w = img.shape[1] // 2 * 2
     img = img[:h, :w]
@@ -1894,7 +1917,8 @@ def measure_aperture(
 ) -> dict:
     """photutils circular aperture with a 3-sigma-clipped median sky annulus."""
     if not (0 < radius < sky_inner < sky_outer):
-        raise ValueError("Need 0 < aperture radius < sky inner < sky outer")
+        # 2.4.0 fit-in F3 (x144): the backstop says what the Photometry page says (its red boxes, x070)
+        raise ValueError(APERTURE_ORDER_TEXT)
     aperture = CircularAperture((x, y), r=radius)
     annulus = CircularAnnulus((x, y), r_in=sky_inner, r_out=sky_outer)
     bad = ~np.isfinite(img)
@@ -3512,7 +3536,7 @@ def debayer_weights(pattern: str, mode: str) -> dict:
         "GBRG": {(0, 0): "G", (0, 1): "B", (1, 0): "R", (1, 1): "G"},
     }.get(pattern)
     if positions is None:
-        raise ValueError(f"Unsupported Bayer pattern {pattern}")
+        raise _bad_pattern(pattern)
     per_color = {"luminance": {"R": 0.299, "G": 0.587 / 2, "B": 0.114}, "green": {"R": 0.0, "G": 0.5, "B": 0.0},
                  "red": {"R": 1.0, "G": 0.0, "B": 0.0}, "blue": {"R": 0.0, "G": 0.0, "B": 1.0}}
     w = per_color.get(mode, per_color["luminance"])
@@ -3805,10 +3829,10 @@ def reduce_frame(
     exp = header_exptime(header)
     jd = mid_jd(header)
     if not comps:
-        raise ValueError("At least one comparison star is required")
+        raise ValueError(NO_COMP_TEXT)   # 2.4.0 fit-in F3 (x149, x203): the page's words
     for comp in comps:
         if comp.catalog_mag is None or not math.isfinite(comp.catalog_mag):
-            raise ValueError(f"{comp.name} needs a catalog magnitude in the band you are measuring")
+            raise ValueError(no_catalog_mag_text(comp.name))
 
     if donut is not None:
         # 2.2.19 (#30): the run's decision holds for this frame (recenter asks field_defocus, which reads the cache)
@@ -8544,7 +8568,7 @@ def write_demo_set(folder: str, n_lights: int = 40) -> dict:
     After a superpixel debayer they sit near (35, 45), (70, 50), (55, 75).
     """
     if fits is None:
-        raise RuntimeError("astropy is required to write demo FITS")
+        raise need_astropy("writing the sample frames")
     rng = np.random.default_rng(7)
     h, w = 180, 220
     bias_level = 100.0
@@ -11602,7 +11626,7 @@ def read_header(path: str) -> dict:
     if path.lower().endswith(".xisf"):
         return read_xisf(path, header_only=True)[1]
     if fits is None:
-        raise RuntimeError("astropy is required. Install with: pip install astropy")
+        raise need_astropy("reading frames")
     with fits.open(path, memmap=True) as hdul:
         hdu = hdul[0]
         if hdu.header.get("NAXIS", 0) == 0 and len(hdul) > 1:
@@ -12222,12 +12246,25 @@ def pier_verdicts(summary: list[dict], steady: float = 0.01, stepper: float = 0.
 
 def edge_problems(observations: list, shape: tuple, comp_names: list[str], check_name: str, margin: float,
                   flat: np.ndarray | None = None, flat_scale: float = 1.0, weak_flat: float = 0.85) -> list[str]:
-    """2.2.3: comparison, spare and check stars that sit near the frame edge (or where the flat is weak) in a night.
+    """2.2.3: comparison, spare and check stars that sit near the frame edge (or where the flat is weak) in a night:
+    one sentence per star with a problem. 2.4.0 fit-in F3 (m471): the facts are edge_records' (the app builds its
+    one end-of-run line per star from those); this sentence no longer ends "Consider leaving it out"."""
+    return [f"{r['label']} {r['words']}: the flat corrects edges and corners least well, so it can read wrong all "
+            "night." for r in edge_records(observations, shape, comp_names, check_name, margin, flat, flat_scale,
+                                           weak_flat)]
+
+
+def edge_records(observations: list, shape: tuple, comp_names: list[str], check_name: str, margin: float,
+                 flat: np.ndarray | None = None, flat_scale: float = 1.0, weak_flat: float = 0.85) -> list[dict]:
+    """2.4.0 fit-in F3 (area F, m471): the stars of a night that came near the frame edge or sit where the flat is
+    weak, as records: {"label" ("comp NAME" / "check NAME" / "spare NAME"), "kind", "name", "closest" (px from the
+    nearest edge), "near" (closer than margin), "flat_pct" (the flat there, % of the center, when under weak_flat,
+    else None), "words" ("comes within 12 px of the frame edge (stars at least 39 px in are safe)")}.
 
     observations: one night's points; their .pos holds each star's position per frame ("c": comps in order,
     "k": check, "s": {spare name: [x, y]}). shape: (height, width) of the measured image. margin: the closest a
     star may come to an edge, in pixels. flat: optional normalized master flat (pixels of the calibrated mosaic,
-    flat_scale times the measured image's). Returns one sentence per star with a problem."""
+    flat_scale times the measured image's)."""
     h, w = shape[0], shape[1]
     # The flat as the measured image sees it: on a color camera one value per 2x2 superpixel (the mean of its
     # four colors, so a red or blue pixel's lower level is not mistaken for vignetting), relative to the center.
@@ -12267,6 +12304,7 @@ def edge_problems(observations: list, shape: tuple, comp_names: list[str], check
         dist = np.minimum.reduce([xy[:, 0], xy[:, 1], (w - 1) - xy[:, 0], (h - 1) - xy[:, 1]])
         closest = float(np.nanmin(dist))
         problem = []
+        flat_pct = None
         if closest < margin:
             # 2.2.19 (nit): say how far in a star has to be, so the user knows where to pick instead
             # step 6c (item e): "within 0 px" read oddly: a star that reaches the edge says so
@@ -12279,11 +12317,12 @@ def edge_problems(observations: list, shape: tuple, comp_names: list[str], check
             vals = flat_img[fy, fx]
             vals = vals[np.isfinite(vals)]
             if vals.size and float(np.min(vals)) < weak_flat:
-                problem.append(f"sits where the flat is only {float(np.min(vals)) * 100:.0f}% of the center "
-                               "(heavy vignetting)")
+                flat_pct = float(np.min(vals)) * 100.0
+                problem.append(f"sits where the flat is only {flat_pct:.0f}% of the center (heavy vignetting)")
         if problem:
-            out.append(f"{label} {' and '.join(problem)}: the flat corrects edges and corners least well, so it can "
-                       "read wrong all night. Consider leaving it out of this night's comps.")
+            kind, _sep, name = label.partition(" ")
+            out.append({"label": label, "kind": kind, "name": name, "closest": closest, "near": closest < margin,
+                        "flat_pct": flat_pct, "words": " and ".join(problem)})
     return out
 
 

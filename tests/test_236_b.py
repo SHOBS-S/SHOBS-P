@@ -244,23 +244,27 @@ class TestAuditFixes236(unittest.TestCase):
         self.assertEqual(clearv_app.App._findings_night_notes(st, obs), {})
 
     def test_plain_skip_note_no_popup(self):
-        """2.3.6 run-through (John 16 Nov): 1 skipped frame is a plain note: no warning box; a ⚠ skip line still
-        pops up."""
+        """2.3.6 run-through (John 16 Nov): 1 skipped frame is a plain note: nothing comes up.
+        2.4.0 fit-in F3 (area F, John 26 Nov): no warning box for the ⚠ ones either; the Findings panel opens by
+        itself for them (_warn_run_skips became _run_summary; a comp left out of frames is a ⚠ line now)."""
         import types
         from unittest import mock
         import clearv_app
         for text, want in (("1 frame skipped: could not align (frames 11).", 0),
                            ("⚠ 40 frames skipped: could not align (frames 1-40).", 1),
-                           ("C3 left out of 19 frames (no flux above sky; frames 5-23); those frames use the other "
+                           ("⚠ C3 left out of 19 frames (no flux above sky; frames 5-23); those frames use the other "
                             "comps.", 1),
-                           ("1 frame skipped: could not align (frames 11).\ncheck star left out of 40 frames "
+                           ("1 frame skipped: could not align (frames 11).\n⚠ check star left out of 40 frames "
                             "(off the frame edge; frames 1-40); no check value there.", 1)):
-            st = types.SimpleNamespace(log=lambda *a, **k: None, _msg_level=lambda ln: "info",
-                                       _night_info=lambda n: {}, comp_skip_text=lambda n, t=text: t,
-                                       label_nights=lambda n: n, flip_like_text=lambda fl: "")
+            opened = []
+            st = types.SimpleNamespace(log=lambda *a, **k: None, _msg_level=clearv_app.App._msg_level,
+                                       _night_info=lambda n: {}, _run_edge_notes=lambda n, p, d: ({}, []),
+                                       comp_skip_log_text=lambda n, edges=None, t=text: t, _job_findings=[],
+                                       _open_findings_for_run=lambda: opened.append(1))
             with mock.patch.object(clearv_app.messagebox, "showwarning") as warn:
-                clearv_app.App._warn_run_skips(st, "JD1")
-            self.assertEqual(warn.call_count, want, text)
+                clearv_app.App._run_summary(st, "JD1", [])
+            self.assertEqual(warn.call_count, 0, text)
+            self.assertEqual(len(opened), want, text)
 
 
 if __name__ == "__main__":

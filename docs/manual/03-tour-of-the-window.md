@@ -176,7 +176,7 @@ its own bar in its lower left, chapter 17.)
 From 2.4.0, every ⚠ and ✖ that SHOBS-P writes to the log also goes on a list called **Findings**, so you never have to dig for one in the log. While
 anything is on it, an amber underlined link sits at the right end of the status line, for example **⚠ 3 to look at**
 (**✖ …** when one of them is an error). Later messages never replace it. Click it, or click the status line when it
-says *⚠ N things need a look (click to see them)*, to open the **Findings** window:
+says *⚠ N things need a look (click to see them)*, to open the **Findings** window. After a photometry run that left a comp or the check out of more than 10 % of the night's frames, skipped more than 10 % of the night, or found a field turn or a zero-point problem, the window opens by itself (from 2.4.0; before, a warning box came up):
 
 - one entry per finding: its ⚠ or ✖, the message itself, the time, and the step that found it (for example
   *Photometry on 165 lights*);

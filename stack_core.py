@@ -669,7 +669,8 @@ def stack_header(anchor_header: dict, members, info: dict, mid_jds, number: int,
 
 def write_stack(path: str, img: np.ndarray, header: dict) -> None:
     if fits is None:
-        raise RuntimeError("astropy is required to write stacks")
+        import photometry_core as core   # here, not at the top: this module stays free of the photometry core
+        raise core.need_astropy("writing stacks")   # 2.4.0 fit-in F3 (x237): the one message, with the repair
     hdr = fits.Header()
     for k, v in header.items():
         key = str(k).upper()

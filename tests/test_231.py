@@ -302,15 +302,19 @@ class TestInApp(unittest.TestCase):
         app.use_scint.set(True)
         self._run()
         night = app.observations[0].night
-        warns = [c[0][1] for c in self.boxes["showwarning"].call_args_list if "frame edge" in c[0][1]]
-        self.assertEqual(len(warns), 1, [c[0][1] for c in self.boxes["showwarning"].call_args_list])
-        text = warns[0]
-        self.assertIn("check K", text)
-        self.assertRegex(text, r"check K (comes within \d+ px of|reaches) the frame edge")   # review S1; step 6c (e)
-        self.assertIn("The check star was off the frame in 20 frames", text)
+        # 2.4.0 fit-in F3 (area F, m471): no box after the run. The check's ONE line (it lost frames at the edge)
+        # names the frames and the better spare; before, a "left out" line, a second "near the frame edge" line and
+        # a warning box said it three times.
+        self.assertEqual([c[0][1] for c in self.boxes["showwarning"].call_args_list if "frame edge" in c[0][1]], [])
+        lines = [t for t in self.logged if "check star left out of" in t]
+        self.assertEqual(len(lines), 1, self.logged)
+        text = lines[0]
+        self.assertIn("⚠ check star left out of 20 frames (off the frame edge; frames ", text)
+        self.assertIn("no check value there.", text)
         self.assertNotIn(" .", text)
         self.assertIn("A better check star stays farther in: FAR", text)
         self.assertNotIn("spare EDGE", text)   # spares near the edge: log only
+        self.assertFalse(any("check K" in t and "frame edge" in t for t in self.logged), self.logged)   # no twin
         # 2.4.0 step 6b (John 19 Nov): a spare near the edge is not on the page at all (the log file only)
         self.assertFalse(any("spare EDGE" in t for t in self.logged), self.logged)
         with open(ca.LOG_FILE, encoding="utf-8") as fh:

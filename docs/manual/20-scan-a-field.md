@@ -85,7 +85,7 @@ The **Scan settings** box on the right holds:
 | **Detection threshold (σ)** | 5.0 | How far above the sky noise a star must be to be measured. Lower finds fainter stars, and more noise. |
 | **Suspect at (× normal)** | 3.0 | How many times more than normal a star must scatter to be a suspect. |
 | **or at (χ²ν × normal)** | 2.5 | The second test: how many times more than normal a star's scatter against its own error bars (χ²ν) must be. 0 or blank switches this test off. |
-| **Most stars to measure** | 800 | The brightest stars first, up to this number. The log says when the limit is reached; raise it to go fainter. |
+| **Most stars to measure** | 800 | The brightest stars first, up to this number. When the limit is reached, the scan's result says so (*Limits: brightest 800 measured …* on the status line, in the log's *Field scan done* line and at the start of the text above the table, from 2.4.0); raise it to go fainter. |
 | **Period search (days)** | 0.02 to 20 | The period range of the suspects' periodograms. Remembered between sessions. (A range left at the old default, 0.05, moves to 0.02 once.) |
 | **Leave out crowded stars (neighbor in the aperture or sky ring)** | on | Skip stars where a neighbor's light reaching the aperture is 1 % or more of the star's own. |
 
@@ -327,7 +327,8 @@ The **Results** row holds the buttons below. Before the first scan the page show
   nights it was a suspect, color and VSX period, `field_scan_suspects.csv`.
 - **Export all light curves CSV…**: every star's light curve, one row per star per frame,
   `field_scan_lightcurves.csv`.
-- **Back** returns to the Photometry page.
+- **Back** returns to the Photometry page. (From 2.4.0 it is the only **Back** on this page; a second one under the
+  Results row is gone.)
 
 See [21. Check a suspect](21-follow-a-candidate.md) for what to do with them.
 

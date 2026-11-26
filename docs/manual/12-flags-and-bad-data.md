@@ -63,7 +63,7 @@ When a night has such a stretch, SHOBS-P asks after photometry:
 - **Use these points** keeps the points. Their error bars grow with the light lost, and each kept point also gets the extra star-to-star scatter measured in that stretch, so the errors stay honest.
 - **Leave them out** (the default; also Escape or closing the window) leaves them flagged, like cloud.
 
-If you are unsure, choose **Leave them out**. You can change it later. Each answer is written to the log with the night and the time, for example "… transmission loss (dew/haze?) question (after photometry) answered “Leave them out” at 2026-10-16 23:41:07."
+If you are unsure, choose **Leave them out**. You can change it later. Each answer is written to the log in one line with the night (the log file adds the time), for example "…: transmission loss (dew/haze?) points left out, flagged (asked after photometry)." or "…: transmission loss (dew/haze?) points kept (asked after photometry): errors follow the reduced light plus the star-to-star scatter there."
 
 If only one star was measured, SHOBS-P cannot tell dew from cloud, so it does not ask: the points are left out, and the log says so.
 
