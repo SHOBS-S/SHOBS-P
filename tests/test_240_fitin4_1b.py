@@ -250,5 +250,47 @@ class TestMarkersRecentred(unittest.TestCase):
                                       "re-centred."])
 
 
+class TestApertureRefit(unittest.TestCase):
+    """8e: an aperture kept from the last field that does not fit this field's stars is re-fitted, plain note."""
+
+    def _app(self, r=8.0, fwhm=2.3, observations=(), set_for=None, folder="/n2/lights"):
+        app = _fake(observations=list(observations), light_dir=_Var(folder), sky_in=_Var(12.0), sky_out=_Var(18.0),
+                    _aperture_set_for=set_for, _camera_folders=None, _CAMERA_VALUES="values")
+        app.radius = _Var(r)
+        app._seeing = lambda: fwhm
+        app._box_number = lambda var: float(var.get())
+        app._aperture_refit = types.MethodType(App._aperture_refit, app)
+        return app
+
+    def test_too_large_aperture_is_refitted_once(self):
+        app = self._app()
+        self.assertTrue(app._aperture_refit(None))
+        prop = core.suggest_apertures(2.3)
+        self.assertEqual((app.radius.get(), app.sky_in.get(), app.sky_out.get()),
+                         (prop["radius"], prop["sky_in"], prop["sky_out"]))
+        self.assertTrue(app.logged[0].startswith("Aperture re-fitted to this field: r = 8 px was kept from the last "
+                                                 "field, and it is 3.5 × the stars' FWHM here (2.3 px)."))
+        self.assertNotIn("⚠", app.logged[0])
+        self.assertEqual(app._aperture_set_for, "/n2/lights")
+        self.assertFalse(app._aperture_refit(None))        # these lights have their sizes now
+
+    def test_too_small_and_donut(self):
+        app = self._app(r=3.0, fwhm=6.0)
+        self.assertTrue(app._aperture_refit(None))
+        app = self._app(r=8.0)
+        self.assertTrue(app._aperture_refit({"clip_below": 12.0, "radius": 14.0, "sky_in": 20.0, "sky_out": 28.0}))
+        self.assertEqual(app.radius.get(), 14.0)
+        self.assertIn("clips the ring", app.logged[0])
+
+    def test_left_alone_when_it_fits_or_is_yours_or_a_series_is_open(self):
+        self.assertFalse(self._app(r=5.0)._aperture_refit(None))                       # fits
+        self.assertFalse(self._app(set_for="/n2/lights")._aperture_refit(None))        # set for these lights
+        self.assertFalse(self._app(observations=[1])._aperture_refit(None))            # a series keeps one aperture
+        src = _src()
+        self.assertIn("if not typed and self._aperture_refit(donut):", src)
+        self.assertIn("self._aperture_set_for = self.light_dir.get().strip()",
+                      _body(src, "    def _aperture_caution_recheck(self"))
+
+
 if __name__ == "__main__":
     unittest.main()

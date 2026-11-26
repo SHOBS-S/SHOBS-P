@@ -12608,6 +12608,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 r = float(self.radius.get())
             except (TypeError, ValueError):
                 return
+        if not typed and self._aperture_refit(donut):
+            return   # 2.4.0 fit-in F4 (#79 item 8e): re-fitted to this field, with a plain note
         text = ""
         # 2.4.0 (#111): "kept from before" only while it is; after you change the boxes the check speaks of your value
         kept = "" if typed else " (kept from before)"
@@ -12628,6 +12630,51 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._aperture_caution_said = text
             self.log(text)
 
+    def _aperture_refit(self, donut) -> bool:
+        """2.4.0 fit-in F4 (#79 item 8e, m229 m231; RESULTS-CHANGING): an aperture kept from the last field that does
+        not fit this field's stars (in focus: r over 2.5 x or under 0.9 x the field's FWHM; defocused: r clips the
+        ring) is re-fitted to them, with a plain note, as a new camera's first image is (#111). It is the start
+        of the #61 trial: the comp survey then tries the sizes around it on the night's frames and keeps the
+        steadiest. Not when a series is open (its nights keep one aperture), and not when the sizes were set
+        (typed, Suggest…, a re-fit) for these lights already: those are yours. True when the boxes were set."""
+        if self.observations:
+            return False
+        try:
+            field = self.light_dir.get().strip()
+        except Exception:
+            field = ""
+        if field and getattr(self, "_aperture_set_for", None) == field:
+            return False
+        r = self._box_number(self.radius)
+        if r is None:
+            return False
+        if donut is not None:
+            if r >= donut["clip_below"]:
+                return False
+            prop = {k: float(donut[k]) for k in ("radius", "sky_in", "sky_out")}
+            why = f"it clips the ring of these defocused stars (r ≥ {donut['clip_below']:g} px holds it)"
+        else:
+            fwhm = self._seeing()
+            if not (math.isfinite(fwhm) and fwhm > 0) or 0.9 * fwhm <= r <= 2.5 * fwhm:
+                return False
+            prop = core.suggest_apertures(fwhm)
+            why = f"it is {r / fwhm:.1f} × the stars' FWHM here ({fwhm:.1f} px)"
+        self._aperture_set_for = field
+        self.radius.set(prop["radius"])
+        self.sky_in.set(prop["sky_in"])
+        self.sky_out.set(prop["sky_out"])
+        snap = (getattr(self, "_camera_folders", None) or {}).get(self._CAMERA_VALUES)
+        if isinstance(snap, dict):   # these sizes go with these lights
+            try:
+                snap["aperture"] = self._camera_values_now()["aperture"]
+            except Exception:
+                pass
+        self.log(f"Aperture re-fitted to this field: r = {r:g} px was kept from the last field, and {why}. Now r "
+                 f"{prop['radius']:g}, sky {prop['sky_in']:g}–{prop['sky_out']:g} px. The comp survey tries the "
+                 "sizes around it on the night's frames and keeps the steadiest; Suggest… shows the detail, and "
+                 "the boxes are yours to change.", keep_status=True)
+        return True
+
     # (the second and third: the ⚠ findings of 2.4.0 before fit-in F3, still dismissed from an older session's list)
     APERTURE_CAUTION_STARTS = ("Aperture r = ", "Defocused stars: the aperture clips the ring", "Defocused stars: r = ")
 
@@ -12640,6 +12687,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             float(self.radius.get())
         except Exception:
             return   # half-typed number: the next keystroke comes back here
+        try:   # 2.4.0 fit-in F4 (8e): sizes set for these lights (typed, Suggest…, a re-fit) are not re-fitted again
+            self._aperture_set_for = self.light_dir.get().strip()
+        except Exception:
+            pass
         said = getattr(self, "_aperture_caution_said", None)
         store = getattr(self, "findings", None)
         if store is not None:
