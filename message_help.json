@@ -2539,16 +2539,32 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "No airmass in the file for …: their baseline is fitted against time only, unlike the other nights; Tc may shift. “Fit every night against time only” makes all nights match."
+    "No airmass in the file for …: their baseline is fitted against time instead (Auto picks none, a time slope or a time curve for each, as the Transit fit page does).",
+    "… gets a time slope in place of the airmass term."
    ],
-   "todo": "Re-save those nights' fit CSVs with a current SHOBS-P, or press Fit every night against time only."
+   "todo": "Nothing. To give such a night airmass, save its fit CSV again with a current SHOBS-P (Save light-curve CSV…)."
   },
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "… nights in use (… fitted against time only: see the note under the table)."
+    "ready (no airmass in the file: baseline fitted against time)"
    ],
-   "todo": "See the note under the table."
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Nights in 2 filters (CV, SR): each filter gets its own depth and limb darkening; a/R\\"
+   ],
+   "todo": "Nothing; untick the box for one depth for all (the note then ends … one depth and one limb darkening, as chosen.)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ready (filter SR: its own depth and limb darkening)",
+    "ready (filter SR, most nights CV: one depth for all, as chosen)"
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Output, Transits mode",

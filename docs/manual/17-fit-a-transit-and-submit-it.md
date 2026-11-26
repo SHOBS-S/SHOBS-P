@@ -672,7 +672,8 @@ A Variables-mode series never offers **Fit the series' nights…**.
 2. Check the list. The **Status** column says **✔ ready** for each usable night. A night of another planet or the same
    night twice is left out with the reason in plain words (nothing is wrong; it just does not belong in this fit). A
    night with fewer than 20 points, or no transit predicted during the data, is left out with **✖** and the reason. A
-   night in another filter than most gets a ⚠; consider **Depth and limb darkening per filter**. **Leave out / put
+   night in another filter than most, or one whose file has no airmass, is still **✔ ready**, with the fact in
+   brackets (see *Nights in more than one filter* and *Nights with no airmass* below). **Leave out / put
    back** (or a double-click) and **Remove** change the list. If the table is wider than the window, use the
    sideways scroll bar under it. The **Single-night Tc (BJD_TDB)** column gives each night's own Tc. For a fit CSV
    that does not carry one, SHOBS-P fits that night alone in the background: the column says *fitting…* until it is
@@ -685,6 +686,14 @@ A Variables-mode series never offers **Fit the series' nights…**.
    nights loaded, the alternative ephemeris is kept in the series file, so the next **Fit the series' nights…** fills it in
    again and the O − C compares with the same one.
 4. Choose **Detrend** and **MCMC** as on the page, and press **Fit nights**. At least two usable nights are needed.
+   **Detrend** has the page's choices (from 2.4.0): **Auto (BIC)** (the default), **none**, **airmass**, **time
+   slope**, **time curve (quadratic)**, **airmass + time slope** and **airmass + time curve (quadratic)**. With
+   **Auto**, each night gets the baseline its own fit picks by the lowest BIC, exactly as the Transit fit page
+   picks it for that night alone, so one night can have airmass and the next a time curve. The time curve
+   (quadratic) is the most a night can get. Any other choice is used for every night. The Log and the Summary
+   name each night's baseline, for example *"12-OCT-2026: baseline airmass (Auto: next airmass + time slope ΔBIC
+   +4.3)"*. Before 2.4.0 the window had two boxes (airmass, time slope) that applied to all nights and no time
+   curve, so a joint fit made with 2.4.0 can give slightly different numbers.
    If the window is still looking up the planet, the line under the fit options says *"Fit nights: waiting for the
    ephemeris…"* and the fit starts when the lookup is in (from 2.4.0; the window's **Cancel**, or a change of
    planet, calls it off and says so); only after a failed lookup does it ask you to
@@ -697,21 +706,28 @@ A Variables-mode series never offers **Fit the series' nights…**.
 
 ### Nights with no airmass
 
-Fit CSVs saved by SHOBS-P 2.2.20 or later carry each point's airmass. Older fit CSVs do not. With **airmass**
-ticked, a night with no airmass among nights that have it is fitted against time only, unlike the others, and its
-Tc may shift. SHOBS-P marks such a night with *"⚠ No airmass in this file: its baseline is fitted against time only,
-unlike the other nights. Tc may shift."* in its **Status** and in a line under the table (with the nights' dates).
-The Summary has one note for all such nights (from 2.4.0): *"⚠ No airmass in the file for 5–6 Oct, 9–10 Oct: their
-baseline is fitted against time only, unlike the other nights; Tc may shift. “Fit every night against time only”
-makes all nights match."* The line under the fit options says, plainly, *"4 nights in use (1 fitted against time
-only: see the note under the table)."*
+Fit CSVs saved by SHOBS-P 2.2.20 or later carry each point's airmass. Older fit CSVs do not. Such a night cannot be
+fitted against airmass, so it is fitted against time instead: with **Auto**, SHOBS-P picks none, a time slope or a
+time curve for it by BIC, as the Transit fit page does for a night without airmass; with a choice that includes
+airmass, the night gets a time slope in place of the airmass term. There is nothing for you to do. The night's
+**Status** reads *"✔ ready (no airmass in the file: baseline fitted against time)"*, and one plain line under the
+table and in the Summary names all such nights: *"No airmass in the file for 5–6 Oct, 9–10 Oct: their baseline is
+fitted against time instead (Auto picks none, a time slope or a time curve for each, as the Transit fit page
+does)."* (Before 2.4.0 this was a ⚠ on every such night, with a **Fit every night against time only** button.)
 
-You have two ways out:
+If you would rather have airmass for such a night, open it again in SHOBS-P 2.2.20 or later and save its fit CSV
+again (**Save light-curve CSV…**); it then carries airmass.
 
-- Open those nights again in SHOBS-P 2.2.20 or later and save their fit CSVs again (**Save light-curve CSV…**). They
-  then carry airmass.
-- Press **Fit every night against time only** (beside the line under the table). It unticks **airmass** and ticks
-  **time slope**, so every night is fitted the same way.
+### Nights in more than one filter
+
+The depth and the limb darkening differ with the filter. When the nights in use are in more than one filter,
+**Depth and limb darkening per filter** is ticked by itself (from 2.4.0): each filter gets its own depth (Rp/R\*)
+and limb darkening, while a/R\*, b and the timing are shared by all nights. The line under the table says so,
+for example *"Nights in 2 filters (CV, SR): each filter gets its own depth and limb darkening; a/R\*, b and the
+timing are shared. Untick “Depth and limb darkening per filter” for one depth for all."* Untick the box if you want
+one depth for all nights; it then stays unticked, and the line reads *"… are fitted with one depth and one limb
+darkening, as chosen."* A night whose filter is not known (an older fit CSV) is fitted with the filter most nights
+have. With one filter the box is greyed.
 
 ### The window's layout
 
