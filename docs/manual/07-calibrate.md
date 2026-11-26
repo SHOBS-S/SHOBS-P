@@ -31,13 +31,16 @@ rows you filled in), calibrates the first light so you can see it, and then move
 You normally do not need **Next: Photometry**: a successful calibration takes you there.
 
 To stop a calibration, press **Cancel**. SHOBS-P stops after the current frame, and any masters you had before are
-left unchanged.
+left unchanged. **Cancel** is greyed while nothing is running (from 2.4.0; hovering says *Nothing is running.*), and
+so is **Cancel run** on the Photometry page.
 
 ## What happens
 
 1. **The plan.** Before the masters are built, one log line says how the lights and flats will be calibrated, for
    example *"Calibration: lights = light − dark (the darks match the lights' exposure, so no bias is needed); flats =
-   flat − dark flat."* Indented notes and ⚠ warnings may follow it (see "Dark flats" below).
+   flat − dark flat."* Indented notes and ⚠ warnings may follow it (see "Dark flats" below). From 2.4.0 the Input
+   page shows the same sentence under the Frames box as soon as the folders are filled (*Plan: lights = …*, chapter
+   5), with a short ⚠ line under it when something is wrong.
 2. **Masters.** For each of bias, dark, dark flat and flat, SHOBS-P either reuses the master it saved last time, or
    median-combines the raw frames into a new one and saves it in the `SHOBS-P masters` subfolder of that folder. The
    log says which, for example "Using saved master flat …" or "Median-combining 30 flat frames".
@@ -273,6 +276,24 @@ The full details are always in the log on this page.
 > monochrome camera?** when you press **Scan folders**. If you skipped the scan, **Build masters and calibrate** runs
 > its checks first (from 2.3.2), so the question comes then; still check that **Bayer pattern** says **MONO** before
 > calibrating, or every frame is split as if it had a color mask.
+
+**A color camera set to MONO** (from 2.4.0). When the flat (or, without flats, the lights' sky background) shows a
+color mask while **Bayer pattern** says **MONO**, **Build masters and calibrate** stops before it builds anything and
+asks:
+
+> The flat shows a color mask (its 2x2 pixel planes differ by 38%), but the Bayer pattern is MONO.
+>
+> Calibrating a color camera as monochrome gives wrong photometry: the colors are never separated.
+>
+> Which camera took these frames?
+
+- **Color camera (RGGB)** sets the pattern to RGGB and goes on. Check that RGGB is your camera's pattern in the Camera
+  box; pick the right one and calibrate again if it is not.
+- **It is monochrome** keeps MONO and goes on. You are not asked again for this Lights folder.
+- **Cancel** (the default) stops, so you can pick the pattern yourself.
+
+When the frames were binned in the camera, the question adds that a color sensor binned 2x2 also looks like this.
+Before 2.4.0 this was only a ⚠ line in the log, and the calibration went on as monochrome.
 
 ---
 

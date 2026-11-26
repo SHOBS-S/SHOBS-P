@@ -281,13 +281,24 @@ class TestInApp(unittest.TestCase):
         self.assertFalse(app._typed_site_check(action="Run photometry"))
         self.assertTrue(any("Elevation box is empty" in t for t in self.logged))
 
-    def test_n2_header_own_site_yes_saved_once(self):
+    def test_n2_header_site_with_empty_boxes_is_used_not_saved(self):
+        """2.4.0 fit-in F3 (A1; was "Is that your own site?" Yes saved once): a header's site with empty Site boxes
+        is used for these frames with no question and nothing saved; Save as my setup saves it."""
         app = self.app
         app.lat.set(""); app.lon.set(""); app.elevation.set("")
-        app._header_setup({"EXPTIME": 60, "SITELAT": 35.3027, "SITELONG": -81.9400})
-        app._typed_site_check(action="Run photometry")
-        self.assertEqual(self.boxes["askyesno"].call_count, 1)   # only "Is that your own site?"
+        self.saves.clear()
+        with mock.patch.object(ca, "ask_choice") as ask:
+            app._header_setup({"EXPTIME": 60, "SITELAT": 35.3027, "SITELONG": -81.9400})
+            app._typed_site_check(action="Run photometry")
+            ask.assert_not_called()
+        self.boxes["askyesno"].assert_not_called()
+        self.assertEqual(app.lat.get(), "35.3027")
+        self.assertIsNotNone(app._own_setup)
+        self.assertEqual(app.settings["site_lat"], JOHN["site_lat"])
+        self.assertEqual(self.saves, [])
+        app._setup_save_as_mine()
         self.assertEqual(app.settings["site_lat"], "35.3027")
+        self.assertIsNone(app._own_setup)
 
     # ---- item 14 ----------------------------------------------------------------------------------------------
     def test_fresh_install_optics_blank(self):
@@ -303,7 +314,11 @@ class TestInApp(unittest.TestCase):
             fresh._header_setup({"FOCALLEN": 2098, "XPIXSZ": 3.76})
             self.assertAlmostEqual(float(fresh.focal_mm.get()), 2098.0)
             self.assertAlmostEqual(float(fresh.pixel_um.get()), 3.76)
-            self.assertIn("now saved as your own optics", fresh.log_box.get("1.0", "end"))   # review S5
+            # 2.4.0 fit-in F3 (A1): held for these frames, not saved as yours (they were saved without asking)
+            self.assertIn("Not saved as yours: Save as my setup", fresh.log_box.get("1.0", "end"))
+            fresh.update(); import time as _t; _t.sleep(0.8); fresh.update()
+            self.assertNotIn("focal_mm", fresh.settings)
+            self.assertNotIn("pixel_um", fresh.settings)
             # typing 2900 by hand is saved like any other value (no more "starting value" exception)
             saved = []
             fresh._save_settings = lambda *a, **k: saved.append(dict(fresh.settings))

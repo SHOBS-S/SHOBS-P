@@ -1157,14 +1157,15 @@ def calibration_plan(have_bias: bool, have_dark: bool, have_flat: bool, have_dar
                      darkflats_in_bias: bool = False, flats_calibrated: bool = False) -> dict:
     """2.3.0 (item 11): how the lights and flats are calibrated from the boxes given, in plain words for the Log.
     {"lights": text, "flats": text ('' without flats), "pedestal": "bias" / "darkflat" / "", "notes": [...],
-    "warnings": [...]}.
+    "warnings": [...], "short": [...]}. "short" (2.4.0 fit-in F3, area B) holds each warning in one short sentence
+    for the Input page's plan line (the Log keeps the full ones).
     - A bias is the pedestal of the lights and darks (as always).
     - No bias, dark flats given: the dark flats are the pedestal: L - DF - (D - DF) t_L / t_D, which is L - D exactly
       when the darks match the lights' exposure (no bias needed, no warning).
     - The dark flats always win for the flats: F - DF.
     - No bias and no dark flats: a dark scaled to another exposure scales the pedestal it holds too (ccdproc
       scale=True): the lights (and the flats) keep a wrong part of the offset. Warned."""
-    notes, warns = [], []
+    notes, warns, short = [], [], []
     pedestal = "bias" if have_bias else ("darkflat" if have_darkflat else "")
     lights_scaled = have_dark and exposures_match(dark_exp, light_exp) is False
     if darkflats_in_bias:
@@ -1190,6 +1191,8 @@ def calibration_plan(have_bias: bool, have_dark: bool, have_flat: bool, have_dar
                          "(pedestal) inside them is scaled too, so the lights keep a wrong offset. The sky ring takes "
                          "most of it out in photometry, but the flat correction and the photon-noise check do not. Add "
                          f"bias frames or dark flats, or use {light_exp:g} s darks.")
+            short.append("Darks can't be scaled correctly without bias or dark flats: add bias frames or dark flats, "
+                         f"or use {light_exp:g} s darks.")
     elif have_bias:
         lights = "light − bias"
     elif have_darkflat:
@@ -1205,6 +1208,8 @@ def calibration_plan(have_bias: bool, have_dark: bool, have_flat: bool, have_dar
             warns.append(f"The dark flats are {darkflat_exp:g} s and the flats {flat_exp:g} s. Dark flats should match "
                          "the flats' exposure; they are taken off as they are (the offset still comes off; the flats' "
                          f"dark current is a little off). Take dark flats at {flat_exp:g} s.")
+            short.append(f"Dark flats {darkflat_exp:g} s, flats {flat_exp:g} s: dark flats should match the flats' "
+                         f"exposure. Take dark flats at {flat_exp:g} s.")
         if have_bias:
             notes.append("Bias and dark flats are both given: the dark flats are taken off the flats; the bias is used "
                          "for the lights and darks.")
@@ -1218,9 +1223,12 @@ def calibration_plan(have_bias: bool, have_dark: bool, have_flat: bool, have_dar
                          f"{flat_exp / dark_exp:.3g}, and with no bias that scales the camera's offset too, so the "
                          "wrong amount of offset comes off and the master flat is wrong. Put dark flats (darks at the flats' "
                          "exposure) in the Dark flats box, or add bias frames.")
+            short.append(f"Flats {flat_exp:g} s, darks {dark_exp:g} s and no bias: the master flat comes out wrong. "
+                         "Put dark flats in the Dark flats box, or add bias frames.")
     elif have_flat:
         flats = "nothing subtracted from the flats (no bias, darks or dark flats)"
-    return {"lights": lights, "flats": flats, "pedestal": pedestal, "notes": notes, "warnings": warns}
+    return {"lights": lights, "flats": flats, "pedestal": pedestal, "notes": notes, "warnings": warns,
+            "short": short}
 
 
 def find_saved_master(paths: list[str], kind: str, binning: int, depends: dict, exptime: float | None = None):
