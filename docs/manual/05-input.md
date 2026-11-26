@@ -320,7 +320,12 @@ as your setup unless you press **Save as my setup**.
   it (some programs write the longitude west-positive: 110.88 where SHOBS-P needs -110.88), your typed site is used
   for these frames and stays when you press **Scan folders** again. The box then says **The site was typed over the
   lights' header's (the header says 31.6800, 110.8800; …); the rest is from the headers.** It is still not saved as
-  yours.
+  yours. SHOBS-P remembers the typed site for that telescope at that header site: the next night's folder of its
+  lights, or the first folder again, gets your typed site and not the header's, and the log says **Using the site
+  you typed over this telescope's header before, 31.6800, -110.8800 (the header says 31.6800, 110.8800), …**. Type
+  the header's numbers back in the boxes to end that. If you empty the Latitude or Longitude box, the box says
+  **The Latitude or Longitude box is empty: type the frames' site, or press Scan folders to put the header's
+  back.**
 - **A header's site that is no site.** Latitude 0 and longitude 0 together, a latitude outside ±90 or a longitude
   outside ±360 is what a capture program writes when no site was set. SHOBS-P does not use it; the log says **The
   lights' header gives latitude 0, longitude 0: not a real site, so it is not used. The Site boxes are used for these

@@ -258,10 +258,10 @@ class TestFix(unittest.TestCase):
         self.assertNotIn("From the lights' headers (", text)
         self.assertEqual(buttons, ["save", "own"])
         self.assertIn("typed over", app.setup_strip_text.get())   # the strip followed the box
-        # nothing saved as yours, and not filed under the header's (wrong) site either
+        # nothing saved as yours (the typed site is filed for this telescope only when another folder is scanned
+        # or at a run: round 2, below)
         self.assertEqual(self.saves, [])
-        app._remember_frames_setup()
-        self.assertNotIn("frames_setups", app.settings)
+        self.assertEqual(app.settings["site_lon"], self.HOME["site_lon"])
         # Save as my setup saves what the strip shows
         app._setup_save_as_mine()
         self.assertEqual(app.settings["site_lon"], "-110.8800")
@@ -276,6 +276,85 @@ class TestFix(unittest.TestCase):
         self.assertNotIn("typed over", text)
         app.lon.set("")                                        # a box being typed is not "typed over"
         self.assertNotIn("typed over", app._setup_strip_parts()[0])
+
+    # ---- round 2 ----------------------------------------------------------------------------------------------------
+    def test_r2_typed_over_site_follows_the_telescope(self):
+        """The reviewer's run: type -110.88 over a west-positive header, scan the next night's folder, go back."""
+        app = self.app
+        west = dict(self.FAR, SITELONG=110.88)
+        first = self._lights_box("night1")
+        app._header_setup(dict(west))
+        app.lon.set("-110.8800")
+        app.elevation.set("1268")
+        self._lights_box("night2")
+        self.logged.clear()
+        app._header_setup(dict(west))                          # the same telescope's next night
+        self.assertEqual((app.lat.get(), app.lon.get(), app.elevation.get()), ("31.6800", "-110.8800", "1268"))
+        line = " ".join(self.logged)
+        self.assertIn("Using the site you typed over this telescope's header before, 31.6800, -110.8800 "
+                      "(the header says 31.6800, 110.8800)", line)
+        self.assertIn("nothing is saved as yours", line)
+        self.assertFalse(any(t.lstrip().startswith(("⚠", "✖")) for t in self.logged))
+        self.assertIn("The site was typed over the lights' header's", app._setup_strip_parts()[0])
+        rec = app.settings["frames_setups"][-1]
+        self.assertEqual((rec["use"], rec["lon"], rec["values"]["lon"]), ("frames", 110.88, "-110.8800"))
+        self.assertEqual(app.settings["site_lon"], self.HOME["site_lon"])     # never your saved site
+        self.assertEqual(app._own_setup["lon"], self.HOME["site_lon"])
+        app.light_dir.set(first)                               # back to the first folder
+        app._header_setup(dict(west))
+        self.assertEqual((app.lon.get(), app.elevation.get()), ("-110.8800", "1268"))
+        # your own lights in between, then a new session's scan: still the typed site
+        app._restore_own_setup()
+        self.assertEqual(app.lon.get(), self.HOME["site_lon"])
+        self._lights_box("night3")
+        app._header_setup(dict(west))
+        self.assertEqual(app.lon.get(), "-110.8800")
+        # another telescope at that site gets its own header's site
+        self._lights_box("other")
+        app._header_setup(dict(west, TELESCOP="Other 0.4 m", FOCALLEN=2000))
+        self.assertEqual(app.lon.get(), "110.8800")
+        # the header's numbers typed back end it
+        self._lights_box("night3")
+        app._header_setup(dict(west))
+        self.assertEqual(app.lon.get(), "-110.8800")
+        app.lon.set("110.8800")
+        self._lights_box("night4")
+        app._header_setup(dict(west))
+        self.assertEqual(app.lon.get(), "110.8800")
+        self.assertNotIn("lon", app.settings["frames_setups"][-1]["values"])
+
+    def test_r2_typed_over_site_filed_at_a_run(self):
+        app = self.app
+        self._lights_box("night1")
+        app._header_setup(dict(self.FAR, SITELONG=110.88))
+        app.lon.set("-110.8800")
+        app._remember_frames_setup()                           # as at a photometry run
+        self.assertEqual(app.settings["frames_setups"][-1]["values"]["lon"], "-110.8800")
+        # Save as my setup: it is yours now, nothing left filed for "their" frames
+        app._setup_save_as_mine()
+        self.assertEqual(app.settings["frames_setups"], [])
+
+    def test_r2_emptied_site_box_is_said(self):
+        app = self.app
+        self._lights_box()
+        app._header_setup(dict(self.FAR))
+        app.lat.set("")
+        self.pump(200)
+        text, buttons = app._setup_strip_parts()
+        self.assertIn("The Latitude or Longitude box is empty: type the frames' site, or press Scan folders to put "
+                      "the header's back.", text)
+        self.assertNotIn("typed over", text)
+        self.assertEqual(app.setup_strip_text.get(), text)
+        self.assertIn("Fill in the Latitude and Longitude boxes first", app._setup_save_why())
+        app._header_setup(dict(self.FAR))                      # Scan folders: the header's back
+        self.assertEqual(app.lat.get(), "31.6800")
+        self.assertNotIn("box is empty", app._setup_strip_parts()[0])
+        self.assertNotIn("frames_setups", app.settings)
+
+    def test_r2_manual_says_what_a_trim_does_to_a_left_out_point(self):
+        text = " ".join(_src(os.path.join("docs", "manual", "17-fit-a-transit-and-submit-it.md")).split())
+        self.assertIn("One case ends the choice", text)
+        self.assertIn("When you then clear that trim, the point is fitted again", text)
 
     # ---- S1 ---------------------------------------------------------------------------------------------------------
     def test_s1_another_telescope_at_the_same_site_gets_its_own_optics(self):

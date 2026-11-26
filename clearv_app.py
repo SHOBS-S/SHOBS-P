@@ -8104,17 +8104,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         rec = self._frames_record(scope, site)
         return "own" if rec and rec.get("use") == "own" else ""
 
-    def _remember_frames_setup(self):
+    def _remember_frames_setup(self, leaving: bool = False):
         """Rule 6, at a photometry run: what the header did not give and you typed for a far site's frames (the
-        elevation above all) comes back when that telescope's lights are scanned again."""
+        elevation above all) comes back when that telescope's lights are scanned again. Review round 2: so does a
+        site typed over the header's ("lat" / "lon" in the record's values, filed under the telescope and the
+        HEADER's site); that one is also filed when another Lights folder is scanned (leaving=True), so the same
+        wrong header does not win again the next night."""
         st = self._frames_setup or {}
         if st.get("kind") != "frames" or self._own_setup is None or getattr(self, "_loading_meta", False):
             return
-        if st.get("folder") != self.light_dir.get().strip() or not st.get("site"):
+        if not st.get("site") or (not leaving and st.get("folder") != self.light_dir.get().strip()):
             return
+        over = self._frames_typed_over(st)
+        here = self._box_site()
+        old = self._frames_record(st.get("scope"), st["site"])
+        had = old is not None and old.get("use") == "frames" and "lat" in (old.get("values") or {})
+        if here is None or (leaving and over is None and not had):
+            return   # a Site box is empty; or nothing typed over the header's to file before a run
         values = {}
-        if self._frames_typed_over(st) is not None:
-            return   # review M2: typed for another site than the header's; not filed under the header's
+        if over is not None:
+            values["lat"], values["lon"] = f"{here[0]:.4f}", f"{here[1]:.4f}"
         for name in ("elevation", "focal_mm", "pixel_um", "site_tz"):
             v = str(self._setup_value(name)).strip()
             if name in ("focal_mm", "pixel_um"):
@@ -8126,7 +8135,6 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     pass
             if v:
                 values[name] = v
-        old = self._frames_record(st.get("scope"), st["site"])
         if old is not None and old.get("use") == "frames" and old.get("values") == values:
             return
         self._store_frames_record(st.get("scope"), st["site"], "frames", values)
@@ -8172,8 +8180,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         same_frames = (prev.get("kind") == "frames" and prev.get("folder") == folder
                        and site is not None and prev.get("site") == tuple(site)
                        and ((prev.get("scope") is None and scope is None) or same_scope(prev.get("scope"), scope)))
-        if own is not None and same_frames:
-            return   # these frames' setup is already in use
+        if own is not None and same_frames and self._box_site() is not None:
+            return   # these frames' setup is already in use (an emptied Site box gets the header's back)
+        if own is not None and prev.get("kind") == "frames":
+            try:
+                self._remember_frames_setup(leaving=True)   # review round 2: a site typed over the header's
+            except Exception:
+                traceback.print_exc()
         # the same telescope's other folder: an elevation typed for it (its header has none) is not lost
         carried_elev = None
         if (own is not None and prev.get("kind") == "frames" and site is not None and site[2] is None
@@ -8216,8 +8229,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self._typed_borrow = None   # 2.3.2 review S1: the frames' own site now, not a typed one
             vals = (self._frames_record(scope, site) or {}).get("values") or {}   # rule 6: typed for them before
             back = []
-            self.lat.set(f"{site[0]:.4f}")
-            self.lon.set(f"{site[1]:.4f}")
+            # review round 2: the site typed over this telescope's header before is used again, and said
+            used = site
+            t_lat, t_lon = fnum(vals.get("lat")), fnum(vals.get("lon"))
+            if t_lat is not None and t_lon is not None and core.site_is_real(t_lat, t_lon) and abs(t_lat) <= 90:
+                used = (t_lat, t_lon, site[2])
+            self.lat.set(f"{used[0]:.4f}")
+            self.lon.set(f"{used[1]:.4f}")
             # Never leave your own elevation with another site's coordinates (2.2.8 MicroObservatory lesson).
             if site[2] is not None:
                 self.elevation.set(f"{site[2]:.0f}")
@@ -8236,7 +8254,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     back.append(f"{'focal length' if key == 'focal_mm' else 'pixel size'} {fnum(vals[key]):g}")
             self.telescope_name.set("")   # 2.2.16 (item 5): another telescope; yours comes back with your setup
             got = ", ".join(f"{k.split('_')[0]} from {v}" for k, v in opt["source"].items())
-            self.log(f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}"
+            self.log((f"Using the site you typed over this telescope's header before, {used[0]:.4f}, {used[1]:.4f} "
+                      f"(the header says {site[0]:.4f}, {site[1]:.4f}), and the optics in these frames"
+                      if used is not site else
+                      f"Using the site and optics in these frames: {site[0]:.4f}, {site[1]:.4f}")
                      + (f", {site[2]:.0f} m" if site[2] is not None else ", elevation not in the header")
                      + (f"; {got}" if got else "") + f" ({where})."
                      + (f" As typed for this telescope's frames before: {', '.join(back)}." if back else "")
@@ -8245,7 +8266,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # 2.2.21 (#22): the header names no time zone. 2.4.0 fit-in F2 (m133, John 24 Nov): the zone is looked
             # up from the site's latitude/longitude (tzfpy), so local times (and trims typed as clock times)
             # are the site's; without the package (an older install), the 2.2.21 line as before.
-            if not self._zone_from_site(site[0], site[1], "the frames' site"):
+            if not self._zone_from_site(used[0], used[1], "the frames' site"):
                 if vals.get("site_tz") and site_time.is_valid(str(vals["site_tz"])):
                     self.site_tz.set(str(vals["site_tz"]))
                     self.log(f"  Time zone {vals['site_tz']}, as used for this telescope's frames before.",
@@ -8380,8 +8401,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 source = (f"The site was typed over the lights' header's (the header says {over[0]:.4f}, "
                           f"{over[1]:.4f}" + (f"; {st['cam']}" if st.get("cam") else "") + "); the rest is from the "
                           "headers")
+            no_site = ""
+            if self._box_site() is None:
+                # review round 2 (nit): said like the missing elevation
+                no_site = (" The Latitude or Longitude box is empty: type the frames' site, or press Scan folders "
+                           "to put the header's back.")
             return ("; ".join(t for t in (values, mount) if t) + f". {source}. In use for these frames only: nothing "
-                    "is saved as yours." + no_elev, ["save", "own"])
+                    "is saved as yours." + no_site + no_elev, ["save", "own"])
         if kind == "mobs":
             return ("MicroObservatory's telescope: " + "; ".join(t for t in (values, st.get("camera", "")) if t)
                     + (f" ({st['where']})" if st.get("where") else "") + ". In use for these frames only.",

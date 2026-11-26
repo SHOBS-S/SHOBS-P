@@ -482,6 +482,20 @@
   {
    "section": "Input",
    "patterns": [
+    "Using the site you typed over this telescope's header before, …, … (the header says …, …), and the optics in these frames … In use for these frames only; nothing is saved as yours. …"
+   ],
+   "todo": "Nothing. To go back to the header's site, type its numbers in the Latitude and Longitude boxes."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Setup for these frames"
+   ],
+   "todo": "Type the site, or press Scan folders."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "Setup for these frames"
    ],
    "todo": "Nothing to work on the series. Press Scan folders before measuring the lights in the Lights row."
