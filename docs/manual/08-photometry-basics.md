@@ -273,9 +273,10 @@ frame edge, no catalog magnitude in this band, a color far from the target's. Be
   of the flat") only while the night's drift has not been checked. Once it has (2.4.0), a star that keeps its sky
   ring on the frame all night gets no edge line at all.
 - (2.4.0) for a comp or check star that is fine on this frame but **drifts toward or off the edge later in the
-  night**, the frames where it happens, for example "⚠ drifts toward the frame edge later in the night: 60 px in on
+  night**, the frames where it happens, for example "drifts toward the frame edge later in the night: 60 px in on
   this frame, but only 32 px on frame #2; stars at least 36 px in all night (3 × the sky-out radius) stay clear of
-  the edge and the weakest part of the flat", or "⚠ drifts off the frame later in the night: it is off the frame
+  the edge and the weakest part of the flat" (a plain note: the sky ring stays on the frame all night, so the star
+  is measured in every frame), or "⚠ drifts off the frame later in the night: it is off the frame
   edge on frames 61–84, so it is not measured there — pick a star further in". When only some of the night's frames
   were checked (big frames), the line says so: "(checked on 8 of the night's 300 lights)". See "How S1–S4 are chosen" below for how the drift is found.
 

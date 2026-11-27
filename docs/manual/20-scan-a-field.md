@@ -130,8 +130,14 @@ read under 1.0, 99 in 100 under 2.1, and stars that never come near a frame edge
 At 2.5 the second test alone listed 7 and 3 ordinary stars (four of the first night's had drifted to the edge of the
 frame). S033 read 4.3 and 5.9, and the field's known short-period variables 3.4 or more, on both nights. A higher
 level (3.0) would have dropped only three ordinary stars from the first night and none from the second, and S033
-reads as low as 2.7 to 3.0 on the first night, depending on which frames are in. So the level stays 2.5. A suspect
-by this test alone that sits near the edge of the frame deserves a look at its light curve before anything else.
+reads as low as 2.7 to 3.0 on the first night, depending on which frames are in. So the level stays 2.5.
+
+**Stars at the frame edge (2.4.0).** On the frames where a star's sky ring runs past the edge of the frame (the
+field drifted it there), the second test leaves that star's points out: it is judged by its own errors only on the
+frames where it is clear of the edge. Its scatter, its light curve and the 3 × normal test keep every point. Such a
+star gets the caution *at the frame edge on N frames (not judged by its own errors there): check its light curve*
+in the **Check first** column. On the first S033 night, four of the seven ordinary stars the second test listed
+were such edge stars.
 
 On a short run the level rises by itself, because χ²ν scatters more from noise alone when there are few points: a
 star needs at least 1 + 5 × √(2 / (n − 1)) on n points, which is 3.36 on 10 points and 2.89 on 15 (a scan of stacks

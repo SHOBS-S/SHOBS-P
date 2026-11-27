@@ -3752,6 +3752,13 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "at the frame edge on N frames (not judged by its own errors there): check its light curve"
+   ],
+   "todo": "Look at its light curve on those frames: a step there is the edge, not the star."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "Searched over a wider range to cover the VSX period: V1 0.9 d (0.02–1.1 d).",
     "VSX period outside the search (…)",
     "Search … d instead"

@@ -8,6 +8,7 @@ import re as _re
 import math
 import os
 import sys
+import warnings
 
 # 2.2.12: UI fonts per platform. Segoe UI and Consolas exist only on Windows; elsewhere Tk falls back to its
 # default (proportional) font, which breaks the lined-up Series and Period boxes. Menlo ships with every Mac.
@@ -9735,7 +9736,8 @@ def chi2_widening(corrected: np.ndarray, med: np.ndarray, sigma: np.ndarray, usa
     """2.4.0 step 7b (#115): per star, the factor its errors are widened by before the per-point cap: sqrt of the
     robust chi2nu that stars as bright show (median z^2 / 0.4549, the same running median over brightness as the
     scatter's), never below 1. 1 where it cannot be worked out."""
-    with np.errstate(all="ignore"):
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # F4 edge rule: a star at the edge all night has no points
         z2 = ((corrected - med[None, :]) / sigma) ** 2
         robust = np.nanmedian(np.where(np.isfinite(z2), z2, np.nan), axis=0) / CHI2_MEDIAN_1DOF
     typical = typical_scatter(med, robust, usable, exclude=exclude)
@@ -9781,7 +9783,18 @@ def suspect_score(excess: float, excess_chi2: float, factor_limit: float = SUSPE
     return s if math.isfinite(s) else float("-inf")
 
 
-def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None, floor=None) -> dict:
+def scan_near_edge(pos, shape, sky_out: float) -> np.ndarray:
+    """2.4.0 fit-in F4 (#115 edge rule, John 26 Nov): per star, True where its sky ring (out to sky_out px) runs past
+    the frame edge on this frame. pos = (n, 2) x, y; shape = the frame's (rows, cols)."""
+    p = np.asarray(pos, dtype=float).reshape(-1, 2)
+    h, w = shape[:2]
+    with np.errstate(invalid="ignore"):
+        d = np.minimum(np.minimum(p[:, 0], p[:, 1]), np.minimum((w - 1) - p[:, 0], (h - 1) - p[:, 1]))
+        return ~(d >= float(sky_out))   # NaN position counts as near the edge
+
+
+def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None, floor=None,
+                      near_edge=None) -> dict:
     """Variability statistics for every star in a field.
 
     inst: frames x stars instrumental magnitudes (NaN where unmeasured).
@@ -9795,6 +9808,11 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
     every star alike and cancels out.
     2.4.0 fit-in F4 (#115): floor (one magnitude error per frame, scan_error_floor, or one number for all frames) is
     added in quadrature to every star's error on that frame; None or 0 = no floor, as before.
+    2.4.0 fit-in F4 (#115 edge rule, John 26 Nov): near_edge (frames x stars, True where the star's sky ring runs
+    past the frame edge, scan_near_edge) keeps those points out of the own-errors test only: a star is not judged
+    by its own errors on the frames where it sits at the edge (on 13 Nov 2026, 4 of the 7 ordinary stars the test
+    listed were edge stars of a night that drifted 215 px). The scatter test and the light curve keep every point.
+    'n_chi2' = the points the own-errors test used per star; 'edge_points' = the points it left out.
     """
     inst = np.asarray(inst, dtype=float)
     n_frames, n_stars = inst.shape
@@ -9839,12 +9857,21 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         # point's z^2 / 0.4549, the median of chi2 with one degree of freedom; never narrowed), so the cap is 5 sigma
         # of the field's real noise at that brightness. Retuned on the 13-14 Nov (97 frames) and quiet 8-9 Nov
         # GSC 03308-00462 nights: S033 2.89 -> 2.69 (still a Suspect at 2.5), 8 Nov unchanged (S033 0.91).
-        sigma = sigma * chi2_widening(corrected, med, sigma, usable, exclude)[None, :]
-        chi2 = chi2nu_against_errors(corrected, med, sigma)
+        judged = corrected
+        edge_n = np.zeros(n_stars, dtype=int)
+        if near_edge is not None:
+            ne = np.asarray(near_edge, dtype=bool)
+            if ne.shape != inst.shape:
+                raise ValueError("the frame-edge table does not match the magnitudes")
+            edge_n = np.sum(ne & np.isfinite(corrected), axis=0).astype(int)
+            judged = np.where(ne, np.nan, corrected)
+        sigma = sigma * chi2_widening(judged, med, sigma, usable, exclude)[None, :]
+        chi2 = chi2nu_against_errors(judged, med, sigma)
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
             out["excess_chi2"] = chi2 / chi2_expected
-        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err, "error_floor": fl})
+        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err, "error_floor": fl,
+                    "n_chi2": np.sum(np.isfinite(judged), axis=0).astype(int), "edge_points": edge_n})
     return out
 
 
@@ -10434,6 +10461,10 @@ def scan_cautions(result: dict, i: int) -> list[str]:
         out.append("near saturation: check linearity")
     if i in set(result.get("blended") or []):   # 2.2.19 (#26)
         out.append("blended neighbor: check")
+    edge = (result.get("edge_points") or {}).get(i)   # 2.4.0 fit-in F4 (#115 edge rule)
+    if edge:
+        out.append(f"at the frame edge on {edge} frame{'s' if edge != 1 else ''} (not judged by its own errors "
+                   "there): check its light curve")
     vsx = result.get("vsx")
     hit = vsx[i] if vsx is not None and i < len(vsx) else None
     rng = result.get("period_range")

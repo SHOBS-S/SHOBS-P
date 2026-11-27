@@ -83,3 +83,10 @@ builder cannot take them). Do not reuse an old image for a page that changed: re
 | img/20-field-scan-output.png | 20 | #115 retune: the level stays 2.5 and the floor 0.003, so nothing in view changes | reuse |
 | (no shot) | 17 | status bar after a save: *The AAVSO exoplanet report saved earlier (…) is of the fit before this one: …* | none |
 | all others | | nothing of builder F4-3 in view | reuse |
+
+## Merge session (m028, scan-star edge rule)
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| any Stars panel shot with a *drifts toward the frame edge later in the night* line | 8 | the line is plain now (no ⚠, not orange) | RESHOOT if the line shows |
+| img/20-field-scan-output.png | 20 | a star at the frame edge on some frames may show *at the frame edge on N frames (not judged by its own errors there): check its light curve* in Check first; the suspect list can be shorter | RESHOOT |

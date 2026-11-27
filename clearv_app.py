@@ -4023,7 +4023,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                             + (", so it is not measured there" if lost else "")
                                             + " — pick a star further in")
             else:
-                note = (f"⚠ drifts toward the frame edge later in the night: {dist:.0f} px in on this frame, but only "
+                # 2.4.0 fit-in F4 (m028, John's call 26 Nov): the sky ring stays on the frame all night, so the star is
+                # measured in every frame: a plain note (a ⚠ is kept for a star that loses its ring or its light)
+                note = (f"drifts toward the frame edge later in the night: {dist:.0f} px in on this frame, but only "
                         f"{near_px:.0f} px on frame {at}{checked}; stars at least {safe:.0f} px in all night (3 × the "
                         "sky-out radius) stay clear of the edge and the weakest part of the flat")
         elif dist < need:
@@ -20165,6 +20167,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 meas = []   # 2.3.0 review: per frame (or stack), how many frames' raw cores each count stands on
                 merrs = []   # 2.4.0 step 7a (#91): each star's predicted magnitude error on each frame
                 scan_floors = []   # 2.4.0 fit-in F4 (#115): each frame's error floor (scintillation, flat field)
+                edge_rows = []   # 2.4.0 fit-in F4 (#115 edge rule): where each star's sky ring runs past the edge
                 # 2.3.0 review fix (#54): a stack has no raw pixels; its stars' peaks, raw cores and clipped counts
                 # are its member frames' (kept from the per-frame scan for the same star list)
                 stack_meta = stack_run["meta"] if stack_run else None
@@ -20248,9 +20251,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         merr_row = (core.scan_mag_errors(flux, noise, scan_electrons) if noise is not None
                                     else np.full(len(pos), np.nan))
                         floor_row = core.scan_frame_floor(header, frame_jd, exp, scan_floor_setup)   # F4 (#115)
+                        edge_row = core.scan_near_edge(pos, img.shape, sky_out)
                         rows.append(row)
                         merrs.append(merr_row)
                         scan_floors.append(floor_row)
+                        edge_rows.append(edge_row)
                         jds.append(frame_jd)
                         rec = stack_core.scan_record(path, frame_jd, exp, reg, side[1])   # 2.3.0 (#54)
                         if members is None:   # 2.3.0 review: what a stack of this frame needs for saturation
@@ -20329,7 +20334,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 merr_all = np.vstack(merrs)
                 stats = core.field_variability(inst, exclude=sorted(saturated),
                                                merr=merr_all if np.isfinite(merr_all).any() else None,
-                                               floor=scan_floors if len(scan_floors) == len(merr_all) else None)
+                                               floor=scan_floors if len(scan_floors) == len(merr_all) else None,
+                                               near_edge=np.vstack(edge_rows) if len(edge_rows) == len(rows)
+                                               else None)
                 if np.isfinite(merr_all).any() and len(scan_floors) == len(merr_all):   # 2.4.0 fit-in F4 (#115)
                     floor_line = core.scan_floor_text(scan_floors)
                     if floor_line:
@@ -20384,11 +20391,18 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                  and result["mag"][i] > limit}
                 result["too_faint"] = sorted(too_faint)
                 # 2.4.0 step 7a (#91, John 21 Nov): a Suspect at the scatter level OR at the own-errors level
+                n_judged = stats.get("n_chi2")
+                if n_judged is None:
+                    n_judged = stats["n_good"]
+                edge_pts = stats.get("edge_points")
+                result["edge_points"] = ({i: int(edge_pts[i]) for i in range(len(labels)) if int(edge_pts[i]) > 0}
+                                         if edge_pts is not None else {})
                 why = {}
                 for i in range(len(labels)):
                     if (stats["usable"][i] and stats["scatter"][i] >= 0.005 and i not in saturated
                             and i not in too_faint):
-                        level = core.chi2_level(chi2_limit, stats["n_good"][i])   # Fable M1: short runs
+                        # Fable M1: short runs. F4 edge rule: the level follows the points the test judged
+                        level = core.chi2_level(chi2_limit, n_judged[i])
                         reason = core.suspect_reason(float(stats["excess"][i]), float(ex2[i]), excess_limit, level)
                         if reason:
                             why[i] = reason
@@ -20398,7 +20412,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
 
                 def score(i):
                     return core.suspect_score(float(stats["excess"][i]), float(ex2[i]), excess_limit,
-                                              core.chi2_level(chi2_limit, stats["n_good"][i]))
+                                              core.chi2_level(chi2_limit, n_judged[i]))
                 result["saturated"] = sorted(saturated)
                 if saturated:
                     how = ("a flat-topped (clipped) core" if precal else

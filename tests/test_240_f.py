@@ -209,10 +209,12 @@ class TestSuggestionsFollowTheDrift(unittest.TestCase):
         self._wait_suggest(app)
         note = app._edge_note("comp", (80.0, 100.0))
         self.assertIn("drifts toward the frame edge later in the night", note)
+        self.assertFalse(note.startswith("⚠"), note)   # F4 m028: the sky ring stays on all night: a plain note
         self.assertIn("80 px in on this frame, but only 20 px on frame", note)
         self.assertNotIn("checked on", note)   # every frame was looked at
         off = app._edge_note("comp", (45.0, 150.0))   # 45 - 60: off the frame by the last frame
         self.assertIn("drifts off the frame later in the night", off)
+        self.assertTrue(off.startswith("⚠"), off)        # losing the star's light stays a ⚠
         self.assertIn("not measured there", off)
         self.assertEqual(app._edge_note("comp", (330.0, 90.0)), "")   # safe all night: no note
 
