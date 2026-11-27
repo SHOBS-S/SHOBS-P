@@ -112,7 +112,9 @@ Two more things are worth knowing but do not stop an upload, so they are plain L
 - **AAVSO report: a comp has no star name (the report calls it “comp1”).** Give the comp its catalog name.
 
 **The check star has no name in this series …**
-The check star was never given a real name, so the report would say `KNAME = check`. Type its AUID (for example `000-BJR-417`) or catalog name (for example `TYC 4006-956-1`). SHOBS-P remembers it with the series. If you leave it empty, the report is not saved.
+The check star was never given a real name, so the report would say `KNAME = check`. Type its AUID (for example `000-BJR-417`) or catalog name (for example `TYC 4006-956-1`). SHOBS-P remembers it with the series. If you leave it empty or press Cancel, the report is not saved; the status line says so (no second box), and **Save AAVSO report** asks again the next time.
+
+A night reduced by a very early version of SHOBS-P (before 1.7, with binning) is not reported: its colors are not real. **Save AAVSO report** says *Report not saved: … was reduced by an early version of SHOBS-P that binned before the debayer …*. Run photometry on that night again, or choose another night in the **Saving** box.
 
 ## One night or the whole series
 

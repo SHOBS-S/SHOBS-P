@@ -1469,7 +1469,7 @@
    "patterns": [
     "After the meridian flip the … apertures were off their stars by about (…) px together, while the target's was not …"
    ],
-   "todo": "See 12. Flags and bad data. Look at the positions in the light-curve CSV."
+   "todo": "See 12. Flags and bad data: reject the frames on one side of the flip on the Blink page and run each side on its own."
   },
   {
    "section": "Photometry",
@@ -1584,9 +1584,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "That makes only K stacks; a field scan needs at least 10. Use a smaller N."
+    "That makes only K stacks; a field scan needs at least 10. Use a smaller N: N = 4 is the largest that gives 10 or more.",
+    "… No N gives that many with these frames: scan the frames one by one."
    ],
-   "todo": "Use a smaller N."
+   "todo": "Type the N the message names in Stack N and press Stack again."
   },
   {
    "section": "Photometry",
@@ -1799,9 +1800,9 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "… frames of … lost light …, but every measured star … faded by the same amount …: transmission loss (dew/haze?), not cloud. Use these points in the light curve …, or leave them out?"
+    "… frames of … lost light …, but every measured star … faded by the same amount …: transmission loss (dew/haze?), not cloud. Use these points in the light curve, or leave them out?"
    ],
-   "todo": "Leave them out (the default) leaves them flagged; Use these points keeps them. See 12. Flags and bad data."
+   "todo": "Leave them out (the default) leaves them flagged; Use these points keeps them, with larger error bars. See 12. Flags and bad data."
   },
   {
    "section": "Output, Variables mode",
@@ -1892,6 +1893,35 @@
     "AAVSO report: a comp has no star name (the report calls it “comp1”)."
    ],
    "todo": "Report each filter separately if you want one per file; give the comp its catalog name."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Report not saved: it needs the check star's name (its AUID or catalog name). Press Save AAVSO report again and type the name."
+   ],
+   "todo": "Press Save AAVSO report again and type the check star's AUID or catalog name."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Report not saved: 5–6 Oct 2019 was reduced by an early version of SHOBS-P that binned before the debayer, so the filter and colors of that night are not real. …"
+   ],
+   "todo": "Run photometry on that night again (or use Remove night…), or choose another night in the Saving box."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "… has night(s) reduced by an early version of SHOBS-P that binned before the debayer: …",
+    "…: 1 night (…) reduced by an early version that binned before the debayer; their filter and colors are not real. …"
+   ],
+   "todo": "Run photometry on those nights again before reporting them."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Series names and magnitudes used for 2 stars measured under another name tonight (same star; the Log lists them)."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Output, Variables mode",
@@ -2033,7 +2063,8 @@
    "patterns": [
     "Period  None: no significant period: the star looks constant at this precision …",
     "… one short night covers under two cycles of the best peak …",
-    "… needs at least 8 usable points."
+    "… needs at least 8 usable points.",
+    "… no search: the min period must be above 0 and below the max period; correct the two Period search boxes. Check the Period search range."
    ],
    "todo": "See 13. Look for a period."
   },
@@ -2255,6 +2286,13 @@
     "The health check needs at least two stars (two comps, or a comp and a check star). Mark a second comp or a check star on the Photometry page and run photometry again."
    ],
    "todo": "Mark a second comp or a check star and run photometry again."
+  },
+  {
+   "section": "Output, Variables mode",
+   "patterns": [
+    "Airmass not checked (no site or RA/Dec)"
+   ],
+   "todo": "Type the site (Input page) and the target's RA/Dec, or use frames with pointing in their headers, to have the check made."
   },
   {
    "section": "Output, Variables mode",
@@ -2787,6 +2825,13 @@
   {
    "section": "Discovery mode",
    "patterns": [
+    "V1 is already a watch star. Its row is highlighted in the Watch stars box."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
     "…: position stored (RA …, Dec …), so it is found by itself on later nights."
    ],
    "todo": "Nothing."
@@ -2808,17 +2853,25 @@
   {
    "section": "Discovery mode",
    "patterns": [
-    "Fewer than 2 frames can be stacked (the others are flagged, or could not be aligned). Use the per-frame points, or un-flag frames on the Output page (Leave flagged points out) and press Stack again."
+    "Fewer than 2 frames can be stacked (of 40 frames: 31 flagged, 8 could not be aligned). Use the per-frame points, or un-flag frames on the Output page (Leave flagged points out) and press Stack again."
    ],
    "todo": "Work with the per-frame points, or keep more frames and press Stack again."
   },
   {
    "section": "Discovery mode",
    "patterns": [
-    "No stack produced a magnitude (the Log says why). The points stay per frame. Try a smaller Stack N, or carry on with the per-frame points.",
+    "No stack produced a magnitude: the most common reason was could not align (7 of 9 stacks skipped). The points stay per frame. Try a smaller Stack N, or carry on with the per-frame points.",
+    "… every stack was skipped for the same reason, …"
+   ],
+   "todo": "Try a smaller Stack N, or use the per-frame points. The Log has each stack's reason."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Photometry on the stacks stopped by an error: … The points stay per frame. Press Stack to try again, or carry on with the per-frame points.",
     "Photometry on the stacks stopped by an error (…); the points stay per frame. Press Stack to try again."
    ],
-   "todo": "Read the Log line above it; try a smaller Stack N, or use the per-frame points."
+   "todo": "Press Stack again; if it fails again, use the per-frame points and send the log file."
   },
   {
    "section": "Discovery mode",

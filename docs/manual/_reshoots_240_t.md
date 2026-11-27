@@ -23,7 +23,9 @@ reuse an old image for a page that changed: reshoot it.
 | img/20-field-scan-output.png | 20 | the line under the table (when a known variable's VSX period is outside the range) is plain grey, no orange ⚠ and no button; the periodogram title of an at-the-edge star is black: *… (the peak is at the edge of the search)* | RESHOOT |
 | img/03-findings.png | 03 | the window itself is unchanged (**Show log** now opens a Log window from pages without a Log) | reuse |
 | img/06-blink-page.jpg, img/06-rejected-list.jpg | 06 | unchanged (the first line before any frame is loaded reads **Rejected frames: none**, as it always did once frames were loaded) | reuse |
-| img/12-transmission-keep.png | 12 | the Keep question is unchanged | reuse |
+| img/12-transmission-keep.png | 12 | the Keep question is two short lines now (*“Use these points”: they go into the light curve with larger error bars …* / *“Leave them out” (the default …): they stay flagged, like cloud.*) | RESHOOT |
+| img/13-period.png (again) | 13 | only if the shot is of a night with no site: the Period box has the plain row **Airmass not checked (no site or RA/Dec)** | RESHOOT (same shot as above; nothing more if the site is typed) |
+| OPTIONAL NEW img/13-no-search.png | 13 | the Period box with *Period  None: no search: the min period must be above 0 and below the max period; … Check the Period search range.* and the plot title **No period search** | NEW SHOT (optional; no image link yet) |
 | OPTIONAL NEW img/13-range-widened.png | 13 | the Period box with *Range   searched 0.02–28 d: widened from 0.02–20 d to cover VSX 22.1 d* | NEW SHOT (optional; no image link in the chapter yet) |
 | OPTIONAL NEW img/12-choose-night.png | 12 | the small window *N nights have frames in a predicted planet transit. Which night do you want to look at?* with the **Night** box, **Choose this night** and **Cancel** | NEW SHOT (optional; no image link yet) |
 | OPTIONAL NEW img/03-log-window.png | 03 | the Log window opened by **Show log** from the Output page | NEW SHOT (optional; no image link yet) |

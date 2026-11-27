@@ -167,7 +167,7 @@ than that.
 
 To scan the stacks, set **Stack N** and press **Stack**. SHOBS-P makes the stacks, then runs the field scan on them
 instead of the single frames. A scan needs at least 10 stacks; with fewer, **Stack** says *"That makes only K stacks;
-a field scan needs at least 10. Use a smaller N."* The per-frame scan is kept: the **Points** box (**Per frame** /
+a field scan needs at least 10. Use a smaller N: N = 4 is the largest that gives 10 or more."* The per-frame scan is kept: the **Points** box (**Per frame** /
 **Stacked**) on the Stack row switches between the two scans.
 
 ![The Discovery Photometry page with the optional Stacking line](img/20-discovery-stack-row.png)

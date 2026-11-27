@@ -68,7 +68,7 @@ reads **< 1e-99**. The FAP counting nights, when it comes from the nightly means
 number of nights (1 in 720 for six nights); a value sitting on that floor says so: **1.4e-03 (the lowest 6 nights can
 show)**.
 
-Further lines appear when they apply: **Range   searched …: widened from … to cover …** or **Range … is outside the search …** (see "Choose a range" above), **Edge …** when the best peak sits at one end of the search and no known period says where to look, **Bins every point used …**, **Check depends on … alone**, **Airmass nightly means follow airmass**, and **Marked …** for periods you asked about. These rows are plain: they give the reasons behind the verdict. Only the **⚠ Doubtful** verdict line itself carries a ⚠.
+Further lines appear when they apply: **Range   searched …: widened from … to cover …** or **Range … is outside the search …** (see "Choose a range" above), **Edge …** when the best peak sits at one end of the search and no known period says where to look, **Bins every point used …**, **Check depends on … alone**, **Airmass nightly means follow airmass** (or **Airmass not checked (no site or RA/Dec)** when the airmass is not known, so that check was not made: type the site on the Input page and the target's RA/Dec), and **Marked …** for periods you asked about. These rows are plain: they give the reasons behind the verdict. Only the **⚠ Doubtful** verdict line itself carries a ⚠.
 
 ### The verdict line
 
