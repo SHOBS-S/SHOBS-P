@@ -2319,7 +2319,7 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
+    "The NEB check needs the target's RA and Dec. On the Input page press Look up (or type RA and Dec), then open the NEB check again."
    ],
    "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."
   },
@@ -2503,9 +2503,23 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "The report's times are …, which SHOBS-P does not convert; it fits them as BJD_TDB, so Tc may be off. Save the report again with BJD_TDB times in the program that wrote it (SHOBS-P also reads HJD_UTC and JD_UTC)."
+    "The report's times are …, which SHOBS-P does not convert (it converts HJD_UTC and JD_UTC to BJD_TDB): Tc is given in …, as the report has it, and no O − C is stated. Save the report again with BJD_TDB times in the program that wrote it."
    ],
    "todo": "Save the report again with BJD_TDB times."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The scatter is about …x the per-point error bars (reduced χ² …); the fit widened its error bars to match."
+   ],
+   "todo": "Nothing: the fit's uncertainties already include it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… the catalog entry has no period: type the period in the Planet boxes on the Input page"
+   ],
+   "todo": "Type the period (days) in the Planet boxes on the Input page."
   },
   {
    "section": "Output, Transits mode",
@@ -2758,6 +2772,13 @@
     "… times are JD_UTC and the star's RA/Dec is not known, so they cannot be put on BJD_TDB: look the planet up on the Input page (or in this window)"
    ],
    "todo": "Look the planet up, then add the file again (or untick and tick the page's night)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Alternative ephemeris not used: … . Type T0 as a BJD_TDB (for example 2460123.45678) and the period in days, each with its ± (leave a ± empty when the source gives none)."
+   ],
+   "todo": "Type it in that form and press Apply again."
   },
   {
    "section": "Output, Transits mode",

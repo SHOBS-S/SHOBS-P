@@ -4765,7 +4765,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         meta = tp._file_meta()
         planet = str((r.get("planet") or {}).get("name") or self.planet_name.get() or "")
         report = getattr(tp, "report", None)
-        system = "JD_UTC" if (report or {}).get("date_type") == "JD_UTC" else "BJD_TDB"
+        own = str((report or {}).get("date_type") or "BJD_TDB")
+        if own not in ("BJD_TDB", "JD_UTC"):
+            # 2.4.0 fit-in F4 (m812): never an upload file that calls unconverted times BJD_TDB
+            messagebox.showerror("SHOBS-P", f"The report's times are {own}, which SHOBS-P does not convert, so no "
+                                            "ExoClock file is written (it would mislabel the times). Save the report "
+                                            "again with BJD_TDB times in the program that wrote it.", parent=self)
+            return ""
+        system = "JD_UTC" if own == "JD_UTC" else "BJD_TDB"
         try:
             ra = dec = lat = lon = None
             if system != "JD_UTC":

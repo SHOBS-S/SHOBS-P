@@ -837,6 +837,10 @@ def _med_err(v):
 
 
 # ---- Timing: O − C and linear ephemerides -----------------------------------------------------------------------
+ALT_EPH_FORM = ("Type T0 as a BJD_TDB (for example 2460123.45678) and the period in days, each with its ± "
+                "(leave a ± empty when the source gives none).")
+
+
 def parse_ephemeris(t0, t0_err, period, period_err, source: str = "") -> dict:
     """A typed ephemeris (strings or numbers). T0 must be a BJD_TDB (2,4xx,xxx.x); a reduced JD (BJD − 2,400,000, e.g.
     60217.71769) is accepted and said so (an MJD, 2,400,000.5 lower, is not: type the full BJD). Uncertainties may
@@ -1938,7 +1942,8 @@ class MultiNightWindow:
             self.eph_alt = parse_ephemeris(v["t0"].get(), v["t0_err"].get(), v["period"].get(), v["period_err"].get(),
                                            v["source"].get())
         except ValueError as exc:
-            self.alt_text.set(f"✖ Alternative ephemeris not used: {exc}.")
+            # 2.4.0 fit-in F4 (m673): the expected form beside the reason
+            self.alt_text.set(f"✖ Alternative ephemeris not used: {exc}. {ALT_EPH_FORM}")
             return
         e = self.eph_alt
         self._keep_alt_in_series()   # 2.2.21 (#44)
@@ -2069,6 +2074,10 @@ class MultiNightWindow:
             try:
                 if (self.page.report or {}).get("date_type") == "JD_UTC":
                     raise NightError("the page's " + JD_UTC_NO_RADEC)
+                own = str((self.page.report or {}).get("date_type") or "BJD_TDB")
+                if own not in ("BJD_TDB", "JD_UTC"):   # 2.4.0 fit-in F4 (m812): a system SHOBS-P does not convert
+                    raise NightError(f"the page's report has {own} times, which SHOBS-P does not convert (it reads "
+                                     "BJD_TDB, HJD_UTC and JD_UTC): save the report with one of those")
                 cur = night_from_result(r, getattr(self.page, "meta_for_files", {}), "Transit fit page")
                 if tui._state(r.get("verdict")) == "none":
                     raise NightError("the page's fit found no transit")

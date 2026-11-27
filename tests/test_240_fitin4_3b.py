@@ -191,7 +191,7 @@ class SheetSweep(unittest.TestCase):
         self.assertEqual(tui.SAVE_ELSEWHERE, "Save to another folder, or close the program that has the file open.")
         self.assertGreaterEqual(src_t.count("{SAVE_ELSEWHERE}"), 4)
         self.assertEqual(src_m.count("{tui.SAVE_ELSEWHERE}"), 3)
-        self.assertIn("Save the report again with BJD_TDB times in the program that wrote it", src_t)     # m812
+        self.assertIn("Save the report again with BJD_TDB times in the program that wrote it", tui.TIMES_NOT_CONVERTED)   # m812
         self.assertNotIn('showinfo("SHOBS-P", "Fit the nights first."', src_m)
         self.assertEqual(mn.FIT_NIGHTS_FIRST, "Fit the nights first (Fit nights).")
 

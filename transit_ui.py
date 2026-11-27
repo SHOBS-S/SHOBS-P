@@ -168,6 +168,12 @@ JD_UTC_NOT_CONVERTED = ("⚠ The report's times are JD_UTC, not BJD_TDB, and the
                         "JD_UTC, up to ±8 min from BJD_TDB, with no usable O − C. " + JD_UTC_WHAT_TO_DO)
 
 
+# 2.4.0 fit-in F4 (m812): a report in a time system SHOBS-P does not convert (it converts HJD_UTC and JD_UTC)
+TIMES_NOT_CONVERTED = ("⚠ The report's times are {dt}, which SHOBS-P does not convert (it converts HJD_UTC and JD_UTC "
+                       "to BJD_TDB): Tc is given in {dt}, as the report has it, and no O − C is stated. Save the "
+                       "report again with BJD_TDB times in the program that wrote it.")
+
+
 # 2.4.0 fit-in F4 (sheet sweep): a save that failed says the way out, in the words of the app's other saves
 SAVE_ELSEWHERE = "Save to another folder, or close the program that has the file open."
 
@@ -3225,9 +3231,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 rep["radec_pending"] = True
                 rep["time_note"] = JD_UTC_NOT_CONVERTED   # open_report says "looking up…" while its lookup runs
             return
-        rep["time_note"] = (f"⚠ The report's times are {dt}, which SHOBS-P does not convert; it fits them as BJD_TDB, so "
-                            "Tc may be off. Save the report again with BJD_TDB times in the program that wrote it "
-                            "(SHOBS-P also reads HJD_UTC and JD_UTC).")   # 2.4.0 fit-in F4 (m812): what to do
+        # 2.4.0 fit-in F4 (m812): Tc is labeled with the report's own time system and no O − C is stated (it was
+        # fitted "as BJD_TDB" and an O − C still went into the files); the note says which systems are converted.
+        rep["date_type"] = dt
+        rep["time_note"] = TIMES_NOT_CONVERTED.format(dt=dt)
 
     @staticmethod
     def _report_jd_to_bjd(rep, radec, looked_up: str = "") -> None:
@@ -3863,6 +3870,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         sw = report_software((self.report or {}).get("header"))
         return f"{sw} report" if sw else "Report"
 
+    def _own_time_system(self) -> str:
+        """2.4.0 fit-in F4 (m812): the time system of an opened report whose times were NOT put on BJD_TDB ('JD_UTC'
+        with no star position, or a system SHOBS-P does not convert, by its own name); '' for BJD_TDB times."""
+        dt = str((self.report or {}).get("date_type") or "BJD_TDB")
+        return "" if dt == "BJD_TDB" else core.ascii_safe(dt)
+
     def family_names(self) -> list:
         """The transit report and plot PNG names: AAVSO_<planet>_<date>_SHOBS-P.txt, <planet>_<filter>_<date>
         _SHOBS-P_transit.png. 2.2.17 (item 9): saved as one numbered set with the light-curve CSV (App._family_path)."""
@@ -3896,10 +3909,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if wf:
             note = (f"SHOBS-P: fit INCLUDES {wf['n']} frames flagged {wf['label']} (error bars x{wf['factor']:g})")
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
-        if (self.report or {}).get("date_type") == "JD_UTC" and self.result is not None:
-            # 2.2.17 review: never a silent mis-time: the times stayed JD_UTC.
+        own = self._own_time_system()
+        if own and self.result is not None:
+            # 2.2.17 review: never a silent mis-time: the times stayed JD_UTC (m812: or another system, named).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
-                             + "SHOBS-P: times are JD_UTC from the source report (not converted; star position unknown)")
+                             + (f"SHOBS-P: times are {own} from the source report (not converted"
+                                + ("; star position unknown)" if own == "JD_UTC" else ")")))
         trim = (self.result or {}).get("trim")
         if trim:
             # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
@@ -3908,7 +3923,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if left:   # 2.4.0 fit-in F3 (#117): points left out as single-point outliers, in the report's NOTES
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(left["report_note"])
         o = tc.oc_summary(self.result or {})
-        if o is not None and state != "none" and (self.report or {}).get("date_type") != "JD_UTC":
+        if o is not None and state != "none" and not own:
             # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "") + "SHOBS-P "
                              + tc.oc_text(o, ascii_only=True))
@@ -4065,8 +4080,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if not fit_path:
             return
         try:
-            n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC",
-                              meta=self.meta_for_files)
+            n = write_fit_csv(fit_path, self.result, self._own_time_system(), meta=self.meta_for_files)
         except Exception as exc:
             messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}\n\n{SAVE_ELSEWHERE}")
             return
@@ -4286,13 +4300,11 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 "SHOBS-P",
                 ("No TOI or TIC number is known for this target, so ExoFOP-TESS's home page opens: search for the star "
                  "there.\n\n" if home else "")
+                # 2.4.0 fit-in F4 (m842): two lines; the upload steps are in the manual (chapter 19, Reports)
                 + "ExoFOP-TESS is for TESS targets (TOIs and TIC stars) only, and uploading needs an ExoFOP account "
                   "(log in first).\n\n"
-                  "Time series: on the target's page, logged in, choose \"Add new\" in the Time Series section and "
-                  "upload the light curve (CSV) and fit notes from the ExoFOP package.\n"
-                  "Files (plot, report): Files \"Add new\" on the same page, with the same data tag.\n\n"
-                  "Data tag: YYYYMMDD_username_description_n (for example 20261015_jsmith_SHOBS-P-transit_1); the "
-                  "description may use only letters, numbers and hyphens.",
+                  "The upload steps and the data tag are in the user's manual, chapter 19 (Reports), under "
+                  "\"To upload it\".",
                 parent=app)
         if app.open_link(url, what):
             app._mark_sent("exofop", plan)
@@ -4452,7 +4464,15 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         return files, png_print
 
 
-def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = None) -> int:
+def _time_label(jd_utc) -> str:
+    """The fit CSV's time column / Tc label: BJD_TDB; 'JD_UTC' for True (times left in JD_UTC); 2.4.0 fit-in F4
+    (m812): a report's own time system, by name, when SHOBS-P did not convert it."""
+    if not jd_utc:
+        return "BJD_TDB"
+    return "JD_UTC" if jd_utc is True else str(jd_utc)
+
+
+def write_fit_csv(path: str, r: dict, jd_utc=False, meta: dict | None = None) -> int:
     """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
     the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
     flagged "trimmed", with no error, model or residual (they were left out of the fit); frames put back from a flag
@@ -4510,7 +4530,7 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
         w.writerow([core.created_line()])
         for line in fit_csv_comments(r, meta, jd_utc):     # 2.2.19 (#29, #18): unquoted, so each starts with "#"
             fh.write(line + "\r\n")
-        w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag",
+        w.writerow([_time_label(jd_utc), "rel_flux", "rel_flux_err", "model", "residual", "flag",
                     "airmass", "segment", "rel_flux_err_raw"])
         for row in rows:
             w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5], num(row[6], "{:.4f}"),
@@ -4553,7 +4573,7 @@ def fit_csv_flip_time(r: dict, meta: dict | None = None):
     return v if math.isfinite(v) else None
 
 
-def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) -> list:
+def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc=False) -> list:
     """2.2.19 (#29, #18): comment lines under the Created line of the fit CSV: the planet, filter and fitted Tc (so a
     multi-night analysis can read the night back), and Tc against the ephemeris prediction (O - C). ASCII only."""
     s = (r or {}).get("summary") or {}
@@ -4562,7 +4582,7 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     out = []
     if "tc" in s:
         out.append(core.ascii_safe(f"# Transit fit: planet {pl.get('name') or ''}; filter {filt or 'unknown'}; Tc "
-                                   f"{s['tc'][0]:.6f} +/- {s['tc'][1]:.6f} {'JD_UTC' if jd_utc else 'BJD_TDB'}; "
+                                   f"{s['tc'][0]:.6f} +/- {s['tc'][1]:.6f} {_time_label(jd_utc)}; "
                                    f"verdict {_state((r or {}).get('verdict'))}"))
     o = tc.oc_summary(r or {})
     if o is not None and not jd_utc:
@@ -4585,7 +4605,7 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
         out += ["# " + ln for ln in tc.fit_inputs_lines(r)]   # 2.4.0 (#93): the exact inputs, full precision
     t_flip = fit_csv_flip_time(r, meta)
     if t_flip is not None:
-        out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")
+        out.append(f"# Meridian flip at {_time_label(jd_utc)} {t_flip:.6f}")
     return [core.ascii_safe(x) for x in out]
 
 
@@ -5156,7 +5176,10 @@ class NebWindow:
             else:
                 self.ra, self.dec = app.target_radec_deg(planet)
         except Exception as exc:
-            messagebox.showinfo("SHOBS-P", f"The NEB check needs the target's RA/Dec: {exc}")
+            # 2.4.0 fit-in F4 (m856): an error box that leads with what to do (was an info box with the raw reason)
+            messagebox.showerror("SHOBS-P", "The NEB check needs the target's RA and Dec. On the Input page press "
+                                            "Look up (or type RA and Dec), then open the NEB check again.\n\n"
+                                            f"({exc})")
             return
         if not app.chart_placed:
             messagebox.showinfo("SHOBS-P", "Solve the image first (Photometry page). The check lists the "

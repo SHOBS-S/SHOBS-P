@@ -551,8 +551,8 @@ from one star. With your photometry shown they are the Input page's. With an ope
 check runs only when the report is of the Input page's star, and then uses the report's depth. For a report of
 another star, it says so and does not run (from 2.4.0; before, it mixed that report's depth with the Input page's
 star and field). Press **Close report** to check the Input page's star. A report of the Input page's star with no
-RA and Dec on the Input page yet gets *"The NEB check needs the target's RA/Dec: …"*: press **Lookup** (or type them)
-first.
+RA and Dec on the Input page yet gets an error box, *"The NEB check needs the target's RA and Dec. On the Input page
+press Look up (or type RA and Dec), then open the NEB check again."*
 
 ## Per-frame or stacked points
 

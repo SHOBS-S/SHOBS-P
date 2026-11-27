@@ -2823,12 +2823,9 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                               "its uncertainties are on the safe side (too wide)."))
     elif r.get("rchi2") is not None and r["rchi2"] > RCHI2_HIGH:
         ratio = math.sqrt(r["rchi2"])
+        # 2.4.0 fit-in F4 (m767): one line; the causes are in the manual (chapters 18 and 23)
         flags.append(("info", f"The scatter is about {ratio:.1f}x the per-point error bars (reduced χ² "
-                              f"{r['rchi2']:.2f}): noise the error model leaves out, such as thin cloud or dew, "
-                              "tracking or seeing changes (red noise), calibration, or a noisy comp; or a camera gain "
-                              "(EGAIN) too large for the stored values (12/14-bit data scaled to 16 bits; see the "
-                              "photometry log's Photon noise line). The fit scales its error bars up to match, so its "
-                              "uncertainties include it."))
+                              f"{r['rchi2']:.2f}); the fit widened its error bars to match."))
     if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
         o = oc_summary(r)   # 2.2.19 (#29): predicted Tc with its propagated error, O − C in min and in sigma
         oc, sig = o["oc_min"], o["sigma_min"]
@@ -3518,7 +3515,8 @@ def exofop_ids(planet: dict | None, *names: str) -> tuple[str, str]:
 def complete_planet(p: dict) -> dict:
     """Fill what can be derived: k from depth, b from inclination, a/R* from duration."""
     if p.get("period") is None:
-        raise ValueError("the catalog entry has no period")
+        # 2.4.0 fit-in F4 (x256): with what to do
+        raise ValueError("the catalog entry has no period: type the period in the Planet boxes on the Input page")
     if p.get("k") is None and p.get("depth"):
         p["k"] = math.sqrt(p["depth"])
     if p.get("k"):
