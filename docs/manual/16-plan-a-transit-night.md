@@ -39,7 +39,8 @@ To enter a planet:
 
 1. In the **Planet (Transits)** box, type the name in **Planet**, for example `TrES-3 b`, `KOI-217 b`,
    `TOI-2046 b` or `EPIC 220504338 b`.
-2. Press **Enter** (or Tab out of the box). The lookup starts by itself. While it runs, the busy bar at the left
+2. Press **Enter** (or Tab out of the box, or click elsewhere in the window; switching to another program does not
+   count, from 2.4.0). The lookup starts by itself. While it runs, the busy bar at the left
    end of the bottom status strip says *"Looking up planet TOI-2046 b at the NASA Exoplanet Archive…"*. The boxes
    stay as they are until the answer comes: an empty box stays blank, and a value already in a box stays until the
    lookup replaces it. When it is done, the line under the box says where the values came from.

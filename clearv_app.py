@@ -2331,6 +2331,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             # is only a backstop (a key or a code path): a status line, no pop-up.
             self.status.set("Another step is still running. Press it again when that one has finished.")
             return False
+        self._flush_pending_lookup()   # 2.4.0 cleanup (review M1): a Star ID just typed is looked up first
         self.busy = True
         self._cancel = threading.Event()
         self.config(cursor="watch")
@@ -4042,7 +4043,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     # 2.4.0 cleanup (#119, John 27 Nov): a comp whose sky ring runs past the edge on ANY frame is out
                     # for the whole night (the one edge rule), whether it loses its ring or its light
                     note = (f"⚠ drifts to the frame edge later in the night: its sky ring (out to {sky_out:g} px) "
-                            f"runs past the edge on frame{'s' if len(which) != 1 else ''} "
+                            f"runs past the edge on frame{'s' if len(cut) != 1 else ''} "
                             f"{core.frame_list_text(cut, 12)}{checked}, so it would be left out of the whole "
                             "night — pick a star further in")
                 else:
@@ -7631,26 +7632,54 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             store.drop_step(self.TARGET_CHECK)
 
     def _focus_left(self, entry, then):
-        """2.4.0 cleanup (F4 card 5, K): a box's FocusOut runs `then` only when the user moved to another widget of
-        this window. Focus that went to another program or a native dialog (focus_get() None), came straight back,
-        or left because the box was greyed by the busy lock is not "done typing": nothing is looked up then (Enter,
-        or leaving the box later, still does)."""
-        def check():
+        """2.4.0 cleanup (F4 card 5, K): a box's FocusOut runs `then` (the lookup) once the user has moved to another
+        widget of this window. Focus that went to another program or a native dialog (focus_get() None) is waited
+        on: when it comes back to the box itself the user is still typing and nothing is looked up; when it comes back
+        anywhere else the lookup runs then. Review M1: a job started before the check (a quick click on a job button,
+        the box then greyed by the busy lock) runs the lookup first (_start_job calls _flush_pending_lookup)."""
+        pend = self.__dict__.setdefault("_pending_lookups", {})
+        pend[id(entry)] = then
+
+        def check(tries=0):
+            if pend.get(id(entry)) is not then:
+                return   # (run already by _start_job, or a newer FocusOut)
             try:
                 now = self.focus_get()
             except Exception:
                 now = None
+            if now is entry:
+                pend.pop(id(entry), None)   # back in the box: still typing
+                return
             try:
                 greyed = entry.instate(["disabled"])
             except Exception:
                 greyed = False
-            if now is None or now is entry or greyed:
+            if now is None or greyed:
+                # (greyed: a job that this box did not start locked it, which took the focus away mid-typing:
+                # wait for the box to come back, then judge where the focus is)
+                if tries < 6000:   # (another program or a native dialog: look again, for up to about half an hour)
+                    try:
+                        self.after(300, lambda: check(tries + 1))
+                    except Exception:
+                        pass
                 return
+            pend.pop(id(entry), None)
             then()
         try:
             self.after(60, check)
         except Exception:
             pass
+
+    def _flush_pending_lookup(self):
+        """Review M1: a Star ID or planet typed and left for a job button: its lookup starts before the job takes the
+        run lock (as the immediate FocusOut lookup did before 2.4.0)."""
+        pend = self.__dict__.get("_pending_lookups") or {}
+        for key, then in list(pend.items()):
+            pend.pop(key, None)
+            try:
+                then()
+            except Exception:
+                traceback.print_exc()
 
     def _auto_lookup(self):
         """2.2.5: look the target up when its name has changed since the last lookup (not on every keystroke)."""
@@ -10958,6 +10987,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             f"Calibrated preview: {os.path.basename(path)}  shape {calibrated.shape}  "
             f"median {np.median(finite) if finite.size else float('nan'):.1f}  NaN px {calibrated.size - finite.size}"
         , keep_status=True)
+        self._drop_target_findings()   # 2.4.0 cleanup (review S6): a new image: the last frames' target findings go
         self._header_pointing_note()   # 2.4.0 (#99): the header's pointing against the Input page's target
         try:
             self._series_drift()   # 2.4.0 (#78): read the drift frames now, so they are ready when comps are suggested
@@ -17492,6 +17522,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                f"{core.band_label(band)} band)…"):   # 2.2.17 (item 1)
             self._solve_tried_for = tried_before   # 2.2.16 (item 10): busy, so not tried after all
             return
+        # 2.4.0 cleanup (review S6): a new solve checks the target against these frames afresh, so the last check's
+        # "not in these frames" findings go (as a job's own findings go when it runs again); this one adds its own,
+        # and the header's pointing is looked at again for the target as it is now
+        self._drop_target_findings()
+        self._header_pointing_said = None
+        self._header_pointing_note()
         self._solving = True          # 2.2.15 (GitHub #3): for the step hint
         self._update_step_hint()
         vet_cache = {"field": getattr(self, "_field_var_cache", None)}
@@ -20645,9 +20681,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         for ra, dec in result["radec"]:
                             best = None
                             for k in known:
-                                d = core.sky_separation_arcsec(ra, dec, k["ra"], k["dec"])
-                                if d < tol and (best is None or d < best[0]):
-                                    best = (d, k)
+                                # review M2: a merged star is matched at every catalog's position for it (VSX's can
+                                # sit several arcsec off SIMBAD's), the hit being the merged entry
+                                for pm in (k.get("members") or [k]):
+                                    d = core.sky_separation_arcsec(ra, dec, pm["ra"], pm["dec"])
+                                    if d < tol and (best is None or d < best[0]):
+                                        best = (d, k)
                             matches.append(best[1] if best else None)
                         result["vsx"] = matches
                     except Exception as exc:
@@ -22356,6 +22395,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         rec = dict(cand) if cand.get("night") == night else {"night": night, "points": []}
                         rec["stamp"] = self._hold_stamp()
                         rec["logged"] = False
+                        rec["kind"] = "re-center" if rc else "flip"   # 2.4.0 cleanup: the lines name the step
                         holds[night] = rec
                     self.log(f"Not auto-saved: the night's {'re-center' if rc else 'flip'} step is {step:+.3f} mag. "
                              f"{os.path.basename(self.series_path)} on disk is unchanged; Save series to keep the night.")
@@ -22397,22 +22437,35 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                and abs(st["offset"]) > core.FLIP_STEP_MARK]
         if not big:
             return None
-        flips = [st for st in big if st["kind"] == core.STEP_FLIP]
-        st = flips[0] if flips else max(big, key=lambda x: abs(x["offset"]))
-        step, kind = st["offset"], st["kind"]
-        if kind == core.STEP_FLIP and getattr(self, "_last_flip_signature", False):
-            return {"step": step, "kind": kind, "text": "the comp and check apertures jumped together at the flip"}
+        # review S1: every step over the mark is judged (the flip first, then the re-centers from the largest), and
+        # the first with a reason holds the save; a benign step no longer hides a suspicious one
+        big.sort(key=lambda x: (x["kind"] != core.STEP_FLIP, -abs(x["offset"])))
         kvals = [o.check_std if o.check_std is not None else float("nan") for o in night_points]
-        if any(math.isfinite(v) for v in kvals):
+        has_check = any(math.isfinite(v) for v in kvals)
+        ksteps = []
+        if has_check:
             try:
                 ksteps = core.night_steps(night_points, kvals, use=use).get(night) or []
-                kstep = next((k["offset"] for k in ksteps if k["part"] == st["part"]), None)
             except Exception:
-                kstep = None
-            if kstep is not None and math.isfinite(kstep) and abs(kstep) > core.FLIP_STEP_MARK \
-                    and abs(kstep) >= 0.5 * abs(step):
-                return {"step": step, "kind": kind, "text": f"the check star steps too ({kstep:+.3f} mag)"}
-            return {"step": step, "kind": kind, "text": ""}
+                ksteps = []
+        mags = np.array([o.mag for o, u in zip(night_points, use) if u and math.isfinite(o.mag)])
+        p2p = (1.4826 * float(np.median(np.abs(np.diff(mags)))) / math.sqrt(2.0)) if mags.size >= 6 else 0.0
+        for st in big:
+            step, kind = st["offset"], st["kind"]
+            if kind == core.STEP_FLIP and getattr(self, "_last_flip_signature", False):
+                return {"step": step, "kind": kind, "text": "the comp and check apertures jumped together at the flip"}
+            if has_check:
+                # review nit: the check's step across the SAME two parts as the target's
+                kstep = next((k["offset"] for k in ksteps
+                              if k["part"] == st["part"] and k.get("prev") == st.get("prev")), None)
+                if kstep is not None and math.isfinite(kstep) and abs(kstep) > core.FLIP_STEP_MARK \
+                        and abs(kstep) >= 0.5 * abs(step):
+                    return {"step": step, "kind": kind, "text": f"the check star steps too ({kstep:+.3f} mag)"}
+            elif p2p > 0 and abs(step) > 5.0 * p2p:
+                return {"step": step, "kind": kind,
+                        "text": f"there is no check star, and the step is {abs(step) / p2p:.0f} × the night's "
+                                "point-to-point scatter"}
+        return {"step": big[0]["offset"], "kind": big[0]["kind"], "text": ""}
         mags = np.array([o.mag for o, u in zip(night_points, use) if u and math.isfinite(o.mag)])
         if mags.size >= 6:
             p2p = 1.4826 * float(np.median(np.abs(np.diff(mags)))) / math.sqrt(2.0)
@@ -24396,6 +24449,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                      f"{name} dropped from the watch list.")
         self.watch_list = keep
 
+    @staticmethod
+    def _held_why(holds: dict) -> str:
+        """2.4.0 cleanup (review nit): what the held nights were held for: "flip step ⚠", "re-center step ⚠" or
+        "flip or re-center step ⚠" (a record from before 2.4.0 has no kind: a flip)."""
+        kinds = {(rec or {}).get("kind") or "flip" for rec in (holds or {}).values()}
+        if kinds == {"re-center"}:
+            return "re-center step ⚠"
+        if len(kinds) > 1:
+            return "flip or re-center step ⚠"
+        return "flip step ⚠"
+
     def _series_holds(self) -> dict:
         """2.3.5 (#81): the nights held out of automatic saves (a flip step ⚠ the user said No to), {night: record}.
         A record keeps the night as the file had it: "points" (none for a new night), "bin", "color", "legacy",
@@ -24460,7 +24524,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if not getattr(self, "_hold_stale_logged", False):
                 self._hold_stale_logged = True
                 self.log(f"Not saved: {self._held_names(sorted(holds))} {'is' if len(holds) == 1 else 'are'} held "
-                         "(flip step ⚠) and the comps or catalog magnitudes changed since, so "
+                         f"({self._held_why(holds)}) and the comps or catalog magnitudes changed since, so "
                          f"{'its earlier version no longer matches' if len(holds) == 1 else 'their earlier versions no longer match'} the series. "
                          "Save series writes everything.")
             self.update_series_status()
@@ -24494,7 +24558,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 if not rec.get("logged"):
                     rec["logged"] = True
                     self.log(f"Saved {os.path.basename(path)} without the new {self.night_label(night, short=True)} "
-                             f"(held: flip step ⚠). {'Its earlier version stays in the file. ' if rec.get('points') else ''}"
+                             f"(held: {self._held_why({night: rec})}). "
+                             f"{'Its earlier version stays in the file. ' if rec.get('points') else ''}"
                              "Save series adds it; Remove night… drops it"
                              + (" (and its earlier version)." if rec.get("points") else "."))
             points.sort(key=lambda o: (o.jd if o.jd is not None and math.isfinite(o.jd) else float("inf")))
@@ -24567,7 +24632,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if held:
             # 2.3.5 (#81): one standing line instead of a ⚠ log line at every automatic save.
             return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "
-                    f"{self._held_names(sorted(held))} {'is' if len(held) == 1 else 'are'} held (flip step ⚠), not "
+                    f"{self._held_names(sorted(held))} {'is' if len(held) == 1 else 'are'} held "
+                    f"({self._held_why({n: self._series_holds()[n] for n in held})}), not "
                     f"in the file: Save series adds {'it' if len(held) == 1 else 'them'}, Remove night… drops "
                     f"{'it' if len(held) == 1 else 'one'}.")
         return (f"Series: {name} — {len(nights)} night{'s' if len(nights) != 1 else ''}, last {label}. "

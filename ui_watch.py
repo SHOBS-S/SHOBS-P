@@ -71,12 +71,13 @@ class UIWatch:
         self._slow_who = ""              # the other threads' innermost frames, seen during one of them
         self._slow_since = clock()
         self._slow_seen = None            # the beat time of the pause already looked at
+        self._q_seen = None               # review S5: the beat time of a pause that was a question or file dialog
 
     def beat(self):
         """Tk thread: called every 50 ms by the UI-queue drain."""
         now = self.clock()
-        if not self._said and SLOW_S <= now - self.last < self.stall_s:
-            self._slow.append(now - self.last)   # #118: a pause too short for the stall line
+        if not self._said and SLOW_S <= now - self.last < self.stall_s and self._q_seen != self.last:
+            self._slow.append(now - self.last)   # #118: a pause too short for the stall line (not a question box)
         if self._said:
             took = now - (self._stall_start or now)
             self.log(f"UI thread responding again after {took:.1f} s.")
@@ -122,9 +123,12 @@ class UIWatch:
                      "counting again.")
             return
         gap = now - self.last
-        if SLOW_S <= gap < self.stall_s and self._slow_seen != self.last and not self._in_question():
+        if SLOW_S <= gap < self.stall_s and self._slow_seen != self.last:
             self._slow_seen = self.last          # #118: who held the window up, once per pause
-            self._slow_who = self.others_text()
+            if self._in_question():
+                self._q_seen = self.last         # review S5: the user is answering a box: the next beat skips it
+            else:
+                self._slow_who = self.others_text()
         if self._slow and now - self._slow_since >= SLOW_EVERY_S:
             self.log(self.slow_summary())
         if gap >= self.stall_s and self._in_question():

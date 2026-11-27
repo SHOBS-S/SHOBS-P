@@ -2162,6 +2162,8 @@ RING_PAST_EDGE = "sky ring runs past the frame edge"   # 2.4.0 cleanup (#119): r
 def edge_distance(shape, x: float, y: float) -> float:
     """Pixels from (x, y) to the nearest frame edge (rows, cols shape); NaN position -> NaN."""
     h, w = int(shape[0]), int(shape[1])
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return float("nan")   # review nit: a NaN x or y alike (min() ignored a NaN y)
     return float(min(x, y, (w - 1) - x, (h - 1) - y))
 
 
@@ -7416,7 +7418,7 @@ def night_steps(observations: list[Obs], values: list[float], use: list[bool] | 
                     prev, prev_t = cand, max(before)
             pkey, ppts = prev
             med = float(np.median([p[1] for p in pts]))
-            steps.append({"kind": STEP_FLIP if key[0] != pkey[0] else STEP_RECENTER, "part": key,
+            steps.append({"kind": STEP_FLIP if key[0] != pkey[0] else STEP_RECENTER, "part": key, "prev": pkey,
                           "offset": med - float(np.median([p[1] for p in ppts])), "shift": med - first,
                           "n_before": len(ppts), "n_after": len(pts)})
         out[night] = steps

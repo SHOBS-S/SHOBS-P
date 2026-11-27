@@ -10,13 +10,15 @@ A separate process has its own interpreter lock, so the window runs at full spee
 call() is made from the page's existing worker thread and blocks it (waiting on a pipe holds no lock) until the
 helper answers. It runs the function by name in the helper and gives back exactly what the function returns (or
 raises what it raised). Callables passed as keywords (progress, log, detrend_progress...) are called back here, on
-the calling thread, with the arguments the helper gave them, so the pages' call_ui lines work as before. A
+the calling thread, with the arguments the helper gave them (positional and keyword; their return value does not
+reach the fit, which gets None), so the pages' call_ui lines work as before. A
 threading.Event passed as cancel= is forwarded: setting it cancels the helper's fit.
 
 The helper is a plain `python fit_process.py --child` started with the window's own Python, kept running between
 fits (main() turns the helper on and starts it in the background as the window opens) and ended when the window closes, or
-by itself when the window's process goes away (its stdin closes). If the helper cannot start or dies, the fit runs
-on the calling thread as before (the old way: the window may be slow while it runs) and the log file says why.
+by itself when the window's process goes away (its stdin closes). If the helper cannot start, cannot take the job, or
+stops during the fit, the fit runs (again) on the calling thread as before (the old way: the window may be slow while
+it runs) and the log file says why; after two helpers stopped mid-fit, every later fit runs that way.
 Functions that are not a module's own (a test's stand-in) also run on the calling thread.
 """
 from __future__ import annotations
@@ -43,6 +45,8 @@ _lock = threading.Lock()
 _idle: list = []
 _all: list = []
 _broken_why = ""                           # set once a helper could not start: later calls run in-thread
+_deaths = 0                                # helpers that stopped during a fit (review S3): after 2, stay in-thread
+MAX_DEATHS = 2
 _closed = False
 
 
@@ -68,13 +72,17 @@ def _send(fh, obj) -> None:
 
 
 def _read_exact(fh, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = fh.read(n - len(buf))
-        if not chunk:
+    """n bytes from the pipe, read straight into one buffer (review S4: appending chunk by chunk was quadratic, and a
+    20 MB result in 4 KB chunks took seconds of the window process's lock)."""
+    buf = bytearray(n)
+    view = memoryview(buf)
+    got = 0
+    while got < n:
+        k = fh.readinto(view[got:])
+        if not k:
             raise EOFError("the helper process closed its pipe")
-        buf += chunk
-    return buf
+        got += k
+    return bytes(buf)
 
 
 def _recv(fh):
@@ -91,6 +99,7 @@ class _Helper:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"   # review nit: the helper's messages decode alike on Windows
         self.proc = subprocess.Popen([sys.executable, os.path.join(HERE, "fit_process.py"), "--child"],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      cwd=HERE, env=env, bufsize=0, creationflags=flags)
@@ -215,12 +224,19 @@ def _own_function(func) -> tuple | None:
 
 def call(func, *args, cancel=None, **kwargs):
     """func(*args, **kwargs) in the helper process; see the module notes. Blocks the calling thread."""
-    global _broken_why
+    global _broken_why, _deaths
     where = _own_function(func)
     if where is None or not ENABLED or _broken_why or _closed:
         return func(*args, cancel=cancel, **kwargs) if cancel is not None else func(*args, **kwargs)
     callbacks = {k: v for k, v in kwargs.items() if callable(v)}
     plain = {k: v for k, v in kwargs.items() if k not in callbacks}
+    job = (where[0], where[1], args, plain, sorted(callbacks), cancel is not None)
+    try:
+        pickle.dumps(("job",) + job, protocol=pickle.HIGHEST_PROTOCOL)   # review nit: before any helper is taken
+    except Exception as exc:
+        _say(f"Fit helper process could not take the fit ({type(exc).__name__}: {exc}); it runs in the window's "
+             "process instead.")
+        return func(*args, cancel=cancel, **kwargs) if cancel is not None else func(*args, **kwargs)
     try:
         h = _take()
     except Exception as exc:
@@ -228,7 +244,6 @@ def call(func, *args, cancel=None, **kwargs):
         _say(f"Fit helper process could not start ({_broken_why}); this fit and the next run in the window's "
              "process (the window may be slow while one runs).")
         return func(*args, cancel=cancel, **kwargs) if cancel is not None else func(*args, **kwargs)
-    job = (where[0], where[1], args, plain, sorted(callbacks), cancel is not None)
     try:
         h.send(("job",) + job)
     except Exception as exc:
@@ -238,6 +253,7 @@ def call(func, *args, cancel=None, **kwargs):
         return func(*args, cancel=cancel, **kwargs) if cancel is not None else func(*args, **kwargs)
     cancel_sent_at = None
     ok = False
+    died = False
     try:
         while True:
             # (checked on every message too: a fit that streams progress must still hear Cancel)
@@ -257,9 +273,10 @@ def call(func, *args, cancel=None, **kwargs):
             kind = msg[0]
             if kind == "cb":
                 _name, cb_args = msg[1], msg[2]
+                cb_kw = msg[3] if len(msg) > 3 else {}
                 cb = callbacks.get(_name)
                 if cb is not None:
-                    cb(*cb_args)
+                    cb(*cb_args, **cb_kw)
             elif kind == "done":
                 ok = True
                 return msg[1]
@@ -276,7 +293,15 @@ def call(func, *args, cancel=None, **kwargs):
             elif kind == "dead":
                 if cancel is not None and cancel.is_set():
                     raise RuntimeError("Canceled")
-                raise RuntimeError(f"the fit helper process stopped ({msg[1]})")
+                # review S3: the helper went away during the fit (an antivirus, say): the fit runs again in the window's
+                # process, as the notes promise (its progress starts again); after MAX_DEATHS, every fit does
+                _deaths += 1
+                if _deaths >= MAX_DEATHS:
+                    _broken_why = f"the helper stopped {_deaths} times"
+                _say(f"Fit helper process stopped during the fit ({msg[1]}); the fit runs again in the window's "
+                     "process (the window may be slow while it runs).")
+                died = True
+                break
     finally:
         if ok:
             _give_back(h)
@@ -285,6 +310,8 @@ def call(func, *args, cancel=None, **kwargs):
             with _lock:
                 if h in _all:
                     _all.remove(h)
+    if died:
+        return func(*args, cancel=cancel, **kwargs) if cancel is not None else func(*args, **kwargs)
 
 
 # ---- the helper's side ----------------------------------------------------------------------------------------
@@ -317,6 +344,11 @@ def _child_main() -> int:
                     if ev is not None:
                         ev.set()
                 else:
+                    if msg[0] == "job":
+                        # review nit: the job's Event exists as soon as the job is read, so a Cancel sent right
+                        # after it (before the fit starts) is not lost
+                        current["cancel"] = threading.Event()
+                        msg = msg + (current["cancel"],)
                     jobs.put(msg)
         except Exception:
             jobs.put(("quit",))         # the window's process went away
@@ -333,25 +365,26 @@ def _child_main() -> int:
         msg = jobs.get()
         if msg[0] != "job":
             return 0
-        _k, mod, name, args, kwargs, cb_names, has_cancel = msg
+        _k, mod, name, args, kwargs, cb_names, has_cancel, ev = msg
         kw = dict(kwargs)
         for cb in cb_names:
-            kw[cb] = (lambda n: (lambda *a: send(("cb", n, a))))(cb)
+            # (review nit: keyword arguments too; a callback's return value is always None here)
+            kw[cb] = (lambda n: (lambda *a, **k: send(("cb", n, a, k))))(cb)
         if has_cancel:
-            current["cancel"] = threading.Event()
-            kw["cancel"] = current["cancel"]
+            kw["cancel"] = ev
         try:
             result = getattr(importlib.import_module(mod), name)(*args, **kw)
             send(("done", result))
         except BaseException as exc:      # noqa: BLE001 (every failure goes back to the window)
             tb = traceback.format_exc()
             try:
-                pickle.dumps(exc)
+                pickle.loads(pickle.dumps(exc))   # review nit: one that pickles but cannot come back is sent as text
             except Exception:
-                exc = RuntimeError(str(exc) or type(exc).__name__)
+                exc = RuntimeError(f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__)
             send(("error", exc, tb))
         finally:
-            current["cancel"] = None
+            if current["cancel"] is ev:
+                current["cancel"] = None
 
 
 if __name__ == "__main__" and "--child" in sys.argv:

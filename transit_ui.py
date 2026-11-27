@@ -2334,8 +2334,11 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 for k, (_g, _l, r_, si, so) in enumerate(sets):
                     flux, _sky = core.measure_many(img, np.where(ok[:, None], xy, 0.0), r_, si, so)
                     # Fable N11: a star whose aperture or sky ring runs off the frame is a partial sum: not measured
+                    # 2.4.0 cleanup (review S7, #119): the comps (not the target, j = 0) follow the one edge rule at
+                    # each variant's own sky ring; set_ensemble then leaves such a comp out of the whole variant
                     edge = np.array([bool(ok[j]) and not core.aperture_clip_reason(img.shape, xy[j, 0], xy[j, 1],
                                                                                    r_, si, so)
+                                     and not (j > 0 and core.sky_ring_past_edge(img.shape, xy[j, 0], xy[j, 1], so))
                                      for j in range(len(xy))])
                     flux = np.where(edge & (np.asarray(flux) > 0), flux, np.nan)
                     with np.errstate(divide="ignore", invalid="ignore"):
@@ -2409,6 +2412,18 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         finally:
             self._show_progress()
 
+    def _notes_after_no_fit(self, text: str, warn: bool = False):
+        """2.4.0 cleanup (review S2): a fit that ended without a result (Cancel, an error, comps changed) does not leave
+        the notes at "Fitting the transit…": the page's earlier fit keeps its cautions under the line, else the line
+        alone."""
+        r = getattr(self, "result", None)
+        level = "warn" if warn else "info"
+        try:
+            earlier = tc.cautions(r["flags"], r.get("verdict")) if r and r.get("flags") is not None else []
+        except Exception:
+            earlier = []
+        self._notes_text([(level, text)] + list(earlier))
+
     def _finish_fit(self, result, meta, error):
         if error is not None:
             if error[0] == "Canceled":
@@ -2416,6 +2431,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self.prog_text.set("Canceled." if error[0] == "Canceled" else "✖ Fit failed.")
             self._show_progress()     # before any dialog, so the bar is not left showing behind it
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
+            self._notes_after_no_fit("Canceled: not fitted yet. Press Fit transit." if error[0] == "Canceled"
+                                     else f"The fit failed: {error[0]}", warn=error[0] != "Canceled")   # review S2
             if error[0] != "Canceled":
                 self.app.log(error[1])
                 # 2.4.0 fit-in F4 (sheet sweep): the box says what to do, not only what failed
@@ -2428,6 +2445,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 # then asks for Fit transit (_run_pending_refit), it never refits by itself.
                 self.prog_text.set("Comps changed during the fit: that fit is not used.")
                 self.draw(placeholder="Comps changed: set the detrend and press Fit transit.")
+                self._notes_after_no_fit("Comps changed during the fit: that fit is not used. Set the detrend and "
+                                         "press Fit transit.")   # review S2
                 return
             # 2.2.7: the data changed while this fit ran (a report opened or closed, another night picked): the
             # result belongs to other data, so it is not shown.

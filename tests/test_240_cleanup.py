@@ -401,16 +401,38 @@ class TestSmallOnes(unittest.TestCase):
     def test_k_focus_that_went_elsewhere_looks_nothing_up(self):
         ran = []
         entry = types.SimpleNamespace(instate=lambda s: False)
-        for focus, want in ((None, 0), (entry, 0), ("other", 1)):
+        queue_ = []
+
+        def app_with(focus_seq):
+            seq = list(focus_seq)
+            a = types.SimpleNamespace(after=lambda ms, fn: queue_.append(fn))
+            a.focus_get = lambda: seq.pop(0) if len(seq) > 1 else seq[0]
+            a.__dict__["_pending_lookups"] = {}
+            return a
+
+        def drain():
+            while queue_:
+                queue_.pop(0)()
+        for seq, want in (([entry], 0), (["other"], 1), ([None, None, entry], 0), ([None, "other"], 1)):
             ran.clear()
-            app = types.SimpleNamespace(focus_get=lambda f=focus: f, after=lambda ms, fn: fn())
+            app = app_with(seq)
             App._focus_left(app, entry, lambda: ran.append(1))
-            self.assertEqual(len(ran), want, focus)
-        grey = types.SimpleNamespace(instate=lambda s: True)
-        app = types.SimpleNamespace(focus_get=lambda: "other", after=lambda ms, fn: fn())
-        ran.clear()
-        App._focus_left(app, grey, lambda: ran.append(1))
-        self.assertEqual(ran, [])
+            drain()
+            self.assertEqual(len(ran), want, seq)
+
+    def test_k_a_quick_click_on_a_job_button_looks_up_first(self):
+        # review M1: the button's command (and _start_job) runs before the deferred check
+        ran, later = [], []
+        app = types.SimpleNamespace(after=lambda ms, fn: later.append(fn), focus_get=lambda: "button")
+        app.__dict__["_pending_lookups"] = {}
+        entry = types.SimpleNamespace(instate=lambda s: True)
+        App._focus_left(app, entry, lambda: ran.append("lookup"))
+        App._flush_pending_lookup(app)          # what _start_job does first
+        ran.append("job")
+        for fn in later:
+            fn()
+        self.assertEqual(ran, ["lookup", "job"])
+        self.assertIn("self._flush_pending_lookup()   # 2.4.0 cleanup (review M1)", _src())
 
     def test_k_plus_a_new_target_takes_the_old_findings(self):
         store = findings.FindingsList(hints=[])
@@ -439,3 +461,157 @@ class TestSmallOnes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- the independent review's findings (27 Nov) ------------------------------------------------------------------
+
+class TestReviewFixes(unittest.TestCase):
+    def test_m2_a_scan_star_matches_any_catalog_position_of_a_merged_star(self):
+        src = _src()
+        self.assertIn('for pm in (k.get("members") or [k]):', src)
+
+    def _app(self):
+        return types.SimpleNamespace(_last_flip_signature=False)
+
+    def test_s1_a_benign_flip_does_not_hide_a_suspicious_recenter(self):
+        pts = ([_obs("n", 1.0 + k / 100, 12.0, check=10.0) for k in range(10)]
+               + [_obs("n", 1.2 + k / 100, 12.03, seg="flip", check=10.0) for k in range(10)]
+               + [_obs("n", 1.4 + k / 100, 12.13, seg="flip", jump=1, check=10.10) for k in range(10)])
+        why = App._flip_step_suspect(self._app(), pts, "n")
+        self.assertEqual(why["kind"], core.STEP_RECENTER)
+        self.assertIn("the check star steps too", why["text"])
+
+    def test_s1_the_suspicious_one_of_two_recenters(self):
+        pts = ([_obs("n", 1.0 + k / 100, 12.0, check=10.0) for k in range(10)]
+               + [_obs("n", 1.2 + k / 100, 12.05, jump=1, check=10.05) for k in range(10)]
+               + [_obs("n", 1.4 + k / 100, 12.17, jump=2, check=10.05) for k in range(10)])
+        why = App._flip_step_suspect(self._app(), pts, "n")
+        self.assertAlmostEqual(why["step"], 0.05, places=3)
+        self.assertIn("the check star steps too", why["text"])
+
+    def test_s1_nothing_suspicious_saves(self):
+        pts = ([_obs("n", 1.0 + k / 100, 12.0, check=10.0) for k in range(10)]
+               + [_obs("n", 1.2 + k / 100, 12.05, jump=1, check=10.0) for k in range(10)])
+        self.assertEqual(App._flip_step_suspect(self._app(), pts, "n")["text"], "")
+
+    def test_s2_the_notes_come_back_after_cancel(self):
+        import transit_ui
+        said = []
+        page = types.SimpleNamespace(result={"flags": [("info", "Detected."), ("warn", "a caution")], "verdict": None},
+                                     _notes_text=said.append)
+        transit_ui.TransitPage._notes_after_no_fit(page, "Canceled: not fitted yet. Press Fit transit.")
+        self.assertEqual(said[0][0], ("info", "Canceled: not fitted yet. Press Fit transit."))
+        self.assertTrue(any("caution" in t for _l, t in said[0][1:]))
+        page.result = None
+        transit_ui.TransitPage._notes_after_no_fit(page, "The fit failed: x", warn=True)
+        self.assertEqual(said[1], [("warn", "The fit failed: x")])
+
+    def test_s5_an_answered_question_is_not_a_slow_pause(self):
+        now = [0.0]
+        said = []
+        w = ui_watch.UIWatch(said.append, main_thread_id=-1, clock=lambda: now[0])
+        with mock.patch.object(w, "_in_question", return_value=True):
+            now[0] += 2.0
+            w.check()               # the watch sees the box up during the pause
+            w.beat()                # answered: the beat does not count it
+        self.assertEqual(w._slow, [])
+
+    def test_s6_and_s7_in_the_code(self):
+        src = _src()
+        i = src.index("# 2.4.0 cleanup (review S6): a new solve checks the target")
+        self.assertIn("self._drop_target_findings()", src[i:i + 500])
+        self.assertIn("self._drop_target_findings()   # 2.4.0 cleanup (review S6): a new image", src)
+        self.assertIn("core.sky_ring_past_edge(img.shape, xy[j, 0], xy[j, 1], so)", _src("transit_ui.py"))
+
+    def test_nit_nan_counts_as_past_the_edge_either_way(self):
+        self.assertTrue(core.sky_ring_past_edge((200, 300), 50.0, float("nan"), 10.0))
+        self.assertTrue(core.sky_ring_past_edge((200, 300), float("nan"), 50.0, 10.0))
+
+    def test_nit_held_why(self):
+        self.assertEqual(App._held_why({"a": {"kind": "re-center"}}), "re-center step ⚠")
+        self.assertEqual(App._held_why({"a": {}}), "flip step ⚠")
+        self.assertEqual(App._held_why({"a": {"kind": "flip"}, "b": {"kind": "re-center"}}),
+                         "flip or re-center step ⚠")
+
+
+def _kw_callback(progress=None):
+    progress(1, 2, label="x")
+    return "ok"
+
+
+class TestHelperReviewFixes(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.was = fit_process.ENABLED
+        fit_process.ENABLED = True
+        fit_process._broken_why, fit_process._deaths, fit_process._closed = "", 0, False
+
+    @classmethod
+    def tearDownClass(cls):
+        fit_process.shutdown()
+        fit_process.ENABLED = cls.was
+        fit_process._closed = False
+        fit_process._broken_why, fit_process._deaths = "", 0
+
+    def test_s3_a_helper_that_dies_mid_fit_falls_back(self):
+        import signal
+        t, f, e, am, planet = _night()
+        said = []
+        fit_process.set_logger(said.append)
+
+        def kill():
+            time.sleep(1.2)
+            for h in list(fit_process._all):
+                try:
+                    os.kill(h.proc.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+        threading.Thread(target=kill, daemon=True).start()
+        try:
+            r = fit_process.call(tc.fit_transit, t, f, e, None, planet, mcmc_steps=3000, progress=lambda *a: None)
+        finally:
+            fit_process.set_logger(None)
+        self.assertIn("summary", r)
+        self.assertTrue(any("stopped during the fit" in s for s in said), said)
+        fit_process._deaths, fit_process._broken_why = 0, ""
+
+    def test_s4_a_big_frame_reads_whole(self):
+        import io
+        data = os.urandom(3_000_000)
+        buf = io.BytesIO()
+        fit_process._send(buf, data)
+        buf.seek(0)
+
+        class Slow:   # a pipe that gives 4 KB at a time
+            def readinto(self, view):
+                chunk = buf.read(min(4096, len(view)))
+                view[:len(chunk)] = chunk
+                return len(chunk)
+        t0 = time.monotonic()
+        self.assertEqual(fit_process._recv(Slow()), data)
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_nit_a_keyword_callback_works(self):
+        got = []
+        # (a test module is not in the app's folder, so call() would run it in-thread: send it to the helper anyway)
+        with mock.patch.object(fit_process, "_own_function", return_value=(_kw_callback.__module__, "_kw_callback")):
+            out = fit_process.call(_kw_callback, progress=lambda *a, **k: got.append((a, k)))
+        self.assertEqual(out, "ok")
+        self.assertEqual(got, [((1, 2), {"label": "x"})])
+
+    def test_nit_a_cancel_set_before_the_call_stops_at_once(self):
+        t, f, e, am, planet = _night()
+        ev = threading.Event()
+        ev.set()
+        t0 = time.monotonic()
+        with self.assertRaises(RuntimeError):
+            fit_process.call(tc.fit_transit, t, f, e, None, planet, mcmc_steps=50000, cancel=ev)
+        self.assertLess(time.monotonic() - t0, 5.0)
+
+    def test_nit_a_job_that_does_not_pickle_runs_here_without_a_helper(self):
+        t, f, e, am, planet = _night()
+        before = len(fit_process._all)
+        planet = dict(planet, odd=threading.Lock())   # cannot be pickled
+        with self.assertRaises(Exception):
+            fit_process.call(tc.fit_transit, t[:2], f[:2], e[:2], None, planet)   # in-thread: the fit's own error
+        self.assertLessEqual(len(fit_process._all), max(before, 1))

@@ -110,7 +110,10 @@ In Variables and Transits mode, the **Target** box names the star you observed.
 
 Things to know:
 
-- The lookup happens only when you press Enter or leave the box, not as you type.
+- The lookup happens only when you press Enter or move to another part of the window (another box, a button), not
+  as you type. Switching to another program, or a file dialog opening, does not count as leaving the box (from
+  2.4.0): coming back to the box you carry on typing; coming back anywhere else starts the lookup then. Pressing a
+  button that starts a job (Calibrate, Run photometry…) right after typing starts the lookup first.
 - While it runs, the busy bar at the bottom of the window says **Looking up SZ Lyn at SIMBAD and VSX…** (chapter 3,
   "The busy bar"). In Transits mode it goes on to the star's planets at the NASA Exoplanet Archive. If SIMBAD and VSX
   have not answered within 60 seconds, a red line under RA/Dec says so, for example **✖ SZ Lyn: the SIMBAD and VSX

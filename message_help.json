@@ -101,7 +101,8 @@
    "section": "Anywhere",
    "patterns": [
     "Fit helper process could not start (…); fits run in the window's process (the window may be slow while one runs).",
-    "… could not take the fit …"
+    "… could not take the fit …",
+    "Fit helper process stopped during the fit (…); the fit runs again in the window's process …"
    ],
    "todo": "Nothing; the results are the same either way. If the window freezes during fits, send the log file."
   },
@@ -2579,7 +2580,8 @@
   {
    "section": "Output, Variables mode",
    "patterns": [
-    "… is held (flip step ⚠), not in the file: Save series adds it, Remove night… drops it."
+    "… is held (flip step ⚠), not in the file: Save series adds it, Remove night… drops it.",
+    "(re-center step ⚠)"
    ],
    "todo": "Press Save series when you want it in the file, or Remove night…"
   },
