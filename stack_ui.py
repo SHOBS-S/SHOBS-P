@@ -383,10 +383,17 @@ class StackMixin:
         if self.stack_n.get().strip() != str(n):
             self.stack_n.set(str(n))
         if len(kept) < 2:
-            # 2.4.0 fit-in F4 (sheet sweep, m729): says what to do
-            messagebox.showerror(TITLE, "Fewer than 2 frames can be stacked (the others are flagged, or could not be "
-                                        "aligned). Use the per-frame points, or un-flag frames on the Output page "
-                                        "(Leave flagged points out) and press Stack again.")
+            # 2.4.0 fit-in F4 (sheet sweep, m729): how many frames of each kind, and what to do
+            out = [r for r in recs if not r["keep"]]
+            n_al = sum(1 for r in out if r.get("why") == "not aligned")
+            n_mag = sum(1 for r in out if r.get("why") == "no magnitude")
+            n_fl = len(out) - n_al - n_mag
+            counts = ", ".join(f"{k} {w}" for k, w in ((n_fl, "flagged"), (n_al, "could not be aligned"),
+                                                       (n_mag, "gave no magnitude")) if k)
+            messagebox.showerror(TITLE, "Fewer than 2 frames can be stacked"
+                                        + (f" (of {len(recs)} frames: {counts})" if counts else "")
+                                        + ". Use the per-frame points, or un-flag frames on the Output page "
+                                          "(Leave flagged points out) and press Stack again.")
             return
         try:
             binning = max(int(self.binning.get()), 1)
@@ -409,8 +416,14 @@ class StackMixin:
                 return
         groups = stack_core.plan_groups(recs, n, cadence)
         if src.get("scan") and len(groups) < stack_core.MIN_POINTS:
+            # 2.4.0 fit-in F4 (sheet sweep, m732): the largest N that still gives enough stacks is named
+            n_ok = next((k for k in range(n - 1, 1, -1)
+                         if len(stack_core.plan_groups(recs, k, cadence)) >= stack_core.MIN_POINTS), 0)
             messagebox.showerror(TITLE, f"That makes only {len(groups)} stacks; a field scan needs at least "
-                                        f"{stack_core.MIN_POINTS}. Use a smaller N.")
+                                        f"{stack_core.MIN_POINTS}. "
+                                        + (f"Use a smaller N: N = {n_ok} is the largest that gives "
+                                           f"{stack_core.MIN_POINTS} or more." if n_ok else
+                                           "No N gives that many with these frames: scan the frames one by one."))
             return
         if src["mode"] == "transits" and len(groups) < 20:
             # 2.3.5 (m733): default No, and the largest N that still leaves 20 points.
@@ -525,6 +538,20 @@ class StackMixin:
         if self._stack_run_ctx is run and not self.busy:
             self._stack_run_ctx = None   # the run did not start (a check said no)
 
+    def _stack_skip_reason(self) -> str:
+        """2.4.0 fit-in F4 (sheet sweep, m742): 'most stacks were skipped for: <reason> (N of M)' from the run's
+        skip list, or '' when it holds nothing."""
+        skips = [s for s in (getattr(self, "_run_skipped", None) or []) if isinstance(s, dict)]
+        if not skips:
+            return ""
+        count: dict = {}
+        for s in skips:
+            word = core.skip_reason_word(s.get("why", "")) or "no reason given"
+            count[word] = count.get(word, 0) + 1
+        word, n = max(count.items(), key=lambda kv: kv[1])
+        return (f"every stack was skipped for the same reason, {word}" if n == len(skips) and n > 1 else
+                f"the most common reason was {word} ({n} of {len(skips)} stacks skipped)")
+
     # ---- after photometry on the stacks ----------------------------------------------------------------------
     def _stack_done(self, night_points, mode, color_info=None, cancelled=False, error=None):
         """The photometry worker's end for a stack run (in place of _photometry_done)."""
@@ -542,12 +569,19 @@ class StackMixin:
             # 2.4.0 fit-in F4 (sheet sweep, m741): the error line says what to do
             self.log(("✖ " if error else "") + "Photometry on the stacks " + (f"stopped by an error ({error})" if error else "canceled")
                      + "; the points stay per frame." + (" Press Stack to try again." if error else ""))
+            if error:   # (m741) the error has the same box as a failed stack; a cancel stays a plain line
+                messagebox.showerror(TITLE, f"Photometry on the stacks stopped by an error: {error}\n\nThe points "
+                                            "stay per frame. Press Stack to try again, or carry on with the "
+                                            "per-frame points.")
             return
         self._progress_end(f"{len(night_points)} stacked points.")
         if not night_points:
             # 2.4.0 fit-in F4 (sheet sweep, m742): says what to do
-            messagebox.showerror(TITLE, "No stack produced a magnitude (the Log says why). The points stay per frame.\n\n"
-                                        "Try a smaller Stack N, or carry on with the per-frame points.")
+            why = self._stack_skip_reason()   # (m742) the most common reason, in the box itself
+            messagebox.showerror(TITLE, "No stack produced a magnitude"
+                                        + (f": {why}" if why else " (the Log says why)")
+                                        + ". The points stay per frame.\n\n"
+                                          "Try a smaller Stack N, or carry on with the per-frame points.")
             return
         night = run["night"]
         filt = self._filter_code()

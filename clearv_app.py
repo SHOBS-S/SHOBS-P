@@ -3961,6 +3961,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         elif dist < need:
             note = (f"⚠ only {max(dist, 0):.0f} px from the frame edge: its sky ring (out to {sky_out:g} px) needs the "
                     f"star at least {need:.0f} px in, with room for drift — pick a star further in")
+        elif dist < safe and night is not None and night[0] >= need:
+            # 2.4.0 fit-in F4 (sheet row m028): the night's real drift was checked and the star keeps its sky ring
+            # on the frame all night: nothing to say (the fixed 3 × sky-out margin is for a night not checked yet)
+            return ""
         elif dist < safe:
             note = (f"⚠ {dist:.0f} px from the frame edge: stars at least {safe:.0f} px in (3 × the sky-out radius) "
                     "stay clear of the edge and the weakest part of the flat")
@@ -12195,9 +12199,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         lines.append(f"⚠ After the meridian flip the {' and '.join(l for l, _m in jumped)} apertures "
                                      f"were off their stars by about ({vx:+.1f}, {vy:+.1f}) px together, while the "
                                      "target's was not: an aperture-placement error at the flip, not a change in "
-                                     "the stars (the check star then looks normal and hides it). Look at "
-                                     "comp1_x/y and check_x/y in the light-curve CSV; if they sit off the stars, "
-                                     "reduce the frames after the flip on their own.")
+                                     "the stars (the check star then looks normal and hides it). Reject the "
+                                     "frames on one side of the flip on the Blink page and run each side on its "
+                                     "own.")   # 2.4.0 fit-in F4 (sheet sweep, m217): the fix in the app's words
         if linear_limit is not None and math.isfinite(linear_limit):
             over = []
             stars = [target] + list(comps) + ([check] if check is not None else [])
@@ -16046,10 +16050,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._watch_highlight = name
         self._refresh_watch_box()
         self._watch_highlight = None
-        self.status.set(text)
-        self.log("Watch stars: " + text)
-        if announce:
-            messagebox.showinfo(APP_TITLE, text + "\n\nIts row is highlighted in the Watch stars box.", parent=self)
+        # 2.4.0 fit-in F4 (sheet sweep, m282): the highlighted row, the status line and the Log; no box for a
+        # harmless repeat (announce is kept for the callers, it changes nothing now)
+        self.log("Watch stars: " + text, keep_status=True)
+        self.status.set(text + " Its row is highlighted in the Watch stars box.")
 
     def _locate_watch_stars(self):
         """After Solve: find each watch star on the new frame by catalog name, then by sky position."""
@@ -19585,7 +19589,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         if "VSX" not in sources:   # 2.2.21 (#48): say so, never "not in SIMBAD" as if VSX was asked
                             self.call_ui(self.log, "  Variable-star check: VSX not reached"
                                          + (f" ({sources.vsx_error})" if getattr(sources, "vsx_error", "") else "")
-                                         + "; only SIMBAD was checked.")
+                                         + "; only SIMBAD was checked. Scan again later before reporting a "
+                                           "candidate.")   # 2.4.0 fit-in F4 (sheet sweep, m367)
                         result["known"] = [k for k in known
                                            if 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[0] < w
                                            and 0 <= core.sky_to_pixel(k["ra"], k["dec"], solution)[1] < h]
@@ -22408,14 +22413,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         # 2.2.18 (item 4): labeled buttons instead of Yes/No (16 Oct: "now left out. Keep these points?" was read as
         # "keep as is", and a Yes put dew points back into the HD 219134 series).
         ex = self._transmission_excess(night)
-        return ("Use these points in the light curve (errors scaled for the lost light), or leave them out?\n\n"
-                f"\u201c{self.KEEP_USE}\u201d: each frame's photon error already comes from its own (reduced) fluxes, "
-                "and scintillation is a fraction of the light that arrives, so the error bars grow where the light is "
-                "lost. "
-                + (f"On top of that, every point used gets the {ex:.3f} mag star-to-star scatter measured in that "
-                   "stretch (in quadrature), so the error bars stay honest even if this was a smooth cloud bank. "
-                   if ex > 0 else "")
-                + f"\u201c{self.KEEP_LEAVE}\u201d (the default; also Escape or closing this window) leaves them "
+        # 2.4.0 fit-in F4 (sheet sweep, x025): two lines, what each button does; the why is in the manual (ch 12)
+        return ("Use these points in the light curve, or leave them out?\n\n"
+                f"\u201c{self.KEEP_USE}\u201d: they go into the light curve with larger error bars"
+                + (f" ({ex:.3f} mag added for the scatter measured in that stretch)" if ex > 0 else "")
+                + f".\n\u201c{self.KEEP_LEAVE}\u201d (the default; also Escape or closing this window): they stay "
                   "flagged, like cloud.")
 
     def _ask_keep(self, night: str, message: str, where: str) -> bool:
@@ -22747,6 +22749,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._period_note = out["note"]
         self._period_bins_note = out["bins_note"]
         self.period = out["period"]
+        # 2.4.0 fit-in F4 (sheet sweep, m487): why no search was made is said in the Period box itself (draw_output)
+        self._period_error = out["error"] or ""
         if out["error"]:
             self.status.set(f"Period search: {out['error']}")
         skip = out.get("skip")
@@ -23982,7 +23986,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         step("drawing the light curve")
         self.draw_output()
         step(None)
-        self._warn_legacy(self.legacy_mixed, os.path.basename(path))
+        self._warn_legacy(self.legacy_mixed, os.path.basename(path), path)
         try:
             self._stack_files_note()   # 2.3.0 review fix (#54): stack files pruned from the cache: said, not needed
         except Exception:
@@ -24515,9 +24519,26 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             nights |= {o.night for o in observations if o.night not in known}
         return nights
 
-    def _warn_legacy(self, nights: set, source: str):
+    def _warn_legacy(self, nights: set, source: str, path: str | None = None):
+        """2.4.0 fit-in F4 (sheet sweep, m520): the box is shown once per series file (remembered in the settings);
+        after that one plain Log line. The Output page's caution stays on those nights, and Save AAVSO report
+        refuses a report that holds them (_legacy_report_stop)."""
         if not nights:
             return
+        if path:
+            key = os.path.normcase(os.path.abspath(path))
+            seen = [p for p in (self.settings.get("legacy_warned") or []) if isinstance(p, str)]
+            if key in seen:
+                self.log(f"{source}: {len(nights)} night{'s' if len(nights) != 1 else ''} "
+                         f"({', '.join(sorted(nights))}) reduced by an early version that binned before the "
+                         "debayer; their filter and colors are not real. Run photometry on them again before "
+                         "reporting them (the Output page says so too).", keep_status=True)
+                return
+            self.settings["legacy_warned"] = (seen + [key])[-200:]
+            try:
+                self._save_settings()
+            except Exception:
+                traceback.print_exc()
         messagebox.showwarning(
             APP_TITLE,
             f"{source} has night(s) reduced by an early version of SHOBS-P that binned before the debayer:\n  {', '.join(sorted(nights))}\n\n"
@@ -25019,6 +25040,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 cautions.append(am_text + (" " + am_check["why"] if am_check.get("why") else
                                            " The period survives with the trend taken out and without the "
                                            "high-airmass nights."))
+            elif am_trend.get("skip") == "no airmass":
+                # 2.4.0 fit-in F4 (sheet sweep, m490): a plain row where the period is read (the Log says it once)
+                period_lines.append("Airmass not checked (no site or RA/Dec)")
             edge_text = core.period_edge_text(self.period) if not too_short else ""
             if edge_text:
                 # 2.4.0 fit-in F4 (8c): a plain row (no ⚠ line under the boxes); the verdict row still counts it
@@ -25041,6 +25065,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         period_lines.append(f"Marked  {m:g} d → power {np.interp(f, freqs[order], power[order]):.2f}")
                     else:
                         period_lines.append(f"Marked  {m:g} d (outside the search)")
+        elif getattr(self, "_period_error", ""):
+            # 2.4.0 fit-in F4 (sheet sweep, m487): the reason in plain words, where the period is read
+            ax.set_title("No period search")
+            period_lines = [period_verdict_line(None, {"no_search": f"no search: {self._period_error}. Check the "
+                                                                    "Period search range"})]
         else:
             ax.set_title("Not enough points for a period")
             period_lines = [period_verdict_line(None, {"no_search": "needs at least 8 usable points"})]
@@ -25838,7 +25867,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 saved = self.series_not_saved(exc)
         nights = sorted({o.night for o in self.observations})
         self.status.set(f"Added {os.path.basename(path)}: {len(self.observations)} points, {len(nights)} night(s).{saved}")
-        self._warn_legacy(legacy, os.path.basename(path))
+        self._warn_legacy(legacy, os.path.basename(path), path)
 
     def edit_night_note(self):
         # 2.4.0 fit-in F2 (m534, m535, John 24 Nov): the note is for the night chosen in the night table (the
@@ -27014,11 +27043,16 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.log(f"⚠ Same-star names: could not re-derive this night with the series' magnitudes: {exc}. "
                          "The night keeps tonight's catalog magnitudes, so it may sit off the other nights: open "
                          "Use comps… (Output page) and press Apply.")   # 2.4.0 fit-in F4 (sheet sweep)
+        # 2.4.0 fit-in F4 (sheet sweep, m540): one line says it; each star's detail is in the Log only
         for old, new in plan["renamed"].items():
             mag = catalog.get(new)
             self.log(f"{old} is {new} (same star): series name"
                      + (f" and {bw} {mag:.3f}" if mag is not None and new in self.comps_used
-                        and not plan.get("band_mismatch") else "") + " used.")
+                        and not plan.get("band_mismatch") else "") + " used.", keep_status=True)
+        if plan["renamed"]:
+            n_ren = len(plan["renamed"])
+            self.log(f"Series names and magnitudes used for {n_ren} star{'s' if n_ren != 1 else ''} measured under "
+                     "another name tonight (same star; the Log lists them).")
         # 2.4.0 fit-in F3 (m541/m543): the why is said once, in the line of the comp with the largest shift; the
         # other comps go to the Log only, and the old "(The series' catalog magnitude wins …)" tail is gone.
         remags = sorted(((name, t, s) for name, (t, s) in (plan.get("remag") or {}).items()
@@ -27911,6 +27945,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._aavso_spelling()
         self._save_aavso_report()
 
+    def _legacy_report_stop(self, points) -> bool:
+        """2.4.0 fit-in F4 (sheet sweep, m520): True (and said) when the report would hold a night reduced by an
+        early version that binned before the debayer: its filter and colors are not real, so it is not reported."""
+        bad = sorted({o.night for o in points if o.night in getattr(self, "legacy_mixed", set())})
+        if not bad:
+            return False
+        names = ", ".join(self.night_label(n, short=True) for n in bad)
+        text = (f"Report not saved: {names} {'was' if len(bad) == 1 else 'were'} reduced by an early version of "
+                "SHOBS-P that binned before the debayer, so the filter and colors of "
+                f"{'that night' if len(bad) == 1 else 'those nights'} are not real. Run photometry on "
+                f"{'it' if len(bad) == 1 else 'them'} again (or use Remove night…), or choose another night in the "
+                "Saving box.")
+        self.log("✖ " + text)
+        messagebox.showerror(APP_TITLE, text)
+        return True
+
     def _save_aavso_report(self) -> bool:
         """The rest of save_aavso. True when the report was written.
         2.4.0 fit-in F3 (area L, John's call 4): the gate is split. What WebObs will reject (webobs_rejects) is
@@ -27934,6 +27984,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         points = [o for o in self._usable() if scope == "series" or o.night == self.highlight_night]
         in_transit = len(points) - len(self._report_points(points))
         points = self._report_points(points)   # 2.2.15 (item 1, review)
+        if self._legacy_report_stop(points):
+            return False
         if in_transit:
             self.log(f"AAVSO report: {in_transit} frame{'s' if in_transit != 1 else ''} in a planet transit left out "
                      "of the report.")
@@ -28586,8 +28638,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             initialvalue=guess, parent=self)
         name = " ".join((answer or "").split())
         if not name or placeholder_star_name(name):
-            messagebox.showinfo(APP_TITLE, "Report not saved: it needs the check star's name (its AUID or catalog "
-                                           "name). Save it again and type the name.")
+            # 2.4.0 fit-in F4 (sheet sweep, m605): the status line and the Log, no box after a Cancel
+            self.log("Report not saved: it needs the check star's name (its AUID or catalog name). Press Save AAVSO "
+                     "report again and type the name.")
             return False
         self.report_names[used] = name
         self.log(f"AAVSO report: check star {used} reported as {name}.")
