@@ -280,10 +280,11 @@ class TestMultiNightWords(unittest.TestCase):
         self.assertIn(("info", "Night N2 is more than 3σ from the nights' own ephemeris."), out)
 
     def test_one_no_airmass_note(self):
+        # 2.4.0 fit-in F4 (m655): plain now (no ⚠, no button): the fit handles such a night by itself
         note = mn.no_airmass_note(["5–6 Oct", "9–10 Oct"])
-        self.assertTrue(note.startswith("⚠ No airmass in the file for 5–6 Oct, 9–10 Oct: their baseline is fitted "
-                                        "against time only"))
-        self.assertIn(mn.TIME_ONLY_BUTTON, note)
+        self.assertTrue(note.startswith("No airmass in the file for 5–6 Oct, 9–10 Oct: their baseline is fitted "
+                                        "against time instead"))
+        self.assertFalse(hasattr(mn, "TIME_ONLY_BUTTON"))
         self.assertIn(": its baseline", mn.no_airmass_note(["5–6 Oct"]))
         src = inspect.getsource(mn.summary_lines)
         self.assertEqual(src.count("no_airmass_note("), 1)
@@ -292,8 +293,8 @@ class TestMultiNightWords(unittest.TestCase):
 
     def test_progress_line_is_plain(self):
         src = inspect.getsource(mn)
-        self.assertIn("fitted against time only: see the note \"", src.replace("\n", " ").replace("  ", " ")
-                      .replace('note " "under', 'note "'))
+        # 2.4.0 fit-in F4 (m677): the line is always "N nights ready." (a night without airmass needs no action)
+        self.assertNotIn("fitted against time only: see the note", src)
         self.assertNotIn("with no airmass (see above)", src)
 
     def test_not_a_fit_csv_one_wording(self):

@@ -699,6 +699,10 @@ def prepare_priors(planet: dict, a_start: float | None = None) -> dict:
 
     Sigmas are floored so a tight catalog value still lets the data speak a little: a/R* at least 3%, b at least
     0.04. An a/R* derived from the duration (no published value) gets a loose 25% prior; a missing b gets none."""
+    saved = (planet.get("saved_priors") or {}).get("priors")
+    if saved is not None:
+        # 2.4.0 fit-in F4 (#93): "Fit with saved priors": the shape priors exactly as an earlier fit used them
+        return {name: (float(m), float(sd)) for name, (m, sd) in saved.items()}
     priors = {}
     a_rs, b = planet.get("a_rs"), planet.get("b")
     if a_rs and not planet.get("a_rs_derived"):
@@ -901,6 +905,10 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
     med = np.median(flux)
     flux, err = flux / med, err / med
     u1g, u2g = limb_darkening_guess(planet.get("teff"), planet.get("ld_band"))   # 2.2.17 (item 1): band-aware
+    ld_sigma = 0.1
+    saved_ld = (planet.get("saved_priors") or {}).get("ld")
+    if saved_ld:   # 2.4.0 fit-in F4 (#93): the limb-darkening prior exactly as the earlier fit used it
+        u1g, u2g, ld_sigma = float(saved_ld[0]), float(saved_ld[1]), float(saved_ld[2])
     q1, q2 = u_to_kipping(u1g, u2g)
     # Predicted mid-transit nearest the data.
     # 2.2.12: without an ephemeris the start guess (the lowest point) is only a start; it is never reported as a
@@ -941,7 +949,8 @@ def _setup_fit(t, flux, err, airmass, planet: dict, detrend_airmass=True, after_
             starts += [{"step": 0.02}, {"step": -0.02}]
     return {"t": t, "t_abs": t_abs, "t_ref": t_ref, "flux": flux, "err": err, "am": am, "flagged": fmask,
             "med": float(med), "period": period, "priors": prepare_priors(planet, a0), "start": start,
-            "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "c_t2", "step"), "ld": (u1g, u2g, 0.1),
+            "free": ("tc", "k", "a_rs", "b", "q1", "q2", "c0", "c_am", "c_t", "c_t2", "step"),
+            "ld": (u1g, u2g, ld_sigma),
             "cadence": cadence, "starts": starts, "t_flip": t_flip, "flip_gap_min": flip_gap, "n": n,
             "tc_pred": tc_pred, "tc_pred_err": tc_pred_err, "tc_start": tc_start, "eph_err_known": eph_err_known,
             "has_eph": bool(tc0), "flip_gated": flip_step is None}
@@ -1906,8 +1915,74 @@ def leave_one_comp_out(t, flux, err, airmass, comp_mags, names, planet: dict, ma
         note += f" No comp moves the depth or Tc by more than {COMP_LOO_SIGMA:g}σ beyond its own noise."
     out["note"] = note
     out["flags"] = flags + [("info", note)]
+    out["comp_err"] = comp_error(out)   # 2.4.0 fit-in F4 (#35): the second error term
     out["text"] = comp_systematic_text(out)
     return out
+
+
+# ---- 2.4.0 fit-in F4 (#35, m755 m754 m793): the comp choice as a second error term --------------------------
+# The leave-one-comp-out refits say how far the depth and Tc move with the comp set. That spread is now carried on
+# the result as its own error term beside the statistical one: "depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %". The
+# two are never added together (the MCMC's ± stays the statistical error, unchanged, in every file's result
+# fields); the comps term is half the full range over the full ensemble and every leave-one-out refit, the same
+# "± spread" the robustness check uses, so it reads like a ±.
+def comp_error(loo: dict | None) -> dict | None:
+    """{"depth": ± (fraction), "tc": ± (days), "depth_all", "depth_min", "depth_max" (without each comp), "driver":
+    the one comp that drives the spread (the leave-one-out's named comp) or ""}; None without a comp check."""
+    if not loo or not loo.get("fits"):
+        return None
+    ref = loo.get("ref") or {}
+    d_all, t_all = ref.get("depth"), ref.get("tc")
+    depths = [f["depth"] for f in loo["fits"]]
+    tcs = [f["tc"] for f in loo["fits"]]
+    dd = depths + ([d_all] if d_all is not None and math.isfinite(d_all) else [])
+    tt = tcs + ([t_all] if t_all is not None and math.isfinite(t_all) else [])
+    flagged = [f["name"] for f in loo["fits"] if f.get("flagged")]
+    return {"depth": (max(dd) - min(dd)) / 2.0, "tc": (max(tt) - min(tt)) / 2.0,
+            "depth_all": d_all, "depth_min": min(depths), "depth_max": max(depths),
+            "driver": flagged[0] if len(flagged) == 1 else "", "n_comps": int(loo.get("n_comps") or len(depths))}
+
+
+def comp_reference_text(loo: dict | None, ascii_only: bool = False) -> str:
+    """m793: 'all comps 1.84 %; without each 1.79–1.88 %' ('' without a comp check)."""
+    ce = (loo or {}).get("comp_err") or comp_error(loo)
+    if not ce or ce.get("depth_all") is None:
+        return ""
+    dash = "-" if ascii_only else "–"
+    return (f"all comps {ce['depth_all'] * 100:.2f} %; without each {ce['depth_min'] * 100:.2f}{dash}"
+            f"{ce['depth_max'] * 100:.2f} %")
+
+
+def two_term_text(result: dict | None, ascii_only: bool = False, with_tc: bool = True) -> str:
+    """m755: 'depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min' from the fit's summary
+    and its comp check ('' when there is no comp check). The depth is the MCMC's, the first ± its statistical error."""
+    r = result or {}
+    ce = r.get("comp_err") or comp_error(r.get("comp_loo"))
+    s = r.get("summary") or {}
+    if not ce or "depth" not in s:
+        return ""
+    pm = "+/-" if ascii_only else "±"
+    text = (f"depth {s['depth'][0] * 100:.2f} {pm} {s['depth'][1] * 100:.2f} (stat) {pm} {ce['depth'] * 100:.2f} "
+            "(comps) %")
+    if with_tc and "tc" in s:
+        text += f"; Tc {pm} {s['tc'][1] * 1440:.2f} (stat) {pm} {ce['tc'] * 1440:.2f} (comps) min"
+    return text
+
+
+def comp_error_line(result: dict | None, ascii_only: bool = False) -> str:
+    """One line for the page, the Log, the settings file, the fit file, the fit CSV and (ASCII) the report NOTES:
+    the two error terms and the reference beside them."""
+    r = result or {}
+    two = two_term_text(r, ascii_only)
+    if not two:
+        return ""
+    loo = r.get("comp_loo") or {}
+    ref = comp_reference_text(loo, ascii_only)
+    n = (r.get("comp_err") or loo.get("comp_err") or {}).get("n_comps")
+    return (two + (f" ({ref})" if ref else "")
+            + f". (comps) = half the range over the full set and each of the {n} comps left out in turn (least "
+              "squares); it is not added to the statistical error"
+            + (", and with 2 comps each refit rests on a single comp" if loo.get("single") else "") + ".")
 
 
 # ---- 2.4.0 step 6b (#35): the robustness check -------------------------------------------------------------
@@ -2178,6 +2253,23 @@ def robustness_text(rob: dict | None, ascii_only: bool = False) -> str:
     if ascii_only:
         txt = txt.replace("–", "-").replace("Δ", "d").replace("±", pm)
     return txt
+
+
+def err_scaled_note(result: dict | None) -> str:
+    """2.4.0 fit-in F4 (nit, 14 Nov): what the ERR column of an export holds, in ASCII: the measured error times the
+    fit's error scale S = sqrt(max(reduced chi-square, 1)) x red-noise beta (never scaled down). '' without a fit."""
+    r = result or {}
+    try:
+        S, rchi, beta = float(r["error_scale"]), float(r["rchi2"]), float(r["beta"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if not all(math.isfinite(v) for v in (S, rchi, beta)):
+        return ""
+    if abs(S - 1.0) < 5e-4:
+        return (f"ERR is each point's measured error, not scaled (raw reduced chi-square {rchi:.2f}, red-noise beta "
+                f"{beta:.2f}; errors are never scaled down)")
+    return (f"ERR is each point's measured error x {S:.3f}, scaled to the scatter and the red noise (raw reduced "
+            f"chi-square {rchi:.2f}, red-noise beta {beta:.2f})")
 
 
 def comp_systematic_text(loo: dict | None) -> str:
@@ -2727,12 +2819,9 @@ def transit_flags(r: dict) -> list[tuple[str, str]]:
                               "its uncertainties are on the safe side (too wide)."))
     elif r.get("rchi2") is not None and r["rchi2"] > RCHI2_HIGH:
         ratio = math.sqrt(r["rchi2"])
+        # 2.4.0 fit-in F4 (m767): one line; the causes are in the manual (chapters 18 and 23)
         flags.append(("info", f"The scatter is about {ratio:.1f}x the per-point error bars (reduced χ² "
-                              f"{r['rchi2']:.2f}): noise the error model leaves out, such as thin cloud or dew, "
-                              "tracking or seeing changes (red noise), calibration, or a noisy comp; or a camera gain "
-                              "(EGAIN) too large for the stored values (12/14-bit data scaled to 16 bits; see the "
-                              "photometry log's Photon noise line). The fit scales its error bars up to match, so its "
-                              "uncertainties include it."))
+                              f"{r['rchi2']:.2f}); the fit widened its error bars to match."))
     if r.get("tc_pred") is not None and r.get("tc_pred_err") is not None:
         o = oc_summary(r)   # 2.2.19 (#29): predicted Tc with its propagated error, O − C in min and in sigma
         oc, sig = o["oc_min"], o["sigma_min"]
@@ -3437,7 +3526,8 @@ def exofop_ids(planet: dict | None, *names: str) -> tuple[str, str]:
 def complete_planet(p: dict) -> dict:
     """Fill what can be derived: k from depth, b from inclination, a/R* from duration."""
     if p.get("period") is None:
-        raise ValueError("the catalog entry has no period")
+        # 2.4.0 fit-in F4 (x256): with what to do
+        raise ValueError("the catalog entry has no period: type the period in the Planet boxes on the Input page")
     if p.get("k") is None and p.get("depth"):
         p["k"] = math.sqrt(p["depth"])
     if p.get("k"):
@@ -3809,7 +3899,9 @@ def exofop_notes(result: dict, meta: dict, mono: bool = False) -> str:
             f"{s['depth'][0] * 1e6:.0f} ± {s['depth'][1] * 1e6:.0f} ppm\n"
             # 2.2.16 (item 6): the comp-choice spread, beside the statistical errors above.
             + (f"  Comp-choice check (diagnostic): {comp_systematic_text(result['comp_loo'])}\n"
-               if result.get("comp_loo") else ""))
+               if result.get("comp_loo") else "")
+            # 2.4.0 fit-in F4 (#35): the same spread as a second error term beside the statistical one
+            + (f"  Result with both error terms: {comp_error_line(result)}\n" if comp_error_line(result) else ""))
 
 
 def _full(v, unit: str = "") -> str:
@@ -3878,6 +3970,10 @@ def fit_inputs_lines(result: dict) -> list:
         out.append("Fit input shape priors used: " + ", ".join(f"{name} {_full(m)} +/- {_full(sd)}"
                                                                for name, (m, sd) in pri.items())
                    + " (published values with the sigma floors)")
+    sv = pl.get("saved_priors")
+    if sv:   # 2.4.0 fit-in F4 (#93): this fit was made with the inputs stored in another fit's settings
+        out.append(f"Fit input saved priors: the values above were read from {sv.get('file') or 'a saved fit'} "
+                   "(Fit with saved priors), not looked up")
     pb = r.get("prayer_bead")   # 2.4.0 (#62)
     if pb:
         mc = pb.get("mcmc") or {}
@@ -3914,6 +4010,137 @@ def fit_inputs_lines(result: dict) -> list:
         when += "; typed over on the Input page after it: " + ", ".join(pl["typed_over"])
     out.append(f"Fit input lookup: {when}")
     return [_ascii_line(x) for x in out]
+
+
+# ---- 2.4.0 fit-in F4 (#93): "Fit with saved priors" ---------------------------------------------------------
+# fit_inputs_lines writes the fit's exact inputs into the settings file (and the fit CSV and fit file). These two
+# read them back, so a report or a night can be fitted again with exactly the priors an earlier fit used, whatever
+# the catalogs say today.
+_NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+
+
+def parse_fit_inputs(text: str) -> dict | None:
+    """The 'Fit input …' lines of a settings file, a fit CSV's comments or a fit file's 'Fit inputs (full
+    precision)' block. Returns {"planet": {period, period_err, t0, t0_err, a_rs, a_rs_err, a_rs_derived, b, b_err,
+    b_assumed, k, k_err, depth, t14, teff}, "priors": {"a_rs": (mean, sigma), "b": (mean, sigma)} (the shape priors
+    as used), "ld": (u1, u2, width) or None, "n": lines read}; None when the text holds no fit inputs."""
+    planet, priors, ld, n = {}, None, None, 0
+    block = False
+
+    def pm(body):
+        m = re.match(rf"\s*({_NUM})(?:\s*\+/-\s*({_NUM}))?", body)
+        if not m:
+            return None, None
+        return float(m.group(1)), (float(m.group(2)) if m.group(2) else None)
+
+    for raw in str(text or "").splitlines():
+        line = raw.strip().lstrip("#").strip()
+        if line.lower().startswith("fit inputs (full precision)"):
+            block = True
+            continue
+        if line.startswith("Fit input "):
+            line = line[len("Fit input "):]
+        elif not (block and raw.startswith("  ") and ":" in line):
+            if block and not raw.startswith("  "):
+                block = False
+            continue
+        name, _sep, body = line.partition(":")
+        name, body = name.strip().lower(), body.strip()
+        if name == "period":
+            v, e = pm(body)
+            if v:
+                planet.update(period=v, period_err=e)
+                n += 1
+        elif name == "t0":
+            v, e = pm(body)
+            planet.update(t0=v, t0_err=e)
+            n += 1
+        elif name == "a/r*":
+            v, e = pm(body)
+            if v is not None:
+                planet.update(a_rs=v, a_rs_err=e, a_rs_derived="derived from the duration" in body)
+                n += 1
+        elif name == "b":
+            v, e = pm(body)
+            if v is not None:
+                planet.update(b=v, b_err=e, b_assumed="(assumed)" in body)
+                n += 1
+        elif name == "published rp/r*":
+            v, e = pm(body)
+            if v is not None:
+                planet.update(k=v, k_err=e)
+            m = re.search(rf"depth\s+({_NUM})", body)
+            if m:
+                planet["depth"] = float(m.group(1))
+            n += 1
+        elif name == "t14":
+            v, _e = pm(body)
+            if v is not None:
+                planet["t14"] = v
+                n += 1
+        elif name == "teff for limb darkening":
+            v, _e = pm(body)
+            if v is not None:
+                planet["teff"] = v
+            n += 1
+        elif name == "limb darkening prior":
+            m = re.search(rf"u1\s+({_NUM}),\s*u2\s+({_NUM}),\s*width\s+({_NUM})", body)
+            if m:
+                ld = tuple(float(g) for g in m.groups())
+                n += 1
+        elif name == "shape priors used":
+            priors = {}
+            for nm, mean, sd in re.findall(rf"(a_rs|b)\s+({_NUM})\s*\+/-\s*({_NUM})", body):
+                priors[nm] = (float(mean), float(sd))
+            n += 1
+    if not n or not planet.get("period"):
+        return None
+    return {"planet": planet, "priors": priors, "ld": ld, "n": n}
+
+
+def apply_saved_inputs(planet: dict | None, saved: dict, file: str = "") -> dict:
+    """The planet a fit is made with when the user asks for saved priors: the page's planet (name, host, source) with
+    the saved period, T0, a/R*, b, Rp/R*, depth, T14 and Teff in place of today's, and the saved shape and
+    limb-darkening priors exactly as the earlier fit used them (prepare_priors and _setup_fit read "saved_priors").
+    A settings file from before the shape-priors line existed gives the priors by the usual rule from its values."""
+    out = dict(planet or {})
+    for key, value in (saved.get("planet") or {}).items():
+        if value is not None or key in ("t0", "t0_err", "period_err", "a_rs_err", "b_err", "k_err"):
+            out[key] = value
+    sp_ = {"file": str(file or "")}
+    if saved.get("priors") is not None:
+        sp_["priors"] = dict(saved["priors"])
+    if saved.get("ld"):
+        sp_["ld"] = tuple(saved["ld"])
+    out["saved_priors"] = sp_
+    out["eph_source"] = f"the saved fit's inputs ({file})" if file else "a saved fit's inputs"
+    return out
+
+
+# 2.4.0 fit-in F4 (sheet sweep, house rule: an error says what to do): the fit's own errors, with the way out.
+FIT_FAILED_HELP = (
+    ("usable points", "Put flagged frames back (Refit with flagged frames), trim less, or reduce more frames of "
+                      "this night."),
+    ("did not converge", "Check the planet's values on the Input page (period, T0, depth, a/R*, b), trim a bad "
+                         "stretch, or pick a simpler Detrend, and fit again."),
+    ("outside the priors or bounds", "Check the planet's values on the Input page (Rp/R* or depth, a/R*, b): one of "
+                                     "them is outside what a transit can have. Look up again, or type the value."),
+    ("could not start the MCMC", "Fit again; if it happens again, trim a bad stretch or pick a simpler Detrend."),
+    ("could not be fitted", "Leave that night out (Leave out / put back) and fit again; fit it alone on the Transit "
+                            "fit page to see what is wrong with it."),
+    ("at least two usable nights", "Add nights, or put a left-out night back (Leave out / put back)."),
+    ("period is not known", "Press Look up, or enter the planet on the Input page."),
+)
+
+
+def fit_failed_help(error: str) -> str:
+    """What to do about a fit error ('' when the error is not one of the fit's own): for the Transit fit page's box
+    and the Multi-night window's line."""
+    low = str(error or "").lower()
+    for key, words in FIT_FAILED_HELP:
+        if key in low:
+            return words
+    return ""
 
 
 def _ascii_line(text: str) -> str:
@@ -3985,6 +4212,8 @@ def fit_text(result: dict, meta: dict) -> str:
     if result.get("comp_loo"):
         # 2.2.16 (item 6)
         lines.append("Comp-choice check (diagnostic) " + comp_systematic_text(result["comp_loo"]))
+        if comp_error_line(result):   # 2.4.0 fit-in F4 (#35)
+            lines.append("Both error terms " + comp_error_line(result))
     if result.get("robust"):
         lines.append("Robustness check " + robustness_text(result["robust"], ascii_only=True)
                      .replace("Robustness check ", "", 1))   # 2.4.0 step 6b (#35)

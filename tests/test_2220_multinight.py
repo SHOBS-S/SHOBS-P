@@ -115,12 +115,13 @@ class TestFitCsv(unittest.TestCase):
         self.assertIsNone(nights[1]["single_tc"])     # no Tc line in the old file
         mn.check_nights(nights, "TOI-2046 b", None, True)
         self.assertEqual(nights[0]["status"][0], "ok")
-        self.assertEqual(nights[1]["status"][0], "warn")
-        self.assertTrue(nights[1]["status"][1].startswith("⚠ No airmass in this file"))
+        # 2.4.0 fit-in F4 (m655): plain words, no ⚠ (the night is simply fitted against time)
+        self.assertEqual(nights[1]["status"][0], "ok")
+        self.assertEqual(nights[1]["status"][1], "✔ ready (" + mn.NO_AIRMASS_STATUS + ")")
         self.assertTrue(nights[1]["use"])
         # time-only detrending: every night matches, no caution
         mn.check_nights(nights, "TOI-2046 b", None, False)
-        self.assertEqual(nights[1]["status"][0], "ok")
+        self.assertEqual(nights[1]["status"], ("ok", "✔ ready"))
         # quick single-night Tc for the column
         tcv, sig = mn.quick_single_tc(nights[1], PLANET, False, True)
         self.assertLess(abs(tcv - (PLANET["t0"] + 102 * PLANET["period"])) * 1440, 5.0)
@@ -319,24 +320,25 @@ class TestWindow(unittest.TestCase):
         w.add_files(paths)
         self.root.update()
         statuses = [self.tree_value(w, iid, "status") for iid in w.tree.get_children()]
-        self.assertTrue(statuses[2].startswith("⚠ No airmass in this file"))
-        self.assertIn("No airmass in this file", w.night_note.get())
-        self.assertTrue(w.time_only_button.winfo_manager())
-        # 2.4.0 fit-in F3 (m677): plain, pointing at the note under the table (which has the ⚠)
-        self.assertNotIn("⚠", w.prog_text.get())
-        self.assertIn("fitted against time only: see the note under the table", w.prog_text.get())
+        # 2.4.0 fit-in F4 (m655, m677): plain words everywhere, one note under the table, no button
+        self.assertEqual(statuses[2], "✔ ready (" + mn.NO_AIRMASS_STATUS + ")")
+        self.assertTrue(w.night_note.get().startswith("No airmass in the file for 03-OCT-2026: its baseline is "
+                                                      "fitted against time instead"))
+        self.assertFalse(hasattr(w, "time_only_button"))
+        self.assertNotIn("⚠", w.prog_text.get() + w.night_note.get())
+        self.assertEqual(w.prog_text.get(), "3 nights ready.")
+        self.assertEqual(w.detrend_key(), "auto")
         # the old CSV's Single-night Tc is filled by a quick fit
         self.assertTrue(self.pump(lambda: bool(self.tree_value(w, w.tree.get_children()[2], "single").strip()
                                                and "fitting" not in self.tree_value(w, w.tree.get_children()[2],
                                                                                     "single"))))
         self.assertIn("±", self.tree_value(w, w.tree.get_children()[2], "single"))
-        # "Fit every night against time only" clears the caution
-        w.fit_time_only()
+        # a time-only choice for every night: all nights match, so the note goes
+        w.set_detrend("slope")
         self.root.update()
         self.assertFalse(w.detrend_airmass.get())
         self.assertTrue(w.detrend_time.get())
         self.assertEqual(w.night_note.get(), "")
-        self.assertFalse(w.time_only_button.winfo_manager())
         # fit: busy bar words, no filling bar, corner button enabled after
         self.assertFalse(hasattr(w, "bar"))
         self.assertIn("disabled", w.corner_button.state())

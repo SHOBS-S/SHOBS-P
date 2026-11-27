@@ -2124,6 +2124,20 @@
   {
    "section": "Photometry",
    "patterns": [
+    "Photon noise: the header gives EGAIN … e-/ADU (about … electrons per image unit), but the night's sky measures … (… x that; …). That is over 2x off, so the sky's gain is used for the error bars and EGAIN is not (…)."
+   ],
+   "todo": "Nothing. Check what your capture program writes as EGAIN."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Photon noise: the headers give no EGAIN …, and tonight's sky could not measure the gain (…), so the gain the sky measured with this camera before is used: … e-/ADU (…)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
     "Photon noise: … so the gain comes from the sky's own noise on one frame (… electrons per image unit, a lower limit: error bars on the safe side). It could not be measured from the night's sky: …"
    ],
    "todo": "For a measurement next time, put two or more darks at the lights' exposure (or bias frames) in the Dark (or Bias) folder."
@@ -2950,7 +2964,7 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "The NEB check needs the target's RA/Dec: the Input page has none for it yet (press Lookup, or type them)"
+    "The NEB check needs the target's RA and Dec. On the Input page press Look up (or type RA and Dec), then open the NEB check again."
    ],
    "todo": "Press Lookup on the Input page, or type the RA and Dec, then open the check again."
   },
@@ -3085,6 +3099,20 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Gain measured from the night's sky, … e- per image unit (…); the header EGAIN … e-/ADU is over 2x off it and was not used"
+   ],
+   "todo": "Nothing. Check the EGAIN your capture program writes (12/14-bit data stored as 16-bit, a pedestal, binning)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Gain as the sky measured it with this camera before, … e-/ADU, … e- per image unit (measured on …; no EGAIN in the headers, and this night's sky could not measure it)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "Gain from the sky's own noise, a lower limit of … e- per image unit (no EGAIN in the headers; error bars are on the safe side)"
    ],
    "todo": "Nothing, or add darks at the lights' exposure and run photometry again for a measured gain."
@@ -3095,6 +3123,142 @@
     "Gain 1 e-/ADU assumed (no EGAIN in the headers, no usable sky estimate) …"
    ],
    "todo": "Add EGAIN to the headers if you know the camera's gain."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit failed: only 14 usable points; a transit fit needs at least 20"
+   ],
+   "todo": "Put flagged frames back (Refit with flagged frames), trim less, or reduce more frames of the night."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit failed: the least-squares fit did not converge …"
+   ],
+   "todo": "Check the planet's values on the Input page (period, T0, depth, a/R\\*, b), trim a bad stretch, or pick a simpler Detrend, and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit failed: the starting fit is outside the priors or bounds"
+   ],
+   "todo": "Check Rp/R\\* or depth, a/R\\* and b on the Input page: look up again, or type the value."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are …, which SHOBS-P does not convert (it converts HJD_UTC and JD_UTC to BJD_TDB): Tc is given in …, as the report has it, and no O − C is stated. Save the report again with BJD_TDB times in the program that wrote it."
+   ],
+   "todo": "Save the report again with BJD_TDB times."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The scatter is about …x the per-point error bars (reduced χ² …); the fit widened its error bars to match."
+   ],
+   "todo": "Nothing: the fit's uncertainties already include it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… the catalog entry has no period: type the period in the Planet boxes on the Input page"
+   ],
+   "todo": "Type the period (days) in the Planet boxes on the Input page."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Could not save the PNG / the fit CSV / the corner plot: … Save to another folder, or close the program that has the file open.",
+    "The AAVSO exoplanet report could not be saved: …"
+   ],
+   "todo": "Do what it says, then save again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The AAVSO exoplanet report saved earlier (AAVSO_…_SHOBS-P.txt) is of the fit before this one: press Save AAVSO exoplanet report… to save this fit's."
+   ],
+   "todo": "Press Save AAVSO exoplanet report… if you want the report of the new fit too (it is saved under the next number, the earlier one is kept)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Comps checked: depth 1.84 ± 0.05 (stat) ± 0.04 (comps) %; Tc ± 0.52 (stat) ± 0.31 (comps) min (all comps 1.84 %; without each 1.80–1.88 %)",
+    "Comps checked: depth spread …, Tc spread …"
+   ],
+   "todo": "Nothing when (comps) is the smaller one. When it is larger, look at the comps (Comp health…)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Open Use comps, untick …"
+   ],
+   "todo": "Press it: Use comps… opens with that comp unticked; Apply there fits the transit without it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… is unticked here because the Transit fit moves most when it is left out. Press Apply to use the other comps (the transit is then fitted again), or tick it again to keep it."
+   ],
+   "todo": "Apply, or tick the comp again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "This fit used the priors saved in …_settings.txt (period, T0, a/R\\"
+   ],
+   "todo": "Nothing; press Fit with the current priors to go back."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… holds no fit inputs. Choose the …_settings.txt that SHOBS-P 2.4.0 or later saved beside a report …"
+   ],
+   "todo": "Choose the settings file (or the fit CSV) of a fit saved with 2.4.0 or later."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The priors in … are for a planet with period … d; the planet here has … d. Use them anyway?"
+   ],
+   "todo": "No (the default) unless you mean it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit: saved priors (…) no longer in use: the night, the report or the planet changed."
+   ],
+   "todo": "Press Fit with saved priors… again if you want them for the new one."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are JD_UTC: SHOBS-P is looking up its star's position to convert them to BJD_TDB…",
+    "The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB at the position of its star, looked up from the planet (NASA Exoplanet Archive)."
+   ],
+   "todo": "Nothing. Fit transit pressed meanwhile waits for the lookup."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "The report's times are JD_UTC, not BJD_TDB, and the star's position is not known: Tc is in JD_UTC, up to ±8 min from BJD_TDB, with no usable O − C. Enter the star on the Input page (Look up, or type RA/Dec) and open the report again to have them converted."
+   ],
+   "todo": "Enter the star on the Input page and open the report again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Transit fit: the Night box now shows …, the night just added."
+   ],
+   "todo": "Nothing; pick the other night in the Night box if you want it."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "… The table gives the larger prayer-bead error for Tc (± 0.62 min) and depth (± 0.050 %); these panels show the MCMC's spread"
+   ],
+   "todo": "Nothing: quote the table's error."
   },
   {
    "section": "Output, Transits mode",
@@ -3184,16 +3348,68 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "No airmass in the file for …: their baseline is fitted against time only, unlike the other nights; Tc may shift. “Fit every night against time only” makes all nights match."
+    "No airmass in the file for …: their baseline is fitted against time instead (Auto picks none, a time slope or a time curve for each, as the Transit fit page does).",
+    "… gets a time slope in place of the airmass term."
    ],
-   "todo": "Re-save those nights' fit CSVs with a current SHOBS-P, or press Fit every night against time only."
+   "todo": "Nothing. To give such a night airmass, save its fit CSV again with a current SHOBS-P (Save light-curve CSV…)."
   },
   {
    "section": "Output, Transits mode",
    "patterns": [
-    "… nights in use (… fitted against time only: see the note under the table)."
+    "ready (no airmass in the file: baseline fitted against time)"
    ],
-   "todo": "See the note under the table."
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Nights in 2 filters (CV, SR): each filter gets its own depth and limb darkening; a/R\\"
+   ],
+   "todo": "Nothing; untick the box for one depth for all (the note then ends … one depth and one limb darkening, as chosen.)."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "ready (filter SR: its own depth and limb darkening)",
+    "ready (filter SR, most nights CV: one depth for all, as chosen)"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit failed: …: the night alone could not be fitted (…). Leave that night out (Leave out / put back) and fit again; fit it alone on the Transit fit page to see what is wrong with it."
+   ],
+   "todo": "Leave it out and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Fit failed: the joint least-squares fit did not converge. Check the planet's values on the Input page …"
+   ],
+   "todo": "Check the planet's values, or leave out the weakest night, and fit again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Save timing CSV…",
+    "Save plot PNG…"
+   ],
+   "todo": "Press Fit nights."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "times are …, which SHOBS-P does not convert (it reads BJD_TDB, HJD_UTC and JD_UTC): save the report with one of those"
+   ],
+   "todo": "Save that report again with BJD_TDB times."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "the CSV has no fitted rows (every row is trimmed or has no error): save the fit CSV again from the Transit fit page"
+   ],
+   "todo": "Fit that night on the Transit fit page and save its light-curve CSV again."
   },
   {
    "section": "Output, Transits mode",
@@ -3212,9 +3428,30 @@
   {
    "section": "Output, Transits mode",
    "patterns": [
+    "Alternative ephemeris not used: … . Type T0 as a BJD_TDB (for example 2460123.45678) and the period in days, each with its ± (leave a ± empty when the source gives none)."
+   ],
+   "todo": "Type it in that form and press Apply again."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
     "No published ephemeris: epochs counted from the first night."
    ],
    "todo": "Nothing; type an alternative ephemeris to see O − C against it. The ⚠ form (… ; Look up.) means no lookup answered."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Check the time system of every night first (BJD_TDB, and the ephemeris in BJD_TDB too): against the input ephemeris (…) the nights are late by +6.2 ± 0.8 min (fit errors only), more than that ephemeris's own uncertainty (±1.1 min at these epochs). A real period change needs many more epochs to show."
+   ],
+   "todo": "Check each night's time system and the PC clock of those nights, then the ephemeris's. If all are right, keep observing: a period change needs many more epochs."
+  },
+  {
+   "section": "Output, Transits mode",
+   "patterns": [
+    "Against the alternative ephemeris (…) the nights are late by … min (fit errors only), and …. That ephemeris states no uncertainty, so this cannot tell an out-of-date ephemeris from a timing problem. Compare with one that gives its ±: read the line for the input ephemeris, or type Exoplanet Watch's or ExoClock's (with its ±) as the alternative."
+   ],
+   "todo": "Read the line for the other ephemeris, or type one with its ± as the alternative and press Apply."
   },
   {
    "section": "Discovery mode",
@@ -3233,6 +3470,14 @@
     "; 2.4.0, before"
    ],
    "todo": "Fix that box and press Scan field again."
+  },
+  {
+   "section": "Discovery mode",
+   "patterns": [
+    "Scan errors: flat-field floor 0.003 mag and scintillation 0.0021 mag (median of 97 frames) added to every point's photon and sky noise.",
+    "Scintillation not added: it needs the telescope aperture (Input page), the site and the field's position."
+   ],
+   "todo": "Nothing. For the scintillation part, fill in Telescope aperture, the site and the field's RA/Dec on the Input page. See 20. Scan a field."
   },
   {
    "section": "Discovery mode",

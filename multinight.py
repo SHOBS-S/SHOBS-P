@@ -71,7 +71,8 @@ def to_bjd_tdb(t, date_type: str, radec=None, lat=None, lon=None):
             out = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
             return out, "JD_UTC converted to BJD_TDB (approximate, good to a few seconds: no site in the file)"
         return out, "JD_UTC converted to BJD_TDB"
-    raise NightError(f"times are {dt}, which SHOBS-P does not convert")
+    raise NightError(f"times are {dt}, which SHOBS-P does not convert (it reads BJD_TDB, HJD_UTC and JD_UTC): save "
+                     "the report with one of those")   # 2.4.0 fit-in F4 (sheet sweep): what to do
 
 
 def _float(v):
@@ -110,17 +111,39 @@ def _finish_night(n: dict) -> dict:
 NOT_FIT_CSV = "not a SHOBS-P transit-fit CSV (it needs time, rel_flux and rel_flux_err columns)"
 JD_UTC_NO_RADEC = ("times are JD_UTC and the star's RA/Dec is not known, so they cannot be put on BJD_TDB: look the "
                    "planet up on the Input page (or in this window)")
-NO_AIRMASS_WARN = ("⚠ No airmass in this file: its baseline is fitted against time only, unlike the other nights. "
-                   "Tc may shift.")
-TIME_ONLY_BUTTON = "Fit every night against time only"
+# 2.4.0 fit-in F4 (m655, m677, m701; John 26 Nov): a night without airmass is simply fitted against time. Auto picks
+# its baseline among none, a time slope and a time curve by BIC, exactly as the Transit fit page does for such a
+# night, so there is nothing for the user to do: a plain status, ONE plain note, no ⚠ and no button.
+NO_AIRMASS_STATUS = "no airmass in the file: baseline fitted against time"
+PER_FILTER_LABEL = "Depth and limb darkening per filter"
+FIT_NIGHTS_FIRST = "Fit the nights first (Fit nights)."
 
 
-def no_airmass_note(labels) -> str:
-    """2.4.0 fit-in F3 (m701): the summary's one note for every night without airmass among nights with it."""
+def no_airmass_note(labels, mode: str | None = tc.DETREND_AUTO) -> str:
+    """The one plain note for every night without airmass among nights with it (the window's line under the table
+    and the summary). mode: "auto", a transit_core.DETREND_CHOICES key, or None (the two flags of before 2.4.0)."""
     one = len(labels) == 1
-    return (f"⚠ No airmass in the file for {', '.join(labels)}: {'its' if one else 'their'} baseline is fitted "
-            f"against time only, unlike the other nights; Tc may shift. “{TIME_ONLY_BUTTON}” makes all nights "
-            "match.")
+    its = "its" if one else "their"
+    if mode == tc.DETREND_AUTO:
+        how = (f"{its} baseline is fitted against time instead (Auto picks none, a time slope or a time curve "
+               f"for {'it' if one else 'each'}, as the Transit fit page does)")
+    elif mode is None:
+        how = f"{its} baseline has no airmass term"
+    else:
+        how = f"{its} baseline gets a time slope in place of the airmass term"
+    return f"No airmass in the file for {', '.join(labels)}: {how}."
+
+
+def mixed_filter_note(nights, per_filter: bool) -> str:
+    """2.4.0 fit-in F4 (m660): the one plain note for nights in more than one filter; '' with one filter."""
+    f = known_filters(nights)
+    if len(f) < 2:
+        return ""
+    if per_filter:
+        return (f"Nights in {len(f)} filters ({', '.join(f)}): each filter gets its own depth and limb darkening; "
+                f"a/R*, b and the timing are shared. Untick “{PER_FILTER_LABEL}” for one depth for all.")
+    return (f"Nights in {len(f)} filters ({', '.join(f)}) are fitted with one depth and one limb darkening, as "
+            f"chosen. Tick “{PER_FILTER_LABEL}” to give each filter its own.")
 
 
 def mixed_airmass(nights: list, detrend_airmass: bool = True) -> list:
@@ -200,7 +223,8 @@ def load_fit_csv(path: str, radec=None) -> dict:
         a.append(av if av is not None else np.nan)
         after.append(i_seg is not None and len(row) > i_seg and row[i_seg].strip().lower() == "after flip")
     if not t:
-        raise NightError("the CSV has no fitted rows")
+        raise NightError("the CSV has no fitted rows (every row is trimmed or has no error): save the fit CSV again "
+                         "from the Transit fit page")   # 2.4.0 fit-in F4 (sheet sweep): what to do
     t_old = np.asarray(t)
     tcol = head[0].strip().upper()
     t_new, note = to_bjd_tdb(t_old, tcol if tcol in ("BJD_TDB", "JD_UTC", "HJD_UTC") else "BJD_TDB", radec)
@@ -279,11 +303,12 @@ def night_label(n: dict) -> str:
     return n.get("source", "")
 
 
-def check_nights(nights: list, planet_name: str, eph: dict | None = None, detrend_airmass: bool = True) -> None:
+def check_nights(nights: list, planet_name: str, eph: dict | None = None, detrend_airmass: bool = True,
+                 per_filter: bool = False) -> None:
     """Sets each night's "use" and "status" (level, text): ✖ another planet, the same night twice, too few points or
-    no predicted transit in the data (left out); ⚠ a filter other than most nights' (depth and limb darkening may
-    differ). Nights the user left out by hand ("user_off") stay out. 2.2.20 (#45): ⚠ a night with no airmass among
-    nights with it (airmass detrending on): see mixed_airmass."""
+    no predicted transit in the data (left out). Nights the user left out by hand ("user_off") stay out.
+    2.4.0 fit-in F4 (m655, m660): a filter other than most nights' and a night with no airmass among nights with it
+    are plain words in the status (they were ⚠): the fit handles both by itself (per_filter; see mixed_airmass)."""
     want = norm_name(planet_name)
     kept = []
     for n in nights:
@@ -325,22 +350,31 @@ def check_nights(nights: list, planet_name: str, eph: dict | None = None, detren
     main_filter = max(sorted(set(filters)), key=filters.count) if filters else ""
     for n in kept:
         if main_filter and str(n.get("filter") or "").strip() and str(n.get("filter") or "").upper() != main_filter:
-            n["status"] = ("warn", f"⚠ filter {n.get('filter') or '?'} (most nights {main_filter}): depth and limb "
-                                   "darkening may differ; consider Depth per filter")
-    # 2.2.20 (#45): never "✔ ready" for a night whose baseline is fitted differently from the others'
+            words = (f"filter {n.get('filter') or '?'}: its own depth and limb darkening" if per_filter else
+                     f"filter {n.get('filter') or '?'}, most nights {main_filter}: one depth for all, as chosen")
+            n["status"] = ("ok", _ready_with(n["status"][1], words))
     for n in mixed_airmass(kept, detrend_airmass):
-        prev = n["status"][1] if n["status"][0] == "warn" else ""
-        n["status"] = ("warn", NO_AIRMASS_WARN + ("; " + prev.lstrip("⚠ ") if prev else ""))
+        n["status"] = ("ok", _ready_with(n["status"][1], NO_AIRMASS_STATUS))
+
+
+def _ready_with(status: str, words: str) -> str:
+    """'✔ ready (a; b)': one more plain remark in a ready night's status."""
+    if status.endswith(")") and " (" in status:
+        return status[:-1] + "; " + words + ")"
+    return status + " (" + words + ")"
 
 
 # ---- Joint model ------------------------------------------------------------------------------------------------
 class JointProblem:
     """Several nights, one shape. Parameters: a_rs, b, and per filter group k, q1, q2 (Kipping); per night tc
-    (days from that night's t_ref), c0, c_am, c_t and the flip step, as in transit_core.TransitProblem. Gaussian
-    priors on a_rs and b (from the planet, as the single-night fit) and on u1, u2 per group (sigma ld_sigma)."""
+    (days from that night's t_ref), c0, c_am, c_t, c_t2 and the flip step, as in transit_core.TransitProblem.
+    Gaussian priors on a_rs and b (from the planet, as the single-night fit) and on u1, u2 per group (sigma
+    ld_sigma). 2.4.0 fit-in F4 (#103 for Multi-night): night_detrend, one (airmass, time slope, time curve) per
+    night, gives each night its own baseline terms (the time curve c_t2 is quadratic in time and always comes with
+    its slope; nothing above quadratic); without it every night gets detrend_airmass / detrend_time as before."""
 
     def __init__(self, nights: list, period: float, priors: dict, ld_priors: dict, groups: list, start: dict,
-                 detrend_airmass: bool = True, detrend_time: bool = False):
+                 detrend_airmass: bool = True, detrend_time: bool = False, night_detrend=None):
         self.period = float(period)
         self.priors = dict(priors)
         self.ld_priors = dict(ld_priors)
@@ -353,7 +387,8 @@ class JointProblem:
             t_ref = float(math.floor(n["t"].min()))
             t = n["t"] - t_ref
             am = n.get("airmass")
-            has_am = am is not None and detrend_airmass
+            fa, ft, fq = (night_detrend[j] if night_detrend is not None else (detrend_airmass, detrend_time, False))
+            has_am = am is not None and bool(fa)
             amc = (am - float(np.mean(am))) if has_am else np.zeros_like(t)
             t_flip = n.get("t_flip")
             after = None
@@ -368,10 +403,13 @@ class JointProblem:
             names += [f"tc:{j}", f"c0:{j}"]
             if has_am:
                 names.append(f"c_am:{j}")
-            if detrend_time:
+            if ft:
                 names.append(f"c_t:{j}")
+            if ft and fq:
+                names.append(f"c_t2:{j}")
             if after is not None:
                 names.append(f"step:{j}")
+            d["detrend"] = (bool(has_am), bool(ft), bool(ft and fq))
             self.nights.append(d)
         self.free = names
         self.index = {nm: i for i, nm in enumerate(names)}
@@ -379,7 +417,8 @@ class JointProblem:
         self._ig = {g: (self.index[f"k:{g}"], self.index[f"q1:{g}"], self.index[f"q2:{g}"]) for g in self.groups}
         self._in = []
         for j, d in enumerate(self.nights):
-            self._in.append(tuple(self.index.get(f"{p}:{j}") for p in ("tc", "c0", "c_am", "c_t", "step")))
+            # c_t2 last, so the first five keep their places (tc, c0, c_am, c_t, step)
+            self._in.append(tuple(self.index.get(f"{p}:{j}") for p in ("tc", "c0", "c_am", "c_t", "step", "c_t2")))
 
     def full(self, x) -> dict:
         return {nm: float(v) for nm, v in zip(self.free, x)}
@@ -407,20 +446,20 @@ class JointProblem:
             k = x[ik]
             if not (0.005 < k < 0.6 and b < 1.0 + k and 0.0 < x[i1] < 1.0 and 0.0 < x[i2] < 1.0):
                 return False
-        for d, (itc, _c0, _cam, _ct, ist) in zip(self.nights, self._in):
+        for d, (itc, _c0, _cam, _ct, ist, _ct2) in zip(self.nights, self._in):
             if not (d["t"][0] - 0.2 < x[itc] < d["t"][-1] + 0.2):
                 return False
             if ist is not None and abs(x[ist]) >= 0.5:
                 return False
             # review (#18): the same limits as the least-squares bounds
             if not 0.5 < x[_c0] < 1.5 or (_cam is not None and abs(x[_cam]) >= 1.0) or \
-                    (_ct is not None and abs(x[_ct]) >= 1.0):
+                    (_ct is not None and abs(x[_ct]) >= 1.0) or (_ct2 is not None and abs(x[_ct2]) >= 20.0):
                 return False
         return True
 
     def night_model(self, x, j: int, t=None, shape=None, transit_only: bool = False, exact: bool = False):
         d = self.nights[j]
-        itc, ic0, icam, ict, ist = self._in[j]
+        itc, ic0, icam, ict, ist, _ict2 = self._in[j]
         shape = shape or self._shape(x)
         k, u1, u2, night_occ = shape[d["group"]]
         if t is None:
@@ -433,7 +472,7 @@ class JointProblem:
 
     def baseline(self, x, j: int, t=None):
         d = self.nights[j]
-        _itc, ic0, icam, ict, ist = self._in[j]
+        _itc, ic0, icam, ict, ist, ict2 = self._in[j]
         own = t is None
         tt = d["t"] if own else np.asarray(t, dtype=float)
         base = x[ic0] + np.zeros_like(tt)
@@ -442,6 +481,8 @@ class JointProblem:
             base = base + x[icam] * am
         if ict is not None:
             base = base + x[ict] * (tt - d["t_mid"])
+        if ict2 is not None:
+            base = base + x[ict2] * np.square(tt - d["t_mid"])
         if ist is not None:
             after = d["after"] if own else (tt >= d["t"][d["after"].argmax()]).astype(float)
             base = base * (1.0 + x[ist] * after)
@@ -491,14 +532,14 @@ class JointProblem:
 
     def scales(self) -> np.ndarray:
         s = {"a_rs": 0.3, "b": 0.03, "k": 0.01, "q1": 0.05, "q2": 0.05, "tc": 1e-3, "c0": 1e-3, "c_am": 1e-3,
-             "c_t": 1e-3, "step": 1e-3}
+             "c_t": 1e-3, "c_t2": 1e-2, "step": 1e-3}
         return np.array([s[nm.split(":")[0]] for nm in self.free])
 
     def bounds(self):
         lo = {"a_rs": 1.3, "b": 0.0, "k": 0.006, "q1": 1e-4, "q2": 1e-4, "c0": 0.5, "c_am": -1.0, "c_t": -1.0,
-              "step": -0.49}
+              "c_t2": -20.0, "step": -0.49}
         hi = {"a_rs": 199.0, "b": 1.5, "k": 0.59, "q1": 0.9999, "q2": 0.9999, "c0": 1.5, "c_am": 1.0, "c_t": 1.0,
-              "step": 0.49}
+              "c_t2": 20.0, "step": 0.49}
         los, his = [], []
         for nm in self.free:
             base, _sep, j = nm.partition(":")
@@ -535,9 +576,34 @@ def _ld_band_key(filt) -> str:
     return str(filt or "").strip().upper() or "CV"
 
 
+DETREND_DEFAULT = tc.DETREND_AUTO   # 2.4.0 fit-in F4: the Multi-night window starts on Auto (BIC), as the Transit page
+
+
+def night_detrend_flags(night: dict, key: str) -> tuple:
+    """2.4.0 fit-in F4 (m655): the (airmass, time slope, time curve) one night gets under a detrend chosen by hand
+    for all nights. A night whose file has no airmass cannot follow airmass, so its airmass term becomes a time
+    slope (the nearest thing a night without airmass can be given); the time terms are as chosen."""
+    da, dt, dq = tc.detrend_flags(key)
+    if da and not tc.airmass_usable(night.get("airmass")):
+        da, dt = False, True
+    return bool(da), bool(dt), bool(dt and dq)
+
+
+def known_filters(nights) -> list:
+    """The filters of the nights in use, upper case, without the nights whose filter is not known (older fit CSVs)."""
+    return sorted({str(n.get("filter") or "").strip().upper() for n in nights
+                   if n.get("use") and str(n.get("filter") or "").strip()})
+
+
+def per_filter_default(nights) -> bool:
+    """2.4.0 fit-in F4 (m660): nights in more than one filter get a depth and limb darkening per filter unless the
+    user unticks it (the depth and the limb darkening do differ with the filter)."""
+    return len(known_filters(nights)) > 1
+
+
 def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_time: bool = False,
               per_filter: bool = False, mcmc_steps: int = DEFAULT_STEPS, progress=None, cancel=None, log=None,
-              seed: int = 11) -> dict:
+              seed: int = 11, detrend: str | None = None) -> dict:
     """The joint fit of the nights marked "use". planet: the period (and the shape priors, as for one night: a/R*
     and b from the published values, limb darkening from Teff and the filter). Steps:
     1. each night alone (transit_core.lsq_fit) for start values;
@@ -545,17 +611,29 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
     3. each night's errors scaled by max(1, sqrt(chi2_nu) * beta) from its joint residuals (beta = red-noise
        time-averaging factor). The files already carry the single-night fit's scaled errors, so the usual
        max(1, chi2_nu) * beta would count beta twice; this way an already-scaled night stays at x1;
-    4. least squares again, then MCMC (transit_core.run_mcmc) for the values and uncertainties."""
+    4. least squares again, then MCMC (transit_core.run_mcmc) for the values and uncertainties.
+    2.4.0 fit-in F4 (#103 for Multi-night; RESULTS-CHANGING): detrend = "auto" gives each night the baseline its
+    own single-night Auto picks (transit_core.choose_detrend: none / airmass / time slope / time curve (quadratic) /
+    airmass + slope / airmass + curve by BIC, the flip step tested inside each choice; the quadratic is the most a
+    night can get), made in step 1 and held in the joint fit; a transit_core.DETREND_CHOICES key gives every night
+    that choice (night_detrend_flags: a night without airmass gets a time slope for the airmass term). detrend None
+    = the two flags detrend_airmass / detrend_time for every night, as before 2.4.0."""
     say = log or (lambda _m: None)
+    if detrend is not None and detrend != tc.DETREND_AUTO and detrend not in {c[0] for c in tc.DETREND_CHOICES}:
+        raise ValueError(f"unknown detrend choice {detrend!r}")
     use = [n for n in nights if n.get("use")]
     if len(use) < 2:
         raise ValueError("a joint fit needs at least two usable nights")
     if not planet or not planet.get("period"):
         raise ValueError("the planet's period is not known: look the planet up first")
     period = float(planet["period"])
-    groups = sorted({_ld_band_key(n.get("filter")) for n in use}) if per_filter else ["all"]
+    # 2.4.0 fit-in F4 (m660): a night whose filter is not known (an older fit CSV) joins the filter most nights
+    # have: it has no depth of its own to claim
+    main = _ld_band_key(_majority_filter([n for n in use if str(n.get("filter") or "").strip()] or use))
     for n in use:
-        n["group"] = _ld_band_key(n.get("filter")) if per_filter else "all"
+        n["group"] = (_ld_band_key(n.get("filter")) if str(n.get("filter") or "").strip() else main) \
+            if per_filter else "all"
+    groups = sorted({n["group"] for n in use}) if per_filter else ["all"]
     # 1. Each night alone, least squares (start values only).
     say(f"Multi-night fit: {len(use)} nights of {planet.get('name') or 'the planet'}; each night alone first…")
     singles = []
@@ -565,10 +643,23 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
         after = (n["t"] >= n["t_flip"]) if n.get("t_flip") is not None else None
         am = n["airmass"] if n.get("airmass") is not None else np.full(len(n["t"]), np.nan)
         try:
-            s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, detrend_airmass, detrend_time, after_flip=after)
+            if detrend == tc.DETREND_AUTO:
+                s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, after_flip=after, detrend_auto=True)
+            elif detrend is not None:
+                fa, ft, fq = night_detrend_flags(n, detrend)
+                s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, fa, ft, after_flip=after, detrend_curve=fq)
+            else:
+                s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, detrend_airmass, detrend_time,
+                               after_flip=after)
+        except RuntimeError:
+            raise
         except Exception as exc:
             raise ValueError(f"{n['source']}: the night alone could not be fitted ({exc})") from exc
         singles.append(s)
+        if detrend is not None:
+            ch = s.get("detrend_choice")
+            say(f"  {night_label(n)}: baseline {tc.detrend_text(s.get('detrend'))}"
+                + (" (" + tc.detrend_choice_text(ch) + ")" if ch else ""))
         if progress is not None:
             progress("prep", i + 1, len(use))
     # 2.3.0 (#8): each night's flip step is kept in the joint fit only when that night's own BIC test kept it (the
@@ -597,8 +688,12 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
         start[f"c0:{j}"] = s["p"]["c0"]
         start[f"c_am:{j}"] = s["p"].get("c_am", 0.0)
         start[f"c_t:{j}"] = s["p"].get("c_t", 0.0)
+        start[f"c_t2:{j}"] = s["p"].get("c_t2", 0.0)
         start[f"step:{j}"] = s["p"].get("step", 0.0)
-    prob = JointProblem(use, period, priors, ld_priors, groups, start, detrend_airmass, detrend_time)
+    # each night's own baseline terms (from its single-night fit) when a detrend choice was given
+    night_detrend = [tuple(bool(v) for v in s["detrend_flags"]) for s in singles] if detrend is not None else None
+    prob = JointProblem(use, period, priors, ld_priors, groups, start, detrend_airmass, detrend_time,
+                        night_detrend=night_detrend)
     # 2. Joint least squares on the files' errors.
     if progress is not None:
         progress("joint", 0, 1)
@@ -614,7 +709,7 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
     scales, rchis, betas, rules = [], [], [], []
     for j, d in enumerate(prob.nights):
         resid = d["flux"] - prob.night_model(x, j)
-        npar = 1 + sum(1 for i in prob._in[j][1:] if i is not None)
+        npar = 1 + sum(1 for i in prob._in[j][1:] if i is not None)   # counts the time curve too
         rchi = float(np.sum((resid / d["err"]) ** 2) / max(len(resid) - npar - 1, 1))
         cad = float(np.median(np.diff(d["t"]))) if len(d["t"]) > 1 else 1e-3
         beta = tc.red_noise_beta(d["t"], resid, cad)
@@ -672,6 +767,10 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             # 2.3.0 (#8): the night's flip step (joint MCMC) when kept, and its own with/without-step test
             "flip_step": summ.get(f"step:{j}") if prob._in[j][4] is not None else None,
             "flip_test": singles[j].get("flip_test"),
+            # 2.4.0 fit-in F4: the night's own baseline terms ('airmass', 'time', 'time2') and, with Auto, how its
+            # single-night BIC choice came out; has_airmass = the file carries airmass at all
+            "detrend": tc.detrend_names(d["detrend"]), "detrend_choice": singles[j].get("detrend_choice"),
+            "has_airmass": n.get("airmass") is not None,
             "series_night": n.get("series_night", "")})   # 2.2.21 (#44)
         _ = itc
     n_data = sum(len(d["t"]) for d in prob.nights)
@@ -680,8 +779,12 @@ def joint_fit(nights: list, planet: dict, detrend_airmass: bool = True, detrend_
             "free": list(prob.free), "chain": chain, "problem": prob, "period": period, "priors": priors,
             "ld_priors": ld_priors, "planet": dict(planet), "chi2": float(sum(chi2s)), "n_data": n_data,
             "rchi2": float(sum(chi2s)) / max(n_data - len(prob.free), 1),
-            "detrend": [nm for nm, on in (("airmass", detrend_airmass), ("time", detrend_time)) if on],
-            "per_filter": per_filter}
+            # "detrend": every term some night was given (before F4: the two boxes); "detrend_mode": "auto", a
+            # DETREND_CHOICES key, or None for the two flags
+            "detrend": ([nm for nm in ("airmass", "time", "time2") if any(nm in o["detrend"] for o in out_nights)]
+                        if detrend is not None else
+                        [nm for nm, on in (("airmass", detrend_airmass), ("time", detrend_time)) if on]),
+            "detrend_mode": detrend, "per_filter": per_filter}
 
 
 def page_airmass_default(page) -> bool:
@@ -698,13 +801,20 @@ def page_airmass_default(page) -> bool:
         return True
 
 
-def quick_single_tc(n: dict, planet: dict, detrend_airmass: bool = True, detrend_time: bool = False) -> tuple:
+def quick_single_tc(n: dict, planet: dict, detrend_airmass: bool = True, detrend_time: bool = False,
+                    detrend: str | None = None) -> tuple:
     """2.2.20 (#45): (Tc, sigma) of one night alone by least squares (transit_core.lsq_fit: Jacobian errors after the
     usual rescaling), for the Single-night Tc column of a file that does not carry its own Tc. About a quarter of a
     second per night."""
     after = (n["t"] >= n["t_flip"]) if n.get("t_flip") is not None else None
     am = n["airmass"] if n.get("airmass") is not None else np.full(len(n["t"]), np.nan)
-    s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, detrend_airmass, detrend_time, after_flip=after)
+    if detrend == tc.DETREND_AUTO:      # 2.4.0 fit-in F4: the window's detrend choice, as joint_fit's step 1
+        s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, after_flip=after, detrend_auto=True)
+    elif detrend is not None:
+        fa, ft, fq = night_detrend_flags(n, detrend)
+        s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, fa, ft, after_flip=after, detrend_curve=fq)
+    else:
+        s = tc.lsq_fit(n["t"], n["flux"], n["err"], am, planet, detrend_airmass, detrend_time, after_flip=after)
     e = float(s["err"].get("tc", float("nan")))
     if not math.isfinite(e) or e <= 0:
         raise ValueError("no finite Tc error")
@@ -727,6 +837,13 @@ def _med_err(v):
 
 
 # ---- Timing: O − C and linear ephemerides -----------------------------------------------------------------------
+# 2.4.0 fit-in F4 (m663): an ephemeris with no ± cannot be judged against: which one to compare with instead
+TIMING_COMPARE = ("Compare with one that gives its ±: read the line for the input ephemeris, or type Exoplanet "
+                  "Watch's or ExoClock's (with its ±) as the alternative.")
+ALT_EPH_FORM = ("Type T0 as a BJD_TDB (for example 2460123.45678) and the period in days, each with its ± "
+                "(leave a ± empty when the source gives none).")
+
+
 def parse_ephemeris(t0, t0_err, period, period_err, source: str = "") -> dict:
     """A typed ephemeris (strings or numbers). T0 must be a BJD_TDB (2,4xx,xxx.x); a reduced JD (BJD − 2,400,000, e.g.
     60217.71769) is accepted and said so (an MJD, 2,400,000.5 lower, is not: type the full BJD). Uncertainties may
@@ -913,13 +1030,14 @@ def timing_statements(a: dict) -> list:
         elif eph.get("t0_err") is None:
             out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), and {agree}. That ephemeris states no uncertainty, "
-                                "so this cannot tell an out-of-date ephemeris from a timing problem; compare with an "
-                                "ephemeris that gives its ± (the input one, or the joint fit's own)."))
+                                "so this cannot tell an out-of-date ephemeris from a timing problem. "
+                                + TIMING_COMPARE))   # 2.4.0 fit-in F4 (m663): the comparison to make, named
         else:
-            out.append(("warn", f"⚠ Against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
+            # 2.4.0 fit-in F4 (m664): leads with the action
+            out.append(("warn", "⚠ Check the time system of every night first (BJD_TDB, and the ephemeris in BJD_TDB "
+                                f"too): against {name} the nights are {'late' if m > 0 else 'early'} by {m:+.1f} ± "
                                 f"{sm:.1f} min (fit errors only), more than that ephemeris's own uncertainty "
-                                f"({eph_txt} at these epochs). Check that every night is in BJD_TDB and that the ephemeris is in "
-                                "BJD_TDB too; a real period change needs many more epochs to show."))
+                                f"({eph_txt} at these epochs). A real period change needs many more epochs to show."))
     own = a.get("own")
     if own:
         lin = own["eph"]
@@ -992,7 +1110,7 @@ def write_timing_csv(path: str, fit: dict, a: dict, meta: dict | None = None) ->
                      f"{s['depth'][0] * 100:.3f} +/- {s['depth'][1] * 100:.3f} %, T14 {s['t14'][0] * 24:.4f} +/- "
                      f"{s['t14'][1] * 24:.4f} h")
     lines.append(f"# a/R* {sh['a_rs'][0]:.3f} +/- {sh['a_rs'][1]:.3f}, b {sh['b'][0]:.3f} +/- {sh['b'][1]:.3f}, inc "
-                 f"{sh['inc'][0]:.2f} +/- {sh['inc'][1]:.2f} deg; detrending: {', '.join(fit['detrend']) or 'none'}")
+                 f"{sh['inc'][0]:.2f} +/- {sh['inc'][1]:.2f} deg; detrending: {detrend_words(fit)}")
     if a.get("input"):
         e = a["input"]["eph"]
         lines.append(f"# Input ephemeris (oc_input columns): {eph_line(e)}; {e.get('source', '')}")
@@ -1271,7 +1389,7 @@ def corner_result(fit: dict, title: str = "") -> dict:
     days = [str(n.get("label") or "")[:6] for n in fit["nights"]]
     for nm in fit["free"]:
         base, _sep, rest = nm.partition(":")
-        if base in ("tc", "c0", "c_am", "c_t", "step"):
+        if base in ("tc", "c0", "c_am", "c_t", "c_t2", "step"):
             j = int(rest)
             lab = by_index.get(j, {}).get("label") or f"night {j + 1}"
             labels[nm] = f"{tpost.LABELS.get(base, base)} {lab}"
@@ -1500,8 +1618,17 @@ class MultiNightWindow:
         self.busy = BusyBar(bottom, label_style="Hint.TLabel", frame_style="Card.TFrame")
         self.busy.pack(side=LEFT)
         ttk.Label(bottom, text="Results", style="Hint.TLabel").pack(side=LEFT, padx=(0, 6))
-        ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton", command=self.save_csv).pack(side=LEFT)
-        ttk.Button(bottom, text="Save plot PNG…", command=self.save_png).pack(side=LEFT, padx=6)
+        # 2.4.0 fit-in F4 (sheet sweep, house rule): greyed until the nights are fitted (it was a box: "Fit the
+        # nights first."), with the reason on hover
+        self.save_csv_button = ttk.Button(bottom, text="Save timing CSV…", style="Accent.TButton",
+                                          command=self.save_csv)
+        self.save_csv_button.pack(side=LEFT)
+        self.save_png_button = ttk.Button(bottom, text="Save plot PNG…", command=self.save_png)
+        self.save_png_button.pack(side=LEFT, padx=6)
+        for b_ in (self.save_csv_button, self.save_png_button):
+            tui._gate(app, b_, lambda: "" if self.fit else FIT_NIGHTS_FIRST, busy=False)
+            if getattr(app, "gates", None) is None:   # an app without gates: greyed by hand (see _saves_state)
+                b_.state(["disabled"])
         # 2.2.20 (item 5): the joint fit's corner plot (enabled once the nights are fitted)
         self.corner_button = ttk.Button(bottom, text="Corner plot…", command=self.open_corner)
         self.corner_button.pack(side=LEFT)
@@ -1547,11 +1674,11 @@ class MultiNightWindow:
         nbox = ttk.Frame(upper, style="Card.TFrame")
         nbox.pack(fill=X, pady=(0, 2))
         self.night_note = StringVar(value="")
+        # 2.4.0 fit-in F4 (m655, m660): plain notes (no ⚠, no button): the fit handles both cases by itself
         self.night_note_label = ttk.Label(nbox, textvariable=self.night_note, style="Card.TLabel",
-                                          foreground=LEVEL_COLORS["warn"], justify=LEFT, wraplength=700)
+                                          foreground=LEVEL_COLORS["info"], justify=LEFT, wraplength=700)
         self.night_note_label.pack(side=LEFT, anchor=W, fill=X, expand=True)
-        self.time_only_button = ttk.Button(nbox, text=TIME_ONLY_BUTTON, command=self.fit_time_only)
-        top.bind("<Configure>", lambda e: self.night_note_label.configure(wraplength=max(e.width - 300, 300)),
+        top.bind("<Configure>", lambda e: self.night_note_label.configure(wraplength=max(e.width - 40, 300)),
                  add="+")
 
         eph = ttk.Frame(upper, style="Card.TFrame")
@@ -1591,14 +1718,27 @@ class MultiNightWindow:
         self.detrend_airmass = BooleanVar(value=page_airmass_default(page))
         self.detrend_time = BooleanVar(value=bool(page.detrend_time.get()) if page is not None else False)
         ttk.Label(opts, text="Detrend", style="Card.TLabel").pack(side=LEFT)
-        # 2.2.20 (#45): the nights' cautions follow the airmass box
-        ttk.Checkbutton(opts, text="airmass", variable=self.detrend_airmass,
-                        command=self.refresh_nights).pack(side=LEFT, padx=(4, 0))
-        ttk.Checkbutton(opts, text="time slope", variable=self.detrend_time).pack(side=LEFT, padx=(6, 0))
+        # 2.4.0 fit-in F4 (#103 for Multi-night; John 26 Nov): the Transit fit page's choices, Auto (BIC) first:
+        # each night gets the baseline its own BIC test picks (the time curve, quadratic, is the most). The two
+        # boxes of before (airmass, time slope) are read-only mirrors of the choice now.
+        self.detrend = StringVar(value=tc.detrend_label(DETREND_DEFAULT))
+        self.detrend_box = ttk.Combobox(opts, textvariable=self.detrend, state="readonly", width=30, values=[
+            tc.DETREND_AUTO_LABEL] + [lab for _k, lab, _f in tc.DETREND_CHOICES])
+        self.detrend_box.pack(side=LEFT, padx=(4, 0))
+        try:
+            self.detrend_box.bind("<<ComboboxSelected>>", lambda _e: self._detrend_clicked())
+        except Exception:
+            pass
+        self._sync_detrend_mirrors()
+        # 2.4.0 fit-in F4 (m660): ticked by itself when the nights are in more than one filter, until the user
+        # sets it by hand (_per_filter_by_hand)
         self.per_filter = BooleanVar(value=False)
-        self.per_filter_check = ttk.Checkbutton(opts, text="Depth and limb darkening per filter",
-                                                variable=self.per_filter)
+        self._per_filter_by_hand = False
+        self.per_filter_check = ttk.Checkbutton(opts, text=PER_FILTER_LABEL, variable=self.per_filter,
+                                                command=self._per_filter_clicked)
         self.per_filter_check.pack(side=LEFT, padx=(12, 0))
+        tui._gate(app, self.per_filter_check, lambda: "" if len(known_filters(getattr(self, "_shown", []))) > 1 else
+                  "The nights in use are all in one filter.", busy=False)
         ttk.Label(opts, text="MCMC", style="Card.TLabel").pack(side=LEFT, padx=(14, 4))
         self.mcmc = StringVar(value="Quick (1,500 steps)")
         ttk.Combobox(opts, textvariable=self.mcmc, values=list(tui.MCMC_CHOICES), width=22,
@@ -1803,7 +1943,8 @@ class MultiNightWindow:
             self.eph_alt = parse_ephemeris(v["t0"].get(), v["t0_err"].get(), v["period"].get(), v["period_err"].get(),
                                            v["source"].get())
         except ValueError as exc:
-            self.alt_text.set(f"✖ Alternative ephemeris not used: {exc}.")
+            # 2.4.0 fit-in F4 (m673): the expected form beside the reason
+            self.alt_text.set(f"✖ Alternative ephemeris not used: {exc}. {ALT_EPH_FORM}")
             return
         e = self.eph_alt
         self._keep_alt_in_series()   # 2.2.21 (#44)
@@ -1934,6 +2075,10 @@ class MultiNightWindow:
             try:
                 if (self.page.report or {}).get("date_type") == "JD_UTC":
                     raise NightError("the page's " + JD_UTC_NO_RADEC)
+                own = str((self.page.report or {}).get("date_type") or "BJD_TDB")
+                if own not in ("BJD_TDB", "JD_UTC"):   # 2.4.0 fit-in F4 (m812): a system SHOBS-P does not convert
+                    raise NightError(f"the page's report has {own} times, which SHOBS-P does not convert (it reads "
+                                     "BJD_TDB, HJD_UTC and JD_UTC): save the report with one of those")
                 cur = night_from_result(r, getattr(self.page, "meta_for_files", {}), "Transit fit page")
                 if tui._state(r.get("verdict")) == "none":
                     raise NightError("the page's fit found no transit")
@@ -1944,10 +2089,43 @@ class MultiNightWindow:
             out.append(cur)
         return out + self.nights
 
+    def detrend_key(self) -> str:
+        """'auto' or a transit_core.DETREND_CHOICES key, from the Detrend box."""
+        text = self.detrend.get()
+        if text == tc.DETREND_AUTO_LABEL:
+            return tc.DETREND_AUTO
+        for key, label, _f in tc.DETREND_CHOICES:
+            if text == label:
+                return key
+        return tc.DETREND_OLD_LABELS.get(text, DETREND_DEFAULT)
+
+    def set_detrend(self, key: str):
+        self.detrend.set(tc.detrend_label(key))
+        self._detrend_clicked()
+
+    def _sync_detrend_mirrors(self):
+        key = self.detrend_key()
+        da, dt, _dq = (True, False, False) if key == tc.DETREND_AUTO else tc.detrend_flags(key)
+        self.detrend_airmass.set(bool(da))
+        self.detrend_time.set(bool(dt))
+
+    def _detrend_clicked(self):
+        self._sync_detrend_mirrors()
+        self.refresh_nights()
+
+    def _per_filter_clicked(self):
+        self._per_filter_by_hand = True
+        self.refresh_nights()
+
     def refresh_nights(self):
         nights = self._all_nights()
         da = bool(self.detrend_airmass.get())
         check_nights(nights, self.planet_name(), self.eph_in(), da)
+        # 2.4.0 fit-in F4 (m660): more than one filter: a depth per filter unless the user chose otherwise
+        many = per_filter_default(nights)
+        if not self._per_filter_by_hand or not many:
+            self.per_filter.set(many)
+        check_nights(nights, self.planet_name(), self.eph_in(), da, bool(self.per_filter.get()))
         self._shown = nights
         self.tree.delete(*self.tree.get_children())
         self._iids = {}
@@ -1963,48 +2141,26 @@ class MultiNightWindow:
                 "✔" if n.get("use") else "—", night_label(n) if len(n.get("t", [])) else "",
                 n.get("source", ""), len(n.get("t", [])) or "", n.get("filter", ""), stext, n["status"][1]))
             self._iids[iid] = n
-        # 2.2.20 (#45): the caution in full under the table, with the choice to fit every night the same way
+        # 2.4.0 fit-in F4 (m655, m660): one plain note under the table (it was a ⚠ per night and a button)
         mixed = mixed_airmass(nights, da)
-        if mixed:
-            names = ", ".join(night_label(n) for n in mixed)
-            self.night_note.set(f"{NO_AIRMASS_WARN} ({names}.) Re-save those nights' fit CSVs with SHOBS-P 2.2.20 or "
-                                f"later (they then carry airmass), or press “{TIME_ONLY_BUTTON}”.")
-            if not self.time_only_button.winfo_manager():
-                self.time_only_button.pack(side=RIGHT, padx=(8, 0))
-        else:
-            self.night_note.set("")
-            self.time_only_button.pack_forget()
+        note = [no_airmass_note([night_label(n) for n in mixed], self.detrend_key())] if mixed else []
+        note.append(mixed_filter_note(nights, bool(self.per_filter.get())))
+        self.night_note.set(" ".join(x for x in note if x))
         self._fill_single_tc(nights)
         try:
             self.tree.configure(height=min(max(len(nights), 3), 8))
         except Exception:
             pass
-        filters = {str(n.get("filter") or "").upper() for n in nights if n.get("use")}
-        try:
-            if len(filters) > 1:
-                self.per_filter_check.state(["!disabled"])
-            else:
-                self.per_filter_check.state(["disabled"])
+        try:   # greyed with one filter (the gate gives the reason on hover; this covers an app without gates)
+            self.per_filter_check.state(["!disabled"] if many else ["disabled"])
         except Exception:
             pass
+        tui._refresh_gates(self.app)
         n_use = sum(1 for n in nights if n.get("use"))
         if not self._running:
-            if mixed and n_use >= 2:
-                # 2.2.20 (#45): not "ready" while nights are fitted differently
-                # 2.4.0 fit-in F3 (m677): plain; the note under the table is the one place that says it in full
-                self.prog_text.set(f"{n_use} nights in use ({len(mixed)} fitted against time only: see the note "
-                                   "under the table).")
-            else:
-                self.prog_text.set(f"{n_use} night{'s' if n_use != 1 else ''} ready" + (": add at least two to fit."
-                                                                                         if n_use < 2 else "."))
-
-    def fit_time_only(self):
-        """2.2.20 (#45): every night's baseline against time only (airmass off, time slope on), so all nights match."""
-        self.detrend_airmass.set(False)
-        self.detrend_time.set(True)
-        self.app.log("Multi-night: airmass detrending off and time slope on for every night (some files have no "
-                     "airmass), so all nights are fitted the same way.")
-        self.refresh_nights()
+            # 2.4.0 fit-in F4 (m677): always "ready": a night without airmass needs nothing from the user
+            self.prog_text.set(f"{n_use} night{'s' if n_use != 1 else ''} ready" + (": add at least two to fit."
+                                                                                     if n_use < 2 else "."))
 
     def _fill_single_tc(self, nights):
         """2.2.20 (#45): the Single-night Tc column for a file that does not carry one (an older fit CSV): a quick
@@ -2012,10 +2168,10 @@ class MultiNightWindow:
         file. Needs the planet's period."""
         if getattr(self, "_closed", False) or not self.planet or not self.planet.get("period"):
             return
-        da, dt = bool(self.detrend_airmass.get()), bool(self.detrend_time.get())
+        key = self.detrend_key()
         for n in nights:   # 2.2.20 (review): a quick fit made with other baseline choices is redone
             if (n.get("single_from") == "a quick fit of this night alone" and not n.get("single_busy")
-                    and n.get("single_choice") != (da, dt)):
+                    and n.get("single_choice") != key):
                 n["single_tc"], n["single_from"], n["single_why"] = None, "", ""
         # 2.2.21 (#44): a series night with no fit CSV or report recorded gets the same quick fit
         todo = [n for n in nights if n.get("use") and not n.get("single_tc") and not n.get("single_busy")
@@ -2025,7 +2181,7 @@ class MultiNightWindow:
         planet = dict(self.planet, ld_band=_majority_filter(todo))
         for n in todo:
             n["single_busy"] = True
-            n["single_choice"] = (da, dt)
+            n["single_choice"] = key
         tok = self.busy.begin(f"Fitting {len(todo)} night{'s' if len(todo) != 1 else ''} alone for the "
                               "Single-night Tc column…")
         app = self.app
@@ -2034,7 +2190,7 @@ class MultiNightWindow:
             out = []
             for n in todo:
                 try:
-                    out.append((n, quick_single_tc(n, planet, da, dt), ""))
+                    out.append((n, quick_single_tc(n, planet, detrend=key), ""))
                 except Exception as exc:
                     out.append((n, None, str(exc).splitlines()[0] if str(exc) else type(exc).__name__))
             app.call_ui(self._single_done, tok, out)
@@ -2083,7 +2239,8 @@ class MultiNightWindow:
         if self._running:
             return
         nights = self._all_nights()
-        check_nights(nights, self.planet_name(), self.eph_in(), bool(self.detrend_airmass.get()))
+        check_nights(nights, self.planet_name(), self.eph_in(), bool(self.detrend_airmass.get()),
+                     bool(self.per_filter.get()))
         use = [n for n in nights if n.get("use")]
         if len(use) < 2:
             messagebox.showinfo("SHOBS-P", "A joint fit needs at least two usable nights of the same planet "
@@ -2115,7 +2272,7 @@ class MultiNightWindow:
         token = object()
         self._token = token
         steps = tui.MCMC_CHOICES.get(self.mcmc.get(), DEFAULT_STEPS)
-        da, dt, pf = bool(self.detrend_airmass.get()), bool(self.detrend_time.get()), bool(self.per_filter.get())
+        key, pf = self.detrend_key(), bool(self.per_filter.get())
         filt = _majority_filter(use)
         planet = dict(self.planet, ld_band=filt)
         cancel = self.app._cancel
@@ -2136,8 +2293,8 @@ class MultiNightWindow:
 
         def work():
             try:
-                fit = joint_fit(use, planet, da, dt, pf, steps, progress=progress, cancel=cancel,
-                                log=lambda m: app.call_ui(app.log, m))
+                fit = joint_fit(use, planet, per_filter=pf, mcmc_steps=steps, progress=progress, cancel=cancel,
+                                log=lambda m: app.call_ui(app.log, m), detrend=key)
                 app.call_ui(self._done, token, fit, None)
             except Exception as exc:
                 app.call_ui(self._done, token, None, (str(exc), traceback.format_exc()))
@@ -2170,11 +2327,13 @@ class MultiNightWindow:
                 self.prog_text.set("Canceled.")
                 self._placeholder("Canceled: Fit nights runs it again.")
             else:
-                self.prog_text.set("✖ Fit failed: " + error[0])
+                todo = tc.fit_failed_help(error[0])   # 2.4.0 fit-in F4 (sheet sweep): what to do, on the same line
+                self.prog_text.set("✖ Fit failed: " + error[0] + (". " + todo if todo else ""))
                 self.app.log(error[1])
                 self._placeholder("The joint fit failed: " + error[0])
             return
         self.fit = fit
+        self._saves_state()
         self.prog_text.set(f"✔ Done: {len(fit['nights'])} nights, MCMC acceptance {fit['chain']['acceptance']:.2f}.")
         try:
             self.corner_button.state(["!disabled"])     # 2.2.20 (item 5)
@@ -2318,9 +2477,19 @@ class MultiNightWindow:
         first, last = nights[0]["label"], nights[-1]["label"]
         return f"{tui._file_planet(self.planet_name())}_{first}_to_{last}_SHOBS-P_multinight"
 
+    def _saves_state(self):
+        """The two saves follow the fit (greyed until the nights are fitted)."""
+        tui._refresh_gates(self.app)
+        if getattr(self.app, "gates", None) is None:
+            for b_ in (self.save_csv_button, self.save_png_button):
+                try:
+                    b_.state(["!disabled"] if self.fit else ["disabled"])
+                except Exception:
+                    pass
+
     def save_csv(self):
         if not self.fit:
-            messagebox.showinfo("SHOBS-P", "Fit the nights first.", parent=self.win)
+            self.prog_text.set(FIT_NIGHTS_FIRST)   # backstop: the button is greyed until there is a fit
             return
         path = self.app.output_path(self._stem() + "_timings.csv", title="Save multi-night timing CSV",
                                     defaultextension=".csv", filetypes=[("CSV", "*.csv")], parent=self.win)
@@ -2332,14 +2501,15 @@ class MultiNightWindow:
                 meta["series"] = os.path.basename(getattr(self.app, "series_path", "") or "") or "open (not saved)"
             n = write_timing_csv(path, self.fit, self.analysis, meta)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the CSV: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the CSV: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self.app.log(f"Multi-night timing CSV: {path} ({n} epochs)")
         self.app.saved_notice(path, "Per-epoch mid-times (BJD_TDB) with the ephemerides in the header.")
 
     def save_png(self):
         if not self.fit or self.fig is None:
-            messagebox.showinfo("SHOBS-P", "Fit the nights first.", parent=self.win)
+            self.prog_text.set(FIT_NIGHTS_FIRST)   # backstop: the button is greyed until there is a fit
             return
         path = self.app.output_path(self._stem() + ".png", title="Save multi-night plot PNG",
                                     defaultextension=".png", filetypes=[("PNG", "*.png")], parent=self.win)
@@ -2349,7 +2519,8 @@ class MultiNightWindow:
             save_figure(self.fig, path, self.fit, self.analysis, self.planet_name(),
                         getattr(self.app, "app_version", ""))
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self._draw()
         self.app.log(f"Multi-night plot PNG: {path}")
@@ -2540,7 +2711,8 @@ class MultiCornerWindow:
         try:
             tpost.save_corner(self.result, path, shape_only=self._shape_only())
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}\n\n{tui.SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         self.app.log(f"Multi-night corner plot PNG: {path}")
         self.app.saved_notice(path)
@@ -2580,6 +2752,29 @@ def ephemeris_used_line(a: dict) -> str:
     return out
 
 
+def detrend_words(fit: dict, ascii_only: bool = False) -> str:
+    """2.4.0 fit-in F4: how the nights were detrended, for the summary and the timing CSV: 'Auto (BIC), each night
+    its own: 12-OCT-2026 airmass; 15-OCT-2026 time curve' / 'time slope for every night' / 'airmass, time' (flags)."""
+    mode = fit.get("detrend_mode")
+    if mode is None:
+        return ", ".join(fit.get("detrend") or []) or "none"
+    per = "; ".join(f"{n['label']} {tc.detrend_text(n.get('detrend'))}" for n in fit["nights"])
+    if mode == tc.DETREND_AUTO:
+        return f"{tc.DETREND_AUTO_LABEL}, each night its own ({per})"
+    same = len({tuple(n.get("detrend") or []) for n in fit["nights"]}) == 1
+    return f"{tc.detrend_label(mode)}" + (" for every night" if same else f" ({per})")
+
+
+def night_detrend_words(n: dict) -> str:
+    """'airmass, time curve (Auto: next airmass ΔBIC +6.3)' for one night of the joint fit."""
+    text = tc.detrend_text(n.get("detrend"))
+    ch = n.get("detrend_choice")
+    if ch:
+        others = sorted((r for r in ch["rows"] if r["key"] != ch["key"]), key=lambda r: r["dbic"])
+        text += " (Auto" + (f": next {others[0]['label']} ΔBIC {others[0]['dbic']:+.1f}" if others else "") + ")"
+    return text
+
+
 def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
     """(level, text) lines for the window's summary: the shape, the ephemerides (which O − C column uses which), the
     plain-words reading, and per-night notes. looked_up: what this window's lookup found ("found", "no_t0",
@@ -2594,7 +2789,7 @@ def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
                             f"{s['t14'][1] * 24:.3f} h"))
     out.append(("info", f"a/R* {sh['a_rs'][0]:.2f} ± {sh['a_rs'][1]:.2f}, b {sh['b'][0]:.3f} ± {sh['b'][1]:.3f}, "
                         f"inc {sh['inc'][0]:.2f} ± {sh['inc'][1]:.2f}°; χ²ν {fit['rchi2']:.2f} over {fit['n_data']} "
-                        f"points; detrending {', '.join(fit['detrend']) or 'none'}"))
+                        f"points; detrending {detrend_words(fit)}"))
     out.append(("head", "Ephemerides (O − C σ = Tc error and the ephemeris's propagated error in quadrature)"))
     out.append(("info", ephemeris_used_line(a)))   # 2.2.21 (#44)
     if a.get("input"):
@@ -2618,18 +2813,26 @@ def summary_lines(fit: dict, a: dict, looked_up: str | None = None) -> list:
     out += list(a.get("statements") or [])
     notes = []
     # 2.2.20 (#45): nights fitted differently (some baselines follow airmass, some cannot).
-    # 2.4.0 fit-in F3 (m701): one ⚠ note naming all of them, where each night had its own line.
-    mixed = "airmass" in fit["detrend"] and any(n.get("airmass") for n in fit["nights"]) and \
-        any(not n.get("airmass") for n in fit["nights"])
+    # 2.4.0 fit-in F3 (m701): one note naming all of them, where each night had its own line.
+    # 2.4.0 fit-in F4 (m655, m660): plain (the fit handles it by itself), and one plain line on mixed filters.
+    no_am = [n for n in fit["nights"] if not n.get("has_airmass", n.get("airmass"))]
+    mode = fit.get("detrend_mode")
+    wants_am = mode == tc.DETREND_AUTO or (tc.detrend_flags(mode)[0] if mode else "airmass" in fit["detrend"])
+    mixed = bool(wants_am and no_am and len(no_am) < len(fit["nights"]))
     if mixed:
-        notes.append(("warn", no_airmass_note([n["label"] for n in fit["nights"] if not n.get("airmass")])))
+        notes.append(("info", no_airmass_note([n["label"] for n in no_am], mode)))
+    fnote = mixed_filter_note([dict(n, use=True) for n in fit["nights"]], bool(fit.get("per_filter")))
+    if fnote:
+        notes.append(("info", fnote))
     for n in fit["nights"]:
         bits = []
+        if mode is not None:
+            bits.append("baseline " + night_detrend_words(n))
         bits.append(f"error bars ×{n['error_scale']:.2f} ({n.get('scale_rule', '')}; χ²ν {n['rchi2_raw']:.2f}, "
                     f"β {n['beta']:.2f})")
         if n.get("time_note"):
             bits.append(n["time_note"])
-        if not n.get("airmass") and "airmass" in fit["detrend"] and not mixed:
+        if not n.get("has_airmass", n.get("airmass")) and wants_am and not mixed:
             bits.append("no airmass in the file")
         ft = n.get("flip_test")
         if ft and n.get("flip_step"):

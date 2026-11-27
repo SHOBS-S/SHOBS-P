@@ -138,7 +138,8 @@ class TestOutputPages(unittest.TestCase):
         for word in ("airmass", "time slope", "time curve", "Auto (BIC)"):
             self.assertIn(word, " ".join(tp.detrend_box.cget("values")))
         self.assertEqual(g.group_of(tp.flip_at_gap_check), "corrections")
-        self.assertEqual([t for t in g.texts("fit") if not t.startswith("PY_VAR")], ["MCMC", "Fit transit", "Cancel"])
+        self.assertEqual([t for t in g.texts("fit") if not t.startswith("PY_VAR")],
+                         ["MCMC", "Fit transit", "Cancel", "Fit with saved priors…"])   # 2.4.0 fit-in F4 (#93)
         self.assertEqual(g.texts("comps")[:2], ["Comp health…", "Use comps…"])
         self.assertEqual(g.texts("analysis"), ["Nearby-binary (NEB) check…", "Multi-night…",
                                                "Fit the series' nights…",    # moved from the Results row

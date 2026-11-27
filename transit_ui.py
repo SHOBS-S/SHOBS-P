@@ -159,6 +159,48 @@ EPH_WAIT = "Fit transit: waiting for the ephemeris…"
 FIT_CALLED_OFF = "Fit transit called off (it was waiting for the ephemeris)."
 
 
+# 2.4.0 fit-in F4 (m811): a JD_UTC report whose star could not be placed (the lookup from its planet found nothing)
+JD_UTC_WHAT_TO_DO = ("Enter the star on the Input page (Look up, or type RA/Dec) and open the report again to have "
+                     "them converted.")
+JD_UTC_LOOKING = ("The report's times are JD_UTC: SHOBS-P is looking up its star's position to convert them to "
+                  "BJD_TDB…")
+JD_UTC_NOT_CONVERTED = ("⚠ The report's times are JD_UTC, not BJD_TDB, and the star's position is not known: Tc is in "
+                        "JD_UTC, up to ±8 min from BJD_TDB, with no usable O − C. " + JD_UTC_WHAT_TO_DO)
+
+
+# 2.4.0 fit-in F4 (m812): a report in a time system SHOBS-P does not convert (it converts HJD_UTC and JD_UTC)
+TIMES_NOT_CONVERTED = ("⚠ The report's times are {dt}, which SHOBS-P does not convert (it converts HJD_UTC and JD_UTC "
+                       "to BJD_TDB): Tc is given in {dt}, as the report has it, and no O − C is stated. Save the "
+                       "report again with BJD_TDB times in the program that wrote it.")
+
+
+# 2.4.0 fit-in F4 (sheet sweep): a save that failed says the way out, in the words of the app's other saves
+SAVE_ELSEWHERE = "Save to another folder, or close the program that has the file open."
+
+# 2.4.0 fit-in F4 (#93)
+SAVED_PRIORS_BUTTON = "Fit with saved priors…"
+SAVED_PRIORS_OFF_BUTTON = "Fit with the current priors"
+SAVED_PRIORS_TIP = ("Fits again with the exact priors of an earlier fit, read from its settings file "
+                    "(…_settings.txt), fit CSV or fit file: period, T0, a/R*, b, limb darkening. While they are in "
+                    "use the button reads “Fit with the current priors”.")
+SAVED_PRIORS_NONE = ("{name} holds no fit inputs.\n\nChoose the …_settings.txt that SHOBS-P 2.4.0 or later saved "
+                     "beside a report (it has lines that start with “Fit input”), or that fit's …_transit_fit.csv.")
+SAVED_PRIORS_OTHER = ("The priors in {name} are for a planet with period {theirs:.6f} d; the planet here has "
+                      "{mine:.6f} d.\n\nUse them anyway?")
+SAVED_PRIORS_NOTE = ("This fit used the priors saved in {name} (period, T0, a/R*, b, limb darkening), not today's "
+                     "looked-up values. “Fit with the current priors” fits with today's.")
+
+
+def core_ask_no(parent, text: str) -> bool:
+    """A Yes/No question whose default is No."""
+    return bool(messagebox.askyesno("SHOBS-P", text, parent=parent, default="no"))
+
+
+UNTICK_BUTTON = "Open Use comps, untick {name}"   # 2.4.0 fit-in F4 (m754)
+UNTICK_TIP = ("Opens Use comps… with this comp unticked: leaving it out moves the depth or Tc by more than the "
+              "statistical error. Nothing changes until you press Apply there.")
+
+
 def _gate(app, widget, why=None, tip=None, busy=True):
     """2.4.0 fit-in F2 (#79 item 6): App.gate (grey until it can work, the reason on hover); a stand-in app without
     gates (tests) leaves the widget as it is."""
@@ -328,6 +370,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         # then waits for it (m787).
         _gate(app, self.fit_button, self._job_why, busy=False)
         groups.add("fit", ttk.Button(g, text="Cancel", command=app.cancel_job))
+        # 2.4.0 fit-in F4 (#93): fit again with the priors stored in a fit's settings file. While they are in use
+        # the button reads "Fit with the current priors" and takes them off again.
+        self._saved_priors = None         # {"saved", "file", "key"} while fits of this source use saved priors
+        self.saved_priors_button = groups.add("fit", ttk.Button(g, text=SAVED_PRIORS_BUTTON,
+                                                                command=self.fit_with_saved_priors), pad=8)
+        _gate(app, self.saved_priors_button, self._saved_priors_why, tip=SAVED_PRIORS_TIP, busy=False)
         # 2.4.0 (#98): a Points or Corrections setting changed since the shown fit: the button says so and the fit's
         # numbers go grey until it is pressed. The fit itself still always waits for the button (2.3.2 item 2).
         self._fit_settings = None         # (detrend airmass, time slope, flip at the gap) of the shown fit
@@ -348,6 +396,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         # 2.4.0 fit-in F2: one mechanism for their state (it was set by hand in _update_comp_buttons)
         for button in (self.comp_health_button, self.use_comps_button):
             _gate(app, button, lambda: self._job_why() or self._comp_windows_ok(), busy=False)
+        # 2.4.0 fit-in F4 (m754): shown only when the comp check names ONE comp that drives the spread
+        self._comp_driver = ""
+        self.untick_button = groups.add("comps", ttk.Button(g, text=UNTICK_BUTTON.format(name="…"),
+                                                            command=self.open_use_comps_untick), shown=False)
+        _gate(app, self.untick_button, lambda: self._job_why() or self._comp_windows_ok(), tip=UNTICK_TIP,
+              busy=False)
         self.comp_hint = StringVar(value="")
         self.comp_hint_label = groups.add("comps", ttk.Label(g, textvariable=self.comp_hint, style="Hint.TLabel",
                                                              justify=LEFT), wrap=True)
@@ -705,9 +759,22 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         self.night_box.configure(values=list(self._night_keys))
         if self.night.get() in nights:
             self.night_label.set(self._key_labels.get(self.night.get(), self.night.get()))
+        # 2.4.0 fit-in F4 (nit, 5 Nov): a night added to the series since the last look (a new run, or a night put
+        # back) becomes the page's night: it is the one the user has just made. Not while a report is shown or a fit
+        # or comp check runs (they belong to the night on the page).
+        seen = getattr(self, "_nights_seen", None)
+        added = [n for n in nights if n not in seen] if seen else []
+        self._nights_seen = set(nights)
         if nights and (self.night.get() not in nights) and self.report is None:
             self.night.set(nights[-1])
             self.night_label.set(self._key_labels.get(nights[-1], nights[-1]))
+            self._use_night(auto=False)
+        elif (added and self.report is None and self.night.get() != added[-1]
+              and not getattr(self, "_fitting", False) and not getattr(self, "_checking", False)):
+            self.night.set(added[-1])
+            self.night_label.set(self._key_labels.get(added[-1], added[-1]))
+            self.app.log(f"Transit fit: the Night box now shows {self._key_labels.get(added[-1], added[-1])}, the "
+                         "night just added.")
             self._use_night(auto=False)
         self.planet_text.set(planet_summary(self.current_planet()))
         if self.report is not None:
@@ -990,6 +1057,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         self._show_source()
         self.result = None
         self._fit_signature = None
+        self._update_trim_text()   # 2.4.0 fit-in F4 (nit): not the last night's "Trimmed: …"
+        sp = getattr(self, "_saved_priors", None)
+        if sp and sp.get("key") != self._saved_key():   # 2.4.0 fit-in F4 (#93): saved priors belong to their source
+            self._drop_saved_priors("another night was chosen")
         self._fill_table()
         self.draw()
         self.source_night = self.night.get()
@@ -1145,6 +1216,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         self.planet_text.set(planet_summary(self.current_planet()))
         self.result = None
         self._fit_signature = None
+        self._drop_saved_priors("another report was opened")   # 2.4.0 fit-in F4 (#93)
+        # 2.4.0 fit-in F4 (nit, 8 Nov): the Trim line said the photometry night's "Trimmed: …" while the report was
+        # shown (_reset_trim above ran while that night's fit was still the page's result)
+        self._update_trim_text()
         self._show_source()
         self._fill_table()
         # 2.2.7: the old plot goes at once. 2.3.2 (item 2): the report waits for Fit transit, as photometry does.
@@ -1152,43 +1227,55 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         # 2.2.12: a report without an ephemeris (no QC-XC line) gets one from the NASA Exoplanet Archive, else from
         # EXOTIC's inits file beside the report, before the fit; never from the lowest point.
         need_eph = not (rep.get("planet") or {}).get("t0") and self.current_planet() is rep.get("planet")
-        what = ("looking up the ephemeris…" if need_eph else
+        need_pos = bool(rep.get("radec_pending"))   # 2.4.0 fit-in F4 (m811): JD_UTC times, star position not known
+        what = ("looking up the star's position…" if need_pos else "looking up the ephemeris…" if need_eph else
                 "set the detrend and press Fit transit" if not self.app.busy
                 else "press Fit transit when the current job ends")
         writer = report_software(h) or "the report"
         self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from {writer}: {what}")
         self._notes_text([("info", "Report loaded. Set the detrend and press Fit transit: SHOBS-P refits its light "
                                    f"curve and lists the report's own results ({writer}) beside SHOBS-P's.")])
-        if need_eph:
+        if need_pos:
+            rep["time_note"] = JD_UTC_LOOKING
+            self._show_source()
+        if need_eph or need_pos:
             self._eph_pending = rep
-            self._find_ephemeris(rep)
+            self._find_ephemeris(rep, want_eph=need_eph, want_pos=need_pos)
 
-    def _find_ephemeris(self, rep):
+    def _find_ephemeris(self, rep, want_eph: bool = True, want_pos: bool = False):
         """2.2.12: NASA Exoplanet Archive (most precise ephemeris) first, then an EXOTIC inits file beside the
         report. Runs in the background; then the page asks for Fit transit (2.3.2, item 2: never fitted by itself)."""
         planet = rep["planet"]
         app = self.app
         # 2.2.20 (item 3): the wait on the main window's busy bar
-        tok = app.busy_begin(f"Looking up the ephemeris of {planet.get('name') or planet.get('host') or 'the planet'} "
-                             "at the NASA Exoplanet Archive…")
+        who = planet.get('name') or planet.get('host') or 'the planet'
+        tok = app.busy_begin((f"Looking up the position of {who}'s star" if want_pos and not want_eph else
+                              f"Looking up the ephemeris of {who}" + (" and its star's position" if want_pos else ""))
+                             + " at the NASA Exoplanet Archive…")
 
         def work():
-            found, why = None, ""
+            found, why, radec = None, "", None
             try:
                 got = tc.lookup_planet(planet.get("name") or planet.get("host") or "")
-                if got.get("t0") and got.get("period"):
+                if want_eph and got.get("t0") and got.get("period"):
                     found = {k: got.get(k) for k in ("t0", "t0_err", "period", "period_err")}
                     found["eph_source"] = tc.ephemeris_source(got)
+                if want_pos and got.get("ra") is not None and got.get("dec") is not None:
+                    # 2.4.0 fit-in F4 (m811): the host's position, to put a JD_UTC report on BJD_TDB
+                    radec = (float(got["ra"]), float(got["dec"]), str(got.get("source") or "the lookup"))
             except Exception as exc:
                 why = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-            if found is None:
+            if found is None and want_eph:
                 try:
                     found = tc.ephemeris_from_inits(os.path.dirname(rep.get("path", "")), planet.get("name", ""),
                                                     planet.get("host", ""))
                 except Exception:
                     found = None
             app.call_ui(app.busy_end, tok)
-            app.call_ui(self._ephemeris_found, rep, found, why)
+            if want_pos:
+                app.call_ui(self._ephemeris_found, rep, found, why, radec, want_eph)
+            else:
+                app.call_ui(self._ephemeris_found, rep, found, why)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1207,9 +1294,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             pass
         return True
 
-    def _ephemeris_found(self, rep, found, why):
+    def _ephemeris_found(self, rep, found, why, radec=None, want_eph: bool = True):
         if getattr(self, "_eph_pending", None) is rep:
             self._eph_pending = None
+        pos_asked = bool(rep.get("radec_pending"))
         # 2.4.0 fit-in F2 (m787); review S2: a lookup for another report leaves a fit queued for this one alone
         queued = getattr(self, "_fit_queued", None)
         if queued and queued.get("report") is rep:
@@ -1219,12 +1307,25 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if self.report is not rep:
             return
         planet = rep["planet"]
+        if pos_asked:
+            # 2.4.0 fit-in F4 (m811): before the ephemeris goes in (the report's own Tc and T0 move with its points;
+            # a looked-up ephemeris is BJD_TDB already)
+            if radec is not None:
+                self._report_jd_to_bjd(rep, radec[:2], radec[2] if len(radec) > 2 else "the lookup")
+                self.app.log(f"Transit fit: {rep['time_note']}")
+                self._show_source()
+            else:
+                rep["radec_pending"] = False
+                rep["time_note"] = JD_UTC_NOT_CONVERTED
+                self._show_source()
+                self.app.log("Transit fit: the report's times are JD_UTC and its star's position could not be looked "
+                             "up" + (f" ({why})" if why else "") + "; they stay JD_UTC. " + JD_UTC_WHAT_TO_DO)
         if found:
             # The period too: the ephemeris's t0 and period belong together.
             planet.update({k: v for k, v in found.items() if v is not None})
             planet.setdefault("eph_source", found.get("eph_source", ""))
             self.app.log(f"Transit fit: the report has no ephemeris; using {found.get('eph_source')}.")
-        else:
+        elif want_eph:
             self.app.log("Transit fit: the report has no ephemeris and none was found"
                          + (f" ({why})" if why else "") + "; no O − C will be given.")
         self.planet_text.set(planet_summary(self.current_planet()))
@@ -1246,7 +1347,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self.draw(placeholder=f"{name}, {self._report_date()}, {len(rep['t'])} points from "
                                   f"{report_software(rep.get('header')) or 'the report'}: set the detrend and press "
                                   "Fit transit.")   # 2.3.2 (item 2)
-            self._notes_text([("info", "Ephemeris in. Set the detrend and press Fit transit.")])
+            lead = ("Ephemeris in." if want_eph and found else "No ephemeris found." if want_eph else "")
+            if pos_asked:
+                lead = (rep["time_note"] if radec is not None else JD_UTC_NOT_CONVERTED.lstrip("⚠ ")) + \
+                    (" " + lead if lead else "")
+            self._notes_text([("warn" if pos_asked and radec is None else "info",
+                               (lead or "Ephemeris in.") + " Set the detrend and press Fit transit.")])
         else:
             self.draw(placeholder="Press Fit transit when the current job ends.")
 
@@ -1541,6 +1647,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         wf = r.get("with_flagged")
         if wf:
             lines.append(f"Flagged frames put back: {wf['n']} {wf['label']} (error bars x{wf['factor']:g})")
+        if tc.comp_error_line(r):   # 2.4.0 fit-in F4 (#35): the statistical and the comps error terms
+            lines.append("Result with both error terms: " + tc.comp_error_line(r, ascii_only=True))
         if r.get("robust"):   # 2.4.0 step 6b (#35)
             lines.append(tc.robustness_text(r["robust"], ascii_only=True).replace("Robustness check (",
                                                                                   "Robustness check: (", 1))
@@ -1653,7 +1761,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if self.report is None:
             self._trim_source_check()   # review: a series change drops the trim
         self._update_airmass_box()   # 2.4.0 (#96): the box never says airmass when the data have none
-        planet = self.current_planet()
+        planet = self._with_saved_priors(self.current_planet())   # 2.4.0 fit-in F4 (#93)
         if not planet:
             if not auto:
                 messagebox.showinfo("SHOBS-P", "Enter the planet on the Input page first (name, then Lookup), or open "
@@ -1998,18 +2106,29 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             if not loo:
                 return
             r["comp_loo"] = loo
+            # 2.4.0 fit-in F4 (#35, m755): the comp spread as a second error term on the result
+            r["comp_err"] = loo.get("comp_err") or tc.comp_error(loo)
             r["flags"] = list(r.get("flags") or []) + list(loo["flags"])
             self._notes_text(tc.cautions(r["flags"], r.get("verdict")))
             self.app.log("Transit fit: " + loo["note"])
+            two = tc.comp_error_line(r)
+            if two:
+                self.app.log("Transit fit: " + two)
             for level, text in loo["flags"]:
                 if level == "warn":
                     self.app.log("Transit fit: " + text)
             flagged = [f["name"] for f in loo["fits"] if f.get("flagged")]
             if loo.get("unnamed"):
                 flagged.append("comp choice")
-            self.prog_text.set(done_text + ("   " if done_text else "") + f"Comps checked: depth spread "
-                               f"{loo['depth_spread'] * 100:.2f} %, Tc spread {loo['tc_spread_s']:.0f} s"
+            # m755, m793: the two error terms and the reference beside them (it was "depth spread …, Tc spread …")
+            ref = tc.comp_reference_text(loo)
+            self.prog_text.set(done_text + ("   " if done_text else "") + "Comps checked: "
+                               + (tc.two_term_text(r) or f"depth spread {loo['depth_spread'] * 100:.2f} %, Tc spread "
+                                                        f"{loo['tc_spread_s']:.0f} s")
+                               + (f" ({ref})" if ref else "")
                                + (f" (stand out: {', '.join(flagged)})" if flagged else ""))
+            self._show_comp_error_row()
+            self._show_comp_driver()
         except Exception as exc:
             self.app.log(f"Comp check not shown: {exc}")
         finally:
@@ -2291,7 +2410,9 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             self.draw(placeholder="Not fitted yet: press Fit transit." if error[0] == "Canceled" else "Fit failed.")
             if error[0] != "Canceled":
                 self.app.log(error[1])
-                messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}")
+                # 2.4.0 fit-in F4 (sheet sweep): the box says what to do, not only what failed
+                todo = tc.fit_failed_help(error[0])
+                messagebox.showerror("SHOBS-P", f"Transit fit failed: {error[0]}" + (f"\n\n{todo}" if todo else ""))
             return
         if self._signature() != getattr(self, "_pending_signature", None):
             if self._refit_pending:
@@ -2319,6 +2440,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             # 2.4.0 fit-in F3 (m779): the fit without the flagged frames is still at hand: no refit to compare
             result["flags"] = [(lvl, text + " " + without if text.startswith("This fit includes ") else text)
                                for lvl, text in result.get("flags") or []]
+        sv = (result.get("planet") or {}).get("saved_priors")
+        if sv:   # 2.4.0 fit-in F4 (#93)
+            result["saved_priors"] = dict(sv)
+            result.setdefault("flags", []).append(("info", SAVED_PRIORS_NOTE.format(name=sv.get("file") or "a file")))
         if self.report is not None and self.report.get("time_note"):
             # 2.2.17 review: the report's time system, converted or not, in the notes and fit file.
             tn = self.report["time_note"]
@@ -2699,7 +2824,34 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 + caveat + " Save it?")
         return True
 
+    @staticmethod
+    def _depth_cell(r, plain: str) -> str:
+        """2.4.0 fit-in F4 (m755): '1.84 ± 0.05 (stat) ± 0.04 (comps)' once the comp check has run; else the plain
+        '1.84 ± 0.05'."""
+        ce = (r or {}).get("comp_err")
+        if not plain or not ce or not math.isfinite(ce.get("depth", float("nan"))):
+            return plain
+        return f"{plain} (stat) ± {ce['depth'] * 100:.2f} (comps)"
+
+    def _show_comp_error_row(self) -> None:
+        """The Depth row after the comp check (the table is filled when the fit lands, before the check)."""
+        try:
+            r = self.result or {}
+            s = r.get("summary") or {}
+            if "depth" not in s:
+                return
+            plain = f"{s['depth'][0] * 100:.2f} ± {s['depth'][1] * 100:.2f}"
+            for iid in self.table.get_children():
+                vals = list(self.table.item(iid, "values"))
+                if vals and vals[0] == "Depth (%)":
+                    vals[1] = self._depth_cell(r, plain)
+                    self.table.item(iid, values=vals)
+                    break
+        except Exception:
+            pass
+
     def _fill_table(self):
+        self._show_comp_driver()       # 2.4.0 fit-in F4 (m754): the untick offer belongs to the fit on the page
         self._update_robust_button()   # 2.4.0 (Fable N13): grayed whenever the page has no fit
         self._show_outlier_buttons()   # 2.4.0 fit-in F3 (#117): the offer belongs to the fit on the page
         if self.result is None and getattr(self, "_airmass_offer", None) is not None:
@@ -2749,7 +2901,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             ("Rp/R*", val("k", "{:.4f}"), NC if free_off else num(ff.get("k"), "{:.4f}"),
              num(p.get("k"), "{:.4f}"), exo("Rp/R*", "{:.4f}")),
             # 2.2.13: the published depth is (Rp/R*)² when Rp/R* is known, the same value the checks compare with.
-            ("Depth (%)", val("depth", "{:.2f}", 100),
+            ("Depth (%)", self._depth_cell(r, val("depth", "{:.2f}", 100)),
              NC if free_off else num(ff.get("k", float("nan")) ** 2, "{:.2f}", 100),
              # 2.4.0 (#70): every published (Rp/R*)² (the range the size check uses)
              (tc.range_text(tc.published_range(p)).replace(" %", "") or num(tc.published_depth(p)[0], "{:.2f}", 100)),
@@ -3071,27 +3223,43 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if dt.startswith("JD"):
             radec = self._report_radec(rep)
             if radec is not None:
-                h = rep.get("header") or {}
-                lat, lon = _float_or_none(h.get("OBSLAT")), _float_or_none(h.get("OBSLON"))
-                converted = None
-                if lat is not None and lon is not None:     # round 2 nit: the site only when the header gives it
-                    try:
-                        converted = core.convert_times(t, "BJD_TDB", radec[0], radec[1], lat, lon)
-                    except Exception:
-                        converted = None
-                if converted is None:
-                    converted = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
-                rep["t"] = np.asarray(converted, dtype=float)
-                _shift_report_times(rep, t)   # round 2: the report's own Tc and ephemeris too
-                rep["time_note"] = "The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB."
+                self._report_jd_to_bjd(rep, radec)
             else:
+                # 2.4.0 fit-in F4 (m811): the star's position is looked up from the report's planet (open_report
+                # starts it; _ephemeris_found converts the times when it lands). Until then, and when the lookup
+                # finds nothing, the times stay JD_UTC and the note says so.
                 rep["date_type"] = "JD_UTC"
-                rep["time_note"] = ("⚠ The report's times are JD_UTC, not BJD_TDB, and the star's position is not known "
-                                    "(enter the star on the Input page and open the report again): Tc is in JD_UTC, up "
-                                    "to ±8 min from BJD_TDB, with no usable O − C.")
+                rep["radec_pending"] = True
+                rep["time_note"] = JD_UTC_NOT_CONVERTED   # open_report says "looking up…" while its lookup runs
             return
-        rep["time_note"] = (f"⚠ The report's times are {dt}, which SHOBS-P does not convert; it fits them as BJD_TDB, so "
-                            "Tc may be off.")
+        # 2.4.0 fit-in F4 (m812): Tc is labeled with the report's own time system and no O − C is stated (it was
+        # fitted "as BJD_TDB" and an O − C still went into the files); the note says which systems are converted.
+        rep["date_type"] = dt
+        rep["time_note"] = TIMES_NOT_CONVERTED.format(dt=dt)
+
+    @staticmethod
+    def _report_jd_to_bjd(rep, radec, looked_up: str = "") -> None:
+        """A JD_UTC report's times to BJD_TDB at the star's position (degrees); the report's own Tc and ephemeris move
+        with the points. looked_up (2.4.0 fit-in F4, m811): where the position came from, when SHOBS-P looked it up
+        from the report's planet."""
+        t = np.asarray(rep["t"], dtype=float)
+        h = rep.get("header") or {}
+        lat, lon = _float_or_none(h.get("OBSLAT")), _float_or_none(h.get("OBSLON"))
+        converted = None
+        if lat is not None and lon is not None:     # round 2 nit: the site only when the header gives it
+            try:
+                converted = core.convert_times(t, "BJD_TDB", radec[0], radec[1], lat, lon)
+            except Exception:
+                converted = None
+        if converted is None:
+            converted = t + np.asarray(tc.bjd_minus_jd_days(t, radec[0], radec[1]), dtype=float)
+        rep["t"] = np.asarray(converted, dtype=float)
+        _shift_report_times(rep, t)   # round 2: the report's own Tc and ephemeris too
+        rep["date_type"] = "BJD_TDB"
+        rep["radec_pending"] = False
+        rep["time_note"] = ("The report's times are JD_UTC; SHOBS-P converted them to BJD_TDB"
+                            + (f" at the position of its star, looked up from the planet ({looked_up})." if looked_up
+                               else "."))
 
     # ---- 2.2.17 (item 4): Comp health and Use comps from the Transit fit page ---------------
     def _comp_windows_ok(self) -> str:
@@ -3116,12 +3284,131 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             return
         self.app.show_comp_health()
 
+    # ---- 2.4.0 fit-in F4 (#93): Fit with saved priors -----------------------------------------------------
+    def _saved_key(self):
+        """What saved priors belong to: this report, or this night, and the planet's name."""
+        src = ("report", id(self.report)) if self.report is not None else ("night", self.night.get())
+        return src + (_norm((self.current_planet() or {}).get("name")),)
+
+    def _saved_priors_why(self) -> str:
+        if self._job_why():
+            return self._job_why()
+        if self.report is None and not self.night.get():
+            return "Choose a night or open a report first."
+        if not self.current_planet():
+            return "Enter the planet on the Input page first, or open a report."
+        return ""
+
+    def _with_saved_priors(self, planet):
+        """The planet for a fit: with the saved priors while they are in use for this source, else as it is. Saved
+        priors that belong to another night, report or planet are dropped, with a Log line."""
+        sp = getattr(self, "_saved_priors", None)
+        if not sp or not planet:
+            return planet
+        if sp.get("key") != self._saved_key():
+            self._drop_saved_priors("the night, the report or the planet changed")
+            return planet
+        return tc.apply_saved_inputs(planet, sp["saved"], sp.get("file", ""))
+
+    def _drop_saved_priors(self, why: str = "") -> None:
+        if getattr(self, "_saved_priors", None):
+            self.app.log(f"Transit fit: saved priors ({self._saved_priors.get('file')}) no longer in use"
+                         + (f": {why}." if why else "."))
+        self._saved_priors = None
+        try:
+            self.saved_priors_button.configure(text=SAVED_PRIORS_BUTTON)
+        except Exception:
+            pass
+
+    def _settings_beside_report(self) -> str:
+        """<report stem>_settings.txt beside the opened report, when it is there ('' otherwise)."""
+        path = (self.report or {}).get("path") or ""
+        if not path:
+            return ""
+        cand = os.path.splitext(path)[0] + "_settings.txt"
+        return cand if os.path.isfile(cand) else ""
+
+    def fit_with_saved_priors(self, path: str | None = None):
+        """Fit transit with the exact inputs (period, T0, a/R*, b, Rp/R*, T14, Teff, the shape and limb-darkening
+        priors) stored in a fit's settings file, fit CSV or fit file. Pressed again while they are in use, it fits
+        with the current priors instead."""
+        why = self._saved_priors_why()
+        if why:
+            self.app.status.set(why)
+            return
+        if getattr(self, "_saved_priors", None) and path is None:
+            self._drop_saved_priors("Fit with the current priors was pressed")
+            self.fit()
+            return
+        if path is None:
+            beside = self._settings_beside_report()
+            start = os.path.dirname(beside) if beside else (os.path.dirname((self.report or {}).get("path") or "")
+                                                            or self.app.output_dir.get().strip() or None)
+            path = filedialog.askopenfilename(
+                parent=self.app, title="Settings file of the fit whose priors to use", initialdir=start,
+                initialfile=os.path.basename(beside) if beside else None,
+                filetypes=[("Settings file, fit CSV or fit file", "*_settings.txt *_transit_fit.csv *_fit.txt"),
+                           ("All files", "*.*")])
+            if not path:
+                return
+        try:
+            with open(path, encoding="utf-8-sig", errors="replace") as fh:
+                saved = tc.parse_fit_inputs(fh.read())
+        except OSError as exc:
+            messagebox.showerror("SHOBS-P", f"Could not read {os.path.basename(path)}:\n{exc}", parent=self.app)
+            return
+        name = os.path.basename(path)
+        if not saved:
+            messagebox.showinfo("SHOBS-P", SAVED_PRIORS_NONE.format(name=name), parent=self.app)
+            return
+        mine = (self.current_planet() or {}).get("period")
+        theirs = saved["planet"]["period"]
+        if mine and abs(theirs - mine) > 0.01 * mine:
+            # another planet's file, most likely: ask before using it (default No)
+            if not core_ask_no(self.app, SAVED_PRIORS_OTHER.format(name=name, theirs=theirs, mine=mine)):
+                return
+        self._saved_priors = {"saved": saved, "file": name, "key": self._saved_key()}
+        try:
+            self.saved_priors_button.configure(text=SAVED_PRIORS_OFF_BUTTON)
+        except Exception:
+            pass
+        self.app.log(f"Transit fit: fitting with the priors saved in {name} ({saved['n']} fit-input lines read)"
+                     + ("" if saved.get("priors") is not None else
+                        "; that file has no 'shape priors used' line, so the priors are worked out from its values")
+                     + ". Fit with the current priors goes back.")
+        self.fit()
+
     def open_use_comps(self):
         why = self._comp_windows_ok()
         if why:
             self.app.status.set(why)
             return
         self.app.choose_comps()
+
+    def open_use_comps_untick(self):
+        """2.4.0 fit-in F4 (m754): Use comps… with the comp that drives the spread already unticked. Nothing changes
+        until the user presses Apply there (the transit is then fitted again, as after any Use comps change)."""
+        why = self._job_why() or self._comp_windows_ok()
+        name = getattr(self, "_comp_driver", "")
+        if why or not name:
+            self.app.status.set(why or "No single comp drives the spread of this fit.")
+            return
+        self.app.log(f"Transit fit: Use comps opened with {name} unticked (leaving it out moves the fit most); "
+                     "nothing changes until Apply.")
+        self.app.choose_comps(untick=[name])
+
+    def _show_comp_driver(self) -> None:
+        """The untick button follows the fit on the page: there only while its comp check names one comp."""
+        ce = (self.result or {}).get("comp_err") or {}
+        name = ce.get("driver") or ""
+        if self.report is not None:
+            name = ""
+        self._comp_driver = name
+        try:
+            self.untick_button.configure(text=UNTICK_BUTTON.format(name=name or "…"))
+            self.groups.show("comps", self.untick_button, bool(name))
+        except Exception:
+            pass
 
     def _comp_link_wanted(self, text: str) -> bool:
         """A comp-choice caution (the comp-noise warning, the leave-one-comp-out cautions) gets a Comp health link
@@ -3584,6 +3871,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         sw = report_software((self.report or {}).get("header"))
         return f"{sw} report" if sw else "Report"
 
+    def _own_time_system(self) -> str:
+        """2.4.0 fit-in F4 (m812): the time system of an opened report whose times were NOT put on BJD_TDB ('JD_UTC'
+        with no star position, or a system SHOBS-P does not convert, by its own name); '' for BJD_TDB times."""
+        dt = str((self.report or {}).get("date_type") or "BJD_TDB")
+        return "" if dt == "BJD_TDB" else core.ascii_safe(dt)
+
     def family_names(self) -> list:
         """The transit report and plot PNG names: AAVSO_<planet>_<date>_SHOBS-P.txt, <planet>_<filter>_<date>
         _SHOBS-P_transit.png. 2.2.17 (item 9): saved as one numbered set with the light-curve CSV (App._family_path)."""
@@ -3617,10 +3910,12 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if wf:
             note = (f"SHOBS-P: fit INCLUDES {wf['n']} frames flagged {wf['label']} (error bars x{wf['factor']:g})")
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + note
-        if (self.report or {}).get("date_type") == "JD_UTC" and self.result is not None:
-            # 2.2.17 review: never a silent mis-time: the times stayed JD_UTC.
+        own = self._own_time_system()
+        if own and self.result is not None:
+            # 2.2.17 review: never a silent mis-time: the times stayed JD_UTC (m812: or another system, named).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
-                             + "SHOBS-P: times are JD_UTC from the source report (not converted; star position unknown)")
+                             + (f"SHOBS-P: times are {own} from the source report (not converted"
+                                + ("; star position unknown)" if own == "JD_UTC" else ")")))
         trim = (self.result or {}).get("trim")
         if trim:
             # 2.2.17 (item 5): the trimmed span(s), ASCII, in the report's NOTES.
@@ -3629,7 +3924,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if left:   # 2.4.0 fit-in F3 (#117): points left out as single-point outliers, in the report's NOTES
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(left["report_note"])
         o = tc.oc_summary(self.result or {})
-        if o is not None and state != "none" and (self.report or {}).get("date_type") != "JD_UTC":
+        if o is not None and state != "none" and not own:
             # 2.2.19 (#29): Tc against the ephemeris prediction, in the report's NOTES (ASCII).
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "") + "SHOBS-P "
                              + tc.oc_text(o, ascii_only=True))
@@ -3639,6 +3934,14 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         dnote = tc.detrend_report_note(self.result or {})   # 2.4.0 (#103)
         if dnote:
             meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_(dnote)
+        enote = tc.err_scaled_note(self.result or {})
+        if enote:   # 2.4.0 fit-in F4 (nit): the report's ERR column is the scaled error; say so
+            meta["notes"] = (meta.get("notes", "") + " | " if meta.get("notes") else "") + ascii_("SHOBS-P: " + enote)
+        two = tc.two_term_text(self.result or {}, ascii_only=True)
+        if two:   # 2.4.0 fit-in F4 (#35, m755 m793): both error terms and the reference, in the report's NOTES
+            ref = tc.comp_reference_text((self.result or {}).get("comp_loo"), ascii_only=True)
+            meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
+                             + ascii_("SHOBS-P: " + two + (f" ({ref})" if ref else "")))
         rob = (self.result or {}).get("robust")
         if rob:   # 2.4.0 step 6b (#35): the robustness check, when it was run on this fit
             meta["notes"] = ((meta.get("notes", "") + " | " if meta.get("notes") else "")
@@ -3682,11 +3985,25 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         try:
             self._write_png(path)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}")
+            messagebox.showerror("SHOBS-P", f"Could not save the PNG: {exc}\n\n{SAVE_ELSEWHERE}")
             return
-        self.app.status.set(f"Wrote {path}")
+        self.app.status.set(f"Wrote {path}" + self._aavso_older_fit_note())
         self.app.log(f"Transit plot PNG: {path}")
         self._save_corner_beside(path)
+
+    def _aavso_older_fit_note(self) -> str:
+        """2.4.0 fit-in F4 (nit, 6 Nov): the plot PNG and the CSVs of a new fit are saved while the AAVSO exoplanet
+        report on disk (saved this session, same night) is still the earlier fit's: one plain sentence for the status
+        line and the Log says so and names the button. '' when no report was saved or it is of this fit."""
+        saved = self.__dict__.get("_aavso_saved")
+        if not saved or not self.result:
+            return ""
+        if saved["serial"] == fit_serial(self.result) or saved["nights"] != tuple(self._fit_nights() or ()):
+            return ""
+        note = (f" The AAVSO exoplanet report saved earlier ({os.path.basename(saved['path'])}) is of the fit before "
+                "this one: press Save AAVSO exoplanet report… to save this fit's.")
+        self.app.log(note.strip(), keep_status=True)
+        return note
 
     def _save_corner_beside(self, png_path: str) -> str:
         """2.2.19 (#31): the corner plot beside the transit PNG, as <stem>_corner.png. A failure here never costs the
@@ -3778,10 +4095,9 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         if not fit_path:
             return
         try:
-            n = write_fit_csv(fit_path, self.result, (self.report or {}).get("date_type") == "JD_UTC",
-                              meta=self.meta_for_files)
+            n = write_fit_csv(fit_path, self.result, self._own_time_system(), meta=self.meta_for_files)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}")
+            messagebox.showerror("SHOBS-P", f"Could not save the fit CSV: {exc}\n\n{SAVE_ELSEWHERE}")
             return
         app.log(f"Transit fit CSV: {fit_path} ({n} rows)")
         # 2.2.21 (#44): the fit CSV is recorded in the series for its night, so Fit the series' nights… finds it
@@ -3790,7 +4106,7 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             import multinight
             app._remember_report(multinight.FIT_CSV_KEY, self._fit_nights(), fit_path)
         app.status.set(app._series_note(f"Wrote {os.path.basename(path) + ' and ' if path else ''}"
-                                        f"{os.path.basename(fit_path)}"))
+                                        f"{os.path.basename(fit_path)}") + self._aavso_older_fit_note())
         self._series_hint_after_save()
 
     def _write_png(self, path: str):
@@ -3892,9 +4208,14 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
             with core.AsciiWriter(path, newline="\n") as fh:
                 fh.write(tc.aavso_exoplanet_report(self.result, meta))
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"The AAVSO exoplanet report could not be saved:\n{exc}", parent=self.app)
+            messagebox.showerror("SHOBS-P", f"The AAVSO exoplanet report could not be saved:\n{exc}\n\n"
+                                            f"{SAVE_ELSEWHERE}", parent=self.app)
             return
         self.app.log(f"AAVSO exoplanet report: {path}")
+        # 2.4.0 fit-in F4 (nit, 6 Nov): which fit this report holds, so a later save of another fit's files can say
+        # that the report is the earlier fit's (_aavso_older_fit_note)
+        self._aavso_saved = {"serial": fit_serial(self.result), "path": path,
+                             "nights": tuple(self._fit_nights() or ())}
         self._write_settings(path, meta)
         self.app._remember_report("exoplanet", self._fit_nights(), path)   # 2.2.18 (item 10)
         if self.report is None:
@@ -3998,13 +4319,11 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                 "SHOBS-P",
                 ("No TOI or TIC number is known for this target, so ExoFOP-TESS's home page opens: search for the star "
                  "there.\n\n" if home else "")
+                # 2.4.0 fit-in F4 (m842): two lines; the upload steps are in the manual (chapter 19, Reports)
                 + "ExoFOP-TESS is for TESS targets (TOIs and TIC stars) only, and uploading needs an ExoFOP account "
                   "(log in first).\n\n"
-                  "Time series: on the target's page, logged in, choose \"Add new\" in the Time Series section and "
-                  "upload the light curve (CSV) and fit notes from the ExoFOP package.\n"
-                  "Files (plot, report): Files \"Add new\" on the same page, with the same data tag.\n\n"
-                  "Data tag: YYYYMMDD_username_description_n (for example 20261015_jsmith_SHOBS-P-transit_1); the "
-                  "description may use only letters, numbers and hyphens.",
+                  "The upload steps and the data tag are in the user's manual, chapter 19 (Reports), under "
+                  "\"To upload it\".",
                 parent=app)
         if app.open_link(url, what):
             app._mark_sent("exofop", plan)
@@ -4143,6 +4462,9 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         with open(lc, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             w.writerow([core.created_line()])
+            enote = tc.err_scaled_note(r)
+            if enote:   # 2.4.0 fit-in F4 (nit): rel_flux_err is the scaled error; say so (one more "#" line)
+                fh.write(core.ascii_safe("# " + enote.replace("ERR is", "rel_flux_err is", 1)) + "\r\n")
             w.writerow(["BJD_TDB", "rel_flux", "rel_flux_err", "airmass", "detrended_flux", "model", "residual"])
             for row in zip(r["t"], r["flux"], r["err_scaled"], r["airmass"], r["detrended"], r["model"], r["residuals"]):
                 w.writerow([f"{row[0]:.7f}"] + [f"{v:.6f}" if math.isfinite(v) else "" for v in row[1:]])
@@ -4165,7 +4487,15 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         return files, png_print
 
 
-def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = None) -> int:
+def _time_label(jd_utc) -> str:
+    """The fit CSV's time column / Tc label: BJD_TDB; 'JD_UTC' for True (times left in JD_UTC); 2.4.0 fit-in F4
+    (m812): a report's own time system, by name, when SHOBS-P did not convert it."""
+    if not jd_utc:
+        return "BJD_TDB"
+    return "JD_UTC" if jd_utc is True else str(jd_utc)
+
+
+def write_fit_csv(path: str, r: dict, jd_utc=False, meta: dict | None = None) -> int:
     """2.2.18 (item 18): the transit fit as a CSV: time, relative flux, its error (as the fit weighted it), the model,
     the residual, and a flag column, one row per point in time order. Trimmed points (2.2.17 Trim) are rows too,
     flagged "trimmed", with no error, model or residual (they were left out of the fit); frames put back from a flag
@@ -4223,7 +4553,7 @@ def write_fit_csv(path: str, r: dict, jd_utc: bool = False, meta: dict | None = 
         w.writerow([core.created_line()])
         for line in fit_csv_comments(r, meta, jd_utc):     # 2.2.19 (#29, #18): unquoted, so each starts with "#"
             fh.write(line + "\r\n")
-        w.writerow(["JD_UTC" if jd_utc else "BJD_TDB", "rel_flux", "rel_flux_err", "model", "residual", "flag",
+        w.writerow([_time_label(jd_utc), "rel_flux", "rel_flux_err", "model", "residual", "flag",
                     "airmass", "segment", "rel_flux_err_raw"])
         for row in rows:
             w.writerow([num(row[0], "{:.7f}")] + [num(v, "{:.6f}") for v in row[1:5]] + [row[5], num(row[6], "{:.4f}"),
@@ -4266,7 +4596,7 @@ def fit_csv_flip_time(r: dict, meta: dict | None = None):
     return v if math.isfinite(v) else None
 
 
-def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) -> list:
+def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc=False) -> list:
     """2.2.19 (#29, #18): comment lines under the Created line of the fit CSV: the planet, filter and fitted Tc (so a
     multi-night analysis can read the night back), and Tc against the ephemeris prediction (O - C). ASCII only."""
     s = (r or {}).get("summary") or {}
@@ -4275,7 +4605,7 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     out = []
     if "tc" in s:
         out.append(core.ascii_safe(f"# Transit fit: planet {pl.get('name') or ''}; filter {filt or 'unknown'}; Tc "
-                                   f"{s['tc'][0]:.6f} +/- {s['tc'][1]:.6f} {'JD_UTC' if jd_utc else 'BJD_TDB'}; "
+                                   f"{s['tc'][0]:.6f} +/- {s['tc'][1]:.6f} {_time_label(jd_utc)}; "
                                    f"verdict {_state((r or {}).get('verdict'))}"))
     o = tc.oc_summary(r or {})
     if o is not None and not jd_utc:
@@ -4291,11 +4621,14 @@ def fit_csv_comments(r: dict, meta: dict | None = None, jd_utc: bool = False) ->
     sl = fit_csv_error_line(r)
     if sl:
         out.append(sl)
+    two = tc.comp_error_line(r or {}, ascii_only=True)
+    if two:   # 2.4.0 fit-in F4 (#35): the statistical and the comps error terms
+        out.append("# Result with both error terms: " + two)
     if (r or {}).get("planet") is not None and "summary" in (r or {}):
         out += ["# " + ln for ln in tc.fit_inputs_lines(r)]   # 2.4.0 (#93): the exact inputs, full precision
     t_flip = fit_csv_flip_time(r, meta)
     if t_flip is not None:
-        out.append(f"# Meridian flip at {'JD_UTC' if jd_utc else 'BJD_TDB'} {t_flip:.6f}")
+        out.append(f"# Meridian flip at {_time_label(jd_utc)} {t_flip:.6f}")
     return [core.ascii_safe(x) for x in out]
 
 
@@ -4685,7 +5018,17 @@ def gain_note(pn: dict | None) -> str:
         return f"Gain {pn['e_per_adu']:.3g} e-/ADU (header EGAIN)"
     if src == "sky" and pn.get("k") and pn.get("sky_method") == "measured":
         # 2.4.0 (#104): measured from the night's sky (the NOTES keep the words before the first bracket)
-        return f"Gain measured from the night's sky, {pn['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
+        ig = pn.get("egain_ignored")   # 2.4.0 fit-in F4 (m473): EGAIN over 2x off the sky's measurement, not used
+        return (f"Gain measured from the night's sky, {pn['k']:.3g} e- per image unit ({sky_meas_words(pn)})"
+                + (f"; the header EGAIN {float(ig):.3g} e-/ADU is over 2x off it and was not used" if ig else ""))
+    if src == "sky" and pn.get("k") and pn.get("sky_method") == "remembered":
+        # 2.4.0 fit-in F4 (#79 item 8g): no EGAIN and no measurement this night: this camera's remembered sky gain
+        rm = pn.get("remembered") or {}
+        when = (f"the median of {rm['nights']} nights, the last {rm.get('last')}" if int(rm.get("nights") or 0) > 1
+                and rm.get("last") else f"measured on {rm.get('last')}" if rm.get("last") else "an earlier night")
+        g = f"{float(rm['e_per_adu']):.3g} e-/ADU, " if rm.get("e_per_adu") else ""
+        return (f"Gain as the sky measured it with this camera before, {g}{pn['k']:.3g} e- per image unit ({when}; "
+                "no EGAIN in the headers, and this night's sky could not measure it)")
     if src == "sky" and pn.get("k"):
         # 2.4.0 (#104): "a lower limit" before the bracket, so a report's NOTES say which one was used
         return (f"Gain from the sky's own noise, a lower limit of {pn['k']:.3g} e- per image unit (no EGAIN in the "
@@ -4810,7 +5153,8 @@ class CornerWindow:
         try:
             tpost.save_corner(self.result, path, shape_only=shape_only)
         except Exception as exc:
-            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}", parent=self.win)
+            messagebox.showerror("SHOBS-P", f"Could not save the corner plot: {exc}\n\n{SAVE_ELSEWHERE}",
+                                 parent=self.win)
             return
         page._corner_written(path, shape_only)
         self.app.log(f"Corner plot PNG: {path}" + (" (replaces this fit's corner plot saved with the plot PNG, now "
@@ -4855,7 +5199,10 @@ class NebWindow:
             else:
                 self.ra, self.dec = app.target_radec_deg(planet)
         except Exception as exc:
-            messagebox.showinfo("SHOBS-P", f"The NEB check needs the target's RA/Dec: {exc}")
+            # 2.4.0 fit-in F4 (m856): an error box that leads with what to do (was an info box with the raw reason)
+            messagebox.showerror("SHOBS-P", "The NEB check needs the target's RA and Dec. On the Input page press "
+                                            "Look up (or type RA and Dec), then open the NEB check again.\n\n"
+                                            f"({exc})")
             return
         if not app.chart_placed:
             messagebox.showinfo("SHOBS-P", "Solve the image first (Photometry page). The check lists the "

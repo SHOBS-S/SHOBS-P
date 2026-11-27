@@ -148,8 +148,11 @@ The notes beside the table add detail. The ones you will see most with a weak re
   most often because the camera gain (EGAIN) is missing or wrong in the headers, or the frames were calibrated in
   other software. The fit keeps the larger error bars, so its uncertainties are on the safe side. The photometry
   log's *Photon noise* line says which gain was used.
-- **"The scatter is about …x the per-point error bars (reduced χ² …)…"** There is noise the error model leaves out:
-  thin cloud, dew, seeing or tracking changes, a noisy comp. The fit scales its error bars up to match.
+- **"The scatter is about …x the per-point error bars (reduced χ² …); the fit widened its error bars to match."**
+  There is noise the error model leaves out: thin cloud, dew, seeing or tracking changes (red noise), calibration, a
+  noisy comp, or a camera gain (EGAIN) too large for the stored values (12/14-bit data scaled to 16 bits; the
+  photometry log's *Photon noise* line says which gain was used). Nothing to do: the fit's uncertainties include it.
+  (2.4.0 shortened the line; the causes are listed here.)
 
 ## Cloud-flagged frames: "No usable baseline after egress: the 31 frames there were flagged cloud"
 

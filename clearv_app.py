@@ -4981,7 +4981,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         meta = tp._file_meta()
         planet = str((r.get("planet") or {}).get("name") or self.planet_name.get() or "")
         report = getattr(tp, "report", None)
-        system = "JD_UTC" if (report or {}).get("date_type") == "JD_UTC" else "BJD_TDB"
+        own = str((report or {}).get("date_type") or "BJD_TDB")
+        if own not in ("BJD_TDB", "JD_UTC"):
+            # 2.4.0 fit-in F4 (m812): never an upload file that calls unconverted times BJD_TDB
+            messagebox.showerror("SHOBS-P", f"The report's times are {own}, which SHOBS-P does not convert, so no "
+                                            "ExoClock file is written (it would mislabel the times). Save the report "
+                                            "again with BJD_TDB times in the program that wrote it.", parent=self)
+            return ""
+        system = "JD_UTC" if own == "JD_UTC" else "BJD_TDB"
         try:
             ra = dec = lat = lon = None
             if system != "JD_UTC":
@@ -19638,6 +19645,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._scan_known_refresh()   # 2.2.19 (#14)
 
     # ---- Discovery mode ---------------------------------------------------------------
+    def _scan_floor_setup(self) -> dict:
+        """2.4.0 fit-in F4 (#115): what the field scan's error floor needs (core.scan_frame_floor), read on the
+        window thread: the telescope aperture and the site for the scintillation term, the field's position for
+        frames whose header has no pointing. A box that is empty or not a number is left out (that term is then 0)."""
+        def num(var):
+            try:
+                v = float(var.get())
+                return v if math.isfinite(v) else None
+            except Exception:
+                return None
+        d_mm, h = num(self.aperture_mm), num(self.elevation)
+        return {"aperture_m": d_mm / 1000.0 if d_mm and d_mm > 0 else None, "altitude_m": h or 0.0,
+                "lat": num(self.lat), "lon": num(self.lon), "ra_hours": num(self.ra_hours),
+                "dec_deg": num(self.dec_deg)}
+
     def _scan_electrons(self, lights, binning, pattern, mode, masters, precalibrated) -> float:
         """2.4.0 step 7a (#91): electrons per image unit for the field scan's per-point errors: the first light's
         EGAIN through core.photon_noise_setup (binning, superpixel, flat), else 1 e-/ADU. The median of a flat-dependent
@@ -20110,6 +20132,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     gaia_name[k] = next((n for n in core.star_names(star) if n.startswith("Gaia DR3 ")), "")
         catalog_used = f"catalog {core.band_label(self._band())} (best of AAVSO, APASS, Gaia, Tycho per star)"
         scan_electrons = self._scan_electrons(lights, binning, pattern, mode, masters, precal)   # 2.4.0 step 7a (#91)
+        scan_floor_setup = self._scan_floor_setup()   # 2.4.0 fit-in F4 (#115): scintillation + flat-field floor
         # Fable S6: where the night's suspects file goes is fixed when the scan starts (a Star ID, filter or Output
         # folder changed afterwards does not move it); "points" says whether the scan was on frames or stacks
         suspects_where = {"folder": self.output_dir.get().strip(),
@@ -20141,6 +20164,7 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 raw_peaks, clips = [], []   # 2.2.19 (#25)
                 meas = []   # 2.3.0 review: per frame (or stack), how many frames' raw cores each count stands on
                 merrs = []   # 2.4.0 step 7a (#91): each star's predicted magnitude error on each frame
+                scan_floors = []   # 2.4.0 fit-in F4 (#115): each frame's error floor (scintillation, flat field)
                 # 2.3.0 review fix (#54): a stack has no raw pixels; its stars' peaks, raw cores and clipped counts
                 # are its member frames' (kept from the per-frame scan for the same star list)
                 stack_meta = stack_run["meta"] if stack_run else None
@@ -20223,8 +20247,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         # fails half-way can never leave the lists out of step (2.2.1).
                         merr_row = (core.scan_mag_errors(flux, noise, scan_electrons) if noise is not None
                                     else np.full(len(pos), np.nan))
+                        floor_row = core.scan_frame_floor(header, frame_jd, exp, scan_floor_setup)   # F4 (#115)
                         rows.append(row)
                         merrs.append(merr_row)
+                        scan_floors.append(floor_row)
                         jds.append(frame_jd)
                         rec = stack_core.scan_record(path, frame_jd, exp, reg, side[1])   # 2.3.0 (#54)
                         if members is None:   # 2.3.0 review: what a stack of this frame needs for saturation
@@ -20302,7 +20328,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 # 2.4.0 step 7a (#91): with each star's own errors, for the excess chi2nu Suspect test
                 merr_all = np.vstack(merrs)
                 stats = core.field_variability(inst, exclude=sorted(saturated),
-                                               merr=merr_all if np.isfinite(merr_all).any() else None)
+                                               merr=merr_all if np.isfinite(merr_all).any() else None,
+                                               floor=scan_floors if len(scan_floors) == len(merr_all) else None)
+                if np.isfinite(merr_all).any() and len(scan_floors) == len(merr_all):   # 2.4.0 fit-in F4 (#115)
+                    floor_line = core.scan_floor_text(scan_floors)
+                    if floor_line:
+                        self.call_ui(self.log, floor_line)
                 ex2 = stats.get("excess_chi2")
                 if ex2 is None:
                     ex2 = np.full(len(labels), np.nan)
@@ -23003,12 +23034,17 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                                    f"({meas.get('why', '')})")
         try:
             setup = core.photon_noise_setup(header, binning, pattern, mode, flat, bias_removed, precalibrated, sky_k,
-                                            sky_level, sky_meas=meas)
+                                            sky_level, sky_meas=meas,
+                                            remembered=_sky_gain_recall(header))   # 2.4.0 fit-in F4 (8g)
         except Exception as exc:
             setup = {"electrons": None, "source": "old", "note": f"Photon noise: gain not worked out ({exc}); "
                                                                   "the pre-2.2.17 error model is used."}
+        _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, all_lights or lights)   # F4 (8g)
         self._noise_model = {"source": setup.get("source", ""), "e_per_adu": setup.get("e_per_adu"),
                              "k": setup.get("k_median")}
+        for key_ in ("egain_ignored", "remembered"):   # 2.4.0 fit-in F4 (m473, 8g): for the settings file's Gain line
+            if setup.get(key_):
+                self._noise_model[key_] = setup[key_]
         if setup.get("sky_method"):   # 2.4.0 (#104): measured from the night's sky, or the one-frame lower limit
             self._noise_model["sky_method"] = setup["sky_method"]
             if setup.get("sky_meas"):
@@ -28246,12 +28282,14 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return
         WatchWindow(self)
 
-    def choose_comps(self):
+    def choose_comps(self, untick=None):
+        """untick (2.4.0 fit-in F4, m754): comps the window opens with unticked (the Transit page's "Open Use comps,
+        untick X"); nothing is applied until the user presses Apply."""
         why = self._use_comps_why()
         if why:
             self.status.set(why)   # 2.4.0 fit-in F2 (m547): Use comps… is greyed with these words
             return
-        UseCompsWindow(self)
+        return UseCompsWindow(self, untick=untick)
 
     def _recompute_with_comps(self, points, selection, comp_names, catalog, aliases=None, **kw) -> dict:
         """2.4.0 fit-in F4 (#79 item 4, m218): core.recompute_with_comps with the page's linear limit (one comp set
@@ -30365,11 +30403,70 @@ class CompHealthWindow:
         self.app.add_watch_by_name(row["label"])
 
 
+USE_COMPS_FLIP_HINT = ("Flip step: how far the star steps against the other stars at the meridian flip (the largest "
+                       "over the nights with a flip; mmag, + = fainter after the flip). Two comps that step opposite "
+                       "ways cancel while both are in use; leave one out and the Transit fit may need a flip step.")
+
+
+def use_comps_flip_text(step) -> str:
+    """2.4.0 fit-in F4: the Use comps window's Flip step cell: '+65 mmag', or '—' with no flip (or too few frames on
+    one side)."""
+    try:
+        v = float(step)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v * 1000:+.0f} mmag" if math.isfinite(v) else "—"
+
+
+def use_comps_untick_text(names) -> str:
+    """2.4.0 fit-in F4 (m754): the line saying why a comp is unticked when the window is opened from the Transit
+    page."""
+    names = list(names)
+    return (f"{', '.join(names)} {'is' if len(names) == 1 else 'are'} unticked here because the Transit fit moves "
+            "most when it is left out. Press Apply to use the other comps (the transit is then fitted again), or "
+            "tick it again to keep it.")
+
+
+def _sky_gain_recall(header) -> dict | None:
+    """2.4.0 fit-in F4 (#79 item 8g): the gain the sky measured with this camera on earlier nights (sky_gain.recall);
+    None when there is none, and never an error."""
+    try:
+        return _sky_gain_mod().recall(header)
+    except Exception:
+        return None
+
+
+def _sky_gain_night(jd: float) -> str:
+    """The night's date (the local evening's, as the on-sky log names it) for the remembered gain."""
+    import onsky_log as ol
+    return ol.night_of(jd)
+
+
+def _sky_gain_remember(header, setup, meas, binning, pattern, mode, flat, lights) -> bool:
+    """2.4.0 fit-in F4 (#79 item 8g): after a night whose sky measured the gain, keep it for this camera (e-/ADU of
+    the stored values), so a later night that cannot measure it has a better fallback than the one-frame lower limit.
+    Never stops a run."""
+    try:
+        if not (meas and meas.get("ok")) or (setup or {}).get("sky_method") != "measured":
+            return False
+        sg = _sky_gain_mod()
+        g = sg.stored_e_per_adu(meas["k"], core.electrons_per_unit(1.0, binning, pattern, mode, flat))
+        night = ""
+        try:
+            night = _sky_gain_night(core.mid_jd(core.read_header(lights[0]))) if lights else ""
+        except Exception:
+            night = ""
+        return sg.remember(header, g, night=night, n_pairs=int(meas.get("n_pairs") or 0))
+    except Exception:
+        return False
+
+
 class UseCompsWindow:
     """Choose which measured stars (the run's comps and the spare comps) form the comparison ensemble."""
 
-    def __init__(self, app):
+    def __init__(self, app, untick=None):
         self.app = app
+        untick = [str(n) for n in (untick or [])]
         win = Toplevel(app)
         self.win = win
         win.title(f"{APP_TITLE} — comparison stars in use")
@@ -30409,8 +30506,11 @@ class UseCompsWindow:
         current = set(app.active_comps or app.comps_used)
         grid = ttk.Frame(inner, style="Card.TFrame")
         grid.pack(fill=X)
+        # 2.4.0 fit-in F4 (nit, 4 Nov): each star's step at the meridian flip, when a night has one
+        self.flip_steps = {row["label"]: row.get("flip_step", float("nan")) for row in health.get("summary", [])}
+        has_flip = any(isinstance(v, float) and math.isfinite(v) for v in self.flip_steps.values())
         for c, head in enumerate(("Use", "Star", "Role", "Catalog mag", "Nights measured", "Night offset",
-                                  "Scatter in night", "Comp health")):
+                                  "Scatter in night", "Comp health") + (("Flip step",) if has_flip else ())):
             ttk.Label(grid, text=head, style="Card.TLabel", font=(core.UI_FONT, 10, "bold")).grid(
                 row=0, column=c, sticky=W, padx=6, pady=(0, 4))
         self.vars = {}
@@ -30428,6 +30528,8 @@ class UseCompsWindow:
         widened_rows = 0
         for r, (name, role) in enumerate(names, 1):
             var = BooleanVar(value=name in current or bool(set(aliases.get(name, ())) & current))
+            if name in untick or set(aliases.get(name, ())) & set(untick):
+                var.set(False)   # m754: opened from the Transit page to try the fit without this comp
             self.vars[name] = var
             var.trace_add("write", lambda *_a: app.gates.refresh())   # 2.4.0 fit-in F2 (m625): Apply at once
             ttk.Checkbutton(grid, variable=var).grid(row=r, column=0, sticky=W, padx=6)
@@ -30460,6 +30562,9 @@ class UseCompsWindow:
                     continue
                 colour = "#b00020" if c == 7 and text.startswith("SUSPECT") else "#1c2b33"
                 ttk.Label(grid, text=text, style="Card.TLabel", foreground=colour).grid(row=r, column=c, sticky=W, padx=6, pady=2)
+            if has_flip:
+                ttk.Label(grid, text=use_comps_flip_text(self.flip_steps.get(name)), style="Card.TLabel").grid(
+                    row=r, column=8, sticky=W, padx=6, pady=2)
         # 2.2.18 (item 3): the check star's catalog magnitude (its plot and the next nights' check), typed here too.
         check = app.check_used or ""
         if check:
@@ -30480,6 +30585,15 @@ class UseCompsWindow:
                                              "nothing is measured again.",
                                  style="Hint.TLabel", wraplength=wrap, justify=LEFT))
         wrapped[-1].pack(anchor=W, pady=(8, 0))
+        if has_flip:
+            wrapped.append(ttk.Label(inner, text=USE_COMPS_FLIP_HINT, style="Hint.TLabel", wraplength=wrap,
+                                     justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
+        gone = [n for n in untick if n in self.vars and not self.vars[n].get()]
+        if gone:
+            wrapped.append(ttk.Label(inner, text=use_comps_untick_text(gone), style="Card.TLabel", wraplength=wrap,
+                                     justify=LEFT))
+            wrapped[-1].pack(anchor=W, pady=(8, 0))
         if len(names) == len(app.comps_used):
             ttk.Label(inner, text="No spare comps in this series yet. Nights reduced after a Solve "
                                   "carry spares.", style="Hint.TLabel").pack(anchor=W, pady=(8, 0))

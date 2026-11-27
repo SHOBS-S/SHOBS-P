@@ -492,8 +492,34 @@ def _corner_title(result: dict, side: float, font: float) -> str:
     name = (result.get("planet") or {}).get("name") or "Transit"
     ch = result["chain"]
     what = result.get("corner_title") or "MCMC posterior"     # 2.2.20 (item 5): "joint MCMC posterior, 4 nights"
-    return wrap_to(f"{name}: {what} ({ch['walkers']} walkers × {ch['steps']} steps; median and 16/84 % lines)",
-                   side * 72.0 * 0.96, font + 2)
+    pb = prayer_bead_words(result)   # 2.4.0 fit-in F4 (6a N7)
+    return wrap_to(f"{name}: {what} ({ch['walkers']} walkers × {ch['steps']} steps; median and 16/84 % lines)"
+                   + (f". {pb}" if pb else ""), side * 72.0 * 0.96, font + 2)
+
+
+def prayer_bead_words(result: dict) -> str:
+    """2.4.0 fit-in F4 (6a N7): the panels' titles are the MCMC's own spread, while the results table reports the
+    prayer-bead error where that one is larger (#62). When it was, the corner plot says so, with the table's value:
+    'The table gives the larger prayer-bead error for Tc (± 0.62 min) and depth (± 0.050 %); these panels show the
+    MCMC's spread'. '' when no error was raised."""
+    pb = (result or {}).get("prayer_bead") or {}
+    raised = list(pb.get("raised") or [])
+    if not raised:
+        return ""
+    err = pb.get("err") or {}
+    words = {"tc": "Tc", "k": "Rp/R*", "depth": "depth", "step": "flip step", "c_t2": "time curve"}
+    bits = []
+    for nm in raised:
+        e = pb.get("depth_err") if nm == "depth" else err.get(nm)
+        try:
+            e = float(e)
+        except (TypeError, ValueError):
+            e = float("nan")
+        val = (f" (± {e * 1440:.2f} min)" if nm == "tc" else f" (± {e * 100:.3f} %)" if nm == "depth"
+               else f" (± {e:.2g})") if math.isfinite(e) else ""
+        bits.append(words.get(nm, nm) + val)
+    return ("The table gives the larger prayer-bead error for " + " and ".join(bits)
+            + "; these panels show the MCMC's spread")
 
 
 def wrap_to(text: str, width_pt: float, font_pt: float) -> str:

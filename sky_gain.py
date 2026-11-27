@@ -46,6 +46,7 @@ factor, divided out of both the pair variance and the floor so the gain is not b
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 
@@ -670,3 +671,97 @@ def flux_words(cam_id: str, meas: dict | None, setup: dict | None, g_flux, g_src
                 + (" (the same)." if abs(float(used) / g_flux - 1) <= 0.02 else f" ({_pct(float(used), g_flux)}).")
                 + " The night's sky could not be measured for a second check.")
     return f"{head}; the night's sky could not be measured, so there is nothing to compare it with."
+
+
+# ---- 2.4.0 fit-in F4 (#79 item 8g): the sky-measured gain, remembered per camera ----------------------------------
+# A night whose sky measures the gain (measure_night ok) leaves the value behind, in e-/ADU of the stored values, under
+# the camera's id (shobs_profile.camera_id: camera, gain setting, offset, binning). A later night with the same camera
+# that has no EGAIN and whose own sky cannot give the gain (too few frames, clouds, a sky too faint against the read
+# noise) then uses the remembered value instead of the one-frame lower limit or the assumed 1 e-/ADU. One small JSON
+# file of SHOBS-P's own in the SHOBS data folder (~/.shobs/); SHOBS-FLUX's camera profiles are not touched.
+REMEMBER_FILE = "shobs_p_sky_gain.json"
+REMEMBER_FORMAT = "shobs-p-sky-gain"
+REMEMBER_KEEP = 12          # nights kept per camera (the newest); the median of them is the remembered gain
+
+
+def remember_path(make: bool = True) -> str:
+    import shobs_profile as sp
+    return os.path.join(sp.data_dir(make), REMEMBER_FILE)
+
+
+def remember_key(header: dict | None) -> str:
+    """The camera's id for the remembered gain, or '' when the header does not name the camera (INSTRUME)."""
+    import shobs_profile as sp
+    key = sp.setup_key(header or {})
+    return key["camera_id"] if key.get("instrume") else ""
+
+
+def _remember_load() -> dict:
+    import json
+    try:
+        with open(remember_path(make=False), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if isinstance(doc, dict) and doc.get("format") == REMEMBER_FORMAT and isinstance(doc.get("cameras"), dict):
+            return doc
+    except Exception:
+        pass
+    return {"format": REMEMBER_FORMAT, "format_version": 1, "cameras": {}}
+
+
+def remember(header: dict | None, e_per_adu: float, night: str = "", n_pairs: int = 0) -> bool:
+    """Keep one night's sky-measured gain (e-/ADU of the stored values) for this camera. One entry per night (a rerun
+    of the night replaces its entry); the newest REMEMBER_KEEP nights are kept. False when nothing was written (no
+    camera name, a value that is not a gain, or the file cannot be written): never an error."""
+    cam = remember_key(header)
+    try:
+        g = float(e_per_adu)
+    except (TypeError, ValueError):
+        return False
+    if not cam or not (math.isfinite(g) and 0.001 <= g <= 1000.0):
+        return False
+    try:
+        import shobs_profile as sp
+        doc = _remember_load()
+        rows = [r for r in doc["cameras"].get(cam, []) if isinstance(r, dict) and r.get("night") != str(night)]
+        rows.append({"night": str(night), "e_per_adu": float(f"{g:.5g}"), "n_pairs": int(n_pairs or 0),
+                     "saved": sp.now_iso()})
+        rows.sort(key=lambda r: (str(r.get("saved") or ""), str(r.get("night") or "")))
+        doc["cameras"][cam] = rows[-REMEMBER_KEEP:]
+        sp.write_json(remember_path(), doc)
+        return True
+    except Exception:
+        return False
+
+
+def recall(header: dict | None) -> dict | None:
+    """The remembered gain for this camera: {"e_per_adu" (the median of the nights kept), "nights", "last" (the
+    newest night's label), "camera"}; None when the camera is not named or nothing is remembered."""
+    cam = remember_key(header)
+    if not cam:
+        return None
+    rows = [r for r in _remember_load()["cameras"].get(cam, []) if isinstance(r, dict)]
+    vals = []
+    for r in rows:
+        try:
+            v = float(r.get("e_per_adu"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            vals.append(v)
+    if not vals:
+        return None
+    return {"e_per_adu": float(np.median(vals)), "nights": len(vals), "last": str(rows[-1].get("night") or ""),
+            "camera": cam}
+
+
+def stored_e_per_adu(k: float, unit_at_one) -> float:
+    """The gain of the stored values (e-/ADU) from the measured electrons per image unit k and what
+    photometry_core.electrons_per_unit(1.0, ...) gives for the same binning, debayer and flat (a number or a map: its
+    median). NaN when either is not usable."""
+    try:
+        u = float(np.nanmedian(unit_at_one)) if np.ndim(unit_at_one) else float(unit_at_one)
+        g = float(k) / u
+    except Exception:
+        return float("nan")
+    return g if (math.isfinite(g) and g > 0) else float("nan")
+

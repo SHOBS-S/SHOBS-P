@@ -3528,6 +3528,11 @@ def _mag_variance(flux: float, variance: float) -> float:
 # The old fixed 0.005 mag added to every point is gone: the real 60 s nights scatter LESS than 0.005 per point.
 E_PER_ADU_RANGE = (0.01, 100.0)   # plausible camera gains in e-/ADU; anything else is not a gain
 MEAS_CHECK = 1.5                 # 2.4.0 (#104): EGAIN vs the gain measured from the sky, either way, before a caution
+# 2.4.0 fit-in F4 (m473, #79 item 8g; RESULTS-CHANGING for the error bars): when the gain MEASURED from the night's sky
+# is over this many times off what EGAIN gives, either way, with its whole 16-84 % spread beyond the mark, the sky's
+# gain is used for the error bars and EGAIN is not (between MEAS_CHECK and this, the caution of #104 stays and EGAIN is
+# used). Too high a sky reading on a faint sky is not trusted downwards (SKY_CHECK_E), as in the caution.
+MEAS_OVERRIDE = 2.0
 SKY_CHECK_E = 100.0               # sky electrons per image pixel above which read noise cannot hide a gain mismatch
 OLD_ERR_FLOOR = 0.005             # the fixed term of the pre-2.2.17 model (kept only for points measured with it)
 
@@ -3730,7 +3735,8 @@ def _sky_meas_brief(meas: dict | None) -> dict | None:
 
 def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: str, flat=None,
                        bias_removed: bool = True, precalibrated: bool = False, sky_k: float = float("nan"),
-                       sky_level: float = float("nan"), sky_meas: dict | None = None) -> dict:
+                       sky_level: float = float("nan"), sky_meas: dict | None = None,
+                       remembered: dict | None = None) -> dict:
     """2.2.17 (item 8): how the photon noise is converted to electrons for a run. Returns {"electrons": number or map,
     "e_per_adu": EGAIN or None, "source": "EGAIN" / "sky" / "assumed", "note": the log line(s), "warning": '' or a
     caution, "k_median", "sky_k"}.
@@ -3747,7 +3753,11 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
     takes the place of sky_k everywhere: as the gain without EGAIN, in the camera-binning choice, and in the EGAIN
     cross-check, which then compares with a measurement and is tighter (1.5x either way, beyond the measurement's own
     16-84 % spread, instead of 2x up / 0.5x down). Without it, sky_k (the single-frame lower limit) is used as before
-    and the words say it is a lower limit. The result's "sky_method" is "measured" or "lower limit"."""
+    and the words say it is a lower limit. The result's "sky_method" is "measured" or "lower limit".
+    2.4.0 fit-in F4 (#79 item 8g): remembered = sky_gain.recall(header), the gain the sky measured on earlier nights
+    with this camera ({"e_per_adu", "nights", "last"}). Without EGAIN and without a measurement tonight it is used
+    in place of the one-frame lower limit and of the assumed 1 e-/ADU ("sky_method" "remembered"). m473: with EGAIN,
+    a measurement over MEAS_OVERRIDE (2x) off it takes EGAIN's place ("egain_ignored" = the header's value)."""
     b = max(int(binning or 1), 1)
     meas = sky_meas if (sky_meas and sky_meas.get("ok") and bias_removed
                         and math.isfinite(float(sky_meas.get("k", float("nan")))) and sky_meas["k"] > 0) else None
@@ -3821,6 +3831,23 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
         stored_gain = gain * cam_bin * cam_bin if binned == "averaged" else gain
         warning = ""
         if meas is not None:
+            # 2.4.0 fit-in F4 (m473): over 2x off, measured: the sky's gain is used, EGAIN is not
+            lo_, hi_ = float(meas.get("k_lo", sky_k)), float(meas.get("k_hi", sky_k))
+            sky_e_ = sky_level * at if math.isfinite(sky_level) else float("nan")
+            too_small = sky_k > MEAS_OVERRIDE * at and lo_ > MEAS_OVERRIDE * at
+            too_large = (sky_k < at / MEAS_OVERRIDE and hi_ < at / MEAS_OVERRIDE and math.isfinite(sky_e_)
+                         and sky_e_ > SKY_CHECK_E)
+            if too_small or too_large:
+                why_ = ("EGAIN may be too small for the stored values, or the frames carry a pedestal"
+                        if too_small else
+                        "EGAIN may be per native ADU of 12/14-bit data stored as 16-bit, or for unsummed binning")
+                return {"electrons": float(sky_k), "e_per_adu": None, "source": "sky", "k_median": float(sky_k),
+                        "sky_k": sky_k, "warning": "", **extra, "egain_ignored": float(gain),
+                        "camera_bin": cam_bin, "camera_bin_mode": binned,
+                        "note": f"Photon noise: the header gives EGAIN {gain:.3g} e-/ADU (about {at:.3g} electrons "
+                                f"per image unit), but the night's sky measures {sky_k:.3g} ({sky_k / at:.2f} x "
+                                f"that; {meas_words}). That is over {MEAS_OVERRIDE:g}x off, so the sky's gain is "
+                                f"used for the error bars and EGAIN is not ({why_})." + ll_note}
             # 2.4.0 (#104): a measurement, so the check is tighter (see the docstring)
             note += (f" The night's sky measures {sky_k:.3g} electrons per image unit ({sky_k / at:.2f} x that; "
                      f"from {meas['n_pairs']} frame pairs).") + ll_note
@@ -3862,6 +3889,29 @@ def photon_noise_setup(header: dict | None, binning: int, pattern: str, mode: st
                 "note": f"Photon noise: {why}, so the gain is measured from the night's sky: {meas_words}. Method: "
                         f"{_sg.METHOD_WORDS if _sg else 'background model and source mask'}."
                         + (f" {ptc_words}" if ptc_words else "") + ll_note + ped_note}
+    # 2.4.0 fit-in F4 (#79 item 8g): the gain the sky measured on earlier nights with this camera, before the
+    # one-frame lower limit and the assumed 1 e-/ADU (not for pre-calibrated frames: their values may be rescaled)
+    rem = remembered if (remembered and not precalibrated) else None
+    try:
+        rem_g = float(rem["e_per_adu"]) if rem else float("nan")
+    except (KeyError, TypeError, ValueError):
+        rem_g = float("nan")
+    if rem is not None and math.isfinite(rem_g) and rem_g > 0:
+        k = electrons_per_unit(rem_g, b, pattern, mode, flat)
+        at = float(np.nanmedian(k)) if np.ndim(k) else float(k)
+        why_not = str((sky_meas or {}).get("why") or "")
+        nn = int(rem.get("nights") or 1)
+        return {"electrons": k, "e_per_adu": None, "source": "sky", "k_median": at, "sky_k": sky_k, "warning": "",
+                **dict(extra, sky_method="remembered"),
+                "remembered": {"e_per_adu": rem_g, "nights": nn, "last": str(rem.get("last") or "")},
+                "note": f"Photon noise: {why}"
+                        + (f", and tonight's sky could not measure the gain ({why_not})" if why_not else
+                           ", and tonight's sky could not measure the gain")
+                        + f", so the gain the sky measured with this camera before is used: {rem_g:.3g} e-/ADU "
+                          f"(about {at:.3g} electrons per image unit; "
+                        + (f"the median of {nn} nights, the last {rem.get('last')}" if nn > 1 and rem.get("last")
+                           else f"measured on {rem.get('last')}" if rem.get("last") else "from an earlier night")
+                        + ")." + ped_note}
     if bias_removed and math.isfinite(sky_k) and sky_k > 0:
         why_not = str((sky_meas or {}).get("why") or "")
         safe = ("a lower limit: error bars on the safe side" if not (precalibrated or pedestal)
@@ -9539,6 +9589,7 @@ def parse_coordinates(text: str):
 # (the scan's "Suspect at (x normal)" box) OR at SUSPECT_EXCESS_CHI2 x the chi2nu that stars as bright show against
 # their own errors that night. Tuned on the 13-14 Nov GSC 03308-00462 scan: S033 (APASS J024812.2+505255, a delta Sct
 # found by eye at 2.06x) has excess chi2nu 2.78; at 2.5 that night has 10 Suspects of 693 usable stars (2 by 3x).
+# 2.4.0 fit-in F4 (#115): checked again on both nights with the error floor in; 2.5 stands (see SCAN_FLAT_FLOOR_MAG).
 SUSPECT_FACTOR = 3.0
 SUSPECT_EXCESS_CHI2 = 2.5
 CHI2_TERM_CAP = 25.0   # one point adds at most 5 sigma squared to chi2 (a cosmic ray or hot pixel stays one point)
@@ -9562,6 +9613,91 @@ def scan_mag_errors(flux, sky_noise, electrons) -> np.ndarray:
         var = noise ** 2 + np.clip(flux, 0.0, None) / k
         err = 1.0857362 * np.sqrt(var) / flux
     return np.where((flux > 0) & np.isfinite(err) & (err > 0), err, np.nan)
+
+
+# 2.4.0 fit-in F4 (#115 finish, John 26 Nov; RESULTS-CHANGING for Discovery): the scan's per-point errors get a
+# floor, so they no longer read low on the brightest stars (photon noise alone gave chi2nu 5-10 there, and the per-point
+# 5 sigma cap then sat too tight on a bright low-amplitude variable). Two terms, in quadrature with the photon and sky
+# noise: each frame's scintillation (the modified Young formula, scintillation_sigma: aperture, airmass, exposure,
+# site height; every star twinkles on its own, and the zero point is a median over many stars, so the star's own
+# scintillation is the whole term) and a flat-field floor, the same for every point.
+# SCAN_FLAT_FLOOR_MAG is the tunable constant: 0.003 mag (0.3 %) is a usual flat-field / pixel-to-pixel residual for
+# an amateur CMOS with sky or panel flats. The normalise-then-cap of step 7b still runs after the floor, so a floor
+# that is too low only leaves more for that widening to do, and a floor that is too high flattens the bright stars'
+# chi2nu towards the same typical value for all of them (the excess is a ratio to stars as bright, so it does not make
+# Suspects by itself). 0 switches the flat-field term off.
+# RETUNE on real nights (fit-in F4, 26 Nov 2026): the two 97-frame GSC 03308-00462 scans (13-14 and 14-15 Nov, 180 s,
+# ASI2600MC TG, 356 mm; about 710 ordinary stars a night = usable, unsaturated, under 2x normal scatter, not in VSX).
+# With and without the floor the ordinary stars' excess chi2nu is the same to 0.04 (99th percentile 2.11 / 2.08 with
+# it, 2.13 / 2.12 without), and 0.006 instead of 0.003 changes no more than that, so the floor stays 0.003. The level
+# stays 2.5 too: stars never near a frame edge have their 99.5th percentile at 2.06 / 2.02, and at 2.5 the own-errors
+# test alone lists 7 and 3 ordinary stars (3 and 2 away from the edges; four of the 13 Nov ones drifted to the frame
+# edge on a night that drifted 215 px). 3.0 would list 4 and 3, a small gain, and would put S033 at risk: it reads
+# 4.27 and 5.85 on these scans, but 3.00 on 13 Nov without its four cloud frames and 2.66-2.78 in John's own saved
+# scans of that night. The known short-period variables on the frame stay Suspects on both nights (GSC 03308-00462
+# 3.4 / 12.4, the two BEST EW stars over 10).
+SCAN_FLAT_FLOOR_MAG = 0.003
+
+
+def scan_error_floor(airmass=None, exptime_s=None, aperture_m=None, altitude_m: float = 0.0,
+                     flat_floor: float | None = None) -> float:
+    """2.4.0 fit-in F4 (#115): the magnitude error added in quadrature to every star's error on one scan frame:
+    scintillation (when the aperture, the airmass and the exposure are known; a stack passes its total exposure) and
+    the flat-field floor (SCAN_FLAT_FLOOR_MAG unless given). Never NaN: a term that is not known counts 0."""
+    ff = SCAN_FLAT_FLOOR_MAG if flat_floor is None else flat_floor
+    try:
+        ff = float(ff)
+    except (TypeError, ValueError):
+        ff = 0.0
+    if not (math.isfinite(ff) and ff > 0):
+        ff = 0.0
+    sc = 1.0857362 * scintillation_sigma(aperture_m, airmass, exptime_s, altitude_m or 0.0)
+    if not (math.isfinite(sc) and sc > 0):
+        sc = 0.0
+    return math.hypot(ff, sc)
+
+
+def scan_frame_floor(header: dict, jd: float, exptime_s: float, setup: dict | None) -> float:
+    """2.4.0 fit-in F4 (#115): scan_error_floor for one scan frame. setup (read on the window thread): aperture_m,
+    altitude_m, lat, lon and the field's ra_hours / dec_deg (used when the header carries no pointing); any of them
+    may be missing: the scintillation term is then 0 and the flat-field floor still counts. The airmass is worked
+    out as a photometry run does (reduce_frame: the header's pointing, the site, the frame's time)."""
+    setup = setup or {}
+    am = None
+    try:
+        ra_h = _header_float(header or {}, "RA_HRS")
+        if ra_h is None:
+            ra_deg = _header_float(header or {}, "OBJCTRA_DEG", "RA")
+            ra_h = ra_deg / 15.0 if ra_deg is not None else setup.get("ra_hours")
+        dec = _header_float(header or {}, "DEC", "OBJDEC")
+        if dec is None:
+            dec = setup.get("dec_deg")
+        lat, lon = setup.get("lat"), setup.get("lon")
+        if None not in (ra_h, dec, lat, lon) and jd is not None and math.isfinite(float(jd)):
+            am = airmass(float(ra_h), float(dec), float(lat), float(lon), float(jd))
+    except Exception:
+        am = None
+    return scan_error_floor(am, exptime_s, setup.get("aperture_m"), setup.get("altitude_m") or 0.0,
+                            setup.get("flat_floor"))
+
+
+def scan_floor_text(floors, flat_floor: float | None = None) -> str:
+    """One plain Log line on the floor a scan used: 'Scan errors: flat-field floor 0.003 mag and scintillation
+    0.0021 mag (median of the frames) added to every point.'"""
+    ff = SCAN_FLAT_FLOOR_MAG if flat_floor is None else float(flat_floor or 0.0)
+    fl = np.asarray(list(floors) if floors is not None else [], dtype=float)
+    fl = fl[np.isfinite(fl)]
+    sc = np.sqrt(np.clip(fl ** 2 - ff ** 2, 0.0, None)) if fl.size else np.array([])
+    known = sc[sc > 0]
+    bits = ([f"flat-field floor {ff:.3f} mag"] if ff > 0 else [])
+    if known.size:
+        bits.append(f"scintillation {float(np.median(known)):.4f} mag (median of {known.size} frame"
+                    f"{'' if known.size == 1 else 's'})")
+    if not bits:
+        return ""
+    tail = "" if known.size else (" Scintillation not added: it needs the telescope aperture (Input page), the "
+                                  "site and the field's position.")
+    return "  Scan errors: " + " and ".join(bits) + " added to every point's photon and sky noise." + tail
 
 
 def frame_zero_point_errors(inst: np.ndarray, ref, star_med: np.ndarray, zp: np.ndarray) -> np.ndarray:
@@ -9645,7 +9781,7 @@ def suspect_score(excess: float, excess_chi2: float, factor_limit: float = SUSPE
     return s if math.isfinite(s) else float("-inf")
 
 
-def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None) -> dict:
+def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None, merr=None, floor=None) -> dict:
     """Variability statistics for every star in a field.
 
     inst: frames x stars instrumental magnitudes (NaN where unmeasured).
@@ -9657,6 +9793,8 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
     against its own errors (plus the frame zero-point error), the chi2nu stars as bright show that night (the same
     running median as the scatter's), and 'excess_chi2' = chi2nu / that. A night whose error model reads low lifts
     every star alike and cancels out.
+    2.4.0 fit-in F4 (#115): floor (one magnitude error per frame, scan_error_floor, or one number for all frames) is
+    added in quadrature to every star's error on that frame; None or 0 = no floor, as before.
     """
     inst = np.asarray(inst, dtype=float)
     n_frames, n_stars = inst.shape
@@ -9689,7 +9827,11 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         if merr.shape != inst.shape:
             raise ValueError("the error table does not match the magnitudes")
         zp_err = frame_zero_point_errors(inst, ref, star_med, zp)
-        sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2)
+        fl = np.zeros(n_frames)
+        if floor is not None:
+            fl = np.broadcast_to(np.asarray(floor, dtype=float), (n_frames,)).copy()
+            fl = np.where(np.isfinite(fl) & (fl > 0), fl, 0.0)
+        sigma = np.sqrt(merr ** 2 + zp_err[:, None] ** 2 + fl[:, None] ** 2)
         # 2.4.0 step 7b (#115, John 21 Nov: retune in 7b): normalise, then cap. The error model has no flat-field or
         # other floor, so on the brightest stars it reads low (typical chi2nu 5-10 there); capping each point at 5
         # sigma of THAT error compressed a bright low-amplitude variable under the level (Fable S1). Each star's
@@ -9702,7 +9844,7 @@ def field_variability(inst: np.ndarray, min_fraction: float = 0.7, exclude=None,
         chi2_expected = typical_scatter(med, chi2, usable, exclude=exclude)
         with np.errstate(all="ignore"):
             out["excess_chi2"] = chi2 / chi2_expected
-        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err})
+        out.update({"chi2nu": chi2, "chi2_expected": chi2_expected, "zp_err": zp_err, "error_floor": fl})
     return out
 
 
