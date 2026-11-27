@@ -49,7 +49,8 @@ If the result is `N FAILED`, send `selftest_log.txt` with your report (see below
 ## The log file
 
 SHOBS-P started from its desktop shortcut has no console window. When something goes wrong inside the program,
-it shows *"Something went wrong: … Details were written to ….shobs_p.log."* and appends the full error to
+it shows *"Something went wrong: … The step may not have finished: run it again. If it happens again, send the
+log file with a bug report: ….shobs_p.log"* and appends the full error to
 `.shobs_p.log` in your user folder (`C:\Users\<you>`; your home folder `~` on Linux and the Mac). Messages that
 would have gone to a console go there too.
 

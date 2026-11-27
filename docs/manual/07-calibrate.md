@@ -269,7 +269,7 @@ common messages:
 
 | Message | What to do |
 |---|---|
-| **No light frames found.** | Check the **Lights** row on the Input page, and that the frames are FITS or XISF. |
+| **No light frames found: the Lights folder is empty (or holds no FITS files), or every frame is rejected in Blink.** | Check the **Lights** row on the Input page, that the frames are FITS or XISF, and the Blink page. |
 | **The masters do not fit these lights: …** | A master of another size or binning. Pick the matching calibration frames, set **Binning** back, or tick **Rebuild masters (ignore saved ones)**. |
 | **… is not a master SHOBS-P built.** | A row points at another program's master. Choose the folder of raw frames instead. |
 | **… is a master dark, not a master flat.** (or similar) | A row points at the wrong kind of master. Pick the right one with **Master file…**. |

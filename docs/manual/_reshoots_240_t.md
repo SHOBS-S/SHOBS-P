@@ -13,3 +13,14 @@ No screenshots are taken until 2.4.0 is complete.
 | Log shots (ch 7, 8) | 7, 8 | New plain lines: *Flats: N of M used for the master flat …*, *Aperture re-fitted to this field …*, *Binning changed: … re-centred.*, *… marker re-centred on its star before the run …*, catalog lines ending *It is asked again by itself in about 45 s …* | RESHOOT only where a shot shows the old wording (*Solve again to use them*, *Check them before running*, *that looks like a meridian flip*) |
 
 New question box (no shot planned): *The … marker at (x, y) is N px from the nearest star … Move the marker onto that star?* (Move it onto that star / Leave it).
+
+F4-1, second part (sheet sweep and nits):
+
+| Shot | Chapter | What changed in it | Action |
+|---|---|---|---|
+| img/05-input-page.png (and any shot of the Site box) | 5 | No new look in normal use. A gray line appears inside the Site box only when the boxes are half filled or the computer's time zone is unknown | no reshoot |
+| any shot of the Stars panel with a comp placed by the solve | 8, 9 | The slot line is now the bare *✓ placed after the solve* (the coordinates and "magnitude kept as loaded" are in the Log only) | RESHOOT if the shot shows the long line |
+| any shot of the planet boxes after a failed lookup | 16 | *✖ … not found (…): check the spelling and press Look up again, or type the values.* under the boxes, no error box | RESHOOT only if a shot shows *Lookup failed.* |
+| NEW (optional) 03-log-window | 3 | The **Log** window that **Show log** in the Findings window opens from a page with no log (Output, Transit fit …) | NEW shot if wanted |
+
+Boxes changed (no shot planned): the telescope aperture question is a box with a number field (OK / Cancel); *Not solved: …* boxes are error boxes with the cause first; *No light frames found: …*, *Something went wrong: …*, *Could not write the demo set: …*, *No catalog magnitude for …* say what to do. Gone as boxes (status line now): *Calibrate first …*, *All 10 comparison stars are marked …*, *No night has frames in a predicted planet transit …*, *Planet lookup failed*.

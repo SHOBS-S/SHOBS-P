@@ -7022,6 +7022,9 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
           is no re-center: its frames stay in the segment they sit beside, so no segment has under min_hold frames;
       (b) a run that holds within the limits of an EARLIER segment of the same side (where that segment ended, or its
           middle) rejoins it under the same number instead of opening a new one;
+      (a2) (2.4.0 fit-in F4, step 8 nit N1) a short run that already sits at the pointing of the NEXT run that holds
+          (and away from the one it left) takes that run's number: one bad registration just after a re-center no
+          longer leaves 1-4 frames of the new pointing under the old number;
       (c) with no plate scale nothing is looked for ("checked" False): pixels alone cannot tell a dither from a
           re-center.
     Returns {"labels": each frame's segment number (0 = the first pointing; the same number means the same pointing),
@@ -7060,6 +7063,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
     found = []
     done = [False] * n
     carry, cur, pending = 0, None, []
+    loose = []   # 2.4.0 fit-in F4 (step 8 nit N1): short runs given the segment they left, until the next run that holds
 
     def give(frames, label):
         for k in frames:
@@ -7070,7 +7074,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
         if new_block:
             for fr in pending:   # a block without a run that held: no re-center in it
                 give(fr, carry)
-            cur, pending = None, []
+            cur, pending, loose = None, [], []
         head = frames[:min_hold]
         start = middle(head)
         if len(frames) < min_hold or any(far(xy[k], start) for k in head):
@@ -7078,6 +7082,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
                 pending.append(frames)
             else:
                 give(frames, cur)   # (a) an excursion stays with the segment it left
+                loose.append(frames)
             continue
         best = None
         for (seg_side, label), seg_frames in segs.items():
@@ -7101,11 +7106,20 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
             d = math.hypot(ddx, ddy)
             found.append({"index": frames[0], "from": segs[(run_side, cur)][-1], "px": d * factor, "arcsec": d * scale,
                           "dx": ddx * factor, "dy": ddy * factor, "returned": best is not None})
+        if cur is not None and label != cur:
+            # step 8 nit N1: 1-4 frames cut off from this run by one bad registration (B B [bad] B B B B B after a
+            # re-center) already sit at the new pointing: they take its number, not the number of the one they left
+            old = (middle(segs[(run_side, cur)][-min_hold:]), middle(segs[(run_side, cur)]))
+            for fr in loose:
+                if all(not far(xy[k], start) for k in fr) and all(far(xy[k], e) for k in fr for e in old):
+                    give(fr, label)
+                    if found:   # this run's own record (appended just above): the move starts at these frames
+                        found[-1]["index"] = min(found[-1]["index"], fr[0])
         segs.setdefault((run_side, label), []).extend(frames)
         give(frames, label)
         for fr in pending:
             give(fr, label)
-        cur, carry, pending = label, label, []
+        cur, carry, pending, loose = label, label, [], []
     for fr in pending:
         give(fr, carry)
     # a frame that was not aligned takes the number of the measured frame before it on its side, else the one after

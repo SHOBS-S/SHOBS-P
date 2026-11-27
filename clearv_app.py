@@ -1972,6 +1972,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.after(1500, lambda: self.log(
                 f"This computer's time zone ({site_time.UNKNOWN_WINDOWS_ZONE}) is not in SHOBS-P's list: pick the "
                 "site's zone in the Time zone box (Input page, Site).", keep_status=True))
+            # 2.4.0 fit-in F4 (m002): also where the fix is
+            self._site_hint("tz", f"This computer's time zone ({site_time.UNKNOWN_WINDOWS_ZONE}) is not in the "
+                                  "list: pick the site's zone above (only local clock times need it).")
         self._apply_site_tz()
         self.site_tz.trace_add("write", lambda *_a: self._site_tz_changed())
         # 2.2.18 (item 11): the same guards as the site (a series' or a borrowed setup is never saved as yours).
@@ -2233,7 +2236,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     # (review MF1) the run lock stays as it is: a worker may still be running, and a second run
                     # must not start beside it. The job's own done-step releases it.
                     try:
-                        self.log(f"✖ Something went wrong: {exc}. Details were written to {LOG_FILE}.")
+                        self.log(f"✖ Something went wrong: {exc}. The step may not have finished: run it again. If "
+                                 f"it happens again, send the log file ({LOG_FILE}) with a bug report.")
                     except Exception:
                         pass
         except queue.Empty:
@@ -2470,7 +2474,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self._unknown_filter_logged = raw
                 self.log(f"⚠ The FITS FILTER is '{raw}', which SHOBS-P cannot calibrate (the comp catalogs carry "
                          "B, V, R and Sloan g\u2032 r\u2032 i\u2032 z\u2032 only). These frames are reported as clear (CV) "
-                         "with V comps.")   # 2.2.17 (item 1): Sloan is known now
+                         "with V comps. If it is B, V, R or a Sloan filter, pick it in the Filter box (Calibrate page); "
+                         "for clear, L or narrowband, CV is right.")   # 2.2.17 (item 1); 2.4.0 F4 (m004): what to do
         elif hand is not None:
             found, source = hand, "hand"
             self.mono_filter_choice.set(self.settings.get("mono_filter_choice", ""))
@@ -3132,7 +3137,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log("Error: " + str(val), keep_status=True)
         except Exception:
             pass
-        messagebox.showerror(APP_TITLE, f"Something went wrong:\n{val}\n\nDetails were written to {LOG_FILE}.")
+        # 2.4.0 fit-in F4 (m014): what to do
+        messagebox.showerror(APP_TITLE, f"Something went wrong:\n{val}\n\nThe step may not have finished: run it "
+                                        "again. If it happens again, send the log file with a bug report:\n"
+                                        f"{LOG_FILE}")
 
     @staticmethod
     def _msg_level(text: str) -> str:
@@ -3158,13 +3166,19 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         level = level or self._msg_level(text)
         # 2.2.18 (item 24): every Log line, with the time, so a run can be traced afterwards
         log_to_file(text if level == "note" or not finding else f"[{level.upper()}] {text}")
-        for box in (self.log_box, getattr(self, "photo_log", None)):
+        for box in (self.log_box, getattr(self, "photo_log", None), getattr(self, "_log_win_box", None)):
             if box is None:
                 continue
-            box.insert(END, text + "\n")
-            if int(box.index("end-1c").split(".")[0]) > 6000:
-                box.delete("1.0", "1001.0")
-            box.see(END)
+            try:
+                box.insert(END, text + "\n")
+                if int(box.index("end-1c").split(".")[0]) > 6000:
+                    box.delete("1.0", "1001.0")
+                box.see(END)
+            except TclError:   # the Log window was closed
+                if box is getattr(self, "_log_win_box", None):
+                    self._log_win_box = None
+                else:
+                    raise
         first = text.strip().splitlines()[0] if text.strip() else ""
         job = getattr(self, "_job_findings", None)
         if job is not None and level in ("warn", "error"):
@@ -3522,6 +3536,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception:
             pass
 
+    def _site_hint(self, key: str, text: str = ""):
+        """2.4.0 fit-in F4 (m019, m002): a plain line inside the Site box (Input page). key: "site" (boxes left
+        incomplete) or "tz" (the computer's time zone is not in the list); empty text takes that line away."""
+        hints = self.__dict__.setdefault("_site_hints", {})
+        if text:
+            hints[key] = text
+        else:
+            hints.pop(key, None)
+        both = "  ".join(hints[k] for k in ("site", "tz") if k in hints)
+        var, lab = getattr(self, "site_hint_text", None), getattr(self, "site_hint_label", None)
+        if var is None or lab is None:
+            self._site_hint_early = both   # the Input page is not built yet
+            return
+        try:
+            var.set(both)
+            (lab.grid if both else lab.grid_remove)()
+        except Exception:
+            pass
+
     def _typed_site_check(self, _event=None, action: str = "") -> bool:
         """Leaving the Site boxes (Enter, or focus elsewhere) and before Scan folders, Calibrate and Run photometry
         (action names it): a typed site that differs from your saved one is asked about once. Yes saves it (and the
@@ -3546,7 +3579,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 what = "Elevation box is" if why == self._INCOMPLETE_ELEV else "Site boxes are"
                 self.log(f"{action}: the {what} empty or not a number, so the site is not saved as yours (your "
                          "saved site is kept). Fill it in if these are your own frames.", keep_status=True)
+                self._site_hint("site", f"The {what} empty or not a number: the site is not saved as yours until "
+                                        "it is filled in.")
             return False
+        self._site_hint("site")
         saved = self._saved_site()
         self._typed_site_pending = False
         here = f"latitude {float(self.lat.get()):.4f}, longitude {float(self.lon.get()):.4f}"
@@ -3653,6 +3689,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         name = self.site_tz.get().strip()
         if name and not site_time.is_valid(name):
             return
+        if name:
+            self._site_hint("tz")   # 2.4.0 fit-in F4 (m002): a zone is picked
         self._apply_site_tz()
         self._remember_site("site_tz", self.site_tz)
 
@@ -4222,10 +4260,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         setup = self._scint_setup()
         if setup is not None and self.observations and not any(
                 math.isfinite(core.scint_mag(o, setup)) for o in self.observations):
-            return "scintillation not included (no airmass: RA/Dec or site unknown)"
+            # 2.4.0 fit-in F4 (x041, x042): the fix in the same breath
+            return ("scintillation not included (no airmass: RA/Dec or site unknown; set them on the Input page "
+                    "and run again)")
         if setup is None:
             return ("scintillation not included (" + ("switched off" if not self.use_scint.get()
-                                                       else "telescope aperture not set") + ")")
+                                                       else "telescope aperture not set: type it in the Optics "
+                                                            "box, Input page") + ")")
         return (f"scintillation included (Osborn et al. 2015; aperture {setup['aperture_m'] * 1000:g} mm, "
                 f"elevation {setup['altitude_m']:.0f} m)")
 
@@ -4711,10 +4752,50 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if getattr(self, "current_step", None) == STEP_PHOTO:
                 if not self.photo_logf.winfo_manager():
                     self.toggle_photo_log()
+            elif getattr(self, "current_step", None) == STEP_CAL:
+                self.log_box.see(END)
             else:
-                self.show_step(STEP_CAL)
+                self.open_log_window()   # 2.4.0 fit-in F4 (step 8 N6): never leave the page the user is on
         except Exception:
             pass
+
+    def open_log_window(self):
+        """2.4.0 fit-in F4 (step 8 N6): the Log in a window of its own, for the pages that have no log (Input, Blink,
+        Output, Transit fit, Multi-night…). Before, Show log in the Findings window jumped to the Calibrate page
+        and the user lost the page he was on. The window shows the same lines as the Calibrate page's log and
+        follows it while it stays open."""
+        win = getattr(self, "_log_win", None)
+        try:
+            if win is not None and win.winfo_exists():
+                win.deiconify()
+                win.lift()
+                return win
+        except TclError:
+            pass
+        win = self._log_win = Toplevel(self)
+        win.title("Log")
+        win.geometry("900x380")
+        box = Text(win, wrap="none", font=(core.MONO_FONT, 9), bg="#1e1e1e", fg="#dcdcdc", insertbackground="white")
+        ys = ttk.Scrollbar(win, orient="vertical", command=box.yview)
+        xs = ttk.Scrollbar(win, orient="horizontal", command=box.xview)
+        box.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        xs.pack(side="bottom", fill=X)
+        ys.pack(side=RIGHT, fill="y")
+        box.pack(side=LEFT, fill=BOTH, expand=True)
+        try:
+            box.insert(END, self.log_box.get("1.0", "end-1c"))
+            if box.get("end-2c", "end-1c") not in ("", "\n"):
+                box.insert(END, "\n")
+        except TclError:
+            pass
+        box.see(END)
+        self._log_win_box = box
+
+        def closed(_e=None):
+            if _e is None or _e.widget is win:
+                self._log_win_box = None
+        win.bind("<Destroy>", closed)
+        return win
 
     def open_webobs(self):
         plan = self._upload_check("webobs")   # 2.2.18 (item 10)
@@ -5614,6 +5695,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.site_tz_box.bind("<<ComboboxSelected>>", self._site_tz_done)
         ttk.Label(site, text="the site's, for local times", style="Hint.TLabel").grid(
             row=3, column=2, sticky=W, padx=(8, 0))
+        # 2.4.0 fit-in F4 (m019, m002): what is missing in this box, said where the fix is (hidden when nothing is)
+        self.site_hint_text = StringVar(value=getattr(self, "_site_hint_early", ""))
+        self.site_hint_label = ttk.Label(site, textvariable=self.site_hint_text, style="Hint.TLabel", wraplength=420,
+                                         justify=LEFT)
+        self.site_hint_label.grid(row=4, column=0, columnspan=3, sticky=W, pady=(2, 0))
+        if not self.site_hint_text.get():
+            self.site_hint_label.grid_remove()
         site.columnconfigure(1, weight=1)
         optics = self._group(right, "Optics")
         optics.pack(fill=X, pady=(10, 0))
@@ -5812,8 +5900,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.planet_source.set(f"Could not look up {name or 'the planet'} ({error}). Check the spelling and "
                                        "press Look up again, or type the values.")
                 return
-            self.planet_source.set("Lookup failed.")
-            messagebox.showerror(APP_TITLE, f"Planet lookup failed:\n{error}")
+            # 2.4.0 fit-in F4 (m064): no error box: the line under the Planet box, as the automatic lookup does
+            self.planet_source.set(f"\u2716 {name or 'The planet'} not found ({error}): check the spelling and "
+                                   "press Look up again, or type the values.")
+            self.status.set(self.planet_source.get())
             return
         before = self._planet_snapshot()   # 2.4.0 (#82): put back if a planet of another star is answered No
         self.planet_info = dict(p)
@@ -7083,6 +7173,37 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.update_star_panel()
         return dropped
 
+    def _same_star_by_lookup(self, cur: str, meta: dict):
+        """2.4.0 fit-in F4 (m509): are the Input page's Star ID and a loaded series' star the same star? Each
+        side's position is the one already known (the Input page's RA/Dec, the file's ra_hours/dec_deg), else
+        looked up by name (SIMBAD, then VSX). True = within 1°, False = further apart, None = a lookup failed (the
+        caller then asks, as before)."""
+        def known(ra_h, dec):
+            try:
+                p = (float(ra_h) * 15.0, float(dec))
+                return p if all(map(math.isfinite, p)) else None
+            except (TypeError, ValueError):
+                return None
+
+        def looked_up(name):
+            try:
+                found = core.lookup_target(name)
+                p = (float(found["ra_hours"]) * 15.0, float(found["dec_deg"]))
+                return p if all(map(math.isfinite, p)) else None
+            except Exception as exc:
+                log_to_file(f"Load series: {name} not looked up ({type(exc).__name__}: {exc})")
+                return None
+        new = str(meta.get("star_id") or "").strip()
+        if not cur or not new:
+            return None
+        a = known(self.ra_hours.get(), self.dec_deg.get()) or looked_up(cur)
+        if a is None:
+            return None
+        b = known(meta.get("ra_hours"), meta.get("dec_deg")) or looked_up(new)
+        if b is None:
+            return None
+        return core.sky_separation_arcsec(a[0], a[1], b[0], b[1]) / 3600.0 <= 1.0
+
     def _other_target_why(self, star, ra_hours=None, dec_deg=None) -> str:
         """2.2.16 (item 11): why a loaded series' target is another star than the Input page's, or "" (see
         _other_target)."""
@@ -7617,9 +7738,44 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.mono_filter = core.RGB_CHANNELS[channel]
         self._mono_filter_source = "rgb"
         self._update_filter_hint()
+        # 2.4.0 fit-in F4 (m111): the preview is redone here (one frame read), so nothing is left to press
+        redone = self._redo_preview_for_channel()
         self._comp_band_changed(old_band)
         self.log(f"Color images: the {core.RGB_CHANNEL_WORDS[channel]} channel is measured from now on (AAVSO filter "
-                 f"{pair[0]}, comps in {core.band_label(pair[1])}). Run Calibrate again to see it in the preview.")
+                 f"{pair[0]}, comps in {core.band_label(pair[1])})."
+                 + ("" if redone is not False else " Run Calibrate again to see it in the preview."))
+
+    def _redo_preview_for_channel(self):
+        """2.4.0 fit-in F4 (m111): after the channel of color images changed, read the reference frame again in the
+        new channel and show it (same frame, same size: markers stay). True = redone, None = no preview to redo,
+        False = it could not be redone (the Log line then says Run Calibrate again)."""
+        path, masters = getattr(self, "preview_path", None), getattr(self, "masters", None)
+        if not path or masters is None or getattr(self, "calibrated", None) is None:
+            return None
+        if getattr(self, "_preview_foreign", ""):
+            return None
+        try:
+            data, header = core.read_fits(path)
+            calibrated = core.calibrate_frame(data, header, masters)
+            if tuple(calibrated.shape[:2]) != tuple(self.calibrated.shape[:2]):
+                return False
+            mono = core.debayer(calibrated, self.pattern.get(), self.debayer_mode.get())
+            if self.preview is None or tuple(mono.shape[:2]) != tuple(self.preview.shape[:2]):
+                return False
+            self.calibrated = calibrated
+            self.preview = mono   # the same stars at the same places: markers and the solve stay
+            self.preview_header = header
+            self._photo_disp = None
+            self._seeing_cache = None
+            self._raw_cache = None
+            words = core.RGB_CHANNEL_WORDS[self._rgb_channel]
+            self.debayer_info.set(f"Preview: {words} channel of the color images  →  {mono.shape[1]}×{mono.shape[0]}")
+            self._preview_title = f"{words.capitalize()} channel"
+            self.refresh_preview()
+            return True
+        except Exception as exc:
+            log_to_file(f"preview not redone after the channel change: {type(exc).__name__}: {exc}")
+            return False
 
     def _wrong_band_star(self, xy) -> bool:
         """2.2.17 (review M2): the labeled star under a marker carries another band than the comps', with a Sloan band
@@ -7650,7 +7806,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         can = (resolve and self.preview is not None and self.preview_is_debayered and not getattr(self, "busy", False))
         self.log(f"Comps are now taken in {label}: the labeled catalog stars (in {core.band_label(chart_band)}) were "
                  f"dropped with the magnitudes filled from them. "
-                 + (f"Solving again to fetch {label} comps." if can else f"Solve again to fetch {label} comps."))
+                 + (f"Solving again to fetch {label} comps." if can else f"Solve again to fetch {label} comps."),
+                 keep_status=can)   # 2.4.0 fit-in F4 (m112): Log only when it solves by itself
         try:
             self.refresh_preview()
             self.update_star_panel()
@@ -7722,7 +7879,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 if self._pattern_user_set:
                     self.log(f"{what[0].upper() + what[1:]} shows no color mask (its 2x2 pixel planes agree to "
                              f"{contrast * 100:.1f}%), so the camera looks monochrome{binned}, but the Bayer pattern "
-                             "was set by hand; left as it is.")
+                             "was set by hand; left as it is. If the camera is monochrome, set the pattern to MONO "
+                             "(Calibrate page): a monochrome camera run with a Bayer pattern is reported as "
+                             "TG/TR/TB and loses three quarters of its pixels.")   # 2.4.0 F4 (m113): what is at stake
                     return
                 self.pattern.set(core.MONO)
                 self.log(f"No Bayer pattern in the headers and {what} shows no color mask (its 2x2 pixel planes agree "
@@ -7782,6 +7941,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                  "MONO for a monochrome camera, then press Calibrate again.")
         return False
 
+    def _sensor_question_again(self) -> bool:
+        """2.4.0 fit-in F4 (m120): the "Color or monochrome camera?" question was closed unanswered at Scan folders
+        for these lights, and the pattern has not been picked by hand since: Calibrate asks again instead of going
+        on with a guessed pattern. False = still not answered (Calibrate does not start)."""
+        folder = self.light_dir.get().strip()
+        if not folder or getattr(self, "_sensor_unanswered", None) != folder:
+            return True
+        if getattr(self, "_pattern_user_set", False):
+            self._sensor_unanswered = None
+            return True
+        self._sensor_asked_for = None
+        self._ask_sensor()
+        if getattr(self, "_sensor_unanswered", None) == folder:
+            self.log("Calibration not started: SHOBS-P needs to know the camera type. Press Calibrate again and "
+                     "answer Color or Monochrome, or pick the Bayer pattern in the Camera box (Calibrate page; MONO "
+                     "for a monochrome camera).")
+            return False
+        return True
+
     def _sensor_pedestal(self):
         """2.2.18 (review M1): the camera's bias level for the lights' sky test: the median of a SHOBS-P master bias or
         the first raw bias frame, else the first raw dark frame (bias plus a little dark current). None when there is
@@ -7823,9 +8001,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(f"Camera: color (your answer). Bayer pattern {self.pattern.get()}: check that it is your "
                      "camera's pattern on the Calibrate page.")
         else:
-            self.log(f"Camera type not answered: Bayer pattern left at {self.pattern.get()}. Check it on the "
-                     "Calibrate page (MONO for a monochrome camera).")
+            # 2.4.0 fit-in F4 (m120): never go on with a guess: Calibrate asks again (see run_calibration)
+            self._sensor_unanswered = folder
+            self.log(f"Camera type not answered: Bayer pattern left at {self.pattern.get()} for now. Calibrate asks "
+                     "again before it starts; or pick the pattern on the Calibrate page (MONO for a monochrome "
+                     "camera).")
             return
+        self._sensor_unanswered = None
         self._pattern_user_set = True
 
     def _choose_one(self, heading: str, message: str, choices, cancel=None, default=None):
@@ -8691,14 +8873,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         ask_key = ("last", words, cur)
         if ask_key in asked:
             return
-        if messagebox.askyesno(
-                APP_TITLE,
-                f"These lights come from {scope_words(scope)}, another telescope than the last frames you measured "
-                f"({scope_words(last)}).\n\nThe Telescope aperture box still says {cur:g} mm from those frames. Is "
-                f"{cur:g} mm right for this telescope? (It sets the scintillation part of the error bars.)\n\n"
-                "Yes keeps it; No takes you to the box (Input page, Optics) to type this telescope's aperture."):
-            self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
-            self._remember_aperture_scope(scope)   # review S2: a Yes is remembered at once
+        # 2.4.0 fit-in F4 (m143): the number is asked for in the box itself (it was Yes/No, then a trip to the
+        # Input page); OK with the value shown confirms it, Cancel leaves it to the Optics box as before
+        typed = self._ask_aperture_mm(
+            f"These lights come from {scope_words(scope)}, another telescope than the last frames you measured "
+            f"({scope_words(last)}).\n\nThe Telescope aperture box still says {cur:g} mm from those frames. Type "
+            "this telescope's aperture in mm (it sets the scintillation part of the error bars), or press OK if "
+            f"{cur:g} mm is right.", cur)
+        if typed is not None:
+            if abs(typed - cur) >= 0.05:
+                self.aperture_mm.set(f"{typed:g}")
+                self.log(f"Telescope aperture set to {typed:g} mm for {scope_words(scope)} (it said {cur:g} mm "
+                         "from the last frames).")
+            else:
+                self.log(f"Telescope aperture {cur:g} mm confirmed for {scope_words(scope)}.")
+            self._remember_aperture_scope(scope)   # review S2: an answer is remembered at once
             return
         asked.add(ask_key)
         # 2.4.0 fit-in F3 (m146): one line, short enough for the status line (log() sets it)
@@ -8710,6 +8899,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.after_idle(lambda: (box.focus_set(), box.select_range(0, "end")))
             except Exception:
                 pass
+
+    def _ask_aperture_mm(self, text: str, cur: float):
+        """2.4.0 fit-in F4 (m143): the telescope aperture in mm, typed in the question itself; None = Cancel."""
+        try:
+            v = simpledialog.askfloat(APP_TITLE, text, initialvalue=float(cur), minvalue=1.0, maxvalue=20000.0,
+                                      parent=self)
+        except Exception:
+            return None
+        return float(v) if v is not None and math.isfinite(float(v)) and v > 0 else None
 
     def _remember_aperture_scope(self, scope: dict | None = None):
         """2.3.1: at a photometry run, which aperture went with which telescope (for _check_aperture_scope). Review S4:
@@ -10246,7 +10444,13 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                           [("go", "Calibrate without them"), ("stop", "Stop")], safe="stop") != "go":
                 return
         if not lights:
-            messagebox.showerror(APP_TITLE, "No light frames found.")
+            # 2.4.0 fit-in F4 (m177): the usual causes and where to go
+            messagebox.showerror(APP_TITLE, "No light frames found: the Lights folder is empty (or holds no FITS "
+                                            "files), or every frame is rejected in Blink.\n\nPick the folder that "
+                                            "holds the lights on the Input page, or un-reject frames on the Blink "
+                                            "page.")
+            return
+        if not self._sensor_question_again():   # 2.4.0 fit-in F4 (m120)
             return
         # 2.2.19 (#38): bias/dark/flat frames found in the Lights folder, with that box empty: offer to use them.
         bias, dark, flat = self._offer_lights_calibration(bias, dark, flat, files)
@@ -10478,6 +10682,25 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self.apply_debayer(auto=True)
         self._resolve_band_after_calibrate()   # 2.4.0 fit-in F2 (x066)
 
+    def _click_again_words(self, taken_off: list) -> str:
+        """2.4.0 fit-in F4 (m193, m194): of the markers just taken off, the ones the solve cannot put back by
+        itself, so the user knows what is left to click: the Target when no RA/Dec is on the Input page, a comp or
+        check slot with no name, a watch star named only by its place (W1, W2 …)."""
+        again = []
+        for lab in taken_off:
+            role = next((r for r in ["target", "check"] + list(COMP_ROLES) if role_label(r) == lab), None)
+            if role == "target":
+                if not (self.ra_hours.get().strip() and self.dec_deg.get().strip()):
+                    again.append(lab)
+            elif role is not None:
+                if placeholder_star_name(getattr(self, f"{role}_name").get().strip()):
+                    again.append(lab)
+            elif _re.fullmatch(r"W\d+", str(lab).strip()):
+                again.append(str(lab))
+        if not again:
+            return " Nothing to click again: wait for the solve."
+        return " Click again after the solve: " + ", ".join(again) + "."
+
     def _carry_marks_to_new_reference(self, calibrated, path) -> str:
         """2.3.4 (#74): Calibrate again after rejecting frames in Blink makes the first kept frame the reference. The
         markers (target, comps, check, watch stars) were placed on the old reference frame, so they are moved to the
@@ -10498,9 +10721,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.watch_xy.clear()
             self.variable_marks, self.spare_marks = [], []
             if gone:
+                # 2.4.0 fit-in F4 (m193): which ones are to be clicked again
                 self.log("Reference: a new frame, and the markers' image could not be lined up with it, so these "
                          "markers were taken off: " + ", ".join(gone) + ". The solve places the comp and check names "
-                         "again.")
+                         "again." + self._click_again_words(gone))
                 return "cleared"
             return ""
         marked = [(role, xy) for role, xy in self._marked_roles() if xy is not None]
@@ -10553,7 +10777,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.spare_marks = []
             self.log(f"Reference: frame {new_lab} replaces {old_lab} (the first kept frame), and the two could not "
                      "be aligned, so these markers were taken off: " + ", ".join(names) + ". Comp and check names "
-                     "stay and are placed again after the solve, as are watch stars with a catalog name or position.")
+                     "stay and are placed again after the solve, as are watch stars with a catalog name or position."
+                     + self._click_again_words(names))   # 2.4.0 fit-in F4 (m194)
             return "cleared"
         h, w = new.shape[:2]
 
@@ -11357,8 +11582,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             self.log(self._target_off_frames_text(name))
             return False
         if not (edge <= xy[0] < w - edge and edge <= xy[1] < h - edge):
+            # 2.4.0 fit-in F4 (m203): with what to do; log() puts it on the status line
             self.log(f"Target: {where} is too close to the edge of this frame to measure (at ({xy[0]:.0f}, "
-                     f"{xy[1]:.0f})); no marker placed.")
+                     f"{xy[1]:.0f})); no marker placed. Click it by hand to measure it anyway, or use frames where "
+                     "it sits farther in.")
             return False
         # Centered on the star exactly as a click is (the star nearest the point, sized by the seeing). No star there
         # (review): no marker, rather than one on blank sky.
@@ -13113,7 +13340,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if error:
             if error == "Canceled":
                 self._discard_job_findings()   # 2.4.0 (#102, review S2)
-            self.log(("" if error == "Canceled" else "✖ ") + f"Aperture test: {error}")
+            # 2.4.0 fit-in F4 (m241): ✖ with one plain reason and what to do
+            self.log("Aperture test canceled." if error == "Canceled" else
+                     f"✖ Aperture test not done: {error}. The aperture boxes are unchanged; press Test again, or "
+                     "set the sizes by hand.")
             return
         window.show_test(result, seeing, sky_in, sky_out, ref_label)
 
@@ -14300,7 +14530,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.status.set("Right-click on a marked star (T, C1…C10, K, W) to clear it.")
             return
         if not self.preview_is_debayered:
-            messagebox.showinfo(APP_TITLE, "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image.")
+            # 2.4.0 fit-in F4 (m252): the status line, no pop-up
+            self.status.set("Calibrate first (Calibrate page): star positions are measured on the calibrated, "
+                            "debayered image.")
             return
         xy = (float(event.xdata), float(event.ydata))
         click_xy = xy
@@ -14387,8 +14619,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 mode = next((r for r in COMP_ROLES if getattr(self, f"{r}_xy") is None
                              and getattr(self, f"{r}_name").get().strip() == spare[0]), mode)
             if mode is None:
-                messagebox.showinfo(APP_TITLE, f"All {MAX_COMPS} comparison stars are marked. Right-click one to "
-                                               "remove it first.")
+                # 2.4.0 fit-in F4 (m257): the status line, no pop-up
+                self.status.set(f"All {MAX_COMPS} comparison stars are marked. Right-click one to remove it first.")
                 return
         if mode == "target":
             # 2.2.19 (r2: M1): a hand click on another star (not a nudge of the marker) is a new target: the frames a
@@ -14408,6 +14640,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             if self.chart_placed:
                 self._suggest_comps()   # 2.2.13: the image is usually solved before the target is clicked
         elif comp_number(mode):
+            off = self._comp_ring_off_frame(xy)   # 2.4.0 fit-in F4 (m027): refused, as Suggest and the spares are
+            if off:
+                self.status.set(off)
+                self.log(off, keep_status=True)
+                return
             setattr(self, f"{mode}_xy", xy)
         else:
             self.check_xy = xy
@@ -14437,6 +14674,53 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.update_star_panel()
             if not self._say_check_clash(mode):   # 2.4.0 (#68)
                 self._vet_choice(mode, xy)
+        self._neighbor_at_pick(mode)   # 2.4.0 fit-in F4 (m234)
+
+    def _comp_ring_off_frame(self, xy) -> str:
+        """2.4.0 fit-in F4 (m027): a comp clicked so near the frame edge that its sky ring is off the frame on this
+        very frame is not taken (it would measure wrong from frame one; the comp suggestions and the spares already
+        leave such stars out). '' when the pick is fine. The check star and the target are not refused."""
+        if xy is None or self.preview is None:
+            return ""
+        try:
+            sky_out = float(self.sky_out.get())
+        except Exception:
+            return ""
+        h, w = self.preview.shape[:2]
+        dist = min(xy[0], xy[1], (w - 1) - xy[0], (h - 1) - xy[1])
+        need = sky_out + 5.0
+        if dist >= need:
+            return ""
+        return (f"Not taken as a comp: the star is only {max(dist, 0):.0f} px from the frame edge, and its sky ring "
+                f"(out to {sky_out:g} px) needs it at least {need:.0f} px in. Pick a star further in.")
+
+    def _neighbor_at_pick(self, role: str):
+        """2.4.0 fit-in F4 (m234): another star inside the aperture of the star just marked is said at pick time, on
+        the slot's own line and in the Log (before, only Suggest… showed it). Nothing is said when there is none."""
+        try:
+            xy = self.target_xy if role == "target" else getattr(self, f"{role}_xy", None)
+            if xy is None or self.preview is None or not self.preview_is_debayered:
+                return
+            radius = float(self.radius.get())
+            tok = getattr(self, "_preview_token", 0)
+            cache = getattr(self, "_pick_sources", None)
+            if cache is None or cache[0] != tok:
+                cache = self._pick_sources = (tok, core.detect_sources(self.preview, max_sources=400, nsigma=5.0,
+                                                                       min_sep=3.0))
+            inside = sum(1 for sx, sy in cache[1] if 2.0 <= math.hypot(sx - xy[0], sy - xy[1]) <= radius + 1.0)
+            if not inside:
+                return
+            lab = role_label(role)
+            text = (f"⚠ {lab}: {inside} other star{'s' if inside != 1 else ''} inside the aperture (r = {radius:g} "
+                    f"px); {'their' if inside != 1 else 'its'} light will be added to {lab.lower()}'s. Choose "
+                    "another star, or a smaller aperture.")
+            self.log(text, keep_status=True)
+            if role != "target":
+                self._slot_notes[role] = (getattr(self, f"{role}_name").get().strip(), text, True)
+                self.update_star_panel()
+            self.status.set(text)
+        except Exception:
+            traceback.print_exc()
 
     def _no_catalog_v_note(self, role: str) -> str:
         """2.2.14 (item 4): why a marked comp has no catalog V on a solved image ('' when it has one, or when the image
@@ -15403,8 +15687,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self._slot_notes[role] = (name, warn, True)
             elif how:
                 self.log(f"{who} placed from {source}, {how}{alias}{tail}", keep_status=True)
-                self._slot_notes[role] = (name, f"✓ placed after the solve at ({xy[0]:.0f}, {xy[1]:.0f}), {how}"
-                                          + tail, not now)
+                # 2.4.0 fit-in F4 (m270): the slot shows only what matters: a bare ✓ when the magnitude was kept
+                # as loaded, the "check it" / "type it" part otherwise (the Log line above keeps the detail)
+                self._slot_notes[role] = (name, "✓ placed after the solve" + ("" if str(mag).strip() else tail),
+                                          not now)
             else:
                 # #71: on the frame, a star is there, but the marker could not be centered on it: said, with a finding
                 warn = (f"⚠ {who} placed from {source} at ({xy[0]:.0f}, {xy[1]:.0f}) but not centered on a star: "
@@ -16450,8 +16736,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             return ""
         name = self._slot_name_for(star)
         if star.get("mag") is None:
-            return (f"{name} has no {core.band_label(star.get('band', 'V'))} magnitude in "
-                    f"{star.get('catalog', 'the catalog')}. Pick another star.")   # 2.2.17 (item 1): band label
+            _b = core.band_label(star.get('band', 'V'))   # 2.4.0 fit-in F4 (x051): the words of x050
+            return f"{name} has no {_b} in {star.get('catalog', 'the catalogs')}; type its {_b} or pick another star"
         mag = f"{star['mag']:.3f}"
         target = (getattr(self, f"{mode}_name"), getattr(self, f"{mode}_mag"))
         target[0].set(name)
@@ -16701,7 +16987,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         if mag_text.strip():
             mag = float(mag_text)
         elif required_mag:
-            raise ValueError(f"{name} needs a catalog {core.band_label(self._band())} magnitude")   # 2.2.17 (item 1)
+            _b = core.band_label(self._band())   # 2.2.17 (item 1); 2.4.0 fit-in F4 (x062): the words of x067
+            raise ValueError(f"{name} has no catalog {_b}. Type its {_b} in the box next to the name, or pick "
+                             "another star")
         return core.Star(name=name, x=xy[0], y=xy[1], catalog_mag=mag)
 
     def label_aavso(self, auto: bool = False):
@@ -16818,10 +17106,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 scale = float(pixel) / float(focal) * 206.265 * camera_bin * binning * superpixel
         except Exception as exc:
             self._update_step_hint()   # 2.2.16 (item 10): "1 Not solved"
+            # 2.4.0 fit-in F4 (m297, m298): the one thing that is wrong, not four things to check
+            what = self._solve_input_problem(exc, wcs is not None)
             if auto:
-                self.status.set(f"Field not solved: check RA, Dec, focal length, and pixel size ({exc}).")
+                self.status.set(f"Field not solved: {what}")
                 return
-            messagebox.showerror(APP_TITLE, f"Check RA, Dec, focal length, and pixel size: {exc}")
+            messagebox.showerror(APP_TITLE, f"Solve can't start: {what}")
             return
         height_px, width_px = self.preview.shape
         tx, ty = self.target_xy if not field_solve else (width_px / 2.0, height_px / 2.0)
@@ -16936,7 +17226,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                             or ("No star catalog answered for this field ("
                                 + "; ".join(f"{c}: {e}" for c, e in failed.items()) + "): a catalog service "
                                 "outage. That is not your RA/Dec or Optics values. Solve again in a few minutes."))
-                    raise ValueError("No catalog returned stars for this field.")   # review S5 (r2: no empty "()")
+                    raise ValueError("No catalog returned stars for this field. Check RA/Dec on the Input "
+                                     "page (is it this field?), then Solve again.")   # review S5 (r2: no empty "()")
                 usable = [s for s in stars if s.get("bright") is not None]
                 usable.sort(key=lambda s: s["bright"])
                 match_set = usable[:60]
@@ -17224,6 +17515,36 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             text += f"\n  {note}."
         return text
 
+    def _solve_input_problem(self, exc, has_wcs: bool = False) -> str:
+        """2.4.0 fit-in F4 (m297, m298): which box stops the solve, in one sentence with where to fix it. The boxes
+        are tested in the order the solve reads them; the error's own text is the fallback."""
+        def bad(var):
+            try:
+                return not math.isfinite(float(str(var.get()).strip()))
+            except Exception:
+                return True
+
+        def box(key):
+            v = self._setup_value(key)
+            try:
+                return "empty" if v in ("", None) else ("" if float(v) > 0 and math.isfinite(float(v)) else "not a number above 0")
+            except (TypeError, ValueError):
+                return "not a number"
+        try:
+            ra_txt, dec_txt = self.ra_hours.get().strip(), self.dec_deg.get().strip()
+            if ra_txt and bad(self.ra_hours):
+                return f"RA '{ra_txt}' is not a number. Type it in hours (Input page), or press Look up again."
+            if dec_txt and bad(self.dec_deg):
+                return f"Dec '{dec_txt}' is not a number. Type it in degrees (Input page), or press Look up again."
+            if not has_wcs:
+                for key, label in (("focal_mm", "Focal length"), ("pixel_um", "Pixel size")):
+                    why = box(key)
+                    if why:
+                        return f"{label} is {why}. Type it in the Optics box (Input page), then Solve again."
+        except Exception:
+            pass
+        return f"{exc}. Check RA, Dec, focal length and pixel size on the Input page, then Solve again."
+
     def _label_done(self, catalog, chart_id, stars, match_set, solved, placed, band, error, vet=None):
         self._end_job()
         self._solving = False
@@ -17242,7 +17563,15 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.log(("✖ " if gave_up else "") + f"Solve: the catalog request failed ({error}). {words}"
                          + (" Press Solve again (top right) to try now." if gave_up else ""))
                 return
-            messagebox.showerror(APP_TITLE, f"Solve: {error}")
+            # 2.4.0 fit-in F4 (m305): what it means and what to do
+            outage = "catalog" in str(error).lower() or "answer" in str(error).lower()
+            messagebox.showerror(
+                APP_TITLE, f"Not solved: {error}\n\n"
+                + ("This is the catalog services, not your RA/Dec or Optics values. Press Solve again in a few "
+                   "minutes. Meanwhile you can mark stars and type the comp and check magnitudes by hand."
+                   if outage else
+                   "Check RA/Dec (Input page) and the Optics values, then press Solve again. You can mark stars "
+                   "meanwhile and type the comp and check magnitudes by hand."))
             return
         n = len(match_set)
         hits = solved["hits"] if solved else 0
@@ -17277,20 +17606,22 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 if self.mode_key == "discovery":
                     self._field_summary()
                 return
-            messagebox.showinfo(
+            # 2.4.0 fit-in F4 (m308): an error box (it was 'info'); the likely cause and what to do first, the
+            # numbers under them
+            messagebox.showerror(
                 APP_TITLE,
-                (f"Star catalogs did not answer, so the frame could not be solved ({hits} of {n} catalog stars "
-                 f"matched, {needed} needed).\n\n" if outage else
-                 f"The catalog stars did not lock onto this frame ({hits} of {n} matched, {needed} needed).\n\n")
-                + f"Target marker: ({tx:.0f}, {ty:.0f})   stars found in frame: {diag.get('sources', 0)}\n"
-                f"Plate scale used: {diag.get('scale', 0):.3f}\"/px (camera bin {diag.get('camera_bin', 1)}, "
-                f"app bin {self._image_binning()}, "
-                + ("monochrome)" if self.pattern.get() == core.MONO else "superpixel x2)") + "\n\n"
+                ("Not solved: the star catalogs did not answer.\n\n" if outage else
+                 "Not solved: the catalog stars did not lock onto this frame.\n\n")
                 + "\n\n".join(why) + "\n\n"
                 + ("Solve again in a few minutes. Meanwhile you can mark stars and type the comp and check "
                    "magnitudes by hand." if outage else
                    "Check that the Target marker is on your star, then RA/Dec, focal length, pixel size, and binning.\n"
-                   "You can always type the comp and check magnitudes in by hand.") + hint,
+                   "You can always type the comp and check magnitudes in by hand.") + hint
+                + f"\n\nThe numbers: {hits} of {n} catalog stars matched ({needed} needed); Target marker "
+                f"({tx:.0f}, {ty:.0f}); stars found in frame: {diag.get('sources', 0)}; plate scale used "
+                f"{diag.get('scale', 0):.3f}\"/px (camera bin {diag.get('camera_bin', 1)}, "
+                f"app bin {self._image_binning()}, "
+                + ("monochrome)." if self.pattern.get() == core.MONO else "superpixel x2)."),
             )
             return
         if diag.get("stacked"):
@@ -19867,7 +20198,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                         try:
                             inst, fit, calibrated = core.field_star_colors(stacks[c1], stacks[c2], cat_color[key], frame_ok)
                         except Exception as exc:   # 2.2.16 (item 3): a color failure must not lose the scan
-                            self.call_ui(self.log, f"  Scan color: color fit failed: {type(exc).__name__}: {exc}")
+                            # 2.4.0 fit-in F4 (m365): plain words; the error's type goes to the log file
+                            log_to_file(f"Scan color ({key}): {type(exc).__name__}: {exc}")
+                            self.call_ui(self.log, f"  Scan color: the {key} color fit could not be made ({exc}); "
+                                                   "the scan goes on without that color.")
                             result[key] = None
                             continue
                         old = (saved_cal or {}).get(key)
@@ -19915,7 +20249,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                             matches.append(best[1] if best else None)
                         result["vsx"] = matches
                     except Exception as exc:
-                        self.call_ui(self.log, f"  Variable-star check skipped: {exc}")
+                        # 2.4.0 fit-in F4 (m368): the words of the 'VSX not reached' line, with what to do
+                        self.call_ui(self.log, f"  Variable-star check: not made ({exc}); the stars found are not "
+                                               "checked against VSX or SIMBAD. Scan again later before reporting "
+                                               "a candidate.")
                 self.call_ui(self._scan_done, result, None)
             except Exception as exc:
                 self.call_ui(self._scan_done, None, (str(exc), traceback.format_exc()))
@@ -19941,7 +20278,10 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:   # 2.3.0 (#54): the scan on the stacks keeps the per-frame scan for the Points switch
             self._stack_scan_done(result)
         except Exception as exc:
-            self.log(f"  (stacking step skipped: {type(exc).__name__}: {exc})")
+            log_to_file(f"scan of the stacks skipped: {type(exc).__name__}: {exc}")
+            # 2.4.0 fit-in F4 (m371): plain words; the error's type goes to the log file only
+            self.log(f"  The scan of the stacks was skipped ({exc}); "
+                     "the per-frame scan is complete.")
         saved_err = ""
         if self.mode_key == "discovery":
             try:   # 2.4.0 step 7a (#92): the night's Suspects kept beside its results (and earlier by-hand ones back)
@@ -21157,8 +21497,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                     color_info = {"fits": fits, "used": used, "frames": n_frames, "saved": saved_cal,
                                   "catalogs": color_catalogs}   # 2.2.14 (item 1)
                 except Exception as exc:
-                    self.call_ui(self.log, f"Color calibration: color fit failed: {type(exc).__name__}: {exc} — "
-                                           "continuing without the color term.")
+                    # 2.4.0 fit-in F4 (m422, m428): one wording; the error's type goes to the log file
+                    log_to_file(f"Color calibration: {type(exc).__name__}: {exc}")
+                    self.call_ui(self.log, self.COLOR_FIT_FAILED.format(why=exc))
                     color_info = None
             self.call_ui(done_cb, night_points, mode, color_info)
 
@@ -21333,6 +21674,11 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         except Exception as exc:
             log_to_file(f"Sky-dominance check skipped: {type(exc).__name__}: {exc}")
 
+    # 2.4.0 fit-in F4 (m422, m428): the one line for a color fit that failed during a run
+    COLOR_FIT_FAILED = ("⚠ The color fit could not be made ({why}), so the night goes on without the color term: "
+                        "the magnitudes are not color-corrected. Run photometry again; if it fails again, untick "
+                        "Also measure R and B.")
+
     def _photometry_done_body(self, night_points, mode, color_info=None, cancelled=False, error=None) -> bool:
         """The done-step; True when the run's points went into the series (its findings then go with them)."""
         remeasure, self._remeasure = getattr(self, "_remeasure", None), None   # 2.3.0 (#50)
@@ -21382,9 +21728,8 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             try:   # 2.2.16 (item 3): a bad color record must not lose the night
                 self._record_color_calibration(night, color_info)
             except Exception as exc:
-                self.log(f"⚠ Color fit failed: {type(exc).__name__}: {exc} — continuing without the color term: "
-                         "the magnitudes are not color-corrected. Run photometry again; if it fails again, untick "
-                         "Also measure R and B.")
+                log_to_file(f"Color record: {type(exc).__name__}: {exc}")
+                self.log(self.COLOR_FIT_FAILED.format(why=exc))   # 2.4.0 fit-in F4 (m422, m428): one wording
         append = False
         plan = None
         same_mode = not self.series_mode or self.series_mode == self.mode_key or self.series_mode_unknown   # 2.2.14
@@ -21512,7 +21857,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                          + (f"; {result['missing']} frame(s) have none of them and are flagged nocomp." if result["missing"] else "."))
                 self._night_out_log(result)   # 2.4.0 fit-in F4 (#79 item 4)
             except ValueError as exc:
-                self.log(f"⚠ Could not apply the chosen comps to {night}: {exc}")
+                # 2.4.0 fit-in F4 (m435): what to do
+                self.log(f"⚠ Could not apply the chosen comps to {night}: {exc}. The night keeps the comps it was "
+                         "measured with; open Use comps… (Output page) and pick comps this night has.")
         self.legacy_mixed.discard(night)
         self.series_mode = self.mode_key
         self.series_mode_unknown = False   # 2.2.14 (item 19): the file records the mode from now on
@@ -21952,9 +22299,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 self.status.set("")   # 2.2.20 (item 3): the busy bar says it
                 self._check_planet_transits(all_nights, user=True, source="series")
                 return
-            messagebox.showinfo(APP_TITLE, "No night has frames in a predicted planet transit. (The check runs in "
-                                           "Variables mode when the Star ID has transiting planets in the NASA "
-                                           "Exoplanet Archive.)")
+            # 2.4.0 fit-in F4 (m455): the answer to the button on the status line, no box
+            self.status.set("No night has frames in a predicted planet transit. (The check runs in Variables mode "
+                            "when the Star ID has transiting planets in the NASA Exoplanet Archive.)")
             return
         night = self.highlight_night if self.highlight_night in nights else (nights[0] if len(nights) == 1 else None)
         if night is None:
@@ -22763,8 +23110,12 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
             failed = [e for e in eps if e.get("failed")]
             if failed and night not in self._loss_failed_logged:
                 self._loss_failed_logged.add(night)   # 2.2.14 review: once per night and session
+                # 2.4.0 fit-in F4 (m476): how many frames, and the setting that changes it
+                n_night = sum(1 for o in self.observations if o.night == night and "cloud" in str(o.flag or ""))
                 self.log(f"{self.label_nights(night)}: the cloud / transmission-loss check failed "
-                         f"({failed[0].get('error', '')}); every frame below the cloud limit is flagged cloud.")
+                         f"({failed[0].get('error', '')}), so every frame below the cloud limit is flagged cloud "
+                         f"({n_night} frame{'s' if n_night != 1 else ''}). Cloud limit on the Output page changes "
+                         "which frames those are.")
         # 2.2.14 (item 10): outliers right next to a cloud run (see core.apply_cloud_edge_flags for the rule).
         self._cloud_edge_count = core.apply_cloud_edge_flags(self.observations)
         return n
@@ -24023,6 +24374,21 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         self._series_gen = getattr(self, "_series_gen", 0) + 1   # 2.2.16 (item 9)
         # 2.2.16 (item 11): a series of another star never inherits this field's target, comps, check or watch stars.
         why, sure = self._other_target(meta.get("star_id"), meta.get("ra_hours"), meta.get("dec_deg"))
+        same = None
+        if why and not sure:
+            # 2.4.0 fit-in F4 (m509): both names are looked up and their positions compared before anything is
+            # asked; the question is left for a lookup that fails
+            step("where the two names point (SIMBAD / VSX)")
+            same = self._same_star_by_lookup(self.star_id.get().strip(), meta)
+            if same is True:
+                self.log(f"Kept the marked stars: {meta.get('star_id')} and {self.star_id.get().strip()} are the "
+                         "same star (their catalog positions agree).")
+                why = ""
+            elif same is False:
+                self.log(f"{meta.get('star_id')} and {self.star_id.get().strip()} are different stars (their "
+                         "catalog positions are more than 1° apart): the comps, check star and watch stars marked "
+                         "for the other star are cleared.")
+                sure = True
         if why and not sure:
             # review: names alone cannot see aliases (HIP 114622 is HD 219134): ask; No (the default) keeps the field.
             cur = self.star_id.get().strip()
@@ -24617,7 +24983,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
                 core.save_color_calibration(saved)
                 self.log(f"  Saved the color term for nights without enough labeled stars ({core.COLOR_CAL_FILE}).")
             except OSError as exc:
-                self.log(f"⚠ Could not save the color term: {exc}")
+                # 2.4.0 fit-in F4 (m519): a plain note (tonight is unaffected) with what to do
+                self.log(f"  Could not save the color term for later nights ({exc}). Tonight's results are not "
+                         f"affected. Check that this file can be written: {core.COLOR_CAL_FILE}.")
 
     @staticmethod
     def _version_tuple(text) -> tuple:
@@ -27319,7 +27687,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         aliases = self._star_aliases()
         missing = [n for n in selection if catalog.get(n) is None]
         if missing:
-            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.")
+            # 2.4.0 fit-in F4 (m549): where to type it
+            messagebox.showerror(APP_TITLE, f"No catalog magnitude for {', '.join(missing)}.\n\nType it in the "
+                                            "Catalog mag column of this window (Use comps…), or untick the star.")
             return False
         no_base = sum(1 for o in self.observations if not math.isfinite(o.target_inst))
         if no_base:
@@ -28999,7 +29369,9 @@ class App(TrimMixin, NeighborsMixin, StackMixin, Tk):   # 2.3.0 (#54): StackMixi
         try:
             demo = core.write_demo_set(folder)
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"Could not write the demo set: {exc}")
+            # 2.4.0 fit-in F4 (m617): what to do
+            messagebox.showerror(APP_TITLE, f"Could not write the demo set: {exc}\n\nChoose another folder, one "
+                                            "you can write to (for example in Documents).")
             return
         self.bias_dir.set(demo["bias"])
         self.dark_dir.set(demo["dark"])

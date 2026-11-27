@@ -102,7 +102,7 @@ The automatic solve stays quiet when it fails: the step strip shows **1 Not solv
 |---|---|
 | **Solve needs to know roughly where the frame is: …** | Your headers give no position and the Input page has no RA/Dec. Type the target's name on the Input page and press Enter (or, in Discovery, the field center), then **Solve again**. |
 | **Star catalogs did not answer, so the frame could not be solved …** with *"Gaia DR3 (HTTP 503) and APASS DR9 (no stars came back) did not answer: a catalog service outage …"* | A catalog server is down (not your settings). **Solve again** in a few minutes. Meanwhile you can mark stars and type comp and check magnitudes by hand. |
-| **The catalog stars did not lock onto this frame …** | Usually wrong optics. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; the window shows the plate scale it used. Also check that the **Target** marker is on your star. |
+| **Not solved: the catalog stars did not lock onto this frame.** (an error box; the numbers are at its end) | Usually wrong optics. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; the window shows the plate scale it used. Also check that the **Target** marker is on your star. |
 | "Only N stars were found on this frame" (in the same window) | Very short exposures or a small telescope. Mark the stars by hand and type their names and magnitudes. |
 | **Not solved: the catalog request failed.** | The internet or a catalog server was down. **Solve again** later. |
 

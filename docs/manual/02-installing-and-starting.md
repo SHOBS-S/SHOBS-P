@@ -246,7 +246,8 @@ update does not lose them. Chapter 3 lists what is remembered.
 
 ## When something goes wrong
 
-- If something fails inside the program, a box says **Something went wrong:** with the error, and the details go to
+- If something fails inside the program, a box says **Something went wrong:** with the error and what to do (run the step again; if it happens again,
+  send the log file), and the details go to
   `.shobs_p.log` in your user folder (`C:\Users\<you>` on Windows, your home folder `~` on Linux and the Mac).
 - `.shobs_p.log` also holds every line of the Log window, each with the date and time in front. When it grows past
   5 MB it is renamed `.shobs_p.log.1` (one old file is kept) and a new log starts.
