@@ -54,13 +54,14 @@ knows a telescope by the header's TELESCOP, INSTRUME and focal length). When you
   log says so: *"Telescope aperture set to 203 mm, as last used with … (the box said 152 mm)."* Type another value in
   the box if that one is wrong; it is used from the next run, and a value you typed for these lights is never
   replaced when you scan them again. (This sets the scintillation part of the error bars.)
-- from another telescope than the last frames you measured, it asks whether the box's value is right: *"These lights
+- from another telescope than the last frames you measured, it asks for this telescope's aperture: *"These lights
   come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says
-  152 mm from those frames. Is 152 mm right for this telescope?"* **No** puts the cursor in the box. The **Setup for
+  152 mm from those frames. Type this telescope's aperture in mm …, or press OK if 152 mm is right."* Type the
+  number and press **OK** (2.4.0; before, a Yes/No question). **Cancel** puts the cursor in the box. The **Setup for
   these frames** box on the Input page shows where the aperture in use comes from, for example *aperture 152 mm
   (still from the last frames, …: check it)*.
 
-Apart from that one case (a telescope it already knows), the box changes only when you answer Yes or type a new
+Apart from that one case (a telescope it already knows), the box changes only when you press OK or type a new
 value, and the same question is not asked again for the same telescope and value. Each night records the box's aperture when it was measured (the settings file's
 **Telescope aperture box when the night was measured** line). The error bars use the box's value when the report is
 saved; the settings file's **Scintillation** line says which.

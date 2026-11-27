@@ -219,9 +219,12 @@ On an **alt-az** mount without a derotator there is no flip, so readings 180° a
 the flats and lights are more than 5° apart. With a derotator it never asks: the log says **Flats taken with the
 derotator at sky angle …, lights at …°. That is fine: …**
 
-**The Flat folder mixes camera angles.** One master built from flats at several angles matches none of them exactly.
-**Stop** (the default) stops so you can keep only the flats taken at the lights' angle; **Use all these flats** goes
-on.
+**The Flat folder holds flats from more than one camera angle.** From 2.4.0 SHOBS-P builds the master flat only
+from the flats taken at the lights' angle (a meridian flip counts as the same angle) and says so in the log:
+*"Flats: 20 of 40 used for the master flat, the ones taken at the lights' camera angle (30°). Left out: 2° (20
+files)."* Nothing is asked. A night that used to be calibrated with all the flats can come out a little
+different. Only when fewer than 3 flats match the lights' angle does it ask, as before: **Stop** (the default)
+stops so you can take or pick flats at the lights' angle; **Use all these flats** goes on.
 
 **The lights look already calibrated.** If the lights were calibrated by another program (file names with `cal` or
 PixInsight's `_c`, floating-point pixels, or calibration keywords in the header), SHOBS-P asks **Skip bias, dark, and
@@ -247,8 +250,10 @@ You may see these after calibration. None stops you; they explain what SHOBS-P n
   counts as a move, never as a flip.
 - **"Mount: Alt-az …"** (written when you scan the folders): which mount is used for these lights, and whether it came
   from the headers or the **Mount** box.
-- **"Zenith keyhole: the field reached altitude …"** (also written at the scan): on an alt-az mount the field went above 85°, where the mount's
-  azimuth speed and the field rotation get extreme. Check those frames on the Blink page.
+- **"⚠ Zenith keyhole: 3 of the 10 frames taken above 85° altitude are smeared … frames 19–21."** (from the
+  photometry run, from 2.4.0): on an alt-az mount the field went above 85°, where the mount turns too fast to
+  track, and the named frames show it. It is said only when frames up there really are smeared; the altitude
+  alone gives no line any more. Look at those frames on the Blink page and reject the bad ones.
 - **"The camera binned these frames (XBINNING=2) …"**: your color camera did the binning. Some capture
   programs mix red, green and blue when they bin a color sensor; capture unbinned and set **Binning** in SHOBS-P
   instead. (Not shown for MicroObservatory frames, which are binned by design, or for a monochrome camera.)
@@ -264,7 +269,7 @@ common messages:
 
 | Message | What to do |
 |---|---|
-| **No light frames found.** | Check the **Lights** row on the Input page, and that the frames are FITS or XISF. |
+| **No light frames found: the Lights folder is empty (or holds no FITS files), or every frame is rejected in Blink.** | Check the **Lights** row on the Input page, that the frames are FITS or XISF, and the Blink page. |
 | **The masters do not fit these lights: …** | A master of another size or binning. Pick the matching calibration frames, set **Binning** back, or tick **Rebuild masters (ignore saved ones)**. |
 | **… is not a master SHOBS-P built.** | A row points at another program's master. Choose the folder of raw frames instead. |
 | **… is a master dark, not a master flat.** (or similar) | A row points at the wrong kind of master. Pick the right one with **Master file…**. |

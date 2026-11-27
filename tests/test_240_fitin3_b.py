@@ -247,7 +247,8 @@ class TestWords(unittest.TestCase):
             self.assertEqual([t for t, _k in logged], [f"JD1: {ln}" for ln in text.splitlines()])
             self.assertEqual([k["level"] for _t, k in logged],
                              ["note" if not ln.startswith("⚠") else "warn" for ln in text.splitlines()])
-        # a ~180° turn or an ensemble zero-point ⚠ of this run opens it too, with nothing left out
+        # an ensemble zero-point ⚠ of this run opens it too, with nothing left out. 2.4.0 fit-in F4 (8d): a ~180°
+        # turn is treated as a meridian flip now (a plain note), so it opens nothing
         for info, job in (({"flip_like": [{"turn": 180}]}, []), ({}, [("warn", "⚠ Ensemble zero point, JD1: …")])):
             opens = []
             st = types.SimpleNamespace(
@@ -255,7 +256,7 @@ class TestWords(unittest.TestCase):
                 comp_skip_log_text=lambda n, edges=None: "", log=lambda t, **k: None, _job_findings=job,
                 _open_findings_for_run=lambda: opens.append(1))
             App._run_summary(st, "JD1", [])
-            self.assertEqual(opens, [1])
+            self.assertEqual(opens, [] if info else [1])
 
 
 # ---- with the window ---------------------------------------------------------------------------------------------
@@ -534,6 +535,11 @@ class TestInApp(unittest.TestCase):
         app._aperture_caution_said = None
         app.radius.set(8.0)
         before = len(app.findings.items)
+        # 2.4.0 fit-in F4 (8e): a kept aperture on a NEW field is re-fitted; the plain note is for sizes that were
+        # set for these lights already (or a series' aperture), which is what this test is about
+        refit = mock.patch.object(app, "_aperture_refit", return_value=False)
+        refit.start()
+        self.addCleanup(refit.stop)
         try:
             with mock.patch.object(app, "_donut_apertures", return_value=None):
                 app._aperture_caution(app._preview_token, measured=True)
@@ -734,9 +740,8 @@ class TestInApp(unittest.TestCase):
         # one ⚠ line per problem star, with what to do; none says "Consider"
         c3 = self._said("C3 left out of")
         self.assertEqual(len(c3), 1, c3)
-        self.assertTrue(c3[0].startswith(f"{night}: ⚠ C3 left out of"), c3)
-        self.assertTrue(c3[0].endswith("those frames use the other comps. Leave it out with Use comps… (Output "
-                                       "page)."), c3)
+        # 2.4.0 fit-in F4 (#79 item 4): a comp off the frame in any frame is out for the whole night: a plain note
+        self.assertTrue(c3[0].startswith(f"{night}: C3 left out of the whole night: missing from"), c3)
         k = self._said("check star left out of")
         self.assertEqual(len(k), 1, k)
         self.assertIn("no check value there. A better check star stays farther in: FAR", k[0])
@@ -745,9 +750,9 @@ class TestInApp(unittest.TestCase):
         self.assertEqual([t for t in self.logged if "comes within" in t and "⚠" in t], [])
         # they are findings (the job summary, the settings file and the report NOTES follow, 2.3.6)
         texts = [f.text for f in app.findings.items]
-        self.assertTrue(any("C3 left out of" in t for t in texts), texts)
+        self.assertFalse(any("C3 left out of" in t for t in texts), texts)   # F4: a plain note is no finding
         self.assertTrue(any("check star left out of" in t for t in texts), texts)
-        self.assertTrue(any("C3 left out of" in t for t in app.run_findings), app.run_findings)
+        self.assertTrue(any("check star left out of" in t for t in app.run_findings), app.run_findings)
         self.assertIn("finding", app.run_findings_note())
         # and the Findings panel opened by itself
         win = getattr(app, "_findings_win", None)

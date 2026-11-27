@@ -174,10 +174,8 @@ What SHOBS-P does:
   the step, and keeps the step only when it improves the fit clearly (ΔBIC 10 or more, the same bar as a detection).
   A kept step is fitted together with the transit, so its uncertainty is part of the depth's. See "A meridian flip in
   the night" in [17. Fit a transit and submit it](17-fit-a-transit-and-submit-it.md).
-- If **Mount** is left on **Alt-az** but the field turns by about 180° between two frames, the photometry run warns
-  you: *"⚠ The field turned by 180° between frames … — that looks like a meridian flip. Is the Mount set right
-  (German equatorial)? …"*. Set **Mount** to **German equatorial** and run photometry again, so the frames after the
-  flip are treated as after it.
+- If **Mount** is left on **Alt-az** but the field turns by about 180° between two frames, the photometry run
+  treats that as the meridian flip it is (from 2.4.0) and says so in a plain note; nothing has to be run again.
 
 How to plan for it:
 
@@ -200,8 +198,9 @@ An alt-az mount never flips, so the flip step does not apply to it. Its trouble 
 the mount's azimuth speed and the field rotation get extreme, and frames there can trail or smear. When you choose
 the night, avoid transits during which the star climbs above 85°, or keep that stretch in the baseline.
 
-When you scan the folders of such a night, with **Mount** set to **Alt-az** in the Optics box (Input page), the log
-says, for example, *"Zenith keyhole: the field reached altitude 87.2° (above 85°), … Check them on the Blink page."*
+After the photometry run of such a night, with **Mount** set to **Alt-az** in the Optics box (Input page), the log
+names the frames near the zenith that really are smeared, for example *"⚠ Zenith keyhole: 3 of the 10 frames taken
+above 85° altitude are smeared …: frames 19–21. …"* When none is smeared it says nothing.
 
 ## Checklist for the night
 

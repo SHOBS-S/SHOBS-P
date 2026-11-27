@@ -49,7 +49,8 @@ If the result is `N FAILED`, send `selftest_log.txt` with your report (see below
 ## The log file
 
 SHOBS-P started from its desktop shortcut has no console window. When something goes wrong inside the program,
-it shows *"Something went wrong: … Details were written to ….shobs_p.log."* and appends the full error to
+it shows *"Something went wrong: … The step may not have finished: run it again. If it happens again, send the
+log file with a bug report: ….shobs_p.log"* and appends the full error to
 `.shobs_p.log` in your user folder (`C:\Users\<you>`; your home folder `~` on Linux and the Mac). Messages that
 would have gone to a console go there too.
 
@@ -195,7 +196,7 @@ To start fresh, press **Clear cached catalogs** on the Credits page (chapter 3).
 | A step at the meridian flip. | Look at **Comp health…**: a comp that jumps at the flip is a common cause. Read the log after the run: a line *"⚠ After the meridian flip the … apertures were off their stars …"* means an aperture problem, not the stars (chapter 12). Try **Pier side as segments** (Variables mode). |
 | One star's comps turned up on another star's night (points flagged `nocomp`). | Press **New reduction** on the Input page before you start on another star (chapter 5). |
 | Frames on an alt-az mount are lost or misaligned through the night. | Set **Mount** to **Alt-az** in the Optics box (Input page), so the alignment follows the field rotation. |
-| The run warns *"⚠ The field turned by 180° between frames … — that looks like a meridian flip."* | **Mount** is set to **Alt-az**, but the frames come from a German equatorial mount (often a setting left from another telescope's data). Set **Mount** to **German equatorial** and run photometry again. |
+| The log says *"The field turned by 180° between frames … and …: a meridian flip."* | **Mount** is set to **Alt-az**, but the frames come from a German equatorial mount (often a setting left from another telescope's data). From 2.4.0 SHOBS-P treats the turn as the flip it is; nothing has to be run again. Set **Mount** to **German equatorial** for next time. |
 | A transit's depth is far off on a night with a meridian flip. | Check that **Mount** is **German equatorial**, so the fit can test a flip step, and read the **Flip step** row (chapter 17). Keep 30 minutes or more of baseline on each side of the flip. |
 | The transit fit does not start. | It needs a planet on the Input page and at least 20 usable points. Look at the hint under the page title. |
 | The Output pages show an old result. | Run photometry again: an old transit fit is cleared as soon as the data change. |

@@ -1348,7 +1348,8 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
         # (comps only: nothing here needs a plate solution, header pointing or a color camera).
         try:
             sel = list(app.active_comps or app.comps_used)
-            # 2.3.5 (review S5): a comp the photometry left out of the whole night is no part of the fit's ensemble.
+            # 2.3.5 (review S5), 2.4.0 fit-in F4 (#79 item 4): a comp the photometry left out of the whole night (not in
+            # every frame, or over the linear limit) is no part of the fit's ensemble.
             try:
                 out_night = set((app._night_info(night) or {}).get("night_out") or [])
             except Exception:
@@ -2221,10 +2222,10 @@ class TransitPage(OutlierMixin):   # 2.4.0 fit-in F3 (#117): OutlierMixin = tran
                             f"({type(exc).__name__}: {exc}).")
         if failed > 0.5 * n:
             return [], f"{failed} of {n} frames could not be read again"
-        base = tm[0] - tc.tied_ensemble(cm[0])
+        base = tm[0] - tc.set_ensemble(cm[0])
         out = []
         for k, (g, label, *_rest) in enumerate(sets[1:], start=1):
-            d = (tm[k] - tc.tied_ensemble(cm[k])) - base
+            d = (tm[k] - tc.set_ensemble(cm[k])) - base
             out.append((g, label, 10 ** (-0.4 * d)))
         why = f"{failed} frame{'s' if failed != 1 else ''} could not be read again (left out of those refits)" \
             if failed else ""

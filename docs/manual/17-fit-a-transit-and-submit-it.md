@@ -23,8 +23,9 @@ This chapter covers:
 3. When photometry ends, SHOBS-P opens the Output step. The fit never starts by itself: the page says *"… usable
    points. Set the detrend and press Fit transit."* Set the detrend (and anything else) first, then press **Fit
    transit**. It needs at least 20 usable points and a planet. The same holds after **Use comps…**, after you pick
-   another night, and after you open a report. When one of your comps was left out of part of the night (it went off
-   the frame edge, say), the line below says so first: *"⚠ C4 is missing in 24 frames (off the frame edge; frames
+   another night, and after you open a report. On a night reduced before 2.4.0, when one of your comps was left out of part of the night (it went off
+   the frame edge, say), the line below says so first (2.4.0 leaves such a comp out of the whole night, so a night
+   reduced now never shows it): *"⚠ C4 is missing in 24 frames (off the frame edge; frames
    61–84). The comp ensemble changes partway through the night, which can move the depth and Tc. Leave that comp
    out with Use comps… if the fit looks off."* The same line goes into the fit's notes and its reports. A comp lost
    in only a frame or two (under 5 % of the night) is not named.
@@ -360,8 +361,8 @@ A bad comparison star can make or hide a transit. The page checks this in three 
 result line then adds, for example, *"Comps checked: depth spread 0.12 %, Tc spread 45 s"*, and the notes give the
 range beside the depth with all comps and the points used: *"Comp choice check (each of the 4 comps left out in turn,
 least squares): depth 1.58–1.72 % beside 1.65 % with all comps (218 points; …)"*. Each refit uses the same frames as
-the main fit: a frame where one comp is missing is measured from the others, on the night's scale, as the photometry
-does (from 2.3.5; before, such frames were dropped from every refit, which gave a wrong range). If a refit had to
+the main fit, and the comps measured in every one of them: a comp missing from any frame is out of the whole night,
+as in the photometry (one comp set per night, from 2.4.0; chapter 8). If a refit had to
 use fewer points (no other comp in some frames), the note says so. If leaving one comp out moves the depth or Tc by
 more than its statistical error, the notes name that comp in orange, with a link to Comp health. The spread is a
 diagnostic (how much the comp choice moves the result), not an error bar; the files call it the *Comp-choice check

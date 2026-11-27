@@ -145,9 +145,63 @@
   {
    "section": "Anywhere",
    "patterns": [
-    "Something went wrong: … Details were written to ….shobs_p.log."
+    "Something went wrong: … The step may not have finished: run it again. If it happens again, send the log file with a bug report: ….shobs_p.log",
+    "Something went wrong: …"
    ],
-   "todo": "Note what you were doing and see 24. Troubleshooting."
+   "todo": "Run the step again. If it happens again, send .shobs_p.log with a bug report: see 24. Troubleshooting."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "The FITS FILTER is 'Ha', which SHOBS-P cannot calibrate … These frames are reported as clear (CV) with V comps. If it is B, V, R or a Sloan filter, pick it in the Filter box (Calibrate page); for clear, L or narrowband, CV is right."
+   ],
+   "todo": "Pick the real filter in the Filter box if it is B, V, R or a Sloan filter; otherwise nothing."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Camera type not answered: Bayer pattern left at … for now. Calibrate asks again before it starts …",
+    "Calibration not started: SHOBS-P needs to know the camera type. …"
+   ],
+   "todo": "Answer Color camera or Monochrome camera, or pick the pattern in the Camera box (Calibrate page)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "… not found (…): check the spelling and press Look up again, or type the values.",
+    "Planet lookup failed"
+   ],
+   "todo": "Check the spelling and press Look up again, or type the values."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Color images: the green channel is measured from now on (AAVSO filter TG, comps in V).",
+    "Run Calibrate again to see it in the preview."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Comps are now taken in B: the labeled catalog stars (in V) were dropped with the magnitudes filled from them. Solving again to fetch B comps.",
+    "… Solve again to fetch B comps."
+   ],
+   "todo": "Nothing when it says Solving again; otherwise press Solve again."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "The flat shows no color mask (…), so the camera looks monochrome, but the Bayer pattern was set by hand; left as it is. If the camera is monochrome, set the pattern to MONO (Calibrate page): a monochrome camera run with a Bayer pattern is reported as TG/TR/TB and loses three quarters of its pixels."
+   ],
+   "todo": "Set MONO if the camera is monochrome; leave it for a color camera (camera-binned color frames can look like this)."
+  },
+  {
+   "section": "Anywhere",
+   "patterns": [
+    "Could not write the demo set: … Choose another folder, one you can write to (for example in Documents)."
+   ],
+   "todo": "Pick another folder."
   },
   {
    "section": "Anywhere",
@@ -331,6 +385,27 @@
   {
    "section": "Input",
    "patterns": [
+    "Lights: OBJECT … is the Star ID, but they point N° from the RA/Dec on the Input page, so … is looked up again (the RA/Dec is replaced by what SIMBAD or VSX gives)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "Lights: OBJECT … is the Star ID, but they point N° from its RA/Dec, also after looking it up again. …"
+   ],
+   "todo": "Check the Star ID (is it the star in these frames?), or type the field's RA/Dec on the Input page."
+  },
+  {
+   "section": "Input",
+   "patterns": [
+    "The camera binned these frames (XBINNING=2) by mixing the red, green and blue pixels: the colour channels are identical … Capture unbinned and set Binning here instead; for these frames use them as unfiltered (CV) data."
+   ],
+   "todo": "Capture unbinned next time and set Binning in SHOBS-P. Do not use B-V or V-R from these frames."
+  },
+  {
+   "section": "Input",
+   "patterns": [
     "TOI-2046: SIMBAD and VSX did not answer within 60 s — type RA/Dec, or Look up again."
    ],
    "todo": "Type RA/Dec, or press Look up again later. If the answer still comes in, it is used. For a planet the line is under the planet boxes and says … the NASA Exoplanet Archive did not answer within 60 s — type the values or Look up again."
@@ -409,9 +484,9 @@
   {
    "section": "Input",
    "patterns": [
-    "These lights come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says … mm from those frames. Is … mm right for this telescope?"
+    "These lights come from …, another telescope than the last frames you measured (…). The Telescope aperture box still says … mm from those frames. Type this telescope's aperture in mm …, or press OK if … mm is right."
    ],
-   "todo": "Yes keeps the value; No puts the cursor in the Telescope aperture (mm) box: type the aperture. After No the status bar and the log say These lights are from …: type its aperture in the Optics box (Input page); it still says … mm from the last frames."
+   "todo": "Type the aperture and press OK (or just OK when the value shown is right). Cancel leaves it to the Telescope aperture (mm) box: the status bar and the log then say These lights are from …: type its aperture in the Optics box (Input page); it still says … mm from the last frames."
   },
   {
    "section": "Input",
@@ -615,9 +690,16 @@
   {
    "section": "Calibrate",
    "patterns": [
-    "The Flat folder mixes camera angles: …"
+    "Flats: 20 of 40 used for the master flat, the ones taken at the lights' camera angle (30°). Left out: 2° (20 files)."
    ],
-   "todo": "Keep only the flats taken at the lights' angle."
+   "todo": "Nothing. Move the other flats to their own folder if you like."
+  },
+  {
+   "section": "Calibrate",
+   "patterns": [
+    "The Flat folder mixes camera angles: … Fewer than 3 of them were taken at the lights' angle (…°), too few for a master flat of their own."
+   ],
+   "todo": "Stop (the default) and take or pick flats at the lights' angle; Use all these flats goes on with a master that matches none exactly."
   },
   {
    "section": "Calibrate",
@@ -653,9 +735,9 @@
   {
    "section": "Calibrate",
    "patterns": [
-    "No light frames found."
+    "No light frames found: the Lights folder is empty (or holds no FITS files), or every frame is rejected in Blink. …"
    ],
-   "todo": "Check the folder and the Blink page."
+   "todo": "Pick the folder that holds the lights on the Input page, or un-reject frames on the Blink page."
   },
   {
    "section": "Calibrate",
@@ -889,9 +971,180 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Calibrate first (Calibrate page). Star positions are measured on the calibrated, debayered image."
+    "Calibrate first (Calibrate page): star positions are measured on the calibrated, debayered image."
    ],
    "todo": "Calibrate."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "All 10 comparison stars are marked. Right-click one to remove it first."
+   ],
+   "todo": "Right-click a comp marker to free a slot."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Not taken as a comp: the star is only … px from the frame edge, and its sky ring (out to … px) needs it at least … px in. Pick a star further in."
+   ],
+   "todo": "Pick a star further in."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2: 1 other star inside the aperture (r = 8 px); its light will be added to comp 2's. Choose another star, or a smaller aperture."
+   ],
+   "todo": "Pick another star, or make the aperture smaller (Suggest…)."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Solve can't start: Focal length is empty. Type it in the Optics box (Input page), then Solve again.",
+    "Field not solved: …",
+    "Pixel size is …",
+    "RA '…' is not a number …",
+    "Dec '…' is not a number …",
+    "Check RA, Dec, focal length, and pixel size: …"
+   ],
+   "todo": "Fill in that box, then Solve again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "This is the catalog services, not your RA/Dec or Optics values. Press Solve again in a few minutes. …",
+    "Check RA/Dec (Input page) and the Optics values, then press Solve again. …"
+   ],
+   "todo": "As the box says. You can mark stars meanwhile and type magnitudes by hand."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Not solved: the catalog stars did not lock onto this frame.",
+    "Not solved: the star catalogs did not answer.",
+    "The numbers: … of … catalog stars matched (… needed); …"
+   ],
+   "todo": "Follow the first paragraph: usually the Optics values or Binning, or a catalog outage."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No catalog returned stars for this field. Check RA/Dec on the Input page (is it this field?), then Solve again."
+   ],
+   "todo": "Check RA/Dec, then Solve again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Reference: a new frame, and the markers' image could not be lined up with it, so these markers were taken off: … Click again after the solve: Target, W2.",
+    "… Nothing to click again: wait for the solve.",
+    "Reference: frame … replaces … and the two could not be aligned …"
+   ],
+   "todo": "Click the named ones again once the solve has landed."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Target: … is too close to the edge of this frame to measure (at (x, y)); no marker placed. Click it by hand to measure it anyway, or use frames where it sits farther in."
+   ],
+   "todo": "As the line says."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… has no V in APASS; type its V or pick another star"
+   ],
+   "todo": "Type the magnitude, or pick another star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "✓ placed after the solve",
+    "✓ placed after the solve; magnitude … from the catalog (the slot had none): check it."
+   ],
+   "todo": "Nothing; check the magnitude when the line says so."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No catalog magnitude for … Type it in the Catalog mag column of this window (Use comps…), or untick the star."
+   ],
+   "todo": "Type it in the Catalog mag column, or untick the star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… has no catalog V. Type its V in the box next to the name, or pick another star"
+   ],
+   "todo": "Type the magnitude, or pick another star."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Aperture test not done: … The aperture boxes are unchanged; press Test again, or set the sizes by hand.",
+    "Aperture test canceled."
+   ],
+   "todo": "Press the test button again, or set the sizes by hand."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The color fit could not be made (…), so the night goes on without the color term: the magnitudes are not color-corrected. Run photometry again; if it fails again, untick Also measure R and B."
+   ],
+   "todo": "Run again; if it fails again, untick Also measure R and B."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Could not save the color term for later nights (…). Tonight's results are not affected. Check that this file can be written: ….shiloh_photometry_colorcal.json."
+   ],
+   "todo": "Check the file is not read-only."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Could not apply the chosen comps to …: … The night keeps the comps it was measured with; open Use comps… (Output page) and pick comps this night has."
+   ],
+   "todo": "Open Use comps… and pick comps the night has."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "…: the cloud / transmission-loss check failed (…), so every frame below the cloud limit is flagged cloud (N frames). Cloud limit on the Output page changes which frames those are."
+   ],
+   "todo": "Change Cloud limit on the Output page if too many frames are flagged."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Scan color: the … color fit could not be made (…); the scan goes on without that color.",
+    "Variable-star check: not made (…); the stars found are not checked against VSX or SIMBAD. Scan again later before reporting a candidate.",
+    "The scan of the stacks was skipped (…); the per-frame scan is complete."
+   ],
+   "todo": "For the variable-star check: scan again later before reporting a candidate. Otherwise nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "No night has frames in a predicted planet transit. …"
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "scintillation not included (no airmass: RA/Dec or site unknown; set them on the Input page and run again)",
+    "… (telescope aperture not set: type it in the Optics box, Input page)",
+    "… (switched off)"
+   ],
+   "todo": "Set what the line names and run again, unless you switched it off."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Kept the marked stars: … and … are the same star (their catalog positions agree).",
+    "… are different stars (their catalog positions are more than 1° apart): the comps, check star and watch stars marked for the other star are cleared."
+   ],
+   "todo": "Nothing."
   },
   {
    "section": "Photometry",
@@ -998,6 +1251,14 @@
     "Defocused stars: r = … px (kept from before) clips the ring; Suggest… gives r = …, sky …–… px."
    ],
    "todo": "Press Suggest…"
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Aperture re-fitted to this field: r = 8 px was kept from the last field, and it is 3.5 × the stars' FWHM here (2.3 px). Now r 4.1, sky 8–12 px. The comp survey tries the sizes around it …",
+    "… and it clips the ring of these defocused stars …"
+   ],
+   "todo": "Nothing; the boxes are yours to change."
   },
   {
    "section": "Photometry",
@@ -1141,7 +1402,7 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Not on this frame, so taken out of tonight's comps (not measured): C2 …"
+    "Not on this frame, so taken out of tonight's comps (not measured): C2 … Click another star to add a comp if you need one."
    ],
    "todo": "Nothing, if the other comps are enough. Click another star to add a comp if you need one. Without a series open the line is a plain Cleared, left from an earlier run …"
   },
@@ -1171,9 +1432,31 @@
   {
    "section": "Photometry",
    "patterns": [
-    "… marker at (x, y) is N px from the center of the star there …"
+    "Comp 2 marker re-centred on its star before the run: moved 4.2 px, from (…) to (…)."
+   ],
+   "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "The Check marker at (x, y) is N px from the nearest star, at (…). That is further than the aperture radius (… px), so it may be another star than the one you meant. Move the marker onto that star?"
+   ],
+   "todo": "Move it onto that star if that is your star. Leave it measures where it is marked."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… marker at (x, y) is N px from the center of the star there … Left where it is, as chosen: the frames are measured beside the star, so it reads faint. …"
    ],
    "todo": "Clear the marker, zoom in and click the star again, unless you meant it."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Binning changed: 3 markers moved to the same stars on the new image (x2) and re-centred.",
+    "No star was found under Comp 2 on the new image …"
+   ],
+   "todo": "Nothing. For a marker with no star under it, Run photometry re-centres it or asks."
   },
   {
    "section": "Photometry",
@@ -1224,7 +1507,32 @@
    "patterns": [
     "AAVSO sequence did not answer (503 from apps.aavso.org); asking again in the background …"
    ],
-   "todo": "Wait: the log says if it answers, and then Solve again uses it."
+   "todo": "Nothing: when it answers, its stars are put to use by themselves."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… did not answer (…); its stars are missing for now. It is asked again by itself in about 45 s; its stars are added then, with nothing to press.",
+    "Variable-star check: VSX and SIMBAD could not be reached …"
+   ],
+   "todo": "Nothing. You can go on marking stars meanwhile."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "AAVSO sequence answered on retry 2, 31 s after it was first asked: 12 sequence stars (chart …); they are put to use now, by themselves.",
+    "Gaia DR3: the deep part (VizieR, to G 19) arrived after the solve … Kept for this field; they are put to use now, by themselves.",
+    "Catalog answers arrived after the solve: solving again by itself to use them (nothing is asked twice)."
+   ],
+   "todo": "Nothing. Before 2.4.0 you had to press Solve again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "… It did not answer after 3 more tries by itself; it is asked again at the next solve.",
+    "Solve: the catalog request failed (…). … Press Solve again (top right) to try now."
+   ],
+   "todo": "Go on without its stars, or press Solve again later."
   },
   {
    "section": "Photometry",
@@ -1290,6 +1598,35 @@
     "Comp survey skipped: the loaded series' comps are all placed on this image, so Run photometry can start at once (Comp health after the run shows how they did)."
    ],
    "todo": "Nothing."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp 2: now TYC 4006-956-1. Magnitude was 11.23, now 10.87; the marker moved 212 px to that star.",
+    "…; the same star, so the marker stays."
+   ],
+   "todo": "Check the two magnitudes are what you expect."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "✓ Comp 2 renamed to …; the marker stays where it is and the magnitude is unchanged (the name is not a star this image knows; ✕ clears the marker, then Enter looks the name up)."
+   ],
+   "todo": "To use another star: ✕, then type its name and press Enter, or click it."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Zenith keyhole: 3 of the 10 frames taken above 85° altitude are smeared (stars up to 1.6 × longer than wide; the night's usual is 1.08): frames 19–21. …"
+   ],
+   "todo": "Look at the named frames on the Blink page, reject the bad ones, and run photometry again."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "Comp survey and comp suggestions skipped: a series is loaded, and a series keeps its own comps (Comp health after the run shows how they did). … is not on this image tonight, so it is not measured; the name stays in the series."
+   ],
+   "todo": "Nothing. To change the series' comps use Use comps… on the Output page."
   },
   {
    "section": "Photometry",
@@ -1516,17 +1853,34 @@
   {
    "section": "Photometry",
    "patterns": [
-    "Linear limit … ADU: raw peak at or above it in … frames …"
+    "Linear limit … ADU: raw peak at or above it in … frames … Shorter exposures or more defocus next time; a comp over the limit is left out of the night by itself."
    ],
-   "todo": "Check Comp health…'s Over linear limit column; prefer stars that stay under it."
+   "todo": "Shorter exposures or more defocus next time. For the check star, pick a fainter one."
   },
   {
    "section": "Photometry",
    "patterns": [
-    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page).",
-    "… left out of … (…); those frames use the other comps. …"
+    "C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40.",
+    "The night uses C1, C2 in every frame.",
+    "… over the linear limit in 3 frames."
    ],
-   "todo": "Take the comp out with Use comps… on the Output page if the night shows steps where it comes and goes; pick a comp further in next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
+   "todo": "Nothing. Pick a comp further in, or a fainter one, next time. See \"Comps near the frame edge\" in 8. Photometry page basics."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "That leaves only C1 for the night. Add a comp that stays on the frame and under the linear limit all night (a spare comp with Use comps…, Output page), then press Run photometry.",
+    "… leaves no comp …",
+    "No comp was measured in every frame: the night stands on C2, and the frames without it have no magnitude. …"
+   ],
+   "todo": "Add a comp that stays on the frame all night: Use comps… on the Output page can bring in a spare."
+  },
+  {
+   "section": "Photometry",
+   "patterns": [
+    "C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page)."
+   ],
+   "todo": "Take the comp out with Use comps… if the night shows steps, or reduce the night again: 2.4.0 leaves such a comp out of the whole night."
   },
   {
    "section": "Photometry",
@@ -1584,9 +1938,10 @@
   {
    "section": "Photometry",
    "patterns": [
-    "The field turned by 180° between frames … — that looks like a meridian flip. Is the Mount set right (German equatorial)? …"
+    "The field turned by 180° between frames … and …: a meridian flip. The frames on the other side of it are treated as after a flip, as on a German equatorial mount (Mount is set to Alt-az; …).",
+    "N frames marked as the flip segment."
    ],
-   "todo": "If it was a flip, set Mount to German equatorial (Input page, Optics box) and run photometry again."
+   "todo": "Nothing. Set Mount to German equatorial (Input page, Optics box) if that is what this mount is."
   },
   {
    "section": "Photometry",

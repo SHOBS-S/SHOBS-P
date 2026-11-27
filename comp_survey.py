@@ -654,7 +654,49 @@ def variable_flags(scatter, inst, factor: float = VARIABLE_FACTOR, window: float
                    min_peers: int = VARIABLE_MIN_PEERS) -> list:
     """Per candidate: (scatter / median scatter of the candidates within `window` mag of it) when that is over
     `factor` (it looks variable tonight), else None. With fewer than min_peers such stars the window widens to twice
-    `window`, then to every candidate (at least 3); with fewer than 3 others it is not judged."""
+    `window`, then to every candidate (at least 3); with fewer than 3 others it is not judged.
+    2.4.0 fit-in F4 (step 5 leftover): the stars are sorted by brightness once and each star's peers are a slice
+    of that list, so a crowded field (hundreds of candidates) no longer costs n x n Python steps on the window's
+    thread. The numbers are the same as before (variable_flags_slow, kept for the test)."""
+    sc = np.asarray(scatter, dtype=float)
+    m = np.asarray(inst, dtype=float)
+    ok = np.isfinite(sc) & np.isfinite(m)
+    idx = np.flatnonzero(ok)
+    order = idx[np.argsort(m[idx], kind="stable")]
+    ms, ss = m[order], sc[order]
+    place = {int(k): p for p, k in enumerate(order)}
+    out = []
+    for j in range(sc.size):
+        if not ok[j]:
+            out.append(None)
+            continue
+        p = place[j]
+        peers = None
+        for win, need in ((window, min_peers), (2 * window, min_peers), (float("inf"), 3)):
+            if math.isinf(win):
+                lo, hi = 0, ms.size
+            else:
+                lo = max(int(np.searchsorted(ms, m[j] - win, side="left")) - 1, 0)
+                hi = min(int(np.searchsorted(ms, m[j] + win, side="right")) + 1, ms.size)
+            keep = np.abs(ms[lo:hi] - m[j]) <= win
+            keep[p - lo] = False   # not the star itself
+            if int(keep.sum()) >= need:
+                peers = ss[lo:hi][keep]
+                break
+        if peers is None:
+            out.append(None)
+            continue
+        ref = float(np.median(peers))
+        out.append(float(sc[j] / ref) if ref > 0 and sc[j] > max(factor * ref, VARIABLE_FLOOR) else None)
+    return out
+
+
+def variable_flags_slow(scatter, inst, factor: float = VARIABLE_FACTOR, window: float = 0.5,
+                   min_peers: int = VARIABLE_MIN_PEERS) -> list:
+    """Per candidate: (scatter / median scatter of the candidates within `window` mag of it) when that is over
+    `factor` (it looks variable tonight), else None. With fewer than min_peers such stars the window widens to twice
+    `window`, then to every candidate (at least 3); with fewer than 3 others it is not judged.
+    (The plain n x n form, kept as the reference for variable_flags.)"""
     sc = np.asarray(scatter, dtype=float)
     m = np.asarray(inst, dtype=float)
     out = []
@@ -780,9 +822,9 @@ def own_step_out(steps, errs, judged, limit: float = OWN_STEP_MAX, sigma: float 
     measured); judged: per candidate, True when it is one the suggestions could use (in the brightness window and not
     already left out). A judged candidate is out when |step| is beyond `limit` (flux fraction) and beyond `sigma` x its
     error. When that would leave fewer than `keep_min` judged candidates with a measured step, the steadiest
-    (smallest |step| to 0.1 ppt, then smallest `scatter` when given; step 6d) are kept instead, so the night still gets comps (the app passes keep_min=0 and lets stars back
-    itself, after its other gates). Returns ({index: step in ppt} for those left
-    out, [indices kept although beyond the limit])."""
+    (smallest |step| to 0.1 ppt, then smallest `scatter` when given; step 6d) are kept instead, so the night still
+    gets comps (the app passes keep_min=0 and lets stars back itself, after its other gates).
+    Returns ({index: step in ppt} for those left out, [indices kept although beyond the limit])."""
     st = np.asarray(steps, dtype=float)
     er = np.asarray(errs, dtype=float)
     ok = np.asarray(judged, dtype=bool) & np.isfinite(st)

@@ -3557,6 +3557,52 @@ def header_e_per_adu(header: dict | None) -> float | None:
     return float(v)
 
 
+def cfa_channels_identical(mosaic: np.ndarray, n_stars: int = 30, box: int = 4) -> dict:
+    """2.4.0 fit-in F4 (m191): were a colour camera's binned frames made by mixing the red, green and blue pixels?
+    Then the four Bayer positions of the mosaic all hold the same mix: every star has the same "colour" between
+    them and the sky is equally bright in each. Measured on the brightest stars (sky-subtracted light in a small
+    box, per Bayer position): "spread" = the robust scatter, over the stars, of the magnitude difference between
+    the two diagonal positions (0,0) and (1,1) (red and blue on any Bayer pattern), and "sky" = the two positions'
+    sky ratio. identical: True when spread < 0.03 mag and the sky ratio is within 2 % of 1 (real colour data
+    show 0.1 mag or more between stars); False when the channels differ; None when it cannot be told (fewer than
+    8 usable stars). Returns {"identical", "spread", "sky", "n"}."""
+    out = {"identical": None, "spread": float("nan"), "sky": float("nan"), "n": 0}
+    m = np.asarray(mosaic, dtype=np.float32)
+    if m.ndim != 2 or min(m.shape) < 64:
+        return out
+    h, w = (m.shape[0] // 2) * 2, (m.shape[1] // 2) * 2
+    a, b = m[0:h:2, 0:w:2], m[1:h:2, 1:w:2]
+    lum = a + b
+    try:
+        found = detect_sources(lum, max_sources=n_stars * 3, nsigma=12.0, min_sep=3.0 * box)
+    except Exception:
+        return out
+    sky_a, sky_b = float(np.nanmedian(a)), float(np.nanmedian(b))
+    top = float(np.nanpercentile(lum, 99.999))
+    diffs = []
+    for x, y in found:
+        xi, yi = int(round(x)), int(round(y))
+        if not (box <= xi < a.shape[1] - box and box <= yi < a.shape[0] - box):
+            continue
+        pa = a[yi - box:yi + box + 1, xi - box:xi + box + 1]
+        pb = b[yi - box:yi + box + 1, xi - box:xi + box + 1]
+        if float(np.nanmax(pa + pb)) >= 0.95 * top and len(found) > 2 * n_stars:
+            continue   # the very brightest may be clipped
+        fa, fb = float(np.nansum(pa - sky_a)), float(np.nansum(pb - sky_b))
+        if fa > 0 and fb > 0:
+            diffs.append(-2.5 * math.log10(fa / fb))
+        if len(diffs) >= n_stars:
+            break
+    out["n"] = len(diffs)
+    if sky_b:
+        out["sky"] = sky_a / sky_b
+    if len(diffs) < 8:
+        return out
+    out["spread"] = float(robust_sigma(np.array(diffs)))
+    out["identical"] = bool(out["spread"] < 0.03 and math.isfinite(out["sky"]) and abs(out["sky"] - 1.0) < 0.02)
+    return out
+
+
 def debayer_weights(pattern: str, mode: str) -> dict:
     """2.2.17 (item 8): the weight of each 2x2 Bayer position (iy, ix) in one superpixel of debayer(pattern, mode);
     {(0, 0): 1.0} for a monochrome camera."""
@@ -7002,6 +7048,9 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
           is no re-center: its frames stay in the segment they sit beside, so no segment has under min_hold frames;
       (b) a run that holds within the limits of an EARLIER segment of the same side (where that segment ended, or its
           middle) rejoins it under the same number instead of opening a new one;
+      (a2) (2.4.0 fit-in F4, step 8 nit N1) a short run that already sits at the pointing of the NEXT run that holds
+          (and away from the one it left) takes that run's number: one bad registration just after a re-center no
+          longer leaves 1-4 frames of the new pointing under the old number;
       (c) with no plate scale nothing is looked for ("checked" False): pixels alone cannot tell a dither from a
           re-center.
     Returns {"labels": each frame's segment number (0 = the first pointing; the same number means the same pointing),
@@ -7040,6 +7089,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
     found = []
     done = [False] * n
     carry, cur, pending = 0, None, []
+    loose = []   # 2.4.0 fit-in F4 (step 8 nit N1): short runs given the segment they left, until the next run that holds
 
     def give(frames, label):
         for k in frames:
@@ -7050,7 +7100,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
         if new_block:
             for fr in pending:   # a block without a run that held: no re-center in it
                 give(fr, carry)
-            cur, pending = None, []
+            cur, pending, loose = None, [], []
         head = frames[:min_hold]
         start = middle(head)
         if len(frames) < min_hold or any(far(xy[k], start) for k in head):
@@ -7058,6 +7108,7 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
                 pending.append(frames)
             else:
                 give(frames, cur)   # (a) an excursion stays with the segment it left
+                loose.append(frames)
             continue
         best = None
         for (seg_side, label), seg_frames in segs.items():
@@ -7081,11 +7132,20 @@ def recenter_segments(regs: list, scale_arcsec: float | None = None, px_factor: 
             d = math.hypot(ddx, ddy)
             found.append({"index": frames[0], "from": segs[(run_side, cur)][-1], "px": d * factor, "arcsec": d * scale,
                           "dx": ddx * factor, "dy": ddy * factor, "returned": best is not None})
+        if cur is not None and label != cur:
+            # step 8 nit N1: 1-4 frames cut off from this run by one bad registration (B B [bad] B B B B B after a
+            # re-center) already sit at the new pointing: they take its number, not the number of the one they left
+            old = (middle(segs[(run_side, cur)][-min_hold:]), middle(segs[(run_side, cur)]))
+            for fr in loose:
+                if all(not far(xy[k], start) for k in fr) and all(far(xy[k], e) for k in fr for e in old):
+                    give(fr, label)
+                    if found:   # this run's own record (appended just above): the move starts at these frames
+                        found[-1]["index"] = min(found[-1]["index"], fr[0])
         segs.setdefault((run_side, label), []).extend(frames)
         give(frames, label)
         for fr in pending:
             give(fr, label)
-        cur, carry, pending = label, label, []
+        cur, carry, pending, loose = label, label, [], []
     for fr in pending:
         give(fr, carry)
     # a frame that was not aligned takes the number of the measured frame before it on its side, else the one after
@@ -7402,90 +7462,135 @@ def ensemble_merr(obs: Obs, selection: list[str], comp_names: list[str], aliases
     return math.sqrt(obs.target_var + total / len(selection) ** 2 + floor)
 
 
-# 2.3.0 (#50): a comp measured in fewer frames of a night than this cannot be tied to the other comps (its own offset
-# from them is not known well enough), so it is left out of that whole night; the night's level then comes from the
-# other comps.
+# 2.4.0 fit-in F4 (#79 item 4, m218; John 14 and 26 Nov): ONE COMP SET PER NIGHT. A chosen comp that is not measured
+# in every frame of a night (off the frame edge, clipped, no flux), or whose raw peak reaches the linear limit in
+# any frame, is left out of that WHOLE night; the night stands on the comps measured in every frame. This replaces
+# the 2.3.0 (#50) tie-in, which kept a part-night comp by putting each frame on the night's scale.
+# The two old numbers stay as names only (transit_core keeps the same pair; tests/test_235.py).
 COMP_TIE_MIN_FRAMES = 5
-COMP_NIGHT_SHARE = 0.5   # measured in fewer than this share of a night's frames: left out of that whole night
+COMP_NIGHT_SHARE = 0.5
+NIGHT_SET_MIN = 2        # fewer comps than this left for a night is worth a ⚠ (one comp has no cross-check)
+
+
+def night_set(m: np.ndarray, over=None, rows=None) -> dict:
+    """2.4.0 fit-in F4 (#79 item 4): the one comp set of a night from m (frames x comps instrumental magnitudes, NaN
+    = not measured in that frame). over: optional frames x comps booleans (raw peak at or over the linear limit).
+
+    Frames that count: `rows` (booleans; the frames with the target measured) when given, else those with at
+    least one of the comps measured. A comp counts for the night only when it is measured in every such frame and
+    is over the limit in none. When that leaves no comp at all (every comp is missing somewhere), the comps
+    measured in the most frames are kept ("few") and the frames without them get no comparison.
+    Returns {"keep": [column numbers], "missing": {column: frames missing}, "over": {column: frames over},
+    "few": [columns kept although not in every frame], "frames": the frames that count}."""
+    m = np.asarray(m, dtype=float)
+    if m.ndim != 2 or m.shape[0] == 0 or m.shape[1] == 0:
+        return {"keep": [], "missing": {}, "over": {}, "few": [], "frames": 0}
+    ok = np.isfinite(m)
+    rows = ok.any(axis=1) if rows is None else (np.asarray(rows, dtype=bool) | ok.any(axis=1))
+    n_rows = int(rows.sum())
+    miss = {j: int((~ok[rows, j]).sum()) for j in range(m.shape[1])}
+    hot = {j: 0 for j in range(m.shape[1])}
+    if over is not None:
+        ov = np.asarray(over, dtype=bool)
+        if ov.shape == m.shape:
+            hot = {j: int(ov[:, j].sum()) for j in range(m.shape[1])}
+    measured = [j for j in range(m.shape[1]) if ok[:, j].any()]
+    keep = [j for j in measured if miss[j] == 0 and hot[j] == 0]
+    few = []
+    if not keep:
+        # no comp is clean in every frame: stand on the best there is, and say so
+        cand = [j for j in measured if hot[j] == 0] or measured
+        if cand:
+            best = min(miss[j] for j in cand)
+            few = [j for j in cand if miss[j] == best]
+            keep = list(few)
+    return {"keep": keep, "missing": {j: c for j, c in miss.items() if c and j in measured},
+            "over": {j: c for j, c in hot.items() if c}, "few": few, "frames": n_rows}
+
+
+def night_set_reason(missing: int, over: int, frames: int) -> str:
+    """2.4.0 fit-in F4: why a comp is out for the night, in plain words."""
+    parts = []
+    if missing:
+        parts.append(f"missing from {missing} of {frames} frame{'s' if frames != 1 else ''} (off the frame or "
+                     "its edge)")
+    if over:
+        parts.append(f"over the linear limit in {over} frame{'s' if over != 1 else ''}")
+    return " and ".join(parts)
 
 
 def night_ensemble(points: list[Obs], selection: list[str], comp_names: list[str], aliases: dict | None = None,
-                   absent_out: bool = False, min_frames: int = COMP_TIE_MIN_FRAMES) -> dict:
-    """2.3.0 (#50): the comp ensemble frame by frame for ONE night, when a comp is missing from some frames (off the
-    frame edge, clipped, no flux).
+                   absent_out: bool = False, min_frames: int = COMP_TIE_MIN_FRAMES,
+                   linear_limit: float | None = None) -> dict:
+    """The comp ensemble frame by frame for ONE night.
 
-    A frame with every chosen comp keeps the plain mean of their instrumental magnitudes. A frame without some of
-    them gets the mean the full set would have had: each comp j is put on the night's scale by its own offset a_j
-    (its median, over the night, above the frame's level P_f), the frame's level P_f is the mean of (inst - a_j) over
-    the comps present, and the ensemble is P_f + mean(a_j). So the ensemble (and the light curve) has no step when a
-    comp leaves or comes back; only the noise grows a little. A full frame gives exactly mean(inst) whatever the a_j.
+    2.4.0 fit-in F4 (#79 item 4, m218): one comp set per night (night_set). A chosen comp missing from any frame
+    of the night, or (with linear_limit, raw ADU) with its raw peak at or over the limit in any frame, is "out":
+    left out of the whole night. Every frame is then the plain mean of the same comps, so nothing has to be tied
+    and the light curve cannot step when a comp leaves the frame. (2.3.0 #50 tied a part-night comp in; min_frames
+    is kept for old callers and no longer used.)
 
     Comps with no measurement on the night are "absent" (absent_out False: every frame of the night is left without
-    a comparison, as before #50; True: treated like the untied comps below). Comps measured in fewer than min_frames
-    frames are "out": left out of the whole night (too few frames to tie them).
+    a comparison, as before; True: left out like the others).
     Returns {"ens": [ensemble inst mag per point, NaN = no comp], "present": [[names used per point]],
-    "use": [the comps the night's ensemble stands on], "out": [...], "absent": [...]}."""
+    "use": [the comps the night's ensemble stands on], "out": [...], "absent": [...], "few": [comps kept although
+    not in every frame, because no comp was], "why": {name: plain reason it is out}}."""
     n = len(points)
     sel = list(dict.fromkeys(selection))
     m = np.array([[star_inst(o, name, comp_names, aliases) for name in sel] for o in points], dtype=float)
     m = m.reshape(n, len(sel))
     counts = np.isfinite(m).sum(axis=0) if n else np.zeros(len(sel), dtype=int)
     absent = [name for name, c in zip(sel, counts) if c == 0]
-    # The rule: out of the whole night when measured in fewer than min_frames frames, or in fewer than half of them
-    # (missing for most of the night, the comp would only add a seam; the night stands on the others throughout).
-    out = [name for name, c in zip(sel, counts) if 0 < c and (c < min(min_frames, n) or c < COMP_NIGHT_SHARE * n)]
+    over = None
+    if linear_limit is not None and math.isfinite(float(linear_limit)) and n:
+        aliases_ = aliases or {}
+        over = np.zeros(m.shape, dtype=bool)
+        for f, o in enumerate(points):
+            peaks = getattr(o, "raw_peaks", None) or {}
+            if not peaks:
+                continue
+            for j, name in enumerate(sel):
+                v = next((peaks.get(k) for k in [name] + list(aliases_.get(name, ())) if peaks.get(k) is not None),
+                         None)
+                try:
+                    over[f, j] = v is not None and math.isfinite(float(v)) and float(v) >= float(linear_limit)
+                except (TypeError, ValueError):
+                    pass
+    ns = night_set(m, over, rows=[math.isfinite(o.target_inst) for o in points])
+    why = {sel[j]: night_set_reason(ns["missing"].get(j, 0), ns["over"].get(j, 0), ns["frames"])
+           for j in set(ns["missing"]) | set(ns["over"]) if j not in ns["keep"]}
+    out = [name for name in sel if name in why]
+    few = [sel[j] for j in ns["few"]]
     if absent and not absent_out:
-        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent}
-    keep = [j for j, name in enumerate(sel) if name not in absent and name not in out]
-    few = []
-    if not keep and out:
-        # 2.3.0 review fix: leaving the few-frame comps out would leave the night with no comp at all (2.2.21 derived
-        # those frames): keep them, used in the frames where they were measured ("few" says which).
-        few, out = list(out), []
-        keep = [j for j, name in enumerate(sel) if name in few]
+        return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent,
+                "few": [], "why": why}
+    keep = list(ns["keep"])
     if not keep:
         return {"ens": [float("nan")] * n, "present": [[] for _ in points], "use": [], "out": out, "absent": absent,
-                "few": few}
+                "few": few, "why": why}
     mk = m[:, keep]
-    ok = np.isfinite(mk)
-    a = np.zeros(len(keep))
-    full = ok.all(axis=1)
-    with np.errstate(invalid="ignore"):
-        for _ in range(12):
-            level = np.array([omean(mk[f, ok[f]] - a[ok[f]]) if ok[f].any() else np.nan for f in range(n)])
-            new_a = np.array([float(np.median(mk[ok[:, j], j] - level[ok[:, j]])) for j in range(len(keep))])
-            new_a -= omean(new_a)
-            if np.allclose(new_a, a, atol=1e-7):
-                a = new_a
-                break
-            a = new_a
-    ens = []
-    present = []
-    for f in range(n):
-        names = [sel[keep[j]] for j in range(len(keep)) if ok[f, j]]
-        present.append(names)
-        if not ok[f].any():
-            ens.append(float("nan"))
-        elif full[f]:
-            ens.append(omean(mk[f]))   # step 6c: order-free, as reduce_frame
-        else:
-            ens.append(omean(mk[f, ok[f]] - a[ok[f]]) + omean(a))
-    return {"ens": ens, "present": present, "use": [sel[j] for j in keep], "out": out, "absent": absent, "few": few}
+    full = np.isfinite(mk).all(axis=1)
+    use = [sel[j] for j in keep]
+    ens = [omean(mk[f]) if full[f] else float("nan") for f in range(n)]   # step 6c: order-free, as reduce_frame
+    present = [list(use) if full[f] else [] for f in range(n)]
+    return {"ens": ens, "present": present, "use": use, "out": out, "absent": absent, "few": few, "why": why}
 
 
 def recompute_with_comps(observations: list[Obs], selection: list[str], comp_names: list[str],
-                         catalog: dict[str, float], aliases: dict | None = None, absent_out: bool = False) -> dict:
+                         catalog: dict[str, float], aliases: dict | None = None, absent_out: bool = False,
+                         linear_limit: float | None = None) -> dict:
     """Re-derive every magnitude (and the check star) from the chosen comps.
 
     selection: names of the comps / spares to use as the ensemble.
     catalog: catalog magnitude for each name, in the band measured.
-    2.3.0 (#50): night by night (night_ensemble). A frame missing some chosen comps (off the frame edge, clipped) is
-    derived from the comps present, put on the night's scale, so no step appears; a frame with none of them, or a
-    night where a chosen star was never measured (another field's comp; absent_out=True treats it as left out of the
-    night instead), gets mag NaN and the flag 'nocomp'. A chosen comp measured in fewer than COMP_TIE_MIN_FRAMES
-    frames of a night is left out of that night.
-    Returns {"done": n, "missing": n, "missing_nights": [...], "partial": frames derived from fewer comps,
-    "night_out": {night: [comps left out of the whole night]}}.
+    2.4.0 fit-in F4 (#79 item 4, m218): night by night, ONE comp set per night (night_ensemble). A chosen comp that
+    is missing from any frame of a night (off the frame edge, clipped), or over linear_limit (raw ADU, when given)
+    in any frame, is left out of that whole night; every frame of the night is the plain mean of the same comps.
+    A frame with none of them, or a night where a chosen star was never measured (another field's comp;
+    absent_out=True treats it as left out of the night instead), gets mag NaN and the flag 'nocomp'.
+    Returns {"done": n, "missing": n, "missing_nights": [...], "partial": 0 (no frame is derived from fewer comps
+    any more), "night_out": {night: [comps left out of the whole night]}, "night_why": {night: {comp: reason}},
+    "night_use": {night: [the night's comps]}, "night_few": {night: [comps kept although not in every frame]}}.
     """
     if not selection:
         raise ValueError("Choose at least one comparison star")
@@ -7495,14 +7600,18 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
     done = missing = partial = 0
     missing_nights = set()
     night_out = {}
-    night_few = {}   # 2.3.0 review fix: comps kept although measured in few frames (the night's only comps)
+    night_few = {}   # comps kept although not measured in every frame (no comp of the night was)
+    night_why, night_use = {}, {}   # 2.4.0 fit-in F4: why each comp is out, and the night's set
     by_night: dict = {}
     for obs in observations:
         by_night.setdefault(obs.night, []).append(obs)
     for night, pts in by_night.items():
-        ne = night_ensemble(pts, selection, comp_names, aliases, absent_out=absent_out)
+        ne = night_ensemble(pts, selection, comp_names, aliases, absent_out=absent_out, linear_limit=linear_limit)
         if ne["out"] or (absent_out and ne["absent"]):
             night_out[night] = list(ne["out"]) + (list(ne["absent"]) if absent_out else [])
+        if ne.get("why"):
+            night_why[night] = dict(ne["why"])
+        night_use[night] = list(ne["use"])
         if ne.get("few"):
             night_few[night] = list(ne["few"])
         use = ne["use"]
@@ -7531,7 +7640,59 @@ def recompute_with_comps(observations: list[Obs], selection: list[str], comp_nam
                 done += 1
             obs.flag = " ".join(words)
     return {"done": done, "missing": missing, "missing_nights": sorted(missing_nights), "partial": partial,
-            "night_out": night_out, "night_few": night_few}
+            "night_out": night_out, "night_few": night_few, "night_why": night_why, "night_use": night_use}
+
+
+def night_out_lines(result: dict, night_label=None, min_comps: int = NIGHT_SET_MIN) -> list:
+    """2.4.0 fit-in F4 (#79 item 4, m218): one line per night with a comp left out, from recompute_with_comps'
+    result. Plain ("  …") while the night keeps min_comps comps or more, "⚠ …" when it is left with fewer (or stands
+    on comps that are not in every frame). night_label(night) -> the night's name on the page."""
+    lab = night_label or (lambda nt: str(nt))
+    lines = []
+    for night in sorted(set(result.get("night_out") or {}) | set(result.get("night_few") or {}), key=str):
+        names = list((result.get("night_out") or {}).get(night) or [])
+        why = (result.get("night_why") or {}).get(night) or {}
+        use = list((result.get("night_use") or {}).get(night) or [])
+        few = list((result.get("night_few") or {}).get(night) or [])
+        said = "; ".join(f"{n}: {why[n]}" if why.get(n) else f"{n}: not measured that night" for n in names)
+        k = len(use)
+        if few:
+            lines.append(f"⚠ {lab(night)}: no comp was measured in every frame. The night stands on "
+                         f"{', '.join(few)}; the frames without {'it' if len(few) == 1 else 'them'} have no "
+                         "magnitude. Choose comps that stay on the frame all night (Use comps…)."
+                         + (f" Left out: {said}." if said else ""))
+        elif names and k < min_comps:
+            lines.append(f"⚠ {lab(night)}: left out of the whole night: {said}. That leaves "
+                         + (f"only {use[0]}" if k == 1 else "no comp") + ". Add a comp that stays on the frame and "
+                         "under the linear limit all night (Use comps…, or a spare comp).")
+        elif names:
+            lines.append(f"  {lab(night)}: left out of the whole night: {said}. The night uses "
+                         f"{', '.join(use)} in every frame.")
+    return lines
+
+
+def clear_out_comp_flags(points: list[Obs], use: list[str], comp_names: list[str], sat_limit: float) -> int:
+    """2.4.0 fit-in F4 (#79 item 4): a frame flagged 'compsat' only because of a comp that is now out for the whole
+    night is not a saturated measurement any more: the flag comes off when none of the night's comps (use) has a
+    raw peak at or over sat_limit in that frame. Frames with no per-star raw peaks are left alone. Returns the
+    frames changed."""
+    changed = 0
+    use = set(use)
+    for o in points:
+        words = o.flag.split()
+        peaks = getattr(o, "raw_peaks", None) or {}
+        if "compsat" not in words or not peaks or not use:
+            continue
+        hot = False
+        for name in comp_names:
+            v = peaks.get(name)
+            if name in use and v is not None and math.isfinite(float(v)) and float(v) >= sat_limit:
+                hot = True
+        if not hot:
+            o.flag = " ".join(w for w in words if w != "compsat")
+            o.saturated = "sat" in words
+            changed += 1
+    return changed
 
 
 def comp_drop_summary(points: list[Obs], labels: list[str] | None = None) -> dict:
@@ -7726,6 +7887,25 @@ def flip_like_turns(angles: list[float], labels: list[str], times: list[float] |
         if abs(d) - expected >= excess:
             out.append({"before": labels[p], "after": labels[q], "turn": abs(d)})
     return out
+
+
+def mark_flip_by_turn(points: list[Obs]) -> int:
+    """2.4.0 fit-in F4 (#79 item 8d): on a night whose alignment followed the field's turn (Mount set to Alt-az)
+    and that held a ~180° turn in one frame gap (flip_like_turns), the frames turned by more than 90° against the
+    reference frame are the meridian flip's other side: their segment becomes "flip", as a German-mount run marks
+    them. Each point's turn is its _turn (degrees against the reference; None = not known, left alone). Returns
+    the frames marked."""
+    n = 0
+    for o in points:
+        a = getattr(o, "_turn", None)
+        if a is None or not math.isfinite(float(a)):
+            continue
+        d = ((float(a) + 180.0) % 360.0) - 180.0
+        if abs(d) > 90.0:
+            if o.segment != "flip":
+                o.segment = "flip"
+            n += 1
+    return n
 
 
 def remap_night_comps(points: list[Obs], night_comps: list[str], series_comps: list[str]) -> int:
@@ -8160,8 +8340,9 @@ def aperture_test_stats(mags_by_r: dict, ref_label: str, has_comp2: bool, boot: 
 
     def series(m):
         comps = m[:, 1] if (not has_comp2 or ref_label == "comp 2") else np.nanmean(m[:, 1:3], axis=1)
-        other = m[:, 3] if ref_label in ("check star", "field star") else (m[:, 2] if ref_label == "comp 2"
-                                                                            else m[:, 0])   # 2.2.19: field star
+        # 2.4.0 fit-in F4 (m627): "steadiest spare (name)" is judged in the check star's place (column 3)
+        judged = ref_label in ("check star", "field star") or ref_label.startswith("steadiest spare")
+        other = m[:, 3] if judged else (m[:, 2] if ref_label == "comp 2" else m[:, 0])   # 2.2.19: field star
         return other - comps, m[:, 0] - comps
 
     ref = np.array([series(mags_by_r[r][:n])[0] for r in radii])
@@ -11361,7 +11542,8 @@ def save_extremum_row(path: str, row: dict) -> str:
 
 def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                 spare_names: list[str] | None = None, aliases: dict | None = None,
-                night_sign: dict | None = None, linear_limit: float | None = None) -> dict | None:
+                night_sign: dict | None = None, linear_limit: float | None = None,
+                limit_word: str = "the linear limit") -> dict | None:
     """Measure each comp, spare comp, and the check star against the others, frame by frame.
 
     For every star, its instrumental magnitude minus the mean of the other stars in the same
@@ -11561,6 +11743,15 @@ def comp_health(observations: list[Obs], names: list[str], check_name: str = "",
                 n_with += 1
                 n_over += float(v) >= float(linear_limit)
             row["over_linear"] = (n_over, n_with)
+            if n_over:
+                # 2.4.0 fit-in F4 (m218; nit of 4 Nov): a star over the limit is not "steady", whatever its scatter:
+                # its response bends there. Said first; a SUSPECT verdict keeps its own words after it.
+                was = str(row.get("verdict") or "")
+                lead = f"over {limit_word} in {n_over} of {n_with} frames"
+                if row.get("kind") == "comp":
+                    lead += " (left out of those nights)" if limit_word == "the linear limit" else ""
+                row["verdict_before_linear"] = was
+                row["verdict"] = lead + (f"; {was}" if was.startswith("SUSPECT") else "")
     return {"labels": labels, "kinds": kinds, "nights": night_list, "nightly": nightly, "summary": summary,
             "excluded": excluded, "too_few": False,
             # 2.2.2: frame-by-frame residuals for the within-night plot.
@@ -12506,6 +12697,24 @@ def rotator_summary(angles: list[float], mount: str | None = None) -> str:
             groups.append([a])
     groups.sort(key=len, reverse=True)
     return ", ".join(f"{g[0]:g}° ({len(g)} file{'s' if len(g) != 1 else ''})" for g in groups)
+
+
+FLAT_ANGLE_MIN = 3   # a master flat from fewer flats than this at the lights' angle is too noisy to build by itself
+
+
+def flats_at_angle(rots: list, light_rot: float, mount: str | None = None) -> list[int]:
+    """2.4.0 fit-in F4 (m167): which flats (by index into rots, each flat's rotator reading or None) were taken at
+    the lights' camera angle (within flat_angle_tolerance; flip-aware on a German mount, flat_angle_difference).
+    A flat with no reading is never counted in."""
+    tol = flat_angle_tolerance(mount)
+    out = []
+    for k, r in enumerate(rots):
+        try:
+            if r is not None and flat_angle_difference(float(r), float(light_rot), mount) <= tol:
+                out.append(k)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def dark_scale_problem(dark_exp: float | None, light_exp: float | None, limit: float = 3.0) -> str | None:

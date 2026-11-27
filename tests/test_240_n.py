@@ -421,7 +421,12 @@ class TestWiderRecenter(PlaceBase):
         self.assertEqual([f.text for f in app.findings.items], [warn[0]])
         self.assertIn("Click the star to center the marker", app.findings.items[0].hint)   # chapter 23's words
         self.assertTrue(app._slot_notes[c1][2])
-        # Run photometry: a finding with the offset in px and the edge distance; it never refuses
+        # Run photometry: a finding with the offset in px and the edge distance; it never refuses.
+        # 2.4.0 fit-in F4 (m378): a marker a little off is re-centred by itself; this one is 7 px off with a 5 px
+        # aperture (far: it could be either star), so Run asks once, and "Leave it" keeps the finding
+        ask = mock.patch.object(self.ca, "ask_choice", return_value="leave")
+        ask.start()
+        self.addCleanup(ask.stop)
         with mock.patch.object(self.ca, "ask_no", side_effect=AssertionError("Run must not ask")), \
                 mock.patch.object(self.ca.messagebox, "showerror", side_effect=AssertionError("Run must not refuse")):
             ok, lines = self._logged(app._markers_in_order)

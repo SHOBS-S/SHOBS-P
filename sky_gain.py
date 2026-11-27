@@ -148,19 +148,31 @@ def plain_fits_2d(path: str) -> bool:
 
 
 def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None, max_px: int = WINDOW_PX,
-                  whole=None):
+                  whole=None, sat: float | None = None):
     """load(path) for measure_night: the frame calibrated exactly as the run calibrates it (photometry_core.bin_image,
     calibrate_frame with the run's masters, debayer), but only a central window of it (at most max_px image pixels),
     with the masters cut to the same window, so a 26 Mpx frame costs a fraction of a full calibration.
     full_load(path) -> calibrated, debayered image is used for anything else (XISF, compressed or 3-plane files)
     and for every path whole(path) is true for (review S1: the Stack step's stacks, already calibrated and binned);
-    its central window is taken."""
+    its central window is taken.
+    2.4.0 fit-in F4 (saturation cut): with sat (the RAW saturation or linear limit, raw ADU), an image pixel is
+    NaN where any RAW pixel under it is at or over sat, so the limit is compared with the values it was set in.
+    (Before, prep_frame compared it with the dark-subtracted, flat-divided, binned values: a pixel a dark level
+    under the limit slipped through.) load.raw_sat says the loader makes this cut; a file with no raw pixels to
+    read (a stack, XISF through full_load) keeps the old cut on its calibrated values, made here."""
     import dataclasses
     import photometry_core as core
     b = max(int(binning or 1), 1)
     mono = (pattern or "").upper() == core.MONO
     cell = b if mono else 2 * b
     per = b * b * (1 if mono else 4)          # raw pixels per image pixel
+    cut_at = float(sat) if sat is not None and math.isfinite(float(sat)) else None
+
+    def old_cut(img):
+        if cut_at is not None:
+            img = np.array(img, dtype=np.float32)
+            img[img >= cut_at] = np.nan
+        return img
 
     def load(path):
         got = None
@@ -169,7 +181,7 @@ def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None
                 raise ValueError("no loader for this file")
             img = np.asarray(full_load(path), dtype=np.float32)
             y0, y1, x0, x1 = window(img.shape, max_px, 1)
-            return img[y0:y1, x0:x1]
+            return old_cut(img[y0:y1, x0:x1])
         try:
             from astropy.io import fits
             h = fits.getheader(path) if str(path).lower().endswith((".fit", ".fits", ".fts")) else None
@@ -183,7 +195,7 @@ def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None
                 raise ValueError("cannot read a window of this file")
             img = np.asarray(full_load(path), dtype=np.float32)
             y0, y1, x0, x1 = window(img.shape, max_px, 1)
-            return img[y0:y1, x0:x1]
+            return old_cut(img[y0:y1, x0:x1])
         raw, header = got
         my0, my1, mx0, mx1 = y0 // b, y1 // b, x0 // b, x1 // b
 
@@ -195,8 +207,34 @@ def window_loader(binning: int, masters, pattern: str, mode: str, full_load=None
             if a is not None and a.shape != (raw.shape[0] // b, raw.shape[1] // b):
                 raise ValueError("the masters do not fit this frame")
         cal = core.calibrate_frame(core.bin_image(raw, b), header, m)
-        return core.debayer(cal, pattern, mode)
+        img = core.debayer(cal, pattern, mode)
+        if cut_at is not None:
+            img = np.array(img, dtype=np.float32)
+            hi = raw_over(raw, cut_at, img.shape)
+            if hi is None:
+                img = old_cut(img)
+            else:
+                img[hi] = np.nan
+        return img
+    load.raw_sat = cut_at is not None
     return load
+
+
+def raw_over(raw: np.ndarray, limit: float, shape) -> np.ndarray | None:
+    """2.4.0 fit-in F4: which image pixels (image of `shape`, made from `raw` by binning and/or a superpixel
+    debayer) have a RAW pixel at or over `limit` under them. None when the raw frame is not a whole number of
+    image pixels (then the caller keeps the old test)."""
+    raw = np.asarray(raw)
+    h, w = int(shape[0]), int(shape[1])
+    if h < 1 or w < 1 or raw.ndim != 2:
+        return None
+    cy, cx = raw.shape[0] // h, raw.shape[1] // w
+    if cy < 1 or cx < 1 or cy != cx or raw.shape[0] - h * cy >= cy or raw.shape[1] - w * cx >= cx:
+        return None
+    over = raw[:h * cy, :w * cx] >= float(limit)
+    if cy == 1:
+        return over
+    return over.reshape(h, cy, w, cx).any(axis=(1, 3))
 
 
 def mesh_size(shape) -> int:
@@ -204,11 +242,13 @@ def mesh_size(shape) -> int:
     return max(16, int(round(min(shape[0], shape[1]) / 12.0)))
 
 
-def prep_frame(img: np.ndarray, sat: float | None = None) -> dict:
+def prep_frame(img: np.ndarray, sat: float | None = None, cut: bool = True) -> dict:
     """A calibrated frame (or window of one) -> {"resid": frame minus its background model (NaN where masked),
     "mask": stars, saturated / bad pixels and the edge, "level": the background's median, "masked": fraction}.
     Review nit: where the sky itself comes within NEAR_SAT_SIGMA of sat, the pixels at sat are the sky's own upper
-    noise tail, not stars; cutting them would make the variance low and the gain high, so that sky is masked too."""
+    noise tail, not stars; cutting them would make the variance low and the gain high, so that sky is masked too.
+    2.4.0 fit-in F4: cut=False when the loader already took the saturated pixels out on the RAW values (they come
+    in as NaN); sat then only serves the sky-near-the-limit test."""
     from astropy.stats import SigmaClip
     from photutils.background import Background2D, MedianBackground
     from photutils.segmentation import detect_sources
@@ -216,7 +256,7 @@ def prep_frame(img: np.ndarray, sat: float | None = None) -> dict:
 
     x = np.asarray(img, dtype=np.float32)
     bad = ~np.isfinite(x)
-    if sat is not None and math.isfinite(float(sat)):
+    if cut and sat is not None and math.isfinite(float(sat)):
         bad |= x >= float(sat)
     if bad.any():
         bad = binary_dilation(bad, iterations=2)
@@ -480,7 +520,9 @@ def measure_night(paths, load, sat: float | None = None, floor_var: float | None
     def prepared(i):
         if i not in cache:
             try:
-                cache[i] = prep_frame(load(use[i]), sat)
+                img = load(use[i])
+                # 2.4.0 fit-in F4: a loader that cut the saturated pixels on the raw values leaves no second cut
+                cache[i] = prep_frame(img, sat, cut=False) if getattr(load, "raw_sat", False) else prep_frame(img, sat)
             except Exception:
                 cache[i] = None
         return cache[i]

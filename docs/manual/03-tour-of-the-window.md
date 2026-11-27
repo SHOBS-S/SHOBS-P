@@ -183,7 +183,8 @@ says *⚠ N things need a look (click to see them)*, to open the **Findings** wi
 - **What to do**, for the messages listed in [23. Messages explained](23-messages-explained.md), in the same words as
   that chapter;
 - **✓ Done** beside each entry takes it off the list; **Clear all** empties it; **Show log** shows the log (the
-  Photometry page's, when that page is in front, otherwise the Calibrate page's); **Close** closes the window and
+  Photometry page's or the Calibrate page's when that page is in front; on any other page a **Log** window of its
+  own opens, from 2.4.0, so you stay on the page you are on); **Close** closes the window and
   keeps the list.
 
 Running a step again replaces that step's findings from last time, so the list is always about your latest runs; a

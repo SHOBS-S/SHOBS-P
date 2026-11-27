@@ -476,7 +476,10 @@ class TestCameraChange(unittest.TestCase):
         self._image(2.3)
         said = []
         real = app.log
+        # 2.4.0 fit-in F4 (8e): a kept aperture on a NEW field is re-fitted; this note is for sizes already set for
+        # these lights (or a series' aperture)
         with mock.patch.object(app, "_donut_apertures", return_value=None), \
+                mock.patch.object(app, "_aperture_refit", return_value=False), \
                 mock.patch.object(app, "log", side_effect=lambda t, *a, **k: (said.append(str(t)), real(t, *a, **k))):
             app._aperture_caution(app._preview_token, measured=True)
             self.assertEqual(len(said), 1, said)

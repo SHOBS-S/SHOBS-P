@@ -102,7 +102,7 @@ The automatic solve stays quiet when it fails: the step strip shows **1 Not solv
 |---|---|
 | **Solve needs to know roughly where the frame is: …** | Your headers give no position and the Input page has no RA/Dec. Type the target's name on the Input page and press Enter (or, in Discovery, the field center), then **Solve again**. |
 | **Star catalogs did not answer, so the frame could not be solved …** with *"Gaia DR3 (HTTP 503) and APASS DR9 (no stars came back) did not answer: a catalog service outage …"* | A catalog server is down (not your settings). **Solve again** in a few minutes. Meanwhile you can mark stars and type comp and check magnitudes by hand. |
-| **The catalog stars did not lock onto this frame …** | Usually wrong optics. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; the window shows the plate scale it used. Also check that the **Target** marker is on your star. |
+| **Not solved: the catalog stars did not lock onto this frame.** (an error box; the numbers are at its end) | Usually wrong optics. Check **Focal length (mm)**, **Pixel size (µm)** and **Binning** on the Input page; the window shows the plate scale it used. Also check that the **Target** marker is on your star. |
 | "Only N stars were found on this frame" (in the same window) | Very short exposures or a small telescope. Mark the stars by hand and type their names and magnitudes. |
 | **Not solved: the catalog request failed.** | The internet or a catalog server was down. **Solve again** later. |
 
@@ -624,9 +624,10 @@ before 2.4.0). A number you type wins for those lights until you scan other ligh
 changed the box: *Linear ADU 60,931 from the SHOBS-FLUX profile for this camera (measured 2026-11-09); it was
 40,000.* SHOBS-P only reads profiles; it never writes them, and it works the same without SHOBS-FLUX. Leave the box
 empty if you don't know the limit and have no profile; nothing changes then. With a value set below **raw sat ADU**, SHOBS-P cautions when you pick a star whose raw peak is over or
-near it (see "Comparison stars and the check star" above), counts after each run the frames where each star went over
-it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"), and Comp health shows an **Over linear limit**
-column (chapter 11).
+near it (see "Comparison stars and the check star" above). From 2.4.0 a comp that goes over it in any frame is left
+out of that whole night, with a plain note naming it ("Comps near the frame edge" below); for the target and the check
+star the run counts the frames over it ("⚠ Linear limit 36,000 ADU: raw peak at or above it in … frames …"). Comp
+health shows an **Over linear limit** column and says so in the verdict (chapter 11).
 
 ### Color
 
@@ -649,12 +650,12 @@ measured. On an alt-az mount (the **Mount** box on the Input page, or clear evid
 flips: the alignment follows the field rotation instead, and the log says how far the field turned, for example
 "Field rotation: the field turned by 12.4° on the sensor through the night (alt-az mount); the apertures followed it."
 If the field turns by more than 5° on a German equatorial mount, the log suggests setting **Mount** to **Alt-az**. The
-other way round, when **Mount** is **Alt-az** but the field turns by about 180° between two frames, the run warns:
-*"⚠ The field turned by 180° between frames 314a and 1b — that looks like a meridian flip. Is the Mount set right
-(German equatorial)? An alt-az field turns smoothly, not by half a turn between two frames. If it was a flip, set Mount
-to German equatorial in the Optics box (Input page) and run photometry again, so the frames after the flip are treated
-as after it."* An alt-az field turns smoothly, well under a degree per frame, so ordinary field rotation never sets
-this off, not even across a long gap or near the zenith. Frames that cannot be lined up (cloud, trailing) are skipped
+other way round, when **Mount** is **Alt-az** but the field turns by about 180° between two frames, that is a
+meridian flip, and from 2.4.0 SHOBS-P treats it as one: the frames on the other side of it become the flip segment,
+as on a German equatorial mount, and the log says so in a plain note (*"The field turned by 180° between frames 314a
+and 1b: a meridian flip. …"*). Nothing has to be set and run again. An alt-az field turns smoothly, well under a
+degree per frame, so ordinary field rotation never sets this off, not even across a long gap or near the zenith.
+Frames that cannot be lined up (cloud, trailing) are skipped
 and listed in the log. When the run is done, SHOBS-P switches to the Output page.
 
 After a meridian flip, SHOBS-P checks the alignment of each flipped frame on up to 15 stars' own centers, so the comp
@@ -676,7 +677,9 @@ other capture programs), that is used. When they don't (MicroObservatory frames,
    calibrated just as the run calibrates them, and looks at a central part of each (about 360,000 pixels; a whole
    MicroObservatory frame).
 2. On each frame it fits a smooth background (the sky with its gradients) and takes it off, then finds the stars and
-   masks them with a few pixels to spare, together with saturated pixels and the edge. Where the sky itself comes
+   masks them with a few pixels to spare, together with saturated pixels and the edge. (From 2.4.0 a pixel
+   counts as saturated when the RAW pixel under it is at or over the raw limit; before, the limit was compared
+   with the dark-subtracted values, which let pixels just under it slip through.) Where the sky itself comes
    within a few times its own noise of the saturation level, that sky is masked too (its brightest noise would be
    cut off and the gain would come out high).
 3. It subtracts the two frames of each pair. The sky's photon noise is different in the two frames, but everything
@@ -761,45 +764,48 @@ frames get the same gain.
 
 ### Comps near the frame edge
 
-When the field drifts during the night, a comparison star near the edge can slide partly off the frame. SHOBS-P then
-leaves that comp out **of that frame only**, and measures the frame with the other comps. This happens when the comp's
-aperture is partly off the frame, when its sky ring is mostly (over half) off the frame, or when it has no light
-above the sky in that frame. A clipped comp is never measured, so it cannot leak into the results.
+When the field drifts during the night, a comparison star near the edge can slide partly off the frame. A comp
+counts as missing from a frame when its aperture is partly off the frame, when its sky ring is mostly (over half)
+off the frame, or when it has no light above the sky in that frame. A clipped comp is never measured, so it cannot
+leak into the results.
 
-- **No step in the light curve.** In a frame without some comps, the comparison is rebuilt from the comps that are
-  there, each first put on the night's scale by its own median offset from the others. So the comparison level stays
-  the same when a comp leaves or comes back; such a frame is only a little noisier. Frames with every comp are
-  measured exactly as before.
-- **A comp missing most of the night.** A comp measured in fewer than half of a night's frames (or in fewer than 5)
-  is left out of the **whole night**, and the night uses the other comps from start to end. The log says so.
+**One comp set per night (from 2.4.0).** A comp that is missing from **any** frame of the night is left out of the
+**whole night**. So is a comp whose raw peak reaches the **Linear limit** (the SHOBS-FLUX linear ADU, Photometry
+page) in any frame. Every frame of the night is then measured with the same comps, from the first frame to the
+last, so the light curve cannot step when a comp leaves the frame. (2.3.x kept such a comp in the frames where it
+was measured and tied it to the others. Nights with a part-night comp therefore come out a little different in
+2.4.0.)
+
 - **The check star** off the edge: that frame has no check value, and the frame is kept.
 - **Spares and watch stars** off the edge are simply not measured in that frame. They never cost a frame.
 - **The target** off the edge: the frame is skipped, and listed.
 - **Every comp lost** in a frame: the frame is skipped, with the reason *"every comp lost (off the frame edge)"*.
 
-After the run, an orange line under the "Measured with" line lists what happened, for example:
+After the run, a line under the "Measured with" line lists what happened, for example:
 
 - *"⚠ 16 frames skipped: every comp lost (off the frame edge) (frames 25–40)."*
-- *"⚠ C3 left out of 14 frames (off the frame edge; frames 27–40); those frames use the other comps. Leave it out
-  with Use comps… (Output page)."*
+- *"C3 left out of the whole night: missing from 14 of 40 frames (off the frame or its edge); frames 27–40."* and
+  *"The night uses C1, C2 in every frame."* A plain note: nothing to do.
+- *"C2 left out of the whole night: over the linear limit in 3 frames."*
+- *"⚠ That leaves only C1 for the night. Add a comp that stays on the frame and under the linear limit all night
+  (a spare comp with Use comps…, Output page), then press Run photometry."* The ⚠ comes only when fewer than two
+  comps are left.
 - *"⚠ check star left out of 18 frames (off the frame edge; frames 23–40); no check value there. …"*
-- *"…; out of the whole night (missing in most frames)."* when the whole-night rule applied.
 
-From 2.4.0 there is one line per star, and it says what to do: *"⚠ C3 left out of 14 frames (off the frame edge;
-frames 27–40); those frames use the other comps. Leave it out with Use comps… (Output page)."* When that star also
-sits where the flat is weak, the same line says so. For the check star the line names a spare that stayed farther in
-all night, to pick as the check next time. The ⚠ (and the advice) is kept for a star that missed more than 10 % of
-the night's frames; at 10 % or less the line is a plain note, like a few skipped frames.
+For the check star the line names a spare that stayed farther in all night, to pick as the check next time. Its ⚠
+(and the advice) is kept for a check star that missed more than 10 % of the night's frames; at 10 % or less the
+line is a plain note, like a few skipped frames. A night reduced before 2.4.0 keeps its old lines (*"⚠ C3 left out
+of 14 frames …; those frames use the other comps. …"*) until it is reduced again.
 
-No box comes up after the run (from 2.4.0). The same lines go in the log, each with its night, and on the
-**Findings** list, which opens by itself when the run has something for you to look at (chapter 3). They also travel
-with the result: the settings file lists them and the report's notes say how many there were. A comp or check that
-only came near the edge and was measured in every frame gets a plain log line, no ⚠.
+No box comes up after the run (from 2.4.0). The same lines go in the log, each with its night; the ⚠ lines also go
+on the **Findings** list, which opens by itself when the run has something for you to look at (chapter 3). They
+also travel with the result: the settings file lists them and the report's notes say how many there were. A comp or
+check that only came near the edge and was measured in every frame gets a plain log line, no ⚠.
 
 ### Measure skipped frames
 
-Since 2.3.0 a comp that leaves the frame (or is clipped, or has no flux) is simply left out of those frames, and the
-other comps carry them, so a single edge comp no longer costs frames. A frame is skipped only when **every** comp was
+A comp that leaves the frame (or is clipped, or has no flux) is left out of the night, and the other comps carry
+every frame, so a single edge comp does not cost frames. A frame is skipped only when **every** comp was
 lost in it, for example on a one-comp night when that comp drifts off the edge, or when all the comps sit near the same
 edge.
 
