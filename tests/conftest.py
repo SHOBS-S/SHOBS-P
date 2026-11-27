@@ -56,3 +56,24 @@ def _settings_start_fresh(_settings_file_of_its_own):
             os.remove(path)   # only the session's own temp file (a test's own patched file is left to it)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _aperture_question_without_a_window():
+    """2.4.0 fit-in F4 (m143): the telescope aperture question is a box with a number field now, which would wait
+    for a key under test. Answered as the tests already answer the old Yes/No: a mocked askyesno's Yes confirms the
+    value shown, its No (or no mock) is Cancel. A test of the box itself patches App._ask_aperture_mm on its own."""
+    try:
+        import clearv_app as ca
+    except Exception:
+        yield
+        return
+
+    def answer(self, text, cur):
+        ask = ca.messagebox.askyesno
+        if isinstance(ask, mock.Mock):
+            return float(cur) if ask(ca.APP_TITLE, text) else None
+        return None
+
+    with mock.patch.object(ca.App, "_ask_aperture_mm", answer):
+        yield

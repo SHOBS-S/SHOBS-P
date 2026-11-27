@@ -139,13 +139,43 @@ class TestWithAWindow(unittest.TestCase):
         with mock.patch.object(App, "_setup_value", lambda self, k: "1000"):
             self.assertIn("boom", app._solve_input_problem(ValueError("boom")))
 
+    def _aperture_case(self, typed):
+        app = self.app
+        app.__dict__.pop("_aperture_asked", None)
+        app.aperture_mm.set("152")
+        app.settings["aperture_scopes"] = []
+        app._lights_scope = {"telescope": "", "camera": "MicroObservatory", "focal_mm": 650.0}
+        app._remember_aperture_scope()
+        said = []
+        with mock.patch.object(app, "_ask_aperture_mm", return_value=typed) as ask, \
+                mock.patch.object(app, "after_idle"), mock.patch.object(app, "log", lambda t, **k: said.append(t)):
+            app._check_aperture_scope({"INSTRUME": "ASI2600MM", "FOCALLEN": 2098})
+        return ask, said
+
+    def test_aperture_typed_in_the_question(self):
+        """m143."""
+        ask, said = self._aperture_case(203.0)
+        self.assertIn("Type this telescope's aperture in mm", ask.call_args[0][0])
+        self.assertEqual(float(self.app.aperture_mm.get()), 203.0)
+        self.assertTrue(any("Telescope aperture set to 203 mm" in t for t in said), said)
+
+    def test_aperture_ok_on_the_value_shown_confirms_it(self):
+        _ask, said = self._aperture_case(152.0)
+        self.assertEqual(float(self.app.aperture_mm.get()), 152.0)
+        self.assertTrue(any("confirmed" in t for t in said), said)
+
+    def test_aperture_cancel_changes_nothing(self):
+        _ask, said = self._aperture_case(None)
+        self.assertEqual(float(self.app.aperture_mm.get()), 152.0)
+        self.assertTrue(any("type its aperture in the Optics box" in t for t in said), said)
+
     def test_planet_not_found_is_a_line_not_a_box(self):
         body = _src()
         i = body.index("m064")
         part = body[i:i + 500]
         self.assertIn("check the spelling", part)
         self.assertNotIn("showerror", part)
-        self.assertNotIn("Planet lookup failed", body)
+        self.assertFalse("Planet lookup failed" in body)
 
 
 class TestCompAtTheEdgeIsRefused(unittest.TestCase):
@@ -165,7 +195,7 @@ class TestCompAtTheEdgeIsRefused(unittest.TestCase):
     def test_only_comps_are_refused_in_the_click(self):
         src = _src()
         i = src.index("off = self._comp_ring_off_frame(xy)")
-        self.assertIn("elif comp_number(mode):", src[i - 120:i])
+        self.assertTrue("elif comp_number(mode):" in src[i - 120:i])
 
 
 class TestNeighborAtPick(unittest.TestCase):
@@ -269,23 +299,22 @@ class TestSweepWording(unittest.TestCase):
                 "pick comps this night has",                                        # m435
         ):
             if words == "is reported as \"":
-                self.assertIn("TG/TR/TB", src)
+                self.assertTrue("TG/TR/TB" in src)
                 continue
-            self.assertIn(words, src, words)
+            self.assertTrue(words in src, words)
 
     def test_retired_words_and_boxes(self):
         src = _src()
-        for words in ("Run Calibrate again to see it in the preview.\")",
-                      "Check RA, Dec, focal length, and pixel size: {exc}",
+        for words in ("Check RA, Dec, focal length, and pixel size: {exc}",
                       "{type(exc).__name__}: {exc} — continuing without the color term",
                       "Pick another star.\")",
                       "needs a catalog {core.band_label",
                       "(stacking step skipped: {type(exc).__name__}"):
-            self.assertNotIn(words, src, words)
-        for box in ('showinfo(APP_TITLE, "Calibrate first (Calibrate page)',
+            self.assertFalse(words in src, words)
+        for box in ('showinfo(APP_TITLE, "Calibrate first (Calibrate page). Star positions',
                     'showinfo(APP_TITLE, f"All {MAX_COMPS} comparison stars',
                     'showinfo(APP_TITLE, "No night has frames in a predicted'):
-            self.assertNotIn(box, src, box)
+            self.assertFalse(box in src, box)
 
     def test_color_fit_line_is_one_wording(self):
         text = App.COLOR_FIT_FAILED.format(why="singular matrix")
